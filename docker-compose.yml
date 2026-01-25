@@ -1,13 +1,21 @@
+# 1. Define the logging template
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   tor:
     build: ./build/tor
     container_name: tor
     restart: unless-stopped
+    logging: *default-logging
     volumes:
-      - ./data/tor:/var/lib/tor
+      - ${TOR_DATA_DIR}:/var/lib/tor
     expose:
-      - "9050" # SOCKS port for both monero and tari
-      - "9051" # Control port for Tari
+      - "9050"
+      - "9051"
     networks:
       mining_net:
         ipv4_address: 172.28.0.25
@@ -22,17 +30,19 @@ services:
     container_name: monerod
     restart: unless-stopped
     stop_grace_period: 1m
+    logging: *default-logging
+    environment:
+      - MONERO_NODE_USERNAME=${MONERO_NODE_USERNAME}
+      - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
+      - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
     volumes:
-      - ./data/monero:/root/.bitmonero
+      - ${MONERO_DATA_DIR}:/root/.bitmonero
       - /dev/hugepages:/dev/hugepages
-      - ./build/monero/bitmonero.conf:/root/.bitmonero/bitmonero.conf:ro
-    command:
-      - --config-file=/root/.bitmonero/bitmonero.conf
-      - --non-interactive
+      - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
     ports:
-      - "18080:18080" # Custom P2P Port
-      - "18081:18081" # Standard RPC Port
-      - "18083:18083" # ZMQ Port (for P2Pool)
+      - "18080:18080" # P2P Port
+      - "18081:18081" # RPC Port
+      - "18083:18083" # ZMQ Port
     networks:
       mining_net:
         ipv4_address: 172.28.0.26
@@ -40,7 +50,7 @@ services:
       tor:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "--digest", "-u", "<your_monero_node_username>:<your_monero_node_password>", "http://localhost:18081/get_info"]
+      test: ["CMD", "curl", "-f", "--digest", "-u", "${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}", "http://localhost:18081/get_info"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -48,23 +58,24 @@ services:
 
   tari:
     image: quay.io/tarilabs/minotari_node:latest-mainnet
-    environment:
-      - WAIT_FOR_TOR=1
     container_name: tari
     restart: unless-stopped
     stop_grace_period: 1m
+    logging: *default-logging
     dns:
       - 1.1.1.1
       - 8.8.8.8
+    environment:
+      - WAIT_FOR_TOR=1
     volumes:
-      - ./data/tari:/var/tari/node
+      - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config
+    ports:
+      - "18102:18102" # Wallet port
+      - "18142:18142" # GRPC port
     command:
       - --disable-splash-screen
       - --non-interactive
-    ports:
-      - "18102:18102" # Wallet port
-      - "18142:18142" # GRPC port for p2pool
     networks:
       mining_net:
         ipv4_address: 172.28.0.27
@@ -82,29 +93,32 @@ services:
     build: ./build/p2pool
     container_name: p2pool
     restart: unless-stopped
+    logging: *default-logging
     privileged: true
     volumes:
-      - ./data/p2pool:/root
-      - ./data/p2pool/stats:/stats
+      - ${P2POOL_DATA_DIR}:/root
+      - ${P2POOL_DATA_DIR}/stats:/stats
       - /dev/hugepages:/dev/hugepages
     ports:
-      - "3333:3333" # Stratum Mining Port
-      - "3334:3334" # Local API Port
-      - "37888:37888" # P2P Sidechain Port
+      - "3333:3333"   # Stratum
+      - "3334:3334"   # Local API
+      - "37888:37888" # P2P Sidechain
     command:
       - --host
       - 172.28.0.26
       - --rpc-port
       - "18081"
       - --rpc-login
-      - "<your_monero_node_username>:<your_monero_node_password>"
+      - "${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}"
       - --zmq-port
       - "18083"
       - --wallet
-      - <your_monero_wallet_address>
+      - ${MONERO_WALLET_ADDRESS} 
       - --merge-mine
       - tari://172.28.0.27:18142
-      - <your_tari_wallet_address>
+      - ${TARI_WALLET_ADDRESS}
+      - --onion-address
+      - ${P2POOL_ONION_ADDRESS} 
       - --local-api
       - --stratum
       - 0.0.0.0:3333
@@ -112,9 +126,6 @@ services:
       - 0.0.0.0:37888
       - --data-api
       - /stats
-      - --onion-address
-      - <your_p2pool_onion_address>
-      - --mini
     networks:
       mining_net:
         ipv4_address: 172.28.0.28
@@ -123,15 +134,16 @@ services:
         condition: service_healthy
       tari:
         condition: service_healthy
-
+  
   dashboard:
       build: ./build/dashboard
       extra_hosts:
         - "host.docker.internal:host-gateway"
       container_name: dashboard
       restart: unless-stopped
+      logging: *default-logging
       volumes:
-        - ./data/p2pool/stats:/app/stats:ro
+        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
         - /home:/data:ro
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
       network_mode: "host"
@@ -143,3 +155,4 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
+        

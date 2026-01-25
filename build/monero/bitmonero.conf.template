@@ -26,12 +26,11 @@ enable-dns-blocklist=true
 
 # --- SECURITY ---
 restricted-rpc=1
-rpc-login=<your_monero_node_username>:<your_monero_node_password>
+rpc-login=${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}
 no-igd=1
 
 # --- TOR SETTINGS ---
-# Use the 'tor' service name defined in docker-compose
 proxy=172.28.0.25:9050
 tx-proxy=tor,172.28.0.25:9050,disable_noise
 
-anonymous-inbound=<your_monero_onion_address>:18080,127.0.0.1:18084
+anonymous-inbound=${MONERO_ONION_ADDRESS}:18080,127.0.0.1:18084

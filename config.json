@@ -2,9 +2,17 @@
     "monero": {
         "wallet_address": "your_monero_wallet_address",
         "node_username": "create_a_username_for_node",
-        "node_password": "create_a_password_for_node"
+        "node_password": "create_a_password_for_node",
+        "data_dir": "DYNAMIC_DATA"
     },
     "tari": {
-        "wallet_address": "your_tari_wallet_address"
+        "wallet_address": "your_tari_wallet_address",
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "p2pool": {
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "tor": {
+        "data_dir": "DYNAMIC_DATA"
     }
 }
