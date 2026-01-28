@@ -42,10 +42,18 @@ sudo chmod -R 755 "$P2POOL_DIR/stats"
 
 # Write a preliminary .env so 'docker compose' has valid volume paths
 cat <<EOF > .env
+MONERO_ONION_ADDRESS=placeholder
+P2POOL_ONION_ADDRESS=placeholder
 MONERO_DATA_DIR=$MONERO_DIR
 TARI_DATA_DIR=$TARI_DIR
 P2POOL_DATA_DIR=$P2POOL_DIR
 TOR_DATA_DIR=$TOR_DATA_DIR
+P2POOL_PORT=37889
+P2POOL_FLAGS=
+MONERO_NODE_USERNAME=placeholder
+MONERO_NODE_PASSWORD=placeholder
+MONERO_WALLET_ADDRESS=placeholder
+TARI_WALLET_ADDRESS=placeholder
 EOF
 
 # --- 3. Start Tor & Generate Onion Addresses ---
@@ -65,6 +73,16 @@ MONERO_USER=$(jq -r .monero.node_username config.json)
 MONERO_PASS=$(jq -r .monero.node_password config.json)
 MONERO_WALLET=$(jq -r .monero.wallet_address config.json)
 TARI_WALLET=$(jq -r .tari.wallet_address config.json)
+POOL_TYPE=$(jq -r '.p2pool.pool // "main"' config.json)
+P2POOL_FLAGS=""
+P2POOL_PORT="37889"
+if [ "$POOL_TYPE" == "mini" ]; then
+    P2POOL_FLAGS="--mini"
+    P2POOL_PORT="37888"
+elif [ "$POOL_TYPE" == "nano" ]; then
+    P2POOL_FLAGS="--nano"
+    P2POOL_PORT="37890"
+fi
 
 cat <<EOF > .env
 MONERO_DATA_DIR=$MONERO_DIR
@@ -78,6 +96,8 @@ TARI_WALLET_ADDRESS=$TARI_WALLET
 MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
+P2POOL_FLAGS=$P2POOL_FLAGS
+P2POOL_PORT=$P2POOL_PORT
 EOF
 
 # --- 5. Apply Templates ---
