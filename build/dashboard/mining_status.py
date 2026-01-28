@@ -4,15 +4,20 @@ import shutil
 import time
 import asyncio
 from aiohttp import web, ClientSession, ClientTimeout
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 # --- CONFIGURATION ---
-STRATUM_STATS_PATH = "/app/stats/local/stratum"
-TARI_STATS_PATH = "/app/stats/local/merge_mining"
+BASE_STATS_DIR = "/app/stats"
+STRATUM_STATS_PATH = f"{BASE_STATS_DIR}/local/stratum"
+TARI_STATS_PATH = f"{BASE_STATS_DIR}/local/merge_mining"
+P2P_STATS_PATH = f"{BASE_STATS_DIR}/local/p2p"
+POOL_STATS_PATH = f"{BASE_STATS_DIR}/pool/stats"
+NETWORK_STATS_PATH = f"{BASE_STATS_DIR}/network/stats"
+
 DISK_PATH = '/data'
 XMRIG_API_PORT = 8080
 API_TIMEOUT = 1         
-UPDATE_INTERVAL = 30  # Refresh background data every 30 seconds
+UPDATE_INTERVAL = 30 
 
 LATEST_DATA = {}
 HASHRATE_HISTORY = []
@@ -20,9 +25,29 @@ HASHRATE_HISTORY = []
 def format_hr(h):
     try:
         val = float(h)
+        if val >= 1_000_000: return f"{val/1_000_000:.2f} MH/s"
         if val >= 1000: return f"{val/1000:.2f} KH/s"
         return f"{int(val)} H/s"
     except: return "0 H/s"
+
+def format_big_num(n):
+    """Formats large numbers (hashes/weights) into readable k/M/G/T/P format."""
+    try:
+        n = float(n)
+        if n == 0: return "0"
+        units = ['', 'k', 'M', 'G', 'T', 'P', 'E', 'Z']
+        for unit in units:
+            if abs(n) < 1000: return f"{n:.2f}{unit}"
+            n /= 1000
+        return f"{n:.2f}Y"
+    except: return "0"
+
+def format_time_abs(ts):
+    """Formats a unix timestamp into HH:MM:SS."""
+    try:
+        if not ts or int(ts) == 0: return "Never"
+        return datetime.fromtimestamp(int(ts)).strftime('%H:%M:%S')
+    except: return "Never"
 
 def format_uptime(seconds):
     try: return str(timedelta(seconds=int(seconds)))
@@ -63,8 +88,17 @@ def get_disk_usage(path="/"):
         }
     except: return {"total": "N/A", "used": "N/A", "percent": "0%", "percent_val": 0}
 
+def detect_pool_type(peers):
+    """Detects Main/Mini/Nano based on peer ports."""
+    counts = {"Main": 0, "Mini": 0, "Nano": 0}
+    for p in peers:
+        if "37889" in p: counts["Main"] += 1
+        elif "37888" in p: counts["Mini"] += 1
+        elif "37890" in p: counts["Nano"] += 1
+    winner = max(counts, key=counts.get)
+    return winner if counts[winner] > 0 else "Unknown"
+
 async def update_data_loop():
-    """Background task to fetch stats and update chart history."""
     global LATEST_DATA, HASHRATE_HISTORY
     while True:
         data = {
@@ -73,6 +107,16 @@ async def update_data_loop():
             "system": {"hp_status": "Unknown", "hp_val": "0/0", "hp_class": "status-warn"},
             "disk": get_disk_usage(DISK_PATH),
             "tari": None,
+            "p2p": {
+                "pool_type": "Initializing...", "connections": 0, "incoming": 0,
+                "peers": 0, "uptime": "0", "zmq": 0
+            },
+            "pool": {
+                "hashrate": "0 H/s", "miners": 0, "blocks": 0, "sidechain_height": 0,
+                "total_hashes": 0, "last_block_found": "N/A", "last_block_ts": 0,
+                "pplns_weight": 0, "pplns_window": 0, "diff": 0
+            },
+            "network": {"difficulty": 0, "height": 0, "reward": 0, "hash": "N/A", "ts": 0},
             "stratum": {},
             "workers": [],
             "total_live_h15": 0
@@ -91,7 +135,57 @@ async def update_data_loop():
                 data["system"]["hp_status"], data["system"]["hp_class"] = "NOT DETECTED", "status-bad"
         except: pass
 
-        # 2. Tari Stats
+        # 2. P2P Stats
+        if os.path.exists(P2P_STATS_PATH):
+            try:
+                with open(P2P_STATS_PATH, 'r') as f:
+                    p2p_json = json.load(f)
+                    peers = p2p_json.get("peers", [])
+                    data["p2p"] = {
+                        "pool_type": detect_pool_type(peers),
+                        "connections": p2p_json.get("connections", 0),
+                        "incoming": p2p_json.get("incoming_connections", 0),
+                        "peers": p2p_json.get("peer_list_size", 0),
+                        "uptime": format_uptime(p2p_json.get("uptime", 0)),
+                        "zmq": p2p_json.get("zmq_last_active", 0)
+                    }
+            except: pass
+
+        # 3. Pool Stats
+        if os.path.exists(POOL_STATS_PATH):
+            try:
+                with open(POOL_STATS_PATH, 'r') as f:
+                    pool_json = json.load(f)
+                    stats = pool_json.get("pool_statistics", {})
+                    data["pool"] = {
+                        "hashrate": format_hr(stats.get("hashRate", 0)),
+                        "miners": stats.get("miners", 0),
+                        "blocks": stats.get("totalBlocksFound", 0),
+                        "sidechain_height": f"{stats.get('sidechainHeight', 0):,}",
+                        "total_hashes": format_big_num(stats.get("totalHashes", 0)),
+                        "last_block_found": stats.get("lastBlockFound", 0),
+                        "last_block_ts": stats.get("lastBlockFoundTime", 0),
+                        "pplns_weight": format_big_num(stats.get("pplnsWeight", 0)),
+                        "pplns_window": stats.get("pplnsWindowSize", 0),
+                        "diff": format_big_num(stats.get("sidechainDifficulty", 0))
+                    }
+            except: pass
+
+        # 4. Network Stats
+        if os.path.exists(NETWORK_STATS_PATH):
+            try:
+                with open(NETWORK_STATS_PATH, 'r') as f:
+                    net_json = json.load(f)
+                    data["network"] = {
+                        "difficulty": f"{net_json.get('difficulty', 0):,}",
+                        "height": f"{net_json.get('height', 0):,}",
+                        "reward": f"{net_json.get('reward', 0) / 1e12:.4f}",
+                        "hash": net_json.get('hash', 'N/A')[:12] + "...",
+                        "ts": net_json.get('timestamp', 0)
+                    }
+            except: pass
+
+        # 5. Tari Stats
         if os.path.exists(TARI_STATS_PATH):
             try:
                 with open(TARI_STATS_PATH, 'r') as f:
@@ -108,7 +202,7 @@ async def update_data_loop():
                         }
             except: pass
 
-        # 3. Stratum & Async Worker Processing
+        # 6. Stratum & Workers
         if os.path.exists(STRATUM_STATS_PATH):
             try:
                 with open(STRATUM_STATS_PATH, 'r') as f:
@@ -146,7 +240,6 @@ async def update_data_loop():
                             data["workers"].append(w_data)
             except: pass
 
-        # Update History Chart
         HASHRATE_HISTORY.append({"t": time.strftime('%H:%M'), "v": data["total_live_h15"]})
         if len(HASHRATE_HISTORY) > 30: HASHRATE_HISTORY.pop(0)
         
@@ -155,8 +248,7 @@ async def update_data_loop():
 
 async def handle_get(request):
     d = LATEST_DATA
-    if not d:
-        return web.Response(text="Initializing data...", status=503)
+    if not d: return web.Response(text="Initializing data...", status=503)
 
     rows = "".join([f"""
         <tr>
@@ -205,11 +297,15 @@ async def handle_get(request):
         .progress-bg {{ background: var(--border); border-radius: 4px; height: 10px; width: 100%; margin-top: 5px; }}
         .progress-fill {{ background: var(--accent); height: 100%; border-radius: 4px; transition: width 0.5s; }}
         .progress-fill.warning {{ background: var(--warn); }} .progress-fill.critical {{ background: var(--bad); }}
+        .pool-badge {{ background: var(--accent); color: #000; padding: 2px 6px; border-radius: 4px; font-size: 12px; vertical-align: middle; margin-left: 10px; font-weight: bold; }}
     </style></head>
     <body><div class="container">
         <div class="header">
             <div>
-                <h2 style="margin:0">{d['host_ip']}</h2>
+                <div style="display:flex; align-items:center;">
+                    <h2 style="margin:0">{d['host_ip']}</h2>
+                    <span class="pool-badge">P2Pool {d['p2p']['pool_type']}</span>
+                </div>
                 <span class="{d['system']['hp_class']}">Huge Pages: {d['system']['hp_status']} ({d['system']['hp_val']})</span>
                 <div style="margin-top: 5px; font-size: 12px; color: #8b949e;">
                     Disk: {d['disk']['used']} / {d['disk']['total']} ({d['disk']['percent']})
@@ -223,23 +319,59 @@ async def handle_get(request):
         </div>
         <div class="grid">
             <div class="card"><canvas id="hChart" height="180"></canvas></div>
+            
             <div class="card">
                 <h3>Stratum Pool</h3>
                 <div class="stat-grid">
-                    <div class="stat-card">
-                        <h5>Hashrate Statistics</h5>
+                    <div class="stat-card" style="grid-column: span 2;">
+                        <h5>Hashrate (15m / 1h / 24h)</h5>
                         <p style="font-size: 11px; line-height: 1.4;">
-                            <strong>15m:</strong> {format_hr(d['stratum'].get('hashrate_15m'))}<br>
-                            <strong>1h:</strong> {format_hr(d['stratum'].get('hashrate_1h'))}<br>
-                            <strong>24h:</strong> {format_hr(d['stratum'].get('hashrate_24h'))}
+                            {format_hr(d['stratum'].get('hashrate_15m'))} / 
+                            {format_hr(d['stratum'].get('hashrate_1h'))} / 
+                            {format_hr(d['stratum'].get('hashrate_24h'))}
                         </p>
                     </div>
-                    <div class="stat-card"><h5>Shares (F/Err)</h5><p>{d['stratum'].get('shares_found', 0)} / {d['stratum'].get('shares_failed',0)}</p></div>
+                    <div class="stat-card"><h5>Shares (OK/Err)</h5><p>{d['stratum'].get('shares_found', 0)} / {d['stratum'].get('shares_failed',0)}</p></div>
                     <div class="stat-card"><h5>Effort (Curr/Avg)</h5><p>{d['stratum'].get('current_effort',0):.2f}% / {d['stratum'].get('average_effort',0):.2f}%</p></div>
+                    <div class="stat-card"><h5>Total Shares</h5><p>{format_big_num(d['stratum'].get('total_stratum_shares',0))}</p></div>
                     <div class="stat-card"><h5>Reward Share</h5><p>{d['stratum'].get('block_reward_share_percent',0):.3f}%</p></div>
+                    <div class="stat-card"><h5>Connections</h5><p>In: {d['stratum'].get('incoming_connections',0)} / Out: {d['stratum'].get('connections',0)}</p></div>
+                    <div class="stat-card"><h5>Last Share</h5><p>{format_time_abs(d['stratum'].get('last_share_found_time', 0))}</p></div>
+                    <div class="stat-card" style="grid-column: span 2;"><h5>Total Hashes</h5><p>{format_big_num(d['stratum'].get('total_hashes',0))}</p></div>
                 </div>
                 <div style="font-size:10px; color:#666; margin-top:10px; overflow-wrap: break-word;">Wallet: {d['stratum'].get('wallet', 'N/A')}</div>
             </div>
+
+            <div class="card">
+                <h3>P2Pool Network</h3>
+                <div class="stat-grid">
+                    <div class="stat-card"><h5>Sidechain Height</h5><p>{d['pool']['sidechain_height']}</p></div>
+                    <div class="stat-card"><h5>Difficulty</h5><p>{d['pool']['diff']}</p></div>
+                    <div class="stat-card"><h5>Pool Hashrate</h5><p>{d['pool']['hashrate']}</p></div>
+                    <div class="stat-card"><h5>Total Hashes</h5><p>{d['pool']['total_hashes']}</p></div>
+                    <div class="stat-card"><h5>Miners</h5><p>{d['pool']['miners']}</p></div>
+                    <div class="stat-card"><h5>PPLNS (Win/Wt)</h5><p>{d['pool']['pplns_window']} / {d['pool']['pplns_weight']}</p></div>
+                    <div class="stat-card"><h5>Blocks Found</h5><p>{d['pool']['blocks']}</p></div>
+                    <div class="stat-card"><h5>Last Block</h5><p>{d['pool']['last_block_found']} ({format_time_abs(d['pool']['last_block_ts'])})</p></div>
+                    <div class="stat-card"><h5>Peers (Out/In/All)</h5><p>{d['p2p']['connections']} / {d['p2p']['incoming']} / {d['p2p']['peers']}</p></div>
+                    <div class="stat-card"><h5>Status</h5><p>Up: {d['p2p']['uptime']} (ZMQ: {d['p2p']['zmq']}s)</p></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>XMR Network</h3>
+                <div class="stat-grid">
+                    <div class="stat-card"><h5>Block Height</h5><p>{d['network']['height']}</p></div>
+                    <div class="stat-card"><h5>Reward</h5><p>{d['network']['reward']} XMR</p></div>
+                    <div class="stat-card" style="grid-column: span 2;"><h5>Difficulty</h5><p>{d['network']['difficulty']}</p></div>
+                    <div class="stat-card" style="grid-column: span 2;">
+                        <h5>Current Block Hash</h5>
+                        <p style="font-size:10px; font-family:monospace;">{d['network']['hash']}</p>
+                    </div>
+                    <div class="stat-card" style="grid-column: span 2;"><h5>Network Time</h5><p>{format_time_abs(d['network']['ts'])}</p></div>
+                </div>
+            </div>
+            
             {tari_section}
         </div>
         <div class="card">
