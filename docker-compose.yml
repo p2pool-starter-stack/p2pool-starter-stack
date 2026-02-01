@@ -143,11 +143,15 @@ services:
       container_name: dashboard
       restart: unless-stopped
       logging: *default-logging
+      network_mode: "host"
       volumes:
         - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
-        - /home:/data:ro
+        - ${DASHBOARD_DATA_DIR}:/data
+        - /var/run/dbus:/var/run/dbus:ro
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
-      network_mode: "host"
+      environment:
+      - HOST_IP=${HOST_IP:-127.0.0.1}
+      - TZ=America/Chicago
 
 networks:
   mining_net:

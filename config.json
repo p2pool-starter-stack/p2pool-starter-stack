@@ -15,5 +15,8 @@
     },
     "tor": {
         "data_dir": "DYNAMIC_DATA"
+    },
+    "dashboard": {
+        "data_dir": "DYNAMIC_DATA"
     }
 }
