@@ -1,0 +1,8 @@
+{
+    "HOME_DIR": "DYNAMIC_HOME",
+    "DONATION": 1,
+    "WORKER_CONFIG_FILE": "./worker-config/example-config.json.template",
+    "P2POOL_NODE_HOSTNAME": "<P2POOL_NODE_HOSTNAME>",
+    "P2POOL_NODE_PORT": 3333,
+    "P2POOL_PROXY_PORT": 3334
+}

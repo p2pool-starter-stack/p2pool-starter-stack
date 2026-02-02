@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
+#
+# Deployment Script for Monero + Tari Merge Mining Stack
+# Handles directory initialization, configuration generation, Tor service provisioning,
+# and system-level optimizations (HugePages).
+#
 set -e
 
-# --- Helper Functions ---
+# --- Logging Utilities ---
 log() { echo -e "\033[1;32m[DEPLOY]\033[0m $1"; }
 warn() { echo -e "\033[1;33m[WARNING]\033[0m $1"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; exit 1; }
 
-# --- 1. Pre-flight Checks ---
+# --- 1. System Prerequisite Verification ---
 command -v jq >/dev/null || error "jq is required. Run: sudo apt install jq"
 command -v docker >/dev/null || error "docker is required."
 docker compose version >/dev/null 2>&1 || error "Docker Compose V2 is required (command: 'docker compose')."
 [ -f "config.json" ] || error "config.json not found."
 
-# Detect real user if run via sudo to fix permission issues
+# Determine the invoking user to maintain correct file ownership when running via sudo
 REAL_USER="${SUDO_USER:-$USER}"
 
+# Check for AVX2 support (Critical for RandomX performance)
 if ! grep -q "avx2" /proc/cpuinfo; then
     warn "AVX2 not detected. Mining performance will be poor."
 fi
 
-# Flag to track if a reboot is needed
+# Flag to indicate if a system reboot is necessary (e.g., after kernel parameter updates)
 REBOOT_REQUIRED=false
 
-# --- 2. Initialize Paths & Preliminary .env ---
-log "Reading configuration and initializing paths..."
+# --- 2. Directory Initialization & Configuration Parsing ---
+log "Parsing configuration and initializing data directories..."
 
-# --- Data Directory Logic (Handles "DYNAMIC_DATA" or Empty strings) ---
-
+# Resolve data directories from config.json, defaulting to local ./data if unspecified
 MONERO_DIR=$(jq -r '.monero.data_dir // empty' config.json)
 if [ -z "$MONERO_DIR" ] || [ "$MONERO_DIR" == "DYNAMIC_DATA" ]; then
     MONERO_DIR="$PWD/data/monero"
@@ -52,14 +57,17 @@ if [ -z "$DASHBOARD_DIR" ] || [ "$DASHBOARD_DIR" == "DYNAMIC_DATA" ]; then
     DASHBOARD_DIR="$PWD/data/dashboard"
 fi
 
-# Create directories immediately
+# Create directory hierarchy
 mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR"
-sudo chown -R 100:101 "$TOR_DATA_DIR" # Tor user inside container is UID 100
+
+# Set permissions for Tor container (UID 100 / GID 101 is standard for Alpine/Debian Tor packages)
+sudo chown -R 100:101 "$TOR_DATA_DIR"
 sudo chown -R "$REAL_USER":"$REAL_USER" "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR"
 mkdir -p "$P2POOL_DIR/stats"
 sudo chmod -R 755 "$P2POOL_DIR/stats"
 
-# Write a preliminary .env so 'docker compose' has valid volume paths during Tor startup
+# Generate preliminary .env file
+# This is required to start the Tor service and generate Onion addresses before the full stack launches.
 cat <<EOF > .env
 MONERO_ONION_ADDRESS=placeholder
 P2POOL_ONION_ADDRESS=placeholder
@@ -79,25 +87,25 @@ XVB_POOL_URL=na.xmrvsbeast.com:4247
 XVB_DONOR_ID=placeholder
 EOF
 
-# --- 3. Start Tor & Generate Onion Addresses ---
-log "Starting Tor to generate Onion addresses..."
+# --- 3. Tor Hidden Service Provisioning ---
+log "Initializing Tor service to generate Onion addresses..."
 docker compose up -d tor
-log "Waiting for Tor hidden services to populate (15s)..."
+log "Waiting for Hidden Services to propagate (15s)..."
 sleep 15
 
-# Get Onion Addresses
+# Retrieve generated Onion Hostnames from the running Tor container
 MONERO_ONION=$(docker exec tor cat /var/lib/tor/monero/hostname)
 TARI_ONION=$(docker exec tor cat /var/lib/tor/tari/hostname)
 P2POOL_ONION=$(docker exec tor cat /var/lib/tor/p2pool/hostname)
 
-# --- 4. Finalize .env File ---
-log "Gathering remaining credentials and finalizing .env..."
+# --- 4. Environment Configuration Finalization ---
+log "Finalizing environment configuration (.env)..."
 MONERO_USER=$(jq -r .monero.node_username config.json)
 MONERO_PASS=$(jq -r .monero.node_password config.json)
 MONERO_WALLET=$(jq -r .monero.wallet_address config.json)
 TARI_WALLET=$(jq -r .tari.wallet_address config.json)
 
-# P2Pool Logic
+# P2Pool Network Configuration (Main/Mini/Nano)
 POOL_TYPE=$(jq -r '.p2pool.pool // "main"' config.json)
 P2POOL_FLAGS=""
 P2POOL_PORT="37889"
@@ -109,17 +117,17 @@ elif [ "$POOL_TYPE" == "nano" ]; then
     P2POOL_PORT="37890"
 fi
 
-# XMRig Proxy Logic
+# XMRig Proxy Settings
 PROXY_PORT=$(jq -r '.xmrig_proxy.port // empty' config.json)
 [ -z "$PROXY_PORT" ] && PROXY_PORT="3344"
 
 XVB_POOL_URL=$(jq -r '.xmrig_proxy.url // empty' config.json)
 [ -z "$XVB_POOL_URL" ] && XVB_POOL_URL="na.xmrvsbeast.com:4247"
 
-# Smart Donor ID: If empty OR set to DYNAMIC_ID, grab first 8 chars of main wallet
+# Smart Donor ID: Auto-generate from wallet if not explicitly configured
 XVB_DONOR_ID=$(jq -r '.xmrig_proxy.donor_id // empty' config.json)
 if [ -z "$XVB_DONOR_ID" ] || [ "$XVB_DONOR_ID" == "DYNAMIC_ID" ]; then
-    log "No explicit Donor ID found. Using first 8 chars of Monero wallet."
+    log "Configuring Donor ID using first 8 characters of Monero wallet."
     XVB_DONOR_ID=$(echo "$MONERO_WALLET" | cut -c 1-8)
 fi
 
@@ -143,36 +151,36 @@ XVB_POOL_URL=$XVB_POOL_URL
 XVB_DONOR_ID=$XVB_DONOR_ID
 EOF
 
-# --- 5. Apply Templates ---
-log "Applying configuration templates..."
+# --- 5. Service Configuration Injection ---
+log "Injecting service configurations..."
 cp build/tari/config.toml.template build/tari/config.toml
 TARI_ONION_SHORT=$(echo "$TARI_ONION" | cut -d'.' -f1)
 sed -i "s/<your_tari_onion_address_no_extension>/$TARI_ONION_SHORT/g" build/tari/config.toml
 
-# --- 6. Kernel & GRUB Optimization (HugePages) ---
-log "Optimizing system for RandomX (HugePages)..."
+# --- 6. Kernel Optimization (HugePages) ---
+log "Applying RandomX optimizations (HugePages)..."
 
-# 6a. Apply immediately
+# 6a. Apply runtime configuration (Non-persistent)
 sudo sysctl -w vm.nr_hugepages=3072
 
-# 6b. Update GRUB for permanence
+# 6b. Persist configuration via Bootloader (GRUB)
 if [ -f "/etc/default/grub" ]; then
     if ! grep -q "hugepages=" /etc/default/grub; then
-        log "Updating /etc/default/grub..."
+        log "Updating GRUB configuration for persistent HugePages..."
         sudo cp /etc/default/grub /etc/default/grub.bak
         sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never /' /etc/default/grub
         if command -v update-grub >/dev/null; then
             sudo update-grub
             REBOOT_REQUIRED=true
         else
-            error "update-grub not found. Please update your bootloader configuration manually to enable HugePages."
+            warn "'update-grub' not found. Please manually update your bootloader to enable HugePages."
         fi
     else
         log "HugePages already configured in GRUB."
     fi
 fi
 
-# --- 7. Final Status ---
+# --- 7. Deployment Summary ---
 log "Deployment preparation complete!"
 if [ "$REBOOT_REQUIRED" = true ]; then
     echo -e "\n\033[1;33m[!] ATTENTION: System optimization requires a reboot.\033[0m"

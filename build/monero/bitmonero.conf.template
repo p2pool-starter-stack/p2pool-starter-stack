@@ -1,11 +1,11 @@
-# --- DATA PATHS ---
-# These paths are INTERNAL to the container
+# --- Data & Logging Configuration ---
+# Internal container paths for blockchain data and logs
 data-dir=/root/.bitmonero
 log-file=/root/.bitmonero/bitmonero.log
 log-level=0
 
-# --- NETWORK SETTINGS ---
-# We bind to 0.0.0.0 so P2Pool and Tari can talk to Monerod
+# --- Network Interface Binding ---
+# Bind to all interfaces (0.0.0.0) to allow communication with P2Pool and Tari containers
 p2p-bind-ip=0.0.0.0
 p2p-bind-port=18080
 rpc-bind-ip=0.0.0.0
@@ -13,24 +13,33 @@ rpc-bind-port=18081
 confirm-external-bind=1
 public-node=1
 
-# --- P2POOL / ZMQ ---
-# This is critical for P2Pool to see new blocks
+# --- P2Pool & ZMQ Integration ---
+# ZeroMQ publisher for block notifications (Required for P2Pool)
 zmq-pub=tcp://0.0.0.0:18083
+
+# Peer Management
 out-peers=32
 in-peers=64
+
+# Priority Nodes (High uptime public nodes for faster initial sync)
 add-priority-node=p2pmd.xmrvsbeast.com:18080
 add-priority-node=nodes.hashvault.pro:18080
+
+# Checkpointing & DNS Security
 enforce-dns-checkpointing=true
 enable-dns-blocklist=true
 
-
-# --- SECURITY ---
+# --- RPC Security ---
+# Restrict RPC access and enforce authentication
 restricted-rpc=1
 rpc-login=${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}
 no-igd=1
 
-# --- TOR SETTINGS ---
+# --- Tor Anonymity Network ---
+# Proxy transaction traffic through the Tor container
+# Note: IP 172.28.0.25 corresponds to the static IP assigned to the Tor service in docker-compose
 proxy=172.28.0.25:9050
 tx-proxy=tor,172.28.0.25:9050,disable_noise
 
+# Advertise Tor hidden service for inbound connections
 anonymous-inbound=${MONERO_ONION_ADDRESS}:18080,127.0.0.1:18084

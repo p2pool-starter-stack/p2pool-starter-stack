@@ -3,77 +3,97 @@ import logging
 from config import XVB_TIME_ALGO_MS, XVB_MIN_TIME_SEND_MS
 
 class XvbAlgorithm:
+    """
+    Manages the switching logic between P2Pool and XvB donation mining.
+    
+    Determines the optimal mining mode (P2POOL, XVB, or SPLIT) based on 
+    current hashrate, historical performance, and configured donation tiers.
+    """
     def __init__(self, state_manager):
-        self.state = state_manager
+        self.state_manager = state_manager
         self.logger = logging.getLogger("XvB_Algo")
         
-        # Margin for 1h average (from Rust: XVB_SIDE_MARGIN_1H)
-        # Reduced to 5% to strictly adhere to "round minimum" rule
+        # Safety margin (5%) to ensure the 1h average strictly meets the tier requirement
+        # despite network fluctuations.
         self.margin_1h = 0.05 
 
     def get_decision(self, current_hr, p2pool_stats, xvb_stats):
         """
-        Main decision loop.
-        Returns: ("MODE_NAME", duration_ms_for_xvb)
+        Evaluates the current mining state to determine the next operation mode.
+
+        Args:
+            current_hr (float): Current 15m average hashrate.
+            p2pool_stats (dict): Statistics from the local P2Pool node.
+            xvb_stats (dict): Historical statistics for XvB mining.
+
+        Returns:
+            tuple: (Mode String ["P2POOL"|"XVB"|"SPLIT"], Duration in ms)
         """
-        # Safety: Force P2Pool if no shares found in window to prevent revenue loss.
+        # Constraint: Enforce P2Pool mode if no shares have been found recently.
+        # This prevents potential revenue loss during low-luck periods.
         shares_found = p2pool_stats.get('shares_found', 0)
-        
         if shares_found == 0:
-            self.logger.info("Decision: Force P2POOL (No shares in window)")
+            self.logger.info("Decision Strategy: Force P2POOL (Zero shares in window)")
             return "P2POOL", 0
 
-        # Safety: Check XvB Fail Count
+        # Constraint: Fallback to P2Pool if XvB endpoint failures exceed threshold.
         fail_count = xvb_stats.get('fail_count', 0)
         if fail_count >= 3:
-            self.logger.warning(f"Decision: Force P2POOL (XvB Fail Count too high: {fail_count})")
+            self.logger.warning(f"Decision Strategy: Force P2POOL (Excessive XvB failures: {fail_count})")
             return "P2POOL", 0
 
-        # Determine highest qualified XvB tier
+        # Identify the highest qualified donation tier based on hashrate capacity
         target_hr = self._get_target_donation_hr(current_hr)
         
-        # If no tier qualified (standard donor), default to P2Pool
+        # If no tier is qualified (Standard/Free tier), default to P2Pool
         if target_hr == 0:
              return "P2POOL", 0
 
-        # Check if donation targets are met (24h avg >= target AND 1h avg within margin)
+        # Verify if donation targets are currently satisfied
+        # Criteria: 24h Avg >= Target AND 1h Avg >= (Target - Margin)
         avg_24h = xvb_stats.get('24h_avg', 0)
         avg_1h = xvb_stats.get('1h_avg', 0)
 
         is_fulfilled = (avg_24h >= target_hr) and (avg_1h >= (target_hr * (1.0 - self.margin_1h)))
 
         if not is_fulfilled:
-            self.logger.info(f"Decision: Force XVB (Target {target_hr} not met, 24h: {avg_24h:.0f})")
+            self.logger.info(f"Decision Strategy: Force XVB (Target {target_hr} not met, 24h: {avg_24h:.0f})")
             return "XVB", XVB_TIME_ALGO_MS
         
-        # Split Cycle (Maintenance Mode)
+        # Split Mode: Calculate precise maintenance duration
         needed_time_ms = self._get_needed_time(current_hr, target_hr)
         
         if needed_time_ms > 0:
+            # Clamp duration to configured bounds
             if needed_time_ms < XVB_MIN_TIME_SEND_MS:
                 needed_time_ms = XVB_MIN_TIME_SEND_MS
             
             if needed_time_ms > XVB_TIME_ALGO_MS:
                 needed_time_ms = XVB_TIME_ALGO_MS
                 
-            self.logger.info(f"Decision: Split Mode ({needed_time_ms}ms to XvB)")
+            self.logger.info(f"Decision Strategy: Split Mode ({needed_time_ms}ms allocated to XvB)")
             return "SPLIT", int(needed_time_ms)
             
         return "P2POOL", 0
 
     def _get_target_donation_hr(self, current_hr):
         """
-        Finds best tier, reserving 15% hashrate for P2Pool safety.
+        Identifies the optimal donation tier.
+        
+        Reserves a 15% safety margin on the current hashrate to ensure
+        P2Pool stability before committing to a higher tier.
         """
         safe_capacity = current_hr * 0.85 
         
-        limit_mega = self.state.get_tier_limit("donor_mega")   # 1,000,000
-        limit_whale = self.state.get_tier_limit("donor_whale") # 100,000
-        limit_vip = self.state.get_tier_limit("donor_vip")     # 10,000
-        limit_mvp = self.state.get_tier_limit("mvp")           # 5,000
-        limit_donor = self.state.get_tier_limit("donor")       # 1,000
+        # Retrieve tier thresholds from state configuration
+        tiers = self.state_manager.state.get("tiers", {})
+        limit_mega = tiers.get("donor_mega", 0)
+        limit_whale = tiers.get("donor_whale", 0)
+        limit_vip = tiers.get("donor_vip", 0)
+        limit_mvp = tiers.get("mvp", 0)
+        limit_donor = tiers.get("donor", 0)
         
-        # Check tiers against SAFE capacity
+        # Evaluate tiers in descending order of requirement
         if limit_mega > 0 and safe_capacity >= limit_mega:
             return float(limit_mega)
         elif limit_whale > 0 and safe_capacity >= limit_whale:
@@ -88,8 +108,11 @@ class XvbAlgorithm:
         return 0.0
 
     def _get_needed_time(self, current_hr, target_hr):
-        """Calculates exact milliseconds needed to maintain average."""
+        """
+        Computes the precise duration (in milliseconds) required to sustain the target average.
+        
+        Formula: (Target Hashrate / Current Hashrate) * Cycle Length
+        """
         if current_hr == 0: return 0
-        # Formula: (Target / Current) * Cycle_Length
         needed = (target_hr / current_hr) * XVB_TIME_ALGO_MS
         return math.ceil(needed)

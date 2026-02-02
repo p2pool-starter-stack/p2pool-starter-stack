@@ -1,14 +1,20 @@
+# --- Tari Base Node Configuration Template ---
+# This file is processed by deploy.sh to inject the specific Onion address.
+
 [common]
+# Base directory for blockchain database and logs
 base_path = "/var/tari/node"
 
 [p2p.seeds]
+# DNS seeds using DNS-over-HTTPS for censorship resistance
 dns_seed_name_servers = [
     "1.1.1.1:853/cloudflare-dns.com",
     "8.8.8.8:853/dns.google"
 ]
 
 [mainnet.p2p.seeds]
-# dns_seeds = ["seeds.tari.com"]
+# List of hardcoded peer seeds to facilitate initial network entry
+# These nodes are maintained by the community and Tari developers
 peer_seeds = [
     "44c1ebed4ec5a6b3b325601e83ff3924f89e8943e15c5e82dfffe83754482b26::/ip4/54.36.113.0/tcp/18189",
     "c00684151e75650c63a5d3e4fd4221ce19c4fbffd1a921caaecf06f8a4a65f0f::/ip4/15.235.48.4/tcp/18189",
@@ -49,13 +55,17 @@ peer_seeds = [
     "de568a57a62bff39322fff935523c5f670e379783293c88b1c525b776b568d41::/onion3/xwsoa6q4ijugfar22uoggu22wt6ttmtg2egkyo4fs6ptfjtq3kbrulid:18141",
     "ecf3f88c40d0b299cf0d0ff30e7ce8dd5a021c0806b8487426f0de89e4766177::/onion3/3dcfberbstruf3g2g5slacw2ls3nj6qmad2fxumqop3m65llagnhj6yd:18141",
     "fabf65440daa00a8033a7d0c966d68815f17feb6a25bc60c75bc5d4a84c41123::/onion3/k7egeg7alhhgr5vbjgatdd6g2rlvy3l6pd3kxvget2q437jqh7q6cuid:18141",
-] # Custom specified peer seed nodes (Default: peer_seeds = [])
+]
 
 [base_node]
+# Enable merge mining capabilities
 mining_enabled = true
+
+# gRPC Interface Configuration
 grpc_enabled = true
 grpc_address = "/ip4/0.0.0.0/tcp/18142"
 
+# Allowed gRPC methods for interaction with the dashboard and miner
 grpc_server_allow_methods = [
     "get_version",
     "check_for_updates",
@@ -99,24 +109,33 @@ grpc_server_allow_methods = [
 ]
 
 [base_node.p2p]
+# Public address advertisement
+# Note: <your_tari_onion_address_no_extension> is replaced during deployment
 public_addresses = ["/onion3/<your_tari_onion_address_no_extension>:18189"]
+
+# Concurrency limits for peer tasks
 max_concurrent_inbound_tasks = 15
 max_concurrent_outbound_tasks = 100
 
 [base_node.p2p.transport]
+# Enforce Tor transport for privacy
 type = "tor"
 
 [base_node.p2p.transport.tcp]
+# Bind to all interfaces inside the container
 listener_address = "/ip4/0.0.0.0/tcp/18189"
 
 [base_node.state_machine]
+# Synchronization timeouts
 blockchain_sync_config.initial_max_sync_latency = 2000
 blockchain_sync_config.rpc_deadline = 2000
 
 [base_node.p2p.transport.tor]
+# Tor Control Port configuration
+# Connects to the shared Tor container at static IP 172.28.0.25
 control_address = "/ip4/172.28.0.25/tcp/9051"
 socks_address_override = "/ip4/172.28.0.25/tcp/9050"
 control_auth = "auto"
 
+# Port mapping for the hidden service
 onion_port = 18189
-

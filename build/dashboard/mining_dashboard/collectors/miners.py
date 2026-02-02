@@ -5,18 +5,26 @@ from config import XMRIG_API_PORT, API_TIMEOUT
 
 async def fetch_xmrig_summary(session, ip, name):
     """
-    Connects to a single XMRig instance.
-    PRIORITY: Hostname -> Hostname.local -> IP
+    Retrieves operational statistics from a single XMRig instance.
+    
+    Implements a failover connection strategy:
+    1. Hostname resolution
+    2. mDNS (Bonjour/Avahi)
+    3. Direct IP address
+    
+    Returns:
+        dict: Normalized worker statistics including hashrate and connection status.
     """
     targets = [
-        f"{name}:{XMRIG_API_PORT}",       # Hostname
-        f"{name}.local:{XMRIG_API_PORT}", # mDNS
-        f"{ip}:{XMRIG_API_PORT}"          # IP Fallback
+        f"{name}:{XMRIG_API_PORT}",       # Priority 1: Standard Hostname
+        f"{name}.local:{XMRIG_API_PORT}", # Priority 2: mDNS (Local Network)
+        f"{ip}:{XMRIG_API_PORT}"          # Priority 3: Direct IP Fallback
     ]
     
     timeout = ClientTimeout(total=API_TIMEOUT)
     
     for target in targets:
+        # Skip invalid targets where hostname/IP might be missing
         if target.startswith(":"): continue
             
         url = f"http://{target}/1/summary"
@@ -26,8 +34,10 @@ async def fetch_xmrig_summary(session, ip, name):
                 if response.status == 200:
                     data = await response.json()
                     
+                    # Validate hashrate structure (expected: [10s, 60s, 15m])
                     hr_total = data.get("hashrate", {}).get("total")
-                    if not isinstance(hr_total, list): hr_total = [0, 0, 0]
+                    if not isinstance(hr_total, list): 
+                        hr_total = [0, 0, 0]
                     
                     active_pool = data.get("connection", {}).get("pool", "Unknown")
                     return {
@@ -39,12 +49,14 @@ async def fetch_xmrig_summary(session, ip, name):
                         "h10": hr_total[0] if len(hr_total) > 0 else 0,
                         "h60": hr_total[1] if len(hr_total) > 1 else 0,
                         "h15": hr_total[2] if len(hr_total) > 2 else 0,
-                        "results": data.get("results", {}),
+                        "results": data.get("results", {}), # Share submission statistics
                         "active_pool": active_pool
                     }
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            # Connection failed for this target; proceed to next fallback
             continue
             
+    # Return default offline state if all connection attempts fail
     return {
         "name": name,
         "ip": ip,
@@ -56,10 +68,13 @@ async def fetch_xmrig_summary(session, ip, name):
 
 async def get_all_workers_stats(worker_configs):
     """
-    Fetches stats for all workers in parallel.
+    Orchestrates concurrent data retrieval from all registered worker nodes.
     
-    worker_configs: List of dicts [{"ip": "192.168.1.50", "name": "miner01"}, ...]
-    (Usually provided by collectors.pools.get_stratum_stats)
+    Args:
+        worker_configs (list): List of dicts containing 'ip' and 'name' for each worker.
+        
+    Returns:
+        list: Aggregated list of worker statistic dictionaries.
     """
     if not worker_configs:
         return []
@@ -67,9 +82,9 @@ async def get_all_workers_stats(worker_configs):
     async with aiohttp.ClientSession() as session:
         tasks = []
         for w in worker_configs:
-            # Launch a fetch task for every worker
+            # Schedule asynchronous fetch task for each worker
             tasks.append(fetch_xmrig_summary(session, w['ip'], w['name']))
         
-        # Wait for all requests to finish concurrently
+        # Execute all tasks concurrently and wait for completion
         results = await asyncio.gather(*tasks)
         return results

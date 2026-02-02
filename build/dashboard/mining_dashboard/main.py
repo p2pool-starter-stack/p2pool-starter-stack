@@ -15,6 +15,7 @@ from collectors.xvb import fetch_xvb_stats
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("Main")
 
+# Global shared state for the latest aggregated metrics
 LATEST_DATA = {
     "workers": [],
     "total_live_h15": 0,
@@ -31,12 +32,20 @@ algorithm = XvbAlgorithm(state_manager)
 
 async def switch_miners(mode, workers):
     """
-    Switches pool priority via XMRig API.
-    Target Priority: Hostname -> mDNS -> IP
+    Configures the upstream pool priority for all active XMRig workers.
+    
+    Iterates through the provided worker list and updates their configuration
+    via the XMRig HTTP API to prioritize either P2Pool or the XvB proxy.
+    
+    Args:
+        mode (str): The target mining mode ("P2POOL" or "XVB").
+        workers (list): A list of worker dictionaries containing 'ip' and 'name'.
     """
     if not workers: return
     
-    # In config.json: P2Pool should be Pool #0, XvB (Direct/Proxy) should be Pool #1
+    # Configuration Assumption:
+    # Pool 0: P2Pool (Local)
+    # Pool 1: XvB (Proxy/Direct)
     p2pool_state = True if mode == "P2POOL" else False
     xvb_state = True if mode == "XVB" else False
 
@@ -45,7 +54,7 @@ async def switch_miners(mode, workers):
             name = w.get('name', '')
             ip = w.get('ip', '')
             
-            # Attempt to reach miner via Name, then .local, then IP
+            # Connection Strategy: Hostname -> mDNS -> IP
             targets = [
                 f"{name}:{XMRIG_API_PORT}",       
                 f"{name}.local:{XMRIG_API_PORT}", 
@@ -74,21 +83,25 @@ async def switch_miners(mode, workers):
                     continue
             
             if not switched:
-                logger.warning(f"Failed to switch {name} (Tried: {', '.join(targets)})")
+                logger.warning(f"Worker Control Error: Failed to switch {name} (Targets attempted: {', '.join(targets)})")
 
 
 async def data_collection_loop():
-    logger.info("Starting Data Collection Loop...")
+    """
+    Periodic task to aggregate statistics from local collectors and external APIs.
+    Updates the global LATEST_DATA state and persists historical metrics.
+    """
+    logger.info("Service Started: Data Collection Loop")
     
-    loop_count = 0 
+    iteration_count = 0 
     
     while True:
         try:
-            # Standard Collection (Fast, local stats)
+            # 1. Collect Local Statistics (High Frequency)
             stratum_raw, worker_configs = get_stratum_stats()
             workers_stats = await get_all_workers_stats(worker_configs)
             
-            # Summing h15 (15m average) for stable decision making
+            # Aggregate 15-minute average hashrate for stable algorithmic input
             total_h15 = sum(w['h15'] for w in workers_stats if w['status'] == 'online')
             
             pool_stats = get_p2pool_stats()
@@ -108,7 +121,8 @@ async def data_collection_loop():
                 "stratum": stratum_raw
             })
             
-            # Determine split for history based on current mode
+            # 2. Update Historical Data
+            # Attribute hashrate to the active mode for visualization
             current_mode = state_manager.get_xvb_stats().get("current_mode", "P2POOL")
             p2pool_hr = 0
             xvb_hr = 0
@@ -119,8 +133,8 @@ async def data_collection_loop():
             
             state_manager.update_history(total_h15, p2pool_hr, xvb_hr)
 
-            # External XvB Check (Throttled: every 10 cycles)
-            if loop_count % 10 == 0:
+            # 3. External API Sync (Throttled: Every 5 minutes / 10 cycles)
+            if iteration_count % 10 == 0:
                 real_xvb_stats = await fetch_xvb_stats()
                 if real_xvb_stats:
                     current_mode = state_manager.get_xvb_stats().get("current_mode", "P2POOL")
@@ -130,18 +144,22 @@ async def data_collection_loop():
                         real_xvb_stats["1h_avg"],
                         real_xvb_stats.get("fail_count", 0)
                     )
-                    logger.info(f"XvB Stats Updated: 1h={real_xvb_stats['1h_avg']:.0f} | 24h={real_xvb_stats['24h_avg']:.0f}")
+                    logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['1h_avg']:.0f} H/s | 24h={real_xvb_stats['24h_avg']:.0f} H/s)")
             
-            loop_count += 1
+            iteration_count += 1
             
         except Exception as e:
-            logger.error(f"Error in data loop: {e}")
+            logger.error(f"Data Collection Error: {e}")
             
         await asyncio.sleep(UPDATE_INTERVAL)
 
 
 async def algo_control_loop():
-    logger.info("Starting Algo Control Loop...")
+    """
+    Periodic task to execute the mining strategy algorithm.
+    Determines the optimal mining mode and manages worker switching cycles.
+    """
+    logger.info("Service Started: Algorithm Control Loop")
     await asyncio.sleep(5) 
     
     while True:
@@ -150,7 +168,7 @@ async def algo_control_loop():
             p2pool_stats = LATEST_DATA.get("pool", {}).get("pool", {}) 
             xvb_stats = state_manager.get_xvb_stats()
             
-            # Decision returns "P2POOL", "XVB", or "SPLIT" with duration
+            # Execute decision logic
             decision, xvb_duration = algorithm.get_decision(current_hr, p2pool_stats, xvb_stats)
             workers = LATEST_DATA.get("workers", [])
             
@@ -165,7 +183,7 @@ async def algo_control_loop():
                 await asyncio.sleep(XVB_TIME_ALGO_MS / 1000)
                 
             elif decision == "SPLIT":
-                # Split Cycle: Run XvB for calculated duration, then P2Pool for remainder
+                # Split Mode: Allocate time slice to XvB, remainder to P2Pool
                 state_manager.update_xvb_stats("XVB (Split)", xvb_stats['24h_avg'], xvb_stats['1h_avg'])
                 await switch_miners("XVB", workers)
                 await asyncio.sleep(xvb_duration / 1000)
@@ -177,15 +195,16 @@ async def algo_control_loop():
                     await asyncio.sleep(remainder)
 
         except Exception as e:
-            logger.error(f"Error in algo loop: {e}")
+            logger.error(f"Algorithm Error: {e}")
             await asyncio.sleep(10)
 
 async def start_background_tasks(app):
+    """Initializes background services upon web application startup."""
     app['data_task'] = asyncio.create_task(data_collection_loop())
     app['algo_task'] = asyncio.create_task(algo_control_loop())
 
 if __name__ == "__main__":
     app = create_app(state_manager, LATEST_DATA)
     app.on_startup.append(start_background_tasks)
-    logger.info(f"Starting Mining Dashboard on port 8000")
+    logger.info("Initializing Dashboard Web Server on Port 8000")
     web.run_app(app, port=8000, print=None)

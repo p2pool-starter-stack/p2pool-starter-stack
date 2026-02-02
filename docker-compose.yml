@@ -5,6 +5,9 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  # --- Tor Anonymity Service ---
+  # Provides hidden services (Onion addresses) for Monero, Tari, and P2Pool.
+  # Uses static IP 172.28.0.25 to allow other containers to route traffic through it.
   tor:
     build: ./build/tor
     container_name: tor
@@ -13,8 +16,8 @@ services:
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     expose:
-      - "9050"
-      - "9051"
+      - "9050" # SOCKS5 Proxy
+      - "9051" # Control Port
     networks:
       mining_net:
         ipv4_address: 172.28.0.25
@@ -24,6 +27,9 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- Monero Daemon (monerod) ---
+  # The full node. Routes transaction traffic through Tor (tx-proxy).
+  # Exposes P2P/RPC ports to the internal network.
   monerod:
     build: ./build/monero
     container_name: monerod
@@ -36,12 +42,12 @@ services:
       - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
     volumes:
       - ${MONERO_DATA_DIR}:/root/.bitmonero
-      - /dev/hugepages:/dev/hugepages
+      - /dev/hugepages:/dev/hugepages # Required for RandomX verification performance
       - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
     ports:
-      - "18080:18080" # P2P Port
-      - "18081:18081" # RPC Port
-      - "18083:18083" # ZMQ Port
+      - "18080:18080" # P2P (Public)
+      - "18081:18081" # RPC (Restricted)
+      - "18083:18083" # ZMQ (P2Pool)
     networks:
       mining_net:
         ipv4_address: 172.28.0.26
@@ -55,6 +61,8 @@ services:
       retries: 3
       start_period: 60s
 
+  # --- Tari Base Node ---
+  # Merge mining node. Connects to Tor for privacy.
   tari:
     image: quay.io/tarilabs/minotari_node:latest-mainnet
     container_name: tari
@@ -70,8 +78,8 @@ services:
       - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config
     ports:
-      - "18102:18102" # Wallet port
-      - "18142:18142" # GRPC port
+      - "18102:18102" # Wallet GRPC
+      - "18142:18142" # Base Node GRPC
     command:
       - --disable-splash-screen
       - --non-interactive
@@ -88,20 +96,23 @@ services:
       retries: 3
       start_period: 30s
 
+  # --- P2Pool Node ---
+  # Decentralized mining pool sidecar.
+  # Coordinates between Monero daemon, Tari node, and miners.
   p2pool:
     build: ./build/p2pool
     container_name: p2pool
     restart: unless-stopped
     logging: *default-logging
-    privileged: true
+    privileged: true # Required for efficient memory access (HugePages)
     volumes:
       - ${P2POOL_DATA_DIR}:/root
-      - ${P2POOL_DATA_DIR}/stats:/stats
+      - ${P2POOL_DATA_DIR}/stats:/stats # Shared volume for Dashboard
       - /dev/hugepages:/dev/hugepages
     ports:
-      - "3333:3333"   # Stratum
+      - "3333:3333"   # Stratum Server
       - "3334:3334"   # Local API
-      - "${P2POOL_PORT}:${P2POOL_PORT}" # P2P Sidechain
+      - "${P2POOL_PORT}:${P2POOL_PORT}" # P2P Sidechain Port
     command:
       - --host
       - 172.28.0.26
@@ -135,6 +146,8 @@ services:
       tari:
         condition: service_healthy
 
+  # --- XMRig Proxy ---
+  # Aggregates connections for the XvB donation/bonus pool.
   xmrig-proxy:
     build: ./build/xmrig-proxy
     container_name: xmrig-proxy
@@ -158,6 +171,9 @@ services:
       mining_net:
         ipv4_address: 172.28.0.29
 
+  # --- Monitoring Dashboard ---
+  # Web interface for stack management.
+  # Uses host networking to enable mDNS discovery of local miners.
   dashboard:
       build: ./build/dashboard
       extra_hosts:
@@ -165,9 +181,9 @@ services:
       container_name: dashboard
       restart: unless-stopped
       logging: *default-logging
-      network_mode: "host"
+      network_mode: "host" # Critical for mDNS/Avahi discovery
       volumes:
-        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
+        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro # Read-only access to P2Pool stats
         - ${DASHBOARD_DATA_DIR}:/data
         - /var/run/dbus:/var/run/dbus:ro
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
@@ -176,6 +192,8 @@ services:
       - TZ=America/Chicago
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
 
+# --- Network Configuration ---
+# Static subnet definition to ensure predictable IP assignment for Tor hidden services.
 networks:
   mining_net:
     driver: bridge

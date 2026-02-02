@@ -1,14 +1,40 @@
 import os
 import time
 from aiohttp import web
-from config import HOST_IP
+from config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN
 from utils import format_hashrate, format_duration, format_time_abs
 
 # Path to the template file
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "index.html")
 
+# Template Caching Configuration
+_TEMPLATE_CACHE = None
+_TEMPLATE_MTIME = 0
+
+def get_cached_template():
+    """Retrieves and caches the HTML template, injecting dynamic components only when the file is modified."""
+    global _TEMPLATE_CACHE, _TEMPLATE_MTIME
+    try:
+        mtime = os.path.getmtime(TEMPLATE_PATH)
+        if _TEMPLATE_CACHE is None or mtime > _TEMPLATE_MTIME:
+            with open(TEMPLATE_PATH, 'r') as f:
+                content = f.read()
+            # Perform template injection only upon file modification
+            if "{stats_card}" not in content and "{tari_section}" in content:
+                content = content.replace("{tari_section}", "{stats_card}\n{tari_section}")
+            _TEMPLATE_CACHE = content
+            _TEMPLATE_MTIME = mtime
+    except Exception as e:
+        print(f"Error loading template: {e}")
+    return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
+
 async def handle_index(request):
-    """Renders the dashboard with the latest data state."""
+    """
+    Request handler for the dashboard index page.
+    
+    Aggregates data from the state manager and latest data reference,
+    processes statistics for display, and renders the HTML template.
+    """
     app = request.app
     
     data = app['latest_data']
@@ -21,41 +47,41 @@ async def handle_index(request):
     chart_p2pool = [str(x.get('v_p2pool', 0)) for x in history]
     chart_xvb = [str(x.get('v_xvb', 0)) for x in history]
 
-    # Algo / XvB Stats
-    xvb = state_mgr.get_xvb_stats()
-    current_mode = xvb.get('current_mode', 'P2POOL')
+    # --- Algorithm & XvB Statistics ---
+    xvb_stats = state_mgr.get_xvb_stats() or {}
+    current_mode = xvb_stats.get('current_mode', 'P2POOL')
     
-    mode_color = "#238636"  # Green default
+    mode_color = "#238636"  # Default color (Green)
     if "XVB" in current_mode: mode_color = "#a371f7"
     if "Split" in current_mode: mode_color = "#58a6ff"
 
-    # Worker Table
+    # --- Worker Status & Table Generation ---
     worker_rows = ""
     workers = data.get('workers', [])
     workers.sort(key=lambda x: (x['status'] != 'online', x['name']))
     
-    for w in workers:
-        status_class = "status-ok" if w['status'] == 'online' else "status-bad"
+    for worker in workers:
+        status_class = "status-ok" if worker['status'] == 'online' else "status-bad"
         
-        # Determine Pool Badge
-        pool_str = w.get('active_pool', '')
+        # Identify and assign pool badge based on port
+        active_pool = worker.get('active_pool', '')
         pool_badge = "Unknown"
-        if any(p in pool_str for p in ['3333', '37889', '37888', '37890']):
+        if any(p in active_pool for p in ['3333', '37889', '37888', '37890']):
             pool_badge = "<span style='background:#238636; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>P2Pool</span>"
-        elif any(p in pool_str for p in ['3344', '4247']):
+        elif any(p in active_pool for p in ['3344', '4247']):
             pool_badge = "<span style='background:#a371f7; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>XvB</span>"
         
-        name_display = f"{w['name']} {pool_badge}"
+        name_display = f"{worker['name']} {pool_badge}"
 
         # Add data-sort attributes for client-side sorting
-        uptime_val = w.get('uptime', 0)
-        h10_val = w.get('h10', 0)
-        h60_val = w.get('h60', 0)
-        h15_val = w.get('h15', 0)
+        uptime_val = worker.get('uptime', 0)
+        h10_val = worker.get('h10', 0)
+        h60_val = worker.get('h60', 0)
+        h15_val = worker.get('h15', 0)
 
-        # Calculate integer value for IP sorting
+        # Convert IP address to integer for sorting purposes
         try:
-            ip_parts = [int(part) for part in w.get('ip', '0.0.0.0').split('.')]
+            ip_parts = [int(part) for part in worker.get('ip', '0.0.0.0').split('.')]
             ip_sort_val = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
         except:
             ip_sort_val = 0
@@ -63,7 +89,7 @@ async def handle_index(request):
         row = f"""
         <tr class="{status_class}">
             <td data-sort="{w['name']}">{name_display}</td>
-            <td data-sort="{ip_sort_val}">{w['ip']}</td>
+            <td data-sort="{ip_sort_val}">{worker['ip']}</td>
             <td data-sort="{uptime_val}">{format_duration(uptime_val)}</td>
             <td data-sort="{h10_val}">{format_hashrate(h10_val)}</td>
             <td data-sort="{h60_val}">{format_hashrate(h60_val)}</td>
@@ -72,52 +98,53 @@ async def handle_index(request):
         """
         worker_rows += row
 
-    # Tari Section
-    tari = data.get('tari', {})
+    # --- Tari Merge Mining Section ---
+    tari_stats = data.get('tari', {})
     tari_section = ""
     
-    if tari.get('active'):
-        # Format difficulty with commas
-        tari_diff = f"{int(tari.get('difficulty', 0)):,}"
+    if tari_stats.get('active'):
+        # Format difficulty with comma separators
+        tari_diff = f"{int(tari_stats.get('difficulty', 0)):,}"
         tari_section = f"""
         <div class="card">
             <h3>Tari Merge Mining</h3>
             <div class="stat-grid">
-                <div class="stat-card"><h5>Status</h5><p class="status-ok">{tari.get('status', 'Unknown')}</p></div>
-                <div class="stat-card"><h5>Reward</h5><p>{tari.get('reward', 0):.2f} TARI</p></div>
-                <div class="stat-card"><h5>Height</h5><p>{tari.get('height', 0)}</p></div>
+                <div class="stat-card"><h5>Status</h5><p class="status-ok">{tari_stats.get('status', 'Unknown')}</p></div>
+                <div class="stat-card"><h5>Reward</h5><p>{tari_stats.get('reward', 0):.2f} TARI</p></div>
+                <div class="stat-card"><h5>Height</h5><p>{tari_stats.get('height', 0)}</p></div>
                 <div class="stat-card"><h5>Difficulty</h5><p>{tari_diff}</p></div>
             </div>
-            <div style="font-size:10px; color:#666; margin-top:10px; overflow-wrap: break-word;">Wallet: {tari.get('address', 'Unknown')}</div>
+            <div style="font-size:10px; color:#666; margin-top:10px; overflow-wrap: break-word;">Wallet: {tari_stats.get('address', 'Unknown')}</div>
         </div>
         """
     else:
         tari_section = '<div class="card"><h3>Tari</h3><p>Waiting for data...</p></div>'
 
-    # System & Pool Stats
-    disk = data.get('system', {}).get('disk', {})
-    disk_percent = disk.get('percent', 0)
+    # --- System and Pool Metrics ---
+    disk_usage = data.get('system', {}).get('disk', {})
+    disk_percent = disk_usage.get('percent', 0)
     disk_fill = "critical" if disk_percent > 90 else "warning" if disk_percent > 70 else ""
     
-    hp = data.get('system', {}).get('hugepages', ["Disabled", "status-bad", "0/0"])
+    hugepages_info = data.get('system', {}).get('hugepages', ["Disabled", "status-bad", "0/0"])
+    hp_status, hp_class, hp_val = hugepages_info
     
     pool_stats = data.get('pool', {})
     p2p_stats = pool_stats.get('p2p', {})
     local_pool = pool_stats.get('pool', {})
     
-    # Stratum Stats
-    strat = data.get('stratum', {})
+    # Stratum Statistics
+    stratum_stats = data.get('stratum', {})
 
-    # Network Stats
-    net = data.get('network', {})
+    # Network Statistics
+    network_stats = data.get('network', {})
 
     try:
-        # Calculate Split
+        # --- Split Mining Calculations ---
         total_hr_val = data.get('total_live_h15', 0)
-        xvb_1h_val = xvb.get('1h_avg', 0)
-        xvb_24h_val = xvb.get('24h_avg', 0)
+        xvb_1h_val = xvb_stats.get('1h_avg', 0)
+        xvb_24h_val = xvb_stats.get('24h_avg', 0)
 
-        # Calculate P2Pool 1h from history if available (more accurate)
+        # Derive P2Pool 1h average from history for improved accuracy
         if history:
             p2p_vals = [x.get('v_p2pool', 0) for x in history]
             p2p_1h_val = sum(p2p_vals) / len(p2p_vals) if p2p_vals else 0
@@ -126,7 +153,7 @@ async def handle_index(request):
             
         p2p_24h_val = max(0, total_hr_val - xvb_24h_val)
 
-        # New Stats Card
+        # --- Status Card Construction ---
         mode_card = f"""
         <div class="card">
             <h3>P2Pool Status</h3>
@@ -139,7 +166,7 @@ async def handle_index(request):
         </div>
         """
 
-        # Determine Tier Name based on 24h avg
+        # Determine Donation Tier based on 24h average hashrate
         tier_name = "Standard"
         if xvb_24h_val >= 1_000_000: tier_name = "Mega (1 MH/s+)"
         elif xvb_24h_val >= 100_000: tier_name = "Whale (100 kH/s+)"
@@ -154,7 +181,7 @@ async def handle_index(request):
                 <div class="stat-card"><h5>Donation Tier</h5><p>{tier_name}</p></div>
                 <div class="stat-card"><h5>1h Avg (Pool)</h5><p>{format_hashrate(xvb_1h_val)}</p></div>
                 <div class="stat-card"><h5>24h Avg (Pool)</h5><p>{format_hashrate(xvb_24h_val)}</p></div>
-                <div class="stat-card"><h5>Fail Count</h5><p>{xvb.get('fail_count', 0)}</p></div>
+                <div class="stat-card"><h5>Fail Count</h5><p>{xvb_stats.get('fail_count', 0)}</p></div>
             </div>
             <div style="font-size:10px; color:#666; margin-top:10px;">Stats fetched from xmrvsbeast.com</div>
         </div>
@@ -162,8 +189,7 @@ async def handle_index(request):
 
         stats_card = mode_card + xvb_card
 
-        with open(TEMPLATE_PATH, 'r') as f:
-            template = f.read()
+        template = get_cached_template()
 
         html = template.format(
             host_ip=HOST_IP,
@@ -174,36 +200,36 @@ async def handle_index(request):
             p2p_type=p2p_stats.get('type', 'Unknown'),
             total_hr=format_hashrate(total_hr_val),
             last_update=format_time_abs(time.time()),
-            xvb_updated=format_time_abs(xvb.get('last_update', 0)),
+            xvb_updated=format_time_abs(xvb_stats.get('last_update', 0)),
             
-            # Updated: Send split values to template
+            # Pass split mining metrics to the template context
             p2p_1h=format_hashrate(p2p_1h_val),
             p2p_24h=format_hashrate(p2p_24h_val),
             xvb_1h=format_hashrate(xvb_1h_val),
             xvb_24h=format_hashrate(xvb_24h_val),
 
             # --- System Resources ---
-            hp_status=hp[0],
-            hp_class=hp[1],
-            hp_val=hp[2],
-            disk_used=disk.get('used_gb', 0),
-            disk_total=disk.get('total_gb', 0),
-            disk_p=disk.get('percent_str', '0%'),
+            hp_status=hp_status,
+            hp_class=hp_class,
+            hp_val=hp_val,
+            disk_used=disk_usage.get('used_gb', 0),
+            disk_total=disk_usage.get('total_gb', 0),
+            disk_p=disk_usage.get('percent_str', '0%'),
             disk_width=f"{disk_percent}%",
             disk_fill_class=disk_fill,
 
             # --- Stratum Pool ---
-            strat_h15=format_hashrate(strat.get('hashrate_15m', 0)),
-            strat_h1h=format_hashrate(strat.get('hashrate_1h', 0)),
-            strat_h24h=format_hashrate(strat.get('hashrate_24h', 0)),
-            strat_shares=f"{strat.get('shares_valid',0)} / {strat.get('shares_invalid',0)}",
-            strat_effort=f"{strat.get('block_effort', 0):.1f}%",
-            strat_total_shares=strat.get('total_shares', 0),
-            strat_reward_pct=f"{strat.get('reward_share_pct', 0):.4f}%",
-            strat_conns=strat.get('connections', 0),
-            strat_last_share=format_time_abs(strat.get('last_share_ts', 0)),
-            strat_total_hashes=strat.get('total_hashes', 0),
-            strat_wallet=strat.get('wallet', 'Unknown'),
+            strat_h15=format_hashrate(stratum_stats.get('hashrate_15m', 0)),
+            strat_h1h=format_hashrate(stratum_stats.get('hashrate_1h', 0)),
+            strat_h24h=format_hashrate(stratum_stats.get('hashrate_24h', 0)),
+            strat_shares=f"{stratum_stats.get('shares_valid',0)} / {stratum_stats.get('shares_invalid',0)}",
+            strat_effort=f"{stratum_stats.get('block_effort', 0):.1f}%",
+            strat_total_shares=stratum_stats.get('total_shares', 0),
+            strat_reward_pct=f"{stratum_stats.get('reward_share_pct', 0):.4f}%",
+            strat_conns=stratum_stats.get('connections', 0),
+            strat_last_share=format_time_abs(stratum_stats.get('last_share_ts', 0)),
+            strat_total_hashes=stratum_stats.get('total_hashes', 0),
+            strat_wallet=stratum_stats.get('wallet', 'Unknown'),
 
             # --- P2Pool Network ---
             pool_height=local_pool.get('height', 0),
@@ -211,7 +237,7 @@ async def handle_index(request):
             pool_hr=format_hashrate(local_pool.get('hashrate', 0)),
             pool_total_hashes=local_pool.get('total_hashes', 0),
             pool_miners=local_pool.get('miners', 0),
-            pplns_win=local_pool.get('pplns_window', 0),
+            pplns_win=f"{local_pool.get('pplns_window', 0)} ({format_duration(local_pool.get('pplns_window', 0) * 10)})",
             pplns_wgt=local_pool.get('pplns_weight', 0),
             pool_blocks=local_pool.get('blocks_found', 0),
             pool_last_blk=format_time_abs(local_pool.get('last_block_ts', 0)),
@@ -219,11 +245,11 @@ async def handle_index(request):
             p2p_uptime=format_duration(p2p_stats.get('uptime', 0)),
 
             # --- XMR Network ---
-            net_height=net.get('height', 0),
-            net_reward=f"{net.get('reward', 0)/1e12:.4f} XMR",
-            net_diff=f"{net.get('difficulty', 0)/1e9:.2f} G",
-            net_hash=net.get('hash', 'N/A'),
-            net_ts=format_time_abs(net.get('timestamp', 0)),
+            net_height=network_stats.get('height', 0),
+            net_reward=f"{network_stats.get('reward', 0)/1e12:.4f} XMR",
+            net_diff=f"{network_stats.get('difficulty', 0)/1e9:.2f} G",
+            net_hash=network_stats.get('hash', 'N/A'),
+            net_ts=format_time_abs(network_stats.get('timestamp', 0)),
 
             # --- Dynamic Components ---
             worker_rows=worker_rows,
@@ -235,7 +261,7 @@ async def handle_index(request):
             chart_xvb=",".join(chart_xvb)
         )
 
-        # Inject Sorting Script
+        # Inject client-side table sorting logic (appended to body)
         sorting_script = """
 <script>
 document.addEventListener('DOMContentLoaded', function() {
@@ -267,7 +293,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return web.Response(text=html, content_type='text/html')
         
     except Exception as e:
-        # Improved error logging
+        # Handle rendering errors gracefully
         return web.Response(text=f"<h1>Error rendering dashboard</h1><p>{str(e)}</p><pre>{type(e).__name__}</pre>", status=500)
 
 def create_app(state_manager, latest_data_ref):

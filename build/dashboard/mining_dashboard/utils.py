@@ -2,51 +2,102 @@ import time
 
 def parse_hashrate(val_str, unit_str=None):
     """
-    Converts a value string and optional unit string into raw H/s (float).
-    Supports: H/s, kH/s, MH/s, GH/s (case insensitive).
+    Converts a numeric string and an optional unit suffix into raw hashes per second (H/s).
+    
+    Args:
+        val_str (str|float): The numeric value (e.g., "1.5").
+        unit_str (str, optional): The unit suffix (e.g., "MH/s", "kH/s").
+        
+    Returns:
+        float: The standardized hashrate in H/s. Returns 0.0 on parsing failure.
     """
     try:
         val = float(val_str)
         if not unit_str:
             return val
         
-        u = unit_str.lower()
-        if "gh" in u: return val * 1_000_000_000
-        if "mh" in u: return val * 1_000_000
-        if "kh" in u: return val * 1_000
+        # Normalize unit string for case-insensitive comparison
+        unit = unit_str.lower()
+        
+        if "gh" in unit: return val * 1_000_000_000
+        if "mh" in unit: return val * 1_000_000
+        if "kh" in unit: return val * 1_000
+        
         return val
     except (ValueError, TypeError):
         return 0.0
 
-def format_hashrate(h):
+def format_hashrate(hashrate):
     """
-    Formats raw hashrate (float) to a readable string (H/s, kH/s, MH/s, GH/s).
+    Formats a raw hashrate value into a human-readable string with appropriate units.
+    
+    Args:
+        hashrate (float): The raw hashrate in H/s.
+        
+    Returns:
+        str: Formatted string (e.g., "1.25 MH/s").
     """
     try:
-        val = float(h)
-        if val >= 1_000_000_000: return f"{val/1_000_000_000:.2f} GH/s"
-        if val >= 1_000_000: return f"{val/1_000_000:.2f} MH/s"
-        if val >= 1_000: return f"{val/1_000:.2f} kH/s"
-        return f"{int(val)} H/s"
+        val = float(hashrate)
+        
+        if val >= 1_000_000_000:
+            return f"{val / 1_000_000_000:.2f} GH/s"
+        elif val >= 1_000_000:
+            return f"{val / 1_000_000:.2f} MH/s"
+        elif val >= 1_000:
+            return f"{val / 1_000:.2f} kH/s"
+        else:
+            return f"{int(val)} H/s"
+            
     except (ValueError, TypeError):
         return "0 H/s"
 
 def format_duration(seconds):
-    """Formats uptime seconds into 2d 4h 30m"""
+    """
+    Formats a duration in seconds into a concise human-readable string.
+    
+    Format logic:
+    - > 1 day: "Xd Xh Xm"
+    - > 1 hour: "Xh Xm"
+    - < 1 hour: "Xm Xs"
+    
+    Args:
+        seconds (int|float): Duration in seconds.
+        
+    Returns:
+        str: Formatted duration string.
+    """
     try:
         seconds = int(seconds)
-        d = seconds // (3600 * 24)
-        h = (seconds // 3600) % 24
-        m = (seconds // 60) % 60
-        s = seconds % 60
-        if d > 0: return f"{d}d {h}h {m}m"
-        if h > 0: return f"{h}h {m}m"
-        return f"{m}m {s}s"
-    except (ValueError, TypeError): return "0s"
+        days = seconds // 86400
+        hours = (seconds // 3600) % 24
+        minutes = (seconds // 60) % 60
+        secs = seconds % 60
+        
+        if days > 0:
+            return f"{days}d {hours}h {minutes}m"
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+            
+        return f"{minutes}m {secs}s"
+        
+    except (ValueError, TypeError):
+        return "0s"
 
-def format_time_abs(ts):
-    """Formats unix timestamp to HH:MM:SS"""
-    if not ts: return "Never"
+def format_time_abs(timestamp):
+    """
+    Converts a Unix timestamp into a localized time string (HH:MM:SS).
+    
+    Args:
+        timestamp (float): Unix timestamp.
+        
+    Returns:
+        str: Formatted time string or error placeholder.
+    """
+    if not timestamp:
+        return "Never"
+        
     try:
-        return time.strftime('%H:%M:%S', time.localtime(ts))
-    except: return "Invalid Time"
+        return time.strftime('%H:%M:%S', time.localtime(timestamp))
+    except (ValueError, OSError):
+        return "Invalid Time"
