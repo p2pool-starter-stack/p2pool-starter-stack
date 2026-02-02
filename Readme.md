@@ -38,7 +38,7 @@ graph TD
     end
 
     subgraph "External"
-        Workers[Hardware Workers\n(XMRig)]
+        Workers["Hardware Workers\n(XMRig)"]
         XvB[XMRvsBeast Pool]
         Internet[Tor Network / Internet]
     end
