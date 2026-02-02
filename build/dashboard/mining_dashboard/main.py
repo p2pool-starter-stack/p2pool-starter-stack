@@ -84,7 +84,7 @@ async def switch_miners(mode, workers):
 
                     # 3. Push updated configuration
                     async with session.put(url, json=config_data, headers=headers, timeout=2) as resp:
-                        if resp.status in [200, 202]:
+                        if resp.status in [200, 202, 204]:
                             switched = True
                             break 
                 except Exception:
