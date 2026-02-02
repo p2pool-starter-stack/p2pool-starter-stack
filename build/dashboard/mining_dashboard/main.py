@@ -68,6 +68,10 @@ async def switch_miners(mode, workers):
                 ]
             }
 
+            # Use the worker's hostname (derived from name) as the access token
+            token = name.split('+')[0]
+            headers = {"Authorization": f"Bearer {token}"}
+
             switched = False
             for target in targets:
                 if target.startswith(":"): continue 
@@ -75,7 +79,7 @@ async def switch_miners(mode, workers):
                 url = f"http://{target}/1/config"
                 
                 try:
-                    async with session.put(url, json=payload, timeout=2) as resp:
+                    async with session.put(url, json=payload, headers=headers, timeout=2) as resp:
                         if resp.status in [200, 202]:
                             switched = True
                             break 

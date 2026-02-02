@@ -39,6 +39,7 @@ WORKER_CONFIG_FILE=$(jq -r .WORKER_CONFIG_FILE "$CONFIG_JSON")
 P2POOL_NODE_HOSTNAME=$(jq -r .P2POOL_NODE_HOSTNAME "$CONFIG_JSON")
 P2POOL_NODE_PORT=$(jq -r .P2POOL_NODE_PORT "$CONFIG_JSON")
 P2POOL_PROXY_PORT=$(jq -r .P2POOL_PROXY_PORT "$CONFIG_JSON")
+ACCESS_TOKEN=$(hostname)
 TEMPLATE_CONFIG="$SCRIPT_DIR/$WORKER_CONFIG_FILE"
 
 # --- 2. Workspace Preparation ---
@@ -127,6 +128,7 @@ FULL_USER="$(hostname)+${DIFFICULTY}"
 jq --arg url "$P2POOL_NODE_HOSTNAME.local:$P2POOL_NODE_PORT" \
    --arg proxy_url "$P2POOL_NODE_HOSTNAME.local:$P2POOL_PROXY_PORT" \
    --arg user "$FULL_USER" \
+   --arg access_token "$ACCESS_TOKEN" \
    --arg log "$LOG_FILE_PATH" \
    --argjson yield "$YIELD" \
    --argjson prio "$PRIORITY" \
@@ -151,6 +153,8 @@ jq --arg url "$P2POOL_NODE_HOSTNAME.local:$P2POOL_NODE_PORT" \
     .randomx."init-avx2" = $avx2 |
     .randomx.wrmsr = $wrmsr |
     .randomx.scratchpad_prefetch_mode = $prefetch' \
+    .randomx.scratchpad_prefetch_mode = $prefetch |
+    if $access_token != "" then ."http"."access-token" = $access_token | ."http"."restricted" = true else ."http"."restricted" = false end' \
    "$TEMPLATE_CONFIG" > config.json
 
 log_info "Configuring log rotation policy..."
