@@ -23,6 +23,10 @@ async def fetch_xmrig_summary(session, ip, name):
     
     timeout = ClientTimeout(total=API_TIMEOUT)
     
+    # Use the worker's hostname (derived from name) as the access token
+    token = name.split('+')[0]
+    headers = {"Authorization": f"Bearer {token}"}
+    
     for target in targets:
         # Skip invalid targets where hostname/IP might be missing
         if target.startswith(":"): continue
@@ -30,7 +34,7 @@ async def fetch_xmrig_summary(session, ip, name):
         url = f"http://{target}/1/summary"
         
         try:
-            async with session.get(url, timeout=timeout) as response:
+            async with session.get(url, headers=headers, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.json()
                     
