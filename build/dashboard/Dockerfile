@@ -19,7 +19,7 @@ COPY mining_dashboard/ ./mining_dashboard/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-# Expose the new port (8080 is defined in config.py)
+# Expose the dashboard port (8000 is defined in main.py)
 EXPOSE 8000
 
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]

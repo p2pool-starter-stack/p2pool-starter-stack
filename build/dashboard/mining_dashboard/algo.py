@@ -16,77 +16,69 @@ class XvbAlgorithm:
         Main decision loop.
         Returns: ("MODE_NAME", duration_ms_for_xvb)
         """
-        # 1. Safety Check: Do we have a share in P2Pool?
-        # If not, we MUST mine P2Pool to avoid losing revenue.
+        # Safety: Force P2Pool if no shares found in window to prevent revenue loss.
         shares_found = p2pool_stats.get('shares_found', 0)
         
         if shares_found == 0:
-            self.logger.info("Algo: No shares found in P2Pool window. Forcing P2POOL.")
+            self.logger.info("Decision: Force P2POOL (No shares in window)")
             return "P2POOL", 0
 
-        # 2. Determine Target
-        # "What is the highest XvB tier I qualify for right now?"
+        # Determine highest qualified XvB tier
         target_hr = self._get_target_donation_hr(current_hr)
         
-        # If we don't qualify for any tier (standard donor), defaults to 0
+        # If no tier qualified (standard donor), default to P2Pool
         if target_hr == 0:
              return "P2POOL", 0
 
-        # 3. Check Current Averages
+        # Check if donation targets are met (24h avg >= target AND 1h avg within margin)
         avg_24h = xvb_stats.get('24h_avg', 0)
         avg_1h = xvb_stats.get('1h_avg', 0)
 
-        # Logic: Are we meeting our donation target?
-        # We need to satisfy the 24h average AND be within 20% of the 1h average.
         is_fulfilled = (avg_24h >= target_hr) and (avg_1h >= (target_hr * (1.0 - self.margin_1h)))
 
         if not is_fulfilled:
-            # We are behind. Send a full cycle to XvB to catch up.
-            self.logger.info(f"Algo: Target {target_hr} H/s not met (24h: {avg_24h:.0f}). Forcing XVB.")
+            self.logger.info(f"Decision: Force XVB (Target {target_hr} not met, 24h: {avg_24h:.0f})")
             return "XVB", XVB_TIME_ALGO_MS
         
-        # 4. Split Cycle (Maintenance Mode)
-        # We are on target, but need to donate a small slice to STAY on target.
+        # Split Cycle (Maintenance Mode)
         needed_time_ms = self._get_needed_time(current_hr, target_hr)
         
         if needed_time_ms > 0:
-            # Enforce minimum switch time to avoid spamming the miner
             if needed_time_ms < XVB_MIN_TIME_SEND_MS:
                 needed_time_ms = XVB_MIN_TIME_SEND_MS
             
-            # Don't exceed the total cycle time
             if needed_time_ms > XVB_TIME_ALGO_MS:
                 needed_time_ms = XVB_TIME_ALGO_MS
                 
-            self.logger.info(f"Algo: Maintenance. Sending {needed_time_ms}ms to XvB.")
+            self.logger.info(f"Decision: Split Mode ({needed_time_ms}ms to XvB)")
             return "SPLIT", int(needed_time_ms)
             
         return "P2POOL", 0
 
     def _get_target_donation_hr(self, current_hr):
         """
-        Automatically finds the best tier based on current hashrate.
-        Queries the limits scraped from the XvB website (stored in state).
+        Finds best tier, reserving 15% hashrate for P2Pool safety.
         """
-        # Retrieve dynamic limits (defaults used if scraping hasn't run yet)
-        limit_mega = self.state.get_tier_limit("donor_mega")
-        limit_whale = self.state.get_tier_limit("donor_whale")
-        limit_vip = self.state.get_tier_limit("donor_vip")
-        limit_mvp = self.state.get_tier_limit("mvp")
+        safe_capacity = current_hr * 0.85 
         
-        # Check tiers in descending order (Highest priority first)
-        if limit_mega > 0 and current_hr > limit_mega:
+        limit_mega = self.state.get_tier_limit("donor_mega")   # 1,000,000
+        limit_whale = self.state.get_tier_limit("donor_whale") # 100,000
+        limit_vip = self.state.get_tier_limit("donor_vip")     # 10,000
+        limit_mvp = self.state.get_tier_limit("mvp")           # 5,000
+        limit_donor = self.state.get_tier_limit("donor")       # 1,000
+        
+        # Check tiers against SAFE capacity
+        if limit_mega > 0 and safe_capacity >= limit_mega:
             return float(limit_mega)
-        elif limit_whale > 0 and current_hr > limit_whale:
+        elif limit_whale > 0 and safe_capacity >= limit_whale:
             return float(limit_whale)
-        elif limit_vip > 0 and current_hr > limit_vip:
+        elif limit_vip > 0 and safe_capacity >= limit_vip:
             return float(limit_vip)
-        elif limit_mvp > 0 and current_hr > limit_mvp:
+        elif limit_mvp > 0 and safe_capacity >= limit_mvp:
             return float(limit_mvp)
+        elif limit_donor > 0 and safe_capacity >= limit_donor:
+            return float(limit_donor)
             
-        # Fallback: Standard Donor. 
-        # Usually 0 enforced requirement, but you can change this to 
-        # return current_hr * 0.01 if you always want to donate 1%.
         return 0.0
 
     def _get_needed_time(self, current_hr, target_hr):

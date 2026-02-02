@@ -8,18 +8,15 @@ async def fetch_xmrig_summary(session, ip, name):
     Connects to a single XMRig instance.
     PRIORITY: Hostname -> Hostname.local -> IP
     """
-    # Define connection targets in your preferred order of reliability
     targets = [
-        f"{name}:{XMRIG_API_PORT}",       # 1. Hostname (Fastest if DNS works)
-        f"{name}.local:{XMRIG_API_PORT}", # 2. Avahi/mDNS (Good for LAN)
-        f"{ip}:{XMRIG_API_PORT}"          # 3. IP Fallback (Last resort)
+        f"{name}:{XMRIG_API_PORT}",       # Hostname
+        f"{name}.local:{XMRIG_API_PORT}", # mDNS
+        f"{ip}:{XMRIG_API_PORT}"          # IP Fallback
     ]
     
     timeout = ClientTimeout(total=API_TIMEOUT)
     
-    # Iterate through targets until one works
     for target in targets:
-        # Skip invalid targets (e.g. if name is missing)
         if target.startswith(":"): continue
             
         url = f"http://{target}/1/summary"
@@ -29,13 +26,13 @@ async def fetch_xmrig_summary(session, ip, name):
                 if response.status == 200:
                     data = await response.json()
                     
-                    hr_total = data.get("hashrate", {}).get("total", [0, 0, 0])
+                    hr_total = data.get("hashrate", {}).get("total")
+                    if not isinstance(hr_total, list): hr_total = [0, 0, 0]
                     
                     return {
                         "name": name,
                         "ip": ip, 
                         "status": "online",
-                        # We save the 'working_addr' so main.py *could* use it if needed
                         "working_addr": target, 
                         "uptime": data.get("uptime", 0),
                         "h10": hr_total[0] if len(hr_total) > 0 else 0,
@@ -44,10 +41,8 @@ async def fetch_xmrig_summary(session, ip, name):
                         "results": data.get("results", {})
                     }
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
-            # If this target failed, immediately try the next one in the list
             continue
             
-    # If all attempts fail
     return {
         "name": name,
         "ip": ip,

@@ -13,6 +13,11 @@
         "pool": "main",
         "data_dir": "DYNAMIC_DATA"
     },
+    "xmrig_proxy": {
+        "port": "3344",
+        "url": "na.xmrvsbeast.com:4247",
+        "donor_id": "DYNAMIC_ID"
+    },
     "tor": {
         "data_dir": "DYNAMIC_DATA"
     },

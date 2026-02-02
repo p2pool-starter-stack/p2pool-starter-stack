@@ -20,7 +20,8 @@ UPDATE_INTERVAL = 30
 
 # --- XvB Algorithm Constants ---
 XVB_TIME_ALGO_MS = 60000        
-XVB_MIN_TIME_SEND_MS = 15000     
+XVB_MIN_TIME_SEND_MS = 15000    
+MONERO_WALLET_ADDRESS = os.environ.get("MONERO_WALLET_ADDRESS", "") 
 
 # --- CORRECTED TIER REQUIREMENTS ---
 # Based on official rules: Mega=1M, Whale=100k, VIP=10k, Donor=1k

@@ -70,18 +70,3 @@ class StateManager:
         self.state["xvb"]["1h_avg"] = donation_avg_1h
         self.state["xvb"]["last_update"] = time.time()
         self.save()
-
-    def update_tiers(self, new_tiers):
-        """Updates tier limits from scraper"""
-        if not new_tiers: return
-        changed = False
-        for k, v in new_tiers.items():
-            # Only update if key exists (security) and value is different
-            if k in self.state["tiers"] and self.state["tiers"][k] != v:
-                self.state["tiers"][k] = v
-                changed = True
-        if changed:
-            self.save()
-
-    def get_tier_limit(self, name):
-        return self.state["tiers"].get(name, 0)

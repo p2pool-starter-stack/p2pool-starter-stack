@@ -30,7 +30,6 @@ def get_p2pool_stats():
     raw_pool = _read_json(POOL_STATS_PATH)
     
     stats = {
-        # P2P Section
         "p2p": {
             "type": detect_pool_type(raw_p2p.get("peers", [])),
             "connections": raw_p2p.get("connections", 0),
@@ -39,7 +38,6 @@ def get_p2pool_stats():
             "uptime": raw_p2p.get("uptime", 0),
             "zmq_active": raw_p2p.get("zmq_last_active", 0)
         },
-        # Pool Statistics Section
         "pool": {
             "hashrate": raw_pool.get("pool_statistics", {}).get("hashRate", 0),
             "miners": raw_pool.get("pool_statistics", {}).get("miners", 0),
@@ -67,23 +65,16 @@ def get_network_stats():
     }
 
 def get_stratum_stats():
-    """
-    Returns:
-    1. full raw stats (needed for Effort, Reward Share, Wallet, etc.)
-    2. list of worker configs (for miners.py)
-    """
+    """Returns raw stats and parsed worker configs."""
     raw = _read_json(STRATUM_STATS_PATH)
     
     worker_configs = []
-    # Parse workers for the active collector
     for w_entry in raw.get("workers", []):
         if isinstance(w_entry, str):
             parts = w_entry.split(',')
-            # Format: ip, uptime, ?, hashrate, name
             if len(parts) >= 1:
                 ip = parts[0]
                 name = parts[4] if len(parts) >= 5 else "miner"
-                # Store parts to allow fallback if API fails
                 worker_configs.append({"ip": ip, "name": name, "parts": parts})
 
     return raw, worker_configs

@@ -3,15 +3,20 @@ set -e
 
 # --- Helper Functions ---
 log() { echo -e "\033[1;32m[DEPLOY]\033[0m $1"; }
+warn() { echo -e "\033[1;33m[WARNING]\033[0m $1"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; exit 1; }
 
 # --- 1. Pre-flight Checks ---
 command -v jq >/dev/null || error "jq is required. Run: sudo apt install jq"
 command -v docker >/dev/null || error "docker is required."
+docker compose version >/dev/null 2>&1 || error "Docker Compose V2 is required (command: 'docker compose')."
 [ -f "config.json" ] || error "config.json not found."
 
+# Detect real user if run via sudo to fix permission issues
+REAL_USER="${SUDO_USER:-$USER}"
+
 if ! grep -q "avx2" /proc/cpuinfo; then
-    echo "WARNING: AVX2 not detected. Mining performance will be poor."
+    warn "AVX2 not detected. Mining performance will be poor."
 fi
 
 # Flag to track if a reboot is needed
@@ -20,30 +25,41 @@ REBOOT_REQUIRED=false
 # --- 2. Initialize Paths & Preliminary .env ---
 log "Reading configuration and initializing paths..."
 
-# Determine Data Directories
-MONERO_DIR=$(jq -r '.monero.data_dir // "DYNAMIC_DATA"' config.json)
-[ "$MONERO_DIR" == "DYNAMIC_DATA" ] && MONERO_DIR="$PWD/data/monero"
+# --- Data Directory Logic (Handles "DYNAMIC_DATA" or Empty strings) ---
 
-TARI_DIR=$(jq -r '.tari.data_dir // "DYNAMIC_DATA"' config.json)
-[ "$TARI_DIR" == "DYNAMIC_DATA" ] && TARI_DIR="$PWD/data/tari"
+MONERO_DIR=$(jq -r '.monero.data_dir // empty' config.json)
+if [ -z "$MONERO_DIR" ] || [ "$MONERO_DIR" == "DYNAMIC_DATA" ]; then
+    MONERO_DIR="$PWD/data/monero"
+fi
 
-P2POOL_DIR=$(jq -r '.p2pool.data_dir // "DYNAMIC_DATA"' config.json)
-[ "$P2POOL_DIR" == "DYNAMIC_DATA" ] && P2POOL_DIR="$PWD/data/p2pool"
+TARI_DIR=$(jq -r '.tari.data_dir // empty' config.json)
+if [ -z "$TARI_DIR" ] || [ "$TARI_DIR" == "DYNAMIC_DATA" ]; then
+    TARI_DIR="$PWD/data/tari"
+fi
 
-TOR_DATA_DIR=$(jq -r '.tor.data_dir // "DYNAMIC_DATA"' config.json)
-[ "$TOR_DATA_DIR" == "DYNAMIC_DATA" ] && TOR_DATA_DIR="$PWD/data/tor"
+P2POOL_DIR=$(jq -r '.p2pool.data_dir // empty' config.json)
+if [ -z "$P2POOL_DIR" ] || [ "$P2POOL_DIR" == "DYNAMIC_DATA" ]; then
+    P2POOL_DIR="$PWD/data/p2pool"
+fi
 
-DASHBOARD_DIR=$(jq -r '.dashboard.data_dir // "DYNAMIC_DATA"' config.json)
-[ "$DASHBOARD_DIR" == "DYNAMIC_DATA" ] && DASHBOARD_DIR="$PWD/data/dashboard"
+TOR_DATA_DIR=$(jq -r '.tor.data_dir // empty' config.json)
+if [ -z "$TOR_DATA_DIR" ] || [ "$TOR_DATA_DIR" == "DYNAMIC_DATA" ]; then
+    TOR_DATA_DIR="$PWD/data/tor"
+fi
 
-# Create directories immediately to prevent Docker volume errors
+DASHBOARD_DIR=$(jq -r '.dashboard.data_dir // empty' config.json)
+if [ -z "$DASHBOARD_DIR" ] || [ "$DASHBOARD_DIR" == "DYNAMIC_DATA" ]; then
+    DASHBOARD_DIR="$PWD/data/dashboard"
+fi
+
+# Create directories immediately
 mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR"
 sudo chown -R 100:101 "$TOR_DATA_DIR" # Tor user inside container is UID 100
-sudo chown -R $USER:$USER "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR"
+sudo chown -R "$REAL_USER":"$REAL_USER" "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR"
 mkdir -p "$P2POOL_DIR/stats"
 sudo chmod -R 755 "$P2POOL_DIR/stats"
 
-# Write a preliminary .env so 'docker compose' has valid volume paths
+# Write a preliminary .env so 'docker compose' has valid volume paths during Tor startup
 cat <<EOF > .env
 MONERO_ONION_ADDRESS=placeholder
 P2POOL_ONION_ADDRESS=placeholder
@@ -58,6 +74,9 @@ MONERO_NODE_USERNAME=placeholder
 MONERO_NODE_PASSWORD=placeholder
 MONERO_WALLET_ADDRESS=placeholder
 TARI_WALLET_ADDRESS=placeholder
+PROXY_PORT=3344
+XVB_POOL_URL=na.xmrvsbeast.com:4247
+XVB_DONOR_ID=placeholder
 EOF
 
 # --- 3. Start Tor & Generate Onion Addresses ---
@@ -66,7 +85,7 @@ docker compose up -d tor
 log "Waiting for Tor hidden services to populate (15s)..."
 sleep 15
 
-# Get Onion Addresses (fetch from container)
+# Get Onion Addresses
 MONERO_ONION=$(docker exec tor cat /var/lib/tor/monero/hostname)
 TARI_ONION=$(docker exec tor cat /var/lib/tor/tari/hostname)
 P2POOL_ONION=$(docker exec tor cat /var/lib/tor/p2pool/hostname)
@@ -77,6 +96,8 @@ MONERO_USER=$(jq -r .monero.node_username config.json)
 MONERO_PASS=$(jq -r .monero.node_password config.json)
 MONERO_WALLET=$(jq -r .monero.wallet_address config.json)
 TARI_WALLET=$(jq -r .tari.wallet_address config.json)
+
+# P2Pool Logic
 POOL_TYPE=$(jq -r '.p2pool.pool // "main"' config.json)
 P2POOL_FLAGS=""
 P2POOL_PORT="37889"
@@ -86,6 +107,20 @@ if [ "$POOL_TYPE" == "mini" ]; then
 elif [ "$POOL_TYPE" == "nano" ]; then
     P2POOL_FLAGS="--nano"
     P2POOL_PORT="37890"
+fi
+
+# XMRig Proxy Logic
+PROXY_PORT=$(jq -r '.xmrig_proxy.port // empty' config.json)
+[ -z "$PROXY_PORT" ] && PROXY_PORT="3344"
+
+XVB_POOL_URL=$(jq -r '.xmrig_proxy.url // empty' config.json)
+[ -z "$XVB_POOL_URL" ] && XVB_POOL_URL="na.xmrvsbeast.com:4247"
+
+# Smart Donor ID: If empty OR set to DYNAMIC_ID, grab first 8 chars of main wallet
+XVB_DONOR_ID=$(jq -r '.xmrig_proxy.donor_id // empty' config.json)
+if [ -z "$XVB_DONOR_ID" ] || [ "$XVB_DONOR_ID" == "DYNAMIC_ID" ]; then
+    log "No explicit Donor ID found. Using first 8 chars of Monero wallet."
+    XVB_DONOR_ID=$(echo "$MONERO_WALLET" | cut -c 1-8)
 fi
 
 cat <<EOF > .env
@@ -103,6 +138,9 @@ TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
 P2POOL_FLAGS=$P2POOL_FLAGS
 P2POOL_PORT=$P2POOL_PORT
+PROXY_PORT=$PROXY_PORT
+XVB_POOL_URL=$XVB_POOL_URL
+XVB_DONOR_ID=$XVB_DONOR_ID
 EOF
 
 # --- 5. Apply Templates ---
@@ -123,8 +161,12 @@ if [ -f "/etc/default/grub" ]; then
         log "Updating /etc/default/grub..."
         sudo cp /etc/default/grub /etc/default/grub.bak
         sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never /' /etc/default/grub
-        sudo update-grub
-        REBOOT_REQUIRED=true
+        if command -v update-grub >/dev/null; then
+            sudo update-grub
+            REBOOT_REQUIRED=true
+        else
+            error "update-grub not found. Please update your bootloader configuration manually to enable HugePages."
+        fi
     else
         log "HugePages already configured in GRUB."
     fi
