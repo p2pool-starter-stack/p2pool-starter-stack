@@ -2,6 +2,7 @@ import json
 import os
 import time
 from config import STATE_FILE_PATH
+from config import TIER_DEFAULTS
 
 class StateManager:
     def __init__(self):

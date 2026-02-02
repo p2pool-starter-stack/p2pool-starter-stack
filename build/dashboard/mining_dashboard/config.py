@@ -1,7 +1,6 @@
 import os
 
 # --- System Paths ---
-# Adjust these if your Docker container paths differ
 BASE_STATS_DIR = "/app/stats"
 DISK_PATH = '/data'
 STATE_FILE_PATH = os.path.join(DISK_PATH, "mining_state.json")
@@ -16,31 +15,23 @@ NETWORK_STATS_PATH = f"{BASE_STATS_DIR}/network/stats"
 # --- Network & API Configuration ---
 HOST_IP = os.environ.get("HOST_IP", "Unknown Host")
 XMRIG_API_PORT = 8080
-API_TIMEOUT = 1         # Seconds to wait for miner response
-UPDATE_INTERVAL = 30    # Seconds between data refresh cycles
+API_TIMEOUT = 1         
+UPDATE_INTERVAL = 30    
 
 # --- XvB Algorithm Constants ---
-# Controls the mining logic cycles
-XVB_TIME_ALGO_MS = 60000        # Total cycle length (1 minute / 60,000 ms)
-XVB_MIN_TIME_SEND_MS = 15000     # Minimum time to force a switch (5 seconds)
-XVB_REWARD_URL = "https://xmrvsbeast.com/p2pool/estimated_reward.html"
+XVB_TIME_ALGO_MS = 60000        
+XVB_MIN_TIME_SEND_MS = 15000     
 
-# Default Fallbacks (Used if scraping fails or on first boot)
-# These act as safe baselines until the scraper runs
+# --- CORRECTED TIER REQUIREMENTS ---
+# Based on official rules: Mega=1M, Whale=100k, VIP=10k, Donor=1k
 TIER_DEFAULTS = {
-    "donor_mega": 1000000, # 1 MH/s
-    "donor_whale": 50000,  # 50 kH/s
-    "donor_vip": 10000,    # 10 kH/s
-    "mvp": 5000,           # 5 kH/s
-    "donor": 0             # 0 kH/s
+    "donor_mega": 1000000, 
+    "donor_whale": 100000, # UPDATED: Was 50k, now 100k
+    "donor_vip": 10000,    
+    "mvp": 5000,           
+    "donor": 1000          # UPDATED: Was 0, now 1k
 }
 
-# P2Pool PPLNS Math Constants (for Mainnet)
-# Used to calculate if you have enough hashrate to hold a share
+# P2Pool PPLNS Math Constants 
 BLOCK_PPLNS_WINDOW_MAIN = 2160  
-SECOND_PER_BLOCK_MAIN = 120     
-
-# --- Donation Auto-Levels ---
-# Hashrate thresholds (H/s) to trigger different donation tiers
-DONOR_LEVEL_VIP = 10000    # 10 kH/s
-DONOR_LEVEL_WHALE = 50000  # 50 kH/s
+SECOND_PER_BLOCK_MAIN = 120

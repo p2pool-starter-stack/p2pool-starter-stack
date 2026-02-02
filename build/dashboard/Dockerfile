@@ -20,6 +20,6 @@ COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # Expose the new port (8080 is defined in config.py)
-EXPOSE 8080
+EXPOSE 8000
 
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]

@@ -98,7 +98,7 @@ def get_tari_stats():
             "status": t.get('channel_state', 'UNKNOWN'),
             "address": t.get('wallet', 'Unknown'),
             "height": t.get('height', 0),
-            "reward": t.get('reward', 0),
+            "reward": t.get('reward', 0) / 1_000_000, 
             "difficulty": t.get('difficulty', 0)
         }
     return {"active": False}
