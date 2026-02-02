@@ -46,9 +46,9 @@ async def fetch_xmrig_summary(session, ip, name):
                         "status": "online",
                         "working_addr": target, 
                         "uptime": data.get("uptime", 0),
-                        "h10": hr_total[0] if len(hr_total) > 0 else 0,
-                        "h60": hr_total[1] if len(hr_total) > 1 else 0,
-                        "h15": hr_total[2] if len(hr_total) > 2 else 0,
+                        "h10": hr_total[0] if len(hr_total) > 0 and hr_total[0] is not None else 0,
+                        "h60": hr_total[1] if len(hr_total) > 1 and hr_total[1] is not None else 0,
+                        "h15": hr_total[2] if len(hr_total) > 2 and hr_total[2] is not None else 0,
                         "results": data.get("results", {}), # Share submission statistics
                         "active_pool": active_pool
                     }

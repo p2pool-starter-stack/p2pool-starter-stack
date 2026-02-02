@@ -88,7 +88,7 @@ async def handle_index(request):
 
         row = f"""
         <tr class="{status_class}">
-            <td data-sort="{w['name']}">{name_display}</td>
+            <td data-sort="{worker['name']}">{name_display}</td>
             <td data-sort="{ip_sort_val}">{worker['ip']}</td>
             <td data-sort="{uptime_val}">{format_duration(uptime_val)}</td>
             <td data-sort="{h10_val}">{format_hashrate(h10_val)}</td>
