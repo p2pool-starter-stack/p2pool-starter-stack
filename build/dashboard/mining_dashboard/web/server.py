@@ -130,7 +130,15 @@ async def handle_index(request):
     disk_fill = "critical" if disk_percent > 90 else "warning" if disk_percent > 70 else ""
     
     mem_usage = data.get('system', {}).get('memory', {})
-    load_avg = data.get('system', {}).get('load', "0.00")
+    load_raw = data.get('system', {}).get('load', "0.00 0.00 0.00")
+    
+    # Format load average with labels
+    load_parts = load_raw.split()
+    if len(load_parts) == 3:
+        load_avg = f"1m: {load_parts[0]} 5m: {load_parts[1]} 15m: {load_parts[2]}"
+    else:
+        load_avg = load_raw
+
     cpu_percent = data.get('system', {}).get('cpu_percent', "0.0%")
     
     hugepages_info = data.get('system', {}).get('hugepages', ["Disabled", "status-bad", "0/0"])
@@ -199,6 +207,11 @@ async def handle_index(request):
 
         template = get_cached_template()
 
+        # Format Block Hash
+        net_hash_val = str(network_stats.get('hash', 'N/A'))
+        if len(net_hash_val) > 20:
+            net_hash_val = f"{net_hash_val[:8]}...{net_hash_val[-8:]}"
+
         html = template.format(
             host_ip=HOST_IP,
 
@@ -261,7 +274,7 @@ async def handle_index(request):
             net_height=network_stats.get('height', 0),
             net_reward=f"{network_stats.get('reward', 0)/1e12:.4f} XMR",
             net_diff=f"{network_stats.get('difficulty', 0)/1e9:.2f} G",
-            net_hash=network_stats.get('hash', 'N/A'),
+            net_hash=net_hash_val,
             net_ts=format_time_abs(network_stats.get('timestamp', 0)),
 
             # --- Dynamic Components ---
