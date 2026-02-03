@@ -76,11 +76,21 @@ async def switch_miners(mode, workers):
                         config_data = await get_resp.json()
 
                     # 2. Modify pool states based on ports
+                    needs_update = False
                     if "pools" in config_data and isinstance(config_data["pools"], list):
                         for pool in config_data["pools"]:
                             p_url = pool.get("url", "")
-                            if ":3333" in p_url: pool["enabled"] = p2pool_state
-                            elif ":3344" in p_url: pool["enabled"] = xvb_state
+                            target_state = None
+                            if ":3333" in p_url: target_state = p2pool_state
+                            elif ":3344" in p_url: target_state = xvb_state
+                            
+                            if target_state is not None and pool.get("enabled") != target_state:
+                                pool["enabled"] = target_state
+                                needs_update = True
+
+                    if not needs_update:
+                        switched = True
+                        break
 
                     # 3. Push updated configuration
                     async with session.put(url, json=config_data, headers=headers, timeout=2) as resp:
