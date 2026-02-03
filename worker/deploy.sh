@@ -28,7 +28,7 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # Parse Configuration
-RAW_HOME=$(jq -r .HOME_DIR "$CONFIG_JSON")
+RAW_HOME=$(jq -r '.HOME_DIR // "DYNAMIC_HOME"' "$CONFIG_JSON")
 if [ "$RAW_HOME" == "DYNAMIC_HOME" ]; then
     HOME_DIR=$HOME
 else
