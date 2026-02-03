@@ -13,6 +13,9 @@ log_info() { echo -e "\033[1;32m[INFO]\033[0m $1"; }
 log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 log_error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; exit 1; }
 
+# Flag to indicate if a system reboot is necessary
+REBOOT_REQUIRED=false
+
 # --- 1. Environment Initialization ---
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 CONFIG_JSON="$SCRIPT_DIR/config.json"
@@ -206,6 +209,7 @@ if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ]; then
     sudo cp /etc/default/grub /etc/default/grub.bak
     sudo sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$NEW_PARAMS\"|" /etc/default/grub
     sudo update-grub
+    REBOOT_REQUIRED=true
 else
     log_warn "Utility 'proposed-grub.sh' not found. Skipping GRUB updates."
 fi
@@ -235,5 +239,10 @@ done
 echo ""
 log_info "--------------------------------------------------------"
 log_info "Deployment Complete."
-log_info "ACTION REQUIRED: A system reboot is mandatory to enable HugePages."
+if [ "$REBOOT_REQUIRED" = true ]; then
+    log_warn "ACTION REQUIRED: A system reboot is mandatory to enable HugePages."
+    echo "Please run: 'sudo reboot' now."
+else
+    log_info "Worker configured successfully. No reboot required."
+fi
 log_info "--------------------------------------------------------"
