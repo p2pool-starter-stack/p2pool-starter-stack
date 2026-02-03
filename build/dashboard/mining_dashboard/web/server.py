@@ -22,6 +22,10 @@ def get_cached_template():
             # Perform template injection only upon file modification
             if "{stats_card}" not in content and "{tari_section}" in content:
                 content = content.replace("{tari_section}", "{stats_card}\n{tari_section}")
+            
+            # Inject CPU/Mem cards before Disk if missing
+            if "{cpu_load}" not in content and "<h5>Disk</h5>" in content:
+                content = content.replace("<h5>Disk</h5>", "<h5>CPU Load</h5><p>{cpu_load}</p></div><div class=\"stat-card\"><h5>Memory</h5><p>{mem_p}</p></div><div class=\"stat-card\"><h5>Disk</h5>")
             _TEMPLATE_CACHE = content
             _TEMPLATE_MTIME = mtime
     except Exception as e:
@@ -125,6 +129,9 @@ async def handle_index(request):
     disk_percent = disk_usage.get('percent', 0)
     disk_fill = "critical" if disk_percent > 90 else "warning" if disk_percent > 70 else ""
     
+    mem_usage = data.get('system', {}).get('memory', {})
+    load_avg = data.get('system', {}).get('load', "0.00")
+    
     hugepages_info = data.get('system', {}).get('hugepages', ["Disabled", "status-bad", "0/0"])
     hp_status, hp_class, hp_val = hugepages_info
     
@@ -217,6 +224,10 @@ async def handle_index(request):
             disk_p=disk_usage.get('percent_str', '0%'),
             disk_width=f"{disk_percent}%",
             disk_fill_class=disk_fill,
+            mem_p=mem_usage.get('percent_str', '0%'),
+            mem_used=f"{mem_usage.get('used_gb', 0):.1f}",
+            mem_total=f"{mem_usage.get('total_gb', 0):.1f}",
+            cpu_load=load_avg,
 
             # --- Stratum Pool ---
             strat_h15=format_hashrate(stratum_stats.get('hashrate_15m', 0)),

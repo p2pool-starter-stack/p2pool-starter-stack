@@ -1,4 +1,5 @@
 import shutil
+import os
 from config import DISK_PATH
 
 BYTES_IN_GB = 1024 ** 3
@@ -26,6 +27,44 @@ def get_disk_usage():
             "total_gb": 0, "used_gb": 0, 
             "percent": 0, "percent_str": "0%"
         }
+
+def get_memory_usage():
+    """
+    Calculates system memory usage using /proc/meminfo.
+    Returns dict with total_gb, used_gb, percent, percent_str.
+    """
+    try:
+        mem_total = 0
+        mem_available = 0
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    mem_total = int(line.split()[1]) * 1024 # kB to bytes
+                elif line.startswith('MemAvailable:'):
+                    mem_available = int(line.split()[1]) * 1024 # kB to bytes
+        
+        if mem_total > 0:
+            used = mem_total - mem_available
+            percent = (used / mem_total) * 100
+            return {
+                "total_gb": mem_total / BYTES_IN_GB,
+                "used_gb": used / BYTES_IN_GB,
+                "percent": percent,
+                "percent_str": f"{percent:.1f}%"
+            }
+    except Exception:
+        pass
+    return {"total_gb": 0, "used_gb": 0, "percent": 0, "percent_str": "0%"}
+
+def get_load_average():
+    """
+    Returns system load average (1m, 5m, 15m) as a string.
+    """
+    try:
+        load = os.getloadavg()
+        return f"{load[0]:.2f} {load[1]:.2f} {load[2]:.2f}"
+    except Exception:
+        return "0.00 0.00 0.00"
 
 def get_hugepages_status():
     """
