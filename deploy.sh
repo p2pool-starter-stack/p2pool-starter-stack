@@ -84,6 +84,7 @@ MONERO_WALLET_ADDRESS=placeholder
 TARI_WALLET_ADDRESS=placeholder
 XVB_POOL_URL=na.xmrvsbeast.com:4247
 XVB_DONOR_ID=placeholder
+XVB_ENABLED=true
 EOF
 
 # --- 3. Tor Hidden Service Provisioning ---
