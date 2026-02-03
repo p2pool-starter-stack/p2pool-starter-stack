@@ -15,7 +15,7 @@ log_error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; exit 1; }
 
 # --- 1. Environment Initialization ---
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
-CONFIG_JSON="$SCRIPT_DIR/configuration.json"
+CONFIG_JSON="$SCRIPT_DIR/config.json"
 
 if [ ! -f "$CONFIG_JSON" ]; then
     log_error "Configuration file not found: $CONFIG_JSON"
