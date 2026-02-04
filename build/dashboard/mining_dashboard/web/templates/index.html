@@ -93,21 +93,29 @@
 
     <div class="grid">
         <div class="card">
-            <canvas id="hChart" height="180"></canvas>
+            {chart_controls}
+            <div style="position: relative; height: 350px; width: 100%;">
+                <canvas id="hChart"></canvas>
+            </div>
         </div>
         
         <div class="card">
-            <h3>Stratum Pool</h3>
+            <h3>My P2Pool Node Stats</h3>
             <div class="stat-grid">
+                <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
+                <div class="stat-card"><h5>Total Hashrate</h5><p>{total_hr}</p></div>
+                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p>{p2p_1h}</p></div>
+                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p>{p2p_24h}</p></div>
+                
                 <div class="stat-card" style="grid-column: span 2;">
-                    <h5>Hashrate (15m / 1h / 24h)</h5>
+                    <h5>Stratum (15m / 1h / 24h)</h5>
                     <p style="font-size: 12px;">{strat_h15} / {strat_h1h} / {strat_h24h}</p>
                 </div>
                 <div class="stat-card"><h5>Shares (OK/Err)</h5><p>{strat_shares}</p></div>
-                <div class="stat-card"><h5>Effort (Curr/Avg)</h5><p>{strat_effort}</p></div>
-                <div class="stat-card"><h5>Total Shares</h5><p>{strat_total_shares}</p></div>
-                <div class="stat-card"><h5>Reward Share</h5><p>{strat_reward_pct}</p></div>
+                <div class="stat-card"><h5>Effort</h5><p>{strat_effort}</p></div>
                 <div class="stat-card"><h5>Connections</h5><p>{strat_conns}</p></div>
+                <div class="stat-card"><h5>Reward Share</h5><p>{strat_reward_pct}</p></div>
+                <div class="stat-card"><h5>Total Shares</h5><p>{strat_total_shares}</p></div>
                 <div class="stat-card"><h5>Last Share</h5><p>{strat_last_share}</p></div>
                 <div class="stat-card" style="grid-column: span 2;"><h5>Total Hashes</h5><p>{strat_total_hashes}</p></div>
             </div>
@@ -115,20 +123,33 @@
         </div>
 
         <div class="card">
-            <h3>P2Pool Network</h3>
+            <h3>Global P2Pool Stats</h3>
             <div class="stat-grid">
-                <div class="stat-card"><h5>Sidechain Height</h5><p>{pool_height}</p></div>
-                <div class="stat-card"><h5>Difficulty</h5><p>{pool_diff}</p></div>
                 <div class="stat-card"><h5>Pool Hashrate</h5><p>{pool_hr}</p></div>
-                <div class="stat-card"><h5>Total Hashes</h5><p>{pool_total_hashes}</p></div>
                 <div class="stat-card"><h5>Miners</h5><p>{pool_miners}</p></div>
-                <div class="stat-card"><h5>PPLNS (Win/Wt)</h5><p>{pplns_win} / {pplns_wgt}</p></div>
-                <div class="stat-card"><h5>Share In Current Window</h5><p>{pool_shares_window}</p></div>
+                <div class="stat-card"><h5>Block Height</h5><p>{pool_height}</p></div>
+                <div class="stat-card"><h5>Difficulty</h5><p>{pool_diff}</p></div>
                 <div class="stat-card"><h5>Blocks Found</h5><p>{pool_blocks}</p></div>
+                <div class="stat-card"><h5>PPLNS Window</h5><p>{pplns_win}</p></div>
+                <div class="stat-card"><h5>PPLNS Weight</h5><p>{pplns_wgt}</p></div>
+                <div class="stat-card"><h5>Share In Window</h5><p>{pool_shares_window}</p></div>
                 <div class="stat-card"><h5>Last Block</h5><p style="font-size: 12px;">{pool_last_blk}</p></div>
-                <div class="stat-card"><h5>Peers (Out/In/All)</h5><p>{p2p_peers}</p></div>
-                <div class="stat-card"><h5>Status</h5><p style="font-size: 11px;">{p2p_uptime}</p></div>
+                <div class="stat-card"><h5>Peers</h5><p>{p2p_peers}</p></div>
+                <div class="stat-card"><h5>Uptime</h5><p style="font-size: 11px;">{p2p_uptime}</p></div>
+                <div class="stat-card"><h5>Total Hashes</h5><p>{pool_total_hashes}</p></div>
             </div>
+        </div>
+
+        <div class="card">
+            <h3>XvB Donation Stats</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Current Tier</h5><p>{tier_name}</p></div>
+                <div class="stat-card"><h5>Target Tier</h5><p>{target_tier_name}</p></div>
+                <div class="stat-card"><h5>1h Avg (Pool)</h5><p>{xvb_1h}</p></div>
+                <div class="stat-card"><h5>24h Avg (Pool)</h5><p>{xvb_24h}</p></div>
+                <div class="stat-card"><h5>Fail Count</h5><p>{xvb_fail_count}</p></div>
+            </div>
+            <div style="font-size:10px; color:#666; margin-top:10px;">Stats fetched from xmrvsbeast.com (Updated: {xvb_updated})</div>
         </div>
 
         <div class="card">
@@ -145,7 +166,16 @@
             </div>
         </div>
         
-        {tari_section}
+        <div class="card">
+            <h3>Tari Merge Mining</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Status</h5><p class="{tari_status_class}">{tari_status}</p></div>
+                <div class="stat-card"><h5>Reward</h5><p>{tari_reward}</p></div>
+                <div class="stat-card"><h5>Height</h5><p>{tari_height}</p></div>
+                <div class="stat-card"><h5>Difficulty</h5><p>{tari_diff}</p></div>
+            </div>
+            <div class="wallet-text">Wallet: {tari_wallet}</div>
+        </div>
     </div>
 
     <div class="card">

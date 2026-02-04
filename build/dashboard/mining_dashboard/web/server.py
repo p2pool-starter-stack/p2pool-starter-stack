@@ -19,17 +19,6 @@ def get_cached_template():
         if _TEMPLATE_CACHE is None or mtime > _TEMPLATE_MTIME:
             with open(TEMPLATE_PATH, 'r') as f:
                 content = f.read()
-            # Perform template injection only upon file modification
-            if "{stats_card}" not in content and "{tari_section}" in content:
-                content = content.replace("{tari_section}", "{stats_card}\n{tari_section}")
-            
-            # Inject CPU/Mem cards before Disk if missing
-            if "{cpu_load}" not in content and "<h5>Disk</h5>" in content:
-                content = content.replace("<h5>Disk</h5>", "<h5>CPU Load</h5><p>{cpu_load}</p></div><div class=\"stat-card\"><h5>Memory</h5><p>{mem_p}</p></div><div class=\"stat-card\"><h5>Disk</h5>")
-            
-            if "{chart_controls}" not in content and "<canvas" in content:
-                content = content.replace("<canvas", '{chart_controls}<div style="position: relative; height: 350px; width: 100%;"><canvas')
-                content = content.replace("</canvas>", '</canvas></div>')
             _TEMPLATE_CACHE = content
             _TEMPLATE_MTIME = mtime
     except Exception as e:
@@ -128,25 +117,14 @@ async def handle_index(request):
 
     # --- Tari Merge Mining Section ---
     tari_stats = data.get('tari', {})
-    tari_section = ""
     
-    if tari_stats.get('active'):
-        # Format difficulty with comma separators
-        tari_diff = f"{int(tari_stats.get('difficulty', 0)):,}"
-        tari_section = f"""
-        <div class="card">
-            <h3>Tari Merge Mining</h3>
-            <div class="stat-grid">
-                <div class="stat-card"><h5>Status</h5><p class="status-ok">{tari_stats.get('status', 'Unknown')}</p></div>
-                <div class="stat-card"><h5>Reward</h5><p>{tari_stats.get('reward', 0):.2f} TARI</p></div>
-                <div class="stat-card"><h5>Height</h5><p>{tari_stats.get('height', 0)}</p></div>
-                <div class="stat-card"><h5>Difficulty</h5><p>{tari_diff}</p></div>
-            </div>
-            <div style="font-size:10px; color:#666; margin-top:10px; overflow-wrap: break-word;">Wallet: {tari_stats.get('address', 'Unknown')}</div>
-        </div>
-        """
-    else:
-        tari_section = '<div class="card"><h3>Tari</h3><p>Waiting for data...</p></div>'
+    tari_active = tari_stats.get('active', False)
+    tari_status = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
+    tari_status_class = "status-ok" if tari_active else ""
+    tari_reward = f"{tari_stats.get('reward', 0):.2f} TARI"
+    tari_height = str(tari_stats.get('height', 0))
+    tari_diff = f"{int(tari_stats.get('difficulty', 0)):,}"
+    tari_wallet = tari_stats.get('address', 'Unknown')
 
     # --- System and Pool Metrics ---
     disk_usage = data.get('system', {}).get('disk', {})
@@ -193,19 +171,6 @@ async def handle_index(request):
             
         p2p_24h_val = max(0, total_hr_val - xvb_24h_val)
 
-        # --- Status Card Construction ---
-        mode_card = f"""
-        <div class="card">
-            <h3>P2Pool Status</h3>
-            <div class="stat-grid">
-                <div class="stat-card"><h5>Current Mode</h5><p style="color:{mode_color}">{current_mode}</p></div>
-                <div class="stat-card"><h5>1h Avg</h5><p>{format_hashrate(p2p_1h_val)}</p></div>
-                <div class="stat-card"><h5>24h Avg (Est.)</h5><p>{format_hashrate(p2p_24h_val)}</p></div>
-                <div class="stat-card"><h5>Total Hashrate</h5><p>{format_hashrate(total_hr_val)}</p></div>
-            </div>
-        </div>
-        """
-
         tiers = state_mgr.state.get("tiers", {})
         # Determine Donation Tier based on 24h average hashrate
         tier_name, _ = get_tier_info(xvb_24h_val, tiers)
@@ -214,29 +179,9 @@ async def handle_index(request):
         safe_capacity = total_hr_val * 0.85
         target_tier_name, _ = get_tier_info(safe_capacity, tiers)
 
-        if ENABLE_XVB:
-            xvb_card = f"""
-            <div class="card">
-                <h3>XvB Donation Status</h3>
-                <div class="stat-grid">
-                    <div class="stat-card"><h5>Current Donation Tier</h5><p>{tier_name}</p></div>
-                    <div class="stat-card"><h5>Target Donation Tier</h5><p>{target_tier_name}</p></div>
-                    <div class="stat-card"><h5>1h Avg (Pool)</h5><p>{format_hashrate(xvb_1h_val)}</p></div>
-                    <div class="stat-card"><h5>24h Avg (Pool)</h5><p>{format_hashrate(xvb_24h_val)}</p></div>
-                    <div class="stat-card"><h5>Fail Count</h5><p>{xvb_stats.get('fail_count', 0)}</p></div>
-                </div>
-                <div style="font-size:10px; color:#666; margin-top:10px;">Stats fetched from xmrvsbeast.com</div>
-            </div>
-            """
-        else:
-            xvb_card = f"""
-            <div class="card">
-                <h3>XvB Donation Status</h3>
-                <div style="padding: 20px; text-align: center; color: #888;">
-                    <em>Feature Disabled in Configuration</em>
-                </div>
-            </div>
-            """
+        if not ENABLE_XVB:
+            tier_name = "Disabled"
+            target_tier_name = "Disabled"
 
         # --- Chart Controls ---
         def _btn_style(target):
@@ -252,11 +197,8 @@ async def handle_index(request):
             <a href="?range=24h" style="{_btn_style('24h')}">24 Hr</a>
             <a href="?range=1w" style="{_btn_style('1w')}">1 Wk</a>
             <a href="?range=1m" style="{_btn_style('1m')}">1 Mo</a>
-            <a href="?range=all" style="{_btn_style('all')}">All</a>
         </div>
         """
-
-        stats_card = mode_card + xvb_card
 
         template = get_cached_template()
 
@@ -333,8 +275,15 @@ async def handle_index(request):
 
             # --- Dynamic Components ---
             worker_rows=worker_rows,
-            tari_section=tari_section,
-            stats_card=stats_card,
+            tari_status=tari_status,
+            tari_status_class=tari_status_class,
+            tari_reward=tari_reward,
+            tari_height=tari_height,
+            tari_diff=tari_diff,
+            tari_wallet=tari_wallet,
+            tier_name=tier_name,
+            target_tier_name=target_tier_name,
+            xvb_fail_count=xvb_stats.get('fail_count', 0),
             chart_controls=chart_controls,
             chart_labels=",".join(chart_labels),
             chart_data=",".join(chart_values),
