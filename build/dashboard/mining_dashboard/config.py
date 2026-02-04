@@ -46,7 +46,6 @@ TIER_DEFAULTS = {
     "donor_mega": 1_000_000, 
     "donor_whale": 100_000, 
     "donor_vip": 10_000,    
-    "mvp": 5_000,           
     "donor": 1_000          
 }
 
