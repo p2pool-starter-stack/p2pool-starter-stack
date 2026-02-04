@@ -28,7 +28,8 @@ def get_cached_template():
                 content = content.replace("<h5>Disk</h5>", "<h5>CPU Load</h5><p>{cpu_load}</p></div><div class=\"stat-card\"><h5>Memory</h5><p>{mem_p}</p></div><div class=\"stat-card\"><h5>Disk</h5>")
             
             if "{chart_controls}" not in content and "<canvas" in content:
-                content = content.replace("<canvas", "{chart_controls}<canvas")
+                content = content.replace("<canvas", '{chart_controls}<div style="position: relative; height: 350px; width: 100%;"><canvas')
+                content = content.replace("</canvas>", '</canvas></div>')
             _TEMPLATE_CACHE = content
             _TEMPLATE_MTIME = mtime
     except Exception as e:
