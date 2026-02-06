@@ -3,75 +3,102 @@
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="refresh" content="30">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mining Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root {{ --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --accent: #58a6ff; --ok: #238636; --bad: #da3633; --warn: #d29922; --purple: #a371f7; }}
-        body {{ font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; }}
+        :root {{ 
+            --bg: #0d1117; --card: #161b22; --border: #30363d; 
+            --text: #c9d1d9; --text-muted: #8b949e; 
+            --accent: #58a6ff; --ok: #238636; --bad: #da3633; --warn: #d29922; --purple: #a371f7; 
+        }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; }}
         
-        .container {{ max-width: 1400px; margin: auto; }}
-        .header {{ display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
         
-        /* Grid Layout */
-        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; margin-bottom: 20px; }}
+        /* Layout & Grid */
+        .header {{ display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }}
+        .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 20px; display: flex; flex-direction: column; }}
         
-        /* Cards */
-        .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 15px; position: relative; }}
-        h3 {{ margin: 0 0 15px 0; font-size: 14px; text-transform: uppercase; color: #8b949e; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }}
+        /* Typography */
+        h2 {{ margin: 0; font-size: 1.5rem; font-weight: 600; }}
+        h3 {{ margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }}
+        .text-muted {{ color: var(--text-muted); }}
+        .text-accent {{ color: var(--accent); }}
+        .text-small {{ font-size: 0.85rem; }}
+        .text-xs {{ font-size: 0.75rem; }}
+        .font-mono {{ font-family: monospace; }}
+        .font-bold {{ font-weight: bold; }}
         
-        /* Stat Grids */
-        .stat-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
-        .stat-card {{ background: #0d1117; padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border); }}
-        .stat-card h5 {{ margin: 0; font-size: 10px; color: #8b949e; text-transform: uppercase; }}
-        .stat-card p {{ margin: 5px 0 0 0; font-weight: bold; font-size: 15px; }}
+        /* Stats */
+        .stat-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
+        .stat-card {{ background: var(--bg); padding: 10px 12px; border-radius: 4px; border: 1px solid var(--border); }}
+        .stat-card h5 {{ margin: 0 0 4px 0; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }}
+        .stat-card p {{ margin: 0; font-weight: 600; font-size: 0.95rem; }}
+        .col-span-2 {{ grid-column: span 2; }}
         
-        /* Tables */
-        table {{ width: 100%; border-collapse: collapse; }}
-        th {{ text-align: left; font-size: 11px; color: #8b949e; padding: 8px; border-bottom: 1px solid var(--border); text-transform: uppercase; }}
-        td {{ padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }}
+        /* Table */
+        table {{ width: 100%; border-collapse: collapse; font-size: 0.9rem; }}
+        th {{ text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; cursor: pointer; }}
+        td {{ padding: 10px; border-bottom: 1px solid #21262d; }}
         tr:last-child td {{ border-bottom: none; }}
         
-        /* Visuals */
-        .dot {{ height: 8px; width: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }}
-        .online {{ background: var(--ok); box-shadow: 0 0 5px var(--ok); }} 
-        .offline {{ background: var(--bad); }}
+        /* Components */
         .status-ok {{ color: var(--ok); }} 
         .status-bad {{ color: var(--bad); }} 
         .status-warn {{ color: var(--warn); }}
-        .bold {{ font-weight: bold; color: var(--accent); }}
         
-        .progress-bg {{ background: var(--border); border-radius: 4px; height: 6px; width: 100%; margin-top: 5px; overflow: hidden; }}
+        .progress-bg {{ background: var(--border); border-radius: 4px; height: 6px; width: 100%; margin-top: 6px; overflow: hidden; }}
         .progress-fill {{ background: var(--accent); height: 100%; border-radius: 4px; }}
         .progress-fill.warning {{ background: var(--warn); }} 
         .progress-fill.critical {{ background: var(--bad); }}
         
-        .pool-badge {{ background: {mode_color}; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 12px; vertical-align: middle; margin-left: 10px; font-weight: bold; }}
-        .wallet-text {{ font-size: 10px; color: #666; margin-top: 10px; word-break: break-all; font-family: monospace; }}
+        .badge {{ padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; vertical-align: middle; display: inline-block; }}
+        .badge-pool {{ color: #fff; margin-left: 10px; }}
+        .badge-outline {{ border: 1px solid var(--border); color: var(--text-muted); margin-left: 8px; }}
+        .badge-ok {{ background: var(--ok); color: white; }}
+        .badge-purple {{ background: var(--purple); color: white; }}
+        .badge-bad {{ background: var(--bad); color: white; }}
         
-        .chart-container {{ height: 180px; width: 100%; }}
+        .wallet-text {{ font-size: 0.7rem; color: #666; margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }}
+        
+        /* Chart Controls */
+        .chart-controls {{ display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 15px; }}
+        .btn-range {{ display: inline-block; padding: 4px 12px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; border: 1px solid var(--border); background-color: var(--card); color: var(--text-muted); transition: all 0.2s; }}
+        .btn-range:hover {{ border-color: var(--text-muted); color: var(--text); }}
+        .btn-range.active {{ background-color: var(--ok); color: #fff; border-color: var(--ok); }}
+
+        /* Utilities */
+        .flex {{ display: flex; }}
+        .items-center {{ align-items: center; }}
+        .justify-end {{ justify-content: flex-end; }}
+        .mb-1 {{ margin-bottom: 0.25rem; }}
+        .mr-2 {{ margin-right: 0.5rem; }}
     </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
         <div>
-            <div style="display:flex; align-items:center;">
-                <h2 style="margin:0">{host_ip}</h2>
-                <span class="pool-badge">{mode_name}</span>
-                <span style="font-size: 12px; color: #8b949e; margin-left: 10px; border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px;">P2Pool {p2p_type}</span>
+            <div class="flex items-center">
+                <h2>{host_ip}</h2>
+                <span class="badge badge-pool" style="background-color: {mode_color};">{mode_name}</span>
+                <span class="badge badge-outline">P2Pool {p2p_type}</span>
             </div>
             
-            <div style="margin-top: 8px; font-size: 13px;">
-                <div style="margin-bottom: 4px;">
-                    <span style="color: #8b949e;">CPU: {cpu_percent} Load: {cpu_load}</span>
+            <div class="text-small" style="margin-top: 10px;">
+                <div class="mb-1">
+                    <span class="text-muted">CPU:</span> {cpu_percent} 
+                    <span class="text-muted" style="margin-left: 10px;">Load:</span> {cpu_load}
                 </div>
-                <div style="margin-bottom: 4px;">
-                    <span style="color: #8b949e; margin-right: 15px;">RAM: {mem_used} / {mem_total} GB ({mem_p})</span>
+                <div class="mb-1">
+                    <span class="text-muted">RAM:</span> {mem_used} / {mem_total} GB ({mem_p})
                     <span class="{hp_class}">Huge Pages: {hp_status} ({hp_val})</span>
                 </div>
-                <div>
-                    <span style="color: #8b949e;">Disk: {disk_used:.1f} / {disk_total:.1f} GB ({disk_p})</span>
-                    <div style="width: 200px; display: inline-block; vertical-align: middle; margin-left: 5px;">
+                <div class="flex items-center">
+                    <span class="text-muted mr-2">Disk: {disk_used:.1f} / {disk_total:.1f} GB ({disk_p})</span>
+                    <div style="width: 150px;">
                         <div class="progress-bg">
                             <div class="progress-fill {disk_fill_class}" style="width: {disk_width}"></div>
                         </div>
@@ -79,13 +106,13 @@
                 </div>
             </div>
         </div>
-        <div style="text-align: right">
-            <div style="font-size: 24px; font-weight: bold; color: var(--accent);">{total_hr}</div>
-            <small style="color:#8b949e">Last Update: {last_update}</small>
-            <div style="font-size: 11px; margin-top: 5px; color: #8b949e;">
+        <div style="text-align: right;">
+            <div class="text-accent font-bold" style="font-size: 24px;">{total_hr}</div>
+            <div class="text-muted text-xs">Last Update: {last_update}</div>
+            <div class="text-muted text-xs" style="margin-top: 5px;">
                 P2Pool: {p2p_1h} (1h) / {p2p_24h} (24h)
             </div>
-            <div style="font-size: 11px; margin-top: 2px; color: {mode_color}">
+            <div class="text-xs" style="margin-top: 2px; color: {mode_color}">
                 XvB: {xvb_1h} (1h) / {xvb_24h} (24h)
             </div>
         </div>
@@ -93,8 +120,14 @@
 
     <div class="grid">
         <div class="card">
-            {chart_controls}
-            <div style="position: relative; height: 350px; width: 100%;">
+            <div class="chart-controls">
+                <span class="text-muted text-small" style="margin-right: 5px;">Range:</span>
+                <a href="?range=1h" class="btn-range {cls_1h}">1 Hr</a>
+                <a href="?range=24h" class="btn-range {cls_24h}">24 Hr</a>
+                <a href="?range=1w" class="btn-range {cls_1w}">1 Wk</a>
+                <a href="?range=1m" class="btn-range {cls_1m}">1 Mo</a>
+            </div>
+            <div style="position: relative; height: 300px; width: 100%;">
                 <canvas id="hChart"></canvas>
             </div>
         </div>
@@ -103,13 +136,13 @@
             <h3>My P2Pool Node Stats</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
-                <div class="stat-card"><h5>Total Hashrate</h5><p>{total_hr}</p></div>
+                <div class="stat-card"><h5>Total Hashrate</h5><p class="text-accent">{total_hr}</p></div>
                 <div class="stat-card"><h5>P2Pool 1h Avg</h5><p>{p2p_1h}</p></div>
                 <div class="stat-card"><h5>P2Pool 24h Avg</h5><p>{p2p_24h}</p></div>
                 
-                <div class="stat-card" style="grid-column: span 2;">
+                <div class="stat-card col-span-2">
                     <h5>Stratum (15m / 1h / 24h)</h5>
-                    <p style="font-size: 12px;">{strat_h15} / {strat_h1h} / {strat_h24h}</p>
+                    <p class="text-small">{strat_h15} / {strat_h1h} / {strat_h24h}</p>
                 </div>
                 <div class="stat-card"><h5>Shares (OK/Err)</h5><p>{strat_shares}</p></div>
                 <div class="stat-card"><h5>Effort</h5><p>{strat_effort}</p></div>
@@ -117,7 +150,7 @@
                 <div class="stat-card"><h5>Reward Share</h5><p>{strat_reward_pct}</p></div>
                 <div class="stat-card"><h5>Total Shares</h5><p>{strat_total_shares}</p></div>
                 <div class="stat-card"><h5>Last Share</h5><p>{strat_last_share}</p></div>
-                <div class="stat-card" style="grid-column: span 2;"><h5>Total Hashes</h5><p>{strat_total_hashes}</p></div>
+                <div class="stat-card col-span-2"><h5>Total Hashes</h5><p>{strat_total_hashes}</p></div>
             </div>
             <div class="wallet-text">Wallet: {strat_wallet}</div>
         </div>
@@ -133,9 +166,9 @@
                 <div class="stat-card"><h5>PPLNS Window</h5><p>{pplns_win}</p></div>
                 <div class="stat-card"><h5>PPLNS Weight</h5><p>{pplns_wgt}</p></div>
                 <div class="stat-card"><h5>Share In Window</h5><p>{pool_shares_window}</p></div>
-                <div class="stat-card"><h5>Last Block</h5><p style="font-size: 12px;">{pool_last_blk}</p></div>
+                <div class="stat-card"><h5>Last Block</h5><p class="text-small">{pool_last_blk}</p></div>
                 <div class="stat-card"><h5>Peers</h5><p>{p2p_peers}</p></div>
-                <div class="stat-card"><h5>Uptime</h5><p style="font-size: 11px;">{p2p_uptime}</p></div>
+                <div class="stat-card"><h5>Uptime</h5><p class="text-small">{p2p_uptime}</p></div>
                 <div class="stat-card"><h5>Total Hashes</h5><p>{pool_total_hashes}</p></div>
             </div>
         </div>
@@ -149,7 +182,7 @@
                 <div class="stat-card"><h5>24h Avg (Pool)</h5><p>{xvb_24h}</p></div>
                 <div class="stat-card"><h5>Fail Count</h5><p>{xvb_fail_count}</p></div>
             </div>
-            <div style="font-size:10px; color:#666; margin-top:10px;">Stats fetched from xmrvsbeast.com (Updated: {xvb_updated})</div>
+            <div class="text-xs text-muted" style="margin-top:10px;">Stats fetched from xmrvsbeast.com (Updated: {xvb_updated})</div>
         </div>
 
         <div class="card">
@@ -157,12 +190,12 @@
             <div class="stat-grid">
                 <div class="stat-card"><h5>Block Height</h5><p>{net_height}</p></div>
                 <div class="stat-card"><h5>Reward</h5><p>{net_reward}</p></div>
-                <div class="stat-card" style="grid-column: span 2;"><h5>Difficulty</h5><p>{net_diff}</p></div>
-                <div class="stat-card" style="grid-column: span 2;">
+                <div class="stat-card col-span-2"><h5>Difficulty</h5><p>{net_diff}</p></div>
+                <div class="stat-card col-span-2">
                     <h5>Current Block Hash</h5>
-                    <p style="font-size:10px; font-family:monospace;">{net_hash}</p>
+                    <p class="font-mono text-xs">{net_hash}</p>
                 </div>
-                <div class="stat-card" style="grid-column: span 2;"><h5>Network Time</h5><p>{net_ts}</p></div>
+                <div class="stat-card col-span-2"><h5>Network Time</h5><p>{net_ts}</p></div>
             </div>
         </div>
         
@@ -222,6 +255,24 @@
                 x: {{ display: false }} 
             }} 
         }}
+    }});
+
+    // Client-side Table Sorting
+    document.addEventListener('DOMContentLoaded', function() {{
+        const getCellValue = (tr, idx) => tr.children[idx].getAttribute('data-sort') || tr.children[idx].innerText || tr.children[idx].textContent;
+        const comparer = (idx, asc) => (a, b) => ((v1, v2) => 
+            v1 !== '' && v2 !== '' && !isNaN(v1) && !isNaN(v2) ? v1 - v2 : v1.toString().localeCompare(v2)
+        )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+
+        document.querySelectorAll('th').forEach(th => {{
+            th.addEventListener('click', (() => {{
+                const table = th.closest('table');
+                const tbody = table.querySelector('tbody');
+                Array.from(tbody.querySelectorAll('tr'))
+                    .sort(comparer(Array.from(th.parentNode.children).indexOf(th), this.asc = !this.asc))
+                    .forEach(tr => tbody.appendChild(tr) );
+            }}));
+        }});
     }});
 </script>
 </body>
