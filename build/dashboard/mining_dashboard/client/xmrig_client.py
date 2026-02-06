@@ -17,13 +17,22 @@ class XMRigWorkerClient:
         # Derive auth token from worker name (e.g., "hostname+diff" -> "hostname")
         token = name.split('+')[0].strip()
         headers = {"Authorization": f"Bearer {token}"}
-        url = f"http://{ip}:{XMRIG_API_PORT}/1/summary"
         
-        try:
-            async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
-                if response.status == 200:
-                    return await response.json()
-        except Exception as e:
-            self.logger.debug(f"Worker API Error ({ip}): {e}")
+        # Try connecting via IP, then Hostname, then Hostname.local
+        targets = []
+        if ip and ip != "0.0.0.0":
+            targets.append(ip)
+        if token:
+            targets.append(token)
+            targets.append(f"{token}.local")
+
+        for target in targets:
+            url = f"http://{target}:{XMRIG_API_PORT}/1/summary"
+            try:
+                async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
+                    if response.status == 200:
+                        return await response.json()
+            except Exception as e:
+                self.logger.debug(f"Worker API Error ({target}): {e}")
         
         return {}

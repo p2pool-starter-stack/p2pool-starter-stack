@@ -270,6 +270,18 @@ class StateManager:
             except sqlite3.Error as e:
                 self.logger.error(f"Worker Update Error: {e}")
 
+    def delete_worker(self, worker_name):
+        """Removes a worker from the known workers list and database."""
+        with self._lock:
+            if worker_name in self.state["known_workers"]:
+                del self.state["known_workers"][worker_name]
+        
+        try:
+            with sqlite3.connect(self.db_path, timeout=5.0) as conn:
+                conn.execute("DELETE FROM workers WHERE name = ?", (worker_name,))
+        except sqlite3.Error as e:
+            self.logger.error(f"Worker Deletion Error: {e}")
+
     def save_snapshot(self, data):
         """Persists the full application state snapshot to the KV store."""
         if not data:
