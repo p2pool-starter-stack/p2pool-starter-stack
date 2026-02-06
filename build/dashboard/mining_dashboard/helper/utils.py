@@ -48,7 +48,7 @@ def format_hashrate(hashrate):
         elif val >= 1_000:
             return f"{val / 1_000:.2f} kH/s"
         else:
-            return f"{int(val)} H/s"
+            return f"{val:.2f} H/s"
             
     except (ValueError, TypeError):
         return "0 H/s"

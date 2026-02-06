@@ -55,14 +55,16 @@ class DataService:
                         if proxy_data and "workers" in proxy_data:
                             for w in proxy_data["workers"]:
                                 # Handle list format (XMRig Proxy 6.x+)
-                                if isinstance(w, list) and len(w) >= 11:
+                                if isinstance(w, list) and len(w) >= 13:
                                     proxy_workers.append({
                                         "name": w[0],
                                         "ip": w[1],
                                         "status": "online",
-                                        "h10": w[8],
-                                        "h60": w[9],
-                                        "h15": w[10],
+                                        # Proxy returns kH/s, convert to H/s
+                                        # Mapping: 1m(idx8)->10s & 60s (Proxy lacks 10s), 10m(idx9)->15m
+                                        "h10": w[8] * 1000,
+                                        "h60": w[8] * 1000,
+                                        "h15": w[9] * 1000,
                                         "uptime": 0 
                                     })
                                 # Handle dict format (Legacy)
@@ -93,6 +95,13 @@ class DataService:
                     for w, extra_stats in zip(proxy_workers, worker_results):
                         if extra_stats:
                             w['uptime'] = extra_stats.get('uptime', w['uptime'])
+                            
+                            # Prefer direct worker stats for hashrate if available
+                            hr_total = extra_stats.get('hashrate', {}).get('total', [])
+                            if isinstance(hr_total, list) and len(hr_total) >= 3:
+                                w['h10'] = hr_total[0] if hr_total[0] is not None else 0
+                                w['h60'] = hr_total[1] if hr_total[1] is not None else 0
+                                w['h15'] = hr_total[2] if hr_total[2] is not None else 0
                         
                         w['active_pool'] = active_pool_port
                         final_workers.append(w)

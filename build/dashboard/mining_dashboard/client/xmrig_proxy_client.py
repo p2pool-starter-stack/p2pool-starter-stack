@@ -88,9 +88,9 @@ class XMRigProxyClient:
                     int,            // 5: Invalid shares
                     int,            // 6: Total hashes
                     int,            // 7: Last share timestamp (ms)
-                    float,          // 8: Hashrate 10s/1m
-                    float,          // 9: Hashrate 60s/10m
-                    float,          // 10: Hashrate 15m/1h
+                    float,          // 8: Hashrate 1m
+                    float,          // 9: Hashrate 10m
+                    float,          // 10: Hashrate 1h
                     float,          // 11: Hashrate 12h
                     float           // 12: Hashrate 24h
                 ]
