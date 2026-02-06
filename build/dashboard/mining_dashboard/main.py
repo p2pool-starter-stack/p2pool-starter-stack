@@ -76,8 +76,12 @@ async def switch_miners(mode):
         ]
 
     try:
-        # Execute update via Proxy Client (running in thread to avoid blocking async loop)
-        await asyncio.to_thread(proxy_client.update_config, {"pools": pools})
+        # Fetch current full configuration to preserve other settings
+        current_config = await asyncio.to_thread(proxy_client.get_config)
+        current_config["pools"] = pools
+
+        # Execute update via Proxy Client with the full configuration
+        await asyncio.to_thread(proxy_client.update_config, current_config)
         logger.info(f"Switched Proxy to mode: {mode}")
     except Exception as e:
         logger.error(f"Failed to switch proxy mode: {e}")
