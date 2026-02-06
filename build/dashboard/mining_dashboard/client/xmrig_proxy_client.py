@@ -37,20 +37,29 @@ class XMRigProxyClient:
 
         Response:
         {
-            "id": "str",                    // Instance ID
-            "worker_id": "str",             // Worker ID (default: hostname)
-            "uptime": int,                  // Uptime in seconds
-            "restricted": bool,             // If API is running in restricted mode
+            "id": "str",
+            "worker_id": "str",
+            "uptime": int,
+            "restricted": bool,
             "resources": {
-                "memory": {
-                    "free": int,            // Free memory in bytes
-                    "total": int,           // Total memory in bytes
-                    "resident_set_memory": int // RSS in bytes
-                },
-                "load_average": [float, float, float], // [1min, 5min, 15min]
-                "hardware_concurrency": int // Number of CPU threads
+                "memory": { "free": int, "total": int, "resident_set_memory": int },
+                "load_average": [float, float, float],
+                "hardware_concurrency": int
             },
-            "features": ["str"]             // List of enabled features (e.g. "api", "http", "tls")
+            "features": ["str"],
+            "version": "str",
+            "kind": "str",
+            "mode": "str",
+            "ua": "str",
+            "donate_level": int,
+            "hashrate": { "total": [float, ...] },
+            "miners": { "now": int, "max": int },
+            "workers": int,
+            "upstreams": { "active": int, "total": int, ... },
+            "results": {
+                "accepted": int, "rejected": int, "invalid": int, "expired": int,
+                "avg_time": int, "hashes_total": int, "best": [int, ...]
+            }
         }
         """
         url = f"{self.base_url}/1/summary"
@@ -65,31 +74,27 @@ class XMRigProxyClient:
 
         Response:
         {
-            "workers": [
-                {
-                    "id": "str",            // Worker ID
-                    "ip": "str",            // Worker IP address
-                    "user_agent": "str",    // Miner user agent
-                    "hashrate": [float, float, float], // [10s, 60s, 15m] hashrate
-                    "shares": [int, int, int] // [accepted, rejected, invalid] shares
-                }
-            ],
             "hashrate": {
-                "total": [float, float, float],
-                "highest": float
+                "total": [float, ...]
             },
-            "results": {
-                "diff_current": int,
-                "shares_good": int,
-                "shares_total": int,
-                "avg_time": int,
-                "hashes_total": int
-            },
-            "connection": {
-                "uptime": int,
-                "ping": int,
-                "failures": int
-            }
+            "mode": "str",
+            "workers": [
+                [
+                    "name",         // 0: Worker Name
+                    "ip",           // 1: IP Address
+                    int,            // 2: Connection count
+                    int,            // 3: Accepted shares
+                    int,            // 4: Rejected shares
+                    int,            // 5: Invalid shares
+                    int,            // 6: Total hashes
+                    int,            // 7: Last share timestamp (ms)
+                    float,          // 8: Hashrate 10s/1m
+                    float,          // 9: Hashrate 60s/10m
+                    float,          // 10: Hashrate 15m/1h
+                    float,          // 11: Hashrate 12h
+                    float           // 12: Hashrate 24h
+                ]
+            ]
         }
         """
         url = f"{self.base_url}/1/workers"

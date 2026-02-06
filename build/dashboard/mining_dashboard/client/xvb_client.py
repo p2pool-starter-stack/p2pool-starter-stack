@@ -1,7 +1,7 @@
 import requests
 import logging
 import re
-from utils import parse_hashrate
+from helper.utils import parse_hashrate
 
 class XvbClient:
     def __init__(self, wallet_address):

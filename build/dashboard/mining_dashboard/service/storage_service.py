@@ -5,7 +5,7 @@ import json
 import os
 import time
 from collections import deque
-from config import DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
+from config.config import DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
 
 class StateManager:
     """

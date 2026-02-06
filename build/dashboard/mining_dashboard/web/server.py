@@ -1,12 +1,19 @@
 import os
 import time
 import html
+import logging
 from aiohttp import web
-from config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB, UPDATE_INTERVAL
-from utils import format_hashrate, format_duration, format_time_abs, get_tier_info
+from config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
+from helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
+
+logger = logging.getLogger("WebServer")
 
 # Path to the template file
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "index.html")
+
+BADGE_P2POOL = "<span style='background:#238636; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>P2Pool</span>"
+BADGE_XVB = "<span style='background:#a371f7; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>XvB</span>"
+BADGE_UNKNOWN = "<span style='background:#96211e; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>Unknown</span>"
 
 # Template Caching Configuration
 _TEMPLATE_CACHE = None
@@ -23,7 +30,7 @@ def get_cached_template():
             _TEMPLATE_CACHE = content
             _TEMPLATE_MTIME = mtime
     except Exception as e:
-        print(f"Error loading template: {e}")
+        logger.error(f"Error loading template: {e}")
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
 async def handle_index(request):
@@ -83,11 +90,11 @@ async def handle_index(request):
             
             # Identify and assign pool badge based on port
             active_pool = worker.get('active_pool', '')
-            pool_badge = "<span style='background:#96211e; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>Unknown</span>"
+            pool_badge = BADGE_UNKNOWN
             if any(p in active_pool for p in ['3333', '37889', '37888', '37890']):
-                pool_badge = "<span style='background:#238636; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>P2Pool</span>"
+                pool_badge = BADGE_P2POOL
             elif any(p in active_pool for p in ['3344', '4247']):
-                pool_badge = "<span style='background:#a371f7; color:white; padding:2px 5px; border-radius:4px; font-size:0.8em;'>XvB</span>"
+                pool_badge = BADGE_XVB
             
             name_display = f"{html.escape(worker['name'])} {pool_badge}"
 
@@ -101,7 +108,7 @@ async def handle_index(request):
             try:
                 ip_parts = [int(part) for part in worker.get('ip', '0.0.0.0').split('.')]
                 ip_sort_val = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
-            except:
+            except (ValueError, IndexError, AttributeError):
                 ip_sort_val = 0
 
             row = f"""
@@ -116,7 +123,7 @@ async def handle_index(request):
             """
             worker_rows += row
         except Exception as e:
-            print(f"Error processing worker {worker.get('name', 'unknown')}: {e}")
+            logger.error(f"Error processing worker {worker.get('name', 'unknown')}: {e}")
             continue
 
     # --- Tari Merge Mining Section ---

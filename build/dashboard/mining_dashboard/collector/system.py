@@ -1,6 +1,6 @@
 import shutil
 import os
-from config import DISK_PATH
+from config.config import DISK_PATH
 
 BYTES_IN_GB = 1024 ** 3
 

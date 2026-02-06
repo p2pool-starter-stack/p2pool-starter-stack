@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from config import (
+from config.config import (
     P2P_STATS_PATH, POOL_STATS_PATH, NETWORK_STATS_PATH, 
     STRATUM_STATS_PATH, TARI_STATS_PATH, SECOND_PER_BLOCK_MAIN,
     BLOCK_PPLNS_WINDOW_MAIN, BLOCK_PPLNS_WINDOW_MINI, BLOCK_PPLNS_WINDOW_NANO,
