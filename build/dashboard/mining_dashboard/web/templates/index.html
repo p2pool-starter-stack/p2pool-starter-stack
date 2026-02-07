@@ -97,7 +97,6 @@
         /* --- Sync View Styles --- */
         #sync-view {{ display: none; }}
         .mode-sync #sync-view {{ display: block; }}
-        .mode-sync #dashboard-view {{ display: none; }}
         
         .loader-container {{ position: relative; width: 150px; height: 150px; margin: 20px auto; }}
         .progress-wheel {{
@@ -113,38 +112,7 @@
 </head>
 <body class="{sync_class}">
 
-<!-- Sync View Overlay -->
-<div id="sync-view">
-    <div class="container">
-        <div class="header-placeholder">
-            <h1>Mining Dashboard</h1>
-            <p>System is currently synchronizing with the network.</p>
-        </div>
-        <div class="grid">
-            <div class="card">
-                <h2 class="text-accent" style="text-align: center;">Monero Sync</h2>
-                <div class="loader-container">
-                    <div class="progress-wheel" style="--p:{sync_percent}%"></div>
-                    <div class="progress-text">{sync_percent}%</div>
-                </div>
-                <div class="status-text">
-                    Synced: {sync_current} / {sync_target}<br>
-                    <small>({sync_remaining} blocks left)</small>
-                </div>
-            </div>
-            <div class="card">
-                <h2 class="text-accent" style="text-align: center;">Tari Sync</h2>
-                <div class="status-text" style="margin-top: 50px;">
-                    <p>Status: {tari_status}</p>
-                    <p>Height: {tari_height}</p>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Main Dashboard View -->
-<div class="container" id="dashboard-view">
+<div class="container">
     <div class="header">
         <div>
             <div class="flex items-center">
@@ -184,6 +152,34 @@
         </div>
     </div>
 
+    <!-- Sync View Overlay -->
+    <div id="sync-view">
+        <div class="header-placeholder">
+            <p>System is currently synchronizing with the network.</p>
+        </div>
+        <div class="grid">
+            <div class="card">
+                <h2 class="text-accent" style="text-align: center;">Monero Sync</h2>
+                <div class="loader-container">
+                    <div class="progress-wheel" style="--p:{sync_percent}%"></div>
+                    <div class="progress-text">{sync_percent}%</div>
+                </div>
+                <div class="status-text">
+                    Synced: {sync_current} / {sync_target}<br>
+                    <small>({sync_remaining} blocks left)</small>
+                </div>
+            </div>
+            <div class="card">
+                <h2 class="text-accent" style="text-align: center;">Tari Sync</h2>
+                <div class="status-text" style="margin-top: 50px;">
+                    <p>Status: {tari_status}</p>
+                    <p>Height: {tari_height}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="dashboard-view">
     <div class="view-controls">
         <div class="toggle-group">
             <button id="btn-simple" class="btn-toggle active">Simple</button>
@@ -322,6 +318,7 @@
                 {worker_rows}
             </tbody>
         </table>
+    </div>
     </div>
 </div>
 <script>
