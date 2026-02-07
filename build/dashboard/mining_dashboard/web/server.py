@@ -126,14 +126,48 @@ def _get_tari_context(data):
 def _get_system_context(data):
     """Extracts and formats system resource metrics."""
     system = data.get('system', {})
+    
+    # Disk Usage
     disk_usage = system.get('disk', {})
     disk_percent = disk_usage.get('percent', 0)
     disk_fill = "critical" if disk_percent > 90 else "warning" if disk_percent > 70 else ""
     
+    disk_class = "text-muted"
+    disk_badge = ""
+    if disk_percent > 80:
+        disk_class = "status-bad"
+        disk_badge = '<span class="badge badge-bad" style="margin-left:5px; margin-right:5px;">High Usage</span>'
+
+    # Memory Usage
     mem_usage = system.get('memory', {})
+    mem_percent = mem_usage.get('percent', 0)
+    
+    mem_label_class = "text-muted"
+    mem_val_class = ""
+    mem_badge = ""
+    if mem_percent > 80:
+        mem_label_class = "status-bad"
+        mem_val_class = "status-bad"
+        mem_badge = '<span class="badge badge-bad" style="margin-left:5px; margin-right:5px;">High Usage</span>'
+
+    # CPU Usage
+    cpu_str = system.get('cpu_percent', "0.0%")
+    try:
+        cpu_val = float(cpu_str.strip('%'))
+    except ValueError:
+        cpu_val = 0.0
+        
     load_raw = system.get('load', "0.00 0.00 0.00")
     load_parts = load_raw.split()
     load_avg = f"1m: {load_parts[0]} 5m: {load_parts[1]} 15m: {load_parts[2]}" if len(load_parts) == 3 else load_raw
+    
+    cpu_label_class = "text-muted"
+    cpu_val_class = ""
+    cpu_badge = ""
+    if cpu_val > 80:
+        cpu_label_class = "status-bad"
+        cpu_val_class = "status-bad"
+        cpu_badge = '<span class="badge badge-bad" style="margin-left:5px; margin-right:5px;">High Usage</span>'
 
     hugepages_info = system.get('hugepages', ["Disabled", "status-bad", "0/0"])
     hp_status, hp_class, hp_val = hugepages_info
@@ -147,11 +181,19 @@ def _get_system_context(data):
         'disk_p': disk_usage.get('percent_str', '0%'),
         'disk_width': f"{disk_percent}%",
         'disk_fill_class': disk_fill,
+        'disk_class': disk_class,
+        'disk_badge': disk_badge,
         'mem_p': mem_usage.get('percent_str', '0%'),
         'mem_used': f"{mem_usage.get('used_gb', 0):.1f}",
         'mem_total': f"{mem_usage.get('total_gb', 0):.1f}",
+        'mem_label_class': mem_label_class,
+        'mem_val_class': mem_val_class,
+        'mem_badge': mem_badge,
         'cpu_load': load_avg,
-        'cpu_percent': system.get('cpu_percent', "0.0%"),
+        'cpu_percent': cpu_str,
+        'cpu_label_class': cpu_label_class,
+        'cpu_val_class': cpu_val_class,
+        'cpu_badge': cpu_badge,
     }
 
 def _get_pool_network_context(data):
@@ -303,10 +345,21 @@ async def handle_index(request):
         # Dynamic Components
         worker_rows = _get_worker_rows(data.get('workers', []))
 
+        # Dynamic Header Badges
+        if is_syncing:
+            header_badges = '<span class="badge badge-warn badge-pool">Syncing...</span>'
+        else:
+            m_color = algo_ctx.get('mode_color', '')
+            m_name = algo_ctx.get('mode_name', '')
+            p_type = pool_net_ctx.get('p2p_type', '')
+            header_badges = f'<span class="badge badge-pool" style="background-color: {m_color};">{m_name}</span>'
+            header_badges += f'<span class="badge badge-outline">P2Pool {p_type}</span>'
+
         template = get_cached_template()
         
         response_html = template.format(
             host_ip=HOST_IP,
+            header_badges=header_badges,
             worker_rows=worker_rows,
             **sync_ctx,
             **algo_ctx,

@@ -64,6 +64,7 @@
         .badge-ok {{ background: var(--ok); color: white; }}
         .badge-purple {{ background: var(--purple); color: white; }}
         .badge-bad {{ background: var(--bad); color: white; }}
+        .badge-warn {{ background: var(--warn); color: white; }}
         
         .wallet-text {{ font-size: 0.7rem; color: #666; margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }}
         
@@ -97,6 +98,7 @@
         /* --- Sync View Styles --- */
         #sync-view {{ display: none; }}
         .mode-sync #sync-view {{ display: block; }}
+        .mode-sync #dashboard-view {{ display: none; }}
         
         .loader-container {{ position: relative; width: 150px; height: 150px; margin: 20px auto; }}
         .progress-wheel {{
@@ -117,21 +119,20 @@
         <div>
             <div class="flex items-center">
                 <h2>{host_ip}</h2>
-                <span class="badge badge-pool" style="background-color: {mode_color};">{mode_name}</span>
-                <span class="badge badge-outline">P2Pool {p2p_type}</span>
+                {header_badges}
             </div>
             
             <div class="text-small" style="margin-top: 10px;">
                 <div class="mb-1">
-                    <span class="text-muted">CPU:</span> {cpu_percent} 
+                    <span class="{cpu_label_class}">CPU:</span> <span class="{cpu_val_class}">{cpu_percent}</span> {cpu_badge}
                     <span class="text-muted" style="margin-left: 10px;">Load:</span> {cpu_load}
                 </div>
                 <div class="mb-1">
-                    <span class="text-muted">RAM:</span> {mem_used} / {mem_total} GB ({mem_p})
+                    <span class="{mem_label_class}">RAM:</span> <span class="{mem_val_class}">{mem_used} / {mem_total} GB ({mem_p})</span> {mem_badge}
                     <span class="{hp_class}">Huge Pages: {hp_status} ({hp_val})</span>
                 </div>
                 <div class="flex items-center">
-                    <span class="text-muted mr-2">Disk: {disk_used:.1f} / {disk_total:.1f} GB ({disk_p})</span>
+                    <span class="{disk_class} mr-2">Disk: {disk_used:.1f} / {disk_total:.1f} GB ({disk_p})</span> {disk_badge}
                     <div style="width: 150px;">
                         <div class="progress-bg">
                             <div class="progress-fill {disk_fill_class}" style="width: {disk_width}"></div>
