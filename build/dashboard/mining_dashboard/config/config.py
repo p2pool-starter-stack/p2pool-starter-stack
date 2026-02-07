@@ -56,6 +56,10 @@ DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://172.28.0.30:2375")
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 
+# --- Tari Configuration ---
+TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
+TARI_EXPLORER_URL = "https://explore.tari.com"
+
 # --- Algorithm Safety Margins ---
 # Safety margin (5%) to ensure the 1h average strictly meets the tier requirement
 ALGO_MARGIN_1H = 0.05

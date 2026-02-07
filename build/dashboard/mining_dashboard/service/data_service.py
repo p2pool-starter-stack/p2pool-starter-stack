@@ -7,6 +7,7 @@ from config.config import UPDATE_INTERVAL
 from client.xmrig_client import XMRigWorkerClient
 from collector.pools import get_p2pool_stats, get_network_stats, get_stratum_stats, get_tari_stats
 from collector.logs import get_monero_sync_status
+from collector.tari.tari import get_tari_sync_status
 from collector.system import get_disk_usage, get_hugepages_status, get_memory_usage, get_load_average, get_cpu_usage
 
 logger = logging.getLogger("DataService")
@@ -26,6 +27,7 @@ class DataService:
             "tari": {},
             "stratum": {},
             "monero_sync": {},
+            "tari_sync": {},
             "timestamp": 0
         }
         
@@ -117,19 +119,23 @@ class DataService:
                     network_stats = get_network_stats()
                     tari_stats = get_tari_stats()
                     monero_sync = await get_monero_sync_status()
+                    tari_sync = await get_tari_sync_status()
 
                     # Determine effective Tari status (matching UI logic)
                     tari_active = tari_stats.get('active', False)
                     tari_status_str = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
 
                     # Apply Sync Logic Overrides
+                    # 1. Monero Sync Check
                     if network_stats.get('height', 0) == 0:
                         monero_sync['is_syncing'] = True
                         if 'percent' not in monero_sync:
                             monero_sync.update({'percent': 0, 'current': 0, 'target': 1})
-                    elif tari_status_str == 'Waiting...':
+                    
+                    # 2. Tari Sync Check (Force dashboard sync mode if Tari is syncing)
+                    if tari_sync.get('is_syncing', False):
                         monero_sync['is_syncing'] = True
-                        # If Monero logs don't indicate syncing, assume Monero is synced
+                        # Ensure Monero shows as "Synced" if it actually is, while Tari spins
                         if 'percent' not in monero_sync:
                             h = network_stats.get('height', 1)
                             monero_sync.update({'percent': 100, 'current': h, 'target': h})
@@ -141,6 +147,7 @@ class DataService:
                         "network": network_stats,
                         "tari": tari_stats,
                         "monero_sync": monero_sync,
+                        "tari_sync": tari_sync,
                         "system": {
                             "disk": get_disk_usage(),
                             "hugepages": get_hugepages_status(),

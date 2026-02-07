@@ -325,14 +325,20 @@ async def handle_index(request):
         
         # Prepare Sync Context
         monero_sync = data.get('monero_sync', {})
+        tari_sync = data.get('tari_sync', {})
         is_syncing = monero_sync.get('is_syncing', False)
+        
         sync_ctx = {
             'sync_class': 'mode-sync' if is_syncing else '',
             'page_title': 'Mining Dashboard - Syncing' if is_syncing else 'Mining Dashboard',
             'sync_percent': monero_sync.get('percent', 0),
             'sync_current': monero_sync.get('current', 0),
             'sync_target': monero_sync.get('target', 0),
-            'sync_remaining': monero_sync.get('target', 0) - monero_sync.get('current', 0)
+            'sync_remaining': monero_sync.get('target', 0) - monero_sync.get('current', 0),
+            'tari_sync_percent': tari_sync.get('percent', 0),
+            'tari_sync_current': tari_sync.get('current', 0),
+            'tari_sync_target': tari_sync.get('target', 0),
+            'tari_sync_remaining': tari_sync.get('target', 0) - tari_sync.get('current', 0)
         }
 
         # Build Contexts

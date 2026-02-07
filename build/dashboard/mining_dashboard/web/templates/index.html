@@ -172,9 +172,13 @@
             </div>
             <div class="card">
                 <h2 class="text-accent" style="text-align: center;">Tari Sync</h2>
-                <div class="status-text" style="margin-top: 50px;">
-                    <p>Status: {tari_status}</p>
-                    <p>Height: {tari_height}</p>
+                <div class="loader-container">
+                    <div class="progress-wheel" style="--p:{tari_sync_percent}%"></div>
+                    <div class="progress-text">{tari_sync_percent}%</div>
+                </div>
+                <div class="status-text">
+                    Synced: {tari_sync_current} / {tari_sync_target}<br>
+                    <small>({tari_sync_remaining} blocks left)</small>
                 </div>
             </div>
         </div>
