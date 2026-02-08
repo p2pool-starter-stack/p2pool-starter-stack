@@ -15,9 +15,6 @@ services:
     logging: *default-logging
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
-    expose:
-      - "9050" # SOCKS5 Proxy
-      - "9051" # Control Port
     networks:
       mining_net:
         ipv4_address: 172.28.0.25
@@ -150,7 +147,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "3333:3333"
+      - "3333:3333" # Stratum Protocol Communication
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
