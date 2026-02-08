@@ -18,7 +18,8 @@ warn() { echo -e "${C_YELLOW}[WARN]${C_RESET} $1"; }
 error() { echo -e "${C_RED}[ERROR]${C_RESET} $1"; exit 1; }
 
 # --- Global Variables ---
-SCRIPT_DIR=$(dirname "$(realpath "$0")")
+OS_TYPE="$(uname -s)"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 CONFIG_JSON="$SCRIPT_DIR/config.json"
 TEMPLATE_JSON="$SCRIPT_DIR/config.json.template"
 REBOOT_REQUIRED=false
@@ -28,11 +29,20 @@ REBOOT_REQUIRED=false
 check_prerequisites() {
     log "Verifying system prerequisites..."
     if ! command -v jq &> /dev/null; then
-        log "Installing prerequisite: jq..."
-        if command -v apt-get &> /dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+        if [ "$OS_TYPE" == "Darwin" ]; then
+            if command -v brew &> /dev/null; then
+                log "Installing prerequisite: jq..."
+                brew install jq
+            else
+                error "Homebrew is required on macOS to install dependencies."
+            fi
         else
-            error "jq is required and apt-get was not found. Please install jq manually."
+            log "Installing prerequisite: jq..."
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update -qq && sudo apt-get install -y -qq jq
+            else
+                error "jq is required and apt-get was not found. Please install jq manually."
+            fi
         fi
     fi
 }
@@ -134,61 +144,121 @@ prepare_workspace() {
 }
 
 install_dependencies() {
-    local dependencies="git build-essential cmake libuv1-dev libssl-dev libhwloc-dev avahi-daemon gettext-base linux-tools-common linux-tools-$(uname -r)"
-
-    log "The following system dependencies are required:"
-    echo -e "  ${C_YELLOW}$dependencies${C_RESET}"
-
-    read -r -p "Install these dependencies now? (y/N): " CONFIRM
-    if [[ "$CONFIRM" =~ ^[Yy] ]]; then
-        log "Installing dependencies..."
-        sudo apt update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" $dependencies
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        log "Installing macOS dependencies..."
+        if command -v brew &> /dev/null; then
+            brew install cmake libuv openssl hwloc
+        else
+            error "Homebrew not found."
+        fi
     else
-        warn "Dependency installation skipped. Proceeding at your own risk."
-    fi
+        local dependencies="git build-essential cmake libuv1-dev libssl-dev libhwloc-dev avahi-daemon gettext-base"
+        # Only add linux-tools if on Linux and kernel version is available
+        if [ "$OS_TYPE" == "Linux" ]; then
+            dependencies="$dependencies linux-tools-common linux-tools-$(uname -r)"
+        fi
 
-    # Enable Model Specific Registers (MSR) for hardware prefetcher tuning
-    sudo modprobe msr
-    echo "msr" | sudo tee -a /etc/modules > /dev/null || true
+        log "The following system dependencies are required:"
+        echo -e "  ${C_YELLOW}$dependencies${C_RESET}"
+
+        read -r -p "Install these dependencies now? (y/N): " CONFIRM
+        if [[ "$CONFIRM" =~ ^[Yy] ]]; then
+            log "Installing dependencies..."
+            sudo apt update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" $dependencies
+        else
+            warn "Dependency installation skipped. Proceeding at your own risk."
+        fi
+
+        # Enable Model Specific Registers (MSR) for hardware prefetcher tuning (Linux only)
+        sudo modprobe msr 2>/dev/null || true
+        if [ -d "/etc/modules" ]; then
+             echo "msr" | sudo tee -a /etc/modules > /dev/null || true
+        fi
+    fi
 }
 
 compile_xmrig() {
     log "Cloning and patching XMRig source code..."
     git clone --quiet https://github.com/xmrig/xmrig.git
-    sed -i "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
+    
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        sed -i '' "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
+        CORES=$(sysctl -n hw.ncpu)
+        log "Compiling binary (Concurrency: $CORES threads)..."
+        mkdir -p xmrig/build && cd xmrig/build
+        # macOS often needs explicit OpenSSL root for cmake if installed via brew
+        cmake .. -DWITH_HWLOC=ON -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) &> /dev/null
+    else
+        sed -i "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
+        CORES=$(nproc)
+        log "Compiling binary (Concurrency: $CORES threads)..."
+        mkdir -p xmrig/build && cd xmrig/build
+        cmake .. -DWITH_HWLOC=ON &> /dev/null
+    fi
 
-    log "Compiling binary (Concurrency: $(nproc) threads)..."
-    mkdir -p xmrig/build && cd xmrig/build
-    cmake .. -DWITH_HWLOC=ON &> /dev/null
-    make -j$(nproc) &> /dev/null
+    make -j$CORES &> /dev/null
 }
 
 generate_xmrig_config() {
     log "Generating hardware-optimized configuration using template: $(basename "$TEMPLATE_CONFIG")..."
 
     # Identify CPU Topology
-    CPU_MODEL=$(lscpu | grep "Model name" | cut -d':' -f2 | xargs)
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        CPU_MODEL=$(sysctl -n machdep.cpu.brand_string)
+    else
+        CPU_MODEL=$(lscpu | grep "Model name" | cut -d':' -f2 | xargs)
+    fi
     LOG_FILE_PATH="$WORKER_ROOT/xmrig.log"
 
     # Default Optimization Profile
     YIELD="true"
     PRIORITY="null"
-    ASM="auto"
+    ASM="\"auto\""
     THREADS="-1"
     NUMA="false"
     PREFETCH=1
     WRMSR="true"
+    RDMSR="true"
+    HUGE_PAGES="true"
+    MEMORY_POOL="false"
+    ONE_GB_PAGES="false"
     DIFFICULTY="10000"
     JIT="false"
     INIT_AVX2="-1"
+    HTTP_RESTRICTED="false"
+    HTTP_HOST="0.0.0.0"
+
+    # macOS Specific Overrides
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        YIELD="false"
+        PRIORITY="5"
+        ASM="true"
+        WRMSR="false"
+        RDMSR="false"
+        HUGE_PAGES="false"
+        MEMORY_POOL="false"
+        ONE_GB_PAGES="false"
+        NUMA="true"
+        HTTP_RESTRICTED="true"
+        HTTP_HOST="::"
+        
+        # Generate rx array [-1, -1, ...] based on core count
+        CORES=$(sysctl -n hw.ncpu)
+        THREADS="["
+        for ((i=0; i<CORES; i++)); do
+            THREADS="${THREADS}-1"
+            if [ $i -lt $((CORES-1)) ]; then THREADS="${THREADS},"; fi
+        done
+        THREADS="${THREADS}]"
+    fi
 
     # Profile: AMD EPYC (Server)
     if [[ "$CPU_MODEL" == *"EPYC"* ]]; then
         log "Hardware Detected: AMD EPYC. Applying NUMA binding and server optimizations."
         NUMA="true"
         YIELD="true"
-        ASM="auto"
+        ASM="\"auto\""
         THREADS="-1"
         DIFFICULTY="1350000"
         WRMSR="true"
@@ -199,7 +269,7 @@ generate_xmrig_config() {
         log "Hardware Detected: AMD Ryzen X3D. Applying 'Golden' prefetch and MSR tuning."
         YIELD="false"
         PRIORITY="4"
-        ASM="ryzen"
+        ASM="\"ryzen\""
         THREADS="[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"
         PREFETCH=1 
         WRMSR="true"
@@ -219,12 +289,18 @@ generate_xmrig_config() {
        --argjson yield "$YIELD" \
        --argjson prio "$PRIORITY" \
        --argjson numa "$NUMA" \
-       --arg asm "$ASM" \
+       --argjson asm "$ASM" \
        --argjson rx "$THREADS" \
        --argjson prefetch "$PREFETCH" \
        --argjson jit "$JIT" \
        --argjson wrmsr "$WRMSR" \
+       --argjson rdmsr "$RDMSR" \
+       --argjson huge_pages "$HUGE_PAGES" \
+       --argjson memory_pool "$MEMORY_POOL" \
+       --argjson one_gb_pages "$ONE_GB_PAGES" \
        --argjson avx2 "$INIT_AVX2" \
+       --argjson restricted "$HTTP_RESTRICTED" \
+       --arg host "$HTTP_HOST" \
        '.pools[0].url = $url | 
         .pools[0].user = $user | 
         .pools[0].enabled = true |
@@ -234,54 +310,72 @@ generate_xmrig_config() {
         .cpu.priority = $prio | 
         .cpu.asm = $asm | 
         .cpu.rx = $rx |
+        ."cpu"."huge-pages" = $huge_pages |
         ."cpu"."huge-pages-jit" = $jit |
+        ."cpu"."memory-pool" = $memory_pool |
+        ."cpu"."msr" = $wrmsr |
         .randomx.numa = $numa |
         .randomx."init-avx2" = $avx2 |
         .randomx.wrmsr = $wrmsr |
+        .randomx.rdmsr = $rdmsr |
+        .randomx."1gb-pages" = $one_gb_pages |
         .randomx.scratchpad_prefetch_mode = $prefetch |
         (if $access_token != "" then ."http"."access-token" = $access_token else . end) | 
-        ."http"."restricted" = false' \
+        ."http"."restricted" = $restricted |
+        ."http"."host" = $host' \
        "$TEMPLATE_CONFIG" > config.json
 
-    log "Configuring log rotation policy..."
-    # Install logrotate configuration
-    sudo tee /etc/logrotate.d/xmrig > /dev/null <<EOF
-$LOG_FILE_PATH {
-    daily
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    copytruncate
-    minsize 50M
-    create 0644 $(whoami) $(whoami)
-}
+    if [ "$OS_TYPE" == "Linux" ]; then
+        log "Configuring log rotation policy..."
+        # Install logrotate configuration
+        sudo tee /etc/logrotate.d/xmrig > /dev/null <<EOF
+    $LOG_FILE_PATH {
+        daily
+        missingok
+        rotate 7
+        compress
+        delaycompress
+        notifempty
+        copytruncate
+        minsize 50M
+        create 0644 $(whoami) $(whoami)
+    }
 EOF
+    fi
 }
 
 install_service() {
-    log "Installing systemd service..."
-    export BUILD_DIR="$WORKER_ROOT/xmrig/build"
-    export CPUPOWER_PATH=$(which cpupower || echo "/usr/bin/cpupower")
+    if [ "$OS_TYPE" == "Linux" ]; then
+        log "Installing systemd service..."
+        export BUILD_DIR="$WORKER_ROOT/xmrig/build"
+        export CPUPOWER_PATH=$(which cpupower || echo "/usr/bin/cpupower")
 
-    # Overwrite the existing file
-    envsubst '$BUILD_DIR $CPUPOWER_PATH' < "$SCRIPT_DIR/systemd/xmrig.service.template" | sudo tee /etc/systemd/system/xmrig.service > /dev/null
+        # Overwrite the existing file
+        envsubst '$BUILD_DIR $CPUPOWER_PATH' < "$SCRIPT_DIR/systemd/xmrig.service.template" | sudo tee /etc/systemd/system/xmrig.service > /dev/null
 
-    # Reload systemd daemon
-    sudo systemctl daemon-reload
+        # Reload systemd daemon
+        sudo systemctl daemon-reload
 
-    # Enable service to start on boot
-    sudo systemctl enable xmrig.service
+        # Enable service to start on boot
+        sudo systemctl enable xmrig.service
 
-    # Restart service to apply new configuration
-    log "Restarting XMRig service..."
-    sudo systemctl restart xmrig.service
+        # Restart service to apply new configuration
+        log "Restarting XMRig service..."
+        sudo systemctl restart xmrig.service
+    else
+        warn "Service installation is not supported on $OS_TYPE."
+        log "You can run the miner manually: $WORKER_ROOT/xmrig/build/xmrig --config=$WORKER_ROOT/config.json"
+    fi
 }
 
 tune_kernel() {
+    if [ "$OS_TYPE" != "Linux" ]; then
+        log "Skipping kernel tuning (Not supported on $OS_TYPE)."
+        return
+    fi
+
     log "Calculating optimal HugePages configuration..."
-    if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ]; then
+    if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ] && [ -f "/etc/default/grub" ]; then
         NEW_PARAMS=$("$SCRIPT_DIR/util/proposed-grub.sh" -q)
         sudo cp /etc/default/grub /etc/default/grub.bak
         sudo sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$NEW_PARAMS\"|" /etc/default/grub
@@ -292,11 +386,15 @@ tune_kernel() {
             warn "'update-grub' not found. Please manually update your bootloader."
         fi
     else
-        warn "Utility 'proposed-grub.sh' not found. Skipping GRUB updates."
+        warn "Skipping GRUB updates (Utility not found or non-GRUB system)."
     fi
 }
 
 configure_limits() {
+    if [ "$OS_TYPE" != "Linux" ]; then
+        return
+    fi
+
     log "Configuring persistent HugePage mounts and memory limits..."
     sudo mkdir -p /dev/hugepages1G
 
