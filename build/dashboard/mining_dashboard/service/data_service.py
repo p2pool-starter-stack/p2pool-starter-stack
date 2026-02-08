@@ -5,9 +5,9 @@ from aiohttp import ClientSession, TCPConnector
 
 from config.config import UPDATE_INTERVAL
 from client.xmrig_client import XMRigWorkerClient
+from client.tari.tari_client import TariClient
 from collector.pools import get_p2pool_stats, get_network_stats, get_stratum_stats, get_tari_stats
 from collector.logs import get_monero_sync_status
-from collector.tari.tari import get_tari_sync_status
 from collector.system import get_disk_usage, get_hugepages_status, get_memory_usage, get_load_average, get_cpu_usage
 
 logger = logging.getLogger("DataService")
@@ -47,6 +47,7 @@ class DataService:
         
         async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
             worker_client = XMRigWorkerClient(session)
+            tari_client = TariClient(session)
             while True:
                 try:
                     # 1. Collect Local Statistics (High Frequency)
@@ -119,7 +120,7 @@ class DataService:
                     network_stats = get_network_stats()
                     tari_stats = get_tari_stats()
                     monero_sync = await get_monero_sync_status()
-                    tari_sync = await get_tari_sync_status()
+                    tari_sync = await tari_client.get_sync_status()
 
                     # Determine effective Tari status (matching UI logic)
                     tari_active = tari_stats.get('active', False)
