@@ -26,15 +26,58 @@ REBOOT_REQUIRED=false
 
 # --- Helper Functions ---
 
+stack_up() {
+    log "Starting stack..."
+    docker compose up -d
+    log "Stack started successfully!"
+    log "Dashboard is available at: http://$(hostname):8000"
+}
+
+stack_down() {
+    log "Stopping stack..."
+    docker compose down
+    log "Stack stopped."
+}
+
+stack_restart() {
+    log "Restarting stack..."
+    docker compose restart
+    log "Stack restarted."
+}
+
+ask_yes_no() {
+    local prompt="$1"
+    local action="$2"
+    read -r -p "$prompt (y/N): " RESPONSE
+    if [[ "$RESPONSE" =~ ^[Yy] ]]; then
+        $action
+    else
+        log "Action cancelled."
+    fi
+}
+
+show_help() {
+    echo "Usage: $0 [OPTION]"
+    echo "Deploy and manage the P2Pool Starter Stack."
+    echo ""
+    echo "Options:"
+    echo "  -s              Interactive start (ask to bring up stack)"
+    echo "  -sf             Force start (bring up stack immediately)"
+    echo "  -d              Interactive stop (ask to bring down stack)"
+    echo "  -df             Force stop (bring down stack immediately)"
+    echo "  -r              Interactive restart (ask to restart stack)"
+    echo "  -rf             Force restart (restart stack immediately)"
+    echo "  -l, --logs      Follow container logs"
+    echo "  -st, --status   Show stack status"
+    echo "  -h, --help      Show this help message"
+}
+
 prompt_start_stack() {
     read -r -p "Start the P2Pool Starter Stack now? (y/N): " START_NOW
     if [[ "$START_NOW" =~ ^[Yy] ]]; then
-        log "Starting stack..."
-        docker compose up -d
-        log "Stack started successfully!"
-        log "Dashboard is available at: http://$(hostname):8000"
+        stack_up
     else
-        echo "You can start the stack later with: docker compose up -d"
+        echo "You can start the stack later with: $0 -s"
     fi
 }
 
@@ -292,7 +335,7 @@ finish_deployment() {
     if [ "$REBOOT_REQUIRED" = true ]; then
         echo -e "\n\033[1;33m[!] ATTENTION: System optimization requires a reboot.\033[0m"
         echo "Please run: 'sudo reboot' now."
-        echo "After reboot, start the stack with: 'docker compose up -d'"
+        echo "After reboot, start the stack with: '$0 -s'"
     else
         prompt_start_stack
     fi
@@ -301,6 +344,29 @@ finish_deployment() {
 # --- Main Execution ---
 
 main() {
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            -s)  ask_yes_no "Start the stack?" stack_up ;;
+            -sf) stack_up ;;
+            -d)  ask_yes_no "Stop the stack?" stack_down ;;
+            -df) stack_down ;;
+            -r)  ask_yes_no "Restart the stack?" stack_restart ;;
+            -rf) stack_restart ;;
+            -l|--logs)
+                log "Following logs (Ctrl+C to exit)..."
+                docker compose logs -f
+                ;;
+            -st|--status)
+                docker compose ps
+                ;;
+            -h|--help) show_help ;;
+            *)
+                error "Unknown option: $1. Use -h for help."
+                ;;
+        esac
+        exit 0
+    fi
+
     check_previous_deployment
     check_prerequisites
     ensure_config_exists
