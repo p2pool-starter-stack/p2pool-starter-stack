@@ -28,6 +28,7 @@ class DataService:
             "stratum": {},
             "monero_sync": {},
             "tari_sync": {},
+            "global_sync": False,
             "timestamp": 0
         }
         
@@ -133,13 +134,22 @@ class DataService:
                         if 'percent' not in monero_sync:
                             monero_sync.update({'percent': 0, 'current': 0, 'target': 1})
                     
-                    # 2. Tari Sync Check (Force dashboard sync mode if Tari is syncing)
-                    if tari_sync.get('is_syncing', False):
-                        monero_sync['is_syncing'] = True
-                        # Ensure Monero shows as "Synced" if it actually is, while Tari spins
-                        if 'percent' not in monero_sync:
+                    # 2. Global Sync Logic
+                    # Show sync dashboard if either Monero or Tari is syncing
+                    is_monero_syncing = monero_sync.get('is_syncing', False)
+                    is_tari_syncing = tari_sync.get('is_syncing', False)
+                    global_sync = is_monero_syncing or is_tari_syncing
+
+                    if global_sync:
+                        # Ensure Monero stats are present if it's not the one syncing
+                        if not is_monero_syncing and 'percent' not in monero_sync:
                             h = network_stats.get('height', 1)
                             monero_sync.update({'percent': 100, 'current': h, 'target': h})
+                        
+                        # Ensure Tari stats are present if it's not the one syncing
+                        if not is_tari_syncing and 'percent' not in tari_sync:
+                            h = tari_stats.get('height', 0)
+                            tari_sync.update({'percent': 100, 'current': h, 'target': h})
 
                     self.latest_data.update({
                         "workers": final_workers,
@@ -149,6 +159,7 @@ class DataService:
                         "tari": tari_stats,
                         "monero_sync": monero_sync,
                         "tari_sync": tari_sync,
+                        "global_sync": global_sync,
                         "system": {
                             "disk": get_disk_usage(),
                             "hugepages": get_hugepages_status(),
