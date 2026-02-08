@@ -24,6 +24,7 @@ REAL_USER="${SUDO_USER:-$USER}"
 CONFIG_JSON="$SCRIPT_DIR/config.json"
 TEMPLATE_JSON="$SCRIPT_DIR/config.json.template"
 REBOOT_REQUIRED=false
+SERVICE_INSTALLED=false
 
 # --- Helper Functions ---
 
@@ -389,9 +390,9 @@ install_service() {
         # Restart service to apply new configuration
         log "Restarting XMRig service..."
         sudo systemctl restart xmrig.service
+        SERVICE_INSTALLED=true
     else
         warn "Service installation is not supported on $OS_TYPE."
-        log "You can run the miner manually: $WORKER_ROOT/xmrig/build/xmrig --config=$WORKER_ROOT/config.json"
     fi
 }
 
@@ -462,8 +463,12 @@ finish_deployment() {
     fi
     log "--------------------------------------------------------"
     echo ""
-    log "You can run the miner manually:"
-    echo "sudo screen -S xmrig $WORKER_ROOT/xmrig/build/xmrig --config=$WORKER_ROOT/config.json"
+    if [ "$SERVICE_INSTALLED" = true ]; then
+        log "Service created. xmrig running in background."
+    else
+        log "You can run the miner manually:"
+        echo "sudo screen -S xmrig $WORKER_ROOT/xmrig/build/xmrig --config=$WORKER_ROOT/config.json"
+    fi
 }
 
 # --- Main Execution ---
