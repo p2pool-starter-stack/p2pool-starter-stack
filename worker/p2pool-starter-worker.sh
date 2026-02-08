@@ -20,6 +20,7 @@ error() { echo -e "${C_RED}[ERROR]${C_RESET} $1"; exit 1; }
 # --- Global Variables ---
 OS_TYPE="$(uname -s)"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REAL_USER="${SUDO_USER:-$USER}"
 CONFIG_JSON="$SCRIPT_DIR/config.json"
 TEMPLATE_JSON="$SCRIPT_DIR/config.json.template"
 REBOOT_REQUIRED=false
@@ -130,7 +131,20 @@ parse_config() {
 
 prepare_workspace() {
     log "Preparing workspace at $WORKER_ROOT..."
-    mkdir -p "$WORKER_ROOT"
+    
+    if [ ! -d "$WORKER_ROOT" ]; then
+        mkdir -p "$WORKER_ROOT" 2>/dev/null || sudo mkdir -p "$WORKER_ROOT"
+    fi
+
+    # Fix permissions to ensure the current user can write
+    if [ "${EUID:-$(id -u)}" -eq 0 ] || [ ! -w "$WORKER_ROOT" ]; then
+        if [ "$OS_TYPE" == "Darwin" ]; then
+            sudo chown -R "$REAL_USER" "$WORKER_ROOT"
+        else
+            sudo chown -R "$REAL_USER":"$REAL_USER" "$WORKER_ROOT"
+        fi
+    fi
+
     cd "$WORKER_ROOT"
 
     GIT_DIR="xmrig"
@@ -147,7 +161,12 @@ install_dependencies() {
     if [ "$OS_TYPE" == "Darwin" ]; then
         log "Installing macOS dependencies..."
         if command -v brew &> /dev/null; then
-            brew install cmake libuv openssl hwloc
+            if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+                # Drop privileges for Homebrew if running as root
+                sudo -u "$REAL_USER" brew install cmake libuv openssl hwloc
+            else
+                brew install cmake libuv openssl hwloc
+            fi
         else
             error "Homebrew not found."
         fi
@@ -428,6 +447,9 @@ finish_deployment() {
         log "Worker configured successfully. No reboot required."
     fi
     log "--------------------------------------------------------"
+    echo ""
+    log "You can run the miner manually:"
+    echo "sudo screen -S xmrig $WORKER_ROOT/xmrig/build/xmrig --config=$WORKER_ROOT/config.json"
 }
 
 # --- Main Execution ---
