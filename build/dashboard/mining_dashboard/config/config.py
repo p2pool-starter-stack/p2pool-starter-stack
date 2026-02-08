@@ -58,7 +58,7 @@ DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 
 # --- Tari Configuration ---
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
-TARI_EXPLORER_URL = "https://explore.tari.com"
+TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 
 # --- Algorithm Safety Margins ---
 # Safety margin (5%) to ensure the 1h average strictly meets the tier requirement

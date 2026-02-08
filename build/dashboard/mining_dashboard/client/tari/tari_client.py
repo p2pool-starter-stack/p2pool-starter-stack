@@ -1,6 +1,5 @@
 import aiohttp
 import logging
-import re
 import grpc
 import os
 
@@ -29,18 +28,15 @@ class TariClient:
         return self._stub
 
     async def get_network_height(self):
-        """Scrapes the official Tari Block Explorer for the current network height."""
+        """Fetches the official Tari Block Explorer for the current network height."""
         try:
             async with self.session.get(self.explorer_url, timeout=5) as response:
                 if response.status == 200:
-                    html = await response.text()
-                    # Look for the Block Height value preceding the label
-                    # HTML structure: <p ...>197,519</p><p ...>Block<br>Height</p>
-                    match = re.search(r'>([\d,]+)</p>\s*<p[^>]*>Block<br>Height</p>', html)
-                    if match:
-                        return int(match.group(1).replace(',', ''))
+                    # content_type=None allows parsing JSON even if header is text/plain
+                    data = await response.json(content_type=None)
+                    return int(data.get('tipInfo', {}).get('metadata', {}).get('best_block_height', 0))
         except Exception as e:
-            logger.error(f"Failed to scrape Tari explorer: {e}")
+            logger.error(f"Failed to fetch Tari explorer: {e}")
         return 0
 
     async def get_local_height(self):
@@ -69,10 +65,18 @@ class TariClient:
         network_height = await self.get_network_height()
         local_height = await self.get_local_height()
         
-        # If we can't get network height OR local height (error/no protos), assume not syncing
-        # This prevents the dashboard from locking up if the Tari node is down or unconfigured
-        if network_height == 0 or local_height is None:
+        # If local height is unavailable (gRPC down), we can't report status
+        if local_height is None:
             return {"is_syncing": False}
+
+        # If network height is unavailable (explorer down), assume synced at local height
+        if network_height == 0:
+            return {
+                "is_syncing": False,
+                "current": local_height,
+                "target": local_height,
+                "percent": 100
+            }
 
         # If local is significantly behind network (e.g. > 3 blocks), we are syncing
         is_syncing = local_height < (network_height - 3)
