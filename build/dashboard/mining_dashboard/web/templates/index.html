@@ -107,7 +107,7 @@
           display: flex; align-items: center; justify-content: center;
         }}
         .progress-wheel::before {{ content: ""; position: absolute; width: 120px; height: 120px; border-radius: 50%; background: #161b22; }}
-        .progress-text {{ position: absolute; font-size: 24px; font-weight: bold; color: #fff; z-index: 10; }}
+        .progress-text {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #fff; z-index: 10; }}
         .status-text {{ font-size: 1.1em; margin-top: 15px; color: #8b949e; text-align: center; }}
         .header-placeholder {{ text-align: center; margin: 40px 0; border-bottom: 1px solid #30363d; padding-bottom: 20px; }}
     </style>
@@ -162,8 +162,8 @@
             <div class="card">
                 <h2 class="text-accent" style="text-align: center;">Monero Sync</h2>
                 <div class="loader-container">
-                    <div class="progress-wheel" style="--p:{sync_percent}%"></div>
-                    <div class="progress-text">{sync_percent}%</div>
+                    <div class="progress-wheel" style="--p:{sync_percent_val}%"></div>
+                    <div class="progress-text">{sync_percent}</div>
                 </div>
                 <div class="status-text">
                     Synced: {sync_current} / {sync_target}<br>
@@ -173,8 +173,8 @@
             <div class="card">
                 <h2 class="text-accent" style="text-align: center;">Tari Sync</h2>
                 <div class="loader-container">
-                    <div class="progress-wheel" style="--p:{tari_sync_percent}%"></div>
-                    <div class="progress-text">{tari_sync_percent}%</div>
+                    <div class="progress-wheel" style="--p:{tari_sync_percent_val}%"></div>
+                    <div class="progress-text">{tari_sync_percent}</div>
                 </div>
                 <div class="status-text">
                     Synced: {tari_sync_current} / {tari_sync_target}<br>

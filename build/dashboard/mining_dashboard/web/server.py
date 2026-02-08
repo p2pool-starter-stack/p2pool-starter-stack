@@ -113,8 +113,13 @@ def _get_tari_context(data):
     tari_active = tari_stats.get('active', False)
     t_addr = tari_stats.get('address', 'Unknown')
     t_short = t_addr if len(t_addr) <= 16 else f"{t_addr[:8]}...{t_addr[-8:]}"
+    
+    status_val = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
+    if tari_active:
+        status_val = f'{status_val} <span style="font-size: 1.2em;">✔</span>'
+
     return {
-        'tari_status': tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...',
+        'tari_status': status_val,
         'tari_status_class': "status-ok" if tari_active else "",
         'tari_reward': f"{tari_stats.get('reward', 0):.2f} TARI",
         'tari_height': str(tari_stats.get('height', 0)),
@@ -326,16 +331,34 @@ async def handle_index(request):
         # Prepare Sync Context
         monero_sync = data.get('monero_sync', {})
         tari_sync = data.get('tari_sync', {})
-        is_syncing = monero_sync.get('is_syncing', False)
+        
+        # Use global_sync flag from DataService to trigger dashboard sync mode
+        is_syncing = data.get('global_sync', False)
+        
+        # Format Monero Sync Display (Checkmark if 100%)
+        m_pct = monero_sync.get('percent', 0)
+        if m_pct >= 100:
+            m_disp = '<span class="status-ok" style="font-size: 3.5em; line-height: 1;">✔</span>'
+        else:
+            m_disp = f"{m_pct}%"
+
+        # Format Tari Sync Display (Checkmark if 100%)
+        t_pct = tari_sync.get('percent', 0)
+        if t_pct >= 100:
+            t_disp = '<span class="status-ok" style="font-size: 3.5em; line-height: 1;">✔</span>'
+        else:
+            t_disp = f"{t_pct}%"
         
         sync_ctx = {
             'sync_class': 'mode-sync' if is_syncing else '',
             'page_title': 'Mining Dashboard - Syncing' if is_syncing else 'Mining Dashboard',
-            'sync_percent': monero_sync.get('percent', 0),
+            'sync_percent': m_disp,
+            'sync_percent_val': m_pct,
             'sync_current': monero_sync.get('current', 0),
             'sync_target': monero_sync.get('target', 0),
             'sync_remaining': monero_sync.get('target', 0) - monero_sync.get('current', 0),
-            'tari_sync_percent': tari_sync.get('percent', 0),
+            'tari_sync_percent': t_disp,
+            'tari_sync_percent_val': t_pct,
             'tari_sync_current': tari_sync.get('current', 0),
             'tari_sync_target': tari_sync.get('target', 0),
             'tari_sync_remaining': tari_sync.get('target', 0) - tari_sync.get('current', 0)
