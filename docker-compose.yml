@@ -46,9 +46,7 @@ services:
       - /dev/hugepages:/dev/hugepages # Required for RandomX verification performance
       - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
     ports:
-      - "18080:18080" # P2P (Public)
       - "18081:18081" # RPC (Restricted)
-      - "18083:18083" # ZMQ (P2Pool)
     networks:
       mining_net:
         ipv4_address: 172.28.0.26
@@ -81,9 +79,6 @@ services:
     volumes:
       - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config
-    ports:
-      - "18102:18102" # Wallet GRPC
-      - "18142:18142" # Base Node GRPC
     command:
       - --disable-splash-screen
       - --non-interactive
@@ -113,9 +108,6 @@ services:
       - ${P2POOL_DATA_DIR}:/root
       - ${P2POOL_DATA_DIR}/stats:/stats # Shared volume for Dashboard
       - /dev/hugepages:/dev/hugepages
-    ports:
-      - "3334:3334"   # Local API
-      - "${P2POOL_PORT}:${P2POOL_PORT}" # P2P Sidechain Port
     command:
       - --host
       - 172.28.0.26
@@ -159,7 +151,6 @@ services:
     logging: *default-logging
     ports:
       - "3333:3333"
-      - "${PROXY_API_PORT}:${PROXY_API_PORT}" # API Port
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
@@ -216,6 +207,7 @@ services:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
       - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
+      - TARI_GRPC_ADDRESS=172.28.0.27:18142
 
   # --- Docker Socket Proxy ---
   # Secure, read-only proxy for the Docker Socket.
