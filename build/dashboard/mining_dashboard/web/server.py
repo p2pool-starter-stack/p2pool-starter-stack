@@ -2,6 +2,7 @@ import os
 import time
 import html
 import logging
+import bisect
 from aiohttp import web
 from config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
 from helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
@@ -33,9 +34,10 @@ def get_cached_template():
         logger.error(f"Error loading template: {e}")
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
-def _get_chart_context(history, range_arg):
+def _get_chart_context(history, shares, range_arg):
     """Filters historical data based on the selected time range and prepares Chart.js datasets."""
     filtered_history = history
+    filtered_shares = shares
     
     if range_arg != 'all':
         target_seconds = 0
@@ -47,10 +49,26 @@ def _get_chart_context(history, range_arg):
         if target_seconds > 0:
             cutoff_timestamp = time.time() - target_seconds
             filtered_history = [x for x in history if x['timestamp'] >= cutoff_timestamp]
+            filtered_shares = [x for x in shares if x.get('ts', 0) >= cutoff_timestamp]
+
+    share_data = ['null'] * len(filtered_history)
+    if filtered_history and filtered_shares:
+        timestamps = [x['timestamp'] for x in filtered_history]
+        for s in filtered_shares:
+            s_ts = s.get('ts', 0)
+            if timestamps:
+                idx = bisect.bisect_left(timestamps, s_ts)
+                candidates = []
+                if idx < len(timestamps): candidates.append(idx)
+                if idx > 0: candidates.append(idx - 1)
+                if candidates:
+                    best_idx = min(candidates, key=lambda i: abs(timestamps[i] - s_ts))
+                    share_data[best_idx] = str(filtered_history[best_idx]['v'])
 
     return {
         'chart_labels': ",".join([f"'{x['t']}'" for x in filtered_history]),
         'chart_data': ",".join([str(x['v']) for x in filtered_history]),
+        'chart_shares': ",".join(share_data),
         'chart_p2pool': ",".join([str(x.get('v_p2pool', 0)) for x in filtered_history]),
         'chart_xvb': ",".join([str(x.get('v_xvb', 0)) for x in filtered_history]),
         'cls_1h': 'active' if range_arg == '1h' else '',
@@ -327,6 +345,7 @@ async def handle_index(request):
     try:
         history = state_mgr.get_history()
         range_arg = request.query.get('range', 'all')
+        shares = data.get('shares', [])
         
         # Prepare Sync Context
         monero_sync = data.get('monero_sync', {})
@@ -365,7 +384,7 @@ async def handle_index(request):
         }
 
         # Build Contexts
-        chart_ctx = _get_chart_context(history, range_arg)
+        chart_ctx = _get_chart_context(history, shares, range_arg)
         system_ctx = _get_system_context(data)
         pool_net_ctx = _get_pool_network_context(data)
         algo_ctx = _get_algo_context(data, state_mgr, history)

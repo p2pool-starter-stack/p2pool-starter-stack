@@ -40,6 +40,9 @@ class DataService:
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
             self.latest_data.update(loaded_snapshot)
+        
+        if "shares" not in self.latest_data:
+            self.latest_data["shares"] = []
 
     async def run(self):
         """
@@ -53,6 +56,15 @@ class DataService:
         async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
             worker_client = XMRigWorkerClient(session)
             tari_client = TariClient(session)
+            
+            # Initialize share tracking
+            last_known_share_ts = 0
+            if self.latest_data.get("shares"):
+                try:
+                    last_known_share_ts = self.latest_data["shares"][-1].get("ts", 0)
+                except (IndexError, KeyError, TypeError):
+                    pass
+
             while True:
                 try:
                     # 1. Collect Local Statistics (High Frequency Polling)
@@ -124,6 +136,21 @@ class DataService:
                     # 5. Fetch Network & Sync Status
                     network_stats = get_network_stats()
                     tari_stats = get_tari_stats()
+                    p2pool_stats = get_p2pool_stats()
+
+                    # Track P2Pool Shares
+                    current_share_ts = p2pool_stats["pool"].get("last_share_time", 0)
+                    if current_share_ts > last_known_share_ts:
+                        if current_share_ts > 0:
+                            self.latest_data["shares"].append({
+                                "ts": current_share_ts,
+                                "difficulty": p2pool_stats["pool"].get("difficulty", 0)
+                            })
+                            # Keep last 100 shares to prevent unbounded growth
+                            if len(self.latest_data["shares"]) > 100:
+                                self.latest_data["shares"] = self.latest_data["shares"][-100:]
+                        last_known_share_ts = current_share_ts
+
                     monero_sync = await get_monero_sync_status()
                     tari_sync = await tari_client.get_sync_status()
 
@@ -158,7 +185,7 @@ class DataService:
                     self.latest_data.update({
                         "workers": final_workers,
                         "total_live_h15": total_h15,
-                        "pool": get_p2pool_stats(),
+                        "pool": p2pool_stats,
                         "network": network_stats,
                         "tari": tari_stats,
                         "monero_sync": monero_sync,

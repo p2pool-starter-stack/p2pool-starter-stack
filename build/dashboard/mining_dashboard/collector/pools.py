@@ -91,6 +91,7 @@ def get_p2pool_stats():
             "total_hashes": pool_stats.get("totalHashes", 0),
             "shares_found": shares_total,
             "shares_in_window": shares_in_window, # Critical metric for Algo switching
+            "last_share_time": last_share_time,
         }
     }
     return stats
