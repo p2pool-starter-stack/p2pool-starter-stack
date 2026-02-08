@@ -177,16 +177,27 @@ install_dependencies() {
             dependencies="$dependencies linux-tools-common linux-tools-$(uname -r)"
         fi
 
-        log "The following system dependencies are required:"
-        echo -e "  ${C_YELLOW}$dependencies${C_RESET}"
+        local missing_deps=""
+        for dep in $dependencies; do
+            if ! dpkg -s "$dep" &> /dev/null; then
+                missing_deps="$missing_deps $dep"
+            fi
+        done
 
-        read -r -p "Install these dependencies now? (y/N): " CONFIRM
-        if [[ "$CONFIRM" =~ ^[Yy] ]]; then
-            log "Installing dependencies..."
-            sudo apt update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" $dependencies
+        if [ -n "$missing_deps" ]; then
+            log "The following system dependencies are required:"
+            echo -e "  ${C_YELLOW}$dependencies${C_RESET}"
+
+            read -r -p "Install these dependencies now? (y/N): " CONFIRM
+            if [[ "$CONFIRM" =~ ^[Yy] ]]; then
+                log "Installing dependencies..."
+                sudo apt update -qq
+                sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" $dependencies
+            else
+                warn "Dependency installation skipped. Proceeding at your own risk."
+            fi
         else
-            warn "Dependency installation skipped. Proceeding at your own risk."
+            log "All system dependencies are already installed."
         fi
 
         # Enable Model Specific Registers (MSR) for hardware prefetcher tuning (Linux only)
@@ -393,13 +404,19 @@ tune_kernel() {
     log "Calculating optimal HugePages configuration..."
     if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ] && [ -f "/etc/default/grub" ]; then
         NEW_PARAMS=$("$SCRIPT_DIR/util/proposed-grub.sh" -q)
-        sudo cp /etc/default/grub /etc/default/grub.bak
-        sudo sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$NEW_PARAMS\"|" /etc/default/grub
-        if command -v update-grub >/dev/null; then
-            sudo update-grub
-            REBOOT_REQUIRED=true
+        
+        # Check if GRUB is already configured
+        if grep -Fq "GRUB_CMDLINE_LINUX_DEFAULT=\"$NEW_PARAMS\"" /etc/default/grub; then
+            log "GRUB is already configured with optimal HugePages settings."
         else
-            warn "'update-grub' not found. Please manually update your bootloader."
+            sudo cp /etc/default/grub /etc/default/grub.bak
+            sudo sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$NEW_PARAMS\"|" /etc/default/grub
+            if command -v update-grub >/dev/null; then
+                sudo update-grub
+                REBOOT_REQUIRED=true
+            else
+                warn "'update-grub' not found. Please manually update your bootloader."
+            fi
         fi
     else
         warn "Skipping GRUB updates (Utility not found or non-GRUB system)."
