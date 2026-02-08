@@ -65,7 +65,7 @@ services:
   # --- Tari Base Node ---
   # Merge mining node. Connects to Tor for privacy.
   tari:
-    image: quay.io/tarilabs/minotari_node:v4.10.0-mainnet
+    image: quay.io/tarilabs/minotari_node:v5.2.1-mainnet
     container_name: tari
     restart: unless-stopped
     stop_grace_period: 1m
