@@ -6,8 +6,8 @@ x-logging: &default-logging
 
 services:
   # --- Tor Anonymity Service ---
-  # Provides hidden services (Onion addresses) for Monero, Tari, and P2Pool.
-  # Uses static IP 172.28.0.25 to allow other containers to route traffic through it.
+  # Orchestrates Tor Hidden Services (Onion addresses) for Monero, Tari, and P2Pool.
+  # Assigned a static IP (172.28.0.25) to function as the centralized SOCKS5 gateway for the stack.
   tor:
     build: ./build/tor
     container_name: tor
@@ -28,8 +28,8 @@ services:
       retries: 5
 
   # --- Monero Daemon (monerod) ---
-  # The full node. Routes transaction traffic through Tor (tx-proxy).
-  # Exposes P2P/RPC ports to the internal network.
+  # The primary Monero Full Node. Configured to route transaction broadcasts via Tor (tx-proxy) for privacy.
+  # Exposes P2P and RPC interfaces solely to the internal Docker network.
   monerod:
     build: ./build/monero
     container_name: monerod
@@ -63,7 +63,7 @@ services:
       start_period: 60s
 
   # --- Tari Base Node ---
-  # Merge mining node. Connects to Tor for privacy.
+  # Minotari Base Node for merge mining. Configured to utilize Tor for all peer-to-peer communication.
   tari:
     image: quay.io/tarilabs/minotari_node:v5.2.1-mainnet
     container_name: tari
@@ -101,8 +101,8 @@ services:
       start_period: 30s
 
   # --- P2Pool Node ---
-  # Decentralized mining pool sidecar.
-  # Coordinates between Monero daemon, Tari node, and miners.
+  # Decentralized mining sidechain node.
+  # Acts as the coordinator between the Monero daemon, Tari Base Node, and downstream miners.
   p2pool:
     build: ./build/p2pool
     container_name: p2pool
@@ -150,7 +150,8 @@ services:
         condition: service_healthy
 
   # --- XMRig Proxy ---
-  # Aggregates connections for the XvB donation/bonus pool.
+  # Connection aggregator for the XMRvsBeast donation/bonus pool.
+  # Reduces upstream connection overhead and manages hashrate routing.
   xmrig-proxy:
     build: ./build/xmrig-proxy
     container_name: xmrig-proxy
@@ -188,8 +189,8 @@ services:
       - p2pool
 
   # --- Monitoring Dashboard ---
-  # Web interface for stack management.
-  # Uses host networking to enable mDNS discovery of local miners.
+  # Web-based management interface and visualization engine.
+  # Utilizes host networking mode to facilitate mDNS/Avahi discovery of local mining workers.
   dashboard:
       build: ./build/dashboard
       extra_hosts:
@@ -215,6 +216,10 @@ services:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
       - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
+
+  # --- Docker Socket Proxy ---
+  # Secure, read-only proxy for the Docker Socket.
+  # Allows the Dashboard to safely query container logs and stats without exposing the full socket.
   docker-proxy:
     image: tecnativa/docker-socket-proxy
     container_name: docker-proxy
@@ -229,7 +234,7 @@ services:
         ipv4_address: 172.28.0.30
 
 # --- Network Configuration ---
-# Static subnet definition to ensure predictable IP assignment for Tor hidden services.
+# Defines a static bridge network to ensure predictable IP assignment for Tor gateway routing.
 networks:
   mining_net:
     driver: bridge

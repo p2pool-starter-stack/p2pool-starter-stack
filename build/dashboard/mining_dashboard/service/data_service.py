@@ -13,6 +13,10 @@ from collector.system import get_disk_usage, get_hugepages_status, get_memory_us
 logger = logging.getLogger("DataService")
 
 class DataService:
+    """
+    Core service responsible for aggregating mining statistics from various sources
+    (Local collectors, XMRig Proxy, Tari Node, etc.) and maintaining the application state.
+    """
     def __init__(self, state_manager, proxy_client, xvb_client):
         self.state_manager = state_manager
         self.proxy_client = proxy_client
@@ -32,15 +36,15 @@ class DataService:
             "timestamp": 0
         }
         
-        # Attempt to restore state from DB to prevent empty dashboard on restart
+        # Restore persistent state from DB to prevent empty dashboard on service restart
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
             self.latest_data.update(loaded_snapshot)
 
     async def run(self):
         """
-        Periodic task to aggregate statistics from local collectors and external APIs.
-        Updates the latest_data state and persists historical metrics.
+        Main execution loop: Aggregates statistics from local collectors and external APIs.
+        Updates the `latest_data` state and persists historical metrics to the database.
         """
         logger.info("Service Started: Data Collection Loop")
         
@@ -51,10 +55,10 @@ class DataService:
             tari_client = TariClient(session)
             while True:
                 try:
-                    # 1. Collect Local Statistics (High Frequency)
+                    # 1. Collect Local Statistics (High Frequency Polling)
                     stratum_raw, worker_configs = get_stratum_stats()
                     
-                    # Fetch workers from Proxy
+                    # 2. Fetch Worker Statistics from XMRig Proxy
                     proxy_workers = []
                     try:
                         proxy_data = await asyncio.to_thread(self.proxy_client.get_workers)
@@ -88,7 +92,7 @@ class DataService:
                     except Exception as e:
                         logger.error(f"Proxy Data Fetch Error: {e}")
 
-                    # Augment with direct worker stats (Uptime, etc.)
+                    # 3. Augment with Direct Worker Stats (Uptime, Hashrate) via Local API
                     tasks = [worker_client.get_stats(w['ip'], w['name']) for w in proxy_workers]
                     worker_results = await asyncio.gather(*tasks)
 
@@ -114,16 +118,16 @@ class DataService:
                         w['active_pool'] = active_pool_port
                         final_workers.append(w)
                     
-                    # Aggregate 15-minute average hashrate
+                    # 4. Calculate Aggregates (15-minute average hashrate)
                     total_h15 = sum(w.get('h15', 0) for w in final_workers if w.get('status') == 'online')
                     
-                    # Fetch stats for sync logic
+                    # 5. Fetch Network & Sync Status
                     network_stats = get_network_stats()
                     tari_stats = get_tari_stats()
                     monero_sync = await get_monero_sync_status()
                     tari_sync = await tari_client.get_sync_status()
 
-                    # Determine effective Tari status (matching UI logic)
+                    # Determine effective Tari status for UI display
                     tari_active = tari_stats.get('active', False)
                     tari_status_str = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
 
@@ -171,14 +175,14 @@ class DataService:
                         "timestamp": time.time()
                     })
                     
-                    # 2. Update Historical Data
+                    # 6. Persist Historical Data
                     p2pool_hr = 0 if "XVB" in current_mode else total_h15
                     xvb_hr = total_h15 if "XVB" in current_mode else 0
                     
                     await asyncio.to_thread(self.state_manager.update_history, total_h15, p2pool_hr, xvb_hr)
                     await asyncio.to_thread(self.state_manager.save_snapshot, self.latest_data)
 
-                    # 3. External API Sync (Throttled)
+                    # 7. External API Sync (Throttled to every 10th iteration)
                     if iteration_count % 10 == 0:
                         real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
                         if real_xvb_stats:

@@ -8,19 +8,19 @@ from helper.utils import format_hashrate, format_duration, format_time_abs, get_
 
 logger = logging.getLogger("WebServer")
 
-# Path to the template file
+# Absolute path to the HTML template file
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "index.html")
 
 BADGE_P2POOL = '<span class="badge badge-ok">P2Pool</span>'
 BADGE_XVB = '<span class="badge badge-purple">XvB</span>'
 BADGE_UNKNOWN = '<span class="badge badge-bad">Unknown</span>'
 
-# Template Caching Configuration
+# Template Caching Mechanism
 _TEMPLATE_CACHE = None
 _TEMPLATE_MTIME = 0
 
 def get_cached_template():
-    """Retrieves and caches the HTML template, injecting dynamic components only when the file is modified."""
+    """Retrieves and caches the HTML template, reloading from disk only if the file has been modified."""
     global _TEMPLATE_CACHE, _TEMPLATE_MTIME
     try:
         mtime = os.path.getmtime(TEMPLATE_PATH)
@@ -34,7 +34,7 @@ def get_cached_template():
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
 def _get_chart_context(history, range_arg):
-    """Filters history and prepares chart data and control classes."""
+    """Filters historical data based on the selected time range and prepares Chart.js datasets."""
     filtered_history = history
     
     if range_arg != 'all':
@@ -60,7 +60,7 @@ def _get_chart_context(history, range_arg):
     }
 
 def _get_worker_rows(workers):
-    """Generates HTML rows for the worker table."""
+    """Generates HTML table rows for worker statistics, including status badges and hashrate metrics."""
     worker_rows = ""
     sorted_workers = sorted(workers, key=lambda x: (x['status'] != 'online', x['name']))
     
@@ -108,7 +108,7 @@ def _get_worker_rows(workers):
     return worker_rows
 
 def _get_tari_context(data):
-    """Extracts Tari specific metrics."""
+    """Extracts and formats Tari merge mining metrics for the dashboard."""
     tari_stats = data.get('tari', {})
     tari_active = tari_stats.get('active', False)
     t_addr = tari_stats.get('address', 'Unknown')
@@ -129,7 +129,7 @@ def _get_tari_context(data):
     }
 
 def _get_system_context(data):
-    """Extracts and formats system resource metrics."""
+    """Extracts and formats system resource metrics (CPU, RAM, Disk, HugePages)."""
     system = data.get('system', {})
     
     # Disk Usage
@@ -202,7 +202,7 @@ def _get_system_context(data):
     }
 
 def _get_pool_network_context(data):
-    """Extracts and formats pool, stratum, and network metrics."""
+    """Extracts and formats P2Pool, Stratum, and Monero Network metrics."""
     pool_stats = data.get('pool', {})
     p2p_stats = pool_stats.get('p2p', {})
     local_pool = pool_stats.get('pool', {})
@@ -254,7 +254,7 @@ def _get_pool_network_context(data):
     }
 
 def _get_algo_context(data, state_mgr, history):
-    """Calculates algorithm switching logic, tiers, and hashrate averages."""
+    """Calculates algorithm switching logic, donation tiers, and hashrate averages."""
     xvb_stats = state_mgr.get_xvb_stats() or {}
     current_mode = xvb_stats.get('current_mode', 'P2POOL')
     
@@ -317,8 +317,8 @@ def _get_algo_context(data, state_mgr, history):
 
 async def handle_index(request):
     """
-    Request handler for the dashboard index page.
-    Aggregates data and renders the HTML template.
+    Primary Request Handler: Aggregates all context data and renders the Dashboard HTML.
+    Handles view modes (Sync vs. Dashboard) and time-range filtering.
     """
     app = request.app
     data = app['latest_data']
