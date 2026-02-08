@@ -78,20 +78,37 @@ async def get_monero_sync_status():
     Parses monerod logs to determine if the node is currently syncing.
     Returns a dict with sync status and progress if syncing, else {'is_syncing': False}.
     """
-    logs = await get_monero_logs(tail=20)
+    logs = await get_monero_logs(tail=100)
     if not logs or (len(logs) == 1 and logs[0].startswith("Error")):
         return {"is_syncing": False}
 
     # Iterate backwards to find the most recent sync status
     for line in reversed(logs):
-        # Pattern: Synced 30456/3604473 (0%, 3574017 left)
-        match = re.search(r"Synced\s+(\d+)/(\d+)\s+\((\d+)%", line)
+        if "You are now synchronized" in line:
+            return {"is_syncing": False}
+
+        # Match "Synced <current>/<target>" with optional percentage
+        match = re.search(r"Synced\s+(\d+)/(\d+)", line)
         if match:
+            current = int(match.group(1))
+            target = int(match.group(2))
+
+            if current >= target:
+                return {"is_syncing": False}
+
+            # If we are behind, check for percentage or calculate it
+            percent = 0
+            pct_match = re.search(r"\((\d+)%", line)
+            if pct_match:
+                percent = int(pct_match.group(1))
+            elif target > 0:
+                percent = int((current / target) * 100)
+
             return {
                 "is_syncing": True,
-                "current": int(match.group(1)),
-                "target": int(match.group(2)),
-                "percent": int(match.group(3))
+                "current": current,
+                "target": target,
+                "percent": percent
             }
             
     return {"is_syncing": False}
