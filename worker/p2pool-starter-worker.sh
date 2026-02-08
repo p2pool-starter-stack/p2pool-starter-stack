@@ -242,7 +242,6 @@ generate_xmrig_config() {
     HUGE_PAGES="true"
     MEMORY_POOL="false"
     ONE_GB_PAGES="false"
-    DIFFICULTY="10000"
     JIT="false"
     INIT_AVX2="-1"
     HTTP_RESTRICTED="false"
@@ -279,7 +278,6 @@ generate_xmrig_config() {
         YIELD="true"
         ASM="\"auto\""
         THREADS="-1"
-        DIFFICULTY="1350000"
         WRMSR="true"
     fi
 
@@ -292,13 +290,12 @@ generate_xmrig_config() {
         THREADS="[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"
         PREFETCH=1 
         WRMSR="true"
-        DIFFICULTY="324000"
         JIT="false"
         INIT_AVX2=1
     fi
 
-    # Construct User ID (Hostname + Difficulty)
-    FULL_USER="$(hostname)+${DIFFICULTY}"
+    # Construct User ID (Hostname)
+    FULL_USER="$(hostname)"
 
     # Generate config.json via jq
     jq --arg url "$P2POOL_NODE_ADDRESS:3333" \
