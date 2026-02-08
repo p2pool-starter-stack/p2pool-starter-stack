@@ -91,33 +91,34 @@ The Dashboard monitors your total aggregate hashrate and controls your workers v
 Create a `config.json` file in the root directory. This file drives the deployment script.
 
 **Example `config.json`:**
-```bash
+```json
 {
-  "monero": {
-    "data_dir": "DYNAMIC_DATA",
-    "wallet_address": "48...",
-    "node_username": "admin",
-    "node_password": "supersecretpassword"
-  },
-  "tari": {
-    "data_dir": "DYNAMIC_DATA",
-    "wallet_address": "54..."
-  },
-  "p2pool": {
-    "data_dir": "DYNAMIC_DATA",
-    "pool": "mini" 
-  },
-  "tor": {
-    "data_dir": "DYNAMIC_DATA"
-  },
-  "dashboard": {
-    "data_dir": "DYNAMIC_DATA"
-  },
-  "xmrig_proxy": {
-    "enabled": true,
-    "url": "na.xmrvsbeast.com:4247",
-    "donor_id": "DYNAMIC_ID"
-  }
+    "monero": {
+        "wallet_address": "48...",
+        "node_username": "admin",
+        "node_password": "supersecretpassword",
+        "data_dir": "DYNAMIC_DATA",
+        "pruned": true
+    },
+    "tari": {
+        "wallet_address": "54...",
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "p2pool": {
+        "pool": "main",
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "xvb": {
+        "enabled": true,
+        "url": "na.xmrvsbeast.com:4247",
+        "donor_id": "DYNAMIC_ID"
+    },
+    "tor": {
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "dashboard": {
+        "data_dir": "DYNAMIC_DATA"
+    }
 }
 ```
 *Note: `DYNAMIC_DATA` defaults to `./data/<service>`. `DYNAMIC_ID` uses the first 8 chars of your Monero wallet. To disable the XvB switching algorithm, set "enabled": false in the xmrig_proxy section. **Important:** You must register your wallet at [XMRvsBeast](https://xmrvsbeast.com/cgi-bin/p2pool_bonus_submit.cgi) to participate in bonus rounds.*

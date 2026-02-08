@@ -14,7 +14,7 @@
         "pool": "main",
         "data_dir": "DYNAMIC_DATA"
     },
-    "xmrig_proxy": {
+    "xvb": {
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",
         "donor_id": "DYNAMIC_ID"
