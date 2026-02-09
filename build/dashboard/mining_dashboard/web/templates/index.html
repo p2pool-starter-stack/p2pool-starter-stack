@@ -331,9 +331,9 @@
         type: 'line',
         data: {{
             labels: [{chart_labels}],
-            datasets: [{{ 
-                label: 'H/s', 
-                data: [{chart_data}], 
+            datasets: [{{
+                label: 'P2Pool',
+                data: [{chart_p2pool}],
                 borderColor: '#58a6ff', 
                 tension: 0.3, 
                 fill: true, 
@@ -341,13 +341,14 @@
                 pointRadius: 0,
                 pointHitRadius: 10
             }}, {{
-                label: 'Share Found',
-                data: [{chart_shares}],
-                borderColor: '#ffffff',
-                backgroundColor: '#ffffff',
-                pointRadius: 4,
-                pointHoverRadius: 6,
-                showLine: false
+                label: 'XvB',
+                data: [{chart_xvb}],
+                borderColor: '#a371f7',
+                tension: 0.3,
+                fill: true,
+                backgroundColor: 'rgba(163, 113, 247, 0.2)',
+                pointRadius: 0,
+                pointHitRadius: 10
             }}]
         }},
         options: {{ 
@@ -355,7 +356,11 @@
             maintainAspectRatio: false, 
             plugins: {{ legend: {{ display: false }} }}, 
             scales: {{ 
-                y: {{ grid: {{ color: '#30363d' }}, ticks: {{ color: '#8b949e' }} }}, 
+                y: {{ 
+                    stacked: true,
+                    grid: {{ color: '#30363d' }}, 
+                    ticks: {{ color: '#8b949e' }} 
+                }}, 
                 x: {{ display: false }} 
             }} 
         }}

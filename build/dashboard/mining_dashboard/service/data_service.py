@@ -130,8 +130,16 @@ class DataService:
                         w['active_pool'] = active_pool_port
                         final_workers.append(w)
                     
-                    # 4. Calculate Aggregates (15-minute average hashrate)
-                    total_h15 = sum(w.get('h15', 0) for w in final_workers if w.get('status') == 'online')
+                    # 4. Calculate Aggregates (Priority: 15m > 60s > 10s)
+                    total_hr = 0
+                    for w in final_workers:
+                        if w.get('status') == 'online':
+                            w_hr = w.get('h15', 0)
+                            if w_hr == 0:
+                                w_hr = w.get('h60', 0)
+                            if w_hr == 0:
+                                w_hr = w.get('h10', 0)
+                            total_hr += w_hr
                     
                     # 5. Fetch Network & Sync Status
                     network_stats = get_network_stats()
@@ -184,7 +192,7 @@ class DataService:
 
                     self.latest_data.update({
                         "workers": final_workers,
-                        "total_live_h15": total_h15,
+                        "total_live_h15": total_hr,
                         "pool": p2pool_stats,
                         "network": network_stats,
                         "tari": tari_stats,
@@ -203,10 +211,10 @@ class DataService:
                     })
                     
                     # 6. Persist Historical Data
-                    p2pool_hr = 0 if "XVB" in current_mode else total_h15
-                    xvb_hr = total_h15 if "XVB" in current_mode else 0
+                    p2pool_hr = 0 if "XVB" in current_mode else total_hr
+                    xvb_hr = total_hr if "XVB" in current_mode else 0
                     
-                    await asyncio.to_thread(self.state_manager.update_history, total_h15, p2pool_hr, xvb_hr)
+                    await asyncio.to_thread(self.state_manager.update_history, total_hr, p2pool_hr, xvb_hr)
                     await asyncio.to_thread(self.state_manager.save_snapshot, self.latest_data)
 
                     # 7. External API Sync (Throttled to every 10th iteration)
