@@ -138,9 +138,15 @@ Use the `p2pool-starter-stack.sh` script to manage your stack.
 | `./p2pool-starter-stack.sh -rd`| **DESTRUCTIVE!** Wipes and refreshes the Dashboard and P2Pool data. |
 
 **To update the stack:**
-Modify the `ARG` versions in the Dockerfiles and rebuild:
+Modify the `ARG` versions in the Dockerfiles, or tari version in `docker-compose.yml`, and rebuild:
 ```bash
-docker compose build --no-cache && ./p2pool-starter-stack.sh -r
+docker compose up -d --build
+```
+
+
+## 🤝 Donation If you found this useful and would like to donate, please donate to this XMR wallet:
+```bash
+89VGXHYEYdTJ4qQPoSZSD4BQsXCm6vCjUF2y2Vm42mA8ESLXA4XpmsvWMFB2stQw7p5UXnyZ81EMtgkCYqjYBPow8v7btKv
 ```
 
 ## 📄 License
