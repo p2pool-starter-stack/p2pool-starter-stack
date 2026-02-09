@@ -94,7 +94,8 @@ def _get_chart_context(history, shares, range_arg):
             
             # Dynamic radius: Base 6 + 2 per share, max 20
             r = min(6 + (count * 2), 20)
-            share_data[idx] = f"{{y: {vp}, shares: {count}, r: {r}}}"
+            t_label = item.get('t', '')
+            share_data[idx] = f"{{x: '{t_label}', y: {vp}, shares: {count}, r: {r}}}"
 
     return {
         'chart_labels': ",".join([f"'{x['t']}'" for x in filtered_history]),
