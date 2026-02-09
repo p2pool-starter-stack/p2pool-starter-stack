@@ -51,23 +51,8 @@ def get_p2pool_stats():
     
     pool_type = detect_pool_type(raw_p2p.get("peers", []))
 
-    # Determine Window Duration based on Chain Type
-    window_blocks = BLOCK_PPLNS_WINDOW_MAIN
-    block_time = SECOND_PER_BLOCK_P2POOL_MAIN
-    
-    if pool_type == "Nano":
-        window_blocks = BLOCK_PPLNS_WINDOW_NANO
-        block_time = SECOND_PER_BLOCK_P2POOL_NANO
-    elif pool_type == "Mini":
-        window_blocks = BLOCK_PPLNS_WINDOW_MINI
-        block_time = SECOND_PER_BLOCK_P2POOL_MINI
-    
-    window_duration = window_blocks * block_time
-    
-    # Calculate Shares in Window
     last_share_time = raw_stratum.get("last_share_found_time", 0)
     shares_total = raw_stratum.get("shares_found", 0)
-    shares_in_window = 1 if (shares_total > 0 and (time.time() - last_share_time) < window_duration) else 0
 
     stats = {
         "p2p": {
@@ -90,7 +75,6 @@ def get_p2pool_stats():
             "difficulty": pool_stats.get("sidechainDifficulty", 0),
             "total_hashes": pool_stats.get("totalHashes", 0),
             "shares_found": shares_total,
-            "shares_in_window": shares_in_window, # Critical metric for Algo switching
             "last_share_time": last_share_time,
         }
     }

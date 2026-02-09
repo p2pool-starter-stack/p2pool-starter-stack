@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import math
 from config.config import (
     XVB_TIME_ALGO_MS, 
@@ -53,28 +54,40 @@ class AlgoService:
         except Exception as e:
             logger.error(f"Failed to switch proxy mode: {e}")
 
-    def get_decision(self, current_hr, p2pool_stats, xvb_stats):
+    def get_decision(self, current_hr, p2pool_stats, p2p_stats, xvb_stats, shares):
         """
         Evaluates the current mining state to determine the next operation mode.
 
         Args:
             current_hr (float): Current 15m average hashrate.
             p2pool_stats (dict): Statistics from the local P2Pool node.
+            p2p_stats (dict): P2P network statistics (for pool type detection).
             xvb_stats (dict): Historical statistics for XvB mining.
+            shares (list): List of recent shares with timestamps.
 
         Returns:
             tuple: (Mode String ["P2POOL"|"XVB"|"SPLIT"], Duration in ms)
         """
         # Feature Flag: Check if XvB switching is globally disabled
         if not ENABLE_XVB:
-            logger.info("Decision Strategy: Force P2POOL (XvB Switching Disabled)")
+            # logger.info("Decision Strategy: Force P2POOL (XvB Switching Disabled)")
             return "P2POOL", 0
 
         # Constraint: Enforce P2Pool mode if no shares have been found recently.
-        # This prevents potential revenue loss during low-luck periods.
-        shares_in_window = p2pool_stats.get('shares_in_window', 0)
-        if shares_in_window == 0:
-            logger.info("Decision Strategy: Force P2POOL (Zero shares in window)")
+        # This uses the same logic as the dashboard UI to count shares within the PPLNS window.
+        pool_type = p2p_stats.get('type', 'Main')
+        pplns_window = p2pool_stats.get('pplns_window', 2160)
+        
+        block_time = 10  # Default for Main/Mini
+        if pool_type == "Nano":
+            block_time = 30
+
+        window_duration = pplns_window * block_time
+        cutoff = time.time() - window_duration
+        shares_in_window_count = sum(1 for s in shares if s.get('ts', 0) >= cutoff)
+
+        if shares_in_window_count == 0:
+            logger.info(f"Decision Strategy: Force P2POOL (Zero shares in PPLNS window of {window_duration}s)")
             return "P2POOL", 0
 
         # Constraint: Fallback to P2Pool if XvB endpoint failures exceed threshold.
@@ -153,11 +166,14 @@ class AlgoService:
                 # Access latest data from DataService
                 latest_data = self.data_service.latest_data
                 current_hr = latest_data.get("total_live_h15", 0)
-                p2pool_stats = latest_data.get("pool", {}).get("pool", {}) 
+                p2pool_data = latest_data.get("pool", {})
+                p2pool_stats = p2pool_data.get("pool", {})
+                p2p_stats = p2pool_data.get("p2p", {})
                 xvb_stats = self.state_manager.get_xvb_stats()
+                shares = latest_data.get("shares", [])
                 
                 # Execute decision logic
-                decision, xvb_duration = self.get_decision(current_hr, p2pool_stats, xvb_stats)
+                decision, xvb_duration = self.get_decision(current_hr, p2pool_stats, p2p_stats, xvb_stats, shares)
                 
                 if decision == "P2POOL":
                     await self.switch_miners("P2POOL", state_label="P2POOL")
