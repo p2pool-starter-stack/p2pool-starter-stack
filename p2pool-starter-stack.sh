@@ -45,6 +45,44 @@ stack_restart() {
     log "Stack restarted."
 }
 
+refresh_dashboard() {
+    echo -e "${C_RED}[WARNING] This is a DESTRUCTIVE action.${C_RESET}"
+    echo "It will stop dashboard/p2pool containers and WIPE their data directories."
+    read -r -p "Are you sure you want to continue? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+        log "Refresh cancelled."
+        return
+    fi
+
+    log "Refreshing Dashboard and P2Pool..."
+
+    if [ ! -f "$CONFIG_FILE" ]; then
+        error "$CONFIG_FILE not found. Is the stack deployed?"
+    fi
+
+    if [ ! -f "$ENV_FILE" ]; then
+        error "$ENV_FILE not found. Is the stack deployed?"
+    fi
+
+    parse_and_validate_config
+
+    log "Stopping dashboard and p2pool containers..."
+    docker compose rm -s -f -v dashboard p2pool
+
+    log "Removing data directories..."
+    [ -d "$DASHBOARD_DIR" ] && sudo rm -rf "$DASHBOARD_DIR"
+    [ -d "$P2POOL_DIR" ] && sudo rm -rf "$P2POOL_DIR"
+
+    log "Recreating data directories..."
+    mkdir -p "$DASHBOARD_DIR" "$P2POOL_DIR"
+    sudo chown -R "$REAL_USER":"$REAL_USER" "$P2POOL_DIR"
+    mkdir -p "$P2POOL_DIR/stats"
+    sudo chmod -R 755 "$P2POOL_DIR/stats"
+
+    log "Bringing services back up..."
+    docker compose up -d dashboard p2pool
+}
+
 ask_yes_no() {
     local prompt="$1"
     local action="$2"
@@ -61,12 +99,13 @@ show_help() {
     echo "Deploy and manage the P2Pool Starter Stack."
     echo ""
     echo "Options:"
-    echo "  -s              Interactive start (ask to bring up stack)"
-    echo "  -sf             Force start (bring up stack immediately)"
-    echo "  -d              Interactive stop (ask to bring down stack)"
-    echo "  -df             Force stop (bring down stack immediately)"
-    echo "  -r              Interactive restart (ask to restart stack)"
-    echo "  -rf             Force restart (restart stack immediately)"
+    echo "  -s, --start     Interactive start (ask to bring up stack)"
+    echo "  -sf, --start-force Force start (bring up stack immediately)"
+    echo "  -d, --down      Interactive stop (ask to bring down stack)"
+    echo "  -df, --down-force Force stop (bring down stack immediately)"
+    echo "  -r, --restart   Interactive restart (ask to restart stack)"
+    echo "  -rf, --restart-force Force restart (restart stack immediately)"
+    echo "  -rd, --refresh-dashboard Refresh dashboard/p2pool (wipe data and restart)"
     echo "  -l, --logs      Follow container logs"
     echo "  -st, --status   Show stack status"
     echo "  -h, --help      Show this help message"
@@ -346,12 +385,13 @@ finish_deployment() {
 main() {
     if [ $# -gt 0 ]; then
         case "$1" in
-            -s)  ask_yes_no "Start the stack?" stack_up ;;
-            -sf) stack_up ;;
-            -d)  ask_yes_no "Stop the stack?" stack_down ;;
-            -df) stack_down ;;
-            -r)  ask_yes_no "Restart the stack?" stack_restart ;;
-            -rf) stack_restart ;;
+            -s|--start)  ask_yes_no "Start the stack?" stack_up ;;
+            -sf|--start-force) stack_up ;;
+            -d|--down)  ask_yes_no "Stop the stack?" stack_down ;;
+            -df|--down-force) stack_down ;;
+            -r|--restart)  ask_yes_no "Restart the stack?" stack_restart ;;
+            -rf|--restart-force) stack_restart ;;
+            -rd|--refresh-dashboard) refresh_dashboard ;;
             -l|--logs)
                 log "Following logs (Ctrl+C to exit)..."
                 docker compose logs -f
