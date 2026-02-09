@@ -2,6 +2,7 @@ import os
 import time
 import html
 import logging
+import bisect
 from aiohttp import web
 from config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
 from helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
@@ -67,12 +68,25 @@ def _get_chart_context(history, shares, range_arg):
     share_data = ['null'] * len(filtered_history)
     if filtered_history and filtered_shares:
         hist_ts = [x['timestamp'] for x in filtered_history]
+        share_counts = {}
+
         for s in filtered_shares:
             s_ts = s['ts']
-            # Find closest history point to place the share marker
-            closest_idx = min(range(len(hist_ts)), key=lambda i: abs(hist_ts[i] - s_ts))
-            val = filtered_history[closest_idx].get('v', 0)
-            share_data[closest_idx] = str(val)
+            # Optimize search using bisect
+            idx = bisect.bisect_left(hist_ts, s_ts)
+            candidates = []
+            if idx < len(hist_ts): candidates.append(idx)
+            if idx > 0: candidates.append(idx - 1)
+            
+            if candidates:
+                closest_idx = min(candidates, key=lambda i: abs(hist_ts[i] - s_ts))
+                share_counts[closest_idx] = share_counts.get(closest_idx, 0) + 1
+
+        for idx, count in share_counts.items():
+            val = filtered_history[idx].get('v', 0)
+            # Dynamic radius: Base 6 + 2 per share, max 20
+            r = min(6 + (count * 2), 20)
+            share_data[idx] = f"{{y: {val}, shares: {count}, r: {r}}}"
 
     return {
         'chart_labels': ",".join([f"'{x['t']}'" for x in filtered_history]),
@@ -246,6 +260,14 @@ def _get_pool_network_context(data):
     workers_list = data.get('workers', [])
     proxy_count = sum(1 for w in workers_list if w.get('status') == 'online')
 
+    # Calculate shares in window
+    shares_list = data.get('shares', [])
+    pplns_window = local_pool.get('pplns_window', 2160)
+    window_duration = pplns_window * 10
+    cutoff = time.time() - window_duration
+    shares_count = sum(1 for s in shares_list if s.get('ts', 0) >= cutoff)
+    shares_display = f"<span class='status-ok'>{shares_count}</span>" if shares_count > 0 else f"<span class='status-bad'>0</span>"
+
     return {
         'strat_h15': format_hashrate(stratum_stats.get('hashrate_15m', 0)),
         'strat_h1h': format_hashrate(stratum_stats.get('hashrate_1h', 0)),
@@ -268,7 +290,7 @@ def _get_pool_network_context(data):
         'pool_miners': local_pool.get('miners', 0),
         'pplns_win': f"{local_pool.get('pplns_window', 0)} ({format_duration(local_pool.get('pplns_window', 0) * 10)})",
         'pplns_wgt': local_pool.get('pplns_weight', 0),
-        'pool_shares_window': f"<span class='status-ok'>True</span>" if local_pool.get('shares_in_window', 0) > 0 else f"<span class='status-bad'>False</span>",
+        'pool_shares_window': shares_display,
         'pool_blocks': local_pool.get('blocks_found', 0),
         'pool_last_blk': format_time_abs(local_pool.get('last_block_ts', 0)),
         'p2p_peers': f"{p2p_stats.get('out_peers',0)} / {p2p_stats.get('in_peers',0)}",

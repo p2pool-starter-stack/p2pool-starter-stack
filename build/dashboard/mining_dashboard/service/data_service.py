@@ -154,9 +154,9 @@ class DataService:
                                 "ts": current_share_ts,
                                 "difficulty": p2pool_stats["pool"].get("difficulty", 0)
                             })
-                            # Keep last 100 shares to prevent unbounded growth
-                            if len(self.latest_data["shares"]) > 100:
-                                self.latest_data["shares"] = self.latest_data["shares"][-100:]
+                            # Keep last 10000 shares to prevent unbounded growth
+                            if len(self.latest_data["shares"]) > 10000:
+                                self.latest_data["shares"] = self.latest_data["shares"][-10000:]
                         last_known_share_ts = current_share_ts
 
                     monero_sync = await get_monero_sync_status()
