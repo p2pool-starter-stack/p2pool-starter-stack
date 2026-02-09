@@ -354,7 +354,9 @@
                 data: [{chart_shares}],
                 borderColor: '#ffffff',
                 backgroundColor: '#ffffff',
-                pointRadius: 4,
+                pointRadius: function(context) {{
+                    return context.raw && context.raw.r ? context.raw.r : 4;
+                }},
                 pointHoverRadius: 6,
                 pointStyle: 'star',
                 showLine: false
