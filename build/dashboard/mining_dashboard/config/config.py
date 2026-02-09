@@ -27,8 +27,8 @@ API_TIMEOUT = 1         # Connection timeout (seconds) for worker API calls
 UPDATE_INTERVAL = 30    # Frequency (seconds) of the main data aggregation loop
 
 # --- XvB Algorithm Constants ---
-# Duration of the donation switching cycle (60 seconds)
-XVB_TIME_ALGO_MS = 60000        
+# Duration of the donation switching cycle (10 minutes)
+XVB_TIME_ALGO_MS = 600000
 
 # Minimum dwell time on a pool to ensure valid share submission (15 seconds)
 XVB_MIN_TIME_SEND_MS = 15000    
@@ -63,8 +63,8 @@ TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
 TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 
 # --- Algorithm Safety Margins ---
-# Buffer margin (5%) to ensure the 1h average strictly meets tier requirements
-ALGO_MARGIN_1H = 0.05
+# Buffer margin (15%) to ensure the 1h average strictly meets tier requirements
+ALGO_MARGIN_1H = 0.15
 
 # --- Data Retention Policies ---
 HISTORY_RETENTION_SEC = 30 * 24 * 3600  # 30 Days
