@@ -1,3 +1,4 @@
+![Logo](./images/p2pool-starter-stack-logo-large.png)
 # P2Pool Starter Stack: Monero & Tari Merge Mining
 
 ![Dashboard](./images/dashboard.png)
