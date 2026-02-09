@@ -33,9 +33,10 @@ def get_cached_template():
         logger.error(f"Error loading template: {e}")
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
-def _get_chart_context(history, range_arg):
+def _get_chart_context(history, shares, range_arg):
     """Filters historical data based on the selected time range and prepares Chart.js datasets."""
     filtered_history = history
+    filtered_shares = shares
     
     if range_arg != 'all':
         target_seconds = 0
@@ -47,6 +48,7 @@ def _get_chart_context(history, range_arg):
         if target_seconds > 0:
             cutoff_timestamp = time.time() - target_seconds
             filtered_history = [x for x in history if x['timestamp'] >= cutoff_timestamp]
+            filtered_shares = [x for x in shares if x['ts'] >= cutoff_timestamp]
 
     p2pool_data = []
     xvb_data = []
@@ -62,11 +64,22 @@ def _get_chart_context(history, range_arg):
         p2pool_data.append(str(vp))
         xvb_data.append(str(vx))
 
+    share_data = ['null'] * len(filtered_history)
+    if filtered_history and filtered_shares:
+        hist_ts = [x['timestamp'] for x in filtered_history]
+        for s in filtered_shares:
+            s_ts = s['ts']
+            # Find closest history point to place the share marker
+            closest_idx = min(range(len(hist_ts)), key=lambda i: abs(hist_ts[i] - s_ts))
+            val = filtered_history[closest_idx].get('v', 0)
+            share_data[closest_idx] = str(val)
+
     return {
         'chart_labels': ",".join([f"'{x['t']}'" for x in filtered_history]),
         'chart_data': ",".join([str(x['v']) for x in filtered_history]),
         'chart_p2pool': ",".join(p2pool_data),
         'chart_xvb': ",".join(xvb_data),
+        'chart_shares': ",".join(share_data),
         'cls_1h': 'active' if range_arg == '1h' else '',
         'cls_24h': 'active' if range_arg == '24h' else '',
         'cls_1w': 'active' if range_arg == '1w' else '',
@@ -340,6 +353,7 @@ async def handle_index(request):
     
     try:
         history = state_mgr.get_history()
+        shares = data.get('shares', [])
         range_arg = request.query.get('range', 'all')
         
         # Prepare Sync Context
@@ -379,7 +393,7 @@ async def handle_index(request):
         }
 
         # Build Contexts
-        chart_ctx = _get_chart_context(history, range_arg)
+        chart_ctx = _get_chart_context(history, shares, range_arg)
         system_ctx = _get_system_context(data)
         pool_net_ctx = _get_pool_network_context(data)
         algo_ctx = _get_algo_context(data, state_mgr, history)
