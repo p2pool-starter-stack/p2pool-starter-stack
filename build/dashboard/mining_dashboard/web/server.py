@@ -83,10 +83,18 @@ def _get_chart_context(history, shares, range_arg):
                 share_counts[closest_idx] = share_counts.get(closest_idx, 0) + 1
 
         for idx, count in share_counts.items():
-            val = filtered_history[idx].get('v', 0)
+            item = filtered_history[idx]
+            v = item.get('v', 0)
+            vp = item.get('v_p2pool', 0)
+            vx = item.get('v_xvb', 0)
+            
+            # Fallback logic: if breakdown is missing, assume P2Pool
+            if vp == 0 and vx == 0 and v > 0:
+                vp = v
+            
             # Dynamic radius: Base 6 + 2 per share, max 20
             r = min(6 + (count * 2), 20)
-            share_data[idx] = f"{{y: {val}, shares: {count}, r: {r}}}"
+            share_data[idx] = f"{{y: {vp}, shares: {count}, r: {r}}}"
 
     return {
         'chart_labels': ",".join([f"'{x['t']}'" for x in filtered_history]),
