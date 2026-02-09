@@ -104,7 +104,7 @@ Connect your XMRig workers to the IP address of the machine running the stack on
 
 The wallet address is managed by the P2Pool service on the main stack; **you do not need to put your wallet address in your worker's configuration.**
 
-When configuring your worker's `config.json`, the `user` field should be a unique name to identify the worker on the dashboard. If you use the provided worker script, it will default to the machine's hostname.
+When configuring your worker's `config.json`, the `user` field should be your worker machine's hostname. If you use the provided worker script, it will default to the machine's hostname.
 
 **Example `config.json` for a manually configured worker:**
 ```json
