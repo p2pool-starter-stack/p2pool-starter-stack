@@ -485,4 +485,8 @@ def create_app(state_manager, latest_data_ref):
     app['latest_data'] = latest_data_ref
     
     app.add_routes([web.get('/', handle_index)])
+    
+    static_path = os.path.join(os.path.dirname(__file__), "static")
+    app.router.add_static('/static', static_path)
+    
     return app
