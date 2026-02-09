@@ -269,10 +269,14 @@ def _get_pool_network_context(data):
     workers_list = data.get('workers', [])
     proxy_count = sum(1 for w in workers_list if w.get('status') == 'online')
 
+    # Determine block time based on pool type (Main/Mini=10s, Nano=30s)
+    pool_type = p2p_stats.get('type', 'Main')
+    block_time = 30 if pool_type == 'Nano' else 10
+
     # Calculate shares in window
     shares_list = data.get('shares', [])
     pplns_window = local_pool.get('pplns_window', 2160)
-    window_duration = pplns_window * 10
+    window_duration = pplns_window * block_time
     cutoff = time.time() - window_duration
     shares_count = sum(1 for s in shares_list if s.get('ts', 0) >= cutoff)
     shares_display = f"<span class='status-ok'>{shares_count}</span>" if shares_count > 0 else f"<span class='status-bad'>0</span>"
@@ -297,7 +301,7 @@ def _get_pool_network_context(data):
         'pool_hr': format_hashrate(local_pool.get('hashrate', 0)),
         'pool_total_hashes': local_pool.get('total_hashes', 0),
         'pool_miners': local_pool.get('miners', 0),
-        'pplns_win': f"{local_pool.get('pplns_window', 0)} ({format_duration(local_pool.get('pplns_window', 0) * 10)})",
+        'pplns_win': f"{local_pool.get('pplns_window', 0)} ({format_duration(local_pool.get('pplns_window', 0) * block_time)})",
         'pplns_wgt': local_pool.get('pplns_weight', 0),
         'pool_shares_window': shares_display,
         'pool_blocks': local_pool.get('blocks_found', 0),
