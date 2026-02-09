@@ -354,10 +354,14 @@
         options: {{ 
             responsive: true, 
             maintainAspectRatio: false, 
+            interaction: {{
+                mode: 'index',
+                intersect: false
+            }},
             plugins: {{ legend: {{ display: false }} }}, 
             scales: {{ 
                 y: {{ 
-                    stacked: true,
+                    stacked: false,
                     grid: {{ color: '#30363d' }}, 
                     ticks: {{ color: '#8b949e' }} 
                 }}, 
