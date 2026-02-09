@@ -254,7 +254,7 @@ generate_xmrig_config() {
     HUGE_PAGES="true"
     MEMORY_POOL="false"
     ONE_GB_PAGES="false"
-    JIT="false"
+    JIT="true"
     INIT_AVX2="-1"
     HTTP_RESTRICTED="false"
     HTTP_HOST="0.0.0.0"
@@ -272,6 +272,7 @@ generate_xmrig_config() {
         NUMA="true"
         HTTP_RESTRICTED="true"
         HTTP_HOST="::"
+        JIT="false"
         
         # Generate rx array [-1, -1, ...] based on core count
         CORES=$(sysctl -n hw.ncpu)
@@ -291,6 +292,7 @@ generate_xmrig_config() {
         ASM="\"auto\""
         THREADS="-1"
         WRMSR="true"
+        JIT="true"
     fi
 
     # Profile: AMD Ryzen X3D (Desktop)
@@ -302,7 +304,7 @@ generate_xmrig_config() {
         THREADS="[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"
         PREFETCH=1 
         WRMSR="true"
-        JIT="false"
+        JIT="true"
         INIT_AVX2=1
     fi
 
@@ -402,6 +404,9 @@ tune_kernel() {
         return
     fi
 
+    log "Applying runtime HugePages configuration..."
+    sudo sysctl -w vm.nr_hugepages=3072
+
     log "Calculating optimal HugePages configuration..."
     if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ] && [ -f "/etc/default/grub" ]; then
         NEW_PARAMS=$("$SCRIPT_DIR/util/proposed-grub.sh" -q)
@@ -481,9 +486,9 @@ main() {
     install_dependencies
     compile_xmrig
     generate_xmrig_config
-    install_service
     tune_kernel
     configure_limits
+    install_service
     finish_deployment
 }
 
