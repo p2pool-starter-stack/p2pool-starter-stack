@@ -3,6 +3,7 @@ import time
 import html
 import logging
 import bisect
+import json
 from aiohttp import web
 from config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
 from helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
@@ -44,7 +45,7 @@ def _get_chart_context(history, shares, range_arg):
         if range_arg == '1h': target_seconds = 3600
         elif range_arg == '24h': target_seconds = 86400
         elif range_arg == '1w': target_seconds = 604800
-        elif range_arg == '1m': target_seconds = 2592000 # 30 Days
+        elif range_arg == '1m': target_seconds = 2592000 
         
         if target_seconds > 0:
             cutoff_timestamp = time.time() - target_seconds
@@ -53,6 +54,8 @@ def _get_chart_context(history, shares, range_arg):
 
     p2pool_data = []
     xvb_data = []
+    chart_labels_list = [json.dumps(x['t']) for x in filtered_history]
+
     for x in filtered_history:
         v = x.get('v', 0)
         vp = x.get('v_p2pool', 0)
@@ -65,14 +68,17 @@ def _get_chart_context(history, shares, range_arg):
         p2pool_data.append(str(vp))
         xvb_data.append(str(vx))
 
-    share_data = ['null'] * len(filtered_history)
+    # --- CHANGED: Use parallel arrays instead of objects ---
+    share_y_list = ['null'] * len(filtered_history)
+    share_r_list = ['0'] * len(filtered_history)
+    share_c_list = ['0'] * len(filtered_history)
+    
     if filtered_history and filtered_shares:
         hist_ts = [x['timestamp'] for x in filtered_history]
         share_counts = {}
 
         for s in filtered_shares:
             s_ts = s['ts']
-            # Optimize search using bisect
             idx = bisect.bisect_left(hist_ts, s_ts)
             candidates = []
             if idx < len(hist_ts): candidates.append(idx)
@@ -83,26 +89,30 @@ def _get_chart_context(history, shares, range_arg):
                 share_counts[closest_idx] = share_counts.get(closest_idx, 0) + 1
 
         for idx, count in share_counts.items():
-            item = filtered_history[idx]
-            v = item.get('v', 0)
-            vp = item.get('v_p2pool', 0)
-            vx = item.get('v_xvb', 0)
-            
-            # Fallback logic: if breakdown is missing, assume P2Pool
-            if vp == 0 and vx == 0 and v > 0:
-                vp = v
-            
-            # Dynamic radius: Base 6 + 2 per share, max 20
-            r = min(6 + (count * 2), 20)
-            t_label = item.get('t', '')
-            share_data[idx] = f"{{x: '{t_label}', y: {vp}, shares: {count}, r: {r}}}"
+            if idx < len(filtered_history):
+                item = filtered_history[idx]
+                v = item.get('v', 0)
+                
+                # 1. Calculate offset: Lift the triangle 10% above the line value
+                # If v is 0 (rare), default to a small number so it doesn't disappear
+                y_pos = v * 1.1 if v > 0 else 100
+                
+                r = min(6 + (count * 3), 15)
+                
+                # 2. Use the OFFSET position (y_pos) instead of the exact line value (v)
+                share_y_list[idx] = str(y_pos)
+                share_r_list[idx] = str(r)
+                share_c_list[idx] = str(count)
 
     return {
-        'chart_labels': ",".join([f"'{x['t']}'" for x in filtered_history]),
+        'chart_labels': ",".join(chart_labels_list),
         'chart_data': ",".join([str(x['v']) for x in filtered_history]),
         'chart_p2pool': ",".join(p2pool_data),
         'chart_xvb': ",".join(xvb_data),
-        'chart_shares': ",".join(share_data),
+        # Pass the 3 separate lists
+        'chart_shares_y': ",".join(share_y_list),
+        'chart_shares_r': ",".join(share_r_list),
+        'chart_shares_c': ",".join(share_c_list),
         'cls_1h': 'active' if range_arg == '1h' else '',
         'cls_24h': 'active' if range_arg == '24h' else '',
         'cls_1w': 'active' if range_arg == '1w' else '',

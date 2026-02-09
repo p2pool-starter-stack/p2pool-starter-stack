@@ -327,6 +327,8 @@
     </div>
 </div>
 <script>
+    const shareCounts = [{chart_shares_c}];
+
     new Chart(document.getElementById('hChart'), {{
         type: 'line',
         data: {{
@@ -339,7 +341,7 @@
                 fill: true, 
                 backgroundColor: 'rgba(88,166,255,0.1)',
                 pointRadius: 0,
-                pointHitRadius: 10
+                pointHitRadius: 20
             }}, {{
                 label: 'XvB',
                 data: [{chart_xvb}],
@@ -348,18 +350,19 @@
                 fill: true,
                 backgroundColor: 'rgba(163, 113, 247, 0.2)',
                 pointRadius: 0,
-                pointHitRadius: 10
+                pointHitRadius: 20
             }}, {{
                 label: 'Shares',
-                data: [{chart_shares}],
-                borderColor: '#39d353',
-                backgroundColor: '#39d353',
-                pointRadius: function(context) {{
-                    return context.raw && context.raw.r ? context.raw.r : 4;
-                }},
-                pointHoverRadius: 8,
-                pointHitRadius: 20,
-                pointStyle: 'circle',
+                data: [{chart_shares_y}], 
+                borderColor: '#FF0000',
+                backgroundColor: '#FF0000',
+                pointStyle: 'triangle',
+                rotation: 180,
+                pointRadius: [{chart_shares_r}],
+                pointHoverRadius: 15,
+                // CHANGE 1: Increase this significantly (e.g., to 100)
+                // This extends the detection area 100px to the left/right of the point
+                pointHitRadius: 100, 
                 showLine: false
             }}]
         }},
@@ -367,20 +370,24 @@
             responsive: true, 
             maintainAspectRatio: false, 
             interaction: {{
-                mode: 'index',
-                intersect: false
+                // CHANGE 2: 'nearest' + axis: 'x' + intersect: false
+                // This means "Find the nearest point along the X axis, even if I'm not touching it"
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false 
             }},
             plugins: {{ 
                 legend: {{ display: false }},
                 tooltip: {{
                     callbacks: {{
                         label: function(context) {{
+                            if (context.dataset.label === 'Shares') {{
+                                var count = shareCounts[context.dataIndex];
+                                return count + ' Shares';
+                            }}
                             var label = context.dataset.label || '';
                             if (label) {{ label += ': '; }}
                             if (context.parsed.y !== null) {{ label += context.parsed.y; }}
-                            if (context.dataset.label === 'Shares' && context.raw && context.raw.shares) {{
-                                label += ' (' + context.raw.shares + ' shares)';
-                            }}
                             return label;
                         }}
                     }}
