@@ -45,6 +45,12 @@ stack_restart() {
     log "Stack restarted."
 }
 
+stack_upgrade() {
+    log "Upgrading stack..."
+    docker compose up -d --build
+    log "Stack upgraded."
+}
+
 refresh_dashboard() {
     echo -e "${C_RED}[WARNING] This is a DESTRUCTIVE action.${C_RESET}"
     echo "It will stop dashboard/p2pool containers and WIPE their data directories."
@@ -105,6 +111,7 @@ show_help() {
     echo "  -df, --down-force Force stop (bring down stack immediately)"
     echo "  -r, --restart   Interactive restart (ask to restart stack)"
     echo "  -rf, --restart-force Force restart (restart stack immediately)"
+    echo "  -u, --upgrade   Interactive upgrade (ask to rebuild stack)"
     echo "  -rd, --refresh-dashboard Refresh dashboard/p2pool (wipe data and restart)"
     echo "  -l, --logs      Follow container logs"
     echo "  -st, --status   Show stack status"
@@ -391,6 +398,7 @@ main() {
             -df|--down-force) stack_down ;;
             -r|--restart)  ask_yes_no "Restart the stack?" stack_restart ;;
             -rf|--restart-force) stack_restart ;;
+            -u|--upgrade) ask_yes_no "Upgrade the stack (rebuild containers)?" stack_upgrade ;;
             -rd|--refresh-dashboard) refresh_dashboard ;;
             -l|--logs)
                 log "Following logs (Ctrl+C to exit)..."

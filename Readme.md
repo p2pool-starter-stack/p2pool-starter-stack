@@ -134,14 +134,19 @@ Use the `p2pool-starter-stack.sh` script to manage your stack.
 | `./p2pool-starter-stack.sh -s` | Start the stack. |
 | `./p2pool-starter-stack.sh -d` | Stop the stack. |
 | `./p2pool-starter-stack.sh -r` | Restart the stack. |
+| `./p2pool-starter-stack.sh -u` | Upgrade the stack (rebuilds containers). |
 | `./p2pool-starter-stack.sh -l` | View the logs of all containers. |
 | `./p2pool-starter-stack.sh -st`| Check the status of the containers. |
 | `./p2pool-starter-stack.sh -rd`| **DESTRUCTIVE!** Wipes and refreshes the Dashboard and P2Pool data. |
 
 **To update the stack:**
-Modify the `ARG` versions in the Dockerfiles, or tari version in `docker-compose.yml`, and rebuild:
+First, pull the latest changes from the repository:
 ```bash
-docker compose up -d --build
+git pull
+```
+Then run the upgrade command:
+```bash
+./p2pool-starter-stack.sh -u
 ```
 
 
