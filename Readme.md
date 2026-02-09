@@ -1,25 +1,27 @@
-# Monero & Tari Merge Mining Stack (Privacy-Focused)
+# P2Pool Starter Stack: Monero & Tari Merge Mining
 
 ![Dashboard](./images/dashboard.png)
 
-A professional-grade, containerized infrastructure for running a private [Monero](https://www.getmonero.org/) full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge mining. This stack is engineered for maximum privacy ([Tor](https://www.torproject.org/)-only networking), hardware efficiency (HugePages/RandomX optimization), and ease of management via a bespoke dashboard.
+A professional-grade, containerized infrastructure for running a private [Monero](https://www.getmonero.org/) full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge mining. This stack is engineered for maximum privacy ([Tor](https://www.torproject.org/)-only networking), hardware efficiency (HugePages/RandomX optimization), and ease of management via an interactive deployment script and bespoke dashboard.
 
 ## 🌟 Features
 *   **Privacy by Design:** Integrated Tor daemon provides hidden services (Onion addresses) for Monero, Tari, and P2Pool. No public IPv4 port forwarding required.
 *   **Merge Mining:** Automatically mines Tari (Minotari) alongside Monero via P2Pool sidechain integration.
-*   **Smart Yield Optimization:** Includes an algorithmic switching engine (`algo.py`) that optimizes donation tiers (XMRvsBeast) vs. P2Pool mining based on real-time hashrate.
-*   **Connection Aggregation:** Built-in **XMRig Proxy** reduces network overhead by aggregating multiple workers into a single connection.
-*   **Real-time Dashboard:** Custom Python/Aiohttp interface featuring mDNS worker discovery, historical hashrate charting, and PPLNS window tracking.
-*   **Security:** All binaries are verified via SHA256 hashes during build. Services run with least-privilege users where applicable.
+*   **Smart Yield Optimization:** An algorithmic switching engine optimizes hashrate allocation between P2Pool and XMRvsBeast bonus rounds to maximize your yield.
+*   **Simplified Worker Configuration:** A single endpoint for all your workers. The stack intelligently routes hashrate upstream.
+*   **Real-time Dashboard:** A custom web UI provides at-a-glance monitoring of your entire mining operation, including hashrate, PPLNS window, and worker status.
+*   **Effortless Deployment:** An interactive script handles setup, configuration, and kernel optimizations, getting you started in minutes.
+*   **Robust & Secure:** All services are containerized. Binaries are verified via SHA256 hashes during build, and services run with least-privilege users where applicable.
 
 ## 🏗️ Architecture
-The stack orchestrates six primary services via Docker Compose:
+The stack orchestrates seven primary services via Docker Compose:
 1.  **Monerod:** The Monero daemon (Full Node). Configured for restricted RPC and Tor transaction broadcasting.
-2.  **P2Pool:** Decentralized mining sidechain. Supports Main, Mini, and Nano chains.
-3.  **Tari Base Node:** Minotari node configured for merge mining with Monero.
-4.  **XMRig Proxy:** Aggregates downstream workers for the XMRvsBeast bonus pool connection.
-5.  **Tor:** Centralized anonymity layer providing SOCKS5 proxies and Hidden Services for all containers.
-6.  **Dashboard:** Web-based monitoring UI.
+2.  **P2Pool:** The decentralized mining sidechain, with support for Main, Mini, and Nano pools.
+3.  **Tari Base Node:** The Minotari node for merge mining with Monero.
+4.  **XMRig Proxy:** A central connection point for all your mining hardware.
+5.  **Tor:** A centralized anonymity layer providing SOCKS5 proxies and Hidden Services for all containers.
+6.  **Dashboard:** The web-based monitoring UI and algorithmic switching engine.
+7.  **Docker Proxy:** A secure, read-only proxy for the Docker Socket, allowing the Dashboard to safely query container stats.
 
 ### High-Level Diagram
 
@@ -28,6 +30,7 @@ graph TD
     subgraph "Docker Stack"
         Dashboard[Dashboard & Algo Engine]
         Tor[Tor Anonymity Service]
+        DockerProxy[Docker Socket Proxy]
         
         subgraph "Mining Core"
             Monerod[Monero Daemon]
@@ -43,11 +46,13 @@ graph TD
         Internet[Tor Network / Internet]
     end
 
-    Workers -- "Stratum (3333)" --> P2Pool
-    Workers -- "Stratum (3344)" --> Proxy
-    Dashboard -.->|"API Control (8080)"| Workers
+    Workers -- "Stratum (3333)" --> Proxy
     
-    Proxy -->|Donation Traffic| XvB
+    Dashboard -- "Controls" --> Proxy
+    Dashboard -- "Monitors" --> DockerProxy
+    
+    Proxy -- "Switches between" --> P2Pool
+    Proxy -- "Switches between" --> XvB
     
     P2Pool <-->|RPC/ZMQ| Monerod
     P2Pool -->|Merge Mine| Tari
@@ -59,123 +64,84 @@ graph TD
     Tor <--> Internet
 ```
 
-## 🧠 Algorithmic Switching & Port Logic
+## 🧠 Algorithmic Switching
+This stack employs a smart switching strategy to maximize yield. Instead of requiring complex worker configurations, it manages hashrate distribution centrally.
 
-This stack employs a smart switching strategy to maximize yield by leveraging the XMRvsBeast bonus rounds while maintaining P2Pool stability.
+### Worker Configuration
+Your workers connect to a **single endpoint**: the `xmrig-proxy` service on port `3333`.
 
-### Port Configuration
-Workers must be configured with two upstream pools (handled automatically by the included **Worker Starter** kit):
-*   **Pool 0 (Primary):** Connects to **Port 3333** (P2Pool Stratum). This yields Monero + Tari.
-*   **Pool 1 (Bonus):** Connects to **Port 3344** (XMRig Proxy). This forwards hashrate to the XMRvsBeast pool.
-
-### Decision Engine (`algo.py`)
-The Dashboard monitors your total aggregate hashrate and controls your workers via their local API (Port 8080):
-1.  **Tier Calculation:** It calculates which XvB donation tier you qualify for (e.g., Whale @ 100 kH/s).
-2.  **Dynamic Switching:**
-    *   If your XvB average drops below the target, it temporarily switches workers to **Pool 1** (Port 3344).
-    *   Once the target is met, it switches workers back to **Pool 0** (Port 3333) to resume P2Pool mining.
-3.  **Split Mode:** If you have excess hashrate, it calculates the precise time split required to maintain the bonus tier while maximizing P2Pool uptime.
+### Decision Engine
+The Dashboard service contains the decision engine. It constantly monitors your total hashrate and the XMRvsBeast pool's status:
+1.  **Tier Calculation:** It determines the highest XMRvsBeast donation tier you qualify for.
+2.  **Dynamic Proxy Reconfiguration:** Based on your current yield and the needs of the donation tier, the engine automatically reconfigures the `xmrig-proxy` to send hashrate to either **P2Pool** (for Monero + Tari mining) or **XMRvsBeast** (for bonus rewards). This happens seamlessly without any changes needed on your workers.
 
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
-*   **OS:** Ubuntu 24.04 LTS (Recommended)
-*   **Hardware:** CPU with AVX2 support (Required for RandomX performance).
+*   **OS:** Ubuntu 24.04 LTS (Recommended) or macOS.
+*   **Hardware:** A CPU with AVX2 support is highly recommended for RandomX performance.
 *   **Software:** Docker Engine & Docker Compose V2.
-*   **Utilities:** `jq` (JSON processor).
+*   **Utilities:** `jq` and `openssl` must be installed.
     ```bash
-    sudo apt update && sudo apt install -y jq docker.io docker-compose-v2
+    # On Ubuntu/Debian
+    sudo apt update && sudo apt install -y jq docker.io docker-compose-v2 openssl
     ```
 
-### 2. Configuration
-Create a `config.json` file in the root directory. This file drives the deployment script.
+### 2. Deployment
+The `p2pool-starter-stack.sh` script is your single point of entry for managing the stack.
 
-**Example `config.json`:**
+1.  **Run the script:**
+    ```bash
+    chmod +x p2pool-starter-stack.sh
+    ./p2pool-starter-stack.sh
+    ```
+2.  **Interactive Setup:** If this is your first time running the script, it will prompt you for your Monero and Tari wallet addresses and a username/password for your Monero node. It will then generate a `config.json` file for you.
+3.  **Kernel Optimization (Linux Only):** The script will configure HugePages for optimal mining performance. A **reboot is required** for these changes to take effect.
+4.  **Start the stack:** After the initial setup (and reboot if required), the script will ask if you want to start the stack.
+
+## ⛏️ Adding Workers
+Connect your XMRig workers to the IP address of the machine running the stack on port `3333`.
+
+The wallet address is managed by the P2Pool service on the main stack; **you do not need to put your wallet address in your worker's configuration.**
+
+When configuring your worker's `config.json`, the `user` field should be a unique name to identify the worker on the dashboard. If you use the provided worker script, it will default to the machine's hostname.
+
+**Example `config.json` for a manually configured worker:**
 ```json
 {
-    "monero": {
-        "wallet_address": "48...",
-        "node_username": "admin",
-        "node_password": "supersecretpassword",
-        "data_dir": "DYNAMIC_DATA",
-        "pruned": true
-    },
-    "tari": {
-        "wallet_address": "54...",
-        "data_dir": "DYNAMIC_DATA"
-    },
-    "p2pool": {
-        "pool": "main",
-        "data_dir": "DYNAMIC_DATA"
-    },
-    "xvb": {
-        "enabled": true,
-        "url": "na.xmrvsbeast.com:4247",
-        "donor_id": "DYNAMIC_ID"
-    },
-    "tor": {
-        "data_dir": "DYNAMIC_DATA"
-    },
-    "dashboard": {
-        "data_dir": "DYNAMIC_DATA"
-    }
+    "pools": [
+        {
+            "url": "YOUR_STACK_IP:3333",
+            "user": "my-rig-01"
+        }
+    ]
 }
 ```
-*Note: `DYNAMIC_DATA` defaults to `./data/<service>`. `DYNAMIC_ID` uses the first 8 chars of your Monero wallet. To disable the XvB switching algorithm, set "enabled": false in the xmrig_proxy section. **Important:** You must register your wallet at [XMRvsBeast](https://xmrvsbeast.com/cgi-bin/p2pool_bonus_submit.cgi) to participate in bonus rounds.*
-
-### 3. Deployment
-1.  **Initialize:** Run the deployment script. This handles directory permissions, Tor service provisioning, and kernel tuning.
-    ```bash
-    chmod +x deploy.sh
-    ./deploy.sh
-    ```
-2.  **Reboot:** The script configures HugePages (3072 pages) in GRUB for optimal mining performance. A reboot is required for these kernel changes to persist.
-    ```bash
-    sudo reboot
-    ```
-3.  **Launch:** Start the stack.
-    ```bash
-    docker compose up -d
-    ```
-
-## ⛏️ Adding Workers (Hardware Provisioning)
-To connect external hardware miners (CPUs) to this stack, they must be able to reach the **Dashboard IP** on ports **3333** (P2Pool) and **3344** (Proxy).
-
-For maximum efficiency on worker nodes (Ryzen MSR mods, HugePages) and automatic dual-pool configuration, use the included **Worker Starter** kit located in the `worker/` directory.
-
-**Quick Setup on Worker Machine:**
-```bash
-git clone https://github.com/VijitSingh97/p2pool-starter-stack.git
-cd p2pool-starter-stack/worker
-# Edit configuration.json to point to your Stack's IP
-sudo ./deploy.sh
-sudo reboot
-```
+For a fully automated and optimized worker setup, see the **High-Performance Worker Provisioning Kit** in the `worker/` directory.
 
 ## 📈 Monitoring
--------------
+Access the dashboard in your web browser:
+*   `http://<your-server-ip>:8000` (or `http://localhost:8000`)
 
-Access the dashboard at:
-
-*   **Local:** `http://localhost:8000`
-*   **Network:** `http://<your-server-ip>:8000` (or `<hostname>.local:8000`)
+The script will print the exact URL when you start the stack.
 
 ## 🛠️ Maintenance
----------------
+Use the `p2pool-starter-stack.sh` script to manage your stack.
 
-**Check Logs:**
+| Command | Description |
+|---|---|
+| `./p2pool-starter-stack.sh -s` | Start the stack. |
+| `./p2pool-starter-stack.sh -d` | Stop the stack. |
+| `./p2pool-starter-stack.sh -r` | Restart the stack. |
+| `./p2pool-starter-stack.sh -l` | View the logs of all containers. |
+| `./p2pool-starter-stack.sh -st`| Check the status of the containers. |
+| `./p2pool-starter-stack.sh -rd`| **DESTRUCTIVE!** Wipes and refreshes the Dashboard and P2Pool data. |
 
-    ```bash
-    docker compose logs -f monerod  # Monitor blockchain sync  docker compose logs -f p2pool   # Monitor pool shares
-    ```
+**To update the stack:**
+Modify the `ARG` versions in the Dockerfiles and rebuild:
+```bash
+docker compose build --no-cache && ./p2pool-starter-stack.sh -r
+```
 
-**Update Stack:** Modify the `ARG` versions in the Dockerfiles and rebuild:
-
-    ```bash
-    docker compose build --no-cache && docker compose up -d
-    ```
-
-📄 License
-----------
-
+## 📄 License
 This project is provided "as-is" under the MIT License.
