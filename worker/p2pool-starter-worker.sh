@@ -330,6 +330,7 @@ generate_xmrig_config() {
        --argjson one_gb_pages "$ONE_GB_PAGES" \
        --argjson avx2 "$INIT_AVX2" \
        --argjson restricted "$HTTP_RESTRICTED" \
+       --argjson donation "$DONATION" \
        --arg host "$HTTP_HOST" \
        '.pools[0].url = $url | 
         .pools[0].user = $user | 
@@ -344,6 +345,8 @@ generate_xmrig_config() {
         ."cpu"."huge-pages-jit" = $jit |
         ."cpu"."memory-pool" = $memory_pool |
         ."cpu"."msr" = $wrmsr |
+        ."donate-level" = $donation |
+        ."donate-over-proxy" = $donation |
         .randomx.numa = $numa |
         .randomx."init-avx2" = $avx2 |
         .randomx.wrmsr = $wrmsr |
