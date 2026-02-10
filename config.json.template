@@ -4,7 +4,7 @@
         "node_username": "create_a_username_for_node",
         "node_password": "create_a_password_for_node",
         "data_dir": "DYNAMIC_DATA",
-        "pruned": true
+        "prune": true
     },
     "tari": {
         "wallet_address": "your_tari_wallet_address",
