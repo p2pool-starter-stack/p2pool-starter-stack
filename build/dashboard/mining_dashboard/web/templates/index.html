@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="30">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{page_title}</title>
+    <link rel="icon" type="image/png" href="/static/p2pool-starter-stack-logo.png">
+    <link rel="apple-touch-icon" href="/static/p2pool-starter-stack-logo.png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Apply view mode immediately to prevent flash
+        if (localStorage.getItem('dashboardView') === 'advanced') {{ document.documentElement.classList.add('mode-advanced'); }}
+    </script>
+    <style>
+        :root {{ 
+            --bg: #0d1117; --card: #161b22; --border: #30363d; 
+            --text: #c9d1d9; --text-muted: #8b949e; 
+            --accent: #58a6ff; --ok: #238636; --bad: #da3633; --warn: #d29922; --purple: #a371f7; 
+        }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; }}
+        
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        
+        /* Layout & Grid */
+        .header {{ display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }}
+        .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 20px; display: flex; flex-direction: column; min-width: 0; }}
+        
+        /* Typography */
+        h2 {{ margin: 0; font-size: 1.5rem; font-weight: 600; }}
+        h3 {{ margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }}
+        .text-muted {{ color: var(--text-muted); }}
+        .text-accent {{ color: var(--accent); }}
+        .text-small {{ font-size: 0.85rem; }}
+        .text-xs {{ font-size: 0.75rem; }}
+        .font-mono {{ font-family: monospace; }}
+        .font-bold {{ font-weight: bold; }}
+        
+        /* Stats */
+        .stat-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
+        .stat-card {{ background: var(--bg); padding: 10px 12px; border-radius: 4px; border: 1px solid var(--border); }}
+        .stat-card h5 {{ margin: 0 0 4px 0; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }}
+        .stat-card p {{ margin: 0; font-weight: 600; font-size: 0.95rem; }}
+        .col-span-2 {{ grid-column: span 2; }}
+        
+        /* Table */
+        table {{ width: 100%; border-collapse: collapse; font-size: 0.9rem; }}
+        th {{ text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; cursor: pointer; }}
+        td {{ padding: 10px; border-bottom: 1px solid #21262d; }}
+        tr:last-child td {{ border-bottom: none; }}
+        
+        /* Components */
+        .status-ok {{ color: var(--ok); }} 
+        .status-bad {{ color: var(--bad); }} 
+        .status-warn {{ color: var(--warn); }}
+        
+        .progress-bg {{ background: var(--border); border-radius: 4px; height: 6px; width: 100%; margin-top: 6px; overflow: hidden; }}
+        .progress-fill {{ background: var(--accent); height: 100%; border-radius: 4px; }}
+        .progress-fill.warning {{ background: var(--warn); }} 
+        .progress-fill.critical {{ background: var(--bad); }}
+        
+        .badge {{ padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; vertical-align: middle; display: inline-block; }}
+        .badge-pool {{ color: #fff; margin-left: 10px; }}
+        .badge-outline {{ border: 1px solid var(--border); color: var(--text-muted); margin-left: 8px; }}
+        .badge-ok {{ background: var(--ok); color: white; }}
+        .badge-purple {{ background: var(--purple); color: white; }}
+        .badge-bad {{ background: var(--bad); color: white; }}
+        .badge-warn {{ background: var(--warn); color: white; }}
+        
+        .wallet-text {{ font-size: 0.7rem; color: #666; margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }}
+        
+        /* Chart Controls */
+        .chart-controls {{ display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 15px; }}
+        .btn-range {{ display: inline-block; padding: 4px 12px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; border: 1px solid var(--border); background-color: var(--card); color: var(--text-muted); transition: all 0.2s; }}
+        .btn-range:hover {{ border-color: var(--text-muted); color: var(--text); }}
+        .btn-range.active {{ background-color: var(--ok); color: #fff; border-color: var(--ok); }}
+
+        /* View Toggle */
+        .view-controls {{ display: flex; justify-content: flex-end; margin-bottom: 15px; }}
+        .toggle-group {{ display: inline-flex; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }}
+        .btn-toggle {{ background: transparent; border: none; color: var(--text-muted); padding: 6px 16px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }}
+        .btn-toggle:hover {{ color: var(--text); background: rgba(255,255,255,0.05); }}
+        .btn-toggle.active {{ background: var(--accent); color: #fff; font-weight: 600; }}
+
+        /* View Modes */
+        .card-advanced {{ display: none !important; }}
+        .card-simple {{ display: flex !important; }}
+        
+        .mode-advanced .card-advanced {{ display: flex !important; }}
+        .mode-advanced .card-simple {{ display: none !important; }}
+
+        /* Utilities */
+        .flex {{ display: flex; }}
+        .items-center {{ align-items: center; }}
+        .justify-end {{ justify-content: flex-end; }}
+        .mb-1 {{ margin-bottom: 0.25rem; }}
+        .mr-2 {{ margin-right: 0.5rem; }}
+
+        /* --- Sync View Styles --- */
+        #sync-view {{ display: none; }}
+        .mode-sync #sync-view {{ display: block; }}
+        .mode-sync #dashboard-view {{ display: none; }}
+        
+        .loader-container {{ position: relative; width: 150px; height: 150px; margin: 20px auto; }}
+        .progress-wheel {{
+          width: 100%; height: 100%; border-radius: 50%;
+          background: conic-gradient(#238636 var(--p), #30363d 0deg);
+          display: flex; align-items: center; justify-content: center;
+        }}
+        .progress-wheel::before {{ content: ""; position: absolute; width: 120px; height: 120px; border-radius: 50%; background: #161b22; }}
+        .progress-text {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #fff; z-index: 10; }}
+        .status-text {{ font-size: 1.1em; margin-top: 15px; color: #8b949e; text-align: center; }}
+        .header-placeholder {{ text-align: center; margin: 40px 0; border-bottom: 1px solid #30363d; padding-bottom: 20px; }}
+    </style>
+</head>
+<body class="{sync_class}">
+
+<div class="container">
+    <div class="header">
+        <div>
+            <div class="flex items-center">
+                <h2>{host_ip}</h2>
+                {header_badges}
+            </div>
+            
+            <div class="text-small" style="margin-top: 10px;">
+                <div class="mb-1">
+                    <span class="{cpu_label_class}">CPU:</span> <span class="{cpu_val_class}">{cpu_percent}</span> {cpu_badge}
+                    <span class="text-muted" style="margin-left: 10px;">Load:</span> {cpu_load}
+                </div>
+                <div class="mb-1">
+                    <span class="{mem_label_class}">RAM:</span> <span class="{mem_val_class}">{mem_used} / {mem_total} GB ({mem_p})</span> {mem_badge}
+                    <span class="{hp_class}">Huge Pages: {hp_status} ({hp_val})</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="{disk_class} mr-2">Disk: {disk_used:.1f} / {disk_total:.1f} GB ({disk_p})</span> {disk_badge}
+                    <div style="width: 150px;">
+                        <div class="progress-bg">
+                            <div class="progress-fill {disk_fill_class}" style="width: {disk_width}"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div style="text-align: right;">
+            <div class="text-accent font-bold" style="font-size: 24px;">{total_hr}</div>
+            <div class="text-muted text-xs">Last Update: {last_update}</div>
+            <div class="text-xs" style="margin-top: 5px; color: {p2p_color}">
+                P2Pool: {p2p_1h} (1h) / {p2p_24h} (24h)
+            </div>
+            <div class="text-xs" style="margin-top: 2px; color: {xvb_color}">
+                XvB: {xvb_1h} (1h) / {xvb_24h} (24h)
+            </div>
+        </div>
+    </div>
+
+    <!-- Sync View Overlay -->
+    <div id="sync-view">
+        <div class="header-placeholder">
+            <p>System is currently synchronizing with the network.</p>
+        </div>
+        <div class="grid">
+            <div class="card">
+                <h2 class="text-accent" style="text-align: center;">Monero Sync</h2>
+                <div class="loader-container">
+                    <div class="progress-wheel" style="--p:{sync_percent_val}%"></div>
+                    <div class="progress-text">{sync_percent}</div>
+                </div>
+                <div class="status-text">
+                    Synced: {sync_current} / {sync_target}<br>
+                    <small>({sync_remaining} blocks left)</small>
+                </div>
+            </div>
+            <div class="card">
+                <h2 class="text-accent" style="text-align: center;">Tari Sync</h2>
+                <div class="loader-container">
+                    <div class="progress-wheel" style="--p:{tari_sync_percent_val}%"></div>
+                    <div class="progress-text">{tari_sync_percent}</div>
+                </div>
+                <div class="status-text">
+                    Synced: {tari_sync_current} / {tari_sync_target}<br>
+                    <small>({tari_sync_remaining} blocks left)</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="dashboard-view">
+    <div class="view-controls">
+        <div class="toggle-group">
+            <button id="btn-simple" class="btn-toggle active">Simple</button>
+            <button id="btn-advanced" class="btn-toggle">Advanced</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <div class="chart-controls">
+                <span class="text-muted text-small" style="margin-right: 5px;">Range:</span>
+                <a href="?range=1h" class="btn-range {cls_1h}">1 Hr</a>
+                <a href="?range=24h" class="btn-range {cls_24h}">24 Hr</a>
+                <a href="?range=1w" class="btn-range {cls_1w}">1 Wk</a>
+                <a href="?range=1m" class="btn-range {cls_1m}">1 Mo</a>
+            </div>
+            <div style="position: relative; flex-grow: 1; min-height: 300px; width: 100%; overflow: hidden;">
+                <canvas id="hChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Simple Stats Card -->
+        <div class="card card-simple">
+            <h3>Overview</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
+                <div class="stat-card"><h5>Total Hashrate</h5><p class="text-accent">{total_hr}</p></div>
+                <div class="stat-card"><h5>Share In Window</h5><p>{pool_shares_window}</p></div>
+                <div class="stat-card"><h5>Last Share</h5><p>{strat_last_share}</p></div>
+                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p>{p2p_1h}</p></div>
+                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p>{p2p_24h}</p></div>
+                <div class="stat-card"><h5>XvB 1h Avg</h5><p>{xvb_1h}</p></div>
+                <div class="stat-card"><h5>XvB 24h Avg</h5><p>{xvb_24h}</p></div>
+                <div class="stat-card"><h5>Current Tier</h5><p>{tier_name}</p></div>
+                <div class="stat-card"><h5>Target Tier</h5><p>{target_tier_name}</p></div>
+                <div class="stat-card"><h5>Tari Mining</h5><p class="{tari_status_class}">{tari_status}</p></div>
+                <div class="stat-card"><h5>Workers Alive</h5><p>{proxy_workers}</p></div>
+                <div class="stat-card"><h5>Wallet XMR</h5><p class="font-mono text-xs">{strat_wallet_short}</p></div>
+                <div class="stat-card"><h5>Wallet TARI</h5><p class="font-mono text-xs">{tari_wallet_short}</p></div>
+            </div>
+        </div>
+
+        <div class="card card-advanced">
+            <h3>My P2Pool Node Stats</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
+                <div class="stat-card"><h5>Total Hashrate</h5><p class="text-accent">{total_hr}</p></div>
+                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p>{p2p_1h}</p></div>
+                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p>{p2p_24h}</p></div>
+                
+                <div class="stat-card col-span-2">
+                    <h5>Stratum (15m / 1h / 24h)</h5>
+                    <p class="text-small">{strat_h15} / {strat_h1h} / {strat_h24h}</p>
+                </div>
+                <div class="stat-card"><h5>Shares (OK/Err)</h5><p>{strat_shares}</p></div>
+                <div class="stat-card"><h5>Effort</h5><p>{strat_effort}</p></div>
+                <div class="stat-card"><h5>Connections</h5><p>{strat_conns}</p></div>
+                <div class="stat-card"><h5>Reward Share</h5><p>{strat_reward_pct}</p></div>
+                <div class="stat-card"><h5>Total Shares</h5><p>{strat_total_shares}</p></div>
+                <div class="stat-card"><h5>Last Share</h5><p>{strat_last_share}</p></div>
+                <div class="stat-card col-span-2"><h5>Total Hashes</h5><p>{strat_total_hashes}</p></div>
+            </div>
+            <div class="wallet-text">Wallet: {strat_wallet}</div>
+        </div>
+
+        <div class="card card-advanced">
+            <h3>Global P2Pool Stats</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Pool Hashrate</h5><p>{pool_hr}</p></div>
+                <div class="stat-card"><h5>Miners</h5><p>{pool_miners}</p></div>
+                <div class="stat-card"><h5>Block Height</h5><p>{pool_height}</p></div>
+                <div class="stat-card"><h5>Difficulty</h5><p>{pool_diff}</p></div>
+                <div class="stat-card"><h5>Blocks Found</h5><p>{pool_blocks}</p></div>
+                <div class="stat-card"><h5>PPLNS Window</h5><p>{pplns_win}</p></div>
+                <div class="stat-card"><h5>PPLNS Weight</h5><p>{pplns_wgt}</p></div>
+                <div class="stat-card"><h5>Share In Window</h5><p>{pool_shares_window}</p></div>
+                <div class="stat-card"><h5>Last Block</h5><p class="text-small">{pool_last_blk}</p></div>
+                <div class="stat-card"><h5>Peers</h5><p>{p2p_peers}</p></div>
+                <div class="stat-card"><h5>Uptime</h5><p class="text-small">{p2p_uptime}</p></div>
+                <div class="stat-card"><h5>Total Hashes</h5><p>{pool_total_hashes}</p></div>
+            </div>
+        </div>
+
+        <div class="card card-advanced">
+            <h3>XvB Donation Stats</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Current Tier</h5><p>{tier_name}</p></div>
+                <div class="stat-card"><h5>Target Tier</h5><p>{target_tier_name}</p></div>
+                <div class="stat-card"><h5>1h Avg (Pool)</h5><p>{xvb_1h}</p></div>
+                <div class="stat-card"><h5>24h Avg (Pool)</h5><p>{xvb_24h}</p></div>
+                <div class="stat-card"><h5>Fail Count</h5><p>{xvb_fail_count}</p></div>
+            </div>
+            <div class="text-xs text-muted" style="margin-top:10px;">Stats fetched from xmrvsbeast.com (Updated: {xvb_updated})</div>
+        </div>
+
+        <div class="card card-advanced">
+            <h3>XMR Network</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Block Height</h5><p>{net_height}</p></div>
+                <div class="stat-card"><h5>Reward</h5><p>{net_reward}</p></div>
+                <div class="stat-card col-span-2"><h5>Difficulty</h5><p>{net_diff}</p></div>
+                <div class="stat-card col-span-2">
+                    <h5>Current Block Hash</h5>
+                    <p class="font-mono text-xs">{net_hash}</p>
+                </div>
+                <div class="stat-card col-span-2"><h5>Network Time</h5><p>{net_ts}</p></div>
+            </div>
+        </div>
+        
+        <div class="card card-advanced">
+            <h3>Tari Merge Mining</h3>
+            <div class="stat-grid">
+                <div class="stat-card"><h5>Status</h5><p class="{tari_status_class}">{tari_status}</p></div>
+                <div class="stat-card"><h5>Reward</h5><p>{tari_reward}</p></div>
+                <div class="stat-card"><h5>Height</h5><p>{tari_height}</p></div>
+                <div class="stat-card"><h5>Difficulty</h5><p>{tari_diff}</p></div>
+            </div>
+            <div class="wallet-text">Wallet: {tari_wallet}</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Workers Alive</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Worker</th>
+                    <th>IP</th>
+                    <th>Uptime</th>
+                    <th>10s</th>
+                    <th>60s</th>
+                    <th>15m</th>
+                </tr>
+            </thead>
+            <tbody>
+                {worker_rows}
+            </tbody>
+        </table>
+    </div>
+    </div>
+</div>
+<script>
+    const shareCounts = [{chart_shares_c}];
+
+    new Chart(document.getElementById('hChart'), {{
+        type: 'line',
+        data: {{
+            labels: [{chart_labels}],
+            datasets: [{{
+                label: 'P2Pool',
+                data: [{chart_p2pool}],
+                borderColor: '#58a6ff', 
+                tension: 0.3, 
+                fill: true, 
+                backgroundColor: 'rgba(88,166,255,0.1)',
+                pointRadius: 0,
+                pointHitRadius: 20
+            }}, {{
+                label: 'XvB',
+                data: [{chart_xvb}],
+                borderColor: '#a371f7',
+                tension: 0.3,
+                fill: true,
+                backgroundColor: 'rgba(163, 113, 247, 0.2)',
+                pointRadius: 0,
+                pointHitRadius: 20
+            }}, {{
+                label: 'Shares',
+                data: [{chart_shares_y}], 
+                borderColor: '#FF0000',
+                backgroundColor: '#FF0000',
+                pointStyle: 'triangle',
+                rotation: 180,
+                pointRadius: [{chart_shares_r}],
+                pointHoverRadius: 15,
+                // CHANGE 1: Increase this significantly (e.g., to 100)
+                // This extends the detection area 100px to the left/right of the point
+                pointHitRadius: 100, 
+                showLine: false
+            }}]
+        }},
+        options: {{ 
+            responsive: true, 
+            maintainAspectRatio: false, 
+            interaction: {{
+                // CHANGE 2: 'nearest' + axis: 'x' + intersect: false
+                // This means "Find the nearest point along the X axis, even if I'm not touching it"
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false 
+            }},
+            plugins: {{ 
+                legend: {{ display: false }},
+                tooltip: {{
+                    callbacks: {{
+                        label: function(context) {{
+                            if (context.dataset.label === 'Shares') {{
+                                var count = shareCounts[context.dataIndex];
+                                return count + ' Shares';
+                            }}
+                            var label = context.dataset.label || '';
+                            if (label) {{ label += ': '; }}
+                            if (context.parsed.y !== null) {{ label += context.parsed.y; }}
+                            return label;
+                        }}
+                    }}
+                }}
+            }}, 
+            scales: {{ 
+                y: {{ 
+                    stacked: false,
+                    grid: {{ color: '#30363d' }}, 
+                    ticks: {{ color: '#8b949e' }} 
+                }}, 
+                x: {{ display: false }} 
+            }} 
+        }}
+    }});
+
+    // Client-side Table Sorting
+    document.addEventListener('DOMContentLoaded', function() {{
+        const getCellValue = (tr, idx) => tr.children[idx].getAttribute('data-sort') || tr.children[idx].innerText || tr.children[idx].textContent;
+        const comparer = (idx, asc) => (a, b) => ((v1, v2) => 
+            v1 !== '' && v2 !== '' && !isNaN(v1) && !isNaN(v2) ? v1 - v2 : v1.toString().localeCompare(v2)
+        )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+
+        document.querySelectorAll('th').forEach(th => {{
+            th.addEventListener('click', (() => {{
+                const table = th.closest('table');
+                const tbody = table.querySelector('tbody');
+                Array.from(tbody.querySelectorAll('tr'))
+                    .sort(comparer(Array.from(th.parentNode.children).indexOf(th), this.asc = !this.asc))
+                    .forEach(tr => tbody.appendChild(tr) );
+            }}));
+        }});
+
+        // View Toggle Logic
+        const btnSimple = document.getElementById('btn-simple');
+        const btnAdvanced = document.getElementById('btn-advanced');
+
+        btnSimple.addEventListener('click', () => setView('simple'));
+        btnAdvanced.addEventListener('click', () => setView('advanced'));
+
+        function setView(mode) {{
+            if (mode === 'advanced') {{
+                document.documentElement.classList.add('mode-advanced');
+                btnAdvanced.classList.add('active');
+                btnSimple.classList.remove('active');
+                localStorage.setItem('dashboardView', 'advanced');
+            }} else {{
+                document.documentElement.classList.remove('mode-advanced');
+                btnSimple.classList.add('active');
+                btnAdvanced.classList.remove('active');
+                localStorage.setItem('dashboardView', 'simple');
+            }}
+        }}
+        
+        // Initialize button state based on current class
+        if (document.documentElement.classList.contains('mode-advanced')) {{
+            btnAdvanced.classList.add('active');
+            btnSimple.classList.remove('active');
+        }}
+    }});
+</script>
+</body>
+</html>
