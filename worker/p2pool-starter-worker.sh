@@ -42,8 +42,12 @@ check_prerequisites() {
             log "Installing prerequisite: jq..."
             if command -v apt-get &> /dev/null; then
                 sudo apt-get update -qq && sudo apt-get install -y -qq jq
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y -q jq
+            elif command -v pacman &> /dev/null; then
+                sudo pacman -Sy --noconfirm jq
             else
-                error "jq is required and apt-get was not found. Please install jq manually."
+                error "jq is required and no supported package manager was found. Please install jq manually."
             fi
         fi
     fi
@@ -172,39 +176,53 @@ install_dependencies() {
             error "Homebrew not found."
         fi
     else
-        local dependencies="git build-essential cmake libuv1-dev libssl-dev libhwloc-dev avahi-daemon gettext-base"
-        # Only add linux-tools if on Linux and kernel version is available
-        if [ "$OS_TYPE" == "Linux" ]; then
-            dependencies="$dependencies linux-tools-common linux-tools-$(uname -r)"
+        local dependencies=""
+        local install_cmd=""
+        local check_cmd=""
+
+        if command -v apt-get &> /dev/null; then
+            dependencies="git build-essential cmake libuv1-dev libssl-dev libhwloc-dev avahi-daemon gettext-base"
+            if [ "$OS_TYPE" == "Linux" ]; then
+                dependencies="$dependencies linux-tools-common"
+                if apt-cache show "linux-tools-$(uname -r)" &> /dev/null; then
+                    dependencies="$dependencies linux-tools-$(uname -r)"
+                fi
+            fi
+            install_cmd="sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold'"
+            check_cmd="dpkg -s"
+        elif command -v dnf &> /dev/null; then
+            dependencies="git cmake libuv-devel openssl-devel hwloc-devel avahi gettext gcc gcc-c++ make automake kernel-devel"
+            install_cmd="sudo dnf install -y"
+            check_cmd="rpm -q"
+        elif command -v pacman &> /dev/null; then
+            dependencies="git cmake libuv openssl hwloc avahi gettext base-devel"
+            install_cmd="sudo pacman -Sy --noconfirm --needed"
+            check_cmd="pacman -Qi"
+        else
+            warn "No supported package manager found. Please install dependencies manually."
+            return
         fi
 
         local missing_deps=""
         for dep in $dependencies; do
-            if ! dpkg -s "$dep" &> /dev/null; then
+            if ! command -v "$dep" &> /dev/null && ! $check_cmd "$dep" &> /dev/null; then
                 missing_deps="$missing_deps $dep"
             fi
         done
 
         if [ -n "$missing_deps" ]; then
             log "The following system dependencies are required:"
-            echo -e "  ${C_YELLOW}$dependencies${C_RESET}"
+            echo -e "  ${C_YELLOW}$missing_deps${C_RESET}"
 
             read -r -p "Install these dependencies now? (y/N): " CONFIRM
             if [[ "$CONFIRM" =~ ^[Yy] ]]; then
                 log "Installing dependencies..."
-                sudo apt update -qq
-                sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" $dependencies
+                eval "$install_cmd $missing_deps"
             else
                 warn "Dependency installation skipped. Proceeding at your own risk."
             fi
         else
             log "All system dependencies are already installed."
-        fi
-
-        # Enable Model Specific Registers (MSR) for hardware prefetcher tuning (Linux only)
-        sudo modprobe msr 2>/dev/null || true
-        if [ -d "/etc/modules" ]; then
-             echo "msr" | sudo tee -a /etc/modules > /dev/null || true
         fi
     fi
 }
@@ -214,14 +232,12 @@ compile_xmrig() {
     git clone --quiet https://github.com/xmrig/xmrig.git
     
     if [ "$OS_TYPE" == "Darwin" ]; then
-        sed -i '' "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
         CORES=$(sysctl -n hw.ncpu)
         log "Compiling binary (Concurrency: $CORES threads)..."
         mkdir -p xmrig/build && cd xmrig/build
         # macOS often needs explicit OpenSSL root for cmake if installed via brew
         cmake .. -DWITH_HWLOC=ON -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) &> /dev/null
     else
-        sed -i "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
         CORES=$(nproc)
         log "Compiling binary (Concurrency: $CORES threads)..."
         mkdir -p xmrig/build && cd xmrig/build
@@ -301,7 +317,15 @@ generate_xmrig_config() {
         YIELD="false"
         PRIORITY="4"
         ASM="\"ryzen\""
-        THREADS="[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"
+
+        CORES=$(nproc)
+        THREADS="["
+        for ((i=0; i<CORES; i++)); do
+            THREADS="${THREADS}$i"
+            if [ $i -lt $((CORES-1)) ]; then THREADS="${THREADS}, "; fi
+        done
+        THREADS="${THREADS}]"
+
         PREFETCH=1 
         WRMSR="true"
         JIT="true"
@@ -407,10 +431,28 @@ tune_kernel() {
         return
     fi
 
-    log "Applying runtime HugePages configuration..."
-    sudo sysctl -w vm.nr_hugepages=3072
+    if [[ "$(uname -m)" == "x86_64" || "$(uname -m)" == "i686" ]]; then
+        log "Enabling MSR module for hardware prefetcher tuning..."
+        sudo modprobe msr 2>/dev/null || true
+        if [ -d "/etc/modules-load.d" ]; then
+            echo "msr" | sudo tee /etc/modules-load.d/msr.conf > /dev/null
+        elif [ -f "/etc/modules" ]; then
+            grep -qFx "msr" /etc/modules || echo "msr" | sudo tee -a /etc/modules > /dev/null
+        fi
+    fi
 
-    log "Calculating optimal HugePages configuration..."
+    log "Applying runtime memory tuning..."
+    if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ]; then
+        # Calculate exact requirement based on hardware and current 1GB page status
+        REQUIRED_PAGES=$("$SCRIPT_DIR/util/proposed-grub.sh" --runtime)
+        log "Hardware-optimized HugePages: $REQUIRED_PAGES (2MB pages) calculated."
+        sudo sysctl -w vm.nr_hugepages="$REQUIRED_PAGES"
+    else
+        warn "Utility script not found. Fallback to safe default (3072)."
+        sudo sysctl -w vm.nr_hugepages=3072
+    fi
+
+    log "Configuring bootloader (GRUB) for persistent HugePages..."
     if [ -f "$SCRIPT_DIR/util/proposed-grub.sh" ] && [ -f "/etc/default/grub" ]; then
         NEW_PARAMS=$("$SCRIPT_DIR/util/proposed-grub.sh" -q)
         

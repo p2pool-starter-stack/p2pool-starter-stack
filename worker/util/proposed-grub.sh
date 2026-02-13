@@ -23,6 +23,9 @@ L3_MB=$(echo "$L3_RAW" | sed 's/[^0-9]//g')
 if [[ "$L3_RAW" == *K* ]]; then
     L3_MB=$((L3_MB / 1024))
 fi
+if [[ -z "$L3_MB" ]]; then
+    L3_MB=4
+fi
 
 # Detect Physical CPU Sockets (NUMA Nodes)
 SOCKETS=$(lscpu | grep "Socket(s):" | awk '{print $2}')
@@ -41,6 +44,26 @@ TOTAL_GB_PAGES=$((3 * SOCKETS))
 # 2MB HugePages: Reserve for JIT compiler and scratchpads (128 base + 1 per thread + buffer)
 TOTAL_2MB_PAGES=$((128 + THREADS + 10))
 
+# Fallback Strategy (Pure 2MB): Covers Dataset (2080MB) + Overhead + JIT
+# 1168 pages * 2MB = ~2336MB per socket (Provides ~250MB buffer for fragmentation)
+BASE_2MB_PAGES=1168
+TOTAL_2MB_FALLBACK=$(((BASE_2MB_PAGES * SOCKETS) + THREADS + 50))
+
+if [[ "$*" == *"--runtime"* ]]; then
+    # Check if 1GB pages are already allocated
+    PAGES_1GB=0
+    if [ -f /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ]; then
+        PAGES_1GB=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages || echo 0)
+    fi
+
+    if [ "$PAGES_1GB" -gt 0 ]; then
+        echo "$TOTAL_2MB_PAGES"
+    else
+        echo "$TOTAL_2MB_FALLBACK"
+    fi
+    exit 0
+fi
+
 # --- 3. Configuration Generation ---
 
 # Check for 1GB HugePage support (pdpe1gb flag)
@@ -49,10 +72,6 @@ if grep -q "pdpe1gb" /proc/cpuinfo; then
     NEW_GRUB="quiet splash hugepagesz=1G hugepages=$TOTAL_GB_PAGES hugepagesz=2M hugepages=$TOTAL_2MB_PAGES default_hugepagesz=2M msr.allow_writes=on"
 else
     # Fallback Strategy: Use only 2MB pages
-    # 1168 pages * 2MB = ~2336MB (Covers 2080MB dataset + overhead) per socket
-    BASE_2MB_PAGES=1168
-    TOTAL_2MB_FALLBACK=$(((BASE_2MB_PAGES * SOCKETS) + THREADS + 10))
-    
     NEW_GRUB="quiet splash default_hugepagesz=2M hugepages=$TOTAL_2MB_FALLBACK msr.allow_writes=on"
 fi
 
