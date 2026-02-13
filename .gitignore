@@ -2,6 +2,10 @@
 .env
 config.json
 /data/
+/worker/data/
+/worker/xmrig/
+/worker/xmrig-*/
+/worker/xmrig.log
 /build/monero/bitmonero.conf
 /build/tari/config.toml
 
