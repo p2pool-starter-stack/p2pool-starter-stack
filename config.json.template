@@ -1,0 +1,28 @@
+{
+    "monero": {
+        "wallet_address": "your_monero_wallet_address",
+        "node_username": "create_a_username_for_node",
+        "node_password": "create_a_password_for_node",
+        "data_dir": "DYNAMIC_DATA",
+        "prune": true
+    },
+    "tari": {
+        "wallet_address": "your_tari_wallet_address",
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "p2pool": {
+        "pool": "main",
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "xvb": {
+        "enabled": true,
+        "url": "na.xmrvsbeast.com:4247",
+        "donor_id": "DYNAMIC_ID"
+    },
+    "tor": {
+        "data_dir": "DYNAMIC_DATA"
+    },
+    "dashboard": {
+        "data_dir": "DYNAMIC_DATA"
+    }
+}

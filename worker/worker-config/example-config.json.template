@@ -1,0 +1,48 @@
+{
+    "autosave": true,
+    "cpu": {
+        "enabled": true,
+        "huge-pages": true,
+        "huge-pages-jit": false,
+        "hwloc": true,
+        "memory-pool": true,
+        "yield": false,
+        "priority": 4,
+        "asm": "ryzen",
+        "rx": null
+    },
+    "randomx": {
+        "init": -1,
+        "mode": "fast",
+        "1gb-pages": true,
+        "rdmsr": true,
+        "wrmsr": ["0xc0011022:0x510000"],
+        "cache_qos": false,
+        "numa": true,
+        "scratchpad_prefetch_mode": 1
+    },
+    "msr": {
+        "enabled": true,
+        "preset": "zen2", 
+        "fork": true
+    },
+    "pools": [
+        {
+            "url": "",
+            "user": "",
+            "pass": "x",
+            "keepalive": true,
+            "tls": false
+        }
+    ],
+    "http": {
+        "enabled": true,
+        "host": "::",
+        "port": 8080,
+        "access-token": null,
+        "restricted": true
+    },
+    "opencl": false,
+    "cuda": false,
+    "log-file": ""
+}

@@ -1,0 +1,28 @@
+[Unit]
+Description=XMRig High-Performance Miner Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+
+# --- Performance Optimization ---
+# Force CPU governor to 'performance' mode to prevent frequency scaling latency
+ExecStartPre=$CPUPOWER_PATH frequency-set -g performance
+
+# --- Execution Configuration ---
+# Set working directory to ensure relative paths in config.json resolve correctly
+WorkingDirectory=$BUILD_DIR
+# Execute the miner binary with the generated configuration
+ExecStart=$BUILD_DIR/xmrig --config=$BUILD_DIR/config.json
+
+# --- Process Management ---
+Restart=always
+RestartSec=10s
+
+# Unlock memory limits to allow HugePages allocation
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
