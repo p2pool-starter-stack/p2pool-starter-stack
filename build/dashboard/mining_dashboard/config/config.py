@@ -63,10 +63,8 @@ TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
 TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 
 # --- Algorithm Safety Margins ---
-# Buffer margin (15%) to ensure the 1h average strictly meets tier requirements
-ALGO_MARGIN_1H = 0.15
-# Over-provisioning buffer (5%) to maintain hashrate comfortably above the target
-ALGO_TARGET_BUFFER = 0.05
+# Over-provisioning buffer (1%) to maintain hashrate comfortably above the target
+ALGO_TARGET_BUFFER = 0.01
 # Switching overhead (ms) to account for connection ramp-up time
 XVB_SWITCH_OVERHEAD_MS = 5000
 

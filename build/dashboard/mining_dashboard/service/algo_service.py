@@ -10,7 +10,6 @@ from config.config import (
     XVB_POOL_URL,
     XVB_MIN_TIME_SEND_MS,
     ENABLE_XVB,
-    ALGO_MARGIN_1H,
     ALGO_TARGET_BUFFER,
     XVB_SWITCH_OVERHEAD_MS
 )
@@ -24,7 +23,6 @@ class AlgoService:
         self.proxy_client = proxy_client
         self.data_service = data_service
         # Safety margin (15%) to ensure the 1h average strictly meets the tier requirement
-        self.margin_1h = ALGO_MARGIN_1H
         self.target_buffer = ALGO_TARGET_BUFFER
 
     async def switch_miners(self, mode, state_label=None):
@@ -113,7 +111,7 @@ class AlgoService:
         avg_24h = xvb_stats.get('avg_24h', 0)
         avg_1h = xvb_stats.get('avg_1h', 0)
 
-        is_fulfilled = (avg_24h >= target_hr) and (avg_1h >= (target_hr * (1.0 - self.margin_1h)))
+        is_fulfilled = (avg_24h >= target_hr) and (avg_1h >= target_hr)
 
         if not is_fulfilled:
             logger.info(f"Decision Strategy: Force XVB (Target {target_hr} not met, 24h: {avg_24h:.0f})")
