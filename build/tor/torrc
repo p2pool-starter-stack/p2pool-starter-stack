@@ -1,30 +1,39 @@
-# Data directory where Tor stores its state (and the auth cookie)
+# --- General Configuration ---
+# Primary storage location for Tor state data and cryptographic keys
 DataDirectory /var/lib/tor
 
-# SOCKS Proxy for the other containers (Monero/Tari)
-# Binding to 0.0.0.0 allows other containers on 'mining_net' to connect
+# --- Network Interfaces ---
+# SOCKS5 proxy interface for routing container traffic through Tor
+# Binds to 0.0.0.0 to accept connections from other services in the Docker network
 SocksPort 0.0.0.0:9050
 
-# Tari uses this file to authenticate its connection to the ControlPort
+# Control interface for programmatic interaction (Required by Tari Base Node)
 ControlPort 0.0.0.0:9051
+
+# --- Hidden Services (Onion Routing) ---
+# Note: Target IPs (172.28.0.x) correspond to static assignments in docker-compose.yml
 
 # Monero P2P Hidden Service
 HiddenServiceDir /var/lib/tor/monero/
 HiddenServicePort 18080  172.28.0.26:18084
 
-# Tari P2P Hidden Service
+# Tari Base Node Hidden Service
 HiddenServiceDir /var/lib/tor/tari/
 HiddenServicePort 18189  172.28.0.27:18189
 
-# Hidden Service for P2Pool
+# P2Pool Hidden Service
 HiddenServiceDir /var/lib/tor/p2pool/
 HiddenServicePort 37888 172.28.0.28:37888
 
-# Cookie Authentication
+# --- Authentication & Permissions ---
+# Enable cookie-based authentication for the Control Port
 CookieAuthentication 1
 CookieAuthFile /var/lib/tor/control_auth_cookie
+# Ensure the auth cookie and data directory are readable by the group (GID 101)
+# This facilitates shared access if volumes are mounted with group permissions
 CookieAuthFileGroupReadable 1
 DataDirectoryGroupReadable 1
 
-# Standard log output to the Docker container console
+# --- Logging ---
+# Output logs to stdout for integration with Docker logging drivers
 Log notice stdout
