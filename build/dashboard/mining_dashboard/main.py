@@ -31,8 +31,18 @@ async def start_background_tasks(app):
     app['data_task'] = asyncio.create_task(data_service.run())
     app['algo_task'] = asyncio.create_task(algo_service.run())
 
+async def cleanup_background_tasks(app):
+    """Stops background tasks and closes resources on shutdown."""
+    app['data_task'].cancel()
+    app['algo_task'].cancel()
+    await asyncio.gather(app['data_task'], app['algo_task'], return_exceptions=True)
+    if 'state_manager' in app:
+        app['state_manager'].close()
+
 if __name__ == "__main__":
     app = create_app(state_manager, data_service.latest_data)
+    app['state_manager'] = state_manager
     app.on_startup.append(start_background_tasks)
+    app.on_cleanup.append(cleanup_background_tasks)
     logger.info("Initializing Dashboard Web Server on Port 8000")
     web.run_app(app, port=8000, print=None)

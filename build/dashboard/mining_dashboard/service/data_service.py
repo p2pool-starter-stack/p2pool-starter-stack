@@ -219,7 +219,11 @@ class DataService:
                     xvb_hr = total_hr if "XVB" in current_mode else 0
                     
                     await asyncio.to_thread(self.state_manager.update_history, total_hr, p2pool_hr, xvb_hr)
-                    await asyncio.to_thread(self.state_manager.save_snapshot, self.latest_data)
+                    
+                    # Create a lightweight snapshot (exclude heavy transient data like shares)
+                    snapshot_data = self.latest_data.copy()
+                    snapshot_data["shares"] = snapshot_data.get("shares", [])[-100:] # Only persist last 100 shares
+                    await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
 
                     # 7. External API Sync (Throttled to every 10th iteration)
                     if iteration_count % 10 == 0:

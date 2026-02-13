@@ -43,6 +43,10 @@ class AlgoService:
         try:
             # Fetch current full configuration to preserve other settings
             current_config = await asyncio.to_thread(self.proxy_client.get_config)
+            if not current_config or not isinstance(current_config, dict):
+                logger.error("Failed to fetch valid proxy config, aborting switch.")
+                return
+
             current_config["pools"] = pools
 
             # Execute update via Proxy Client with the full configuration
@@ -72,7 +76,6 @@ class AlgoService:
         """
         # Feature Flag: Check if XvB switching is globally disabled
         if not ENABLE_XVB:
-            # logger.info("Decision Strategy: Force P2POOL (XvB Switching Disabled)")
             return "P2POOL", 0
 
         # Constraint: Enforce P2Pool mode if no shares have been found recently.
