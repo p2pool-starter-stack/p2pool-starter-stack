@@ -232,12 +232,14 @@ compile_xmrig() {
     git clone --quiet https://github.com/xmrig/xmrig.git
     
     if [ "$OS_TYPE" == "Darwin" ]; then
+        sed -i '' "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
         CORES=$(sysctl -n hw.ncpu)
         log "Compiling binary (Concurrency: $CORES threads)..."
         mkdir -p xmrig/build && cd xmrig/build
         # macOS often needs explicit OpenSSL root for cmake if installed via brew
         cmake .. -DWITH_HWLOC=ON -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) &> /dev/null
     else
+        sed -i "s/DonateLevel = 1;/DonateLevel = $DONATION;/g" xmrig/src/donate.h
         CORES=$(nproc)
         log "Compiling binary (Concurrency: $CORES threads)..."
         mkdir -p xmrig/build && cd xmrig/build
