@@ -62,6 +62,7 @@ services:
   tari:
     image: quay.io/tarilabs/minotari_node:v5.2.1-mainnet
     container_name: tari
+    mem_limit: 2048m
     restart: unless-stopped
     stop_grace_period: 1m
     logging: *default-logging
