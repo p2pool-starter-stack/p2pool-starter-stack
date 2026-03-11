@@ -57,6 +57,10 @@ DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://172.28.0.30:2375")
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 
+# --- Monero Configuration ---
+# Used to determine if the node is local (Docker) or remote
+MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")
+
 # --- Tari Configuration ---
 # Connection details for the Tari Base Node and Block Explorer
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")

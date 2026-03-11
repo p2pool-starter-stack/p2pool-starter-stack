@@ -6,8 +6,6 @@ x-logging: &default-logging
 
 services:
   # --- Tor Anonymity Service ---
-  # Orchestrates Tor Hidden Services (Onion addresses) for Monero, Tari, and P2Pool.
-  # Assigned a static IP (172.28.0.25) to function as the centralized SOCKS5 gateway for the stack.
   tor:
     build: ./build/tor
     container_name: tor
@@ -25,9 +23,9 @@ services:
       retries: 5
 
   # --- Monero Daemon (monerod) ---
-  # The primary Monero Full Node. Configured to route transaction broadcasts via Tor (tx-proxy) for privacy.
-  # Exposes P2P and RPC interfaces solely to the internal Docker network.
+  # Only starts if "local_node" profile is active
   monerod:
+    profiles: ["local_node"]
     build: ./build/monero
     container_name: monerod
     restart: unless-stopped
@@ -40,10 +38,10 @@ services:
       - MONERO_PRUNE=${MONERO_PRUNE}
     volumes:
       - ${MONERO_DATA_DIR}:/root/.bitmonero
-      - /dev/hugepages:/dev/hugepages # Required for RandomX verification performance
+      - /dev/hugepages:/dev/hugepages
       - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
     ports:
-      - "18081:18081" # RPC (Restricted)
+      - "18081:18081"
     networks:
       mining_net:
         ipv4_address: 172.28.0.26
@@ -58,7 +56,6 @@ services:
       start_period: 60s
 
   # --- Tari Base Node ---
-  # Minotari Base Node for merge mining. Configured to utilize Tor for all peer-to-peer communication.
   tari:
     image: quay.io/tarilabs/minotari_node:v5.2.1-mainnet
     container_name: tari
@@ -93,27 +90,27 @@ services:
       start_period: 30s
 
   # --- P2Pool Node ---
-  # Decentralized mining sidechain node.
-  # Acts as the coordinator between the Monero daemon, Tari Base Node, and downstream miners.
   p2pool:
     build: ./build/p2pool
     container_name: p2pool
     restart: unless-stopped
     logging: *default-logging
-    privileged: true # Required for efficient memory access (HugePages)
+    privileged: true
     volumes:
       - ${P2POOL_DATA_DIR}:/root
-      - ${P2POOL_DATA_DIR}/stats:/stats # Shared volume for Dashboard
+      - ${P2POOL_DATA_DIR}/stats:/stats
       - /dev/hugepages:/dev/hugepages
+      - /var/run/dbus:/var/run/dbus:ro
+      - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket:ro
     command:
       - --host
-      - 172.28.0.26
+      - ${MONERO_NODE_HOST} # Dynamic Host
       - --rpc-port
-      - "18081"
+      - "${MONERO_RPC_PORT}"
       - --rpc-login
-      - "${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}"
+      - "${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}" # Only used if auth required
       - --zmq-port
-      - "18083"
+      - "${MONERO_ZMQ_PORT}"
       - --wallet
       - ${MONERO_WALLET_ADDRESS} 
       - --merge-mine
@@ -133,21 +130,18 @@ services:
       mining_net:
         ipv4_address: 172.28.0.28
     depends_on:
-      monerod:
-        condition: service_healthy
+      # monerod dependency removed to allow remote node operation
       tari:
         condition: service_healthy
 
   # --- XMRig Proxy ---
-  # Connection aggregator for the XMRvsBeast donation/bonus pool.
-  # Reduces upstream connection overhead and manages hashrate routing.
   xmrig-proxy:
     build: ./build/xmrig-proxy
     container_name: xmrig-proxy
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "3333:3333" # Stratum Protocol Communication
+      - "3333:3333"
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
@@ -177,8 +171,6 @@ services:
       - p2pool
 
   # --- Monitoring Dashboard ---
-  # Web-based management interface and visualization engine.
-  # Utilizes host networking mode to facilitate mDNS/Avahi discovery of local mining workers.
   dashboard:
       build: ./build/dashboard
       extra_hosts:
@@ -186,15 +178,16 @@ services:
       container_name: dashboard
       restart: unless-stopped
       logging: *default-logging
-      network_mode: "host" # Critical for mDNS/Avahi discovery
+      network_mode: "host"
       volumes:
-        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro # Read-only access to P2Pool stats
+        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
         - ${DASHBOARD_DATA_DIR}:/data
         - /var/run/dbus:/var/run/dbus:ro
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
       environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       - TZ=America/Chicago
+      - MONERO_NODE_HOST=${MONERO_NODE_HOST:-172.28.0.26}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
       - XVB_ENABLED=${XVB_ENABLED}
@@ -207,23 +200,20 @@ services:
       - TARI_GRPC_ADDRESS=172.28.0.27:18142
 
   # --- Docker Socket Proxy ---
-  # Secure, read-only proxy for the Docker Socket.
-  # Allows the Dashboard to safely query container logs and stats without exposing the full socket.
   docker-proxy:
     image: tecnativa/docker-socket-proxy
     container_name: docker-proxy
     restart: unless-stopped
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Read-only mount
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      - CONTAINERS=1 # Allow listing containers
-      - LOGS=1       # Allow reading logs
+      - CONTAINERS=1
+      - LOGS=1
     networks:
       mining_net:
         ipv4_address: 172.28.0.30
 
 # --- Network Configuration ---
-# Defines a static bridge network to ensure predictable IP assignment for Tor gateway routing.
 networks:
   mining_net:
     driver: bridge

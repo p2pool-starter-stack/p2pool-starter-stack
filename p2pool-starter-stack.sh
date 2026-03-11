@@ -28,6 +28,7 @@ REBOOT_REQUIRED=false
 
 stack_up() {
     log "Starting stack..."
+    # Docker Compose will automatically pick up COMPOSE_PROFILES from .env
     docker compose up -d
     log "Stack started successfully!"
     log "Dashboard is available at: http://$(hostname):8000"
@@ -178,21 +179,58 @@ ensure_config_exists() {
         echo "Please provide the following details to generate a minimal configuration:"
 
         read -r -p "Enter Monero Wallet Address: " IN_MONERO_WALLET
-        read -r -p "Enter Monero Node Username: " IN_MONERO_USER
-        read -r -s -p "Enter Monero Node Password: " IN_MONERO_PASS
-        echo ""
         read -r -p "Enter Tari Wallet Address: " IN_TARI_WALLET
 
-        if [ -z "$IN_MONERO_WALLET" ] || [ -z "$IN_MONERO_USER" ] || [ -z "$IN_MONERO_PASS" ] || [ -z "$IN_TARI_WALLET" ]; then
-            error "All fields are required. Aborting."
+        echo ""
+        echo "--- Node Configuration ---"
+        read -r -p "Use LOCAL Monero node? (y/N): " USE_LOCAL
+        
+        local MODE="local"
+        local REMOTE_HOST=""
+        local REMOTE_RPC="18081"
+        local REMOTE_ZMQ="18083"
+        local IN_MONERO_USER=""
+        local IN_MONERO_PASS=""
+
+        if [[ "$USE_LOCAL" =~ ^[Yy] ]]; then
+            echo "Local node selected."
+            read -r -p "Enter Monero Node Username: " IN_MONERO_USER
+            read -r -s -p "Enter Monero Node Password: " IN_MONERO_PASS
+            echo ""
+        else
+            echo "Remote node selected."
+            MODE="remote"
+            read -r -p "Enter Remote Node Host (IP or Domain): " REMOTE_HOST
+            read -r -p "Enter Remote RPC Port (default 18081): " REMOTE_RPC
+            read -r -p "Enter Remote ZMQ Port (default 18083): " REMOTE_ZMQ
+            # Set defaults if empty
+            REMOTE_RPC=${REMOTE_RPC:-18081}
+            REMOTE_ZMQ=${REMOTE_ZMQ:-18083}
+            # Ask for auth if needed
+            read -r -p "Does the remote node require authentication? (y/N): " REMOTE_AUTH
+            if [[ "$REMOTE_AUTH" =~ ^[Yy] ]]; then
+                 read -r -p "Enter Remote Node Username: " IN_MONERO_USER
+                 read -r -s -p "Enter Remote Node Password: " IN_MONERO_PASS
+                 echo ""
+            fi
+        fi
+
+        if [ -z "$IN_MONERO_WALLET" ] || [ -z "$IN_TARI_WALLET" ]; then
+            error "Wallet addresses are required. Aborting."
         fi
 
         cat <<EOF > "$CONFIG_FILE"
 {
     "monero": {
+        "mode": "$MODE",
         "wallet_address": "$IN_MONERO_WALLET",
         "node_username": "$IN_MONERO_USER",
-        "node_password": "$IN_MONERO_PASS"
+        "node_password": "$IN_MONERO_PASS",
+        "remote": {
+            "host": "$REMOTE_HOST",
+            "rpc_port": $REMOTE_RPC,
+            "zmq_port": $REMOTE_ZMQ
+        }
     },
     "tari": {
         "wallet_address": "$IN_TARI_WALLET"
@@ -210,14 +248,19 @@ parse_and_validate_config() {
     fi
 
     # Extract Required Fields
-    MONERO_USER=$(jq -r '.monero.node_username // empty' "$CONFIG_FILE")
-    MONERO_PASS=$(jq -r '.monero.node_password // empty' "$CONFIG_FILE")
     MONERO_WALLET=$(jq -r '.monero.wallet_address // empty' "$CONFIG_FILE")
     TARI_WALLET=$(jq -r '.tari.wallet_address // empty' "$CONFIG_FILE")
 
-    if [ -z "$MONERO_USER" ] || [ -z "$MONERO_PASS" ] || [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
-        error "Missing required configuration in $CONFIG_FILE."
+    if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
+        error "Missing required wallet addresses in $CONFIG_FILE."
     fi
+
+    # Determine Mode
+    MONERO_MODE=$(jq -r '.monero.mode // "local"' "$CONFIG_FILE")
+    
+    # Creds might be empty if remote and no auth
+    MONERO_USER=$(jq -r '.monero.node_username // empty' "$CONFIG_FILE")
+    MONERO_PASS=$(jq -r '.monero.node_password // empty' "$CONFIG_FILE")
 
     # Resolve Directories
     MONERO_DIR=$(jq -r '.monero.data_dir // empty' "$CONFIG_FILE")
@@ -248,6 +291,8 @@ prepare_directories() {
 }
 
 generate_preliminary_env() {
+    # We generate a temporary .env so Tor can start. 
+    # Actual Monero/Remote config is finalized in finalize_env.
     PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
     cat <<EOF > "$ENV_FILE"
 MONERO_ONION_ADDRESS=placeholder
@@ -259,10 +304,10 @@ DASHBOARD_DATA_DIR=$DASHBOARD_DIR
 TOR_DATA_DIR=$TOR_DATA_DIR
 P2POOL_PORT=37889
 P2POOL_FLAGS=
-MONERO_NODE_USERNAME=placeholder
-MONERO_NODE_PASSWORD=placeholder
-MONERO_WALLET_ADDRESS=placeholder
-TARI_WALLET_ADDRESS=placeholder
+MONERO_NODE_USERNAME=$MONERO_USER
+MONERO_NODE_PASSWORD=$MONERO_PASS
+MONERO_WALLET_ADDRESS=$MONERO_WALLET
+TARI_WALLET_ADDRESS=$TARI_WALLET
 XVB_POOL_URL=na.xmrvsbeast.com:4247
 XVB_DONOR_ID=placeholder
 XVB_ENABLED=true
@@ -270,6 +315,10 @@ P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=1
+MONERO_NODE_HOST=172.28.0.26
+MONERO_RPC_PORT=18081
+MONERO_ZMQ_PORT=18083
+COMPOSE_PROFILES=local_node
 EOF
 }
 
@@ -286,6 +335,21 @@ provision_tor() {
 
 finalize_env() {
     log "Finalizing environment configuration (.env)..."
+
+    # Determine Host, Ports, and Profiles based on Mode
+    if [ "$MONERO_MODE" == "local" ]; then
+        log "Configuring for LOCAL Monero Node..."
+        MONERO_HOST="172.28.0.26"
+        RPC_PORT="18081"
+        ZMQ_PORT="18083"
+        PROFILES="local_node"
+    else
+        log "Configuring for REMOTE Monero Node..."
+        MONERO_HOST=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
+        RPC_PORT=$(jq -r '.monero.remote.rpc_port // 18081' "$CONFIG_FILE")
+        ZMQ_PORT=$(jq -r '.monero.remote.zmq_port // 18083' "$CONFIG_FILE")
+        PROFILES="" # Empty profile disables local monerod
+    fi
 
     # Pruning
     MONERO_PRUNE_BOOL=$(jq -r '.monero.prune // "true"' "$CONFIG_FILE")
@@ -340,6 +404,10 @@ P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=$MONERO_PRUNE
+MONERO_NODE_HOST=$MONERO_HOST
+MONERO_RPC_PORT=$RPC_PORT
+MONERO_ZMQ_PORT=$ZMQ_PORT
+COMPOSE_PROFILES=$PROFILES
 EOF
 }
 

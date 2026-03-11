@@ -1,10 +1,16 @@
 {
     "monero": {
+        "mode": "local",
         "wallet_address": "your_monero_wallet_address",
         "node_username": "create_a_username_for_node",
         "node_password": "create_a_password_for_node",
         "data_dir": "DYNAMIC_DATA",
-        "prune": true
+        "prune": true,
+        "remote": {
+            "host": "node.remote-monero-host.com",
+            "rpc_port": 18081,
+            "zmq_port": 18083
+        }
     },
     "tari": {
         "wallet_address": "your_tari_wallet_address",
