@@ -44,5 +44,9 @@ if __name__ == "__main__":
     app['state_manager'] = state_manager
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
-    logger.info("Initializing Dashboard Web Server on Port 8000")
-    web.run_app(app, port=8000, print=None)
+    
+    logger.info("Initializing Dashboard Web Server securely on 127.0.0.1:8000")
+    
+    # Bound to localhost (127.0.0.1) so it is inaccessible from the local network directly
+    # Traffic is securely routed through the Caddy proxy
+    web.run_app(app, host='127.0.0.1', port=8000, print=None)
