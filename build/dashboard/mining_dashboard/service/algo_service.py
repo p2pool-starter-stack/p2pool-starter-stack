@@ -11,7 +11,9 @@ from config.config import (
     XVB_MIN_TIME_SEND_MS,
     ENABLE_XVB,
     ALGO_TARGET_BUFFER,
-    XVB_SWITCH_OVERHEAD_MS
+    XVB_SWITCH_OVERHEAD_MS,
+    XVB_MAX_ABSOLUTE_BUFFER,
+    XVB_MIN_MAINTENANCE_BUFFER
 )
 from helper.utils import get_tier_info
 
@@ -109,20 +111,12 @@ class AlgoService:
         if target_hr == 0:
              return "P2POOL", 0
 
-        # Verify if donation targets are currently satisfied
-        # Criteria: 24h Avg >= Target AND 1h Avg >= (Target - Margin)
         avg_24h = xvb_stats.get('avg_24h', 0)
         avg_1h = xvb_stats.get('avg_1h', 0)
 
-        is_fulfilled = (avg_24h >= target_hr) and (avg_1h >= target_hr)
-
-        if not is_fulfilled:
-            logger.info(f"Decision Strategy: Force XVB (Target {target_hr} not met, 24h: {avg_24h:.0f})")
-            return "XVB", XVB_TIME_ALGO_MS
-        
-        # Split Mode: Calculate precise maintenance duration
-        # Uses current_hr (real-time) to adjust donation time dynamically
-        needed_time_ms = self._get_needed_time(current_hr, target_hr)
+        # Split Mode: Calculate precise maintenance duration dynamically.
+        # This now handles deficits smoothly without forcing full 10-minute blocks.
+        needed_time_ms = self._get_needed_time(current_hr, target_hr, avg_1h, avg_24h)
         
         if needed_time_ms > 0:
             # Clamp duration to configured bounds
@@ -135,7 +129,7 @@ class AlgoService:
                 needed_time_ms = XVB_TIME_ALGO_MS
 
             if needed_time_ms >= XVB_TIME_ALGO_MS:
-                logger.info(f"Decision Strategy: Split Mode (Full Cycle allocated to XvB)")
+                logger.info(f"Decision Strategy: Force/Full XVB ({needed_time_ms}ms needed)")
                 return "XVB", XVB_TIME_ALGO_MS
 
             logger.info(f"Decision Strategy: Split Mode ({needed_time_ms}ms allocated to XvB)")
@@ -156,18 +150,36 @@ class AlgoService:
         _, threshold = get_tier_info(safe_capacity, tiers)
         return threshold
 
-    def _get_needed_time(self, current_hr, target_hr):
+    def _get_needed_time(self, current_hr, target_hr, avg_1h, avg_24h):
         """
         Computes the precise duration (in milliseconds) required to sustain the target average.
-        
-        Formula: (Target Hashrate / Current Hashrate) * Cycle Length
+        Uses a dynamic PID-like approach to prevent overshooting at high hashrates.
         """
         if current_hr == 0: return 0
-        # Apply buffer to target hashrate to prevent dropping below threshold
-        target_with_buffer = target_hr * (1.0 + self.target_buffer)
-        needed = (target_with_buffer / current_hr) * XVB_TIME_ALGO_MS
         
-        # Add switching overhead compensation
+        effective_target = target_hr
+        
+        # 1. Deficit Compensation (Proportional Catch-up)
+        # If lagging behind, inject an extra hashrate target to catch up quickly 
+        # without blindly forcing full 10-minute cycles.
+        if avg_1h < target_hr:
+            effective_target += (target_hr - avg_1h) * 1.5 
+        if avg_24h < target_hr:
+            effective_target += (target_hr - avg_24h) * 0.5
+
+        # 2. Dynamic Safety Buffer
+        # Once target is met, reduce the buffer to a minimal percentage to prevent waste.
+        # If the target is not met, use the configured percentage buffer but CAP it to prevent 
+        # massive absolute waste at high tiers.
+        if avg_1h >= target_hr and avg_24h >= target_hr:
+            buffer_hr = target_hr * XVB_MIN_MAINTENANCE_BUFFER  # Minimal maintenance buffer
+        else:
+            calculated_buffer = target_hr * self.target_buffer
+            buffer_hr = min(calculated_buffer, XVB_MAX_ABSOLUTE_BUFFER)
+            
+        effective_target += buffer_hr
+
+        needed = (effective_target / current_hr) * XVB_TIME_ALGO_MS
         needed += XVB_SWITCH_OVERHEAD_MS
         
         return math.ceil(needed)

@@ -69,6 +69,11 @@ TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 # --- Algorithm Safety Margins ---
 # Over-provisioning buffer (5%) to maintain hashrate comfortably above the target
 ALGO_TARGET_BUFFER = 0.05
+# Maximum absolute buffer (in H/s) to add to the target when catching up.
+# Prevents massive waste at higher donation tiers (e.g., 5% of 1M = 50k H/s).
+XVB_MAX_ABSOLUTE_BUFFER = int(os.environ.get("XVB_MAX_ABSOLUTE_BUFFER", 1000))
+# Minimal buffer multiplier used when averages are fully satisfied.
+XVB_MIN_MAINTENANCE_BUFFER = float(os.environ.get("XVB_MIN_MAINTENANCE_BUFFER", 0.01))
 # Switching overhead (ms) to account for connection ramp-up time
 XVB_SWITCH_OVERHEAD_MS = 5000
 
