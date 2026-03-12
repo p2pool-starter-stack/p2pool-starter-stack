@@ -2,7 +2,7 @@
 #
 # Deployment Script for Monero + Tari Merge Mining Stack
 # Orchestrates directory initialization, configuration generation, Tor service provisioning,
-# and system-level kernel optimizations (HugePages) for high-performance mining.
+# system-level kernel optimizations (HugePages), and automated HTTPS via Caddy.
 #
 set -Eeuo pipefail
 
@@ -30,7 +30,7 @@ stack_up() {
     log "Starting stack..."
     docker compose up -d
     log "Stack started successfully!"
-    log "Dashboard is available at: http://$(hostname):8000"
+    log "Dashboard will be available securely at: https://$(hostname)"
 }
 
 stack_down() {
@@ -375,6 +375,35 @@ optimize_kernel() {
     fi
 }
 
+generate_caddy_config() {
+    log "Generating Caddyfile for automatic HTTPS..."
+    
+    # Attempt to auto-detect the machine's primary local IP address
+    local default_ip
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        default_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || echo "")
+    else
+        default_ip=$(hostname -I | awk '{print $1}')
+    fi
+    
+    echo "Caddy needs to know what IP or hostname you will use to access the dashboard in your browser."
+    read -r -p "Enter IP/Hostname [$default_ip]: " HOST_DOMAIN
+    
+    # Use default IP if user leaves it blank
+    HOST_DOMAIN=${HOST_DOMAIN:-$default_ip}
+
+    # Inject the captured LAN IP into the .env file for the dashboard container
+    echo "HOST_IP=$HOST_DOMAIN" >> "$ENV_FILE"
+
+    cat <<EOF > "Caddyfile"
+https://$HOST_DOMAIN {
+    tls internal
+    reverse_proxy 127.0.0.1:8000
+}
+EOF
+    log "Caddyfile created successfully for $HOST_DOMAIN."
+}
+
 finish_deployment() {
     echo "DEPLOYMENT_COMPLETED=true" >> "$ENV_FILE"
     log "Deployment preparation complete!"
@@ -425,6 +454,7 @@ main() {
     finalize_env
     inject_service_configs
     optimize_kernel
+    generate_caddy_config
     finish_deployment
 }
 

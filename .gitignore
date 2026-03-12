@@ -8,6 +8,7 @@ config.json
 /worker/xmrig.log
 /build/monero/bitmonero.conf
 /build/tari/config.toml
+Caddyfile
 
 # Python
 __pycache__/

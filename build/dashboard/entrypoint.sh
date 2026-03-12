@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
 
-# Retrieve the container's primary IPv4 address for dashboard binding and display
-export HOST_IP=$(ip -4 addr show | grep -v '127.0.0.1' | grep 'inet' | head -n 1 | awk '{print $2}' | cut -d/ -f1)
+# We no longer dynamically fetch the LAN IP here because the dashboard 
+# MUST be bound to localhost (127.0.0.1) to remain secure behind Caddy.
+# The HOST_IP variable is now injected directly via docker-compose.yml.
+
+# Fallback to localhost if the variable is somehow missing
+export HOST_IP="${HOST_IP:-127.0.0.1}"
 
 # Navigate to the application source root to ensure Python module resolution works correctly
 cd /app/mining_dashboard
