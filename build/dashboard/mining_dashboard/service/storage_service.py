@@ -23,6 +23,7 @@ class StateManager:
         self._db_lock = threading.Lock()  # Lock for serializing DB access
         self.state = {
             "hashrate_history": deque(),
+            "shares": [],
             "known_workers": {}, # Persist worker IPs by name to prevent loss during XvB switching
             "xvb": {
                 "total_donated_time": 0.0,
@@ -64,7 +65,9 @@ class StateManager:
         self._conn.execute("CREATE TABLE IF NOT EXISTS history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
+        self._conn.execute("CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON history(timestamp)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_ts ON shares(ts)")
 
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
@@ -159,6 +162,10 @@ class StateManager:
                             self.state["xvb"][key] = val
                         except (ValueError, TypeError):
                             self.logger.warning(f"Skipping corrupted KV pair: {key}={val}")
+
+                    # 4. Load Shares
+                    cursor.execute("SELECT ts, difficulty FROM shares WHERE ts > ? ORDER BY ts ASC", (history_cutoff,))
+                    self.state["shares"] = [dict(row) for row in cursor.fetchall()]
                     
                 self.logger.info(f"State successfully loaded from {self.db_path}")
         except sqlite3.Error as e:
@@ -206,6 +213,34 @@ class StateManager:
                         self._conn.execute("DELETE FROM history WHERE timestamp < ?", (ts - HISTORY_RETENTION_SEC,))
         except sqlite3.Error as e:
             self.logger.error(f"History Update Error: {e}")
+
+    def add_share(self, ts: float, difficulty: float):
+        """Appends a new share to history and persists it to the DB."""
+        with self._lock:
+            # Check if share already exists to prevent duplicate in-memory appends
+            if not any(s['ts'] == ts for s in self.state.get("shares", [])):
+                self.state["shares"].append({"ts": ts, "difficulty": difficulty})
+            
+            # Prune in-memory state based on the 30-day config
+            cutoff = time.time() - HISTORY_RETENTION_SEC
+            self.state["shares"] = [s for s in self.state["shares"] if s["ts"] >= cutoff]
+
+        # Persist to DB
+        try:
+            with self._db_lock:
+                if not self._conn: return
+                with self._conn:
+                    self._conn.execute("INSERT OR IGNORE INTO shares (ts, difficulty) VALUES (?, ?)", (ts, difficulty))
+                    
+                    if random.random() < 0.05:
+                        self._conn.execute("DELETE FROM shares WHERE ts < ?", (time.time() - HISTORY_RETENTION_SEC,))
+        except sqlite3.Error as e:
+            self.logger.error(f"Share Insert Error: {e}")
+
+    def get_shares(self) -> List[Dict[str, Any]]:
+        """Returns a copy of the shares history."""
+        with self._lock:
+            return list(self.state.get("shares", []))
 
     def get_xvb_stats(self) -> Dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

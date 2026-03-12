@@ -36,7 +36,7 @@ def get_cached_template():
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
 def _get_chart_context(history, shares, range_arg):
-    """Filters historical data based on the selected time range and prepares Chart.js datasets."""
+    """Filters historical data based on the selected time range, downsamples for performance, and prepares datasets."""
     filtered_history = history
     filtered_shares = shares
     
@@ -51,6 +51,36 @@ def _get_chart_context(history, shares, range_arg):
             cutoff_timestamp = time.time() - target_seconds
             filtered_history = [x for x in history if x['timestamp'] >= cutoff_timestamp]
             filtered_shares = [x for x in shares if x['ts'] >= cutoff_timestamp]
+
+    # --- DOWNSAMPLING LOGIC ---
+    # Limits maximum points sent to the frontend to ensure Chart.js performance 
+    # and to dramatically reduce the HTML payload size.
+    MAX_POINTS = 800
+    if len(filtered_history) > MAX_POINTS:
+        chunk_size = len(filtered_history) / MAX_POINTS
+        downsampled = []
+        for i in range(MAX_POINTS):
+            start_idx = int(i * chunk_size)
+            end_idx = int((i + 1) * chunk_size)
+            chunk = filtered_history[start_idx:end_idx]
+            if not chunk:
+                continue
+            
+            # Average the hashrate values over the chunk
+            avg_v = sum(x.get('v', 0) for x in chunk) / len(chunk)
+            avg_vp = sum(x.get('v_p2pool', 0) for x in chunk) / len(chunk)
+            avg_vx = sum(x.get('v_xvb', 0) for x in chunk) / len(chunk)
+            
+            mid_idx = len(chunk) // 2
+            
+            downsampled.append({
+                't': chunk[mid_idx]['t'],
+                'timestamp': chunk[mid_idx]['timestamp'],
+                'v': round(avg_v, 2),
+                'v_p2pool': round(avg_vp, 2),
+                'v_xvb': round(avg_vx, 2)
+            })
+        filtered_history = downsampled
 
     p2pool_data = []
     xvb_data = []
@@ -68,7 +98,6 @@ def _get_chart_context(history, shares, range_arg):
         p2pool_data.append(str(vp))
         xvb_data.append(str(vx))
 
-    # --- CHANGED: Use parallel arrays instead of objects ---
     share_y_list = ['null'] * len(filtered_history)
     share_r_list = ['0'] * len(filtered_history)
     share_c_list = ['0'] * len(filtered_history)
@@ -94,7 +123,6 @@ def _get_chart_context(history, shares, range_arg):
                 v = item.get('v', 0)
                 
                 # 1. Calculate offset: Lift the triangle 10% above the line value
-                # If v is 0 (rare), default to a small number so it doesn't disappear
                 y_pos = v * 1.1 if v > 0 else 100
                 
                 r = min(6 + (count * 3), 15)
@@ -109,7 +137,6 @@ def _get_chart_context(history, shares, range_arg):
         'chart_data': ",".join([str(x['v']) for x in filtered_history]),
         'chart_p2pool': ",".join(p2pool_data),
         'chart_xvb': ",".join(xvb_data),
-        # Pass the 3 separate lists
         'chart_shares_y': ",".join(share_y_list),
         'chart_shares_r': ",".join(share_r_list),
         'chart_shares_c': ",".join(share_c_list),

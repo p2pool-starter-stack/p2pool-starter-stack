@@ -155,7 +155,6 @@
         </div>
     </div>
 
-    <!-- Sync View Overlay -->
     <div id="sync-view">
         <div class="header-placeholder">
             <p>System is currently synchronizing with the network.</p>
@@ -208,7 +207,6 @@
             </div>
         </div>
         
-        <!-- Simple Stats Card -->
         <div class="card card-simple">
             <h3>Overview</h3>
             <div class="stat-grid">
@@ -362,8 +360,6 @@
                 rotation: 180,
                 pointRadius: [{chart_shares_r}],
                 pointHoverRadius: 15,
-                // CHANGE 1: Increase this significantly (e.g., to 100)
-                // This extends the detection area 100px to the left/right of the point
                 pointHitRadius: 100, 
                 showLine: false
             }}]
@@ -371,9 +367,8 @@
         options: {{ 
             responsive: true, 
             maintainAspectRatio: false, 
+            animation: false, 
             interaction: {{
-                // CHANGE 2: 'nearest' + axis: 'x' + intersect: false
-                // This means "Find the nearest point along the X axis, even if I'm not touching it"
                 mode: 'nearest',
                 axis: 'x',
                 intersect: false 
@@ -389,7 +384,7 @@
                             }}
                             var label = context.dataset.label || '';
                             if (label) {{ label += ': '; }}
-                            if (context.parsed.y !== null) {{ label += context.parsed.y; }}
+                            if (context.parsed.y !== null) {{ label += context.parsed.y + ' H/s'; }} 
                             return label;
                         }}
                     }}

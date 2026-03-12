@@ -41,9 +41,6 @@ class DataService:
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
             self.latest_data.update(loaded_snapshot)
-        
-        if "shares" not in self.latest_data:
-            self.latest_data["shares"] = []
 
     async def run(self):
         """
@@ -60,11 +57,11 @@ class DataService:
             
             # Initialize share tracking
             last_known_share_ts = 0
-            if self.latest_data.get("shares"):
-                try:
-                    last_known_share_ts = self.latest_data["shares"][-1].get("ts", 0)
-                except (IndexError, KeyError, TypeError):
-                    pass
+            
+            # Get latest share timestamp from DB if available
+            db_shares = self.state_manager.get_shares()
+            if db_shares:
+                last_known_share_ts = db_shares[-1].get("ts", 0)
 
             while True:
                 try:
@@ -149,17 +146,12 @@ class DataService:
                     tari_stats = get_tari_stats()
                     p2pool_stats = get_p2pool_stats()
 
-                    # Track P2Pool Shares
+                    # Track P2Pool Shares in DB
                     current_share_ts = p2pool_stats["pool"].get("last_share_time", 0)
                     if current_share_ts > last_known_share_ts:
                         if current_share_ts > 0:
-                            self.latest_data["shares"].append({
-                                "ts": current_share_ts,
-                                "difficulty": p2pool_stats["pool"].get("difficulty", 0)
-                            })
-                            # Keep last 10000 shares to prevent unbounded growth
-                            if len(self.latest_data["shares"]) > 10000:
-                                self.latest_data["shares"] = self.latest_data["shares"][-10000:]
+                            difficulty = p2pool_stats["pool"].get("difficulty", 0)
+                            await asyncio.to_thread(self.state_manager.add_share, current_share_ts, difficulty)
                         last_known_share_ts = current_share_ts
 
                     monero_sync = await get_monero_sync_status()
@@ -177,24 +169,24 @@ class DataService:
                             monero_sync.update({'percent': 0, 'current': 0, 'target': 1})
                     
                     # 2. Global Sync Logic
-                    # Show sync dashboard if either Monero or Tari is syncing
                     is_monero_syncing = monero_sync.get('is_syncing', False)
                     is_tari_syncing = tari_sync.get('is_syncing', False)
                     global_sync = is_monero_syncing or is_tari_syncing
 
                     if global_sync:
-                        # Ensure Monero stats are present if it's not the one syncing
                         if not is_monero_syncing and 'percent' not in monero_sync:
                             h = network_stats.get('height', 1)
                             monero_sync.update({'percent': 100, 'current': h, 'target': h})
-                        
-                        # Ensure Tari stats are present if it's not the one syncing
                         if not is_tari_syncing and 'percent' not in tari_sync:
                             h = tari_stats.get('height', 0)
                             tari_sync.update({'percent': 100, 'current': h, 'target': h})
 
+                    # Fetch fresh shares list to populate UI
+                    shares_list = await asyncio.to_thread(self.state_manager.get_shares)
+
                     self.latest_data.update({
                         "workers": final_workers,
+                        "shares": shares_list,
                         "total_live_h15": total_hr,
                         "total_live_h10": total_h10,
                         "pool": p2pool_stats,
@@ -220,9 +212,9 @@ class DataService:
                     
                     await asyncio.to_thread(self.state_manager.update_history, total_hr, p2pool_hr, xvb_hr)
                     
-                    # Create a lightweight snapshot (exclude heavy transient data like shares)
+                    # Create a lightweight snapshot (exclude shares entirely as they are safely in DB)
                     snapshot_data = self.latest_data.copy()
-                    snapshot_data["shares"] = snapshot_data.get("shares", [])[-100:] # Only persist last 100 shares
+                    snapshot_data.pop("shares", None)
                     await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
 
                     # 7. External API Sync (Throttled to every 10th iteration)
