@@ -306,7 +306,7 @@ def _get_pool_network_context(data):
         'strat_wallet_short': s_short,
         'proxy_workers': proxy_count,
         'p2p_type': p2p_stats.get('type', 'Unknown'),
-        'pool_height': local_pool.get('height', 0),
+        'pool_sidechain_height': local_pool.get('sidechain_height', 0),
         'pool_diff': f"{local_pool.get('difficulty', 0)/1e6:.2f} M",
         'pool_hr': format_hashrate(local_pool.get('hashrate', 0)),
         'pool_total_hashes': local_pool.get('total_hashes', 0),

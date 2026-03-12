@@ -173,8 +173,6 @@ services:
   # --- Monitoring Dashboard ---
   dashboard:
       build: ./build/dashboard
-      extra_hosts:
-        - "host.docker.internal:host-gateway"
       container_name: dashboard
       restart: unless-stopped
       logging: *default-logging
@@ -212,6 +210,22 @@ services:
     networks:
       mining_net:
         ipv4_address: 172.28.0.30
+
+  # --- Caddy Reverse Proxy ---
+  # Provides local automatic HTTPS with self-signed certificates
+  # Both Caddy and Dashboard are on the host network, allowing direct 127.0.0.1 routing
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data 
+
+# --- Volumes ---
+volumes:
+  caddy_data: 
 
 # --- Network Configuration ---
 networks:
