@@ -18,7 +18,7 @@
     },
     "p2pool": {
         "pool": "main",
-        "light-mode": true,
+        "light_mode": true,
         "data_dir": "DYNAMIC_DATA"
     },
     "xvb": {
