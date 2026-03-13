@@ -234,6 +234,9 @@ ensure_config_exists() {
     },
     "tari": {
         "wallet_address": "$IN_TARI_WALLET"
+    },
+    "dashboard": {
+        "host": "DYNAMIC_HOST"
     }
 }
 EOF
@@ -277,6 +280,8 @@ parse_and_validate_config() {
 
     DASHBOARD_DIR=$(jq -r '.dashboard.data_dir // empty' "$CONFIG_FILE")
     [ -z "$DASHBOARD_DIR" ] || [ "$DASHBOARD_DIR" == "DYNAMIC_DATA" ] && DASHBOARD_DIR="$PWD/data/dashboard"
+
+    DASHBOARD_HOST=$(jq -r '.dashboard.host // empty' "$CONFIG_FILE")
 }
 
 prepare_directories() {
@@ -446,19 +451,25 @@ optimize_kernel() {
 generate_caddy_config() {
     log "Generating Caddyfile for automatic HTTPS..."
     
-    # Attempt to auto-detect the machine's primary local IP address
-    local default_ip
-    if [ "$OS_TYPE" == "Darwin" ]; then
-        default_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || echo "")
+    # Check if a valid host was provided in config.json
+    if [ -n "${DASHBOARD_HOST:-}" ] && [ "$DASHBOARD_HOST" != "DYNAMIC_HOST" ]; then
+        HOST_DOMAIN="$DASHBOARD_HOST"
+        log "Using hostname '$HOST_DOMAIN' from config.json."
     else
-        default_ip=$(hostname -I | awk '{print $1}')
+        # Attempt to auto-detect the machine's primary local IP address
+        local default_ip
+        if [ "$OS_TYPE" == "Darwin" ]; then
+            default_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || echo "")
+        else
+            default_ip=$(hostname -I | awk '{print $1}')
+        fi
+        
+        echo "Caddy needs to know what IP or hostname you will use to access the dashboard in your browser."
+        read -r -p "Enter IP/Hostname [$default_ip]: " HOST_DOMAIN
+        
+        # Use default IP if user leaves it blank
+        HOST_DOMAIN=${HOST_DOMAIN:-$default_ip}
     fi
-    
-    echo "Caddy needs to know what IP or hostname you will use to access the dashboard in your browser."
-    read -r -p "Enter IP/Hostname [$default_ip]: " HOST_DOMAIN
-    
-    # Use default IP if user leaves it blank
-    HOST_DOMAIN=${HOST_DOMAIN:-$default_ip}
 
     # Inject the captured LAN IP into the .env file for the dashboard container
     echo "HOST_IP=$HOST_DOMAIN" >> "$ENV_FILE"
