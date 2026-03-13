@@ -304,6 +304,7 @@ DASHBOARD_DATA_DIR=$DASHBOARD_DIR
 TOR_DATA_DIR=$TOR_DATA_DIR
 P2POOL_PORT=37889
 P2POOL_FLAGS=
+P2POOL_LIGHT_MODE=
 MONERO_NODE_USERNAME=$MONERO_USER
 MONERO_NODE_PASSWORD=$MONERO_PASS
 MONERO_WALLET_ADDRESS=$MONERO_WALLET
@@ -378,7 +379,7 @@ finalize_env() {
     fi
 
     # XvB Config
-    XVB_ENABLED=$(jq -r '.xvb.enabled // .xmrig_proxy.enabled // "true"' "$CONFIG_FILE")
+    XVB_ENABLED=$(jq -r 'if .xvb.enabled != null then .xvb.enabled elif .xmrig_proxy.enabled != null then .xmrig_proxy.enabled else "true" end' "$CONFIG_FILE")
     XVB_POOL_URL=$(jq -r '.xvb.url // .xmrig_proxy.url // empty' "$CONFIG_FILE")
     [ -z "$XVB_POOL_URL" ] && XVB_POOL_URL="na.xmrvsbeast.com:4247"
 
@@ -402,6 +403,7 @@ MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
 P2POOL_FLAGS=$P2POOL_FLAGS
+P2POOL_LIGHT_MODE=$P2POOL_LIGHT_MODE
 P2POOL_PORT=$P2POOL_PORT
 XVB_POOL_URL=$XVB_POOL_URL
 XVB_DONOR_ID=$XVB_DONOR_ID

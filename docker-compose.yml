@@ -126,6 +126,7 @@ services:
       - --data-api
       - /stats
       - ${P2POOL_FLAGS}
+      - ${P2POOL_LIGHT_MODE:+--light-mode}
     networks:
       mining_net:
         ipv4_address: 172.28.0.28
