@@ -31,7 +31,20 @@ stack_up() {
     # Docker Compose will automatically pick up COMPOSE_PROFILES from .env
     docker compose up -d
     log "Stack started successfully!"
-    log "Dashboard will be available securely at: https://$(hostname)"
+    
+    # Grab the configured hostname to display accurately in logs
+    local display_host=$(hostname)
+    if [ -f "$ENV_FILE" ]; then
+        local env_host=$(grep "^HOST_IP=" "$ENV_FILE" | cut -d'=' -f2)
+        [ -n "$env_host" ] && display_host="$env_host"
+    fi
+
+    # Explicitly check the DASHBOARD_SECURE variable
+    if [ -f "$ENV_FILE" ] && grep -q "DASHBOARD_SECURE=true" "$ENV_FILE"; then
+        log "Dashboard will be available securely at: https://$display_host"
+    else
+        log "Dashboard will be available at: http://$display_host"
+    fi
 }
 
 stack_down() {
@@ -236,7 +249,8 @@ ensure_config_exists() {
         "wallet_address": "$IN_TARI_WALLET"
     },
     "dashboard": {
-        "host": "DYNAMIC_HOST"
+        "host": "DYNAMIC_HOST",
+        "secure": true
     }
 }
 EOF
@@ -282,6 +296,9 @@ parse_and_validate_config() {
     [ -z "$DASHBOARD_DIR" ] || [ "$DASHBOARD_DIR" == "DYNAMIC_DATA" ] && DASHBOARD_DIR="$PWD/data/dashboard"
 
     DASHBOARD_HOST=$(jq -r '.dashboard.host // empty' "$CONFIG_FILE")
+
+    # Ensure a strict true/false string is returned, defaulting to true
+    DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
 }
 
 prepare_directories() {
@@ -324,6 +341,7 @@ MONERO_NODE_HOST=172.28.0.26
 MONERO_RPC_PORT=18081
 MONERO_ZMQ_PORT=18083
 COMPOSE_PROFILES=local_node
+DASHBOARD_SECURE=true
 EOF
 }
 
@@ -413,6 +431,7 @@ MONERO_NODE_HOST=$MONERO_HOST
 MONERO_RPC_PORT=$RPC_PORT
 MONERO_ZMQ_PORT=$ZMQ_PORT
 COMPOSE_PROFILES=$PROFILES
+DASHBOARD_SECURE=$DASHBOARD_SECURE
 EOF
 }
 
@@ -449,37 +468,43 @@ optimize_kernel() {
 }
 
 generate_caddy_config() {
-    log "Generating Caddyfile for automatic HTTPS..."
-    
-    # Check if a valid host was provided in config.json
+    # Attempt to auto-detect the machine's primary local IP address
+    local default_ip
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        default_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || echo "")
+    else
+        default_ip=$(hostname -I | awk '{print $1}')
+    fi
+
+    # Determine Hostname (from config or user input)
     if [ -n "${DASHBOARD_HOST:-}" ] && [ "$DASHBOARD_HOST" != "DYNAMIC_HOST" ]; then
         HOST_DOMAIN="$DASHBOARD_HOST"
-        log "Using hostname '$HOST_DOMAIN' from config.json."
+        log "Using dashboard hostname '$HOST_DOMAIN' from config.json."
     else
-        # Attempt to auto-detect the machine's primary local IP address
-        local default_ip
-        if [ "$OS_TYPE" == "Darwin" ]; then
-            default_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || echo "")
-        else
-            default_ip=$(hostname -I | awk '{print $1}')
-        fi
-        
-        echo "Caddy needs to know what IP or hostname you will use to access the dashboard in your browser."
+        echo "The stack needs to know what IP or hostname you will use to access the dashboard in your browser."
         read -r -p "Enter IP/Hostname [$default_ip]: " HOST_DOMAIN
-        
-        # Use default IP if user leaves it blank
         HOST_DOMAIN=${HOST_DOMAIN:-$default_ip}
     fi
 
     # Inject the captured LAN IP into the .env file for the dashboard container
     echo "HOST_IP=$HOST_DOMAIN" >> "$ENV_FILE"
 
-    cat <<EOF > "Caddyfile"
+    if [ "$DASHBOARD_SECURE" == "true" ]; then
+        log "Generating Caddyfile for automatic HTTPS..."
+        cat <<EOF > "Caddyfile"
 https://$HOST_DOMAIN {
     tls internal
     reverse_proxy 127.0.0.1:8000
 }
 EOF
+    else
+        log "Secure mode is disabled. Generating Caddyfile for unsecure HTTP..."
+        cat <<EOF > "Caddyfile"
+http://$HOST_DOMAIN {
+    reverse_proxy 127.0.0.1:8000
+}
+EOF
+    fi
     log "Caddyfile created successfully for $HOST_DOMAIN."
 }
 

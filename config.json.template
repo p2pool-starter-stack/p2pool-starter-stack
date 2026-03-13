@@ -30,6 +30,7 @@
     },
     "dashboard": {
         "data_dir": "DYNAMIC_DATA",
-        "host": "DYNAMIC_HOST"
+        "host": "DYNAMIC_HOST",
+        "secure": true
     }
 }
