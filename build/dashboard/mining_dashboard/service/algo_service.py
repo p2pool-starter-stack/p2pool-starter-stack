@@ -13,7 +13,8 @@ from config.config import (
     ALGO_TARGET_BUFFER,
     XVB_SWITCH_OVERHEAD_MS,
     XVB_MAX_ABSOLUTE_BUFFER,
-    XVB_MIN_MAINTENANCE_BUFFER
+    XVB_MIN_MAINTENANCE_BUFFER,
+    UPDATE_INTERVAL
 )
 from helper.utils import get_tier_info
 
@@ -183,11 +184,11 @@ class AlgoService:
         needed += XVB_SWITCH_OVERHEAD_MS
         
         return math.ceil(needed)
-        
-    async def _smart_sleep(self, duration_sec, check_interval_sec=10):
+
+    async def _smart_sleep(self, duration_sec, check_interval_sec=UPDATE_INTERVAL):
         """
         Sleeps in chunks, evaluating the hashrate target frequently.
-        Aborts sleep early if the 1H average drops below the tier target.
+        Aborts sleep early if either the 1H or 24H average drops below the tier target.
         """
         sleep_elapsed = 0
         while sleep_elapsed < duration_sec:
@@ -205,10 +206,12 @@ class AlgoService:
                     
                 xvb_stats = self.state_manager.get_xvb_stats()
                 avg_1h = xvb_stats.get('avg_1h', 0)
+                avg_24h = xvb_stats.get('avg_24h', 0) 
+                
                 target_hr = self._get_target_donation_hr(stable_hr)
 
-                # Polling condition: Instantly break if we dip below target
-                if target_hr > 0 and avg_1h < target_hr:
+                # Polling condition now checks both 1H and 24H averages
+                if target_hr > 0 and (avg_1h < target_hr or avg_24h < target_hr):
                     # Dry-run the decision engine to ensure PPLNS constraints still allow XVB
                     current_hr = latest_data.get("total_live_h10", 0) or stable_hr
                     p2pool_stats = latest_data.get("pool", {}).get("pool", {})
@@ -218,7 +221,7 @@ class AlgoService:
                     decision, _ = self.get_decision(current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares)
                     
                     if decision in ["XVB", "SPLIT"]:
-                        logger.warning(f"Interrupting P2Pool sleep: 1H AVG ({avg_1h:.2f}) < Target ({target_hr:.2f}). Catching up.")
+                        logger.warning(f"Interrupting P2Pool sleep: 1H AVG ({avg_1h:.2f}) or 24H AVG ({avg_24h:.2f}) < Target ({target_hr:.2f}). Catching up.")
                         return # Break out of sleep early to trigger a new cycle
             except Exception as e:
                 logger.debug(f"Error during smart sleep check: {e}")

@@ -217,8 +217,8 @@ class DataService:
                     snapshot_data.pop("shares", None)
                     await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
 
-                    # 7. External API Sync (Throttled to every 10th iteration)
-                    if iteration_count % 10 == 0:
+                    # 7. External API Sync (UPDATED: Throttled to match UPDATE_INTERVAL)
+                    if iteration_count % 1 == 0:
                         real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
                         if real_xvb_stats:
                             await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
