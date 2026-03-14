@@ -468,25 +468,20 @@ optimize_kernel() {
 }
 
 generate_caddy_config() {
-    # Attempt to auto-detect the machine's primary local IP address
-    local default_ip
-    if [ "$OS_TYPE" == "Darwin" ]; then
-        default_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || echo "")
-    else
-        default_ip=$(hostname -I | awk '{print $1}')
-    fi
+    # Always default to the machine's hostname
+    local default_host=$(hostname)
 
     # Determine Hostname (from config or user input)
     if [ -n "${DASHBOARD_HOST:-}" ] && [ "$DASHBOARD_HOST" != "DYNAMIC_HOST" ]; then
         HOST_DOMAIN="$DASHBOARD_HOST"
         log "Using dashboard hostname '$HOST_DOMAIN' from config.json."
     else
-        echo "The stack needs to know what IP or hostname you will use to access the dashboard in your browser."
-        read -r -p "Enter IP/Hostname [$default_ip]: " HOST_DOMAIN
-        HOST_DOMAIN=${HOST_DOMAIN:-$default_ip}
+        echo "The stack needs to know what hostname you will use to access the dashboard in your browser."
+        read -r -p "Enter Hostname [$default_host]: " HOST_DOMAIN
+        HOST_DOMAIN=${HOST_DOMAIN:-$default_host}
     fi
 
-    # Inject the captured LAN IP into the .env file for the dashboard container
+    # Inject the captured hostname into the .env file for the dashboard container
     echo "HOST_IP=$HOST_DOMAIN" >> "$ENV_FILE"
 
     if [ "$DASHBOARD_SECURE" == "true" ]; then
