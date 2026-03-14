@@ -183,6 +183,45 @@ class AlgoService:
         needed += XVB_SWITCH_OVERHEAD_MS
         
         return math.ceil(needed)
+        
+    async def _smart_sleep(self, duration_sec, check_interval_sec=10):
+        """
+        Sleeps in chunks, evaluating the hashrate target frequently.
+        Aborts sleep early if the 1H average drops below the tier target.
+        """
+        sleep_elapsed = 0
+        while sleep_elapsed < duration_sec:
+            # Calculate time for this specific tick
+            sleep_time = min(check_interval_sec, duration_sec - sleep_elapsed)
+            await asyncio.sleep(sleep_time)
+            sleep_elapsed += sleep_time
+            
+            try:
+                # Fetch fresh state
+                latest_data = self.data_service.latest_data
+                stable_hr = latest_data.get("total_live_h15", 0)
+                if stable_hr == 0:
+                    stable_hr = latest_data.get("total_live_h10", 0)
+                    
+                xvb_stats = self.state_manager.get_xvb_stats()
+                avg_1h = xvb_stats.get('avg_1h', 0)
+                target_hr = self._get_target_donation_hr(stable_hr)
+
+                # Polling condition: Instantly break if we dip below target
+                if target_hr > 0 and avg_1h < target_hr:
+                    # Dry-run the decision engine to ensure PPLNS constraints still allow XVB
+                    current_hr = latest_data.get("total_live_h10", 0) or stable_hr
+                    p2pool_stats = latest_data.get("pool", {}).get("pool", {})
+                    p2p_stats = latest_data.get("pool", {}).get("p2p", {})
+                    shares = latest_data.get("shares", [])
+                    
+                    decision, _ = self.get_decision(current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares)
+                    
+                    if decision in ["XVB", "SPLIT"]:
+                        logger.warning(f"Interrupting P2Pool sleep: 1H AVG ({avg_1h:.2f}) < Target ({target_hr:.2f}). Catching up.")
+                        return # Break out of sleep early to trigger a new cycle
+            except Exception as e:
+                logger.debug(f"Error during smart sleep check: {e}")
 
     async def run(self):
         """
@@ -218,7 +257,8 @@ class AlgoService:
                 
                 if decision == "P2POOL":
                     await self.switch_miners("P2POOL", state_label="P2POOL")
-                    await asyncio.sleep(XVB_TIME_ALGO_MS / 1000)
+                    # Use smart sleep to poll for drops
+                    await self._smart_sleep(XVB_TIME_ALGO_MS / 1000)
                     
                 elif decision == "XVB":
                     await self.switch_miners("XVB", state_label="XVB")
@@ -232,7 +272,8 @@ class AlgoService:
                     remainder = (XVB_TIME_ALGO_MS - xvb_duration) / 1000
                     if remainder > 0:
                         await self.switch_miners("P2POOL", state_label="P2POOL (Split)")
-                        await asyncio.sleep(remainder)
+                        # Use smart sleep during the P2Pool remainder
+                        await self._smart_sleep(remainder)
 
             except Exception as e:
                 logger.error(f"Algorithm Error: {e}")
