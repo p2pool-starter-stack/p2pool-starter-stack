@@ -212,8 +212,8 @@ services:
         ipv4_address: 172.28.0.30
 
   # --- Caddy Reverse Proxy ---
-  # Provides local automatic HTTPS with self-signed certificates
-  # Both Caddy and Dashboard are on the host network, allowing direct 127.0.0.1 routing
+  # Bridges the local 127.0.0.1 application binding to the LAN
+  # Serves HTTPS or HTTP depending on configuration
   caddy:
     image: caddy:latest
     container_name: caddy

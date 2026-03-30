@@ -29,6 +29,8 @@
         "data_dir": "DYNAMIC_DATA"
     },
     "dashboard": {
-        "data_dir": "DYNAMIC_DATA"
+        "data_dir": "DYNAMIC_DATA",
+        "host": "DYNAMIC_HOST",
+        "secure": true
     }
 }
