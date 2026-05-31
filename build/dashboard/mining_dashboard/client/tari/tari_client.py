@@ -69,8 +69,12 @@ class TariClient:
         if local_height is None:
             return {"is_syncing": False}
 
-        # If network height is unavailable (explorer down), assume synced at local height
+        # If network height is unavailable (explorer down), assume synced at the local
+        # height — but only if we actually have one. With no local height yet (0) we
+        # have no data, so report as still syncing rather than a false 100% at 0/0.
         if network_height == 0:
+            if local_height == 0:
+                return {"is_syncing": True, "current": 0, "target": 0, "percent": 0}
             return {
                 "is_syncing": False,
                 "current": local_height,

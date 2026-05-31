@@ -435,16 +435,22 @@ async def handle_index(request):
         # Use global_sync flag from DataService to trigger dashboard sync mode
         is_syncing = data.get('global_sync', False)
         
-        # Format Monero Sync Display (Checkmark if 100%)
+        # Format Monero Sync Display. Show the checkmark only once we have real data
+        # (target > 0); before the initial heights arrive it's 0/0, which is "waiting",
+        # not "synced", so render a loading indicator rather than a false 100% check.
         m_pct = monero_sync.get('percent', 0)
-        if m_pct >= 100:
+        if monero_sync.get('target', 0) <= 0:
+            m_disp = '…'
+        elif m_pct >= 100:
             m_disp = '<span class="status-ok" style="font-size: 3.5em; line-height: 1;">✔</span>'
         else:
             m_disp = f"{m_pct}%"
 
-        # Format Tari Sync Display (Checkmark if 100%)
+        # Format Tari Sync Display (same 0/0 guard as Monero above)
         t_pct = tari_sync.get('percent', 0)
-        if t_pct >= 100:
+        if tari_sync.get('target', 0) <= 0:
+            t_disp = '…'
+        elif t_pct >= 100:
             t_disp = '<span class="status-ok" style="font-size: 3.5em; line-height: 1;">✔</span>'
         else:
             t_disp = f"{t_pct}%"
