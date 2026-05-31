@@ -337,6 +337,7 @@ P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=1
+MONERO_PREP_THREADS=4
 MONERO_NODE_HOST=172.28.0.26
 MONERO_RPC_PORT=18081
 MONERO_ZMQ_PORT=18083
@@ -381,6 +382,20 @@ finalize_env() {
     else
         MONERO_PRUNE=0
     fi
+
+    # Block-verification threads — hardware-dependent, so derive from THIS host's core
+    # count rather than hardcoding (more cores = faster initial-sync verification).
+    # Reserve 2 cores for the system/p2pool and cap at 8 (prep-blocks-threads sees
+    # diminishing returns past that). Override by setting a number in config.json
+    # (monero.prep_blocks_threads) — e.g. lower it if this host also runs a CPU miner.
+    MONERO_PREP_THREADS=$(jq -r '.monero.prep_blocks_threads // "auto"' "$CONFIG_FILE")
+    if ! [[ "$MONERO_PREP_THREADS" =~ ^[0-9]+$ ]]; then
+        CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+        MONERO_PREP_THREADS=$(( CORES - 2 ))
+        [ "$MONERO_PREP_THREADS" -lt 4 ] && MONERO_PREP_THREADS=4
+        [ "$MONERO_PREP_THREADS" -gt 8 ] && MONERO_PREP_THREADS=8
+    fi
+    log "Monero block-prep threads set to $MONERO_PREP_THREADS (host cores: $(nproc 2>/dev/null || echo '?'))"
 
     # P2Pool Config
     POOL_TYPE=$(jq -r '.p2pool.pool // "main"' "$CONFIG_FILE")
@@ -427,6 +442,7 @@ P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=$MONERO_PRUNE
+MONERO_PREP_THREADS=$MONERO_PREP_THREADS
 MONERO_NODE_HOST=$MONERO_HOST
 MONERO_RPC_PORT=$RPC_PORT
 MONERO_ZMQ_PORT=$ZMQ_PORT

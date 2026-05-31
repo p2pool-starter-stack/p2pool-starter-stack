@@ -40,6 +40,7 @@ services:
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
       - MONERO_PRUNE=${MONERO_PRUNE}
+      - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
     volumes:
       - ${MONERO_DATA_DIR}:/root/.bitmonero
       - /dev/hugepages:/dev/hugepages

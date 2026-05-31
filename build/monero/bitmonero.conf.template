@@ -21,9 +21,16 @@ public-node=1
 # ZeroMQ publisher for block notifications (Required for P2Pool)
 zmq-pub=tcp://0.0.0.0:18083
 
-# Peer Management
-out-peers=32
+# Peer Management. out-peers raised for Tor: each peer is roughly one bandwidth-capped
+# Tor circuit, so more peers = more aggregate download bandwidth in parallel. This is
+# network tuning (not CPU) — it does NOT scale with cores, unlike prep-blocks-threads below.
+out-peers=48
 in-peers=64
+
+# Block-verification threads, sized to the deploying host's CPU by the deploy script
+# (MONERO_PREP_THREADS = nproc-2, clamped 4..8). Speeds up initial-block-download
+# verification on multi-core hosts while leaving headroom for the system and p2pool.
+prep-blocks-threads=${MONERO_PREP_THREADS}
 
 # Priority Nodes (High uptime public nodes for faster initial sync)
 add-priority-node=p2pmd.xmrvsbeast.com:18080
