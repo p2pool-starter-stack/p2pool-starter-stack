@@ -6,8 +6,16 @@
 base_path = "/var/tari/node"
 
 [p2p.seeds]
+# Resolve DNS seeds over DNS-over-TLS (port 853). The seeds.tari.com TXT answer is 15
+# records (~1KB), which overflows a 512-byte UDP packet; Docker's embedded resolver
+# (127.0.0.11) has no EDNS0 and truncates it ("received truncated response"), and Tari's
+# resolver doesn't retry over TCP. DoT is TCP-based (no truncation) and encrypted. Mirrors
+# the Tari upstream default. If port 853 is filtered on your host, fall back to "1.1.1.1:53"
+# (plain UDP, but Cloudflare honours EDNS0 so the full answer still fits).
 dns_seed_name_servers = [
-    "127.0.0.11:53"
+    "1.1.1.1:853/cloudflare-dns.com",
+    "8.8.8.8:853/dns.google",
+    "9.9.9.9:853/dns.quad9.net",
 ]
 dns_seeds_use_dnssec = false
 
