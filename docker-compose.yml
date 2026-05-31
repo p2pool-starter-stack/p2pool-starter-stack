@@ -16,11 +16,15 @@ services:
     networks:
       mining_net:
         ipv4_address: 172.28.0.25
+    # Healthy only once Tor has finished bootstrapping (circuits built), not merely
+    # when the SOCKS port is open — so tari/monerod don't start against a Tor that
+    # can't route yet. start_period covers a cold bootstrap without counting failures.
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "9050"]
+      test: ["CMD", "/usr/local/bin/tor-healthcheck.sh"]
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 5
+      start_period: 90s
 
   # --- Monero Daemon (monerod) ---
   # Only starts if "local_node" profile is active

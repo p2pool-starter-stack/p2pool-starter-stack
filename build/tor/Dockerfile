@@ -1,11 +1,15 @@
 FROM alpine:latest
 
-# Install Tor and Netcat (useful for health checks and debugging)
-# We use --no-cache to keep the image size minimal
-RUN apk add --no-cache tor netcat-openbsd
+# Install Tor plus the tools the bootstrap healthcheck needs: netcat (talk to the
+# control port) and xxd (hex-encode the auth cookie). --no-cache keeps the image small.
+RUN apk add --no-cache tor netcat-openbsd xxd
 
 # Copy the custom Tor configuration file
 COPY torrc /etc/tor/torrc
+
+# Control-port bootstrap healthcheck (see docker-compose.yml healthcheck)
+COPY healthcheck.sh /usr/local/bin/tor-healthcheck.sh
+RUN chmod +x /usr/local/bin/tor-healthcheck.sh
 
 # Create the data directory and ensure the 'tor' user has ownership
 # This is critical because we switch to a non-root user below
