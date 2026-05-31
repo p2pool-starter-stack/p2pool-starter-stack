@@ -57,7 +57,7 @@ services:
 
   # --- Tari Base Node ---
   tari:
-    image: quay.io/tarilabs/minotari_node:v5.2.1-mainnet
+    image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet
     container_name: tari
     restart: unless-stopped
     stop_grace_period: 1m
@@ -207,7 +207,7 @@ services:
 
   # --- Docker Socket Proxy ---
   docker-proxy:
-    image: tecnativa/docker-socket-proxy
+    image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-proxy
     restart: unless-stopped
     volumes:
@@ -223,7 +223,7 @@ services:
   # Bridges the local 127.0.0.1 application binding to the LAN
   # Serves HTTPS or HTTP depending on configuration
   caddy:
-    image: caddy:latest
+    image: caddy:2.11
     container_name: caddy
     restart: unless-stopped
     network_mode: "host"

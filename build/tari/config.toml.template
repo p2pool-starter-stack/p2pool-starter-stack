@@ -113,7 +113,7 @@ grpc_server_allow_methods = [
 public_addresses = ["/onion3/<your_tari_onion_address_no_extension>:18189"]
 
 # Concurrency limits for peer tasks
-max_concurrent_inbound_tasks = 15
+max_concurrent_inbound_tasks = 40
 max_concurrent_outbound_tasks = 100
 
 [base_node.p2p.transport]

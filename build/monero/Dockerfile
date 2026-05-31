@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y \
 
 # Define Monero version and SHA256 hash for binary verification
 # Refer to https://www.getmonero.org/downloads/hashes.txt for validation
-ARG MONERO_VERSION=v0.18.4.5
-ARG MONERO_HASH=423b49f3658e29f70a1d971667dec924c7ee7a107cfc93440456e28500b471a6
+ARG MONERO_VERSION=v0.18.5.0
+ARG MONERO_HASH=166ad93036f95f5abeba24c8670061be022c9238dba2e6a7587611a1d759e294
 
 # Download, verify integrity, and install the Monero daemon (monerod)
 RUN wget -O monero.tar.bz2 https://downloads.getmonero.org/cli/monero-linux-x64-${MONERO_VERSION}.tar.bz2 \

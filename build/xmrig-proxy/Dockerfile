@@ -2,8 +2,8 @@ FROM ubuntu:24.04
 
 # Define XMRig Proxy version and SHA256 hash for binary verification
 # Refer to https://github.com/xmrig/xmrig-proxy/releases for validation
-ARG XMRIG_PROXY_VERSION=6.24.0
-ARG XMRIG_PROXY_HASH=54b096c51c65aa7730023071bbc1fc2c6a703ca3a7789fbdf1abe6b6791196dd
+ARG XMRIG_PROXY_VERSION=6.26.0
+ARG XMRIG_PROXY_HASH=73cceb10be474ba8ce20faddb9d2c6af0cb50bce84e72f7d36a326f7147c01c4
 
 # Install system dependencies required for downloading and verifying the binary
 RUN apt-get update && apt-get install -y \

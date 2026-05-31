@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 
-ARG P2POOL_VERSION=v4.13
-ARG P2POOL_HASH=d02361ee5f18e3e53af79436af6dc1772b71aa5ad8582ad88b0764ae2c9289c3
+ARG P2POOL_VERSION=v4.15.1
+ARG P2POOL_HASH=efd8b23579774711a5b86743da980e0936b7c220894063296719116d7f9ba254
 
 # Install dependencies, including avahi-utils for the resolve script
 RUN apt-get update && apt-get install -y \
