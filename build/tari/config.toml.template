@@ -12,12 +12,15 @@ dns_seed_name_servers = [
 dns_seeds_use_dnssec = false
 
 [mainnet.p2p.seeds]
-# Hardcoded peer seeds for initial network entry. DNS seeding is disabled in this
-# stack (dns_seed_name_servers points at Docker's resolver) to avoid a clearnet DNS
-# lookup that would leak "this host runs a Tari node" outside Tor — so this list is
-# the sole bootstrap path and must be kept in sync with the live seed set.
-# Source of truth: `dig TXT seeds.tari.com` (Tari mainnet DNS seed). Last synced
-# 2026-05-30 against minotari_node v5.3.1 — re-check periodically as seeds rotate.
+# DNS seeds: the v5.3.1 binary defaults to `seeds.mainnet.tari.com` (+ ip4./ip6./tor.
+# variants), but those hostnames have NO DNS records — mainnet's live seed list is
+# published at the bare `seeds.tari.com`. Without this override the node logs
+# "DNS seed ... failed to resolve" on every start and falls back to peer_seeds only.
+dns_seeds = ["seeds.tari.com"]
+
+# Hardcoded peer seeds (bootstrap fallback). Mirror of the live `seeds.tari.com` TXT
+# records — re-sync periodically as seeds rotate.
+# Source of truth: `dig TXT seeds.tari.com`. Last synced 2026-05-30 (minotari_node v5.3.1).
 peer_seeds = [
     "94a4b29148621479b1c1dffb1a2f5680dcf2c0cfb901152e245d6ec299821f61::/ip4/91.134.83.67/tcp/18189",
     "1069fb56a3aaba45b9aa9839714251a4dfeb850e8d79d6ac9ca180377120fe1c::/ip4/51.75.116.227/tcp/18189",
