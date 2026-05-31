@@ -95,7 +95,15 @@ services:
     container_name: p2pool
     restart: unless-stopped
     logging: *default-logging
-    privileged: true
+    # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the
+    # RandomX dataset (IPC_LOCK) and raise thread priority (SYS_NICE).
+    cap_add:
+      - IPC_LOCK
+      - SYS_NICE
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     volumes:
       - ${P2POOL_DATA_DIR}:/root
       - ${P2POOL_DATA_DIR}/stats:/stats

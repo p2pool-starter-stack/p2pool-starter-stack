@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession
 
 from config.config import UPDATE_INTERVAL
 from client.xmrig_client import XMRigWorkerClient
@@ -51,7 +51,7 @@ class DataService:
         
         iteration_count = 0 
         
-        async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+        async with ClientSession() as session:
             worker_client = XMRigWorkerClient(session)
             tari_client = TariClient(session)
             
