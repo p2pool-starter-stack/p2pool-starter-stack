@@ -2,6 +2,7 @@ import aiohttp
 import logging
 import grpc
 import os
+import time
 
 from config.config import TARI_GRPC_ADDRESS
 
@@ -14,11 +15,20 @@ from .generated import base_node_pb2_grpc
 from google.protobuf import empty_pb2
 
 class TariClient:
+    # When the base node is briefly overloaded mid-sync (it logs "BaseNodeService failed
+    # to send reply ... ChainMetadata" and its own `status` command times out), gRPC calls
+    # fail. Serve the last good sync reading for up to this long so the dashboard doesn't
+    # flicker to 0/0 on every blip. Bounded so a genuinely down node isn't masked forever —
+    # the proper "node is down" indicator is tracked separately in the TODO.
+    _MAX_STALE_SECONDS = 300
+
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
         self.grpc_address = TARI_GRPC_ADDRESS
         self._channel = None
         self._stub = None
+        self._last_sync_status = None
+        self._last_sync_ts = 0.0
 
     def _ensure_channel(self):
         if self._channel is None:
@@ -35,14 +45,33 @@ class TariClient:
 
     async def get_sync_status(self):
         """
-        Determine Tari sync progress from the node's OWN gRPC, not the external block
-        explorer. `initial_sync_achieved` is the authoritative "fully synced" flag; while
-        syncing, GetSyncProgress.tip_height is the height the node is working toward.
+        Sync status from the node's own gRPC, with last-known-state caching.
 
-        This replaces the old explorer-based logic, whose failure mode was: a transient
-        explorer outage returned network height 0, the code assumed "synced at local
-        height", and the dashboard flashed a premature 100% ✔ before dropping back to a
-        percentage. The node always knows its own state, so there's nothing external to fail.
+        The base node can get briefly overloaded while syncing — when it does, GetTipInfo
+        times out, and we'd otherwise return an empty status that the UI renders as "0/0".
+        Instead we serve the last good reading for a short window (see _MAX_STALE_SECONDS),
+        so a busy-but-alive node keeps showing its real progress instead of flickering.
+        """
+        status = await self._fetch_sync_status()
+        if status is not None:
+            self._last_sync_status = status
+            self._last_sync_ts = time.monotonic()
+            return status
+
+        # gRPC unreachable this cycle. Serve the last good state briefly (node is likely
+        # just busy), but stop once it's clearly stale so a down node isn't masked forever.
+        if self._last_sync_status and (time.monotonic() - self._last_sync_ts) <= self._MAX_STALE_SECONDS:
+            return self._last_sync_status
+        return {"is_syncing": False}
+
+    async def _fetch_sync_status(self):
+        """
+        Read sync progress from the node's gRPC. Returns the status dict, or None if the
+        node is unreachable (so the caller can fall back to the last known state).
+
+        `initial_sync_achieved` is the authoritative "fully synced" flag; while syncing,
+        GetSyncProgress.tip_height is the height the node is working toward. Using the
+        node's own state means there's no external block explorer to fail.
         """
         try:
             stub = self._ensure_channel()
@@ -50,7 +79,7 @@ class TariClient:
         except Exception as e:
             logger.error(f"Tari gRPC GetTipInfo error: {e}")
             await self._reset_channel()
-            return {"is_syncing": False}
+            return None
 
         local_height = tip.metadata.best_block_height
 
