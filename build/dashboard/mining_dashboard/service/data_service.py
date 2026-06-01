@@ -81,10 +81,15 @@ class DataService:
                                     # worker API isn't reachable.
                                     last_share_ms = w[7] if w[7] else 0
                                     uptime_estimate = int(time.time() - last_share_ms / 1000) if last_share_ms > 0 else 0
+                                    # w[2] = active connection count. xmrig-proxy keeps a worker
+                                    # in /workers (with a decaying hashrate) after it disconnects,
+                                    # so mere presence != connected — use the connection count, or
+                                    # a stopped miner stays green and inflates the total.
+                                    connections = w[2] if len(w) > 2 else 0
                                     proxy_workers.append({
                                         "name": w[0],
                                         "ip": w[1],
-                                        "status": "online",
+                                        "status": "online" if connections > 0 else "offline",
                                         # Proxy returns kH/s, convert to H/s
                                         # Mapping: 1m(idx8)->10s & 60s (Proxy lacks 10s), 10m(idx9)->15m
                                         "h10": w[8] * 1000,
