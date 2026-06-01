@@ -3,7 +3,7 @@ import logging
 import grpc
 import os
 
-from config.config import TARI_GRPC_ADDRESS, TARI_EXPLORER_URL
+from config.config import TARI_GRPC_ADDRESS
 
 logger = logging.getLogger("TariClient")
 
@@ -17,7 +17,6 @@ class TariClient:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
         self.grpc_address = TARI_GRPC_ADDRESS
-        self.explorer_url = TARI_EXPLORER_URL
         self._channel = None
         self._stub = None
 
@@ -27,74 +26,57 @@ class TariClient:
             self._stub = base_node_pb2_grpc.BaseNodeStub(self._channel)
         return self._stub
 
-    async def get_network_height(self):
-        """Fetches the official Tari Block Explorer for the current network height."""
-        try:
-            async with self.session.get(self.explorer_url, timeout=5) as response:
-                if response.status == 200:
-                    # content_type=None allows parsing JSON even if header is text/plain
-                    data = await response.json(content_type=None)
-                    return int(data.get('tipInfo', {}).get('metadata', {}).get('best_block_height', 0))
-        except Exception as e:
-            logger.error(f"Failed to fetch Tari explorer: {e}")
-        return 0
-
-    async def get_local_height(self):
-        """Fetches the local node's tip height via gRPC."""
-        try:
-            stub = self._ensure_channel()
-            request = empty_pb2.Empty()
-            response = await stub.GetTipInfo(request, timeout=5)
-            
-            if response and response.metadata:
-                return response.metadata.best_block_height
-        except Exception as e:
-            logger.error(f"Tari gRPC Error: {e}")
-            # Reset channel to force reconnection on next attempt
-            if self._channel:
-                await self._channel.close()
-                self._channel = None
-                self._stub = None
-        return None
+    async def _reset_channel(self):
+        """Drop the gRPC channel so the next call reconnects (used after errors)."""
+        if self._channel:
+            await self._channel.close()
+        self._channel = None
+        self._stub = None
 
     async def get_sync_status(self):
         """
-        Aggregates local and network stats to determine sync progress.
-        Returns a dict compatible with the dashboard sync view.
+        Determine Tari sync progress from the node's OWN gRPC, not the external block
+        explorer. `initial_sync_achieved` is the authoritative "fully synced" flag; while
+        syncing, GetSyncProgress.tip_height is the height the node is working toward.
+
+        This replaces the old explorer-based logic, whose failure mode was: a transient
+        explorer outage returned network height 0, the code assumed "synced at local
+        height", and the dashboard flashed a premature 100% ✔ before dropping back to a
+        percentage. The node always knows its own state, so there's nothing external to fail.
         """
-        network_height = await self.get_network_height()
-        local_height = await self.get_local_height()
-        
-        # If local height is unavailable (gRPC down), we can't report status
-        if local_height is None:
+        try:
+            stub = self._ensure_channel()
+            tip = await stub.GetTipInfo(empty_pb2.Empty(), timeout=5)
+        except Exception as e:
+            logger.error(f"Tari gRPC GetTipInfo error: {e}")
+            await self._reset_channel()
             return {"is_syncing": False}
 
-        # If network height is unavailable (explorer down), assume synced at the local
-        # height — but only if we actually have one. With no local height yet (0) we
-        # have no data, so report as still syncing rather than a false 100% at 0/0.
-        if network_height == 0:
-            if local_height == 0:
-                return {"is_syncing": True, "current": 0, "target": 0, "percent": 0}
-            return {
-                "is_syncing": False,
-                "current": local_height,
-                "target": local_height,
-                "percent": 100
-            }
+        local_height = tip.metadata.best_block_height
 
-        # If local is significantly behind network (e.g. > 3 blocks), we are syncing
-        is_syncing = local_height < (network_height - 3)
-        
-        percent = 0
-        if network_height > 0:
-            percent = int((local_height / network_height) * 100)
+        # The node reports initial sync complete — trust it over any height heuristic.
+        if tip.initial_sync_achieved:
+            return {"is_syncing": False, "current": local_height,
+                    "target": local_height, "percent": 100}
 
-        return {
-            "is_syncing": is_syncing,
-            "current": local_height,
-            "target": network_height,
-            "percent": percent
-        }
+        # Still syncing: ask the node what height it is syncing toward.
+        target = 0
+        try:
+            progress = await stub.GetSyncProgress(empty_pb2.Empty(), timeout=5)
+            if progress.local_height:
+                local_height = progress.local_height
+            target = progress.tip_height
+        except Exception as e:
+            logger.error(f"Tari gRPC GetSyncProgress error: {e}")
+            await self._reset_channel()
+
+        # No reliable target yet (early startup / between sync rounds): report syncing
+        # without a false 100%, so the UI shows a loading state, not a premature ✔.
+        if target <= local_height:
+            return {"is_syncing": True, "current": local_height, "target": 0, "percent": 0}
+
+        percent = int((local_height / target) * 100)
+        return {"is_syncing": True, "current": local_height, "target": target, "percent": percent}
 
     async def close(self):
         if self._channel:
