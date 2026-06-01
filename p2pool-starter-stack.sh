@@ -119,6 +119,7 @@ show_help() {
     echo "Deploy and manage the P2Pool Starter Stack."
     echo ""
     echo "Options:"
+    echo "      --skip-optimize   Skip kernel/GRUB HugePages tuning during a deploy run"
     echo "  -s, --start     Interactive start (ask to bring up stack)"
     echo "  -sf, --start-force Force start (bring up stack immediately)"
     echo "  -d, --down      Interactive stop (ask to bring down stack)"
@@ -350,8 +351,19 @@ EOF
 provision_tor() {
     log "Initializing Tor service to generate Onion addresses..."
     docker compose up -d tor
-    log "Waiting for Hidden Services to propagate (15s)..."
-    sleep 15
+    # Poll for the three hidden-service hostname files instead of a fixed sleep — Tor can take
+    # more or less than 15s to publish them, especially on first run.
+    log "Waiting for Tor hidden services to be generated..."
+    local elapsed=0 timeout=60
+    until docker exec tor test -f /var/lib/tor/monero/hostname \
+        && docker exec tor test -f /var/lib/tor/tari/hostname \
+        && docker exec tor test -f /var/lib/tor/p2pool/hostname; do
+        if [ "$elapsed" -ge "$timeout" ]; then
+            error "Timed out after ${timeout}s waiting for Tor hidden-service hostnames."
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
 
     MONERO_ONION=$(docker exec tor cat /var/lib/tor/monero/hostname)
     TARI_ONION=$(docker exec tor cat /var/lib/tor/tari/hostname)
@@ -471,12 +483,22 @@ inject_service_configs() {
 }
 
 optimize_kernel() {
+    if [ "${SKIP_OPTIMIZE:-0}" == "1" ]; then
+        log "Skipping kernel/HugePages optimization (--skip-optimize)."
+        return 0
+    fi
     log "Applying RandomX optimizations (HugePages)..."
     if [ "$OS_TYPE" == "Linux" ]; then
         sudo sysctl -w vm.nr_hugepages=3072
 
         if [ -f "/etc/default/grub" ]; then
             if ! grep -q "hugepages=" /etc/default/grub; then
+                warn "Persistent HugePages requires editing /etc/default/grub and a reboot."
+                read -r -p "Modify GRUB for persistent HugePages now? (y/N): " GRUB_OK
+                if [[ ! "$GRUB_OK" =~ ^[Yy] ]]; then
+                    log "Skipped GRUB edit. HugePages set for this boot only (vm.nr_hugepages=3072)."
+                    return 0
+                fi
                 log "Updating GRUB configuration for persistent HugePages..."
                 sudo cp /etc/default/grub /etc/default/grub.bak
                 sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never /' /etc/default/grub
@@ -546,6 +568,12 @@ finish_deployment() {
 # --- Main Execution ---
 
 main() {
+    SKIP_OPTIMIZE=0
+    if [ "$1" == "--skip-optimize" ]; then
+        SKIP_OPTIMIZE=1
+        shift
+    fi
+
     if [ $# -gt 0 ]; then
         case "$1" in
             -s|--start)  ask_yes_no "Start the stack?" stack_up ;;

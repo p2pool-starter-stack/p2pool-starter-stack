@@ -9,7 +9,7 @@ from config.config import TARI_GRPC_ADDRESS
 logger = logging.getLogger("TariClient")
 
 # Attempt to import generated protobuf modules
-# See Readme.md for generation instructions (requires grpcio-tools)
+# See README.md for generation instructions (requires grpcio-tools)
 from .generated import base_node_pb2
 from .generated import base_node_pb2_grpc
 from google.protobuf import empty_pb2

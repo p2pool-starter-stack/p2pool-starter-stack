@@ -76,6 +76,11 @@ class DataService:
                             for w in proxy_data["workers"]:
                                 # Handle list format (XMRig Proxy 6.x+)
                                 if isinstance(w, list) and len(w) >= 13:
+                                    # w[7] = last share timestamp (ms). Use it as a fallback
+                                    # "seconds since last share" for uptime when the direct
+                                    # worker API isn't reachable.
+                                    last_share_ms = w[7] if w[7] else 0
+                                    uptime_estimate = int(time.time() - last_share_ms / 1000) if last_share_ms > 0 else 0
                                     proxy_workers.append({
                                         "name": w[0],
                                         "ip": w[1],
@@ -85,7 +90,7 @@ class DataService:
                                         "h10": w[8] * 1000,
                                         "h60": w[8] * 1000,
                                         "h15": w[9] * 1000,
-                                        "uptime": 0 
+                                        "uptime": uptime_estimate
                                     })
                                 # Handle dict format (Legacy)
                                 elif isinstance(w, dict):
@@ -115,16 +120,22 @@ class DataService:
                     for w, extra_stats in zip(proxy_workers, worker_results):
                         if extra_stats:
                             w['uptime'] = extra_stats.get('uptime', w['uptime'])
-                            
-                            # Prefer direct worker stats for hashrate if available
+
+                            # xmrig-proxy /1/summary reports hashrate in kH/s; an xmrig miner
+                            # reports H/s. The 'kind' field distinguishes them, so scale to H/s.
+                            is_proxy = extra_stats.get('kind') == 'proxy'
+                            hr_scale = 1000 if is_proxy else 1
+
                             hr_total = extra_stats.get('hashrate', {}).get('total', [])
                             if isinstance(hr_total, list) and len(hr_total) >= 3:
-                                w['h10'] = hr_total[0] if hr_total[0] is not None else 0
-                                w['h60'] = hr_total[1] if hr_total[1] is not None else 0
-                                w['h15'] = hr_total[2] if hr_total[2] is not None else 0
-                        else:
-                            w['status'] = 'unreachable'
-                        
+                                w['h10'] = (hr_total[0] or 0) * hr_scale
+                                w['h60'] = (hr_total[1] or 0) * hr_scale
+                                w['h15'] = (hr_total[2] or 0) * hr_scale
+                        # If the direct worker API is unreachable, keep the worker 'online' with
+                        # the proxy-derived hashrate/uptime (the proxy already confirmed it's
+                        # connected and submitting shares) instead of marking it 'unreachable',
+                        # which would drop it from the hashrate total and read zero. (Fixes #28.)
+
                         w['active_pool'] = active_pool_port
                         final_workers.append(w)
                     
