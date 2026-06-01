@@ -46,7 +46,10 @@ services:
       - /dev/hugepages:/dev/hugepages
       - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
     ports:
-      - "18081:18081"
+      # Default 127.0.0.1 = host-local only (no LAN exposure); p2pool reaches monerod over
+      # the internal Docker network regardless. Set monero.rpc_lan_access:true in config.json
+      # to publish on the LAN (0.0.0.0) for wallets on other machines.
+      - "${MONERO_RPC_BIND:-127.0.0.1}:18081:18081"
     networks:
       mining_net:
         ipv4_address: 172.28.0.26
@@ -197,7 +200,7 @@ services:
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
       environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
-      - TZ=America/Chicago
+      - TZ=${TZ:-America/Chicago}
       - MONERO_NODE_HOST=${MONERO_NODE_HOST:-172.28.0.26}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}

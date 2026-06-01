@@ -7,8 +7,13 @@ DataDirectory /var/lib/tor
 # Binds to 0.0.0.0 to accept connections from other services in the Docker network
 SocksPort 0.0.0.0:9050
 
-# Control interface for programmatic interaction (Required by Tari Base Node)
-ControlPort 0.0.0.0:9051
+# Control interface (required by the Tari base node, which connects from another container).
+# Bind explicitly to this container's bridge IP (for Tari at 172.28.0.27) + loopback (for the
+# bootstrap healthcheck) instead of 0.0.0.0, so the control port isn't auto-exposed on any
+# interface added later. The real protection is the cookie auth below: the auth cookie lives
+# in this container's private /var/lib/tor volume, so other bridge containers can't read it.
+ControlPort 172.28.0.25:9051
+ControlPort 127.0.0.1:9051
 
 # --- Hidden Services (Onion Routing) ---
 # Note: Target IPs (172.28.0.x) correspond to static assignments in docker-compose.yml

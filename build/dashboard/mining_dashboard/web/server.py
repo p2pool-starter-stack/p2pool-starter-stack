@@ -506,13 +506,42 @@ async def handle_index(request):
 
         return web.Response(text=response_html, content_type='text/html')
         
-    except Exception as e:
-        # Handle rendering errors gracefully
-        return web.Response(text=f"<h1>Error rendering dashboard</h1><p>{str(e)}</p><pre>{type(e).__name__}</pre>", status=500)
+    except Exception:
+        # Log the full error server-side; never leak exception details to the browser.
+        logger.exception("Error rendering dashboard")
+        return web.Response(
+            text="<h1>Dashboard error</h1><p>Something went wrong rendering the page. "
+                 "See the dashboard container logs for details.</p>",
+            status=500,
+            content_type='text/html',
+        )
+
+def _apply_security_headers(response):
+    """Baseline hardening headers. CSP is self-only (Chart.js is vendored locally);
+    'unsafe-inline' is required because the template has inline <style>/<script> blocks."""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+        "base-uri 'self'; form-action 'self'"
+    )
+    return response
+
+
+@web.middleware
+async def security_headers_middleware(request, handler):
+    """Apply security headers to every response, including aiohttp error responses."""
+    try:
+        return _apply_security_headers(await handler(request))
+    except web.HTTPException as exc:
+        raise _apply_security_headers(exc)
+
 
 def create_app(state_manager, latest_data_ref):
     """Factory to create the web app instance."""
-    app = web.Application()
+    app = web.Application(middlewares=[security_headers_middleware])
     # Pass shared state objects to the app context
     app['state_manager'] = state_manager
     app['latest_data'] = latest_data_ref

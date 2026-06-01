@@ -338,6 +338,7 @@ PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=1
 MONERO_PREP_THREADS=4
+MONERO_RPC_BIND=127.0.0.1
 MONERO_NODE_HOST=172.28.0.26
 MONERO_RPC_PORT=18081
 MONERO_ZMQ_PORT=18083
@@ -397,6 +398,16 @@ finalize_env() {
     fi
     log "Monero block-prep threads set to $MONERO_PREP_THREADS (host cores: $(nproc 2>/dev/null || echo '?'))"
 
+    # monerod RPC LAN exposure. Default localhost-only: p2pool reaches monerod over the
+    # internal Docker network regardless, so the published port is only for external wallets.
+    # Set monero.rpc_lan_access:true in config.json to publish on the LAN (0.0.0.0).
+    MONERO_RPC_LAN=$(jq -r '.monero.rpc_lan_access // false' "$CONFIG_FILE")
+    if [ "$MONERO_RPC_LAN" == "true" ]; then
+        MONERO_RPC_BIND="0.0.0.0"
+    else
+        MONERO_RPC_BIND="127.0.0.1"
+    fi
+
     # P2Pool Config
     POOL_TYPE=$(jq -r '.p2pool.pool // "main"' "$CONFIG_FILE")
     P2POOL_FLAGS=""
@@ -443,6 +454,7 @@ PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=$MONERO_PRUNE
 MONERO_PREP_THREADS=$MONERO_PREP_THREADS
+MONERO_RPC_BIND=$MONERO_RPC_BIND
 MONERO_NODE_HOST=$MONERO_HOST
 MONERO_RPC_PORT=$RPC_PORT
 MONERO_ZMQ_PORT=$ZMQ_PORT
