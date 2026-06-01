@@ -15,7 +15,7 @@ A professional-grade, containerized infrastructure for running a private [Monero
 *   **Robust & Secure:** All services are containerized. Binaries are verified via SHA256 hashes during build, and services run with least-privilege users where applicable.
 
 ## 🏗️ Architecture
-The stack orchestrates seven primary services via Docker Compose:
+The stack orchestrates eight primary services via Docker Compose:
 1.  **Monerod:** The Monero daemon (Full Node). Configured for restricted RPC and Tor transaction broadcasting.
 2.  **P2Pool:** The decentralized mining sidechain, with support for Main, Mini, and Nano pools.
 3.  **Tari Base Node:** The Minotari node for merge mining with Monero.
@@ -23,6 +23,7 @@ The stack orchestrates seven primary services via Docker Compose:
 5.  **Tor:** A centralized anonymity layer providing SOCKS5 proxies and Hidden Services for all containers.
 6.  **Dashboard:** The web-based monitoring UI and algorithmic switching engine.
 7.  **Docker Proxy:** A secure, read-only proxy for the Docker Socket, allowing the Dashboard to safely query container stats.
+8.  **Caddy:** A reverse proxy that serves the Dashboard over HTTPS (automatic local TLS) on the LAN.
 
 ### High-Level Diagram
 
@@ -121,10 +122,12 @@ When configuring your worker's `config.json`, the `user` field should be your wo
 For a fully automated and optimized worker setup, see the **High-Performance Worker Provisioning Kit** in the `worker/` directory.
 
 ## 📈 Monitoring
-Access the dashboard in your web browser:
-*   `http://<your-server-ip>:8000` (or `http://localhost:8000`)
+Access the dashboard in your web browser over HTTPS (served by Caddy):
+*   `https://<your-hostname>` — the hostname you set during deployment.
 
-The script will print the exact URL when you start the stack.
+Caddy uses a self-signed certificate (`tls internal`), so the first time you visit, your browser
+will show a one-time "your connection is not private" / untrusted-certificate warning — accept it
+to proceed. The script prints the exact URL when you start the stack.
 
 ## 🛠️ Maintenance
 Use the `p2pool-starter-stack.sh` script to manage your stack.

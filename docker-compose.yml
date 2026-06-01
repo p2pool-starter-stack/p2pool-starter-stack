@@ -16,11 +16,15 @@ services:
     networks:
       mining_net:
         ipv4_address: 172.28.0.25
+    # Healthy only once Tor has finished bootstrapping (circuits built), not merely
+    # when the SOCKS port is open — so tari/monerod don't start against a Tor that
+    # can't route yet. start_period covers a cold bootstrap without counting failures.
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "9050"]
+      test: ["CMD", "/usr/local/bin/tor-healthcheck.sh"]
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 5
+      start_period: 90s
 
   # --- Monero Daemon (monerod) ---
   # Only starts if "local_node" profile is active
@@ -36,12 +40,16 @@ services:
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
       - MONERO_PRUNE=${MONERO_PRUNE}
+      - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
     volumes:
       - ${MONERO_DATA_DIR}:/root/.bitmonero
       - /dev/hugepages:/dev/hugepages
       - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
     ports:
-      - "18081:18081"
+      # Default 127.0.0.1 = host-local only (no LAN exposure); p2pool reaches monerod over
+      # the internal Docker network regardless. Set monero.rpc_lan_access:true in config.json
+      # to publish on the LAN (0.0.0.0) for wallets on other machines.
+      - "${MONERO_RPC_BIND:-127.0.0.1}:18081:18081"
     networks:
       mining_net:
         ipv4_address: 172.28.0.26
@@ -57,7 +65,7 @@ services:
 
   # --- Tari Base Node ---
   tari:
-    image: quay.io/tarilabs/minotari_node:v5.2.1-mainnet
+    image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet
     container_name: tari
     restart: unless-stopped
     stop_grace_period: 1m
@@ -95,7 +103,15 @@ services:
     container_name: p2pool
     restart: unless-stopped
     logging: *default-logging
-    privileged: true
+    # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the
+    # RandomX dataset (IPC_LOCK) and raise thread priority (SYS_NICE).
+    cap_add:
+      - IPC_LOCK
+      - SYS_NICE
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     volumes:
       - ${P2POOL_DATA_DIR}:/root
       - ${P2POOL_DATA_DIR}/stats:/stats
@@ -184,7 +200,7 @@ services:
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
       environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
-      - TZ=America/Chicago
+      - TZ=${TZ:-America/Chicago}
       - MONERO_NODE_HOST=${MONERO_NODE_HOST:-172.28.0.26}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
@@ -199,7 +215,7 @@ services:
 
   # --- Docker Socket Proxy ---
   docker-proxy:
-    image: tecnativa/docker-socket-proxy
+    image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-proxy
     restart: unless-stopped
     volumes:
@@ -215,7 +231,7 @@ services:
   # Bridges the local 127.0.0.1 application binding to the LAN
   # Serves HTTPS or HTTP depending on configuration
   caddy:
-    image: caddy:latest
+    image: caddy:2.11
     container_name: caddy
     restart: unless-stopped
     network_mode: "host"

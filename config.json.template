@@ -6,6 +6,8 @@
         "node_password": "create_a_password_for_node",
         "data_dir": "DYNAMIC_DATA",
         "prune": true,
+        "prep_blocks_threads": "auto",
+        "rpc_lan_access": false,
         "remote": {
             "host": "node.remote-monero-host.com",
             "rpc_port": 18081,

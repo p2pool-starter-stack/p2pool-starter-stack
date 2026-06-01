@@ -119,6 +119,7 @@ show_help() {
     echo "Deploy and manage the P2Pool Starter Stack."
     echo ""
     echo "Options:"
+    echo "      --skip-optimize   Skip kernel/GRUB HugePages tuning during a deploy run"
     echo "  -s, --start     Interactive start (ask to bring up stack)"
     echo "  -sf, --start-force Force start (bring up stack immediately)"
     echo "  -d, --down      Interactive stop (ask to bring down stack)"
@@ -337,6 +338,8 @@ P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=1
+MONERO_PREP_THREADS=4
+MONERO_RPC_BIND=127.0.0.1
 MONERO_NODE_HOST=172.28.0.26
 MONERO_RPC_PORT=18081
 MONERO_ZMQ_PORT=18083
@@ -348,8 +351,19 @@ EOF
 provision_tor() {
     log "Initializing Tor service to generate Onion addresses..."
     docker compose up -d tor
-    log "Waiting for Hidden Services to propagate (15s)..."
-    sleep 15
+    # Poll for the three hidden-service hostname files instead of a fixed sleep — Tor can take
+    # more or less than 15s to publish them, especially on first run.
+    log "Waiting for Tor hidden services to be generated..."
+    local elapsed=0 timeout=60
+    until docker exec tor test -f /var/lib/tor/monero/hostname \
+        && docker exec tor test -f /var/lib/tor/tari/hostname \
+        && docker exec tor test -f /var/lib/tor/p2pool/hostname; do
+        if [ "$elapsed" -ge "$timeout" ]; then
+            error "Timed out after ${timeout}s waiting for Tor hidden-service hostnames."
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
 
     MONERO_ONION=$(docker exec tor cat /var/lib/tor/monero/hostname)
     TARI_ONION=$(docker exec tor cat /var/lib/tor/tari/hostname)
@@ -380,6 +394,30 @@ finalize_env() {
         MONERO_PRUNE=1
     else
         MONERO_PRUNE=0
+    fi
+
+    # Block-verification threads — hardware-dependent, so derive from THIS host's core
+    # count rather than hardcoding (more cores = faster initial-sync verification).
+    # Reserve 2 cores for the system/p2pool and cap at 8 (prep-blocks-threads sees
+    # diminishing returns past that). Override by setting a number in config.json
+    # (monero.prep_blocks_threads) — e.g. lower it if this host also runs a CPU miner.
+    MONERO_PREP_THREADS=$(jq -r '.monero.prep_blocks_threads // "auto"' "$CONFIG_FILE")
+    if ! [[ "$MONERO_PREP_THREADS" =~ ^[0-9]+$ ]]; then
+        CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+        MONERO_PREP_THREADS=$(( CORES - 2 ))
+        [ "$MONERO_PREP_THREADS" -lt 4 ] && MONERO_PREP_THREADS=4
+        [ "$MONERO_PREP_THREADS" -gt 8 ] && MONERO_PREP_THREADS=8
+    fi
+    log "Monero block-prep threads set to $MONERO_PREP_THREADS (host cores: $(nproc 2>/dev/null || echo '?'))"
+
+    # monerod RPC LAN exposure. Default localhost-only: p2pool reaches monerod over the
+    # internal Docker network regardless, so the published port is only for external wallets.
+    # Set monero.rpc_lan_access:true in config.json to publish on the LAN (0.0.0.0).
+    MONERO_RPC_LAN=$(jq -r '.monero.rpc_lan_access // false' "$CONFIG_FILE")
+    if [ "$MONERO_RPC_LAN" == "true" ]; then
+        MONERO_RPC_BIND="0.0.0.0"
+    else
+        MONERO_RPC_BIND="127.0.0.1"
     fi
 
     # P2Pool Config
@@ -427,6 +465,8 @@ P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=$MONERO_PRUNE
+MONERO_PREP_THREADS=$MONERO_PREP_THREADS
+MONERO_RPC_BIND=$MONERO_RPC_BIND
 MONERO_NODE_HOST=$MONERO_HOST
 MONERO_RPC_PORT=$RPC_PORT
 MONERO_ZMQ_PORT=$ZMQ_PORT
@@ -443,12 +483,22 @@ inject_service_configs() {
 }
 
 optimize_kernel() {
+    if [ "${SKIP_OPTIMIZE:-0}" == "1" ]; then
+        log "Skipping kernel/HugePages optimization (--skip-optimize)."
+        return 0
+    fi
     log "Applying RandomX optimizations (HugePages)..."
     if [ "$OS_TYPE" == "Linux" ]; then
         sudo sysctl -w vm.nr_hugepages=3072
 
         if [ -f "/etc/default/grub" ]; then
             if ! grep -q "hugepages=" /etc/default/grub; then
+                warn "Persistent HugePages requires editing /etc/default/grub and a reboot."
+                read -r -p "Modify GRUB for persistent HugePages now? (y/N): " GRUB_OK
+                if [[ ! "$GRUB_OK" =~ ^[Yy] ]]; then
+                    log "Skipped GRUB edit. HugePages set for this boot only (vm.nr_hugepages=3072)."
+                    return 0
+                fi
                 log "Updating GRUB configuration for persistent HugePages..."
                 sudo cp /etc/default/grub /etc/default/grub.bak
                 sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never /' /etc/default/grub
@@ -518,6 +568,12 @@ finish_deployment() {
 # --- Main Execution ---
 
 main() {
+    SKIP_OPTIMIZE=0
+    if [ "$1" == "--skip-optimize" ]; then
+        SKIP_OPTIMIZE=1
+        shift
+    fi
+
     if [ $# -gt 0 ]; then
         case "$1" in
             -s|--start)  ask_yes_no "Start the stack?" stack_up ;;
