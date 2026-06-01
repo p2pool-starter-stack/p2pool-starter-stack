@@ -1,0 +1,47 @@
+{
+    "_docs": "Reference for every config.json key, each shown with its default value. Copy ONLY the keys you actually want to change into config.json; any key you omit keeps the default below. The string \"auto\" means 'let the stack decide' (default path / hostname / donor id). Full descriptions: https://github.com/VijitSingh97/p2pool-starter-stack#configuration-reference",
+
+    "monero": {
+        "mode": "local",
+        "wallet_address": "your_monero_wallet_address",
+        "node_username": "create_a_username_for_node",
+        "node_password": "create_a_password_for_node",
+
+        "prune": true,
+        "prep_blocks_threads": "auto",
+        "rpc_lan_access": false,
+        "data_dir": "auto",
+
+        "remote": {
+            "host": "node.remote-monero-host.com",
+            "rpc_port": 18081,
+            "zmq_port": 18083
+        }
+    },
+
+    "tari": {
+        "wallet_address": "your_tari_wallet_address",
+        "data_dir": "auto"
+    },
+
+    "p2pool": {
+        "pool": "main",
+        "data_dir": "auto"
+    },
+
+    "xvb": {
+        "enabled": true,
+        "url": "na.xmrvsbeast.com:4247",
+        "donor_id": "auto"
+    },
+
+    "tor": {
+        "data_dir": "auto"
+    },
+
+    "dashboard": {
+        "secure": true,
+        "host": "auto",
+        "data_dir": "auto"
+    }
+}

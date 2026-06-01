@@ -80,26 +80,46 @@ The Dashboard service contains the decision engine. It constantly monitors your 
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
-*   **OS:** Ubuntu 24.04 LTS (Recommended) or macOS.
+*   **OS:** Ubuntu Server **24.04 LTS** is the officially supported platform. Other Linux distros and macOS may work but aren't officially supported.
 *   **Hardware:** A CPU with AVX2 support is highly recommended for RandomX performance.
-*   **Software:** Docker Engine & Docker Compose V2.
-*   **Utilities:** `jq` and `openssl` must be installed.
-    ```bash
-    # On Ubuntu/Debian
-    sudo apt update && sudo apt install -y jq docker.io docker-compose-v2 openssl
-    ```
+*   **Software:** Docker Engine, Docker Compose V2, `jq`, and `openssl`.
+
+`setup` checks for these dependencies and, **on Ubuntu, offers to install any that are missing** for you. If you'd rather install them yourself:
+```bash
+sudo apt update && sudo apt install -y jq docker.io docker-compose-v2 openssl
+```
+On an unsupported OS, or if dependency detection misfires on an exotic setup, run `setup` with `--skip-deps` to bypass the check.
 
 ### 2. Deployment
-The `p2pool-starter-stack.sh` script is your single point of entry for managing the stack.
+The `stack.sh` script is your single point of entry for setting up and managing the stack.
 
-1.  **Run the script:**
+1.  **Run setup:**
     ```bash
-    chmod +x p2pool-starter-stack.sh
-    ./p2pool-starter-stack.sh
+    chmod +x stack.sh
+    ./stack.sh setup
     ```
-2.  **Interactive Setup:** If this is your first time running the script, it will prompt you for your Monero and Tari wallet addresses and a username/password for your Monero node. It will then generate a `config.json` file for you.
-3.  **Kernel Optimization (Linux Only):** The script will configure HugePages for optimal mining performance. A **reboot is required** for these changes to take effect.
-4.  **Start the stack:** After the initial setup (and reboot if required), the script will ask if you want to start the stack.
+2.  **Dependency check:** `setup` first verifies Docker, Docker Compose, `jq`, and `openssl` are present. On Ubuntu it offers to `apt install` anything missing; on other systems it tells you exactly what to install. Add `--skip-deps` to skip this entirely.
+3.  **Interactive Setup:** On first run, `setup` asks for your Monero and Tari wallet addresses and whether you're using a **local** or **remote** Monero node. For a local node it **auto-generates** the internal RPC credentials for you (they're saved in `config.json`/`.env`). It writes a minimal `config.json` and locks it down to owner-only (`chmod 600`).
+4.  **Kernel Optimization (Linux Only):** `setup` configures HugePages for RandomX performance. Making HugePages *persistent* edits GRUB and requires a **reboot** — you'll be prompted before any GRUB change, and you can skip the whole step with `./stack.sh setup --skip-optimize`.
+5.  **Start the stack:** After setup (and a reboot if you enabled persistent HugePages), `setup` offers to start the stack for you.
+
+### 3. Changing settings later
+`config.json` is the single source of truth. To change anything after setup:
+
+1.  Edit `config.json`.
+2.  Run `./stack.sh apply`.
+
+`apply` first **previews exactly what will change** (diffing your edited `config.json` against the running configuration), **warns before anything disruptive** — switching the Monero node local↔remote, toggling pruning, changing a payout address, exposing the RPC to your LAN, or moving a data directory all trigger a confirmation prompt — and then regenerates the `.env`, Caddy, and Tari configs and recreates **only** the containers that need it. It does **not** re-provision Tor, touch GRUB, or rotate the proxy token, so it's safe to run anytime. If nothing changed, it does nothing.
+
+```bash
+# edit config.json, then:
+./stack.sh apply        # shows the changes and asks before disruptive ones
+./stack.sh apply -y     # skip the confirmation prompt (for scripting)
+```
+
+For example, to switch P2Pool from `main` to `mini`, or flip the dashboard to plain HTTP, edit `config.json` and run `./stack.sh apply`.
+
+See [Configuration](#-configuration) for every available setting.
 
 ## ⛏️ Adding Workers
 Connect your XMRig workers to the IP address of the machine running the stack on port `3333`.
@@ -129,18 +149,57 @@ Caddy uses a self-signed certificate (`tls internal`), so the first time you vis
 will show a one-time "your connection is not private" / untrusted-certificate warning — accept it
 to proceed. The script prints the exact URL when you start the stack.
 
+## ⚙️ Configuration
+`config.json` is the single source of truth for the stack. The interactive `setup` writes a minimal
+one for you, or you can start from the template:
+```bash
+cp config.json.template config.json
+```
+Edit it, then run `./stack.sh apply` to propagate your changes.
+
+Only a few keys are required — your wallets, the node mode/credentials, the pool, and whether the
+dashboard is served securely. **Every other key is optional and falls back to a sensible default,
+so leave it out unless you want to change it.** For the complete shape with every key and its
+default, see [`config.advanced.example.json`](config.advanced.example.json) and copy in only the
+keys you want to override.
+
+### Configuration reference
+
+| Key | Default | Description |
+|---|---|---|
+| `monero.mode` | `local` | `local` runs the bundled Monero node; `remote` connects to an external node (see `monero.remote`). |
+| `monero.wallet_address` | _required_ | Your Monero payout address. |
+| `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC. `setup` auto-generates them; they're internal to the stack (only monerod, p2pool and the dashboard use them). For a remote node, set only if it requires auth. |
+| `monero.prune` | `true` | Prune the Monero blockchain to save disk space. |
+| `monero.prep_blocks_threads` | `auto` | Block-verification threads during sync. `auto` = host cores − 2, clamped to 4–8. |
+| `monero.rpc_lan_access` | `false` | `true` publishes the node's RPC on the LAN (`0.0.0.0`) for wallets on other machines; default is localhost-only. |
+| `monero.remote.host` / `rpc_port` / `zmq_port` | — / `18081` / `18083` | Remote node connection details (used when `mode` is `remote`). |
+| `tari.wallet_address` | _required_ | Your Tari (Minotari) payout address. |
+| `p2pool.pool` | `main` | P2Pool sidechain: `main`, `mini`, or `nano`. |
+| `xvb.enabled` | `true` | Enable XMRvsBeast bonus-round hashrate switching. |
+| `xvb.url` | `na.xmrvsbeast.com:4247` | XMRvsBeast pool endpoint. |
+| `xvb.donor_id` | `auto` | XvB donor id. `auto` = the first 8 characters of your Monero address. |
+| `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
+| `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
+| `*.data_dir` | `auto` | Per-service data directory. `auto` = `./data/<service>`. |
+
+> The string `"auto"` anywhere means "let the stack pick the default."
+
 ## 🛠️ Maintenance
-Use the `p2pool-starter-stack.sh` script to manage your stack.
+Use the `stack.sh` script to manage your stack. Run `./stack.sh help` to see everything.
 
 | Command | Description |
 |---|---|
-| `./p2pool-starter-stack.sh -s` | Start the stack. |
-| `./p2pool-starter-stack.sh -d` | Stop the stack. |
-| `./p2pool-starter-stack.sh -r` | Restart the stack. |
-| `./p2pool-starter-stack.sh -u` | Upgrade the stack (rebuilds containers). |
-| `./p2pool-starter-stack.sh -l` | View the logs of all containers. |
-| `./p2pool-starter-stack.sh -st`| Check the status of the containers. |
-| `./p2pool-starter-stack.sh -rd`| **DESTRUCTIVE!** Wipes and refreshes the Dashboard and P2Pool data. |
+| `./stack.sh setup` | First-time setup (interactive). `--skip-optimize` skips kernel/GRUB tuning; `--skip-deps` skips the dependency check/install. |
+| `./stack.sh apply` | Preview and apply `config.json` changes (warns before disruptive ones, recreates only what changed). `-y` skips the prompt. |
+| `./stack.sh up` | Start the stack. |
+| `./stack.sh down` | Stop the stack. |
+| `./stack.sh restart` | Restart the stack. |
+| `./stack.sh upgrade` | Rebuild and restart the containers (after a `git pull`). |
+| `./stack.sh logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
+| `./stack.sh status` | Show container status. |
+| `./stack.sh reset-dashboard` | **DESTRUCTIVE!** Wipes and recreates the Dashboard and P2Pool data. |
+| `./stack.sh help` | Show all commands. |
 
 **To update the stack:**
 First, pull the latest changes from the repository:
@@ -149,7 +208,7 @@ git pull
 ```
 Then run the upgrade command:
 ```bash
-./p2pool-starter-stack.sh -u
+./stack.sh upgrade
 ```
 
 

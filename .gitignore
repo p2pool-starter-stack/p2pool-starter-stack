@@ -1,5 +1,6 @@
 # Secrets and Env
 .env
+.env.new
 config.json
 /data/
 /worker/data/
