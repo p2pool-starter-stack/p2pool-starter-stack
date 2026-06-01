@@ -112,8 +112,13 @@ async def _get_remote_monero_sync_status():
 async def _get_local_monero_sync_status():
     """
     Parses local monerod docker logs to determine if the node is currently syncing.
+
+    Recent monerod (v0.18.x at log-level 0) no longer prints the old "Synced N/M"
+    progress line — it logs "... top block candidate: CURRENT -> TARGET ..." instead.
+    We match both formats, and read a larger tail so the DNS-blocklist "Host ... blocked"
+    spam can't push the most recent sync line out of the window.
     """
-    logs = await get_monero_logs(tail=100)
+    logs = await get_monero_logs(tail=250)
     if not logs or (len(logs) == 1 and logs[0].startswith("Error")):
         return {"is_syncing": False}
 
@@ -121,12 +126,17 @@ async def _get_local_monero_sync_status():
         if "You are now synchronized" in line:
             return {"is_syncing": False}
 
+        # Old format: "Synced 1351344/3686301 (36%, ...)"
         match = re.search(r"Synced\s+(\d+)/(\d+)", line)
+        # Current format: "... top block candidate: 1351344 -> 3686301 [Your node is ...]"
+        if not match:
+            match = re.search(r"top block candidate:\s*(\d+)\s*->\s*(\d+)", line)
+
         if match:
             current = int(match.group(1))
             target = int(match.group(2))
 
-            if current >= target:
+            if target == 0 or current >= target:
                 return {"is_syncing": False}
 
             percent = 0
@@ -142,7 +152,7 @@ async def _get_local_monero_sync_status():
                 "target": target,
                 "percent": percent
             }
-            
+
     return {"is_syncing": False}
 
 async def get_monero_sync_status():
