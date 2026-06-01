@@ -1,5 +1,5 @@
 # --- Tari Base Node Configuration Template ---
-# This file is processed by deploy.sh to inject the specific Onion address.
+# This file is processed by stack.sh to inject the specific Onion address.
 
 [common]
 # Base directory for blockchain database and logs
