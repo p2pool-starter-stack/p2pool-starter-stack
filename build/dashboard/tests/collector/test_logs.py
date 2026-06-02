@@ -90,11 +90,13 @@ class TestRemoteSyncStatus:
             assert await logs._get_remote_monero_sync_status() == {"is_syncing": False}
 
 
-class TestLocalSyncStatus:
+class TestLogSyncStatus:
+    """Log-scraping fallback path (`_get_monero_sync_status_from_logs`)."""
+
     async def test_new_format_top_block_candidate(self):
         with patch.object(logs, "get_monero_logs",
                           AsyncMock(return_value=["top block candidate: 100 -> 200 [node]"])):
-            status = await logs._get_local_monero_sync_status()
+            status = await logs._get_monero_sync_status_from_logs()
         assert status["is_syncing"] is True
         assert status["current"] == 100 and status["target"] == 200
         assert status["percent"] == 50
@@ -102,16 +104,37 @@ class TestLocalSyncStatus:
     async def test_old_synced_format(self):
         with patch.object(logs, "get_monero_logs",
                           AsyncMock(return_value=["Synced 50/100 (50%, ...)"])):
-            assert (await logs._get_local_monero_sync_status())["percent"] == 50
+            assert (await logs._get_monero_sync_status_from_logs())["percent"] == 50
 
     async def test_already_synchronized(self):
         with patch.object(logs, "get_monero_logs",
                           AsyncMock(return_value=["You are now synchronized with the network"])):
-            assert await logs._get_local_monero_sync_status() == {"is_syncing": False}
+            assert await logs._get_monero_sync_status_from_logs() == {"is_syncing": False}
 
     async def test_error_logs(self):
         with patch.object(logs, "get_monero_logs", AsyncMock(return_value=["Error: nope"])):
-            assert await logs._get_local_monero_sync_status() == {"is_syncing": False}
+            assert await logs._get_monero_sync_status_from_logs() == {"is_syncing": False}
+
+
+class TestLocalSyncStatus:
+    """Orchestrator: prefer the get_info RPC, fall back to log scraping when unreachable."""
+
+    async def test_rpc_result_used_when_available(self):
+        # RPC returns a status → use it directly, never touch the docker logs.
+        rpc_status = {"is_syncing": True, "current": 10, "target": 20, "percent": 50}
+        with patch.object(logs._monero_client, "get_sync_status", return_value=rpc_status), \
+             patch.object(logs, "get_monero_logs", AsyncMock()) as mock_logs:
+            status = await logs._get_local_monero_sync_status()
+        assert status == rpc_status
+        mock_logs.assert_not_called()
+
+    async def test_falls_back_to_logs_when_rpc_unreachable(self):
+        # RPC returns None (node unreachable / creds absent) → scrape logs instead.
+        with patch.object(logs._monero_client, "get_sync_status", return_value=None), \
+             patch.object(logs, "get_monero_logs",
+                          AsyncMock(return_value=["Synced 50/100 (50%, ...)"])):
+            status = await logs._get_local_monero_sync_status()
+        assert status["is_syncing"] is True and status["percent"] == 50
 
 
 class TestDispatch:

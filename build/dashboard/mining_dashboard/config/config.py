@@ -69,6 +69,14 @@ DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")
 
+# monerod's get_info RPC, used to read sync height/target directly instead of scraping
+# docker logs (Issue #29). Reachable because the dashboard runs network_mode: host and
+# monerod publishes 127.0.0.1:18081. Credentials are required by monerod's restricted-rpc
+# + rpc-login (digest auth); absent creds simply make the RPC fail and fall back to logs.
+MONERO_RPC_URL = os.environ.get("MONERO_RPC_URL", "http://127.0.0.1:18081")
+MONERO_NODE_USERNAME = os.environ.get("MONERO_NODE_USERNAME", "")
+MONERO_NODE_PASSWORD = os.environ.get("MONERO_NODE_PASSWORD", "")
+
 # --- Tari Configuration ---
 # Connection details for the Tari Base Node and Block Explorer
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
