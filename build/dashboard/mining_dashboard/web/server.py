@@ -352,6 +352,34 @@ def _get_pool_network_context(data):
         'net_ts': format_time_abs(network_stats.get('timestamp', 0)),
     }
 
+def _avg_p2pool_over_window(history, window_seconds):
+    """Time-weighted P2Pool hashrate over the trailing window, from DB history.
+
+    Averages the per-sample ``v_p2pool`` (hashrate attributed to P2Pool) for
+    samples within the window. Samples are written at a fixed cadence
+    (UPDATE_INTERVAL), so a simple mean approximates a time-weighted average.
+    Mirrors the chart's legacy-data fallback: rows predating the p2pool/xvb
+    split (v_p2pool == v_xvb == 0 but v > 0) are counted as P2Pool. (Issue #27)
+    """
+    if not history:
+        return 0.0
+
+    cutoff = time.time() - window_seconds
+    total = 0.0
+    count = 0
+    for x in history:
+        if x.get('timestamp', 0) < cutoff:
+            continue
+        vp = x.get('v_p2pool', 0) or 0
+        vx = x.get('v_xvb', 0) or 0
+        v = x.get('v', 0) or 0
+        if vp == 0 and vx == 0 and v > 0:
+            vp = v
+        total += vp
+        count += 1
+
+    return total / count if count else 0.0
+
 def _get_algo_context(data, state_mgr, history):
     """Calculates algorithm switching logic, donation tiers, and hashrate averages."""
     xvb_stats = state_mgr.get_xvb_stats() or {}
@@ -363,20 +391,25 @@ def _get_algo_context(data, state_mgr, history):
     c_blue = "#58a6ff"
     c_muted = "#8b949e"
 
-    mode_color = c_green
-    p2p_color = c_green
-    xvb_color = c_muted
-
-    if "XVB" in current_mode: 
-        mode_color = c_purple
-        p2p_color = c_muted
-        xvb_color = c_purple
-    if "Split" in current_mode: 
+    # Pool activity coloring: the active pool is colored, the inactive one muted.
+    # Symmetric — P2Pool dims when XvB is active, and vice versa (Issue #27).
+    # Checked most-specific first: "XVB (Split)" contains both "Split" and "XVB".
+    if not ENABLE_XVB:
+        current_mode = "P2POOL (XvB Disabled)"
+        mode_color = c_green
+        p2p_color = c_green
+        xvb_color = c_muted
+    elif "Split" in current_mode:
+        # Split cycle alternates pools within the window — both are active.
         mode_color = c_blue
         p2p_color = c_green
         xvb_color = c_purple
-    if not ENABLE_XVB: 
-        current_mode = "P2POOL (XvB Disabled)"
+    elif "XVB" in current_mode:
+        mode_color = c_purple
+        p2p_color = c_muted
+        xvb_color = c_purple
+    else:  # P2POOL
+        mode_color = c_green
         p2p_color = c_green
         xvb_color = c_muted
 
@@ -384,9 +417,12 @@ def _get_algo_context(data, state_mgr, history):
     xvb_1h_val = xvb_stats.get('avg_1h', 0)
     xvb_24h_val = xvb_stats.get('avg_24h', 0)
 
-    stratum_stats = data.get('stratum', {})
-    p2p_1h_val = stratum_stats.get('hashrate_1h', 0)
-    p2p_24h_val = stratum_stats.get('hashrate_24h', 0)
+    # P2Pool 1h/24h averages from our own DB history: the time-weighted hashrate
+    # actually delivered to P2Pool (v_p2pool), rather than p2pool's noisy stratum
+    # estimate or a total-minus-XvB subtraction. The raw stratum reading is still
+    # shown separately in the "Stratum (15m/1h/24h)" card. (Issue #27)
+    p2p_1h_val = _avg_p2pool_over_window(history, 3600)
+    p2p_24h_val = _avg_p2pool_over_window(history, 86400)
 
     tiers = state_mgr.get_tiers()
     tier_name, _ = get_tier_info(xvb_24h_val, tiers)

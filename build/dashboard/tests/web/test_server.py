@@ -92,6 +92,74 @@ class TestChartContext:
         assert isinstance(ctx, dict)
 
 
+class TestAvgP2poolOverWindow:
+    def test_empty_history_returns_zero(self):
+        assert server._avg_p2pool_over_window([], 3600) == 0.0
+
+    def test_averages_v_p2pool_in_window(self):
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 1000, "v_xvb": 0},
+            {"timestamp": now - 60, "v": 500, "v_p2pool": 500, "v_xvb": 0},
+        ]
+        assert server._avg_p2pool_over_window(history, 3600) == 750.0
+
+    def test_excludes_samples_outside_window(self):
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 1000, "v_xvb": 0},
+            {"timestamp": now - 7200, "v": 200, "v_p2pool": 200, "v_xvb": 0},
+        ]
+        assert server._avg_p2pool_over_window(history, 3600) == 1000.0
+
+    def test_legacy_rows_count_as_p2pool(self):
+        now = time.time()
+        history = [{"timestamp": now - 30, "v": 800, "v_p2pool": 0, "v_xvb": 0}]
+        assert server._avg_p2pool_over_window(history, 3600) == 800.0
+
+    def test_xvb_samples_drag_average_down(self):
+        # Time spent donating to XvB reduces the P2Pool average (v_p2pool == 0 then).
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 1000, "v_xvb": 0},
+            {"timestamp": now - 60, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+        ]
+        assert server._avg_p2pool_over_window(history, 3600) == 500.0
+
+
+class TestAlgoContextColors:
+    MUTED = "#8b949e"
+
+    def _ctx(self, mode):
+        sm = StateManager(db_path=":memory:")
+        sm.update_xvb_stats(mode=mode)
+        try:
+            return server._get_algo_context({"total_live_h15": 100000}, sm, [])
+        finally:
+            sm.close()
+
+    def test_p2pool_mode_grays_xvb(self):
+        ctx = self._ctx("P2POOL")
+        assert ctx["xvb_color"] == self.MUTED
+        assert ctx["p2p_color"] != self.MUTED
+
+    def test_xvb_mode_grays_p2pool(self):
+        ctx = self._ctx("XVB")
+        assert ctx["p2p_color"] == self.MUTED
+        assert ctx["xvb_color"] != self.MUTED
+
+    def test_split_mode_both_active(self):
+        ctx = self._ctx("XVB (Split)")
+        assert ctx["p2p_color"] != self.MUTED
+        assert ctx["xvb_color"] != self.MUTED
+
+    def test_xvb_disabled_grays_xvb(self, monkeypatch):
+        monkeypatch.setattr(server, "ENABLE_XVB", False)
+        ctx = self._ctx("XVB")
+        assert ctx["xvb_color"] == self.MUTED
+        assert "Disabled" in ctx["mode_name"]
+
+
 class TestHelpers:
     def test_get_cached_template_returns_str(self):
         assert isinstance(get_cached_template(), str)
