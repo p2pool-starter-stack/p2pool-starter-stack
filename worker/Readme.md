@@ -24,7 +24,7 @@ This script automates the deployment of a high-performance [XMRig](https://githu
 ### 1. Clone the Repository
 On the machine you want to provision as a worker:
 ```bash
-git clone https://github.com/VijitSingh97/p2pool-starter-stack.git
+git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
 cd p2pool-starter-stack/worker
 ```
 
