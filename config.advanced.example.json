@@ -4,8 +4,8 @@
     "monero": {
         "mode": "local",
         "wallet_address": "your_monero_wallet_address",
-        "node_username": "create_a_username_for_node",
-        "node_password": "create_a_password_for_node",
+        "node_username": "",
+        "node_password": "",
 
         "prune": true,
         "prep_blocks_threads": "auto",
