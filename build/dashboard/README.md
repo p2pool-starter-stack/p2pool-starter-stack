@@ -4,6 +4,10 @@ The monitoring web UI and XvB switching engine for the P2Pool Starter Stack. It 
 stats from the local collectors, the XMRig proxy, and the Tari node, and serves a single-page
 dashboard (behind Caddy) on `127.0.0.1:8000`.
 
+The page updates **live in place**: a small client loop re-fetches the rendered page and swaps
+the server-rendered region `<div>`s (and updates the chart from a JSON data island) instead of
+reloading, so scroll position, table sort, and chart state survive each refresh.
+
 ## Layout
 
 ```
@@ -13,7 +17,8 @@ mining_dashboard/
 ├── client/            # external service clients (xmrig, xmrig-proxy, xvb, tari gRPC, monerod RPC, docker control)
 ├── collector/         # local stats collectors (pools, system, docker logs)
 ├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite)
-├── web/               # aiohttp server + HTML template + static assets
+├── web/               # server.py (transport: routing + middleware), views.py (rendering:
+│                      #   typed context dataclasses + render_dashboard), HTML template, static assets
 └── helper/            # formatting utilities
 ```
 
