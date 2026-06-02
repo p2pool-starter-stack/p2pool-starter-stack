@@ -336,6 +336,16 @@ def _get_pool_network_context(data):
         monero_mode = "Unknown"
     monero_db_size = f"{db_bytes / 1e9:.1f} GB" if db_bytes > 0 else "—"
 
+    # Compact header badge mirroring the mode. Hidden for a remote node (pruning unknown).
+    if monero_mode == "Pruned":
+        monero_prune_badge = ('<span class="badge badge-outline" '
+                              'title="Monero blockchain is pruned">XMR Pruned</span>')
+    elif monero_mode == "Full":
+        monero_prune_badge = ('<span class="badge badge-outline" '
+                              'title="Monero blockchain is full (not pruned)">XMR Full</span>')
+    else:
+        monero_prune_badge = ''
+
     return {
         'strat_h15': format_hashrate(stratum_stats.get('hashrate_15m', 0)),
         'strat_h1h': format_hashrate(stratum_stats.get('hashrate_1h', 0)),
@@ -370,6 +380,7 @@ def _get_pool_network_context(data):
         'net_ts': format_time_abs(network_stats.get('timestamp', 0)),
         'monero_mode': monero_mode,
         'monero_db_size': monero_db_size,
+        'monero_prune_badge': monero_prune_badge,
     }
 
 def _avg_p2pool_over_window(history, window_seconds):

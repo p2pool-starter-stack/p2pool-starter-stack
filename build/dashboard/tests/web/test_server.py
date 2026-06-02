@@ -233,17 +233,22 @@ class TestMoneroMode:
         ctx = self._ctx(db_size=85_000_000_000)
         assert ctx["monero_mode"] == "Pruned"
         assert ctx["monero_db_size"] == "85.0 GB"
+        assert "XMR Pruned" in ctx["monero_prune_badge"]
 
     def test_local_full(self, monkeypatch):
         monkeypatch.setattr(server, "MONERO_NODE_HOST", "172.28.0.26")
         monkeypatch.setattr(server, "MONERO_PRUNE", False)
-        assert self._ctx()["monero_mode"] == "Full"
+        ctx = self._ctx()
+        assert ctx["monero_mode"] == "Full"
+        assert "XMR Full" in ctx["monero_prune_badge"]
 
     def test_remote_unknown(self, monkeypatch):
-        # A remote node's pruning state isn't something we probe.
+        # A remote node's pruning state isn't something we probe — no badge.
         monkeypatch.setattr(server, "MONERO_NODE_HOST", "10.0.0.9")
         monkeypatch.setattr(server, "MONERO_PRUNE", True)
-        assert self._ctx()["monero_mode"] == "Unknown"
+        ctx = self._ctx()
+        assert ctx["monero_mode"] == "Unknown"
+        assert ctx["monero_prune_badge"] == ""
 
     def test_db_size_dash_when_unknown(self, monkeypatch):
         monkeypatch.setattr(server, "MONERO_NODE_HOST", "172.28.0.26")

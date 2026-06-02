@@ -60,7 +60,8 @@ Once both nodes are synced, the dashboard shows the full operational view.
 
 A persistent status strip across the top shows the hostname, host telemetry (CPU, load, RAM,
 HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** for both P2Pool and
-XvB so you can see your split at a glance.
+XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
+**`XMR Full`** badge shows the Monero node's blockchain mode at a glance.
 
 ### Node status & failover
 
