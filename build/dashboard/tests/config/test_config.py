@@ -17,9 +17,15 @@ class TestConfig:
     def test_defaults_load(self):
         import mining_dashboard.config.config as cfg
         assert cfg.XMRIG_API_PORT == 8080
-        assert cfg.ALGO_TARGET_BUFFER == 0.05
+        assert cfg.XVB_DONATION_LEVEL == "lowest"
+        assert cfg.XVB_MAX_DONATION_FRACTION == 0.85
         assert isinstance(cfg.TIER_DEFAULTS, dict)
         assert cfg.TIER_DEFAULTS["donor_mega"] == 1_000_000
+
+    def test_donation_level_env_override(self):
+        with patch.dict(os.environ, {"XVB_DONATION_LEVEL": "AUTO"}):
+            cfg = _reload_config()
+            assert cfg.XVB_DONATION_LEVEL == "auto"  # normalized to lowercase
 
     def test_tier_config_env_override_valid(self):
         custom = {"donor_ultra": 5_000_000, "donor_basic": 500}

@@ -121,3 +121,48 @@ def get_tier_info(hashrate, tiers=None):
             return f"{display_name} ({format_hashrate(threshold)}+)", float(threshold)
 
     return "None", 0.0
+
+def _configured_tier_threshold(tiers, donation_level):
+    """
+    Maps a configured donation level to a tier threshold (H/s).
+
+    Accepts "lowest", "auto"/"highest", a tier name ("donor"/"vip"/"whale"/"mega",
+    matched against the tier keys with the "donor_" prefix stripped), or a raw
+    numeric H/s value. Unknown values fall back to the lowest tier.
+    """
+    positive = sorted(t for t in tiers.values() if t > 0)
+    if not positive:
+        return 0.0
+
+    level = (donation_level or "lowest").strip().lower()
+    if level == "lowest":
+        return float(positive[0])
+    if level in ("auto", "highest"):
+        return float(positive[-1])
+
+    # Named tier (e.g. "vip" -> "donor_vip", "donor" -> "donor")
+    for key, threshold in tiers.items():
+        name = key.replace("donor_", "").replace("_", "").lower() or "donor"
+        if level in (name, key.lower()):
+            return float(threshold)
+
+    # Raw numeric threshold
+    try:
+        return float(level)
+    except (ValueError, TypeError):
+        return float(positive[0])
+
+def resolve_target_threshold(tiers, stable_hr, donation_level, max_fraction):
+    """
+    Resolves the donation tier threshold to aim for (H/s; 0 = donate nothing).
+
+    Picks the highest tier the hashrate can sustain (leaving `max_fraction` head-
+    room for p2pool), then caps it by the configured `donation_level`. So "lowest"
+    targets the cheapest tier we can hold, "auto" targets the highest sustainable,
+    and a named/numeric level is honored but never exceeds what we can sustain.
+    """
+    _, sustainable = get_tier_info(stable_hr * max_fraction, tiers)
+    if sustainable <= 0:
+        return 0.0
+    configured = _configured_tier_threshold(tiers, donation_level)
+    return min(configured, sustainable)

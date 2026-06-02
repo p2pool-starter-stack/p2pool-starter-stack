@@ -32,7 +32,8 @@
     "xvb": {
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",
-        "donor_id": "auto"
+        "donor_id": "auto",
+        "donation_level": "lowest"
     },
 
     "tor": {

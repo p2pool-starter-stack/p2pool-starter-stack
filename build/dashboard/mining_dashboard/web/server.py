@@ -5,8 +5,14 @@ import logging
 import bisect
 import json
 from aiohttp import web
-from mining_dashboard.config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
-from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
+from mining_dashboard.config.config import (
+    HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB,
+    XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
+)
+from mining_dashboard.helper.utils import (
+    format_hashrate, format_duration, format_time_abs, get_tier_info,
+    resolve_target_threshold,
+)
 
 logger = logging.getLogger("WebServer")
 
@@ -425,9 +431,14 @@ def _get_algo_context(data, state_mgr, history):
     p2p_24h_val = _avg_p2pool_over_window(history, 86400)
 
     tiers = state_mgr.get_tiers()
+    # Current tier = what XvB actually credits us (drives qualification).
     tier_name, _ = get_tier_info(xvb_24h_val, tiers)
-    safe_capacity = total_hr_val * 0.85
-    target_tier_name, _ = get_tier_info(safe_capacity, tiers)
+    # Target tier = what the algo aims for, honoring the configured donation level
+    # (Issue #40 config side) and what the hashrate can sustain.
+    target_threshold = resolve_target_threshold(
+        tiers, total_hr_val, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION
+    )
+    target_tier_name, _ = get_tier_info(target_threshold, tiers)
 
     if not ENABLE_XVB:
         tier_name = "Disabled"

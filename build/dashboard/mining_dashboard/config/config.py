@@ -42,6 +42,14 @@ XVB_DONOR_ID = os.environ.get("XVB_DONOR_ID", "")
 # Feature Flag: Toggles the XvB algorithmic switching logic
 ENABLE_XVB = os.environ.get("XVB_ENABLED", "true").lower() == "true"
 
+# Donation tier to target (config.json: xvb.donation_level). The XvB raffle picks
+# winners at random, so donating above a tier's threshold buys nothing — we aim to
+# just clear it and send the rest to p2pool.
+#   "lowest" (default) — minimal donation: target the lowest donor tier we can hold
+#   "auto"/"highest"   — highest tier the current hashrate can sustain
+#   "donor"/"vip"/"whale"/"mega" — a specific named tier
+XVB_DONATION_LEVEL = os.environ.get("XVB_DONATION_LEVEL", "lowest").strip().lower()
+
 # --- Upstream Pool Configuration ---
 P2POOL_URL = os.environ.get("P2POOL_URL", "")
 XVB_POOL_URL = os.environ.get("XVB_POOL_URL", "")
@@ -66,9 +74,27 @@ MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
 TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 
-# --- Algorithm Safety Margins ---
-# Over-provisioning buffer (5%) to maintain hashrate comfortably above the target
-ALGO_TARGET_BUFFER = 0.05
+# --- XvB Donation Controller (Issue #9) ---
+# Max fraction of any switching cycle donated to XvB. Always leaves room on p2pool
+# so it keeps finding shares (required to stay a "VIP" and to validate raffle
+# rounds) and caps how high a tier we will try to sustain. (Replaces the old
+# hardcoded 0.85 tier-selection margin.)
+XVB_MAX_DONATION_FRACTION = float(os.environ.get("XVB_MAX_DONATION_FRACTION", 0.85))
+
+# Steady-state cushion held above the tier threshold so normal variance doesn't
+# drop the measured 1h/24h average below it. A small percentage, but capped in
+# ABSOLUTE H/s so high tiers don't over-donate (5% of 1M = 50k H/s wasted; the
+# cap bounds that to a fixed amount regardless of tier).
+XVB_MAINT_MARGIN_PCT = float(os.environ.get("XVB_MAINT_MARGIN_PCT", 0.02))
+XVB_MAINT_MARGIN_ABS_CAP = float(os.environ.get("XVB_MAINT_MARGIN_ABS_CAP", 1000))
+
+# Proportional catch-up gains: when a trailing average is below target, donate
+# extra proportional to the deficit instead of dumping a full cycle. The 1h
+# average recovers within the hour (larger gain); the 24h average is sluggish
+# (gentle gain) to avoid sustained over-donation while it climbs.
+XVB_CATCHUP_GAIN_1H = float(os.environ.get("XVB_CATCHUP_GAIN_1H", 1.5))
+XVB_CATCHUP_GAIN_24H = float(os.environ.get("XVB_CATCHUP_GAIN_24H", 0.5))
+
 # Switching overhead (ms) to account for connection ramp-up time
 XVB_SWITCH_OVERHEAD_MS = 5000
 

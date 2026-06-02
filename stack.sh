@@ -606,7 +606,7 @@ render_env() {
     fi
 
     # XvB config (accepts legacy xmrig_proxy.* keys)
-    local xvb_enabled xvb_url xvb_donor
+    local xvb_enabled xvb_url xvb_donor xvb_donation_level
     xvb_enabled=$(jq -r 'if .xvb.enabled != null then .xvb.enabled elif .xmrig_proxy.enabled != null then .xmrig_proxy.enabled else "true" end' "$CONFIG_FILE")
     xvb_url=$(jq -r '.xvb.url // .xmrig_proxy.url // empty' "$CONFIG_FILE")
     [ -z "$xvb_url" ] && xvb_url="na.xmrvsbeast.com:4247"
@@ -614,6 +614,9 @@ render_env() {
     case "$xvb_donor" in
         ""|auto|DYNAMIC_ID) xvb_donor=$(echo "$MONERO_WALLET" | cut -c 1-8) ;;
     esac
+    # Donation tier target: lowest (default) / auto / donor|vip|whale|mega
+    xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
+    [ -z "$xvb_donation_level" ] && xvb_donation_level="lowest"
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
@@ -635,6 +638,7 @@ P2POOL_PORT=$p2pool_port
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
+XVB_DONATION_LEVEL=$xvb_donation_level
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -793,7 +797,7 @@ describe_change() {
             msg="Monero node endpoint ($key): $old → $new." ;;
         MONERO_NODE_USERNAME|MONERO_NODE_PASSWORD)
             msg="Monero node RPC credential updated ($key)." ;;
-        XVB_ENABLED|XVB_POOL_URL|XVB_DONOR_ID)
+        XVB_ENABLED|XVB_POOL_URL|XVB_DONOR_ID|XVB_DONATION_LEVEL)
             msg="XMRvsBeast setting ($key): $old → $new." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;

@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch
 from mining_dashboard.helper.utils import (
     parse_hashrate, format_hashrate, format_duration,
-    format_time_abs, get_tier_info,
+    format_time_abs, get_tier_info, resolve_target_threshold,
 )
 
 
@@ -82,3 +82,34 @@ class TestGetTierInfo:
 
     def test_zero_threshold_ignored(self):
         assert get_tier_info(100, tiers={"donor_zero": 0}) == ("None", 0.0)
+
+
+class TestResolveTargetThreshold:
+    TIERS = {"donor_mega": 1_000_000, "donor_whale": 100_000,
+             "donor_vip": 10_000, "donor": 1_000}
+
+    def test_lowest_picks_cheapest_tier(self):
+        # Plenty of hashrate, but "lowest" still targets the cheapest tier.
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "lowest", 0.85) == 1_000
+
+    def test_auto_picks_highest_sustainable(self):
+        # 15_000 * 0.85 = 12_750 -> VIP (10_000) is the highest we can hold.
+        assert resolve_target_threshold(self.TIERS, 15_000, "auto", 0.85) == 10_000
+        assert resolve_target_threshold(self.TIERS, 15_000, "highest", 0.85) == 10_000
+
+    def test_named_tier(self):
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "whale", 0.85) == 100_000
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "vip", 0.85) == 10_000
+
+    def test_named_tier_capped_by_sustainable(self):
+        # Request Mega but can only sustain VIP -> capped down to VIP.
+        assert resolve_target_threshold(self.TIERS, 15_000, "mega", 0.85) == 10_000
+
+    def test_cannot_sustain_any_tier_returns_zero(self):
+        assert resolve_target_threshold(self.TIERS, 100, "lowest", 0.85) == 0.0
+
+    def test_numeric_level_honored(self):
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "5000", 0.85) == 5_000
+
+    def test_unknown_level_falls_back_to_lowest(self):
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "bogus", 0.85) == 1_000

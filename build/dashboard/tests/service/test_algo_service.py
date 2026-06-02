@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
@@ -47,17 +47,22 @@ class TestGetDecision:
                                         {"avg_24h": 0, "avg_1h": 0, "fail_count": 0}, RECENT_SHARES)
             assert mode == "P2POOL"
 
-    def test_target_not_met_forces_xvb(self, algo):
+    def test_below_target_ramps_donation_above_maintenance(self, algo):
         with patch("mining_dashboard.service.algo_service.ENABLE_XVB", True):
-            # stable 15k -> qualifies VIP (10k); 24h/1h avg below target -> XVB full cycle
-            mode, dur = algo.get_decision(15_000, 15_000, POOL_STATS, P2P_MAIN,
-                                          {"avg_24h": 100, "avg_1h": 100, "fail_count": 0}, RECENT_SHARES)
-            assert mode == "XVB"
-            assert dur == XVB_TIME_ALGO_MS
+            # Behind on both averages -> catch-up donates strictly more time than
+            # when comfortably in tier (no binary "force full cycle" anymore).
+            behind = algo.get_decision(15_000, 15_000, POOL_STATS, P2P_MAIN,
+                                       {"avg_24h": 100, "avg_1h": 100, "fail_count": 0}, RECENT_SHARES)
+            in_tier = algo.get_decision(15_000, 15_000, POOL_STATS, P2P_MAIN,
+                                        {"avg_24h": 5_000, "avg_1h": 5_000, "fail_count": 0}, RECENT_SHARES)
+            assert behind[0] in ("SPLIT", "XVB")
+            behind_ms = XVB_TIME_ALGO_MS if behind[0] == "XVB" else behind[1]
+            in_tier_ms = XVB_TIME_ALGO_MS if in_tier[0] == "XVB" else in_tier[1]
+            assert behind_ms > in_tier_ms
 
     def test_target_met_enters_split_or_full(self, algo):
         with patch("mining_dashboard.service.algo_service.ENABLE_XVB", True):
-            # target met (24h & 1h >= 10k) and high current_hr -> SPLIT (partial) or XVB (full cycle)
+            # In tier with huge headroom -> minimal donation (SPLIT), not a full cycle.
             mode, dur = algo.get_decision(1_000_000, 15_000, POOL_STATS, P2P_MAIN,
                                           {"avg_24h": 10_000, "avg_1h": 10_000, "fail_count": 0}, RECENT_SHARES)
             assert mode in ("SPLIT", "XVB")
@@ -76,15 +81,41 @@ class TestHelpers:
         assert algo._get_needed_time(0, 10_000) == 0
 
     def test_get_needed_time_scales_with_target(self, algo):
-        # higher target -> more time needed
-        t_low = algo._get_needed_time(10_000, 5_000)
-        t_high = algo._get_needed_time(10_000, 9_000)
+        # In tier (no catch-up) with huge headroom so the fraction isn't clamped:
+        # a higher target needs proportionally more donation time.
+        t_low = algo._get_needed_time(1_000_000, 5_000, avg_1h=5_000, avg_24h=5_000)
+        t_high = algo._get_needed_time(1_000_000, 50_000, avg_1h=50_000, avg_24h=50_000)
         assert t_high > t_low > 0
+
+    def test_maintenance_cushion_is_absolute_capped(self, algo):
+        # The steady-state cushion above target is capped in ABSOLUTE H/s, so a
+        # huge tier doesn't waste a percentage of a huge number (the #9 fix).
+        H = 10_000_000
+        big = algo._get_needed_time(H, 1_000_000, avg_1h=1_000_000, avg_24h=1_000_000)
+        donated_rate = ((big - 5000) / XVB_TIME_ALGO_MS) * H   # back out donated H/s
+        cushion = donated_rate - 1_000_000
+        # ~1000 (the cap), NOT ~50_000 that a flat 5% would waste.
+        assert 900 < cushion < 1_100
+
+    def test_donation_fraction_capped_by_max_fraction(self, algo):
+        # Deeply behind with little headroom: never donate more than F_MAX.
+        ms = algo._get_needed_time(10_000, 8_000, avg_1h=0, avg_24h=0)
+        fraction = (ms - 5000) / XVB_TIME_ALGO_MS
+        assert fraction <= algo.max_donation_fraction + 1e-9
 
     def test_get_target_uses_state_manager_tiers(self, algo):
         algo.state_manager.get_tiers.return_value = {"donor": 1_000}
         # 2000 * 0.85 = 1700 >= 1000 -> threshold 1000
         assert algo._get_target_donation_hr(2_000) == 1_000
+
+    def test_lowest_default_targets_cheapest_tier(self, algo):
+        # Default donation level is "lowest" -> donor (1000) even with huge hashrate.
+        assert algo._get_target_donation_hr(1_000_000) == 1_000
+
+    def test_auto_targets_highest_sustainable_tier(self, algo):
+        algo.donation_level = "auto"
+        # 15000 * 0.85 = 12750 -> highest sustainable is VIP (10000).
+        assert algo._get_target_donation_hr(15_000) == 10_000
 
 
 class TestSwitchMiners:
@@ -101,6 +132,26 @@ class TestSwitchMiners:
         algo.proxy_client.get_config.return_value = None
         await algo.switch_miners("P2POOL")
         algo.proxy_client.update_config.assert_not_called()
+
+
+class TestSmartSleep:
+    LATEST = {"total_live_h15": 15_000, "total_live_h10": 15_000, "pool": {}, "shares": []}
+
+    async def test_aborts_early_when_decision_flips_to_donate(self, algo):
+        algo.data_service.latest_data = dict(self.LATEST)
+        algo.state_manager.get_xvb_stats.return_value = {"avg_24h": 0, "avg_1h": 0, "fail_count": 0}
+        algo.get_decision = MagicMock(return_value=("SPLIT", 60_000))
+        with patch("asyncio.sleep", new_callable=AsyncMock) as slept:
+            await algo._smart_sleep(600, check_interval_sec=30)
+        assert slept.await_count == 1  # bailed after the first check
+
+    async def test_sleeps_full_duration_when_staying_p2pool(self, algo):
+        algo.data_service.latest_data = dict(self.LATEST)
+        algo.state_manager.get_xvb_stats.return_value = {"avg_24h": 0, "avg_1h": 0, "fail_count": 0}
+        algo.get_decision = MagicMock(return_value=("P2POOL", 0))
+        with patch("asyncio.sleep", new_callable=AsyncMock) as slept:
+            await algo._smart_sleep(90, check_interval_sec=30)
+        assert slept.await_count == 3  # 90s / 30s ticks, no early abort
 
 
 class TestRunLoop:
