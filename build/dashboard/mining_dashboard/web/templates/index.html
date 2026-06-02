@@ -140,6 +140,7 @@
                             <div class="progress-fill {disk_fill_class}" style="width: {disk_width}"></div>
                         </div>
                     </div>
+                    {monero_prune_badge}
                 </div>
             </div>
         </div>
@@ -168,7 +169,8 @@
                 </div>
                 <div class="status-text">
                     Synced: {sync_current} / {sync_target}<br>
-                    <small>({sync_remaining} blocks left)</small>
+                    <small>({sync_remaining} blocks left)</small><br>
+                    <small class="text-muted">{monero_mode} · DB {monero_db_size}</small>
                 </div>
             </div>
             <div class="card">
@@ -285,6 +287,8 @@
             <div class="stat-grid">
                 <div class="stat-card"><h5>Block Height</h5><p>{net_height}</p></div>
                 <div class="stat-card"><h5>Reward</h5><p>{net_reward}</p></div>
+                <div class="stat-card"><h5>Node Mode</h5><p>{monero_mode}</p></div>
+                <div class="stat-card"><h5>DB Size</h5><p>{monero_db_size}</p></div>
                 <div class="stat-card col-span-2"><h5>Difficulty</h5><p>{net_diff}</p></div>
                 <div class="stat-card col-span-2">
                     <h5>Current Block Hash</h5>

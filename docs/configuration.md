@@ -76,7 +76,7 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 | `monero.mode` | `local` | `local` runs the bundled Monero node; `remote` connects to an external node (see `monero.remote`). |
 | `monero.wallet_address` | _required_ | Your Monero payout address. |
 | `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC. `setup` auto-generates them; they're internal to the stack (monerod, p2pool, and the dashboard use them — the dashboard reads the node's `get_info` RPC for sync status). For a remote node, set only if it requires auth. |
-| `monero.prune` | `true` | Prune the Monero blockchain to save disk space. |
+| `monero.prune` | `true` | Prune the Monero blockchain to save disk space. The dashboard's Monero panel shows the resulting **Pruned**/**Full** mode and the node's on-disk DB size, so you can spot a config-vs-data mismatch when reusing a chain. |
 | `monero.prep_blocks_threads` | `auto` | Block-verification threads during sync. `auto` = host cores − 2, clamped to 4–8. |
 | `monero.rpc_lan_access` | `false` | `true` publishes the node's RPC on the LAN (`0.0.0.0`) for wallets on other machines; default is localhost-only. |
 | `monero.remote.host` / `rpc_port` / `zmq_port` | — / `18081` / `18083` | Remote node connection details (used when `mode` is `remote`). |

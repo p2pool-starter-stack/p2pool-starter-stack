@@ -8,6 +8,7 @@ from aiohttp import web
 from mining_dashboard.config.config import (
     HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB,
     XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
+    MONERO_PRUNE, MONERO_NODE_HOST,
 )
 from mining_dashboard.helper.utils import (
     format_hashrate, format_duration, format_time_abs, get_tier_info,
@@ -324,6 +325,27 @@ def _get_pool_network_context(data):
     shares_count = sum(1 for s in shares_list if s.get('ts', 0) >= cutoff)
     shares_display = f"<span class='status-ok'>{shares_count}</span>" if shares_count > 0 else f"<span class='status-bad'>0</span>"
 
+    # Monero node mode: Pruned/Full from config (Issue #32), with the on-disk DB size from
+    # get_info alongside so a config/DB mismatch is visible. Only meaningful for a local node
+    # (we don't probe a remote node's RPC, so its pruning state is unknown to us).
+    monero_sync = data.get('monero_sync', {})
+    db_bytes = monero_sync.get('db_size', 0) or 0
+    if MONERO_NODE_HOST == "172.28.0.26":
+        monero_mode = "Pruned" if MONERO_PRUNE else "Full"
+    else:
+        monero_mode = "Unknown"
+    monero_db_size = f"{db_bytes / 1e9:.1f} GB" if db_bytes > 0 else "—"
+
+    # Compact header badge mirroring the mode. Hidden for a remote node (pruning unknown).
+    if monero_mode == "Pruned":
+        monero_prune_badge = ('<span class="badge badge-outline" '
+                              'title="Monero blockchain is pruned">XMR Pruned</span>')
+    elif monero_mode == "Full":
+        monero_prune_badge = ('<span class="badge badge-outline" '
+                              'title="Monero blockchain is full (not pruned)">XMR Full</span>')
+    else:
+        monero_prune_badge = ''
+
     return {
         'strat_h15': format_hashrate(stratum_stats.get('hashrate_15m', 0)),
         'strat_h1h': format_hashrate(stratum_stats.get('hashrate_1h', 0)),
@@ -356,6 +378,9 @@ def _get_pool_network_context(data):
         'net_diff': f"{network_stats.get('difficulty', 0)/1e9:.2f} G",
         'net_hash': net_hash_val,
         'net_ts': format_time_abs(network_stats.get('timestamp', 0)),
+        'monero_mode': monero_mode,
+        'monero_db_size': monero_db_size,
+        'monero_prune_badge': monero_prune_badge,
     }
 
 def _avg_p2pool_over_window(history, window_seconds):

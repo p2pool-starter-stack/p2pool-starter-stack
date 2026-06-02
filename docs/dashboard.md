@@ -23,7 +23,9 @@ hashrate is routed yet.
 Sync Mode gives each chain its own progress card so you can see exactly where things stand:
 
 - **Monero Sync** — current verified block height vs. the network tip, with the number of blocks
-  remaining. A green check means this chain is fully caught up.
+  remaining. A green check means this chain is fully caught up. It also shows whether the node is
+  running **Pruned** or **Full** and its on-disk DB size (also in the **XMR Network** panel of the
+  operational view) — handy for confirming a reused chain matches your `monero.prune` setting.
 - **Tari Sync** — the same, as a percentage ring, for the Minotari chain.
 
 The top bar still shows live host telemetry throughout — CPU, load average, RAM, **HugePages**
@@ -58,7 +60,8 @@ Once both nodes are synced, the dashboard shows the full operational view.
 
 A persistent status strip across the top shows the hostname, host telemetry (CPU, load, RAM,
 HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** for both P2Pool and
-XvB so you can see your split at a glance.
+XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
+**`XMR Full`** badge shows the Monero node's blockchain mode at a glance.
 
 ### Node status & failover
 
