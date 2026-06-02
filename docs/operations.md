@@ -99,22 +99,11 @@ If a node looks genuinely stalled (no new blocks over a long period), restart it
 blockchain or a remote node — see
 [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
-**Tari is using a lot of RAM, or keeps restarting.**
-Both can be normal. Tari's memory grows over time (it's commonly seen using 10+ GB) — that by
-itself isn't a problem as long as the host has headroom (`free -h`, `docker stats`). To stop a
-*runaway* from taking the whole machine down, the Tari container has a **safety ceiling**
-(`tari.mem_limit`, `auto` by default). `auto` sizes it from the RAM left after the ~6 GB RandomX
-HugePages reservation, holding back ~25% of the rest for Monero/P2Pool/the OS — so ~7.5 GB on a
-16 GB host, ~19 GB on 32 GB. If Tari ever hits the ceiling it restarts cleanly on its own while
-Monero and P2Pool keep mining.
-
-- **Tari restarts too often** — the ceiling is below Tari's real working set. Raise it, e.g.
-  `"tari": { "mem_limit": "16g" }`, then `./stack.sh apply`.
-- **You want to reserve more RAM for other apps on the box** — lower it, e.g.
-  `"tari": { "mem_limit": "6g" }`, then `./stack.sh apply`. Set it too low and Tari may OOM-loop
-  (restart repeatedly, never finishing its initial sync) — give it more.
-
-See [Configuration reference](configuration.md#configuration-reference).
+**Tari shows high memory use.**
+Usually nothing to worry about — most of it is reclaimable disk cache, not a leak. Tari has an
+auto-sized memory limit (`tari.mem_limit`) that keeps a genuine runaway from affecting the rest of
+the stack. Only change it if Tari restarts repeatedly (give it more) or you want to free RAM for
+other apps (give it less), then run `./stack.sh apply`.
 
 **Browser warns "your connection is not private."**
 Expected with `dashboard.secure: true` — Caddy uses a self-signed certificate. Accept the
