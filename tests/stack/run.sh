@@ -69,6 +69,7 @@ assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change M
 assert_contains "wallet is DEST"     "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
 assert_contains "xvb url is INFO"    "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)"        "INFO"
 assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)"   "DEST"
+assert_contains "tari mem is INFO"   "$(run_sourced "$SANDBOX" describe_change TARI_MEM_LIMIT 2048m 4g)" "INFO"
 
 echo "== unit: env helpers =="
 printf 'A=1\nB=two\nPROXY_AUTH_TOKEN=keep=me\n' > "$SANDBOX/old.env"
@@ -136,12 +137,29 @@ assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PRO
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
 assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
+# tari.mem_limit absent => "auto" is a safety ceiling: host RAM minus a >=2 GB reserve, floored at
+# 2048m. Assert it ends in 'm', is >= the 2048m floor, and never exceeds physical RAM.
+mem="$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)"
+host_ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+case "$mem" in
+    *m) n="${mem%m}"
+        if [ "$n" -ge 2048 ] && { [ "$host_ram_mb" -le 0 ] || [ "$n" -le "$host_ram_mb" ]; }
+        then ok "tari mem auto is a sane ceiling ($mem, host ${host_ram_mb}m)"
+        else bad "tari mem auto sane ceiling" "got [$mem] on ${host_ram_mb}m host"; fi ;;
+    *) bad "tari mem auto has m suffix" "got [$mem]" ;;
+esac
 
 # Non-blocking Tari (dashboard.tari_required:false) propagates as TARI_REQUIRED=false.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
 assert_eq "tari_required propagated false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
+
+# An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
+assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
 
 echo "== black-box: local node creds auto-generated + persisted (#50) =="
 # A local node with BLANK creds: apply must generate them, write them into .env AND back into

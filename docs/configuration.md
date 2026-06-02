@@ -75,6 +75,7 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 | `monero.data_dir` | `auto` | Where the Monero blockchain lives on the host. `auto` = `./data/monero`. Point this at an existing `.bitmonero` directory to reuse a synced node — see [Reusing an existing node](#reusing-an-existing-node). |
 | `tari.wallet_address` | _required_ | Your Tari (Minotari) payout address. |
 | `tari.data_dir` | `auto` | Where the Tari node data lives on the host. `auto` = `./data/tari`. |
+| `tari.mem_limit` | `auto` | Upper limit on the Tari container's memory, so a runaway Tari restarts cleanly on its own instead of dragging down the whole host. `auto` picks a safe size for your machine — leave it unless you want to give Tari less RAM (to free it for other apps) or more (if it ever restarts too often). Accepts any Docker memory value, e.g. `"8g"`. |
 | `p2pool.pool` | `main` | P2Pool sidechain: `main`, `mini`, or `nano`. |
 | `p2pool.data_dir` | `auto` | Where P2Pool data lives on the host. `auto` = `./data/p2pool`. |
 | `xvb.enabled` | `true` | Enable XMRvsBeast bonus-round hashrate switching. |

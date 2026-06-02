@@ -99,6 +99,12 @@ If a node looks genuinely stalled (no new blocks over a long period), restart it
 blockchain or a remote node — see
 [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
+**Tari shows high memory use.**
+Usually nothing to worry about — most of it is reclaimable disk cache, not a leak. Tari has an
+auto-sized memory limit (`tari.mem_limit`) that keeps a genuine runaway from affecting the rest of
+the stack. Only change it if Tari restarts repeatedly (give it more) or you want to free RAM for
+other apps (give it less), then run `./stack.sh apply`.
+
 **Browser warns "your connection is not private."**
 Expected with `dashboard.secure: true` — Caddy uses a self-signed certificate. Accept the
 warning once. To use plain HTTP, set `dashboard.secure: false` and run `./stack.sh apply`.

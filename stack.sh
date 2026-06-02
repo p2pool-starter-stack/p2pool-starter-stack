@@ -787,6 +787,46 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
+    # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
+    # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
+    # CEILING, not a tight leash: it lets Tari use what it wants and only OOM-restarts it (cleanly,
+    # since memswap_limit in compose disables swap) on a genuine runaway that would otherwise take the
+    # host down.
+    #
+    # "auto" sizes the ceiling from RAM that is actually free for normal use. Two big chunks are NOT:
+    #   - HugePages: this stack reserves vm.nr_hugepages=3072 (~6 GB) for RandomX (used by p2pool).
+    #     That RAM is carved out of the buddy allocator and is invisible to container memory stats,
+    #     so we subtract it up front — otherwise Tari's cap + HugePages + the rest of the stack can
+    #     exceed physical RAM and the host OOMs before Tari's own limit ever fires.
+    #   - a ~25% reserve (>=2 GB) of what's left, for monerod/p2pool/Tor/the dashboard/the OS/page
+    #     cache. Tari gets the remainder, floored at 2 GB.
+    # Net: with HugePages on, ~7.5 GB on a 16 GB host, ~19 GB on 32 GB; with HugePages off
+    # (--skip-optimize) it's ~75% of RAM. Override with tari.mem_limit (any Docker value, e.g. "8g").
+    local tari_mem_limit ram_mb huge_mb avail_mb reserve_mb
+    tari_mem_limit=$(jq -r '.tari.mem_limit // "auto"' "$CONFIG_FILE")
+    case "$tari_mem_limit" in
+        ""|auto)
+            huge_mb=0
+            if [ "$OS_TYPE" == "Darwin" ]; then
+                ram_mb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1048576 ))
+            else
+                ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+                # HugePages_Total (pages) * Hugepagesize (kB) -> MiB reserved out of RAM.
+                huge_mb=$(awk '/HugePages_Total/{t=$2} /Hugepagesize/{s=$2} END{print int(t*s/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+            fi
+            [ "${ram_mb:-0}" -gt 0 ] 2>/dev/null   || ram_mb=16384   # unknown host => assume 16 GB
+            [ "${huge_mb:-0}" -ge 0 ] 2>/dev/null  || huge_mb=0
+            avail_mb=$(( ram_mb - huge_mb ))                         # RAM left after HugePages
+            [ "$avail_mb" -lt 2048 ] && avail_mb=2048
+            reserve_mb=$(( avail_mb / 4 ))                           # rest of the stack + OS + cache
+            [ "$reserve_mb" -lt 2048 ] && reserve_mb=2048
+            tari_mem_limit=$(( avail_mb - reserve_mb ))
+            [ "$tari_mem_limit" -lt 2048 ] && tari_mem_limit=2048    # never starve Tari below 2 GB
+            tari_mem_limit="${tari_mem_limit}m"
+            ;;
+    esac
+
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
     cat <<EOF > "$target"
@@ -809,6 +849,7 @@ XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
+TARI_MEM_LIMIT=$tari_mem_limit
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -975,6 +1016,8 @@ describe_change() {
             else
                 msg="Tari → non-blocking — keep mining Monero through a Tari outage, start as soon as Monero is synced, and keep the operational dashboard while Tari syncs."
             fi ;;
+        TARI_MEM_LIMIT)
+            msg="Tari memory cap: $old → $new — the tari container is recreated (brief restart; on-disk chain data is preserved)." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
         HOST_IP)
