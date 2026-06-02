@@ -1,6 +1,6 @@
 <div align="center">
 
-![Logo](./images/p2pool-starter-stack-logo-large.png)
+<img src="./images/p2pool-starter-stack-logo-large.png" alt="P2Pool Starter Stack" width="560">
 
 # P2Pool Starter Stack
 
@@ -91,37 +91,61 @@ The stack orchestrates eight services via Docker Compose: a Monero **full node**
 **dashboard** + switching engine, a read-only **Docker socket proxy**, and **Caddy** for HTTPS.
 
 ```mermaid
-graph TD
-    subgraph "Docker Stack"
-        Dashboard[Dashboard & Algo Engine]
-        Tor[Tor Anonymity Service]
-        DockerProxy[Docker Socket Proxy]
+flowchart TB
+    %% ── External actors ──
+    You(["👤 You · Browser"])
+    Workers(["⛏️ XMRig Workers"])
+    XvB(["🎲 XMRvsBeast Pool"])
+    Net(["🌐 Tor Network / Internet"])
 
-        subgraph "Mining Core"
-            Monerod[Monero Daemon]
-            P2Pool[P2Pool Node]
-            Tari[Tari Base Node]
-            Proxy[XMRig Proxy]
+    subgraph stack ["🐳 P2Pool Starter Stack"]
+        direction TB
+
+        Caddy["🔒 Caddy<br/>HTTPS reverse proxy"]
+        Dashboard["📊 Dashboard<br/>+ XvB switching engine"]
+        DockerProxy["🛡️ Docker Socket Proxy<br/>read-only"]
+        Tor["🧅 Tor<br/>anonymity layer"]
+
+        subgraph core ["⚙️ Mining Core"]
+            direction TB
+            Proxy["🔀 XMRig Proxy<br/>:3333"]
+            P2Pool["🔵 P2Pool"]
+            Monerod["🟠 Monero Node"]
+            Tari["🟣 Tari Node"]
         end
     end
 
-    subgraph "External"
-        Workers["Hardware Workers (XMRig)"]
-        XvB[XMRvsBeast Pool]
-        Internet[Tor Network / Internet]
-    end
+    You ==>|HTTPS| Caddy
+    Caddy --> Dashboard
+    Workers ==>|"Stratum 3333"| Proxy
 
-    Workers -- "Stratum (3333)" --> Proxy
-    Dashboard -- "Controls" --> Proxy
-    Dashboard -- "Monitors" --> DockerProxy
-    Proxy -- "Switches between" --> P2Pool
-    Proxy -- "Switches between" --> XvB
-    P2Pool <-->|RPC/ZMQ| Monerod
-    P2Pool -->|Merge Mine| Tari
-    Monerod <-->|Tx Broadcast| Tor
-    Tari <-->|P2P Traffic| Tor
-    P2Pool <-->|P2P Traffic| Tor
-    Tor <--> Internet
+    Dashboard -.->|controls| Proxy
+    Dashboard -.->|monitors| DockerProxy
+    Dashboard -.->|"reads stats & sync"| core
+
+    Proxy ==>|hashrate| P2Pool
+    Proxy ==>|hashrate| XvB
+
+    P2Pool <-->|"RPC / ZMQ"| Monerod
+    P2Pool -->|merge-mine| Tari
+
+    Monerod <--> Tor
+    Tari <--> Tor
+    P2Pool <--> Tor
+    Tor <--> Net
+
+    classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
+    classDef ctrl fill:#1d4ed8,stroke:#93c5fd,color:#eff6ff;
+    classDef priv fill:#6d28d9,stroke:#c4b5fd,color:#f5f3ff;
+    classDef mine fill:#047857,stroke:#6ee7b7,color:#ecfdf5;
+
+    class You,Workers,XvB,Net ext;
+    class Caddy,Dashboard ctrl;
+    class Tor,DockerProxy priv;
+    class Proxy,P2Pool,Monerod,Tari mine;
+
+    style stack stroke:#475569,stroke-width:1px;
+    style core stroke:#10b981,stroke-width:1px,stroke-dasharray:5 4;
 ```
 
 Read the full breakdown — including the privacy model and the algorithmic switching engine — in
