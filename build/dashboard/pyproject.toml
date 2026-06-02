@@ -35,7 +35,9 @@ include = ["mining_dashboard*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"
+# importlib mode lets test modules share basenames (e.g. several test_utils.py) without
+# __init__.py packages or sys.path games.
+addopts = "-q --import-mode=importlib"
 markers = [
     "integration: tests that exercise multiple components or external services",
 ]

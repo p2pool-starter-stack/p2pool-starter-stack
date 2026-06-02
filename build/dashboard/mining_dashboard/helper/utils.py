@@ -100,7 +100,7 @@ def format_time_abs(timestamp):
         
     try:
         return time.strftime('%H:%M:%S', time.localtime(timestamp))
-    except (ValueError, OSError):
+    except (ValueError, OSError, TypeError):
         return "Invalid Time"
 
 def get_tier_info(hashrate, tiers=None):
