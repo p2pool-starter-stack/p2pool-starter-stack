@@ -466,3 +466,54 @@ class TestViewModel:
     def test_is_json_serializable(self):
         # #30 will serve this map over fetch() — every value must be JSON-encodable.
         json.dumps(self._vm())
+
+
+class TestPartialUpdateContract:
+    """Server-side guarantees the #30 client-side partial refresh relies on."""
+
+    import re as _re
+    _ISLAND = _re.compile(
+        r'<script type="application/json" id="chart-json">(.*?)</script>', _re.S)
+
+    def _render(self, history=None, range_arg="all"):
+        from unittest.mock import MagicMock
+        sm = MagicMock()
+        sm.get_history.return_value = history or []
+        sm.get_xvb_stats.return_value = {"current_mode": "P2POOL"}
+        sm.get_tiers.return_value = {}
+        data = {
+            "shares": [], "workers": [], "global_sync": False, "total_live_h15": 0,
+            "monero_sync": {"percent": 100, "current": 10, "target": 10},
+            "tari_sync": {"percent": 50, "current": 5, "target": 10},
+        }
+        return render_dashboard(data, sm, range_arg)
+
+    def test_no_meta_refresh(self):
+        # The whole point of #30: kill the full-page auto-reload.
+        assert 'http-equiv="refresh"' not in self._render()
+
+    def test_all_swappable_region_ids_present(self):
+        html = self._render()
+        for region in ("top-header", "sync-view", "card-overview", "card-mynode",
+                       "card-global", "card-xvb", "card-network", "card-tari",
+                       "workers-tbody", "workers-table"):
+            assert f'id="{region}"' in html, f"missing region id: {region}"
+
+    def test_chart_island_is_valid_json_when_empty(self):
+        html = self._render(history=[])
+        data = json.loads(self._ISLAND.search(html).group(1).strip())
+        assert data == {"labels": [], "p2pool": [], "xvb": [],
+                        "sharesY": [], "sharesR": [], "sharesC": []}
+
+    def test_chart_island_is_valid_json_with_data(self):
+        # Populated history exercises the null markers + floats that must stay JSON-valid.
+        history = [
+            {"timestamp": 100, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},
+            {"timestamp": 160, "v": 600, "v_p2pool": 300, "v_xvb": 300, "t": "b"},
+        ]
+        html = self._render(history=history)
+        data = json.loads(self._ISLAND.search(html).group(1).strip())
+        assert data["labels"] == ["a", "b"]
+        assert data["p2pool"] == [500, 300]
+        assert data["xvb"] == [0, 300]
+        assert len(data["sharesY"]) == 2  # null where no share landed
