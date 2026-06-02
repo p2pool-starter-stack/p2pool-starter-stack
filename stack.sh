@@ -42,14 +42,21 @@ REBOOT_REQUIRED=false
 SKIP_OPTIMIZE=0
 SKIP_DEPS=0
 
-# Always operate from the directory containing this script, so the stack can be managed from
-# anywhere (./stack.sh, an absolute path, cron, systemd, ...). All paths below are relative to it.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR" || error "Cannot enter the script directory: $SCRIPT_DIR"
+# Detect whether we're being sourced (e.g. by the test suite). When sourced we only define
+# functions/constants and skip all side effects (cd, traps, running main).
+_STACK_SOURCED=0
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _STACK_SOURCED=1; fi
 
-# Friendly message on unexpected failure; always clean up the apply staging file.
-trap on_err ERR
-trap 'rm -f "${ENV_FILE}.new" 2>/dev/null || true' EXIT
+if [ "$_STACK_SOURCED" = "0" ]; then
+    # Always operate from the directory containing this script, so the stack can be managed from
+    # anywhere (./stack.sh, an absolute path, cron, systemd, ...). All paths below are relative to it.
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cd "$SCRIPT_DIR" || error "Cannot enter the script directory: $SCRIPT_DIR"
+
+    # Friendly message on unexpected failure; always clean up the apply staging file.
+    trap on_err ERR
+    trap 'rm -f "${ENV_FILE}.new" 2>/dev/null || true' EXIT
+fi
 
 # --- Lifecycle Helpers ---
 
@@ -914,4 +921,6 @@ main() {
     esac
 }
 
-main "$@"
+if [ "$_STACK_SOURCED" = "0" ]; then
+    main "$@"
+fi

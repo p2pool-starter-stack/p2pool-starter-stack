@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#
+# Dependency-free test suite for stack.sh (no bats required).
+# Mixes unit tests (sourcing stack.sh and calling its functions) with black-box CLI tests
+# (running a sandboxed copy of stack.sh with docker/sudo stubbed out). Run: tests/stack/run.sh
+#
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+STACK="$ROOT/stack.sh"
+PASS=0
+FAIL=0
+
+ok()  { PASS=$((PASS + 1)); printf '  \033[1;32m✓\033[0m %s\n' "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf '  \033[1;31m✗\033[0m %s\n      %s\n' "$1" "$2"; }
+
+assert_eq()       { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$3], got [$2]"; fi; }
+assert_contains() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "[$2] missing [$3]" ;; esac; }
+assert_rc()       { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected rc $3, got $2"; fi; }
+
+# Run a command with stack.sh sourced (functions available, no cd/main side effects),
+# from a given working directory. Usage: run_sourced <dir> <cmd> [args...]
+run_sourced() {
+    local dir="$1"; shift
+    ( cd "$dir"; source "$STACK"; set +e; "$@" )
+}
+
+# A throwaway sandbox dir, cleaned on exit.
+SANDBOX="$(mktemp -d)"
+trap 'rm -rf "$SANDBOX"' EXIT
+
+# A fake docker that records calls and answers the few queries setup/apply make.
+make_stubs() {
+    local bin="$1"
+    mkdir -p "$bin"
+    cat > "$bin/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >> "${DOCKER_LOG:-/dev/null}"
+case "$*" in
+  "compose version"|"info") exit 0 ;;
+  "exec tor test -f "*) exit 0 ;;
+  "exec tor cat /var/lib/tor/monero/hostname") echo "mona.onion" ;;
+  "exec tor cat /var/lib/tor/tari/hostname")   echo "taria.onion" ;;
+  "exec tor cat /var/lib/tor/p2pool/hostname") echo "p2pa.onion" ;;
+esac
+exit 0
+EOF
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/sudo"
+    chmod +x "$bin/docker" "$bin/sudo"
+}
+
+# ---------------------------------------------------------------------------
+echo "== unit: resolve_default =="
+assert_eq "auto -> default"        "$(run_sourced "$SANDBOX" resolve_default auto /def)"          "/def"
+assert_eq "empty -> default"       "$(run_sourced "$SANDBOX" resolve_default '' /def)"            "/def"
+assert_eq "DYNAMIC_DATA -> default" "$(run_sourced "$SANDBOX" resolve_default DYNAMIC_DATA /def)" "/def"
+assert_eq "custom kept"            "$(run_sourced "$SANDBOX" resolve_default /my/dir /def)"        "/my/dir"
+
+echo "== unit: assert_safe_dir =="
+run_sourced "$SANDBOX" assert_safe_dir "/"       >/dev/null 2>&1; assert_rc "rejects /"        "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir "/home"   >/dev/null 2>&1; assert_rc "rejects /home"    "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir ""        >/dev/null 2>&1; assert_rc "rejects empty"    "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir "/srv/p2pool/data" >/dev/null 2>&1; assert_rc "allows real dir" "$?" "0"
+
+echo "== unit: describe_change =="
+assert_contains "prune is DEST"      "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)"        "DEST"
+assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
+assert_contains "wallet is DEST"     "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
+assert_contains "xvb url is INFO"    "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)"        "INFO"
+assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)"   "DEST"
+
+echo "== unit: env helpers =="
+printf 'A=1\nB=two\nPROXY_AUTH_TOKEN=keep=me\n' > "$SANDBOX/old.env"
+printf 'A=1\nB=three\nC=4\nPROXY_AUTH_TOKEN=keep=me\n' > "$SANDBOX/new.env"
+assert_eq "env_get_file reads value"      "$(run_sourced "$SANDBOX" env_get_file "$SANDBOX/old.env" B)" "two"
+assert_eq "env_get_file value with ="     "$(run_sourced "$SANDBOX" env_get_file "$SANDBOX/old.env" PROXY_AUTH_TOKEN)" "keep=me"
+changed="$(run_sourced "$SANDBOX" env_changed_keys "$SANDBOX/old.env" "$SANDBOX/new.env" | sort | tr '\n' ' ')"
+assert_eq "env_changed_keys finds B and C" "$changed" "B C "
+
+# ---------------------------------------------------------------------------
+echo "== black-box: CLI dispatch =="
+"$STACK" help >/dev/null 2>&1; assert_rc "help exits 0" "$?" "0"
+assert_contains "help shows usage" "$("$STACK" help 2>&1)" "Usage:"
+out="$("$STACK" frobnicate 2>&1)"; rc=$?
+assert_rc "unknown command fails" "$rc" "1"
+assert_contains "unknown command message" "$out" "Unknown command"
+
+echo "== black-box: guards =="
+G="$SANDBOX/guard"; mkdir -p "$G/build/tari"; cp "$STACK" "$G/stack.sh"
+cp "$ROOT/build/tari/config.toml.template" "$G/build/tari/" 2>/dev/null || true
+make_stubs "$G/bin"
+out="$(cd "$G" && PATH="$G/bin:$PATH" ./stack.sh apply 2>&1)"; rc=$?
+assert_rc "apply without .env fails" "$rc" "1"
+assert_contains "apply needs setup" "$out" "setup"
+
+echo "== black-box: config validation =="
+V="$SANDBOX/val"; mkdir -p "$V/build/tari"; cp "$STACK" "$V/stack.sh"; make_stubs "$V/bin"
+cp "$ROOT/build/tari/config.toml.template" "$V/build/tari/"
+mkdir -p "$V/data/monero" "$V/data/tari" "$V/data/p2pool" "$V/data/tor" "$V/data/dashboard" "$V/data/p2pool/stats"
+seed_env() { cat > "$V/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+}
+WALLET="49AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"banana"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"; rc=$?
+assert_rc "invalid pool rejected" "$rc" "1"
+assert_contains "invalid pool message" "$out" "p2pool.pool"
+
+echo "== black-box: apply preserves secrets + propagates =="
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+DOCKER_LOG="$V/docker.log"; : > "$DOCKER_LOG"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
+assert_eq "pool flag propagated"  "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)"  "--mini"
+assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
+assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
+assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
+
+# ---------------------------------------------------------------------------
+echo ""
+printf 'stack.sh tests: \033[1;32m%d passed\033[0m, ' "$PASS"
+if [ "$FAIL" -gt 0 ]; then printf '\033[1;31m%d failed\033[0m\n' "$FAIL"; exit 1; fi
+printf '0 failed\n'
