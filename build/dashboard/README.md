@@ -13,7 +13,8 @@ mining_dashboard/
 ├── client/            # external service clients (xmrig, xmrig-proxy, xvb, tari gRPC, monerod RPC, docker control)
 ├── collector/         # local stats collectors (pools, system, docker logs)
 ├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite)
-├── web/               # aiohttp server + HTML template + static assets
+├── web/               # server.py (transport: routing + middleware), views.py (rendering:
+│                      #   typed context dataclasses + render_dashboard), HTML template, static assets
 └── helper/            # formatting utilities
 ```
 

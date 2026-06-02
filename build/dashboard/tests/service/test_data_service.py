@@ -3,7 +3,10 @@ from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 
 import mining_dashboard.service.data_service as ds_mod
-from mining_dashboard.service.data_service import DataService
+from mining_dashboard.service.data_service import (
+    DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
+    _parse_proxy_list_worker, _parse_legacy_dict_worker,
+)
 
 
 class _FakeClientSession:
@@ -28,6 +31,143 @@ def _make_service():
     svc.docker_control.stop = AsyncMock(return_value=True)
     svc.docker_control.start = AsyncMock(return_value=True)
     return svc, state_manager, proxy_client
+
+
+class TestProxyWorkerParsers:
+    """The per-shape row parsers used by _normalize_proxy_workers (Issue #39)."""
+
+    def test_parse_list_row_named_fields(self):
+        # idx2=connections, idx8=1m kH/s, idx9=10m kH/s, idx7=last share ms.
+        row = ["rig", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
+        w = _parse_proxy_list_worker(row)
+        assert w == {"name": "rig", "ip": "10.0.0.1", "status": "online",
+                     "h10": 1000, "h60": 1000, "h15": 2000, "uptime": 0}
+
+    def test_parse_list_row_offline_and_uptime(self):
+        row = ["rig", "10.0.0.1", 0, 0, 0, 0, 0, 1_000, 1.0, 2.0, 0, 0, 0]
+        w = _parse_proxy_list_worker(row)
+        assert w["status"] == "offline"
+        assert w["uptime"] > 0  # derived from the last-share timestamp
+
+    def test_parse_legacy_dict_row(self):
+        w = _parse_legacy_dict_worker({"id": "old", "ip": "1.2.3.4",
+                                       "hashrate": [10, 20, 30], "uptime": 5})
+        assert w == {"name": "old", "ip": "1.2.3.4", "status": "online",
+                     "h10": 10, "h60": 20, "h15": 30, "uptime": 5}
+
+
+class TestNormalizeProxyWorkers:
+    """The two xmrig-proxy /workers payload shapes -> a uniform worker list (Issue #39)."""
+
+    def test_list_format_online(self):
+        # 6.x list: idx2=connections (1 -> online), idx8=1.0 kH/s, idx9=2.0 kH/s.
+        row = ["rig1", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
+        [w] = _normalize_proxy_workers({"workers": [row]})
+        assert w["name"] == "rig1"
+        assert w["ip"] == "10.0.0.1"
+        assert w["status"] == "online"
+        assert w["h10"] == 1000 and w["h60"] == 1000  # idx8 kH/s -> H/s
+        assert w["h15"] == 2000                         # idx9 kH/s -> H/s
+        assert w["uptime"] == 0                          # idx7 (last share ms) == 0
+
+    def test_list_format_offline_when_no_connections(self):
+        # A worker still listed by the proxy but with 0 connections is a stopped miner.
+        row = ["rig1", "10.0.0.1", 0, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
+        [w] = _normalize_proxy_workers({"workers": [row]})
+        assert w["status"] == "offline"
+
+    def test_list_format_uptime_estimate_from_last_share(self):
+        # idx7 = last share timestamp (ms) -> a non-negative "seconds since last share".
+        row = ["rig1", "10.0.0.1", 1, 0, 0, 0, 0, 1_000, 1.0, 2.0, 0, 0, 0]
+        [w] = _normalize_proxy_workers({"workers": [row]})
+        assert isinstance(w["uptime"], int)
+        assert w["uptime"] > 0
+
+    def test_short_list_row_is_skipped(self):
+        # Fewer than 13 fields isn't the 6.x shape -> ignored rather than mis-parsed.
+        assert _normalize_proxy_workers({"workers": [["rig1", "10.0.0.1", 1]]}) == []
+
+    def test_legacy_dict_format(self):
+        row = {"id": "old", "ip": "1.2.3.4", "hashrate": [100, 200, 300], "uptime": 50}
+        [w] = _normalize_proxy_workers({"workers": [row]})
+        assert w["name"] == "old"
+        assert w["status"] == "online"
+        assert (w["h10"], w["h60"], w["h15"]) == (100, 200, 300)
+        assert w["uptime"] == 50
+
+    def test_legacy_dict_defaults(self):
+        [w] = _normalize_proxy_workers({"workers": [{}]})
+        assert w["name"] == "Unknown"
+        assert w["ip"] == "0.0.0.0"
+        assert (w["h10"], w["h60"], w["h15"]) == (0, 0, 0)
+
+    def test_missing_payload_returns_empty(self):
+        assert _normalize_proxy_workers(None) == []
+        assert _normalize_proxy_workers({}) == []
+        assert _normalize_proxy_workers({"nope": 1}) == []
+
+
+class TestMergeDirectStats:
+    """Augment proxy workers with direct-API stats; kind-based scaling + keep-online (#39/#28)."""
+
+    def _worker(self):
+        return {"name": "rig", "ip": "10.0.0.1", "status": "online",
+                "h10": 1, "h60": 2, "h15": 3, "uptime": 0}
+
+    def test_proxy_kind_scales_khs_to_hs(self):
+        extra = {"kind": "proxy", "uptime": 120, "hashrate": {"total": [1, 2, 3]}}
+        [w] = _merge_direct_stats([self._worker()], [extra], "3333")
+        assert (w["h10"], w["h60"], w["h15"]) == (1000, 2000, 3000)
+        assert w["uptime"] == 120
+        assert w["active_pool"] == "3333"
+
+    def test_xmrig_kind_not_scaled(self):
+        extra = {"uptime": 99, "hashrate": {"total": [10, 20, 30]}}
+        [w] = _merge_direct_stats([self._worker()], [extra], "3344")
+        assert (w["h10"], w["h60"], w["h15"]) == (10, 20, 30)
+        assert w["active_pool"] == "3344"
+
+    def test_unreachable_direct_api_keeps_proxy_values_online(self):
+        # Falsy extra_stats -> keep proxy-derived hashrate/uptime and stay online (#28).
+        w0 = self._worker()
+        [w] = _merge_direct_stats([w0], [{}], "3333")
+        assert w["status"] == "online"
+        assert (w["h10"], w["h60"], w["h15"]) == (1, 2, 3)  # untouched
+        assert w["active_pool"] == "3333"
+
+    def test_short_hashrate_total_ignored(self):
+        # A <3-entry total isn't applied; uptime still updates and active_pool is tagged.
+        extra = {"uptime": 7, "hashrate": {"total": [5, 6]}}
+        [w] = _merge_direct_stats([self._worker()], [extra], "3333")
+        assert (w["h10"], w["h60"], w["h15"]) == (1, 2, 3)
+        assert w["uptime"] == 7
+
+
+class TestAggregateHashrate:
+    """Total live hashrate, priority 15m > 60s > 10s, online-only (Issue #39)."""
+
+    def test_prefers_h15(self):
+        workers = [{"status": "online", "h15": 2000, "h60": 1000, "h10": 500}]
+        assert _aggregate_hashrate(workers) == (2000, 500)
+
+    def test_falls_back_to_h60_then_h10(self):
+        workers = [
+            {"status": "online", "h15": 0, "h60": 1500, "h10": 500},  # uses h60
+            {"status": "online", "h15": 0, "h60": 0, "h10": 700},     # uses h10
+        ]
+        total_h15, total_h10 = _aggregate_hashrate(workers)
+        assert total_h15 == 1500 + 700
+        assert total_h10 == 500 + 700
+
+    def test_offline_excluded(self):
+        workers = [
+            {"status": "online", "h15": 1000, "h10": 100},
+            {"status": "offline", "h15": 9999, "h10": 9999},
+        ]
+        assert _aggregate_hashrate(workers) == (1000, 100)
+
+    def test_empty(self):
+        assert _aggregate_hashrate([]) == (0, 0)
 
 
 class TestInit:
