@@ -1,28 +1,17 @@
 import os
-import time
-import html
 import logging
-import bisect
-import json
 from aiohttp import web
-from mining_dashboard.config.config import (
-    HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB,
-    XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
-    MONERO_PRUNE, MONERO_NODE_HOST,
-)
-from mining_dashboard.helper.utils import (
-    format_hashrate, format_duration, format_time_abs, get_tier_info,
-    resolve_target_threshold,
+from mining_dashboard.config.config import HOST_IP
+from mining_dashboard.web.views import (
+    _get_chart_context, _get_system_context, _get_pool_network_context,
+    _get_algo_context, _get_tari_context, _get_worker_rows,
+    build_sync_context, build_header_badges,
 )
 
 logger = logging.getLogger("WebServer")
 
 # Absolute path to the HTML template file
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "index.html")
-
-BADGE_P2POOL = '<span class="badge badge-ok">P2Pool</span>'
-BADGE_XVB = '<span class="badge badge-purple">XvB</span>'
-BADGE_UNKNOWN = '<span class="badge badge-bad">Unknown</span>'
 
 # Template Caching Mechanism
 _TEMPLATE_CACHE = None
@@ -42,462 +31,6 @@ def get_cached_template():
         logger.error(f"Error loading template: {e}")
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
-def _get_chart_context(history, shares, range_arg):
-    """Filters historical data based on the selected time range, downsamples for performance, and prepares datasets."""
-    filtered_history = history
-    filtered_shares = shares
-    
-    if range_arg != 'all':
-        target_seconds = 0
-        if range_arg == '1h': target_seconds = 3600
-        elif range_arg == '24h': target_seconds = 86400
-        elif range_arg == '1w': target_seconds = 604800
-        elif range_arg == '1m': target_seconds = 2592000 
-        
-        if target_seconds > 0:
-            cutoff_timestamp = time.time() - target_seconds
-            filtered_history = [x for x in history if x['timestamp'] >= cutoff_timestamp]
-            filtered_shares = [x for x in shares if x['ts'] >= cutoff_timestamp]
-
-    # --- DOWNSAMPLING LOGIC ---
-    # Limits maximum points sent to the frontend to ensure Chart.js performance 
-    # and to dramatically reduce the HTML payload size.
-    MAX_POINTS = 800
-    if len(filtered_history) > MAX_POINTS:
-        chunk_size = len(filtered_history) / MAX_POINTS
-        downsampled = []
-        for i in range(MAX_POINTS):
-            start_idx = int(i * chunk_size)
-            end_idx = int((i + 1) * chunk_size)
-            chunk = filtered_history[start_idx:end_idx]
-            if not chunk:
-                continue
-            
-            # Average the hashrate values over the chunk
-            avg_v = sum(x.get('v', 0) for x in chunk) / len(chunk)
-            avg_vp = sum(x.get('v_p2pool', 0) for x in chunk) / len(chunk)
-            avg_vx = sum(x.get('v_xvb', 0) for x in chunk) / len(chunk)
-            
-            mid_idx = len(chunk) // 2
-            
-            downsampled.append({
-                't': chunk[mid_idx]['t'],
-                'timestamp': chunk[mid_idx]['timestamp'],
-                'v': round(avg_v, 2),
-                'v_p2pool': round(avg_vp, 2),
-                'v_xvb': round(avg_vx, 2)
-            })
-        filtered_history = downsampled
-
-    p2pool_data = []
-    xvb_data = []
-    chart_labels_list = [json.dumps(x['t']) for x in filtered_history]
-
-    for x in filtered_history:
-        v = x.get('v', 0)
-        vp = x.get('v_p2pool', 0)
-        vx = x.get('v_xvb', 0)
-        
-        # Fallback for legacy data: if breakdown is missing, assume P2Pool
-        if vp == 0 and vx == 0 and v > 0:
-            vp = v
-            
-        p2pool_data.append(str(vp))
-        xvb_data.append(str(vx))
-
-    share_y_list = ['null'] * len(filtered_history)
-    share_r_list = ['0'] * len(filtered_history)
-    share_c_list = ['0'] * len(filtered_history)
-    
-    if filtered_history and filtered_shares:
-        hist_ts = [x['timestamp'] for x in filtered_history]
-        share_counts = {}
-
-        for s in filtered_shares:
-            s_ts = s['ts']
-            idx = bisect.bisect_left(hist_ts, s_ts)
-            candidates = []
-            if idx < len(hist_ts): candidates.append(idx)
-            if idx > 0: candidates.append(idx - 1)
-            
-            if candidates:
-                closest_idx = min(candidates, key=lambda i: abs(hist_ts[i] - s_ts))
-                share_counts[closest_idx] = share_counts.get(closest_idx, 0) + 1
-
-        for idx, count in share_counts.items():
-            if idx < len(filtered_history):
-                item = filtered_history[idx]
-                v = item.get('v', 0)
-                
-                # 1. Calculate offset: Lift the triangle 10% above the line value
-                y_pos = v * 1.1 if v > 0 else 100
-                
-                r = min(6 + (count * 3), 15)
-                
-                # 2. Use the OFFSET position (y_pos) instead of the exact line value (v)
-                share_y_list[idx] = str(y_pos)
-                share_r_list[idx] = str(r)
-                share_c_list[idx] = str(count)
-
-    return {
-        'chart_labels': ",".join(chart_labels_list),
-        'chart_data': ",".join([str(x['v']) for x in filtered_history]),
-        'chart_p2pool': ",".join(p2pool_data),
-        'chart_xvb': ",".join(xvb_data),
-        'chart_shares_y': ",".join(share_y_list),
-        'chart_shares_r': ",".join(share_r_list),
-        'chart_shares_c': ",".join(share_c_list),
-        'cls_1h': 'active' if range_arg == '1h' else '',
-        'cls_24h': 'active' if range_arg == '24h' else '',
-        'cls_1w': 'active' if range_arg == '1w' else '',
-        'cls_1m': 'active' if range_arg == '1m' else ''
-    }
-
-def _get_worker_rows(workers):
-    """Generates HTML table rows for worker statistics, including status badges and hashrate metrics."""
-    worker_rows = ""
-    sorted_workers = sorted(workers, key=lambda x: (x['status'] != 'online', x['name']))
-    
-    for worker in sorted_workers:
-        try:
-            status_class = "status-ok" if worker['status'] == 'online' else "status-bad"
-            
-            # Identify and assign pool badge based on port
-            active_pool = worker.get('active_pool', '')
-            pool_badge = BADGE_UNKNOWN
-            if any(p in active_pool for p in ['3333', '37889', '37888', '37890']):
-                pool_badge = BADGE_P2POOL
-            elif any(p in active_pool for p in ['3344', '4247']):
-                pool_badge = BADGE_XVB
-            
-            name_display = f"{html.escape(worker['name'])} {pool_badge}"
-
-            # Add data-sort attributes for client-side sorting
-            uptime_val = worker.get('uptime', 0)
-            h10_val = worker.get('h10', 0)
-            h60_val = worker.get('h60', 0)
-            h15_val = worker.get('h15', 0)
-
-            # Convert IP address to integer for sorting purposes
-            try:
-                ip_parts = [int(part) for part in worker.get('ip', '0.0.0.0').split('.')]
-                ip_sort_val = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
-            except (ValueError, IndexError, AttributeError):
-                ip_sort_val = 0
-
-            row = f"""
-            <tr class="{status_class}">
-                <td data-sort="{html.escape(worker['name'])}">{name_display}</td>
-                <td data-sort="{ip_sort_val}">{html.escape(worker['ip'])}</td>
-                <td data-sort="{uptime_val}">{format_duration(uptime_val)}</td>
-                <td data-sort="{h10_val}">{format_hashrate(h10_val)}</td>
-                <td data-sort="{h60_val}">{format_hashrate(h60_val)}</td>
-                <td data-sort="{h15_val}">{format_hashrate(h15_val)}</td>
-            </tr>
-            """
-            worker_rows += row
-        except Exception as e:
-            logger.error(f"Error processing worker {worker.get('name', 'unknown')}: {e}")
-            continue
-    return worker_rows
-
-def _get_tari_context(data):
-    """Extracts and formats Tari merge mining metrics for the dashboard."""
-    tari_stats = data.get('tari', {})
-    tari_active = tari_stats.get('active', False)
-    t_addr = tari_stats.get('address', 'Unknown')
-    t_short = t_addr if len(t_addr) <= 16 else f"{t_addr[:8]}...{t_addr[-8:]}"
-    
-    status_val = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
-    if tari_active:
-        status_val = f'{status_val} <span style="font-size: 1.2em;">✔</span>'
-
-    return {
-        'tari_status': status_val,
-        'tari_status_class': "status-ok" if tari_active else "",
-        'tari_reward': f"{tari_stats.get('reward', 0):.2f} TARI",
-        'tari_height': str(tari_stats.get('height', 0)),
-        'tari_diff': f"{int(tari_stats.get('difficulty', 0)):,}",
-        'tari_wallet': t_addr,
-        'tari_wallet_short': t_short
-    }
-
-def _get_system_context(data):
-    """Extracts and formats system resource metrics (CPU, RAM, Disk, HugePages)."""
-    system = data.get('system', {})
-    
-    # Disk Usage
-    disk_usage = system.get('disk', {})
-    disk_percent = disk_usage.get('percent', 0)
-    disk_fill = "critical" if disk_percent > 90 else "warning" if disk_percent > 70 else ""
-    
-    disk_class = "text-muted"
-    disk_badge = ""
-    if disk_percent > 80:
-        disk_class = "status-bad"
-        disk_badge = '<span class="badge badge-bad" style="margin-left:5px; margin-right:5px;">High Usage</span>'
-
-    # Memory Usage
-    mem_usage = system.get('memory', {})
-    mem_percent = mem_usage.get('percent', 0)
-    
-    mem_label_class = "text-muted"
-    mem_val_class = ""
-    mem_badge = ""
-    if mem_percent > 80:
-        mem_label_class = "status-bad"
-        mem_val_class = "status-bad"
-        mem_badge = '<span class="badge badge-bad" style="margin-left:5px; margin-right:5px;">High Usage</span>'
-
-    # CPU Usage
-    cpu_str = system.get('cpu_percent', "0.0%")
-    try:
-        cpu_val = float(cpu_str.strip('%'))
-    except ValueError:
-        cpu_val = 0.0
-        
-    load_raw = system.get('load', "0.00 0.00 0.00")
-    load_parts = load_raw.split()
-    load_avg = f"1m: {load_parts[0]} 5m: {load_parts[1]} 15m: {load_parts[2]}" if len(load_parts) == 3 else load_raw
-    
-    cpu_label_class = "text-muted"
-    cpu_val_class = ""
-    cpu_badge = ""
-    if cpu_val > 80:
-        cpu_label_class = "status-bad"
-        cpu_val_class = "status-bad"
-        cpu_badge = '<span class="badge badge-bad" style="margin-left:5px; margin-right:5px;">High Usage</span>'
-
-    hugepages_info = system.get('hugepages', ["Disabled", "status-bad", "0/0"])
-    hp_status, hp_class, hp_val = hugepages_info
-
-    return {
-        'hp_status': hp_status,
-        'hp_class': hp_class,
-        'hp_val': hp_val,
-        'disk_used': disk_usage.get('used_gb', 0),
-        'disk_total': disk_usage.get('total_gb', 0),
-        'disk_p': disk_usage.get('percent_str', '0%'),
-        'disk_width': f"{disk_percent}%",
-        'disk_fill_class': disk_fill,
-        'disk_class': disk_class,
-        'disk_badge': disk_badge,
-        'mem_p': mem_usage.get('percent_str', '0%'),
-        'mem_used': f"{mem_usage.get('used_gb', 0):.1f}",
-        'mem_total': f"{mem_usage.get('total_gb', 0):.1f}",
-        'mem_label_class': mem_label_class,
-        'mem_val_class': mem_val_class,
-        'mem_badge': mem_badge,
-        'cpu_load': load_avg,
-        'cpu_percent': cpu_str,
-        'cpu_label_class': cpu_label_class,
-        'cpu_val_class': cpu_val_class,
-        'cpu_badge': cpu_badge,
-    }
-
-def _get_pool_network_context(data):
-    """Extracts and formats P2Pool, Stratum, and Monero Network metrics."""
-    pool_stats = data.get('pool', {})
-    p2p_stats = pool_stats.get('p2p', {})
-    local_pool = pool_stats.get('pool', {})
-    stratum_stats = data.get('stratum', {})
-    network_stats = data.get('network', {})
-
-    net_hash_val = str(network_stats.get('hash', 'N/A'))
-    if len(net_hash_val) > 20:
-        net_hash_val = f"{net_hash_val[:8]}...{net_hash_val[-8:]}"
-
-    s_addr = stratum_stats.get('wallet', 'Unknown')
-    s_short = s_addr if len(s_addr) <= 16 else f"{s_addr[:8]}...{s_addr[-8:]}"
-
-    workers_list = data.get('workers', [])
-    proxy_count = sum(1 for w in workers_list if w.get('status') == 'online')
-
-    # Determine block time based on pool type (Main/Mini=10s, Nano=30s)
-    pool_type = p2p_stats.get('type', 'Main')
-    block_time = 30 if pool_type == 'Nano' else 10
-
-    # Calculate shares in window
-    shares_list = data.get('shares', [])
-    pplns_window = local_pool.get('pplns_window', 2160)
-    window_duration = pplns_window * block_time
-    cutoff = time.time() - window_duration
-    shares_count = sum(1 for s in shares_list if s.get('ts', 0) >= cutoff)
-    shares_display = f"<span class='status-ok'>{shares_count}</span>" if shares_count > 0 else f"<span class='status-bad'>0</span>"
-
-    # Monero node mode: Pruned/Full from config (Issue #32), with the on-disk DB size from
-    # get_info alongside so a config/DB mismatch is visible. Only meaningful for a local node
-    # (we don't probe a remote node's RPC, so its pruning state is unknown to us).
-    monero_sync = data.get('monero_sync', {})
-    db_bytes = monero_sync.get('db_size', 0) or 0
-    if MONERO_NODE_HOST == "172.28.0.26":
-        monero_mode = "Pruned" if MONERO_PRUNE else "Full"
-    else:
-        monero_mode = "Unknown"
-    monero_db_size = f"{db_bytes / 1e9:.1f} GB" if db_bytes > 0 else "—"
-
-    # Compact header badge mirroring the mode. Hidden for a remote node (pruning unknown).
-    if monero_mode == "Pruned":
-        monero_prune_badge = ('<span class="badge badge-outline" '
-                              'title="Monero blockchain is pruned">XMR Pruned</span>')
-    elif monero_mode == "Full":
-        monero_prune_badge = ('<span class="badge badge-outline" '
-                              'title="Monero blockchain is full (not pruned)">XMR Full</span>')
-    else:
-        monero_prune_badge = ''
-
-    return {
-        'strat_h15': format_hashrate(stratum_stats.get('hashrate_15m', 0)),
-        'strat_h1h': format_hashrate(stratum_stats.get('hashrate_1h', 0)),
-        'strat_h24h': format_hashrate(stratum_stats.get('hashrate_24h', 0)),
-        'strat_shares': f"{stratum_stats.get('shares_found',0)} / {stratum_stats.get('shares_failed',0)}",
-        'strat_effort': f"{stratum_stats.get('current_effort', 0):.1f}%",
-        'strat_total_shares': stratum_stats.get('total_stratum_shares', 0),
-        'strat_reward_pct': f"{stratum_stats.get('block_reward_share_percent', 0):.4f}%",
-        'strat_conns': stratum_stats.get('connections', 0),
-        'strat_last_share': format_time_abs(stratum_stats.get('last_share_found_time', 0)),
-        'strat_total_hashes': stratum_stats.get('total_hashes', 0),
-        'strat_wallet': s_addr,
-        'strat_wallet_short': s_short,
-        'proxy_workers': proxy_count,
-        'p2p_type': p2p_stats.get('type', 'Unknown'),
-        'pool_sidechain_height': local_pool.get('sidechain_height', 0),
-        'pool_diff': f"{local_pool.get('difficulty', 0)/1e6:.2f} M",
-        'pool_hr': format_hashrate(local_pool.get('hashrate', 0)),
-        'pool_total_hashes': local_pool.get('total_hashes', 0),
-        'pool_miners': local_pool.get('miners', 0),
-        'pplns_win': f"{local_pool.get('pplns_window', 0)} ({format_duration(local_pool.get('pplns_window', 0) * block_time)})",
-        'pplns_wgt': local_pool.get('pplns_weight', 0),
-        'pool_shares_window': shares_display,
-        'pool_blocks': local_pool.get('blocks_found', 0),
-        'pool_last_blk': format_time_abs(local_pool.get('last_block_ts', 0)),
-        'p2p_peers': f"{p2p_stats.get('out_peers',0)} / {p2p_stats.get('in_peers',0)}",
-        'p2p_uptime': format_duration(p2p_stats.get('uptime', 0)),
-        'net_height': network_stats.get('height', 0),
-        'net_reward': f"{network_stats.get('reward', 0)/1e12:.4f} XMR",
-        'net_diff': f"{network_stats.get('difficulty', 0)/1e9:.2f} G",
-        'net_hash': net_hash_val,
-        'net_ts': format_time_abs(network_stats.get('timestamp', 0)),
-        'monero_mode': monero_mode,
-        'monero_db_size': monero_db_size,
-        'monero_prune_badge': monero_prune_badge,
-    }
-
-def _avg_p2pool_over_window(history, window_seconds):
-    """Time-weighted P2Pool hashrate over the trailing window, from DB history.
-
-    Averages the per-sample ``v_p2pool`` (hashrate attributed to P2Pool) for
-    samples within the window. Samples are written at a fixed cadence
-    (UPDATE_INTERVAL), so a simple mean approximates a time-weighted average.
-    Mirrors the chart's legacy-data fallback: rows predating the p2pool/xvb
-    split (v_p2pool == v_xvb == 0 but v > 0) are counted as P2Pool. (Issue #27)
-    """
-    if not history:
-        return 0.0
-
-    cutoff = time.time() - window_seconds
-    total = 0.0
-    count = 0
-    for x in history:
-        if x.get('timestamp', 0) < cutoff:
-            continue
-        vp = x.get('v_p2pool', 0) or 0
-        vx = x.get('v_xvb', 0) or 0
-        v = x.get('v', 0) or 0
-        if vp == 0 and vx == 0 and v > 0:
-            vp = v
-        total += vp
-        count += 1
-
-    return total / count if count else 0.0
-
-def _get_algo_context(data, state_mgr, history):
-    """Calculates algorithm switching logic, donation tiers, and hashrate averages."""
-    xvb_stats = state_mgr.get_xvb_stats() or {}
-    current_mode = xvb_stats.get('current_mode', 'P2POOL')
-    
-    # Colors
-    c_green = "#238636"
-    c_purple = "#a371f7"
-    c_blue = "#58a6ff"
-    c_muted = "#8b949e"
-
-    # Pool activity coloring: the active pool is colored, the inactive one muted.
-    # Symmetric — P2Pool dims when XvB is active, and vice versa (Issue #27).
-    # Checked most-specific first: "XVB (Split)" contains both "Split" and "XVB".
-    if not ENABLE_XVB:
-        current_mode = "P2POOL (XvB Disabled)"
-        mode_color = c_green
-        p2p_color = c_green
-        xvb_color = c_muted
-    elif "Split" in current_mode:
-        # Split cycle alternates pools within the window — both are active.
-        mode_color = c_blue
-        p2p_color = c_green
-        xvb_color = c_purple
-    elif "XVB" in current_mode:
-        mode_color = c_purple
-        p2p_color = c_muted
-        xvb_color = c_purple
-    else:  # P2POOL
-        mode_color = c_green
-        p2p_color = c_green
-        xvb_color = c_muted
-
-    total_hr_val = data.get('total_live_h15', 0)
-    xvb_1h_val = xvb_stats.get('avg_1h', 0)
-    xvb_24h_val = xvb_stats.get('avg_24h', 0)
-
-    # P2Pool 1h/24h averages from our own DB history: the time-weighted hashrate
-    # actually delivered to P2Pool (v_p2pool), rather than p2pool's noisy stratum
-    # estimate or a total-minus-XvB subtraction. The raw stratum reading is still
-    # shown separately in the "Stratum (15m/1h/24h)" card. (Issue #27)
-    p2p_1h_val = _avg_p2pool_over_window(history, 3600)
-    p2p_24h_val = _avg_p2pool_over_window(history, 86400)
-
-    tiers = state_mgr.get_tiers()
-    # Current tier = what XvB actually credits us (drives qualification).
-    tier_name, _ = get_tier_info(xvb_24h_val, tiers)
-    # Target tier = what the algo aims for, from the configured donation level
-    # (Issue #40 config side). "auto" = highest sustainable; an explicit tier is
-    # honored even if unsustainable, in which case we flag a low-hashrate warning.
-    target_threshold, sustainable = resolve_target_threshold(
-        tiers, total_hr_val, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION
-    )
-    target_tier_name, _ = get_tier_info(target_threshold, tiers)
-
-    low_hr_badge = ''
-    if (ENABLE_XVB and XVB_DONATION_LEVEL not in ("auto", "highest")
-            and target_threshold > 0 and not sustainable):
-        low_hr_badge = (
-            '<span class="badge badge-warn" style="margin-left: 8px;" '
-            'title="Your hashrate can\'t sustain the selected XvB donation tier; '
-            'donation will fall short of it.">⚠ Hashrate low for tier</span>'
-        )
-
-    if not ENABLE_XVB:
-        tier_name = "Disabled"
-        target_tier_name = "Disabled"
-        low_hr_badge = ''
-
-    return {
-        'mode_name': current_mode,
-        'mode_color': mode_color,
-        'p2p_color': p2p_color,
-        'xvb_color': xvb_color,
-        'total_hr': format_hashrate(total_hr_val),
-        'last_update': format_time_abs(time.time()),
-        'xvb_updated': format_time_abs(xvb_stats.get('last_update', 0)),
-        'p2p_1h': format_hashrate(p2p_1h_val),
-        'p2p_24h': format_hashrate(p2p_24h_val),
-        'xvb_1h': format_hashrate(xvb_1h_val),
-        'xvb_24h': format_hashrate(xvb_24h_val),
-        'tier_name': tier_name,
-        'target_tier_name': target_tier_name,
-        'low_hr_badge': low_hr_badge,
-        'xvb_fail_count': xvb_stats.get('fail_count', 0),
-    }
-
 async def handle_index(request):
     """
     Primary Request Handler: Aggregates all context data and renders the Dashboard HTML.
@@ -506,99 +39,31 @@ async def handle_index(request):
     app = request.app
     data = app['latest_data']
     state_mgr = app['state_manager']
-    
+
     try:
         history = state_mgr.get_history()
         shares = data.get('shares', [])
         range_arg = request.query.get('range', 'all')
-        
-        # Prepare Sync Context
-        monero_sync = data.get('monero_sync', {})
-        tari_sync = data.get('tari_sync', {})
-        
+
         # Use global_sync flag from DataService to trigger dashboard sync mode
         is_syncing = data.get('global_sync', False)
-        
-        # Format Monero Sync Display. Show the checkmark only once we have real data
-        # (target > 0); before the initial heights arrive it's 0/0, which is "waiting",
-        # not "synced", so render a loading indicator rather than a false 100% check.
-        m_pct = monero_sync.get('percent', 0)
-        if monero_sync.get('target', 0) <= 0:
-            m_disp = '…'
-        elif m_pct >= 100:
-            m_disp = '<span class="status-ok" style="font-size: 3.5em; line-height: 1;">✔</span>'
-        else:
-            m_disp = f"{m_pct}%"
 
-        # Format Tari Sync Display (same 0/0 guard as Monero above)
-        t_pct = tari_sync.get('percent', 0)
-        if tari_sync.get('target', 0) <= 0:
-            t_disp = '…'
-        elif t_pct >= 100:
-            t_disp = '<span class="status-ok" style="font-size: 3.5em; line-height: 1;">✔</span>'
-        else:
-            t_disp = f"{t_pct}%"
-        
-        sync_ctx = {
-            'sync_class': 'mode-sync' if is_syncing else '',
-            'page_title': 'Mining Dashboard - Syncing' if is_syncing else 'Mining Dashboard',
-            'sync_percent': m_disp,
-            'sync_percent_val': m_pct,
-            'sync_current': monero_sync.get('current', 0),
-            'sync_target': monero_sync.get('target', 0),
-            'sync_remaining': monero_sync.get('target', 0) - monero_sync.get('current', 0),
-            'tari_sync_percent': t_disp,
-            'tari_sync_percent_val': t_pct,
-            'tari_sync_current': tari_sync.get('current', 0),
-            'tari_sync_target': tari_sync.get('target', 0),
-            'tari_sync_remaining': tari_sync.get('target', 0) - tari_sync.get('current', 0)
-        }
-
-        # Build Contexts
+        # Build Contexts (presentation logic lives in web/views.py)
+        sync_ctx = build_sync_context(
+            data.get('monero_sync', {}), data.get('tari_sync', {}), is_syncing
+        )
         chart_ctx = _get_chart_context(history, shares, range_arg)
         system_ctx = _get_system_context(data)
         pool_net_ctx = _get_pool_network_context(data)
         algo_ctx = _get_algo_context(data, state_mgr, history)
         tari_ctx = _get_tari_context(data)
-        
+
         # Dynamic Components
         worker_rows = _get_worker_rows(data.get('workers', []))
-
-        # Dynamic Header Badges
-        if is_syncing:
-            header_badges = '<span class="badge badge-warn badge-pool">Syncing...</span>'
-        else:
-            m_color = algo_ctx.get('mode_color', '')
-            m_name = algo_ctx.get('mode_name', '')
-            p_type = pool_net_ctx.get('p2p_type', '')
-            header_badges = f'<span class="badge badge-pool" style="background-color: {m_color};">{m_name}</span>'
-            header_badges += f'<span class="badge badge-outline">P2Pool {p_type}</span>'
-            header_badges += algo_ctx.get('low_hr_badge', '')
-
-        # Node-down badges (Issue #31) — shown whenever a node is unreachable, regardless
-        # of sync state, plus a notice when workers have been rejected to fail over.
-        if monero_sync.get('down'):
-            header_badges += '<span class="badge badge-bad badge-pool">monerod DOWN</span>'
-        if tari_sync.get('down'):
-            header_badges += '<span class="badge badge-bad badge-pool">Tari DOWN</span>'
-        if data.get('workers_rejected'):
-            header_badges += '<span class="badge badge-bad badge-pool" title="Workers rejected so they fail over to their backup pools">Workers rejected</span>'
-        # Miner held until the required chain(s) finish their initial sync (Issue #35).
-        if data.get('miner_held'):
-            header_badges += '<span class="badge badge-warn badge-pool" title="p2pool and xmrig-proxy are held until the required chains finish syncing">Miner held (sync)</span>'
-        # Non-blocking Tari (Issue #51): Tari is (re)syncing but we stay in the operational
-        # view — surface it as a top-bar badge instead of the full-screen takeover. Show the
-        # progress percentage once it's known (omitted early on, before a target height, so it
-        # doesn't read a misleading "0%").
-        if data.get('tari_syncing_passive'):
-            t_pct = tari_sync.get('percent', 0)
-            label = f'Tari syncing {t_pct}%' if t_pct > 0 else 'Tari syncing'
-            header_badges += (f'<span class="badge badge-warn badge-pool" '
-                              f'title="Tari is still syncing — merge mining resumes when it catches up; '
-                              f'Monero mining continues">{label}</span>')
+        header_badges = build_header_badges(data, is_syncing, algo_ctx, pool_net_ctx)
 
         template = get_cached_template()
-        
+
         response_html = template.format(
             host_ip=HOST_IP,
             header_badges=header_badges,
@@ -612,7 +77,7 @@ async def handle_index(request):
         )
 
         return web.Response(text=response_html, content_type='text/html')
-        
+
     except Exception:
         # Log the full error server-side; never leak exception details to the browser.
         logger.exception("Error rendering dashboard")
@@ -652,10 +117,10 @@ def create_app(state_manager, latest_data_ref):
     # Pass shared state objects to the app context
     app['state_manager'] = state_manager
     app['latest_data'] = latest_data_ref
-    
+
     app.add_routes([web.get('/', handle_index)])
-    
+
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.router.add_static('/static', static_path)
-    
+
     return app
