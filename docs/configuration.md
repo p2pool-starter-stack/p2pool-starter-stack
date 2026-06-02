@@ -6,27 +6,20 @@ running `./stack.sh apply`.
 
 ## The minimal config
 
-Only a few keys are required — your wallets, the node mode, the pool, and whether the dashboard
-is served securely. The local node's RPC credentials are **auto-generated** when you leave them
-blank, so you normally don't set them. **Every other key is optional and falls back to a sensible
-default**, so leave it out unless you want to change it.
+Only your two **wallet addresses** are required. **Every other key is optional and falls back to
+a sensible default** — the node runs locally, on the `main` pool, with a secure dashboard, and the
+local node's RPC credentials are **auto-generated** for you — so leave a key out unless you want to
+change it.
 
-A fresh `config.json` looks like this (see [`config.json.template`](../config.json.template)):
+A fresh `config.json` is just this (see [`config.json.template`](../config.json.template)):
 
 ```json
 {
     "monero": {
-        "mode": "local",
         "wallet_address": "your_monero_wallet_address"
     },
     "tari": {
         "wallet_address": "your_tari_wallet_address"
-    },
-    "p2pool": {
-        "pool": "main"
-    },
-    "dashboard": {
-        "secure": true
     }
 }
 ```
