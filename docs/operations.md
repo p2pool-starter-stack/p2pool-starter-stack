@@ -99,6 +99,14 @@ If a node looks genuinely stalled (no new blocks over a long period), restart it
 blockchain or a remote node — see
 [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
+**Tari keeps restarting / its memory climbs and then it bounces.**
+Expected on small hosts. The Tari container has a hard memory cap (`tari.mem_limit`, `auto` by
+default) so its slow, unbounded memory growth can't pressure the whole machine — it OOM-restarts
+cleanly while Monero and P2Pool keep mining throughout. If it restarts often enough to hurt merge
+mining, or it OOM-loops during its **initial** sync (the cap is too low to finish syncing), raise
+it — e.g. `"tari": { "mem_limit": "4g" }` — and run `./stack.sh apply`. See
+[Configuration reference](configuration.md#configuration-reference).
+
 **Browser warns "your connection is not private."**
 Expected with `dashboard.secure: true` — Caddy uses a self-signed certificate. Accept the
 warning once. To use plain HTTP, set `dashboard.secure: false` and run `./stack.sh apply`.

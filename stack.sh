@@ -787,6 +787,29 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Tari memory cap (#55). Tari's memory grows unbounded over time; uncapped it can OOM the whole
+    # host on small machines. The cap (paired with memswap_limit in compose => no swap) makes it
+    # OOM-restart cleanly instead. "auto" scales to host RAM: RAM/8, floored at 2048 MB (Tari needs
+    # ~2 GB to sync reliably) and capped at 4096 MB (a leak shouldn't get unlimited headroom). A
+    # 16 GB host => 2048 MB, the value validated firsthand in #14. Override with tari.mem_limit,
+    # e.g. "3072m" or "4g" — any Docker memory value is passed through verbatim.
+    local tari_mem_limit ram_mb
+    tari_mem_limit=$(jq -r '.tari.mem_limit // "auto"' "$CONFIG_FILE")
+    case "$tari_mem_limit" in
+        ""|auto)
+            if [ "$OS_TYPE" == "Darwin" ]; then
+                ram_mb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1048576 ))
+            else
+                ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+            fi
+            [ "${ram_mb:-0}" -gt 0 ] 2>/dev/null || ram_mb=16384   # unknown host => assume 16 GB
+            tari_mem_limit=$(( ram_mb / 8 ))
+            [ "$tari_mem_limit" -lt 2048 ] && tari_mem_limit=2048
+            [ "$tari_mem_limit" -gt 4096 ] && tari_mem_limit=4096
+            tari_mem_limit="${tari_mem_limit}m"
+            ;;
+    esac
+
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
     cat <<EOF > "$target"
@@ -809,6 +832,7 @@ XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
+TARI_MEM_LIMIT=$tari_mem_limit
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -975,6 +999,8 @@ describe_change() {
             else
                 msg="Tari → non-blocking — keep mining Monero through a Tari outage, start as soon as Monero is synced, and keep the operational dashboard while Tari syncs."
             fi ;;
+        TARI_MEM_LIMIT)
+            msg="Tari memory cap: $old → $new — the tari container is recreated (brief restart; on-disk chain data is preserved)." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
         HOST_IP)

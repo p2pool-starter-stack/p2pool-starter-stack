@@ -70,6 +70,15 @@ services:
     restart: unless-stopped
     stop_grace_period: 1m
     logging: *default-logging
+    # Tari's memory grows unbounded over time (#55, first reported in #14); left uncapped it can
+    # pressure or OOM the whole host on small (e.g. 16 GB) machines. Cap it so it OOM-restarts
+    # cleanly instead of dragging the stack down — monerod/p2pool keep mining throughout. These
+    # are the legacy keys on purpose: deploy.resources has no swap field, and memswap_limit equal
+    # to mem_limit means zero swap => clean OOM-kill, no disk thrash. (Capping swap needs
+    # swapaccount=1 on older cgroup-v1 hosts; cgroup-v2 honors it by default.) stack.sh sets
+    # TARI_MEM_LIMIT from tari.mem_limit, whose "auto" default scales the cap to host RAM.
+    mem_limit: ${TARI_MEM_LIMIT:-2048m}
+    memswap_limit: ${TARI_MEM_LIMIT:-2048m}
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -91,11 +100,15 @@ services:
       tor:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "ps | grep minotari_node || exit 1"]
+      # Liveness only — deliberately NOT a sync/gRPC check: that would block p2pool from ever
+      # starting while Tari is down or still syncing, breaking "Tari is optional" (#35/#51). The
+      # '[m]' bracket stops grep matching its own argv — the old `grep minotari_node` matched
+      # itself, so the check reported "healthy" even when the daemon had died.
+      test: ["CMD-SHELL", "ps | grep '[m]inotari_node' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 90s   # survive the post-OOM DB integrity check without flapping unhealthy
 
   # --- P2Pool Node ---
   p2pool:
