@@ -892,7 +892,7 @@ apply() {
 
 main() {
     local cmd="${1:-}"
-    [ -n "$cmd" ] && shift || true
+    if [ -n "$cmd" ]; then shift; fi
 
     case "$cmd" in
         "")

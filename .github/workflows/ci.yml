@@ -36,7 +36,8 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint stack.sh and test scripts
-        run: shellcheck stack.sh tests/stack/run.sh tests/stack/test_compose.sh
+        # Gate on warnings+errors (real issues); info-level style nits vary by shellcheck version.
+        run: shellcheck --severity=warning stack.sh tests/stack/run.sh tests/stack/test_compose.sh
       - name: Run stack.sh test suite
         run: bash tests/stack/run.sh
 

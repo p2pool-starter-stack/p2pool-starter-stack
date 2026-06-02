@@ -14,4 +14,4 @@ test-compose: ## Validate docker-compose.yml interpolation
 	bash tests/stack/test_compose.sh
 
 lint: ## shellcheck the stack scripts
-	shellcheck stack.sh tests/stack/run.sh tests/stack/test_compose.sh
+	shellcheck --severity=warning stack.sh tests/stack/run.sh tests/stack/test_compose.sh
