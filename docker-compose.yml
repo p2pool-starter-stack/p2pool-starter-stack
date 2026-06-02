@@ -218,9 +218,10 @@ services:
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
       - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
       - TARI_GRPC_ADDRESS=172.28.0.27:18142
-      # Reject workers when a local node is down so miners fail over to backups (Issue #31).
-      # Opt-in (default off); enable via dashboard.reject_workers_on_node_down in config.json.
-      - REJECT_WORKERS_ON_NODE_DOWN=${REJECT_WORKERS_ON_NODE_DOWN:-false}
+      # Reject workers when a required node is down so miners fail over to backups (Issue #31).
+      # Per-node, both default on; tune via dashboard.reject_workers_on_*_down in config.json.
+      - REJECT_WORKERS_ON_MONERO_DOWN=${REJECT_WORKERS_ON_MONERO_DOWN:-true}
+      - REJECT_WORKERS_ON_TARI_DOWN=${REJECT_WORKERS_ON_TARI_DOWN:-true}
 
   # --- Docker Socket Proxy ---
   docker-proxy:

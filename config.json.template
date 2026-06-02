@@ -12,7 +12,6 @@
         "pool": "main"
     },
     "dashboard": {
-        "secure": true,
-        "reject_workers_on_node_down": false
+        "secure": true
     }
 }

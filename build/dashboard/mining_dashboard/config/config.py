@@ -66,11 +66,18 @@ LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 
 # --- Reject Workers on Node Down (Issue #31) ---
-# When a local node (monerod/tari) is unreachable, the stack can't mine — so optionally
-# stop the xmrig-proxy container to close :3333, forcing miners to fail over to the backup
-# pools they've configured instead of sitting idle on us. Opt-in (default off) because it
-# changes mining behaviour and depends on the socket proxy's ALLOW_START/ALLOW_STOP grant.
-REJECT_WORKERS_ON_NODE_DOWN = os.environ.get("REJECT_WORKERS_ON_NODE_DOWN", "false").strip().lower() == "true"
+# When a required node is unreachable, the stack can't mine on the workers' behalf — so stop
+# the xmrig-proxy container to close :3333, forcing miners to fail over to the backup pools
+# they've configured instead of sitting idle on us.
+#
+# Per-node so you can match what each chain means to you: monerod is REQUIRED for p2pool
+# mining (down = can't mine, reject), while Tari is only merge-mining gravy (you can still
+# mine Monero on p2pool without it). Both default true (reject if either is down); set
+# reject_workers_on_tari_down:false if you'd rather keep mining Monero through a Tari outage.
+# Safe to leave on: if the socket-proxy stop grant is missing the stop simply no-ops, and the
+# debounce + ever-up guard keep a blip or initial sync from tripping it.
+REJECT_WORKERS_ON_MONERO_DOWN = os.environ.get("REJECT_WORKERS_ON_MONERO_DOWN", "true").strip().lower() == "true"
+REJECT_WORKERS_ON_TARI_DOWN = os.environ.get("REJECT_WORKERS_ON_TARI_DOWN", "true").strip().lower() == "true"
 
 # Container the dashboard stops/starts to reject/readmit workers.
 REJECT_WORKERS_CONTAINER = os.environ.get("REJECT_WORKERS_CONTAINER", "xmrig-proxy")

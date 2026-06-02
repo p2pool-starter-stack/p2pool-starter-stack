@@ -5,7 +5,8 @@ from aiohttp import ClientSession
 
 from mining_dashboard.config.config import (
     UPDATE_INTERVAL,
-    REJECT_WORKERS_ON_NODE_DOWN,
+    REJECT_WORKERS_ON_MONERO_DOWN,
+    REJECT_WORKERS_ON_TARI_DOWN,
     REJECT_WORKERS_CONTAINER,
 )
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
@@ -58,32 +59,41 @@ class DataService:
             self.latest_data.update(loaded_snapshot)
             self.workers_rejected = bool(self.latest_data.get("workers_rejected", False))
 
-    async def _apply_worker_rejection(self, nodes_down):
+    async def _apply_worker_rejection(self, monero_down, tari_down):
         """
-        Reject workers (stop the proxy) when a node is DOWN so miners fail over to their
-        backup pools; readmit them (start the proxy) once nodes are confirmed healthy.
+        Reject workers (stop the proxy) when a node we care about is DOWN so miners fail over
+        to their backup pools; readmit them (start the proxy) once those nodes are confirmed
+        healthy.
 
-        Opt-in via REJECT_WORKERS_ON_NODE_DOWN; a no-op otherwise. Only acts on transitions
-        (tracked by `workers_rejected`), and Docker treats a repeat stop/start as
-        already-done (HTTP 304), so this is safe to call every cycle.
+        Per-node: monerod and Tari each have their own toggle (both default on), so a Tari-only
+        outage need not reject workers if you're happy to keep mining Monero on p2pool. A no-op
+        when both toggles are off. Only acts on transitions (tracked by `workers_rejected`), and
+        Docker treats a repeat stop/start as already-done (HTTP 304), so it's safe every cycle.
         """
-        if not REJECT_WORKERS_ON_NODE_DOWN:
+        reject_monero = REJECT_WORKERS_ON_MONERO_DOWN
+        reject_tari = REJECT_WORKERS_ON_TARI_DOWN
+        if not (reject_monero or reject_tari):
             return
 
-        if nodes_down and not self.workers_rejected:
+        should_reject = (monero_down and reject_monero) or (tari_down and reject_tari)
+
+        if should_reject and not self.workers_rejected:
             logger.warning(
-                f"Node unreachable — stopping {REJECT_WORKERS_CONTAINER} so workers fail "
-                f"over to their backup pools."
+                f"Required node unreachable — stopping {REJECT_WORKERS_CONTAINER} so workers "
+                f"fail over to their backup pools."
             )
             if await self.docker_control.stop(REJECT_WORKERS_CONTAINER):
                 self.workers_rejected = True
             return
 
-        # Readmit only once BOTH nodes are confirmed healthy (not merely 'not down'), so a
-        # dashboard restart mid-outage doesn't bring workers back to a still-down stack.
-        if self.workers_rejected and self.monero_health.healthy and self.tari_health.healthy:
+        # Readmit only once every node we reject on is confirmed healthy (not merely 'not
+        # down'), so a dashboard restart mid-outage doesn't bring workers back to a still-down
+        # stack. A node whose toggle is off is ignored here.
+        recovered = ((not reject_monero) or self.monero_health.healthy) and \
+                    ((not reject_tari) or self.tari_health.healthy)
+        if self.workers_rejected and recovered:
             logger.info(
-                f"Nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."
+                f"Required nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."
             )
             if await self.docker_control.start(REJECT_WORKERS_CONTAINER):
                 self.workers_rejected = False
@@ -250,7 +260,7 @@ class DataService:
                     tari_down = self.tari_health.update(tari_sync.get('reachable', True))
                     monero_sync['down'] = monero_down
                     tari_sync['down'] = tari_down
-                    await self._apply_worker_rejection(monero_down or tari_down)
+                    await self._apply_worker_rejection(monero_down, tari_down)
 
                     # Fetch fresh shares list to populate UI
                     shares_list = await asyncio.to_thread(self.state_manager.get_shares)

@@ -58,57 +58,97 @@ class TestWorkerRejection:
         svc.docker_control.start = AsyncMock(return_value=True)
         return svc
 
-    async def test_no_action_when_disabled(self):
+    def _flags(self, monero=True, tari=True):
+        # Both reject toggles patched in the data_service module namespace.
+        return (patch.object(ds_mod, "REJECT_WORKERS_ON_MONERO_DOWN", monero),
+                patch.object(ds_mod, "REJECT_WORKERS_ON_TARI_DOWN", tari))
+
+    async def test_no_action_when_both_disabled(self):
         svc = self._svc()
-        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", False):
-            await svc._apply_worker_rejection(nodes_down=True)
+        m, t = self._flags(monero=False, tari=False)
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=True, tari_down=True)
         svc.docker_control.stop.assert_not_called()
         assert svc.workers_rejected is False
 
-    async def test_stop_when_down_and_enabled(self):
+    async def test_stop_when_monero_down(self):
         svc = self._svc()
-        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True), \
-             patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"):
-            await svc._apply_worker_rejection(nodes_down=True)
+        m, t = self._flags()
+        with m, t, patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"):
+            await svc._apply_worker_rejection(monero_down=True, tari_down=False)
         svc.docker_control.stop.assert_awaited_once_with("xmrig-proxy")
         assert svc.workers_rejected is True
+
+    async def test_stop_when_tari_down_and_enabled(self):
+        svc = self._svc()
+        m, t = self._flags()
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=False, tari_down=True)
+        svc.docker_control.stop.assert_awaited_once()
+        assert svc.workers_rejected is True
+
+    async def test_tari_down_ignored_when_tari_toggle_off(self):
+        # Per-node: a Tari-only outage must NOT reject workers when reject-on-tari is off —
+        # we can still mine Monero on p2pool.
+        svc = self._svc()
+        m, t = self._flags(monero=True, tari=False)
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=False, tari_down=True)
+        svc.docker_control.stop.assert_not_called()
+        assert svc.workers_rejected is False
 
     async def test_stop_failure_keeps_flag_false_for_retry(self):
         svc = self._svc()
         svc.docker_control.stop = AsyncMock(return_value=False)
-        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
-            await svc._apply_worker_rejection(nodes_down=True)
+        m, t = self._flags()
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=True, tari_down=False)
         assert svc.workers_rejected is False  # so the next cycle retries
 
     async def test_no_double_stop_when_already_rejected(self):
         svc = self._svc()
         svc.workers_rejected = True
-        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
-            await svc._apply_worker_rejection(nodes_down=True)
+        m, t = self._flags()
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=True, tari_down=True)
         svc.docker_control.stop.assert_not_called()
         svc.docker_control.start.assert_not_called()
 
-    async def test_readmit_only_when_both_nodes_healthy(self):
+    async def test_readmit_when_relevant_nodes_healthy(self):
         svc = self._svc()
         svc.workers_rejected = True
         svc.monero_health.healthy = True
         svc.tari_health.healthy = True
-        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
-            await svc._apply_worker_rejection(nodes_down=False)
+        m, t = self._flags()
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=False, tari_down=False)
         svc.docker_control.start.assert_awaited_once()
         assert svc.workers_rejected is False
 
-    async def test_no_readmit_while_a_node_unconfirmed(self):
-        # Rejected + nodes no longer "down", but a node not yet confirmed healthy (e.g. fresh
-        # after restart) → do NOT readmit workers to a possibly-still-down stack.
+    async def test_no_readmit_while_a_relevant_node_unconfirmed(self):
+        # Rejected + nodes no longer "down", but a node we reject on isn't yet confirmed
+        # healthy (e.g. fresh after restart) → do NOT readmit to a possibly-still-down stack.
         svc = self._svc()
         svc.workers_rejected = True
         svc.monero_health.healthy = True
         svc.tari_health.healthy = False
-        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
-            await svc._apply_worker_rejection(nodes_down=False)
+        m, t = self._flags()
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=False, tari_down=False)
         svc.docker_control.start.assert_not_called()
         assert svc.workers_rejected is True
+
+    async def test_readmit_ignores_node_whose_toggle_is_off(self):
+        # reject-on-tari off → Tari health is irrelevant to readmission; monero healthy is enough.
+        svc = self._svc()
+        svc.workers_rejected = True
+        svc.monero_health.healthy = True
+        svc.tari_health.healthy = False
+        m, t = self._flags(monero=True, tari=False)
+        with m, t:
+            await svc._apply_worker_rejection(monero_down=False, tari_down=False)
+        svc.docker_control.start.assert_awaited_once()
+        assert svc.workers_rejected is False
 
 
 class TestRunIteration:

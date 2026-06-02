@@ -14,7 +14,7 @@ endpoint, and a monitoring dashboard — all behind Tor, with no public port for
 | 4 | **XMRig Proxy** | A single connection point for all your mining hardware; the switching engine reconfigures it on the fly. |
 | 5 | **Tor** | A centralized anonymity layer providing SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
 | 6 | **Dashboard** | The web monitoring UI and the algorithmic switching engine. |
-| 7 | **Docker Proxy** | A secure, least-privilege proxy for the Docker socket: read-only by default, so the dashboard can query container stats without full Docker access, plus a narrow opt-in start/stop grant used to reject workers when a node is down (Issue #31). |
+| 7 | **Docker Proxy** | A secure, least-privilege proxy for the Docker socket: read-only for stats, plus a narrow start/stop grant (only) so the dashboard can reject workers when a node is down (Issue #31). No general Docker access. |
 | 8 | **Caddy** | A reverse proxy that serves the dashboard over HTTPS (automatic local TLS) on the LAN. |
 
 ## High-level diagram
@@ -101,9 +101,9 @@ explicitly via `monero.rpc_lan_access`).
 - **Pinned versions.** Service images and binaries are pinned to known-good versions.
 - **Hardened dashboard.** Security headers (a restrictive `Content-Security-Policy`,
   `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`) and a sanitized error handler; it reaches
-  Docker only through a least-privilege socket proxy — read-only, plus an opt-in `ALLOW_START`/
-  `ALLOW_STOP` grant (not general `POST`) so it can stop/start the proxy container to fail workers
-  over when a node is down. General Docker write access stays off.
+  Docker only through a least-privilege socket proxy — read-only for stats, plus a narrow
+  `ALLOW_START`/`ALLOW_STOP` grant (not general `POST`) so it can stop/start the proxy container to
+  fail workers over when a node is down. General Docker write access stays off.
 - **Locked-down config.** `config.json` is created `chmod 600` (owner-only), and the internal RPC
   proxy token is generated once and preserved across re-runs.
 

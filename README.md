@@ -37,8 +37,8 @@ coffee gets cold**.
 - 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and kernel
   tuning, then starts everything for you.
 - 🔒 **Hardened out of the box.** Least-privilege containers, SHA256-verified binaries, pinned
-  versions, localhost-only RPC, and a least-privilege Docker socket proxy (read-only, plus an
-  opt-in start/stop grant for node-down worker failover).
+  versions, localhost-only RPC, and a least-privilege Docker socket proxy (read-only for stats,
+  plus a narrow start/stop grant for node-down worker failover).
 
 ---
 

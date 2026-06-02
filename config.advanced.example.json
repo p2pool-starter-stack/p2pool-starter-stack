@@ -43,6 +43,8 @@
     "dashboard": {
         "secure": true,
         "host": "auto",
-        "data_dir": "auto"
+        "data_dir": "auto",
+        "reject_workers_on_monero_down": true,
+        "reject_workers_on_tari_down": true
     }
 }
