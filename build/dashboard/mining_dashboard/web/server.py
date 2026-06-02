@@ -583,6 +583,19 @@ async def handle_index(request):
             header_badges += '<span class="badge badge-bad badge-pool">Tari DOWN</span>'
         if data.get('workers_rejected'):
             header_badges += '<span class="badge badge-bad badge-pool" title="Workers rejected so they fail over to their backup pools">Workers rejected</span>'
+        # Miner held until the required chain(s) finish their initial sync (Issue #35).
+        if data.get('miner_held'):
+            header_badges += '<span class="badge badge-warn badge-pool" title="p2pool and xmrig-proxy are held until the required chains finish syncing">Miner held (sync)</span>'
+        # Non-blocking Tari (Issue #51): Tari is (re)syncing but we stay in the operational
+        # view — surface it as a top-bar badge instead of the full-screen takeover. Show the
+        # progress percentage once it's known (omitted early on, before a target height, so it
+        # doesn't read a misleading "0%").
+        if data.get('tari_syncing_passive'):
+            t_pct = tari_sync.get('percent', 0)
+            label = f'Tari syncing {t_pct}%' if t_pct > 0 else 'Tari syncing'
+            header_badges += (f'<span class="badge badge-warn badge-pool" '
+                              f'title="Tari is still syncing — merge mining resumes when it catches up; '
+                              f'Monero mining continues">{label}</span>')
 
         template = get_cached_template()
         

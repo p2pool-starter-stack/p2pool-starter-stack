@@ -93,8 +93,7 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
-| `dashboard.reject_workers_on_monero_down` | `true` | When a sustained monerod outage is detected, stop the `xmrig-proxy` container so miners disconnect and **fail over to their configured backup pools** instead of idling (it restarts on recovery). monerod is **required** to mine, so this defaults on. No effect for a remote node. |
-| `dashboard.reject_workers_on_tari_down` | `true` | Same, for a Tari outage. Tari is **only needed for merge mining** — you can still mine Monero on p2pool without it — so set this to `false` if you'd rather keep mining through a Tari outage. Defaults on (reject if *either* node is down). |
+| `dashboard.tari_required` | `true` | How much a Tari problem holds up the rest of the stack. Monero is **required** to mine, so its behavior isn't configurable: a monerod outage always rejects workers (stops `xmrig-proxy` so miners **fail over to their backup pools**), and the miner is always held until monerod finishes syncing. Tari is **only needed for merge mining**, so this one flag decides how much it blocks. **`true` (default):** a Tari outage also rejects workers, the miner waits for Tari's initial sync too, and a Tari-only (re)sync shows the full-screen Sync view. **`false` (non-blocking):** keep mining Monero through a Tari outage, start mining as soon as Monero is synced (Tari finishes in the background), and keep the normal dashboard — with a `Tari syncing` indicator — instead of the takeover screen. |
 
 ---
 

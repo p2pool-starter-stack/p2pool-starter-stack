@@ -22,7 +22,12 @@ def _make_service():
     state_manager.get_xvb_stats.return_value = {"current_mode": "P2POOL"}
     proxy_client = MagicMock()
     xvb_client = MagicMock()
-    return DataService(state_manager, proxy_client, xvb_client), state_manager, proxy_client
+    svc = DataService(state_manager, proxy_client, xvb_client)
+    # Mock the docker-control proxy so run()'s sync gate / failover don't hit the network.
+    svc.docker_control = MagicMock()
+    svc.docker_control.stop = AsyncMock(return_value=True)
+    svc.docker_control.start = AsyncMock(return_value=True)
+    return svc, state_manager, proxy_client
 
 
 class TestInit:
@@ -47,6 +52,20 @@ class TestInit:
         svc = DataService(sm, MagicMock(), MagicMock())
         assert svc.workers_rejected is True
 
+    def test_restores_miner_released_latch(self):
+        # A restart after the miner was released must NOT re-hold a running, mining stack (#35).
+        sm = MagicMock()
+        sm.load_snapshot.return_value = {"miner_released": True}
+        svc = DataService(sm, MagicMock(), MagicMock())
+        assert svc.miner_released is True
+
+    def test_holds_miner_when_restart_mid_sync(self):
+        # Fresh state (no snapshot) → the miner is held until the gate is first satisfied.
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        svc = DataService(sm, MagicMock(), MagicMock())
+        assert svc.miner_released is False
+
 
 class TestWorkerRejection:
     def _svc(self):
@@ -58,41 +77,30 @@ class TestWorkerRejection:
         svc.docker_control.start = AsyncMock(return_value=True)
         return svc
 
-    def _flags(self, monero=True, tari=True):
-        # Both reject toggles patched in the data_service module namespace.
-        return (patch.object(ds_mod, "REJECT_WORKERS_ON_MONERO_DOWN", monero),
-                patch.object(ds_mod, "REJECT_WORKERS_ON_TARI_DOWN", tari))
-
-    async def test_no_action_when_both_disabled(self):
-        svc = self._svc()
-        m, t = self._flags(monero=False, tari=False)
-        with m, t:
-            await svc._apply_worker_rejection(monero_down=True, tari_down=True)
-        svc.docker_control.stop.assert_not_called()
-        assert svc.workers_rejected is False
+    def _tari(self, required=True):
+        # Tari's "is it required?" flag, patched in the data_service module namespace.
+        return patch.object(ds_mod, "TARI_REQUIRED", required)
 
     async def test_stop_when_monero_down(self):
+        # monerod is required, so its outage always rejects — even with Tari non-blocking.
         svc = self._svc()
-        m, t = self._flags()
-        with m, t, patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"):
+        with self._tari(required=False), patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"):
             await svc._apply_worker_rejection(monero_down=True, tari_down=False)
         svc.docker_control.stop.assert_awaited_once_with("xmrig-proxy")
         assert svc.workers_rejected is True
 
-    async def test_stop_when_tari_down_and_enabled(self):
+    async def test_stop_when_tari_down_and_required(self):
         svc = self._svc()
-        m, t = self._flags()
-        with m, t:
+        with self._tari(required=True):
             await svc._apply_worker_rejection(monero_down=False, tari_down=True)
         svc.docker_control.stop.assert_awaited_once()
         assert svc.workers_rejected is True
 
-    async def test_tari_down_ignored_when_tari_toggle_off(self):
-        # Per-node: a Tari-only outage must NOT reject workers when reject-on-tari is off —
-        # we can still mine Monero on p2pool.
+    async def test_tari_down_ignored_when_non_blocking(self):
+        # A Tari-only outage must NOT reject workers when Tari is non-blocking — we can still
+        # mine Monero on p2pool.
         svc = self._svc()
-        m, t = self._flags(monero=True, tari=False)
-        with m, t:
+        with self._tari(required=False):
             await svc._apply_worker_rejection(monero_down=False, tari_down=True)
         svc.docker_control.stop.assert_not_called()
         assert svc.workers_rejected is False
@@ -100,16 +108,14 @@ class TestWorkerRejection:
     async def test_stop_failure_keeps_flag_false_for_retry(self):
         svc = self._svc()
         svc.docker_control.stop = AsyncMock(return_value=False)
-        m, t = self._flags()
-        with m, t:
+        with self._tari():
             await svc._apply_worker_rejection(monero_down=True, tari_down=False)
         assert svc.workers_rejected is False  # so the next cycle retries
 
     async def test_no_double_stop_when_already_rejected(self):
         svc = self._svc()
         svc.workers_rejected = True
-        m, t = self._flags()
-        with m, t:
+        with self._tari():
             await svc._apply_worker_rejection(monero_down=True, tari_down=True)
         svc.docker_control.stop.assert_not_called()
         svc.docker_control.start.assert_not_called()
@@ -119,8 +125,7 @@ class TestWorkerRejection:
         svc.workers_rejected = True
         svc.monero_health.healthy = True
         svc.tari_health.healthy = True
-        m, t = self._flags()
-        with m, t:
+        with self._tari(required=True):
             await svc._apply_worker_rejection(monero_down=False, tari_down=False)
         svc.docker_control.start.assert_awaited_once()
         assert svc.workers_rejected is False
@@ -132,23 +137,93 @@ class TestWorkerRejection:
         svc.workers_rejected = True
         svc.monero_health.healthy = True
         svc.tari_health.healthy = False
-        m, t = self._flags()
-        with m, t:
+        with self._tari(required=True):
             await svc._apply_worker_rejection(monero_down=False, tari_down=False)
         svc.docker_control.start.assert_not_called()
         assert svc.workers_rejected is True
 
-    async def test_readmit_ignores_node_whose_toggle_is_off(self):
-        # reject-on-tari off → Tari health is irrelevant to readmission; monero healthy is enough.
+    async def test_readmit_ignores_tari_when_non_blocking(self):
+        # Tari non-blocking → Tari health is irrelevant to readmission; monerod healthy is enough.
         svc = self._svc()
         svc.workers_rejected = True
         svc.monero_health.healthy = True
         svc.tari_health.healthy = False
-        m, t = self._flags(monero=True, tari=False)
-        with m, t:
+        with self._tari(required=False):
             await svc._apply_worker_rejection(monero_down=False, tari_down=False)
         svc.docker_control.start.assert_awaited_once()
         assert svc.workers_rejected is False
+
+    async def test_no_readmit_until_monero_healthy_even_if_tari_non_blocking(self):
+        # monerod is mandatory: never readmit while it's unconfirmed, regardless of Tari.
+        svc = self._svc()
+        svc.workers_rejected = True
+        svc.monero_health.healthy = False
+        with self._tari(required=False):
+            await svc._apply_worker_rejection(monero_down=False, tari_down=False)
+        svc.docker_control.start.assert_not_called()
+        assert svc.workers_rejected is True
+
+
+class TestSyncGate:
+    """Hold p2pool + xmrig-proxy until the required chain(s) finish their initial sync (#35)."""
+
+    def _svc(self):
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        svc = DataService(sm, MagicMock(), MagicMock())
+        svc.docker_control = MagicMock()
+        svc.docker_control.stop = AsyncMock(return_value=True)
+        svc.docker_control.start = AsyncMock(return_value=True)
+        return svc
+
+    async def test_holds_all_containers_when_not_synced(self):
+        svc = self._svc()
+        with patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]):
+            await svc._apply_sync_gate(gate_satisfied=False)
+        stopped = {c.args[0] for c in svc.docker_control.stop.await_args_list}
+        assert stopped == {"p2pool", "xmrig-proxy"}
+        svc.docker_control.start.assert_not_called()
+        assert svc.miner_held is True
+        assert svc.miner_released is False
+
+    async def test_releases_when_gate_satisfied(self):
+        svc = self._svc()
+        with patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]):
+            await svc._apply_sync_gate(gate_satisfied=True)
+        started = {c.args[0] for c in svc.docker_control.start.await_args_list}
+        assert started == {"p2pool", "xmrig-proxy"}
+        svc.docker_control.stop.assert_not_called()
+        assert svc.miner_released is True
+        assert svc.miner_held is False
+
+    async def test_noop_once_released(self):
+        # One-way latch: after release we never touch the containers again, so a later
+        # not-synced reading (e.g. a node blip) can't fight #31 by re-stopping the miner.
+        svc = self._svc()
+        svc.miner_released = True
+        await svc._apply_sync_gate(gate_satisfied=False)
+        await svc._apply_sync_gate(gate_satisfied=True)
+        svc.docker_control.stop.assert_not_called()
+        svc.docker_control.start.assert_not_called()
+
+    async def test_partial_start_failure_keeps_latch_closed(self):
+        # If only one container starts, stay unreleased so the next cycle retries the rest.
+        svc = self._svc()
+        svc.docker_control.start = AsyncMock(side_effect=[True, False])
+        with patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]):
+            await svc._apply_sync_gate(gate_satisfied=True)
+        assert svc.miner_released is False
+
+    async def test_rehold_stops_quietly_after_first_cycle(self):
+        # The first hold logs (quiet=False); subsequent re-asserts are quiet so a multi-hour
+        # sync doesn't flood the dashboard log.
+        svc = self._svc()
+        with patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool"]):
+            await svc._apply_sync_gate(gate_satisfied=False)
+            await svc._apply_sync_gate(gate_satisfied=False)
+        first, second = svc.docker_control.stop.await_args_list
+        assert first.kwargs.get("quiet") is False
+        assert second.kwargs.get("quiet") is True
 
 
 class TestRunIteration:
@@ -189,6 +264,122 @@ class TestRunIteration:
         assert svc.latest_data["total_live_h15"] == 2000.0
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
+
+    async def test_run_holds_miner_while_syncing(self):
+        # A syncing Monero node → gate holds p2pool + xmrig-proxy and #31's failover stays
+        # dormant (no workers to fail over before we've even started mining).
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        svc._apply_worker_rejection = AsyncMock()
+
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False, "reachable": True})
+        tari_client.close = AsyncMock()
+
+        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
+             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
+             patch.object(ds_mod, "TariClient", return_value=tari_client), \
+             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
+             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
+             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
+             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
+             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
+             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": True, "reachable": True, "percent": 50, "current": 50, "target": 100})), \
+             patch.object(ds_mod, "get_disk_usage", return_value={}), \
+             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
+             patch.object(ds_mod, "get_memory_usage", return_value={}), \
+             patch.object(ds_mod, "get_load_average", return_value="0"), \
+             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
+             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+        stopped = {c.args[0] for c in svc.docker_control.stop.await_args_list}
+        assert stopped == {"p2pool", "xmrig-proxy"}
+        svc.docker_control.start.assert_not_called()
+        svc._apply_worker_rejection.assert_not_called()
+        assert svc.miner_released is False
+        assert svc.latest_data["miner_held"] is True
+
+    async def test_run_releases_despite_height_override(self):
+        # Both nodes are synced per their RPC/gRPC, but p2pool is held so its stats file is
+        # empty → get_network_stats height 0 trips the UI "syncing" override. The gate must
+        # key off the raw sync signals (captured before the override) or it would deadlock,
+        # never starting p2pool because p2pool isn't running. (Releases → start the miner.)
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False, "reachable": True})
+        tari_client.close = AsyncMock()
+
+        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
+             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
+             patch.object(ds_mod, "TariClient", return_value=tari_client), \
+             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
+             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
+             patch.object(ds_mod, "get_network_stats", return_value={"height": 0}), \
+             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
+             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
+             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": False, "reachable": True})), \
+             patch.object(ds_mod, "get_disk_usage", return_value={}), \
+             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
+             patch.object(ds_mod, "get_memory_usage", return_value={}), \
+             patch.object(ds_mod, "get_load_average", return_value="0"), \
+             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
+             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+        started = {c.args[0] for c in svc.docker_control.start.await_args_list}
+        assert started == {"p2pool", "xmrig-proxy"}
+        assert svc.miner_released is True
+        # The UI override still marks Monero as syncing for display — that's fine; only the
+        # gate must ignore it.
+        assert svc.latest_data["monero_sync"]["is_syncing"] is True
+
+    async def test_run_nonblocking_tari_releases_and_stays_operational(self):
+        # Monero synced, Tari still syncing, Tari non-blocking (#51): release the miner (don't
+        # wait for Tari), keep the operational view (global_sync False), and flag Tari's
+        # passive sync so the UI shows a "Tari syncing" indicator instead of the takeover.
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(
+            return_value={"is_syncing": True, "reachable": True, "percent": 42, "current": 42, "target": 100})
+        tari_client.close = AsyncMock()
+
+        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
+             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
+             patch.object(ds_mod, "TariClient", return_value=tari_client), \
+             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
+             patch.object(ds_mod, "TARI_REQUIRED", False), \
+             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
+             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
+             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
+             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
+             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": False, "reachable": True})), \
+             patch.object(ds_mod, "get_disk_usage", return_value={}), \
+             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
+             patch.object(ds_mod, "get_memory_usage", return_value={}), \
+             patch.object(ds_mod, "get_load_average", return_value="0"), \
+             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
+             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+        started = {c.args[0] for c in svc.docker_control.start.await_args_list}
+        assert started == {"p2pool", "xmrig-proxy"}
+        assert svc.miner_released is True
+        assert svc.latest_data["global_sync"] is False
+        assert svc.latest_data["tari_syncing_passive"] is True
 
     async def test_iteration_survives_collector_error(self):
         svc, sm, proxy = _make_service()

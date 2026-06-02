@@ -89,7 +89,8 @@ stack_upgrade() {
 # Show the compose table, then health-check every service we expect to be running and warn
 # about anything that isn't. Returns non-zero if any service needs attention (handy for cron).
 # Profile-aware (the bundled monerod only counts in local-node mode), and aware that a stopped
-# xmrig-proxy can be intentional when reject-workers (#31) has kicked in because a node is down.
+# p2pool/xmrig-proxy can be intentional: reject-workers (#31) stops xmrig-proxy when a node is
+# down, and the sync hold (#35) stops both until the required chains finish their initial sync.
 stack_status() {
     docker compose ps || true
     echo ""
@@ -103,7 +104,7 @@ stack_status() {
         return 1
     fi
 
-    local problems=0 proxy_state="" node_down=0
+    local problems=0 proxy_state="" p2pool_state="" node_down=0
     local s cid info state health
     while IFS= read -r s; do
         [ -z "$s" ] && continue
@@ -128,9 +129,14 @@ stack_status() {
             fi
         fi
 
-        # Defer the proxy verdict until we know whether a node is down.
+        # Defer the verdict for the miner containers until we know whether a node is down /
+        # the sync hold is on: a stopped p2pool or xmrig-proxy is often intentional (#31/#35).
         if [ "$s" = "xmrig-proxy" ] && [ "$state" != "running" ]; then
             proxy_state="$state"
+            continue
+        fi
+        if [ "$s" = "p2pool" ] && [ "$state" != "running" ]; then
+            p2pool_state="$state"
             continue
         fi
 
@@ -148,16 +154,21 @@ stack_status() {
         esac
     done <<< "$expected"
 
-    # A stopped xmrig-proxy is expected when reject-workers (#31) stopped it because a node is
-    # down — flag it loudly only when the nodes actually look fine.
-    if [ -n "$proxy_state" ]; then
+    # A stopped p2pool/xmrig-proxy is normally intentional: the dashboard stops xmrig-proxy to
+    # fail workers over a node-down (#31), and holds the miner until the required chains finish
+    # syncing (#35). We can't tell those apart from a genuine fault here (a healthy node can
+    # still be syncing), so report it as likely-intentional and point at the dashboard.
+    local held name st why
+    for held in "p2pool=$p2pool_state" "xmrig-proxy=$proxy_state"; do
+        name=${held%%=*}; st=${held#*=}
+        [ -z "$st" ] && continue
         if [ "$node_down" -eq 1 ]; then
-            printf '  %b⚠%b %-13s %s — likely intentional: a node is down, so workers were rejected to fail over to backups\n' "$C_YELLOW" "$C_RESET" "xmrig-proxy" "$proxy_state"
+            why="a node is down, so workers were rejected to fail over to backups"
         else
-            printf '  %b✗%b %-13s %s — but nodes look healthy, so workers are NOT mining\n' "$C_RED" "$C_RESET" "xmrig-proxy" "$proxy_state"
-            problems=$((problems + 1))
+            why="held until the required chains finish syncing — check the dashboard"
         fi
-    fi
+        printf '  %b⚠%b %-13s %s — likely intentional: %s\n' "$C_YELLOW" "$C_RESET" "$name" "$st" "$why"
+    done
 
     echo ""
     if [ "$problems" -eq 0 ]; then
@@ -701,11 +712,12 @@ render_env() {
     xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
-    # Reject workers when a required node is down so miners fail over to their backups (#31).
-    # Per-node (monerod required for mining; Tari optional merge-mining), both default true.
-    local reject_monero reject_tari
-    reject_monero=$(jq -r 'if .dashboard.reject_workers_on_monero_down != null then .dashboard.reject_workers_on_monero_down | tostring else "true" end' "$CONFIG_FILE")
-    reject_tari=$(jq -r 'if .dashboard.reject_workers_on_tari_down != null then .dashboard.reject_workers_on_tari_down | tostring else "true" end' "$CONFIG_FILE")
+    # How much Tari blocks the stack (#31/#35/#51). monerod is required and not configurable
+    # (a monerod outage always rejects workers; the miner always waits for monerod's sync).
+    # tari_required (default true): a Tari outage rejects workers, the miner waits for Tari's
+    # sync, and a Tari-only sync drives full Sync Mode. false = non-blocking Tari.
+    local tari_required
+    tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
@@ -728,8 +740,7 @@ XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
-REJECT_WORKERS_ON_MONERO_DOWN=$reject_monero
-REJECT_WORKERS_ON_TARI_DOWN=$reject_tari
+TARI_REQUIRED=$tari_required
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -890,8 +901,12 @@ describe_change() {
             msg="Monero node RPC credential updated ($key)." ;;
         XVB_ENABLED|XVB_POOL_URL|XVB_DONOR_ID|XVB_DONATION_LEVEL)
             msg="XMRvsBeast setting ($key): $old → $new." ;;
-        REJECT_WORKERS_ON_MONERO_DOWN|REJECT_WORKERS_ON_TARI_DOWN)
-            msg="$key → $new — when on, that node being down stops xmrig-proxy so miners fail over to their backups." ;;
+        TARI_REQUIRED)
+            if [ "$new" == "true" ]; then
+                msg="Tari → required — a Tari outage rejects workers, the miner waits for Tari's sync, and a Tari-only sync takes over the dashboard."
+            else
+                msg="Tari → non-blocking — keep mining Monero through a Tari outage, start as soon as Monero is synced, and keep the operational dashboard while Tari syncs."
+            fi ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
         HOST_IP)

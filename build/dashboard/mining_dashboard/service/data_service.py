@@ -5,9 +5,9 @@ from aiohttp import ClientSession
 
 from mining_dashboard.config.config import (
     UPDATE_INTERVAL,
-    REJECT_WORKERS_ON_MONERO_DOWN,
-    REJECT_WORKERS_ON_TARI_DOWN,
+    TARI_REQUIRED,
     REJECT_WORKERS_CONTAINER,
+    SYNC_GATE_CONTAINERS,
 )
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.tari.tari_client import TariClient
@@ -41,7 +41,10 @@ class DataService:
             "monero_sync": {},
             "tari_sync": {},
             "global_sync": False,
+            "tari_syncing_passive": False,
             "workers_rejected": False,
+            "miner_released": False,
+            "miner_held": False,
             "timestamp": 0
         }
 
@@ -53,11 +56,21 @@ class DataService:
         # a dashboard restart mid-outage still readmits workers once the node recovers.
         self.workers_rejected = False
 
+        # Hold the miner (p2pool + xmrig-proxy) until the required chain(s) finish syncing
+        # (Issue #35). One-way latch: `miner_released` flips True the first time the gate is
+        # satisfied, and we never re-hold after that (a later node blip is #31's job, which
+        # stops only xmrig-proxy so p2pool keeps its sidechain position). Persisted so a
+        # restart mid-sync keeps holding, and a restart after release doesn't re-stop a
+        # running, mining stack. `miner_held` is transient UI/log state, not persisted.
+        self.miner_released = False
+        self.miner_held = False
+
         # Restore persistent state from DB to prevent empty dashboard on service restart
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
             self.latest_data.update(loaded_snapshot)
             self.workers_rejected = bool(self.latest_data.get("workers_rejected", False))
+            self.miner_released = bool(self.latest_data.get("miner_released", False))
 
     async def _apply_worker_rejection(self, monero_down, tari_down):
         """
@@ -65,17 +78,13 @@ class DataService:
         to their backup pools; readmit them (start the proxy) once those nodes are confirmed
         healthy.
 
-        Per-node: monerod and Tari each have their own toggle (both default on), so a Tari-only
-        outage need not reject workers if you're happy to keep mining Monero on p2pool. A no-op
-        when both toggles are off. Only acts on transitions (tracked by `workers_rejected`), and
-        Docker treats a repeat stop/start as already-done (HTTP 304), so it's safe every cycle.
+        monerod is required to mine, so a monerod outage always rejects. Tari is only merge-
+        mining gravy: a Tari outage rejects only when `TARI_REQUIRED` (dashboard.tari_required),
+        so a non-blocking Tari can go down without kicking miners off Monero. Only acts on
+        transitions (tracked by `workers_rejected`), and Docker treats a repeat stop/start as
+        already-done (HTTP 304), so it's safe every cycle.
         """
-        reject_monero = REJECT_WORKERS_ON_MONERO_DOWN
-        reject_tari = REJECT_WORKERS_ON_TARI_DOWN
-        if not (reject_monero or reject_tari):
-            return
-
-        should_reject = (monero_down and reject_monero) or (tari_down and reject_tari)
+        should_reject = monero_down or (tari_down and TARI_REQUIRED)
 
         if should_reject and not self.workers_rejected:
             logger.warning(
@@ -88,15 +97,62 @@ class DataService:
 
         # Readmit only once every node we reject on is confirmed healthy (not merely 'not
         # down'), so a dashboard restart mid-outage doesn't bring workers back to a still-down
-        # stack. A node whose toggle is off is ignored here.
-        recovered = ((not reject_monero) or self.monero_health.healthy) and \
-                    ((not reject_tari) or self.tari_health.healthy)
+        # stack. Tari's health is ignored when it's non-blocking.
+        recovered = self.monero_health.healthy and \
+                    ((not TARI_REQUIRED) or self.tari_health.healthy)
         if self.workers_rejected and recovered:
             logger.info(
                 f"Required nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."
             )
             if await self.docker_control.start(REJECT_WORKERS_CONTAINER):
                 self.workers_rejected = False
+
+    async def _apply_sync_gate(self, gate_satisfied):
+        """
+        Hold p2pool + xmrig-proxy stopped until the required chain(s) have fully synced once,
+        then start them (Issue #35). Keeps p2pool from flooding Tari's logs with merge-mining
+        junk during the long initial sync, when it can't usefully mine anyway.
+
+        `gate_satisfied` is True once monerod is synced AND Tari is synced-or-non-blocking — so
+        a non-blocking Tari (dashboard.tari_required:false) releases the miner as soon as
+        monerod is ready and lets Tari finish in the background.
+
+        One-way latch: once released we never re-hold, so this can't fight #31 (a transient
+        node-down later stops only xmrig-proxy and keeps p2pool on the sidechain — that's #31's
+        job, gated behind `miner_released` by the caller). While holding we re-assert the stop
+        every cycle (quietly), so a `docker compose up` mid-sync — which would restart the held
+        containers — is undone within a cycle.
+
+        `gate_satisfied` must be derived from the *raw* per-node sync signals (RPC/gRPC), not
+        the network-height UI override: that override is fed by p2pool's own stats file, so
+        while p2pool is held it would read 0 and falsely report Monero as syncing forever.
+        """
+        if self.miner_released:
+            return
+
+        if gate_satisfied:
+            ok = True
+            for container in SYNC_GATE_CONTAINERS:
+                ok = (await self.docker_control.start(container)) and ok
+            if ok:
+                self.miner_released = True
+                self.miner_held = False
+                logger.info(
+                    f"Required chain(s) synced — starting {', '.join(SYNC_GATE_CONTAINERS)}; mining can begin."
+                )
+            # On a partial-start failure leave the latch closed so the next cycle retries.
+            return
+
+        # Still syncing: keep the miner held. Log the human-facing notice only on the first
+        # cycle of a hold; the per-cycle re-assert stops are quiet to avoid flooding the log.
+        for container in SYNC_GATE_CONTAINERS:
+            await self.docker_control.stop(container, quiet=self.miner_held)
+        if not self.miner_held:
+            self.miner_held = True
+            logger.info(
+                f"Required chain(s) still syncing — holding {', '.join(SYNC_GATE_CONTAINERS)} "
+                f"until synced."
+            )
 
     async def run(self):
         """
@@ -229,6 +285,16 @@ class DataService:
                     monero_sync = await get_monero_sync_status()
                     tari_sync = await tari_client.get_sync_status()
 
+                    # Raw per-node "fully synced" signals for the sync gate (Issue #35),
+                    # captured BEFORE the network-height UI override below. A node counts as
+                    # synced only when it's reachable AND not syncing — an unreachable node
+                    # reports is_syncing=False too, and we must not mistake that for synced
+                    # (that's what #31's node-down handling is for). Reading the raw signal
+                    # also avoids a deadlock: the height override is fed by p2pool's stats
+                    # file, which reads 0 while p2pool is held — falsely "syncing" forever.
+                    monero_synced = monero_sync.get('reachable', True) and not monero_sync.get('is_syncing', False)
+                    tari_synced = tari_sync.get('reachable', True) and not tari_sync.get('is_syncing', False)
+
                     # Determine effective Tari status for UI display
                     tari_active = tari_stats.get('active', False)
                     tari_status_str = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
@@ -240,10 +306,16 @@ class DataService:
                         if 'percent' not in monero_sync:
                             monero_sync.update({'percent': 0, 'current': 0, 'target': 1})
                     
-                    # 2. Global Sync Logic
+                    # 2. Global Sync Logic. monerod always drives the full-screen Sync Mode;
+                    # Tari does so only when it's required (Issue #51). A non-blocking Tari
+                    # (dashboard.tari_required:false) keeps the operational view and surfaces
+                    # its progress in the Tari panel instead of hijacking the whole dashboard.
                     is_monero_syncing = monero_sync.get('is_syncing', False)
                     is_tari_syncing = tari_sync.get('is_syncing', False)
-                    global_sync = is_monero_syncing or is_tari_syncing
+                    global_sync = is_monero_syncing or (is_tari_syncing and TARI_REQUIRED)
+                    # True when Tari is syncing but we're staying in the operational view — the
+                    # UI shows a "Tari syncing" indicator rather than the takeover screen.
+                    tari_syncing_passive = is_tari_syncing and not global_sync
 
                     if global_sync:
                         if not is_monero_syncing and 'percent' not in monero_sync:
@@ -253,14 +325,22 @@ class DataService:
                             h = tari_stats.get('height', 0)
                             tari_sync.update({'percent': 100, 'current': h, 'target': h})
 
-                    # 3. Node-down detection + optional worker rejection (Issue #31).
-                    # Debounce each node's live reachability into a stable DOWN flag, then
-                    # (if enabled) stop the proxy so workers fail over to their backups.
+                    # 3. Node-down detection + worker rejection (Issue #31). Debounce each
+                    # node's live reachability into a stable DOWN flag; monerod-down always
+                    # rejects, Tari-down rejects only when required (handled in the helper).
                     monero_down = self.monero_health.update(monero_sync.get('reachable', True))
                     tari_down = self.tari_health.update(tari_sync.get('reachable', True))
                     monero_sync['down'] = monero_down
                     tari_sync['down'] = tari_down
-                    await self._apply_worker_rejection(monero_down, tari_down)
+
+                    # 4. Sync gate (Issue #35): hold p2pool + xmrig-proxy until the required
+                    # chain(s) first sync, then release. monerod must be synced; Tari must be
+                    # synced too unless it's non-blocking. #31's runtime failover only applies
+                    # once released — before that there are no workers to fail over, and it
+                    # keeps the two features from both driving xmrig-proxy.
+                    await self._apply_sync_gate(monero_synced and (tari_synced or not TARI_REQUIRED))
+                    if self.miner_released:
+                        await self._apply_worker_rejection(monero_down, tari_down)
 
                     # Fetch fresh shares list to populate UI
                     shares_list = await asyncio.to_thread(self.state_manager.get_shares)
@@ -276,7 +356,10 @@ class DataService:
                         "monero_sync": monero_sync,
                         "tari_sync": tari_sync,
                         "global_sync": global_sync,
+                        "tari_syncing_passive": tari_syncing_passive,
                         "workers_rejected": self.workers_rejected,
+                        "miner_released": self.miner_released,
+                        "miner_held": self.miner_held,
                         "system": {
                             "disk": get_disk_usage(),
                             "hugepages": get_hugepages_status(),

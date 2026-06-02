@@ -35,8 +35,16 @@ an eye on resources during the initial download.
 **Why this screen exists:** a Monero or Tari node can't mine until it has downloaded and verified
 the blockchain, which on a first run can take from a few hours to over a day depending on your
 hardware, disk, and network. Sync Mode makes that progress visible instead of leaving you
-guessing. Once **both** chains report fully synced, the dashboard automatically swaps Sync Mode
-for the operational view and mining begins — no refresh or restart needed.
+guessing. Once the required chains report fully synced, the dashboard automatically swaps Sync
+Mode for the operational view and mining begins — no refresh or restart needed.
+
+While the chains are syncing, the dashboard keeps `p2pool` and `xmrig-proxy` **stopped** (a
+**`Miner held (sync)`** badge shows next to the hostname) and starts them automatically once
+they're ready. Running p2pool against an unsynced node achieves nothing and floods Tari's logs
+with merge-mining chatter that buries the messages you'd actually want while debugging a sync.
+Releasing the miner is one-way — once it starts it stays up. By default the stack waits for
+**both** Monero and Tari; if you've set [`dashboard.tari_required: false`](configuration.md), it
+waits only for Monero and starts mining while Tari finishes syncing in the background.
 
 > **Want to skip most of the wait?** Point the stack at an existing synced blockchain, or connect
 > to a remote node. See [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
@@ -73,10 +81,15 @@ that a log line changed.
 While a node is down, the dashboard also **rejects workers** so they fail over to the backup pools
 you've configured, instead of sitting idle on a stack that can't mine for them — a sustained outage
 stops the `xmrig-proxy` container (a **`Workers rejected`** badge shows) and a confirmed recovery
-restarts it. This is **on by default**, with a per-node toggle: monerod is required to mine so
-`reject_workers_on_monero_down` defaults on, and `reject_workers_on_tari_down` defaults on too but
-can be set to `false` if you'd rather keep mining Monero through a Tari (merge-mining) outage. See
-[Configuration](configuration.md). It never triggers for a remote node.
+restarts it. monerod is required to mine, so a monerod outage always rejects. Tari is merge-mining
+gravy, so whether a Tari outage rejects follows [`dashboard.tari_required`](configuration.md): when
+it's `true` (default) a Tari outage rejects too; set it `false` to keep mining Monero straight
+through a Tari outage. (Rejection never triggers for a remote monerod — the stack doesn't manage
+that node.)
+
+**Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync no longer takes over the
+screen: the operational view stays up, mining continues, and a **`Tari syncing`** badge shows Tari's
+progress until it catches up and merge mining resumes.
 
 ### Hashrate chart
 

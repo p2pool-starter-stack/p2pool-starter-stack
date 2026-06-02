@@ -14,7 +14,7 @@ the full list.
 | `./stack.sh restart` | Restart the stack. |
 | `./stack.sh upgrade` | Rebuild and restart the containers (run after a `git pull`). |
 | `./stack.sh logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
-| `./stack.sh status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `xmrig-proxy` as intentional when a node is down (reject-workers failover). |
+| `./stack.sh status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./stack.sh reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. |
 | `./stack.sh help` | Show all commands. |
 
@@ -36,8 +36,9 @@ Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmr
 `status` prints the usual compose table, then a per-service health check — a green ✓ for each
 running (and healthy) service, and a ⚠/✗ for anything unhealthy, restarting, stopped, or missing.
 It exits non-zero when something needs attention, so you can wire it into a cron/monitoring check.
-A stopped `xmrig-proxy` while a node is down is reported as **intentional** (that's the
-node-down worker failover doing its job), not an error.
+A stopped `p2pool`/`xmrig-proxy` is reported as **intentional**, not an error: the dashboard stops
+it either to fail workers over a node-down outage or while the miner is held until the required
+chains finish their initial sync — check the dashboard to see which.
 
 **Start / stop / restart:**
 

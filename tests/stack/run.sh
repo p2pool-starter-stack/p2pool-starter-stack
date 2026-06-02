@@ -123,7 +123,14 @@ out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply 
 assert_eq "pool flag propagated"  "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)"  "--mini"
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
+assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
 assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
+
+# Non-blocking Tari (dashboard.tari_required:false) propagates as TARI_REQUIRED=false.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
+assert_eq "tari_required propagated false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
 
 echo "== black-box: status health check =="
 # A docker stub driven by FAKE_STATES ("svc=state:health ..."; state "missing" = no container)
@@ -167,11 +174,18 @@ out="$(cd "$ST" && FAKE_STATES="$NODE_DOWN" PATH="$ST/bin:$PATH" ./stack.sh stat
 assert_rc "status: node down exits 1" "$rc" "1"
 assert_contains "status: proxy stop is intentional" "$out" "likely intentional"
 
-# Proxy stopped while nodes are healthy -> flagged as a real problem.
+# A stopped p2pool/xmrig-proxy with healthy nodes is intentional — the nodes pass their
+# healthchecks while still syncing and the dashboard holds the miner until they're synced
+# (#35), so status reports it as likely-intentional (exit 0), not a fault.
 PROXY_ONLY="${ALL_UP/xmrig-proxy=running:none/xmrig-proxy=exited:none}"
 out="$(cd "$ST" && FAKE_STATES="$PROXY_ONLY" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
-assert_rc "status: lone proxy stop exits 1" "$rc" "1"
-assert_contains "status: lone proxy stop warns" "$out" "NOT mining"
+assert_rc "status: proxy stop under sync hold exits 0" "$rc" "0"
+assert_contains "status: proxy stop notes sync hold" "$out" "finish syncing"
+
+P2POOL_ONLY="${ALL_UP/p2pool=running:none/p2pool=exited:none}"
+out="$(cd "$ST" && FAKE_STATES="$P2POOL_ONLY" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
+assert_rc "status: p2pool stop under sync hold exits 0" "$rc" "0"
+assert_contains "status: p2pool stop notes sync hold" "$out" "finish syncing"
 
 # Remote-node mode: the bundled monerod is not expected even if absent.
 printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=\nHOST_IP=box.lan\n' > "$ST/.env"
