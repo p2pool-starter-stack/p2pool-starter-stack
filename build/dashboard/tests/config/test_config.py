@@ -1,0 +1,43 @@
+import os
+import json
+import importlib
+from unittest.mock import patch
+
+
+def _reload_config():
+    import mining_dashboard.config.config as cfg
+    return importlib.reload(cfg)
+
+
+class TestConfig:
+    def teardown_method(self):
+        # Reset module-level state so a TIER_CONFIG override doesn't leak into other tests.
+        _reload_config()
+
+    def test_defaults_load(self):
+        import mining_dashboard.config.config as cfg
+        assert cfg.XMRIG_API_PORT == 8080
+        assert cfg.ALGO_TARGET_BUFFER == 0.05
+        assert isinstance(cfg.TIER_DEFAULTS, dict)
+        assert cfg.TIER_DEFAULTS["donor_mega"] == 1_000_000
+
+    def test_tier_config_env_override_valid(self):
+        custom = {"donor_ultra": 5_000_000, "donor_basic": 500}
+        # deploy injects the JSON wrapped in single quotes
+        with patch.dict(os.environ, {"TIER_CONFIG": f"'{json.dumps(custom)}'"}):
+            cfg = _reload_config()
+            assert cfg.TIER_DEFAULTS["donor_ultra"] == 5_000_000
+            assert "donor_mega" not in cfg.TIER_DEFAULTS
+
+    def test_tier_config_env_override_invalid_json_falls_back(self):
+        with patch.dict(os.environ, {"TIER_CONFIG": "'{bad_json: missing_quotes}'"}):
+            cfg = _reload_config()
+            assert cfg.TIER_DEFAULTS["donor_mega"] == 1_000_000
+
+    def test_xvb_enabled_flag(self):
+        with patch.dict(os.environ, {"XVB_ENABLED": "false"}):
+            cfg = _reload_config()
+            assert cfg.ENABLE_XVB is False
+        with patch.dict(os.environ, {"XVB_ENABLED": "true"}):
+            cfg = _reload_config()
+            assert cfg.ENABLE_XVB is True

@@ -8,10 +8,8 @@ set -e
 # Fallback to localhost if the variable is somehow missing
 export HOST_IP="${HOST_IP:-127.0.0.1}"
 
-# Navigate to the application source root to ensure Python module resolution works correctly
-cd /app/mining_dashboard
-
-# Launch the main application process
-# 'exec' replaces the shell process to handle signals (SIGTERM) correctly
-# '-u' forces unbuffered stdout/stderr for real-time Docker logging
-exec python3 -u main.py
+# Launch the application as an installed package module from /app.
+# 'exec' replaces the shell process so SIGTERM is handled correctly;
+# '-u' forces unbuffered stdout/stderr for real-time Docker logging.
+cd /app
+exec python3 -u -m mining_dashboard.main

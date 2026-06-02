@@ -1,0 +1,109 @@
+from unittest.mock import patch
+
+import mining_dashboard.collector.pools as pools
+from mining_dashboard.collector.pools import (
+    detect_pool_type, get_p2pool_stats, get_network_stats,
+    get_stratum_stats, get_tari_stats,
+)
+from mining_dashboard.config.config import (
+    P2P_STATS_PATH, POOL_STATS_PATH, STRATUM_STATS_PATH,
+    NETWORK_STATS_PATH, TARI_STATS_PATH, SECOND_PER_BLOCK_MAIN,
+)
+
+
+class TestDetectPoolType:
+    def test_empty_is_unknown(self):
+        assert detect_pool_type([]) == "Unknown"
+        assert detect_pool_type(None) == "Unknown"
+
+    def test_majority_wins(self):
+        assert detect_pool_type(["1.1.1.1:37889", "2.2.2.2:37889", "3.3.3.3:37888"]) == "Main"
+        assert detect_pool_type(["1.1.1.1:37888"]) == "Mini"
+        assert detect_pool_type(["1.1.1.1:37890"]) == "Nano"
+
+    def test_unknown_ports(self):
+        assert detect_pool_type(["1.1.1.1:9999"]) == "Unknown"
+
+
+def _read_json_map(mapping):
+    """Return a side_effect that maps a stats path to a fixture dict."""
+    return lambda path: mapping.get(path, {})
+
+
+class TestP2poolStats:
+    def test_aggregates_sources(self):
+        mapping = {
+            P2P_STATS_PATH: {"peers": ["1.1.1.1:37889"], "connections": 8, "incoming_connections": 2},
+            POOL_STATS_PATH: {"pool_statistics": {"hashRate": 1234, "miners": 5, "pplnsWindowSize": 2160}},
+            STRATUM_STATS_PATH: {"last_share_found_time": 99, "shares_found": 7},
+        }
+        with patch.object(pools, "_read_json", side_effect=_read_json_map(mapping)):
+            s = get_p2pool_stats()
+        assert s["p2p"]["type"] == "Main"
+        assert s["p2p"]["out_peers"] == 8
+        assert s["pool"]["hashrate"] == 1234
+        assert s["pool"]["pplns_window"] == 2160
+        assert s["pool"]["shares_found"] == 7
+        assert s["pool"]["last_share_time"] == 99
+
+    def test_empty_files_give_defaults(self):
+        with patch.object(pools, "_read_json", return_value={}):
+            s = get_p2pool_stats()
+        assert s["p2p"]["type"] == "Unknown"
+        assert s["pool"]["hashrate"] == 0
+
+
+class TestNetworkStats:
+    def test_hashrate_derived_when_missing(self):
+        with patch.object(pools, "_read_json", return_value={"difficulty": 1200, "height": 10}):
+            s = get_network_stats()
+        assert s["hash"] == 1200 / SECOND_PER_BLOCK_MAIN
+        assert s["height"] == 10
+
+    def test_hashrate_passthrough(self):
+        with patch.object(pools, "_read_json", return_value={"difficulty": 1200, "hash": 999}):
+            assert get_network_stats()["hash"] == 999
+
+
+class TestStratumStats:
+    def test_worker_parsing(self):
+        raw = {"workers": ["10.0.0.1:3333,x,y,z,rig-01,extra"]}
+        with patch.object(pools, "_read_json", return_value=raw):
+            _, workers = get_stratum_stats()
+        assert workers == [{"ip": "10.0.0.1", "name": "rig-01",
+                            "parts": ["10.0.0.1:3333", "x", "y", "z", "rig-01", "extra"]}]
+
+    def test_worker_without_name_defaults_to_miner(self):
+        with patch.object(pools, "_read_json", return_value={"workers": ["10.0.0.2:3333"]}):
+            _, workers = get_stratum_stats()
+        assert workers[0]["name"] == "miner"
+
+
+class TestTariStats:
+    def test_active_chain_converts_utari(self):
+        raw = {"chains": [{"channel_state": "Active", "wallet": "T123", "height": 5,
+                           "reward": 2_000_000, "difficulty": 42}]}
+        with patch.object(pools, "_read_json", return_value=raw):
+            s = get_tari_stats()
+        assert s["active"] is True
+        assert s["reward"] == 2.0  # 2_000_000 uTari -> 2 Tari
+        assert s["status"] == "Active"
+
+    def test_no_chains_inactive(self):
+        with patch.object(pools, "_read_json", return_value={}):
+            assert get_tari_stats() == {"active": False}
+
+
+class TestReadJson:
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert pools._read_json(str(tmp_path / "nope.json")) == {}
+
+    def test_malformed_json_returns_empty(self, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not valid")
+        assert pools._read_json(str(bad)) == {}
+
+    def test_valid_json(self, tmp_path):
+        good = tmp_path / "good.json"
+        good.write_text('{"a": 1}')
+        assert pools._read_json(str(good)) == {"a": 1}

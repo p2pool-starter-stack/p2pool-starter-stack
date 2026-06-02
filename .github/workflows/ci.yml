@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  dashboard:
+    name: Dashboard tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dashboard with test extras
+        run: pip install -e "build/dashboard[test]"
+      - name: Run pytest with coverage gate
+        working-directory: build/dashboard
+        run: python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
+
+  dashboard-image:
+    name: Dashboard image (Docker test stage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the dashboard test stage (installs package + runs the suite in-container)
+        run: docker build --target test ./build/dashboard
+
+  shell:
+    name: Shell tests (shellcheck + stack.sh suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint stack.sh and test scripts
+        # Gate on warnings+errors (real issues); info-level style nits vary by shellcheck version.
+        run: shellcheck --severity=warning stack.sh tests/stack/run.sh tests/stack/test_compose.sh
+      - name: Run stack.sh test suite
+        run: bash tests/stack/run.sh
+
+  compose:
+    name: Compose config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose.yml interpolation
+        run: bash tests/stack/test_compose.sh

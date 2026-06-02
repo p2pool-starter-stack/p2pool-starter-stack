@@ -5,7 +5,7 @@ import struct
 import json
 import aiofiles
 
-from config.config import DOCKER_PROXY_URL, LOG_TAIL_LINES, DOCKER_TIMEOUT, NETWORK_STATS_PATH, MONERO_NODE_HOST
+from mining_dashboard.config.config import DOCKER_PROXY_URL, LOG_TAIL_LINES, DOCKER_TIMEOUT, NETWORK_STATS_PATH, MONERO_NODE_HOST
 
 logger = logging.getLogger("LogCollector")
 

@@ -7,7 +7,7 @@ import time
 import random
 from collections import deque
 from typing import Dict, List, Optional, Any
-from config.config import DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
+from mining_dashboard.config.config import DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
 
 class StateManager:
     """
@@ -16,9 +16,10 @@ class StateManager:
     Handles atomic file I/O to prevent data corruption and ensures state consistency
     across application restarts.
     """
-    def __init__(self):
+    def __init__(self, db_path: str = None):
         self.logger = logging.getLogger("StateManager")
-        self.db_path = DB_FILE_PATH
+        # Default to the configured path; tests inject a temp file or ":memory:".
+        self.db_path = db_path if db_path is not None else DB_FILE_PATH
         self._lock = threading.Lock()
         self._db_lock = threading.Lock()  # Lock for serializing DB access
         self.state = {

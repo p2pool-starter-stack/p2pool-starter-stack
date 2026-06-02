@@ -1,5 +1,5 @@
 import time
-from config.config import TIER_DEFAULTS
+from mining_dashboard.config.config import TIER_DEFAULTS
 
 def parse_hashrate(val_str, unit_str=None):
     """
@@ -100,7 +100,7 @@ def format_time_abs(timestamp):
         
     try:
         return time.strftime('%H:%M:%S', time.localtime(timestamp))
-    except (ValueError, OSError):
+    except (ValueError, OSError, TypeError):
         return "Invalid Time"
 
 def get_tier_info(hashrate, tiers=None):

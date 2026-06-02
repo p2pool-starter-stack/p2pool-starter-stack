@@ -86,7 +86,7 @@ TIER_DEFAULTS = {
     "donor": 1_000          
 }
 
-# Allow runtime configuration override via environment variable (injected by deploy.sh)
+# Allow runtime configuration override via environment variable (injected via .env)
 env_tiers = os.environ.get("TIER_CONFIG")
 if env_tiers and env_tiers.strip() and env_tiers != "''":
     try:

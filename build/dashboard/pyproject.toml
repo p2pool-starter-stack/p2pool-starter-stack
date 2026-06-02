@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mining-dashboard"
+version = "0.2.0"
+description = "Monitoring dashboard and XvB switching engine for the P2Pool Starter Stack"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "aiohttp>=3.10.11",
+    "requests>=2.32.4",
+    # grpcio/protobuf floors are dictated by the checked-in Tari gRPC stubs
+    # (mining_dashboard/client/tari/generated/*_pb2*.py), which assert these at
+    # import time. Do not resolve lower; regenerate the stubs if bumping.
+    "grpcio>=1.78.0",
+    "protobuf>=6.31.1,<7",
+    "aiofiles>=24.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-mock>=3.14",
+    "pytest-cov>=5",
+    "pytest-aiohttp>=1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["mining_dashboard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# importlib mode lets test modules share basenames (e.g. several test_utils.py) without
+# __init__.py packages or sys.path games.
+addopts = "-q --import-mode=importlib"
+markers = [
+    "integration: tests that exercise multiple components or external services",
+]
+
+[tool.coverage.run]
+source = ["mining_dashboard"]
+omit = [
+    "*/client/tari/generated/*",  # generated gRPC stubs
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

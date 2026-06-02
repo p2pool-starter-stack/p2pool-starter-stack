@@ -15,6 +15,10 @@ Caddyfile
 __pycache__/
 *.pyc
 .pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.eggs/
 
 # OS
 .DS_Store
