@@ -6,12 +6,14 @@ no request — which is the whole point of having pulled them out of the request
 """
 import time
 
+import json
+
 import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
     build_chart_context, build_pool_network_context, build_worker_rows,
     build_tari_context, build_system_context, build_algo_context,
     build_sync_context, build_header_badges, get_cached_template, render_dashboard,
-    AlgoContext, PoolNetworkContext,
+    build_view_model, AlgoContext, PoolNetworkContext,
 )
 from mining_dashboard.service.storage_service import StateManager
 
@@ -438,3 +440,29 @@ class TestRenderDashboard:
         import pytest
         with pytest.raises(RuntimeError):
             render_dashboard({"workers": []}, bad_sm, "all")
+
+
+class TestViewModel:
+    """The assembled field map (shared by the HTML render and a future #30 JSON endpoint)."""
+
+    def _vm(self):
+        sm = StateManager(db_path=":memory:")
+        data = {
+            "shares": [], "workers": [], "global_sync": False,
+            "monero_sync": {"percent": 100, "current": 10, "target": 10},
+            "tari_sync": {"percent": 50, "current": 5, "target": 10},
+        }
+        try:
+            return build_view_model(data, sm, "all")
+        finally:
+            sm.close()
+
+    def test_contains_all_template_fields(self):
+        vm = self._vm()
+        for key in ("host_ip", "worker_rows", "header_badges", "total_hr",
+                    "sync_percent", "mode_name", "tari_status"):
+            assert key in vm
+
+    def test_is_json_serializable(self):
+        # #30 will serve this map over fetch() — every value must be JSON-encodable.
+        json.dumps(self._vm())

@@ -717,13 +717,15 @@ def get_cached_template():
     return _TEMPLATE_CACHE or "<h1>Template Error</h1>"
 
 
-def render_dashboard(data, state_mgr, range_arg):
-    """Assemble every context block and render the dashboard HTML.
+def build_view_model(data, state_mgr, range_arg):
+    """Assemble every context block into the flat field map the dashboard needs.
 
-    The single place the template contract is satisfied: each block's dataclass fields are
-    flattened into the ``str.format`` kwargs, alongside the host IP, worker rows, and header
-    badges. May raise (e.g. ``state_mgr.get_history`` failing) — the caller wraps this and
-    returns a sanitized 500.
+    Each block's dataclass fields are flattened into a single dict, alongside the host IP,
+    pre-rendered worker rows, and header badges. The values are all JSON-serializable
+    primitives/strings — so this is the single source of truth for both the HTML render
+    (``render_dashboard``) and a future ``fetch()`` partial/JSON endpoint (Issue #30),
+    without either re-deriving the other's data. May raise (e.g. ``state_mgr.get_history``
+    failing) — callers wrap this and return a sanitized 500.
     """
     history = state_mgr.get_history()
     is_syncing = data.get('global_sync', False)
@@ -743,5 +745,9 @@ def render_dashboard(data, state_mgr, range_arg):
         worker_rows=build_worker_rows(data.get('workers', [])),
         header_badges=build_header_badges(data, is_syncing, algo, pool_net),
     )
+    return fields
 
-    return get_cached_template().format(**fields)
+
+def render_dashboard(data, state_mgr, range_arg):
+    """Render the dashboard HTML — the one place the template contract is satisfied."""
+    return get_cached_template().format(**build_view_model(data, state_mgr, range_arg))
