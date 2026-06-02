@@ -33,26 +33,30 @@ class TestFetchSyncStatus:
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(return_value=_tip(500, synced=True))
         status = await client.get_sync_status()
-        assert status == {"is_syncing": False, "current": 500, "target": 500, "percent": 100}
+        assert status == {"is_syncing": False, "current": 500, "target": 500,
+                          "percent": 100, "reachable": True}
 
     async def test_syncing_with_target(self):
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(return_value=_tip(100, synced=False))
         stub.GetSyncProgress = AsyncMock(return_value=_progress(100, 200))
         status = await client.get_sync_status()
-        assert status == {"is_syncing": True, "current": 100, "target": 200, "percent": 50}
+        assert status == {"is_syncing": True, "current": 100, "target": 200,
+                          "percent": 50, "reachable": True}
 
     async def test_syncing_without_reliable_target(self):
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(return_value=_tip(100, synced=False))
         stub.GetSyncProgress = AsyncMock(return_value=_progress(100, 100))  # target <= local
         status = await client.get_sync_status()
-        assert status == {"is_syncing": True, "current": 100, "target": 0, "percent": 0}
+        assert status == {"is_syncing": True, "current": 100, "target": 0,
+                          "percent": 0, "reachable": True}
 
     async def test_grpc_error_returns_default_when_no_cache(self):
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(side_effect=RuntimeError("unavailable"))
-        assert await client.get_sync_status() == {"is_syncing": False}
+        # Unreachable with no cache: default status, flagged not reachable (Issue #31).
+        assert await client.get_sync_status() == {"is_syncing": False, "reachable": False}
 
 
 class TestCaching:
@@ -61,9 +65,12 @@ class TestCaching:
         # First call succeeds and populates the cache.
         stub.GetTipInfo = AsyncMock(return_value=_tip(300, synced=True))
         good = await client.get_sync_status()
-        # Next call fails -> should return the cached good reading (within the stale window).
+        assert good["reachable"] is True
+        # Next call fails -> cached good reading (within the stale window), but flagged
+        # not reachable this cycle so the down-detector still sees the outage.
         stub.GetTipInfo = AsyncMock(side_effect=RuntimeError("busy"))
-        assert await client.get_sync_status() == good
+        cached = await client.get_sync_status()
+        assert cached == {**good, "reachable": False}
 
     async def test_stale_cache_expires(self, monkeypatch):
         client, stub = _client_with_stub()
@@ -72,7 +79,7 @@ class TestCaching:
         # Push the cache timestamp beyond the stale window.
         client._last_sync_ts -= (client._MAX_STALE_SECONDS + 1)
         stub.GetTipInfo = AsyncMock(side_effect=RuntimeError("down"))
-        assert await client.get_sync_status() == {"is_syncing": False}
+        assert await client.get_sync_status() == {"is_syncing": False, "reachable": False}
 
 
 class TestClose:

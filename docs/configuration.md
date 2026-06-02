@@ -93,6 +93,7 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
+| `dashboard.reject_workers_on_node_down` | `false` | When `true`, a sustained local node (monerod/tari) outage stops the `xmrig-proxy` container so miners disconnect and **fail over to their configured backup pools** instead of idling; it restarts on recovery. Off by default — it changes mining behavior and relies on the socket proxy's start/stop grant. No effect for a remote node. |
 
 ---
 

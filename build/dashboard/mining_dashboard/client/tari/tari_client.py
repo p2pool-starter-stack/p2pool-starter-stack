@@ -56,13 +56,16 @@ class TariClient:
         if status is not None:
             self._last_sync_status = status
             self._last_sync_ts = time.monotonic()
-            return status
+            # `reachable` reflects this cycle's live gRPC, independent of the cache below;
+            # it drives node-down detection (Issue #31). Added on the returned copy so the
+            # cached `_last_sync_status` stays a pristine sync reading.
+            return {**status, "reachable": True}
 
         # gRPC unreachable this cycle. Serve the last good state briefly (node is likely
         # just busy), but stop once it's clearly stale so a down node isn't masked forever.
         if self._last_sync_status and (time.monotonic() - self._last_sync_ts) <= self._MAX_STALE_SECONDS:
-            return self._last_sync_status
-        return {"is_syncing": False}
+            return {**self._last_sync_status, "reachable": False}
+        return {"is_syncing": False, "reachable": False}
 
     async def _fetch_sync_status(self):
         """

@@ -125,8 +125,16 @@ async def _get_local_monero_sync_status():
     """
     rpc_status = await asyncio.to_thread(_monero_client.get_sync_status)
     if rpc_status is not None:
+        # RPC answered → monerod is reachable. `reachable` drives node-down detection
+        # (Issue #31); it's distinct from is_syncing (a synced node is reachable).
+        rpc_status["reachable"] = True
         return rpc_status
-    return await _get_monero_sync_status_from_logs()
+    # RPC unreachable this cycle: fall back to log scraping for the display value, but
+    # report the node as not reachable so the down-detector can act on a sustained outage.
+    # (Old docker logs persist after monerod dies, so log success != monerod up.)
+    status = await _get_monero_sync_status_from_logs()
+    status["reachable"] = False
+    return status
 
 
 async def _get_monero_sync_status_from_logs():
@@ -177,10 +185,13 @@ async def _get_monero_sync_status_from_logs():
 
 async def get_monero_sync_status():
     """
-    Determines whether to check local docker logs or P2Pool's network stats 
+    Determines whether to check local docker logs or P2Pool's network stats
     based on the configured MONERO_NODE_HOST.
     """
     if MONERO_NODE_HOST == "172.28.0.26":
         return await _get_local_monero_sync_status()
-    else:
-        return await _get_remote_monero_sync_status()
+    # Remote node: we don't probe its RPC, so report it reachable — the reject-workers
+    # feature (Issue #31) deliberately no-ops for remote nodes (p2pool manages those).
+    status = await _get_remote_monero_sync_status()
+    status.setdefault("reachable", True)
+    return status

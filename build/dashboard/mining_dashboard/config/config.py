@@ -65,6 +65,22 @@ DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://172.28.0.30:2375")
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 
+# --- Reject Workers on Node Down (Issue #31) ---
+# When a local node (monerod/tari) is unreachable, the stack can't mine — so optionally
+# stop the xmrig-proxy container to close :3333, forcing miners to fail over to the backup
+# pools they've configured instead of sitting idle on us. Opt-in (default off) because it
+# changes mining behaviour and depends on the socket proxy's ALLOW_START/ALLOW_STOP grant.
+REJECT_WORKERS_ON_NODE_DOWN = os.environ.get("REJECT_WORKERS_ON_NODE_DOWN", "false").strip().lower() == "true"
+
+# Container the dashboard stops/starts to reject/readmit workers.
+REJECT_WORKERS_CONTAINER = os.environ.get("REJECT_WORKERS_CONTAINER", "xmrig-proxy")
+
+# Debounce: a node must be unreachable this long before it's declared DOWN, and reachable
+# this long before recovery — so a single transient timeout or a brief restart doesn't
+# kick every miner to their backups (and back) on a blip.
+NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
+NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
+
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")

@@ -55,6 +55,22 @@ class TestIndexRoute:
         resp = await client.get("/?range=24h")
         assert resp.status == 200
 
+    async def test_node_down_badges_rendered(self, aiohttp_client):
+        # When a node is down / workers rejected, the header surfaces it (Issue #31).
+        data = {
+            "shares": [], "workers": [], "global_sync": False,
+            "monero_sync": {"percent": 100, "current": 10, "target": 10, "down": True},
+            "tari_sync": {"percent": 100, "current": 10, "target": 10, "down": False},
+            "workers_rejected": True,
+        }
+        sm = StateManager(db_path=":memory:")
+        cli = await aiohttp_client(create_app(sm, data))
+        html = await (await cli.get("/")).text()
+        sm.close()
+        assert "monerod DOWN" in html
+        assert "Tari DOWN" not in html
+        assert "Workers rejected" in html
+
 
 class TestErrorHandling:
     async def test_render_error_is_sanitized(self, aiohttp_client, app_data):

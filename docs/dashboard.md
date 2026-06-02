@@ -60,6 +60,19 @@ A persistent status strip across the top shows the hostname, host telemetry (CPU
 HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** for both P2Pool and
 XvB so you can see your split at a glance.
 
+### Node status & failover
+
+If a local node becomes unreachable, a red **`monerod DOWN`** or **`Tari DOWN`** badge appears in
+the top bar (after a short debounce, so a momentary blip doesn't flap). Sync state is read from
+monerod's `get_info` RPC and Tari's gRPC, so "down" means the node itself is unreachable — not just
+that a log line changed.
+
+Optionally, the dashboard can **reject workers** while a node is down so they fail over to the
+backup pools you've configured, instead of sitting idle on a stack that can't mine. Enable it with
+`dashboard.reject_workers_on_node_down: true` (see [Configuration](configuration.md)); when on, a
+sustained outage stops the `xmrig-proxy` container (a **`Workers rejected`** badge shows) and a
+confirmed recovery restarts it. It's off by default and never triggers for a remote node.
+
 ### Hashrate chart
 
 A time-series chart of your hashrate with selectable ranges (1h / 24h / 1w / 1mo). The shaded

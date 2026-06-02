@@ -618,6 +618,10 @@ render_env() {
     xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
+    # Reject workers when a local node is down so miners fail over to their backups (#31).
+    local reject_workers
+    reject_workers=$(jq -r 'if .dashboard.reject_workers_on_node_down != null then .dashboard.reject_workers_on_node_down | tostring else "false" end' "$CONFIG_FILE")
+
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
     cat <<EOF > "$target"
@@ -639,6 +643,7 @@ XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
+REJECT_WORKERS_ON_NODE_DOWN=$reject_workers
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -799,6 +804,8 @@ describe_change() {
             msg="Monero node RPC credential updated ($key)." ;;
         XVB_ENABLED|XVB_POOL_URL|XVB_DONOR_ID|XVB_DONATION_LEVEL)
             msg="XMRvsBeast setting ($key): $old → $new." ;;
+        REJECT_WORKERS_ON_NODE_DOWN)
+            msg="Reject-workers-on-node-down → $new — when on, a down node stops xmrig-proxy so miners fail over to their backups." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
         HOST_IP)

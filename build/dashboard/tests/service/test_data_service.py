@@ -39,6 +39,77 @@ class TestInit:
         svc = DataService(sm, MagicMock(), MagicMock())
         assert svc.latest_data["total_live_h15"] == 0
 
+    def test_restores_workers_rejected_flag(self):
+        # A dashboard restart mid-outage must remember it had rejected workers, so it can
+        # readmit them on recovery (Issue #31).
+        sm = MagicMock()
+        sm.load_snapshot.return_value = {"workers_rejected": True}
+        svc = DataService(sm, MagicMock(), MagicMock())
+        assert svc.workers_rejected is True
+
+
+class TestWorkerRejection:
+    def _svc(self):
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        svc = DataService(sm, MagicMock(), MagicMock())
+        svc.docker_control = MagicMock()
+        svc.docker_control.stop = AsyncMock(return_value=True)
+        svc.docker_control.start = AsyncMock(return_value=True)
+        return svc
+
+    async def test_no_action_when_disabled(self):
+        svc = self._svc()
+        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", False):
+            await svc._apply_worker_rejection(nodes_down=True)
+        svc.docker_control.stop.assert_not_called()
+        assert svc.workers_rejected is False
+
+    async def test_stop_when_down_and_enabled(self):
+        svc = self._svc()
+        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True), \
+             patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"):
+            await svc._apply_worker_rejection(nodes_down=True)
+        svc.docker_control.stop.assert_awaited_once_with("xmrig-proxy")
+        assert svc.workers_rejected is True
+
+    async def test_stop_failure_keeps_flag_false_for_retry(self):
+        svc = self._svc()
+        svc.docker_control.stop = AsyncMock(return_value=False)
+        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
+            await svc._apply_worker_rejection(nodes_down=True)
+        assert svc.workers_rejected is False  # so the next cycle retries
+
+    async def test_no_double_stop_when_already_rejected(self):
+        svc = self._svc()
+        svc.workers_rejected = True
+        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
+            await svc._apply_worker_rejection(nodes_down=True)
+        svc.docker_control.stop.assert_not_called()
+        svc.docker_control.start.assert_not_called()
+
+    async def test_readmit_only_when_both_nodes_healthy(self):
+        svc = self._svc()
+        svc.workers_rejected = True
+        svc.monero_health.healthy = True
+        svc.tari_health.healthy = True
+        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
+            await svc._apply_worker_rejection(nodes_down=False)
+        svc.docker_control.start.assert_awaited_once()
+        assert svc.workers_rejected is False
+
+    async def test_no_readmit_while_a_node_unconfirmed(self):
+        # Rejected + nodes no longer "down", but a node not yet confirmed healthy (e.g. fresh
+        # after restart) → do NOT readmit workers to a possibly-still-down stack.
+        svc = self._svc()
+        svc.workers_rejected = True
+        svc.monero_health.healthy = True
+        svc.tari_health.healthy = False
+        with patch.object(ds_mod, "REJECT_WORKERS_ON_NODE_DOWN", True):
+            await svc._apply_worker_rejection(nodes_down=False)
+        svc.docker_control.start.assert_not_called()
+        assert svc.workers_rejected is True
+
 
 class TestRunIteration:
     async def test_single_iteration_aggregates(self):

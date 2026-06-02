@@ -13,6 +13,7 @@ def algo():
     state_manager.get_tiers.return_value = dict(TIER_DEFAULTS)
     proxy_client = MagicMock()       # called via asyncio.to_thread -> sync methods
     data_service = MagicMock()
+    data_service.workers_rejected = False  # not rejecting workers (Issue #31 guard off)
     return AlgoService(state_manager, proxy_client, data_service)
 
 
@@ -173,3 +174,13 @@ class TestRunLoop:
             with pytest.raises(Exception):
                 await algo.run()
         assert algo.switch_miners.called
+
+    async def test_run_skips_switching_while_workers_rejected(self, algo):
+        # When a node is down and workers are rejected (Issue #31), the proxy is stopped —
+        # the loop must not try to reconfigure it.
+        algo.data_service.workers_rejected = True
+        algo.switch_miners = MagicMock(side_effect=lambda *a, **k: asyncio.sleep(0))
+        with patch("asyncio.sleep", side_effect=[None, Exception("stop")]):
+            with pytest.raises(Exception):
+                await algo.run()
+        assert not algo.switch_miners.called

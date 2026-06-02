@@ -218,6 +218,9 @@ services:
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
       - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
       - TARI_GRPC_ADDRESS=172.28.0.27:18142
+      # Reject workers when a local node is down so miners fail over to backups (Issue #31).
+      # Opt-in (default off); enable via dashboard.reject_workers_on_node_down in config.json.
+      - REJECT_WORKERS_ON_NODE_DOWN=${REJECT_WORKERS_ON_NODE_DOWN:-false}
 
   # --- Docker Socket Proxy ---
   docker-proxy:
@@ -229,6 +232,12 @@ services:
     environment:
       - CONTAINERS=1
       - LOGS=1
+      # Narrow start/stop grant (Issue #31): lets the dashboard stop xmrig-proxy to reject
+      # workers when a node is down (so they fail over to backups) and start it on recovery.
+      # POST stays default-off, so this is NOT general write access — only these two
+      # endpoints. Reused later for startup gating (#35).
+      - ALLOW_START=1
+      - ALLOW_STOP=1
     networks:
       mining_net:
         ipv4_address: 172.28.0.30

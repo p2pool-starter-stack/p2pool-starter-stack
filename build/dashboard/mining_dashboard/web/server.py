@@ -550,6 +550,15 @@ async def handle_index(request):
             header_badges += f'<span class="badge badge-outline">P2Pool {p_type}</span>'
             header_badges += algo_ctx.get('low_hr_badge', '')
 
+        # Node-down badges (Issue #31) — shown whenever a node is unreachable, regardless
+        # of sync state, plus a notice when workers have been rejected to fail over.
+        if monero_sync.get('down'):
+            header_badges += '<span class="badge badge-bad badge-pool">monerod DOWN</span>'
+        if tari_sync.get('down'):
+            header_badges += '<span class="badge badge-bad badge-pool">Tari DOWN</span>'
+        if data.get('workers_rejected'):
+            header_badges += '<span class="badge badge-bad badge-pool" title="Workers rejected so they fail over to their backup pools">Workers rejected</span>'
+
         template = get_cached_template()
         
         response_html = template.format(
