@@ -165,7 +165,7 @@ Everything runs through `stack.sh` (`./stack.sh help` lists it all):
 | `./stack.sh up` / `down` / `restart` | Start / stop / restart the stack. |
 | `./stack.sh upgrade` | Rebuild and restart after a `git pull`. |
 | `./stack.sh logs [service]` | Follow logs (all, or one service). |
-| `./stack.sh status` | Show container status. |
+| `./stack.sh status` | Container status + health-check of every expected service (warns on anything down). |
 
 Full reference: **[Operations & Maintenance](docs/operations.md)**.
 
