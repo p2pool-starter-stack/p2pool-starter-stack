@@ -64,6 +64,10 @@ Once both nodes are synced, the dashboard shows the full operational view.
 
 ![Operational dashboard](../images/dashboard.png)
 
+The page updates itself **live** every 30 seconds, refreshing each panel in place rather than
+reloading the whole page — so your scroll position, the column you've sorted the worker table by,
+and the chart all stay put between updates.
+
 ### Top bar
 
 A persistent status strip across the top shows the hostname, host telemetry (CPU, load, RAM,
@@ -93,9 +97,9 @@ progress until it catches up and merge mining resumes.
 
 ### Hashrate chart
 
-A time-series chart of your hashrate with selectable ranges (1h / 24h / 1w / 1mo). The shaded
-bands show how hashrate was split between **P2Pool** and **XvB** over time, so you can see the
-switching engine at work.
+A time-series chart of your hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch
+instantly without reloading the page. The shaded bands show how hashrate was split between
+**P2Pool** and **XvB** over time, so you can see the switching engine at work.
 
 ### Overview
 

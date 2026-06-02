@@ -2,7 +2,6 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="30">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{page_title}</title>
     <link rel="icon" type="image/png" href="/static/p2pool-starter-stack-logo.png">
@@ -117,7 +116,7 @@
 <body class="{sync_class}">
 
 <div class="container">
-    <div class="header">
+    <div class="header" id="top-header">
         <div>
             <div class="flex items-center">
                 <h2>{host_ip}</h2>
@@ -207,9 +206,12 @@
             <div style="position: relative; flex-grow: 1; min-height: 300px; width: 100%; overflow: hidden;">
                 <canvas id="hChart"></canvas>
             </div>
+            <script type="application/json" id="chart-json">
+            {{"labels":[{chart_labels}],"p2pool":[{chart_p2pool}],"xvb":[{chart_xvb}],"sharesY":[{chart_shares_y}],"sharesR":[{chart_shares_r}],"sharesC":[{chart_shares_c}]}}
+            </script>
         </div>
         
-        <div class="card card-simple">
+        <div class="card card-simple" id="card-overview">
             <h3>Overview</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
@@ -229,7 +231,7 @@
             </div>
         </div>
 
-        <div class="card card-advanced">
+        <div class="card card-advanced" id="card-mynode">
             <h3>My P2Pool Node Stats</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
@@ -252,7 +254,7 @@
             <div class="wallet-text">Wallet: {strat_wallet}</div>
         </div>
 
-        <div class="card card-advanced">
+        <div class="card card-advanced" id="card-global">
             <h3>Global P2Pool Stats</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Pool Hashrate</h5><p>{pool_hr}</p></div>
@@ -270,7 +272,7 @@
             </div>
         </div>
 
-        <div class="card card-advanced">
+        <div class="card card-advanced" id="card-xvb">
             <h3>XvB Donation Stats</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Current Tier</h5><p>{tier_name}</p></div>
@@ -282,7 +284,7 @@
             <div class="text-xs text-muted" style="margin-top:10px;">Stats fetched from xmrvsbeast.com (Updated: {xvb_updated})</div>
         </div>
 
-        <div class="card card-advanced">
+        <div class="card card-advanced" id="card-network">
             <h3>XMR Network</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Block Height</h5><p>{net_height}</p></div>
@@ -298,7 +300,7 @@
             </div>
         </div>
         
-        <div class="card card-advanced">
+        <div class="card card-advanced" id="card-tari">
             <h3>Tari Merge Mining</h3>
             <div class="stat-grid">
                 <div class="stat-card"><h5>Status</h5><p class="{tari_status_class}">{tari_status}</p></div>
@@ -312,7 +314,7 @@
 
     <div class="card">
         <h3>Workers Alive</h3>
-        <table>
+        <table id="workers-table">
             <thead>
                 <tr>
                     <th>Worker</th>
@@ -323,7 +325,7 @@
                     <th>15m</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="workers-tbody">
                 {worker_rows}
             </tbody>
         </table>
@@ -331,124 +333,160 @@
     </div>
 </div>
 <script>
-    const shareCounts = [{chart_shares_c}];
+    // ----------------------------------------------------------------------------------
+    // Live partial refresh (Issue #30).
+    //
+    // Instead of a full-page <meta refresh> every 30s (which reset scroll, table sort, and
+    // chart state), we re-fetch the rendered page and swap only the server-rendered region
+    // <div>s by id. The chart card is intentionally NOT swapped, so the Chart.js instance
+    // survives and is updated via chart.update() from a JSON data island. Sort state is
+    // tracked and re-applied after each swap; scroll position is saved/restored.
+    // ----------------------------------------------------------------------------------
+    const REFRESH_MS = 30000;
+    const REGIONS = ['top-header', 'sync-view', 'card-overview', 'card-mynode', 'card-global',
+                     'card-xvb', 'card-network', 'card-tari', 'workers-tbody'];
 
-    new Chart(document.getElementById('hChart'), {{
-        type: 'line',
-        data: {{
-            labels: [{chart_labels}],
-            datasets: [{{
-                label: 'P2Pool',
-                data: [{chart_p2pool}],
-                borderColor: '#58a6ff', 
-                tension: 0.3, 
-                fill: true, 
-                backgroundColor: 'rgba(88,166,255,0.1)',
-                pointRadius: 0,
-                pointHitRadius: 20
-            }}, {{
-                label: 'XvB',
-                data: [{chart_xvb}],
-                borderColor: '#a371f7',
-                tension: 0.3,
-                fill: true,
-                backgroundColor: 'rgba(163, 113, 247, 0.2)',
-                pointRadius: 0,
-                pointHitRadius: 20
-            }}, {{
-                label: 'Shares',
-                data: [{chart_shares_y}], 
-                borderColor: '#FF0000',
-                backgroundColor: '#FF0000',
-                pointStyle: 'triangle',
-                rotation: 180,
-                pointRadius: [{chart_shares_r}],
-                pointHoverRadius: 15,
-                pointHitRadius: 100, 
-                showLine: false
-            }}]
-        }},
-        options: {{ 
-            responsive: true, 
-            maintainAspectRatio: false, 
-            animation: false, 
-            interaction: {{
-                mode: 'nearest',
-                axis: 'x',
-                intersect: false 
+    let chart = null;
+    let shareCounts = [];
+    let sortIndex = null, sortAsc = true;
+    let currentRange = new URL(window.location.href).searchParams.get('range') || 'all';
+
+    function readChartData(doc) {{
+        const el = doc.getElementById('chart-json');
+        if (!el) return null;
+        try {{ return JSON.parse(el.textContent); }} catch (e) {{ return null; }}
+    }}
+
+    function createChart(d) {{
+        const canvas = document.getElementById('hChart');
+        if (!canvas || typeof Chart === 'undefined') return;
+        shareCounts = d.sharesC;
+        chart = new Chart(canvas, {{
+            type: 'line',
+            data: {{
+                labels: d.labels,
+                datasets: [
+                    {{ label: 'P2Pool', data: d.p2pool, borderColor: '#58a6ff', tension: 0.3, fill: true,
+                       backgroundColor: 'rgba(88,166,255,0.1)', pointRadius: 0, pointHitRadius: 20 }},
+                    {{ label: 'XvB', data: d.xvb, borderColor: '#a371f7', tension: 0.3, fill: true,
+                       backgroundColor: 'rgba(163, 113, 247, 0.2)', pointRadius: 0, pointHitRadius: 20 }},
+                    {{ label: 'Shares', data: d.sharesY, borderColor: '#FF0000', backgroundColor: '#FF0000',
+                       pointStyle: 'triangle', rotation: 180, pointRadius: d.sharesR, pointHoverRadius: 15,
+                       pointHitRadius: 100, showLine: false }}
+                ]
             }},
-            plugins: {{ 
-                legend: {{ display: false }},
-                tooltip: {{
-                    callbacks: {{
-                        label: function(context) {{
-                            if (context.dataset.label === 'Shares') {{
-                                var count = shareCounts[context.dataIndex];
-                                return count + ' Shares';
-                            }}
-                            var label = context.dataset.label || '';
-                            if (label) {{ label += ': '; }}
-                            if (context.parsed.y !== null) {{ label += context.parsed.y + ' H/s'; }} 
-                            return label;
-                        }}
-                    }}
-                }}
-            }}, 
-            scales: {{ 
-                y: {{ 
-                    stacked: false,
-                    grid: {{ color: '#30363d' }}, 
-                    ticks: {{ color: '#8b949e' }} 
-                }}, 
-                x: {{ display: false }} 
-            }} 
-        }}
-    }});
-
-    // Client-side Table Sorting
-    document.addEventListener('DOMContentLoaded', function() {{
-        const getCellValue = (tr, idx) => tr.children[idx].getAttribute('data-sort') || tr.children[idx].innerText || tr.children[idx].textContent;
-        const comparer = (idx, asc) => (a, b) => ((v1, v2) => 
-            v1 !== '' && v2 !== '' && !isNaN(v1) && !isNaN(v2) ? v1 - v2 : v1.toString().localeCompare(v2)
-        )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
-
-        document.querySelectorAll('th').forEach(th => {{
-            th.addEventListener('click', (() => {{
-                const table = th.closest('table');
-                const tbody = table.querySelector('tbody');
-                Array.from(tbody.querySelectorAll('tr'))
-                    .sort(comparer(Array.from(th.parentNode.children).indexOf(th), this.asc = !this.asc))
-                    .forEach(tr => tbody.appendChild(tr) );
-            }}));
-        }});
-
-        // View Toggle Logic
-        const btnSimple = document.getElementById('btn-simple');
-        const btnAdvanced = document.getElementById('btn-advanced');
-
-        btnSimple.addEventListener('click', () => setView('simple'));
-        btnAdvanced.addEventListener('click', () => setView('advanced'));
-
-        function setView(mode) {{
-            if (mode === 'advanced') {{
-                document.documentElement.classList.add('mode-advanced');
-                btnAdvanced.classList.add('active');
-                btnSimple.classList.remove('active');
-                localStorage.setItem('dashboardView', 'advanced');
-            }} else {{
-                document.documentElement.classList.remove('mode-advanced');
-                btnSimple.classList.add('active');
-                btnAdvanced.classList.remove('active');
-                localStorage.setItem('dashboardView', 'simple');
+            options: {{
+                responsive: true, maintainAspectRatio: false, animation: false,
+                interaction: {{ mode: 'nearest', axis: 'x', intersect: false }},
+                plugins: {{
+                    legend: {{ display: false }},
+                    tooltip: {{ callbacks: {{ label: function(context) {{
+                        if (context.dataset.label === 'Shares') {{ return shareCounts[context.dataIndex] + ' Shares'; }}
+                        var label = context.dataset.label || '';
+                        if (label) {{ label += ': '; }}
+                        if (context.parsed.y !== null) {{ label += context.parsed.y + ' H/s'; }}
+                        return label;
+                    }} }} }}
+                }},
+                scales: {{ y: {{ stacked: false, grid: {{ color: '#30363d' }}, ticks: {{ color: '#8b949e' }} }},
+                           x: {{ display: false }} }}
             }}
+        }});
+    }}
+
+    // Create the chart lazily the first time we're operational (so it's never built into a
+    // hidden/zero-size canvas during Sync Mode); update it thereafter.
+    function syncChart(d, syncing) {{
+        if (syncing || !d) return;
+        if (!chart) {{ createChart(d); return; }}
+        shareCounts = d.sharesC;
+        chart.data.labels = d.labels;
+        chart.data.datasets[0].data = d.p2pool;
+        chart.data.datasets[1].data = d.xvb;
+        chart.data.datasets[2].data = d.sharesY;
+        chart.data.datasets[2].pointRadius = d.sharesR;
+        chart.update();
+        chart.resize();
+    }}
+
+    // --- Table sort, persisted across refreshes ---
+    const getCellValue = (tr, idx) => tr.children[idx].getAttribute('data-sort') || tr.children[idx].innerText || tr.children[idx].textContent;
+    const comparer = (idx, asc) => (a, b) => ((v1, v2) =>
+        v1 !== '' && v2 !== '' && !isNaN(v1) && !isNaN(v2) ? v1 - v2 : v1.toString().localeCompare(v2)
+    )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+
+    function applySort() {{
+        if (sortIndex === null) return;
+        const tbody = document.getElementById('workers-tbody');
+        if (!tbody) return;
+        Array.from(tbody.querySelectorAll('tr')).sort(comparer(sortIndex, sortAsc)).forEach(tr => tbody.appendChild(tr));
+    }}
+
+    // --- Range switching without a full reload ---
+    function setRange(r) {{
+        currentRange = r;
+        document.querySelectorAll('.btn-range').forEach(b => {{
+            const br = new URL(b.href, window.location.href).searchParams.get('range') || 'all';
+            b.classList.toggle('active', br === r);
+        }});
+        history.replaceState(null, '', r === 'all' ? window.location.pathname : ('?range=' + r));
+        refresh();
+    }}
+
+    // --- View toggle (simple / advanced) ---
+    function setView(mode) {{
+        const adv = mode === 'advanced';
+        document.documentElement.classList.toggle('mode-advanced', adv);
+        const s = document.getElementById('btn-simple'), a = document.getElementById('btn-advanced');
+        if (s) s.classList.toggle('active', !adv);
+        if (a) a.classList.toggle('active', adv);
+        localStorage.setItem('dashboardView', mode);
+    }}
+
+    // --- The refresh cycle: fetch rendered page, swap regions, update chart ---
+    async function refresh() {{
+        let doc;
+        try {{
+            const res = await fetch(window.location.pathname + '?range=' + encodeURIComponent(currentRange),
+                                    {{ headers: {{ 'X-Requested-With': 'fetch' }} }});
+            if (!res.ok) return;
+            doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+        }} catch (e) {{ console.warn('dashboard refresh failed', e); return; }}
+        if (!doc.getElementById('top-header')) return;   // error page / unexpected response
+        const sx = window.scrollX, sy = window.scrollY;
+        for (const id of REGIONS) {{
+            const src = doc.getElementById(id), dst = document.getElementById(id);
+            if (src && dst) dst.innerHTML = src.innerHTML;
         }}
-        
-        // Initialize button state based on current class
-        if (document.documentElement.classList.contains('mode-advanced')) {{
-            btnAdvanced.classList.add('active');
-            btnSimple.classList.remove('active');
+        if (doc.body) document.body.className = doc.body.className;
+        if (doc.title) document.title = doc.title;
+        applySort();
+        syncChart(readChartData(doc), document.body.classList.contains('mode-sync'));
+        window.scrollTo(sx, sy);
+    }}
+
+    // --- Wiring. Event delegation so handlers survive region swaps. ---
+    document.addEventListener('click', function(e) {{
+        const th = e.target.closest('#workers-table th');
+        if (th) {{
+            const idx = Array.from(th.parentNode.children).indexOf(th);
+            sortAsc = (sortIndex === idx) ? !sortAsc : true;
+            sortIndex = idx;
+            applySort();
+            return;
         }}
+        const range = e.target.closest('.btn-range');
+        if (range) {{ e.preventDefault(); setRange(new URL(range.href, window.location.href).searchParams.get('range') || 'all'); return; }}
+        if (e.target.closest('#btn-simple')) {{ setView('simple'); return; }}
+        if (e.target.closest('#btn-advanced')) {{ setView('advanced'); return; }}
     }});
+
+    // Sync the toggle buttons to the class the head script set pre-render (avoids a flash).
+    if (document.documentElement.classList.contains('mode-advanced')) {{ setView('advanced'); }}
+
+    // Initial chart, then the periodic partial refresh.
+    syncChart(readChartData(document), document.body.classList.contains('mode-sync'));
+    setInterval(refresh, REFRESH_MS);
 </script>
 </body>
 </html>
