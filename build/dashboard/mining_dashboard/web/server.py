@@ -445,9 +445,9 @@ def _get_algo_context(data, state_mgr, history):
     if (ENABLE_XVB and XVB_DONATION_LEVEL not in ("auto", "highest")
             and target_threshold > 0 and not sustainable):
         low_hr_badge = (
-            '<span class="badge badge-warn" title="Your hashrate can\'t sustain the '
-            'selected XvB donation tier; donation will fall short of it.">'
-            '⚠ Hashrate low for tier</span>'
+            '<span class="badge badge-warn" style="margin-left: 8px;" '
+            'title="Your hashrate can\'t sustain the selected XvB donation tier; '
+            'donation will fall short of it.">⚠ Hashrate low for tier</span>'
         )
 
     if not ENABLE_XVB:
