@@ -4,6 +4,10 @@ The monitoring web UI and XvB switching engine for the P2Pool Starter Stack. It 
 stats from the local collectors, the XMRig proxy, and the Tari node, and serves a single-page
 dashboard (behind Caddy) on `127.0.0.1:8000`.
 
+The page updates **live in place**: a small client loop re-fetches the rendered page and swaps
+the server-rendered region `<div>`s (and updates the chart from a JSON data island) instead of
+reloading, so scroll position, table sort, and chart state survive each refresh.
+
 ## Layout
 
 ```
