@@ -5,8 +5,14 @@ import logging
 import bisect
 import json
 from aiohttp import web
-from mining_dashboard.config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
-from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
+from mining_dashboard.config.config import (
+    HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB,
+    XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
+)
+from mining_dashboard.helper.utils import (
+    format_hashrate, format_duration, format_time_abs, get_tier_info,
+    resolve_target_threshold,
+)
 
 logger = logging.getLogger("WebServer")
 
@@ -425,13 +431,29 @@ def _get_algo_context(data, state_mgr, history):
     p2p_24h_val = _avg_p2pool_over_window(history, 86400)
 
     tiers = state_mgr.get_tiers()
+    # Current tier = what XvB actually credits us (drives qualification).
     tier_name, _ = get_tier_info(xvb_24h_val, tiers)
-    safe_capacity = total_hr_val * 0.85
-    target_tier_name, _ = get_tier_info(safe_capacity, tiers)
+    # Target tier = what the algo aims for, from the configured donation level
+    # (Issue #40 config side). "auto" = highest sustainable; an explicit tier is
+    # honored even if unsustainable, in which case we flag a low-hashrate warning.
+    target_threshold, sustainable = resolve_target_threshold(
+        tiers, total_hr_val, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION
+    )
+    target_tier_name, _ = get_tier_info(target_threshold, tiers)
+
+    low_hr_badge = ''
+    if (ENABLE_XVB and XVB_DONATION_LEVEL not in ("auto", "highest")
+            and target_threshold > 0 and not sustainable):
+        low_hr_badge = (
+            '<span class="badge badge-warn" style="margin-left: 8px;" '
+            'title="Your hashrate can\'t sustain the selected XvB donation tier; '
+            'donation will fall short of it.">⚠ Hashrate low for tier</span>'
+        )
 
     if not ENABLE_XVB:
         tier_name = "Disabled"
         target_tier_name = "Disabled"
+        low_hr_badge = ''
 
     return {
         'mode_name': current_mode,
@@ -447,6 +469,7 @@ def _get_algo_context(data, state_mgr, history):
         'xvb_24h': format_hashrate(xvb_24h_val),
         'tier_name': tier_name,
         'target_tier_name': target_tier_name,
+        'low_hr_badge': low_hr_badge,
         'xvb_fail_count': xvb_stats.get('fail_count', 0),
     }
 
@@ -525,6 +548,7 @@ async def handle_index(request):
             p_type = pool_net_ctx.get('p2p_type', '')
             header_badges = f'<span class="badge badge-pool" style="background-color: {m_color};">{m_name}</span>'
             header_badges += f'<span class="badge badge-outline">P2Pool {p_type}</span>'
+            header_badges += algo_ctx.get('low_hr_badge', '')
 
         template = get_cached_template()
         

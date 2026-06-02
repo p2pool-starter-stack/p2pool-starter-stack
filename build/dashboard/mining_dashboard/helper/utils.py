@@ -121,3 +121,55 @@ def get_tier_info(hashrate, tiers=None):
             return f"{display_name} ({format_hashrate(threshold)}+)", float(threshold)
 
     return "None", 0.0
+
+def _configured_tier_threshold(tiers, donation_level):
+    """
+    Maps a configured donation level to a tier threshold (H/s).
+
+    Accepts "lowest", "auto"/"highest", a tier name ("donor"/"vip"/"whale"/"mega",
+    matched against the tier keys with the "donor_" prefix stripped), or a raw
+    numeric H/s value. Unknown values fall back to the lowest tier.
+    """
+    positive = sorted(t for t in tiers.values() if t > 0)
+    if not positive:
+        return 0.0
+
+    level = (donation_level or "lowest").strip().lower()
+    if level == "lowest":
+        return float(positive[0])
+    if level in ("auto", "highest"):
+        return float(positive[-1])
+
+    # Named tier (e.g. "vip" -> "donor_vip", "donor" -> "donor")
+    for key, threshold in tiers.items():
+        name = key.replace("donor_", "").replace("_", "").lower() or "donor"
+        if level in (name, key.lower()):
+            return float(threshold)
+
+    # Raw numeric threshold
+    try:
+        return float(level)
+    except (ValueError, TypeError):
+        return float(positive[0])
+
+def resolve_target_threshold(tiers, stable_hr, donation_level, max_fraction):
+    """
+    Resolves the donation tier to aim for. Returns ``(threshold_hs, sustainable)``.
+
+    "auto"/"highest" targets the highest tier the hashrate can sustain (leaving
+    `max_fraction` headroom for p2pool); the threshold is 0 when none is
+    sustainable (donate nothing). A specific tier ("donor"/"vip"/"whale"/"mega" or
+    a numeric H/s) is honored as-is and is NOT downgraded — a user may deliberately
+    target a tier above their capacity, in which case `sustainable` is False so the
+    dashboard can warn.
+    """
+    _, sustainable_threshold = get_tier_info(stable_hr * max_fraction, tiers)
+
+    level = (donation_level or "auto").strip().lower()
+    if level in ("auto", "highest"):
+        target = sustainable_threshold
+    else:
+        target = _configured_tier_threshold(tiers, level)
+
+    sustainable = target > 0 and (stable_hr * max_fraction) >= target
+    return target, sustainable
