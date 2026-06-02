@@ -105,8 +105,8 @@ Give it a minute after a worker connects for stats to populate. Confirm the work
 hashing (`./stack.sh logs xmrig-proxy`).
 
 **P2Pool can't connect to a remote node.**
-P2Pool needs a node with **ZMQ enabled** and an **unrestricted RPC**. Public "open node"
-endpoints generally don't qualify — use a node you control. See
+The node must be set up for mining — **ZMQ publishing enabled** (`zmq-pub`) and its RPC reachable
+by P2Pool. Public "open node" endpoints don't qualify — use a node you run and control. See
 [Configuration › Connecting to a remote Monero node](configuration.md#connecting-to-a-remote-monero-node).
 
 **HugePages shows as disabled / low.**

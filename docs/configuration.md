@@ -75,7 +75,7 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 |---|---|---|
 | `monero.mode` | `local` | `local` runs the bundled Monero node; `remote` connects to an external node (see `monero.remote`). |
 | `monero.wallet_address` | _required_ | Your Monero payout address. |
-| `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC. `setup` auto-generates them; they're internal to the stack (only monerod, p2pool, and the dashboard use them). For a remote node, set only if it requires auth. |
+| `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC. `setup` auto-generates them; they're internal to the stack (only monerod and p2pool use them). For a remote node, set only if it requires auth. |
 | `monero.prune` | `true` | Prune the Monero blockchain to save disk space. |
 | `monero.prep_blocks_threads` | `auto` | Block-verification threads during sync. `auto` = host cores − 2, clamped to 4–8. |
 | `monero.rpc_lan_access` | `false` | `true` publishes the node's RPC on the LAN (`0.0.0.0`) for wallets on other machines; default is localhost-only. |
@@ -197,9 +197,10 @@ To connect to an external Monero node instead of running one locally, set `moner
 ```
 
 - The bundled `monerod` container is not started in remote mode.
-- P2Pool requires a node with **ZMQ enabled** and an **unrestricted RPC** that it can reach, so a
-  remote node has to be one you control or one that explicitly exposes those for mining. Public
-  "open node" endpoints generally do **not** work for P2Pool.
+- The remote node must be set up for **P2Pool mining** — with **ZMQ publishing enabled**
+  (`zmq-pub`, port `18083` by default) and its RPC reachable by P2Pool. In practice that means a
+  node **you run and control**; general-purpose public "open node" endpoints do **not** work,
+  since they don't expose ZMQ.
 - If the remote node requires RPC authentication, set `monero.node_username` / `node_password`
   to match it; otherwise leave them out.
 

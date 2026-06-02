@@ -20,7 +20,7 @@ driven by a single script — `stack.sh` — and most of it is automated.
 |---|---|
 | **Operating system** | Ubuntu Server **24.04 LTS** is the officially supported platform. Other Linux distributions and macOS may work but aren't officially supported. |
 | **CPU** | A processor with **AVX2** support is highly recommended for RandomX performance. |
-| **Disk** | A pruned Monero node needs roughly **80–100 GB**; a full (unpruned) node needs **250 GB+**. An SSD is strongly recommended. |
+| **Disk** | A **pruned** Monero node needs roughly **80–100 GB**; a **full** (unpruned) node needs **200 GB+** — and the chain keeps growing. An SSD is strongly recommended. |
 | **Software** | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
 You don't have to install the software dependencies yourself. `setup` checks for them and, **on

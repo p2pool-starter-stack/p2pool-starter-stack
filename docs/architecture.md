@@ -99,9 +99,9 @@ explicitly via `monero.rpc_lan_access`).
   than running fully privileged.
 - **Verified binaries.** Third-party binaries are SHA256-verified during the image build.
 - **Pinned versions.** Service images and binaries are pinned to known-good versions.
-- **Hardened dashboard.** Security headers (a self-only CSP, `X-Frame-Options: DENY`,
-  `nosniff`, a `Referrer-Policy`) and a sanitized error handler; it reaches Docker only through a
-  read-only socket proxy.
+- **Hardened dashboard.** Security headers (a restrictive `Content-Security-Policy`,
+  `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`) and a sanitized error handler; it reaches
+  Docker only through a read-only socket proxy.
 - **Locked-down config.** `config.json` is created `chmod 600` (owner-only), and the internal RPC
   proxy token is generated once and preserved across re-runs.
 
