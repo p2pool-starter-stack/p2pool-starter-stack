@@ -33,7 +33,7 @@ on_err() {
 }
 
 # Detect Operating System
-readonly OS_TYPE="$(uname -s)"
+OS_TYPE="$(uname -s)"; readonly OS_TYPE
 readonly CONFIG_FILE="config.json"
 readonly ENV_FILE=".env"
 readonly REAL_USER="${SUDO_USER:-$USER}"
@@ -227,6 +227,7 @@ resolve_default() {
 
 # Read the os-release file into OS_ID / OS_VERSION / OS_PRETTY (subshell-sourced to avoid clobber).
 # OS_RELEASE_FILE is overridable for testing; defaults to the standard location.
+# shellcheck disable=SC1090  # os-release path is dynamic by design
 detect_os() {
     local osr="${OS_RELEASE_FILE:-/etc/os-release}"
     OS_ID=""; OS_VERSION=""; OS_PRETTY="$OS_TYPE"

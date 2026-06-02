@@ -20,9 +20,10 @@ assert_rc()       { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected rc
 
 # Run a command with stack.sh sourced (functions available, no cd/main side effects),
 # from a given working directory. Usage: run_sourced <dir> <cmd> [args...]
+# shellcheck disable=SC1090  # STACK path is dynamic by design
 run_sourced() {
     local dir="$1"; shift
-    ( cd "$dir"; source "$STACK"; set +e; "$@" )
+    ( cd "$dir" || return; source "$STACK"; set +e; "$@" )
 }
 
 # A throwaway sandbox dir, cleaned on exit.
