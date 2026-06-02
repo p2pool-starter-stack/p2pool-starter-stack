@@ -125,6 +125,60 @@ assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PRO
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
 
+echo "== black-box: status health check =="
+# A docker stub driven by FAKE_STATES ("svc=state:health ..."; state "missing" = no container)
+# so we can script each service's state and assert how `status` reports it.
+make_status_stub() {
+    local bin="$1"; mkdir -p "$bin"
+    cat > "$bin/docker" <<'EOF'
+#!/usr/bin/env bash
+sub="$*"
+case "$sub" in
+  "compose config --services")
+      for kv in $FAKE_STATES; do echo "${kv%%=*}"; done ;;
+  "compose ps -aq "*)
+      svc="${sub##* }"
+      for kv in $FAKE_STATES; do
+        [ "${kv%%=*}" = "$svc" ] && [ "${kv#*=}" != "missing" ] && echo "$svc"
+      done ;;
+  "inspect "*)
+      cid="${sub##* }"
+      for kv in $FAKE_STATES; do
+        [ "${kv%%=*}" = "$cid" ] && echo "${kv#*=}" | tr ':' ' '
+      done ;;
+esac
+exit 0
+EOF
+    chmod +x "$bin/docker"
+}
+ST="$SANDBOX/status"; mkdir -p "$ST/bin"; cp "$STACK" "$ST/stack.sh"
+make_status_stub "$ST/bin"
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' > "$ST/.env"
+ALL_UP="tor=running:healthy monerod=running:healthy p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
+
+# All services up -> success, friendly summary.
+out="$(cd "$ST" && FAKE_STATES="$ALL_UP" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
+assert_rc "status: all up exits 0" "$rc" "0"
+assert_contains "status: all-up summary" "$out" "All expected services are up"
+
+# A node down + proxy stopped -> node flagged, proxy treated as intentional failover.
+NODE_DOWN="${ALL_UP/monerod=running:healthy/monerod=exited:none}"; NODE_DOWN="${NODE_DOWN/xmrig-proxy=running:none/xmrig-proxy=exited:none}"
+out="$(cd "$ST" && FAKE_STATES="$NODE_DOWN" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
+assert_rc "status: node down exits 1" "$rc" "1"
+assert_contains "status: proxy stop is intentional" "$out" "likely intentional"
+
+# Proxy stopped while nodes are healthy -> flagged as a real problem.
+PROXY_ONLY="${ALL_UP/xmrig-proxy=running:none/xmrig-proxy=exited:none}"
+out="$(cd "$ST" && FAKE_STATES="$PROXY_ONLY" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
+assert_rc "status: lone proxy stop exits 1" "$rc" "1"
+assert_contains "status: lone proxy stop warns" "$out" "NOT mining"
+
+# Remote-node mode: the bundled monerod is not expected even if absent.
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=\nHOST_IP=box.lan\n' > "$ST/.env"
+REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
+out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
+assert_rc "status: remote mode ignores monerod" "$rc" "0"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'stack.sh tests: \033[1;32m%d passed\033[0m, ' "$PASS"

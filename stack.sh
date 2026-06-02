@@ -86,6 +86,88 @@ stack_upgrade() {
     log "Stack upgraded."
 }
 
+# Show the compose table, then health-check every service we expect to be running and warn
+# about anything that isn't. Returns non-zero if any service needs attention (handy for cron).
+# Profile-aware (the bundled monerod only counts in local-node mode), and aware that a stopped
+# xmrig-proxy can be intentional when reject-workers (#31) has kicked in because a node is down.
+stack_status() {
+    docker compose ps || true
+    echo ""
+    log "Service health check:"
+
+    local expected profiles
+    expected=$(docker compose config --services 2>/dev/null | sort || true)
+    profiles=$(env_get COMPOSE_PROFILES)
+    if [ -z "$expected" ]; then
+        warn "Could not read the service list from compose — is Docker running?"
+        return 1
+    fi
+
+    local problems=0 proxy_state="" node_down=0
+    local s cid info state health
+    while IFS= read -r s; do
+        [ -z "$s" ] && continue
+        # The bundled monerod only runs under the local_node profile; in remote mode it's
+        # not expected, so don't flag it missing.
+        if [ "$s" = "monerod" ] && [[ ",$profiles," != *",local_node,"* ]]; then
+            continue
+        fi
+
+        cid=$(docker compose ps -aq "$s" 2>/dev/null | head -n1 || true)
+        if [ -z "$cid" ]; then
+            state="missing"; health="none"
+        else
+            info=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo "unknown none")
+            state=${info%% *}; health=${info##* }
+        fi
+
+        # Track required-node health (monerod/tari) to interpret a stopped proxy below.
+        if [ "$s" = "monerod" ] || [ "$s" = "tari" ]; then
+            if [ "$state" != "running" ] || { [ "$health" != "healthy" ] && [ "$health" != "none" ]; }; then
+                node_down=1
+            fi
+        fi
+
+        # Defer the proxy verdict until we know whether a node is down.
+        if [ "$s" = "xmrig-proxy" ] && [ "$state" != "running" ]; then
+            proxy_state="$state"
+            continue
+        fi
+
+        case "$state" in
+            running)
+                case "$health" in
+                    healthy|none) printf '  %b✓%b %-13s running\n'  "$C_GREEN"  "$C_RESET" "$s" ;;
+                    starting)     printf '  %b…%b %-13s starting (health check pending)\n' "$C_YELLOW" "$C_RESET" "$s" ;;
+                    *)            printf '  %b⚠%b %-13s running but UNHEALTHY\n' "$C_YELLOW" "$C_RESET" "$s"; problems=$((problems + 1)) ;;
+                esac ;;
+            restarting)
+                printf '  %b✗%b %-13s restarting (possible crash loop — check logs)\n' "$C_RED" "$C_RESET" "$s"; problems=$((problems + 1)) ;;
+            *)
+                printf '  %b✗%b %-13s %s\n' "$C_RED" "$C_RESET" "$s" "$state"; problems=$((problems + 1)) ;;
+        esac
+    done <<< "$expected"
+
+    # A stopped xmrig-proxy is expected when reject-workers (#31) stopped it because a node is
+    # down — flag it loudly only when the nodes actually look fine.
+    if [ -n "$proxy_state" ]; then
+        if [ "$node_down" -eq 1 ]; then
+            printf '  %b⚠%b %-13s %s — likely intentional: a node is down, so workers were rejected to fail over to backups\n' "$C_YELLOW" "$C_RESET" "xmrig-proxy" "$proxy_state"
+        else
+            printf '  %b✗%b %-13s %s — but nodes look healthy, so workers are NOT mining\n' "$C_RED" "$C_RESET" "xmrig-proxy" "$proxy_state"
+            problems=$((problems + 1))
+        fi
+    fi
+
+    echo ""
+    if [ "$problems" -eq 0 ]; then
+        log "All expected services are up."
+    else
+        warn "$problems service(s) need attention (see above)."
+        return 1
+    fi
+}
+
 announce_dashboard_url() {
     local display_host
     display_host=$(env_get HOST_IP)
@@ -152,7 +234,8 @@ Lifecycle:
 
 Inspection:
   logs [service]            Follow logs for all containers, or a single service.
-  status                    Show container status.
+  status                    Show container status + health-check every expected service
+                            (warns about anything down; non-zero exit if so).
 
 Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
@@ -618,6 +701,12 @@ render_env() {
     xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
+    # Reject workers when a required node is down so miners fail over to their backups (#31).
+    # Per-node (monerod required for mining; Tari optional merge-mining), both default true.
+    local reject_monero reject_tari
+    reject_monero=$(jq -r 'if .dashboard.reject_workers_on_monero_down != null then .dashboard.reject_workers_on_monero_down | tostring else "true" end' "$CONFIG_FILE")
+    reject_tari=$(jq -r 'if .dashboard.reject_workers_on_tari_down != null then .dashboard.reject_workers_on_tari_down | tostring else "true" end' "$CONFIG_FILE")
+
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
     cat <<EOF > "$target"
@@ -639,6 +728,8 @@ XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
+REJECT_WORKERS_ON_MONERO_DOWN=$reject_monero
+REJECT_WORKERS_ON_TARI_DOWN=$reject_tari
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -799,6 +890,8 @@ describe_change() {
             msg="Monero node RPC credential updated ($key)." ;;
         XVB_ENABLED|XVB_POOL_URL|XVB_DONOR_ID|XVB_DONATION_LEVEL)
             msg="XMRvsBeast setting ($key): $old → $new." ;;
+        REJECT_WORKERS_ON_MONERO_DOWN|REJECT_WORKERS_ON_TARI_DOWN)
+            msg="$key → $new — when on, that node being down stops xmrig-proxy so miners fail over to their backups." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
         HOST_IP)
@@ -919,7 +1012,7 @@ main() {
         restart)          require_deployed; stack_restart ;;
         upgrade)          require_deployed; stack_upgrade ;;
         logs)             require_env; log "Following logs (Ctrl+C to exit)..."; docker compose logs -f "$@" ;;
-        status)           require_env; docker compose ps ;;
+        status)           require_env; stack_status || exit 1 ;;
         reset-dashboard)  require_deployed; reset_dashboard ;;
         help|-h|--help)   show_help ;;
         *)                error "Unknown command: $cmd. Run '$0 help'." ;;

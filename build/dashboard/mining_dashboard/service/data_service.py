@@ -3,12 +3,19 @@ import logging
 import time
 from aiohttp import ClientSession
 
-from mining_dashboard.config.config import UPDATE_INTERVAL
+from mining_dashboard.config.config import (
+    UPDATE_INTERVAL,
+    REJECT_WORKERS_ON_MONERO_DOWN,
+    REJECT_WORKERS_ON_TARI_DOWN,
+    REJECT_WORKERS_CONTAINER,
+)
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.tari.tari_client import TariClient
+from mining_dashboard.client.docker.docker_control import DockerControl
 from mining_dashboard.collector.pools import get_p2pool_stats, get_network_stats, get_stratum_stats, get_tari_stats
 from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.system import get_disk_usage, get_hugepages_status, get_memory_usage, get_load_average, get_cpu_usage
+from mining_dashboard.service.node_health import NodeHealthMonitor
 
 logger = logging.getLogger("DataService")
 
@@ -34,13 +41,62 @@ class DataService:
             "monero_sync": {},
             "tari_sync": {},
             "global_sync": False,
+            "workers_rejected": False,
             "timestamp": 0
         }
-        
+
+        # Node-down detection + optional worker rejection (Issue #31).
+        self.docker_control = DockerControl()
+        self.monero_health = NodeHealthMonitor()
+        self.tari_health = NodeHealthMonitor()
+        # True while we've stopped the proxy to reject workers. Persisted in the snapshot so
+        # a dashboard restart mid-outage still readmits workers once the node recovers.
+        self.workers_rejected = False
+
         # Restore persistent state from DB to prevent empty dashboard on service restart
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
             self.latest_data.update(loaded_snapshot)
+            self.workers_rejected = bool(self.latest_data.get("workers_rejected", False))
+
+    async def _apply_worker_rejection(self, monero_down, tari_down):
+        """
+        Reject workers (stop the proxy) when a node we care about is DOWN so miners fail over
+        to their backup pools; readmit them (start the proxy) once those nodes are confirmed
+        healthy.
+
+        Per-node: monerod and Tari each have their own toggle (both default on), so a Tari-only
+        outage need not reject workers if you're happy to keep mining Monero on p2pool. A no-op
+        when both toggles are off. Only acts on transitions (tracked by `workers_rejected`), and
+        Docker treats a repeat stop/start as already-done (HTTP 304), so it's safe every cycle.
+        """
+        reject_monero = REJECT_WORKERS_ON_MONERO_DOWN
+        reject_tari = REJECT_WORKERS_ON_TARI_DOWN
+        if not (reject_monero or reject_tari):
+            return
+
+        should_reject = (monero_down and reject_monero) or (tari_down and reject_tari)
+
+        if should_reject and not self.workers_rejected:
+            logger.warning(
+                f"Required node unreachable — stopping {REJECT_WORKERS_CONTAINER} so workers "
+                f"fail over to their backup pools."
+            )
+            if await self.docker_control.stop(REJECT_WORKERS_CONTAINER):
+                self.workers_rejected = True
+            return
+
+        # Readmit only once every node we reject on is confirmed healthy (not merely 'not
+        # down'), so a dashboard restart mid-outage doesn't bring workers back to a still-down
+        # stack. A node whose toggle is off is ignored here.
+        recovered = ((not reject_monero) or self.monero_health.healthy) and \
+                    ((not reject_tari) or self.tari_health.healthy)
+        if self.workers_rejected and recovered:
+            logger.info(
+                f"Required nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."
+            )
+            if await self.docker_control.start(REJECT_WORKERS_CONTAINER):
+                self.workers_rejected = False
 
     async def run(self):
         """
@@ -197,6 +253,15 @@ class DataService:
                             h = tari_stats.get('height', 0)
                             tari_sync.update({'percent': 100, 'current': h, 'target': h})
 
+                    # 3. Node-down detection + optional worker rejection (Issue #31).
+                    # Debounce each node's live reachability into a stable DOWN flag, then
+                    # (if enabled) stop the proxy so workers fail over to their backups.
+                    monero_down = self.monero_health.update(monero_sync.get('reachable', True))
+                    tari_down = self.tari_health.update(tari_sync.get('reachable', True))
+                    monero_sync['down'] = monero_down
+                    tari_sync['down'] = tari_down
+                    await self._apply_worker_rejection(monero_down, tari_down)
+
                     # Fetch fresh shares list to populate UI
                     shares_list = await asyncio.to_thread(self.state_manager.get_shares)
 
@@ -211,6 +276,7 @@ class DataService:
                         "monero_sync": monero_sync,
                         "tari_sync": tari_sync,
                         "global_sync": global_sync,
+                        "workers_rejected": self.workers_rejected,
                         "system": {
                             "disk": get_disk_usage(),
                             "hugepages": get_hugepages_status(),

@@ -120,21 +120,24 @@ class TestLocalSyncStatus:
     """Orchestrator: prefer the get_info RPC, fall back to log scraping when unreachable."""
 
     async def test_rpc_result_used_when_available(self):
-        # RPC returns a status → use it directly, never touch the docker logs.
+        # RPC returns a status → use it directly (flagged reachable), never touch the logs.
         rpc_status = {"is_syncing": True, "current": 10, "target": 20, "percent": 50}
         with patch.object(logs._monero_client, "get_sync_status", return_value=rpc_status), \
              patch.object(logs, "get_monero_logs", AsyncMock()) as mock_logs:
             status = await logs._get_local_monero_sync_status()
-        assert status == rpc_status
+        assert status["is_syncing"] is True and status["percent"] == 50
+        assert status["reachable"] is True
         mock_logs.assert_not_called()
 
     async def test_falls_back_to_logs_when_rpc_unreachable(self):
-        # RPC returns None (node unreachable / creds absent) → scrape logs instead.
+        # RPC returns None (node unreachable / creds absent) → scrape logs, flagged not
+        # reachable so the down-detector can act (Issue #31).
         with patch.object(logs._monero_client, "get_sync_status", return_value=None), \
              patch.object(logs, "get_monero_logs",
                           AsyncMock(return_value=["Synced 50/100 (50%, ...)"])):
             status = await logs._get_local_monero_sync_status()
         assert status["is_syncing"] is True and status["percent"] == 50
+        assert status["reachable"] is False
 
 
 class TestDispatch:
@@ -146,7 +149,8 @@ class TestDispatch:
     async def test_remote_when_other_host(self):
         with patch.object(logs, "MONERO_NODE_HOST", "10.0.0.9"), \
              patch.object(logs, "_get_remote_monero_sync_status", AsyncMock(return_value={"is_syncing": False})):
-            assert await logs.get_monero_sync_status() == {"is_syncing": False}
+            # Remote node is reported reachable so reject-workers no-ops for it (Issue #31).
+            assert await logs.get_monero_sync_status() == {"is_syncing": False, "reachable": True}
 
 
 class _FakeFile:

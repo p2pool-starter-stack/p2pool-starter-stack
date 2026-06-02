@@ -60,10 +60,37 @@ PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 PROXY_API_PORT = int(os.environ.get("PROXY_API_PORT", 3344))
 
 # --- Docker Proxy Configuration ---
-# Settings for connecting to the secure Docker Socket Proxy
+# Read-only socket proxy: container stats/logs only (no write access).
 DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://172.28.0.30:2375")
+# Control socket proxy: start/stop only, used to reject/readmit workers on node-down
+# (Issue #31). A separate proxy so opening POST for start/stop can't widen the read-only
+# proxy's access. See docker-compose.yml `docker-control`.
+DOCKER_CONTROL_URL = os.environ.get("DOCKER_CONTROL_URL", "tcp://172.28.0.31:2375")
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
+
+# --- Reject Workers on Node Down (Issue #31) ---
+# When a required node is unreachable, the stack can't mine on the workers' behalf — so stop
+# the xmrig-proxy container to close :3333, forcing miners to fail over to the backup pools
+# they've configured instead of sitting idle on us.
+#
+# Per-node so you can match what each chain means to you: monerod is REQUIRED for p2pool
+# mining (down = can't mine, reject), while Tari is only merge-mining gravy (you can still
+# mine Monero on p2pool without it). Both default true (reject if either is down); set
+# reject_workers_on_tari_down:false if you'd rather keep mining Monero through a Tari outage.
+# Safe to leave on: if the socket-proxy stop grant is missing the stop simply no-ops, and the
+# debounce + ever-up guard keep a blip or initial sync from tripping it.
+REJECT_WORKERS_ON_MONERO_DOWN = os.environ.get("REJECT_WORKERS_ON_MONERO_DOWN", "true").strip().lower() == "true"
+REJECT_WORKERS_ON_TARI_DOWN = os.environ.get("REJECT_WORKERS_ON_TARI_DOWN", "true").strip().lower() == "true"
+
+# Container the dashboard stops/starts to reject/readmit workers.
+REJECT_WORKERS_CONTAINER = os.environ.get("REJECT_WORKERS_CONTAINER", "xmrig-proxy")
+
+# Debounce: a node must be unreachable this long before it's declared DOWN, and reachable
+# this long before recovery — so a single transient timeout or a brief restart doesn't
+# kick every miner to their backups (and back) on a blip.
+NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
+NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote

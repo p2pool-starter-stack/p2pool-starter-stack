@@ -236,9 +236,15 @@ class AlgoService:
         
         while True:
             try:
+                # While workers are rejected (a node is down, Issue #31) the proxy is
+                # stopped — don't try to reconfigure its pools; just wait for recovery.
+                if getattr(self.data_service, "workers_rejected", False):
+                    await asyncio.sleep(UPDATE_INTERVAL)
+                    continue
+
                 # Access latest data from DataService
                 latest_data = self.data_service.latest_data
-                
+
                 # Use 10s average for immediate reaction to hashrate drops
                 current_hr = latest_data.get("total_live_h10", 0)
                 if current_hr == 0:

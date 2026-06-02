@@ -93,6 +93,8 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
+| `dashboard.reject_workers_on_monero_down` | `true` | When a sustained monerod outage is detected, stop the `xmrig-proxy` container so miners disconnect and **fail over to their configured backup pools** instead of idling (it restarts on recovery). monerod is **required** to mine, so this defaults on. No effect for a remote node. |
+| `dashboard.reject_workers_on_tari_down` | `true` | Same, for a Tari outage. Tari is **only needed for merge mining** — you can still mine Monero on p2pool without it — so set this to `false` if you'd rather keep mining through a Tari outage. Defaults on (reject if *either* node is down). |
 
 ---
 
