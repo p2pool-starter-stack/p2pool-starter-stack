@@ -433,16 +433,27 @@ def _get_algo_context(data, state_mgr, history):
     tiers = state_mgr.get_tiers()
     # Current tier = what XvB actually credits us (drives qualification).
     tier_name, _ = get_tier_info(xvb_24h_val, tiers)
-    # Target tier = what the algo aims for, honoring the configured donation level
-    # (Issue #40 config side) and what the hashrate can sustain.
-    target_threshold = resolve_target_threshold(
+    # Target tier = what the algo aims for, from the configured donation level
+    # (Issue #40 config side). "auto" = highest sustainable; an explicit tier is
+    # honored even if unsustainable, in which case we flag a low-hashrate warning.
+    target_threshold, sustainable = resolve_target_threshold(
         tiers, total_hr_val, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION
     )
     target_tier_name, _ = get_tier_info(target_threshold, tiers)
 
+    low_hr_badge = ''
+    if (ENABLE_XVB and XVB_DONATION_LEVEL not in ("auto", "highest")
+            and target_threshold > 0 and not sustainable):
+        low_hr_badge = (
+            '<span class="badge badge-warn" title="Your hashrate can\'t sustain the '
+            'selected XvB donation tier; donation will fall short of it.">'
+            '⚠ Hashrate low for tier</span>'
+        )
+
     if not ENABLE_XVB:
         tier_name = "Disabled"
         target_tier_name = "Disabled"
+        low_hr_badge = ''
 
     return {
         'mode_name': current_mode,
@@ -458,6 +469,7 @@ def _get_algo_context(data, state_mgr, history):
         'xvb_24h': format_hashrate(xvb_24h_val),
         'tier_name': tier_name,
         'target_tier_name': target_tier_name,
+        'low_hr_badge': low_hr_badge,
         'xvb_fail_count': xvb_stats.get('fail_count', 0),
     }
 
@@ -536,6 +548,7 @@ async def handle_index(request):
             p_type = pool_net_ctx.get('p2p_type', '')
             header_badges = f'<span class="badge badge-pool" style="background-color: {m_color};">{m_name}</span>'
             header_badges += f'<span class="badge badge-outline">P2Pool {p_type}</span>'
+            header_badges += algo_ctx.get('low_hr_badge', '')
 
         template = get_cached_template()
         

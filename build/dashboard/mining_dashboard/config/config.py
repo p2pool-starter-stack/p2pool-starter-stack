@@ -45,10 +45,10 @@ ENABLE_XVB = os.environ.get("XVB_ENABLED", "true").lower() == "true"
 # Donation tier to target (config.json: xvb.donation_level). The XvB raffle picks
 # winners at random, so donating above a tier's threshold buys nothing — we aim to
 # just clear it and send the rest to p2pool.
-#   "lowest" (default) — minimal donation: target the lowest donor tier we can hold
-#   "auto"/"highest"   — highest tier the current hashrate can sustain
-#   "donor"/"vip"/"whale"/"mega" — a specific named tier
-XVB_DONATION_LEVEL = os.environ.get("XVB_DONATION_LEVEL", "lowest").strip().lower()
+#   "auto" (default)  — highest tier the current hashrate can sustain
+#   "donor"/"vip"/"whale"/"mega" — a specific named tier, honored even if the
+#       hashrate can't sustain it (the dashboard shows a warning badge then)
+XVB_DONATION_LEVEL = os.environ.get("XVB_DONATION_LEVEL", "auto").strip().lower()
 
 # --- Upstream Pool Configuration ---
 P2POOL_URL = os.environ.get("P2POOL_URL", "")

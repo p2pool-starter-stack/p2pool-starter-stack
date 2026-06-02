@@ -48,6 +48,7 @@ class TestGetDecision:
             assert mode == "P2POOL"
 
     def test_below_target_ramps_donation_above_maintenance(self, algo):
+        algo.donation_level = "donor"  # fixed target (1000) so neither case clamps to F_MAX
         with patch("mining_dashboard.service.algo_service.ENABLE_XVB", True):
             # Behind on both averages -> catch-up donates strictly more time than
             # when comfortably in tier (no binary "force full cycle" anymore).
@@ -108,14 +109,20 @@ class TestHelpers:
         # 2000 * 0.85 = 1700 >= 1000 -> threshold 1000
         assert algo._get_target_donation_hr(2_000) == 1_000
 
-    def test_lowest_default_targets_cheapest_tier(self, algo):
-        # Default donation level is "lowest" -> donor (1000) even with huge hashrate.
-        assert algo._get_target_donation_hr(1_000_000) == 1_000
+    def test_default_auto_targets_highest_sustainable(self, algo):
+        # Default donation level is "auto" -> highest sustainable tier.
+        # 1_000_000 * 0.85 = 850_000 -> Whale (100_000).
+        assert algo._get_target_donation_hr(1_000_000) == 100_000
 
     def test_auto_targets_highest_sustainable_tier(self, algo):
         algo.donation_level = "auto"
         # 15000 * 0.85 = 12750 -> highest sustainable is VIP (10000).
         assert algo._get_target_donation_hr(15_000) == 10_000
+
+    def test_explicit_tier_not_downgraded(self, algo):
+        # Explicitly choosing a tier above capacity is honored, not downgraded.
+        algo.donation_level = "mega"
+        assert algo._get_target_donation_hr(15_000) == 1_000_000
 
 
 class TestSwitchMiners:

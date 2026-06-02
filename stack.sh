@@ -614,9 +614,9 @@ render_env() {
     case "$xvb_donor" in
         ""|auto|DYNAMIC_ID) xvb_donor=$(echo "$MONERO_WALLET" | cut -c 1-8) ;;
     esac
-    # Donation tier target: lowest (default) / auto / donor|vip|whale|mega
+    # Donation tier target: auto (default) / donor|vip|whale|mega
     xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
-    [ -z "$xvb_donation_level" ] && xvb_donation_level="lowest"
+    [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 

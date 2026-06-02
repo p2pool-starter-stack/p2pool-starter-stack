@@ -154,15 +154,22 @@ def _configured_tier_threshold(tiers, donation_level):
 
 def resolve_target_threshold(tiers, stable_hr, donation_level, max_fraction):
     """
-    Resolves the donation tier threshold to aim for (H/s; 0 = donate nothing).
+    Resolves the donation tier to aim for. Returns ``(threshold_hs, sustainable)``.
 
-    Picks the highest tier the hashrate can sustain (leaving `max_fraction` head-
-    room for p2pool), then caps it by the configured `donation_level`. So "lowest"
-    targets the cheapest tier we can hold, "auto" targets the highest sustainable,
-    and a named/numeric level is honored but never exceeds what we can sustain.
+    "auto"/"highest" targets the highest tier the hashrate can sustain (leaving
+    `max_fraction` headroom for p2pool); the threshold is 0 when none is
+    sustainable (donate nothing). A specific tier ("donor"/"vip"/"whale"/"mega" or
+    a numeric H/s) is honored as-is and is NOT downgraded — a user may deliberately
+    target a tier above their capacity, in which case `sustainable` is False so the
+    dashboard can warn.
     """
-    _, sustainable = get_tier_info(stable_hr * max_fraction, tiers)
-    if sustainable <= 0:
-        return 0.0
-    configured = _configured_tier_threshold(tiers, donation_level)
-    return min(configured, sustainable)
+    _, sustainable_threshold = get_tier_info(stable_hr * max_fraction, tiers)
+
+    level = (donation_level or "auto").strip().lower()
+    if level in ("auto", "highest"):
+        target = sustainable_threshold
+    else:
+        target = _configured_tier_threshold(tiers, level)
+
+    sustainable = target > 0 and (stable_hr * max_fraction) >= target
+    return target, sustainable

@@ -74,7 +74,7 @@ Your workers connect to a **single endpoint**: the `xmrig-proxy` service on port
 
 ### Decision Engine
 The Dashboard service contains the decision engine. It constantly monitors your total hashrate and the XMRvsBeast pool's status:
-1.  **Tier Targeting:** It picks the XMRvsBeast donation tier to aim for, set by `xvb.donation_level` — `lowest` (default: minimal donation, most hashrate stays on P2Pool), `auto` (the highest tier your hashrate can sustain), or a specific tier. Because the XvB raffle picks winners at random, donating *above* a tier's threshold earns nothing, so the engine donates only enough to hold the tier.
+1.  **Tier Targeting:** It picks the XMRvsBeast donation tier to aim for, set by `xvb.donation_level` — `auto` (default: the highest tier your hashrate can sustain) or a specific tier (`donor`/`vip`/`whale`/`mega`). A specific tier is honored even if your hashrate is too low to hold it (the dashboard shows a warning badge then). Because the XvB raffle picks winners at random, donating *above* a tier's threshold earns nothing, so the engine donates only enough to hold the tier.
 2.  **Dynamic Proxy Reconfiguration:** Using a feedback controller on your measured 1h/24h donation averages, the engine reconfigures the `xmrig-proxy` to send just enough time to **XMRvsBeast** to stay in tier and the rest to **P2Pool** (Monero + Tari mining) — ramping donation up when it falls behind. This happens seamlessly without any changes on your workers.
 
 ## 🚀 Getting Started
@@ -179,7 +179,7 @@ keys you want to override.
 | `xvb.enabled` | `true` | Enable XMRvsBeast bonus-round hashrate switching. |
 | `xvb.url` | `na.xmrvsbeast.com:4247` | XMRvsBeast pool endpoint. |
 | `xvb.donor_id` | `auto` | XvB donor id. `auto` = the first 8 characters of your Monero address. |
-| `xvb.donation_level` | `lowest` | Donation tier to target: `lowest` (minimal donation, most hashrate to P2Pool), `auto`/`highest` (highest tier your hashrate can sustain), or a specific tier (`donor`/`vip`/`whale`/`mega`). |
+| `xvb.donation_level` | `auto` | Donation tier to target: `auto` (highest tier your hashrate can sustain) or a specific tier (`donor`/`vip`/`whale`/`mega`). A specific tier is honored even if your hashrate can't hold it — the dashboard shows a warning badge in that case. |
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `*.data_dir` | `auto` | Per-service data directory. `auto` = `./data/<service>`. |

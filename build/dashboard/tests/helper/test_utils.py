@@ -88,28 +88,30 @@ class TestResolveTargetThreshold:
     TIERS = {"donor_mega": 1_000_000, "donor_whale": 100_000,
              "donor_vip": 10_000, "donor": 1_000}
 
-    def test_lowest_picks_cheapest_tier(self):
-        # Plenty of hashrate, but "lowest" still targets the cheapest tier.
-        assert resolve_target_threshold(self.TIERS, 1_000_000, "lowest", 0.85) == 1_000
-
     def test_auto_picks_highest_sustainable(self):
         # 15_000 * 0.85 = 12_750 -> VIP (10_000) is the highest we can hold.
-        assert resolve_target_threshold(self.TIERS, 15_000, "auto", 0.85) == 10_000
-        assert resolve_target_threshold(self.TIERS, 15_000, "highest", 0.85) == 10_000
+        assert resolve_target_threshold(self.TIERS, 15_000, "auto", 0.85) == (10_000, True)
+        assert resolve_target_threshold(self.TIERS, 15_000, "highest", 0.85) == (10_000, True)
 
-    def test_named_tier(self):
-        assert resolve_target_threshold(self.TIERS, 1_000_000, "whale", 0.85) == 100_000
-        assert resolve_target_threshold(self.TIERS, 1_000_000, "vip", 0.85) == 10_000
+    def test_auto_zero_when_nothing_sustainable(self):
+        assert resolve_target_threshold(self.TIERS, 100, "auto", 0.85) == (0.0, False)
 
-    def test_named_tier_capped_by_sustainable(self):
-        # Request Mega but can only sustain VIP -> capped down to VIP.
-        assert resolve_target_threshold(self.TIERS, 15_000, "mega", 0.85) == 10_000
+    def test_named_tier_honored(self):
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "whale", 0.85) == (100_000, True)
+        assert resolve_target_threshold(self.TIERS, 1_000_000, "vip", 0.85) == (10_000, True)
 
-    def test_cannot_sustain_any_tier_returns_zero(self):
-        assert resolve_target_threshold(self.TIERS, 100, "lowest", 0.85) == 0.0
+    def test_named_tier_not_downgraded_but_flagged_unsustainable(self):
+        # Request Mega with only 50k -> honored (1M) but flagged not sustainable.
+        assert resolve_target_threshold(self.TIERS, 50_000, "mega", 0.85) == (1_000_000, False)
+
+    def test_cannot_sustain_named_tier_is_flagged(self):
+        # VIP needs 10k; 5k * 0.85 = 4250 < 10k -> honored but not sustainable.
+        assert resolve_target_threshold(self.TIERS, 5_000, "vip", 0.85) == (10_000, False)
 
     def test_numeric_level_honored(self):
-        assert resolve_target_threshold(self.TIERS, 1_000_000, "5000", 0.85) == 5_000
+        target, sustainable = resolve_target_threshold(self.TIERS, 1_000_000, "5000", 0.85)
+        assert target == 5_000 and sustainable is True
 
     def test_unknown_level_falls_back_to_lowest(self):
-        assert resolve_target_threshold(self.TIERS, 1_000_000, "bogus", 0.85) == 1_000
+        target, _ = resolve_target_threshold(self.TIERS, 1_000_000, "bogus", 0.85)
+        assert target == 1_000

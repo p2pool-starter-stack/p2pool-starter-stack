@@ -148,13 +148,14 @@ class AlgoService:
     def _get_target_donation_hr(self, stable_hr):
         """
         Resolves the donation tier threshold to target for the given (stable)
-        hashrate: the highest tier we can sustain (leaving p2pool headroom),
-        capped by the configured donation level. Returns 0 to donate nothing.
+        hashrate. "auto" picks the highest sustainable tier; an explicit tier is
+        honored as-is (not downgraded). Returns 0 to donate nothing.
         """
         tiers = self.state_manager.get_tiers()
-        return resolve_target_threshold(
+        target, _ = resolve_target_threshold(
             tiers, stable_hr, self.donation_level, self.max_donation_fraction
         )
+        return target
 
     def _get_needed_time(self, current_hr, target_hr, avg_1h=0, avg_24h=0):
         """

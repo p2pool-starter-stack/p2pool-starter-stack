@@ -160,6 +160,32 @@ class TestAlgoContextColors:
         assert "Disabled" in ctx["mode_name"]
 
 
+class TestLowHashrateWarning:
+    def _ctx(self, monkeypatch, level, total_hr):
+        monkeypatch.setattr(server, "XVB_DONATION_LEVEL", level)
+        sm = StateManager(db_path=":memory:")
+        sm.update_xvb_stats(mode="P2POOL")
+        try:
+            return server._get_algo_context({"total_live_h15": total_hr}, sm, [])
+        finally:
+            sm.close()
+
+    def test_warns_when_selected_tier_unsustainable(self, monkeypatch):
+        # 50k can't sustain Mega (1M) -> warning badge.
+        ctx = self._ctx(monkeypatch, "mega", 50_000)
+        assert ctx["low_hr_badge"]
+
+    def test_no_warning_for_auto(self, monkeypatch):
+        # auto only ever targets a sustainable tier -> no warning.
+        ctx = self._ctx(monkeypatch, "auto", 50_000)
+        assert ctx["low_hr_badge"] == ""
+
+    def test_no_warning_when_sustainable(self, monkeypatch):
+        # 50k easily sustains Donor (1k) -> no warning.
+        ctx = self._ctx(monkeypatch, "donor", 50_000)
+        assert ctx["low_hr_badge"] == ""
+
+
 class TestHelpers:
     def test_get_cached_template_returns_str(self):
         assert isinstance(get_cached_template(), str)

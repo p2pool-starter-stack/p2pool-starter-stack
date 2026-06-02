@@ -17,7 +17,7 @@ class TestConfig:
     def test_defaults_load(self):
         import mining_dashboard.config.config as cfg
         assert cfg.XMRIG_API_PORT == 8080
-        assert cfg.XVB_DONATION_LEVEL == "lowest"
+        assert cfg.XVB_DONATION_LEVEL == "auto"
         assert cfg.XVB_MAX_DONATION_FRACTION == 0.85
         assert isinstance(cfg.TIER_DEFAULTS, dict)
         assert cfg.TIER_DEFAULTS["donor_mega"] == 1_000_000
