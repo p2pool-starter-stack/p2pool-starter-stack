@@ -1,4 +1,5 @@
 import aiohttp
+import asyncio
 import logging
 import re
 import struct
@@ -6,8 +7,12 @@ import json
 import aiofiles
 
 from mining_dashboard.config.config import DOCKER_PROXY_URL, LOG_TAIL_LINES, DOCKER_TIMEOUT, NETWORK_STATS_PATH, MONERO_NODE_HOST
+from mining_dashboard.client.monero.monero_client import MoneroClient
 
 logger = logging.getLogger("LogCollector")
+
+# Stateless client reused across cycles; reads monerod's get_info RPC (Issue #29).
+_monero_client = MoneroClient()
 
 async def fetch_docker_logs(container_name, tail=None):
     """
@@ -110,6 +115,21 @@ async def _get_remote_monero_sync_status():
         return {"is_syncing": False}
 
 async def _get_local_monero_sync_status():
+    """
+    Sync status for a local monerod.
+
+    Prefers monerod's get_info RPC (format-stable, Issue #29); the RPC runs in a thread
+    because the client is synchronous (requests + digest auth). Falls back to scraping
+    docker logs when the RPC is unreachable — e.g. creds not plumbed into the dashboard
+    env, or monerod briefly down — so this is never worse than the previous behaviour.
+    """
+    rpc_status = await asyncio.to_thread(_monero_client.get_sync_status)
+    if rpc_status is not None:
+        return rpc_status
+    return await _get_monero_sync_status_from_logs()
+
+
+async def _get_monero_sync_status_from_logs():
     """
     Parses local monerod docker logs to determine if the node is currently syncing.
 

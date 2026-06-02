@@ -10,7 +10,7 @@ dashboard (behind Caddy) on `127.0.0.1:8000`.
 mining_dashboard/
 ├── main.py            # entry point: build_app() wires everything; `python -m mining_dashboard.main`
 ├── config/            # configuration from environment variables
-├── client/            # external service clients (xmrig, xmrig-proxy, xvb, tari gRPC)
+├── client/            # external service clients (xmrig, xmrig-proxy, xvb, tari gRPC, monerod RPC)
 ├── collector/         # local stats collectors (pools, system, docker logs)
 ├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite)
 ├── web/               # aiohttp server + HTML template + static assets

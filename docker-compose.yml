@@ -202,6 +202,11 @@ services:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       - TZ=${TZ:-America/Chicago}
       - MONERO_NODE_HOST=${MONERO_NODE_HOST:-172.28.0.26}
+      # monerod get_info RPC creds (Issue #29): the dashboard reads sync height/target over
+      # 127.0.0.1:18081 (reachable via network_mode: host) using digest auth, instead of
+      # scraping docker logs. Only used for a local node; harmless for remote-node setups.
+      - MONERO_NODE_USERNAME=${MONERO_NODE_USERNAME}
+      - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
       - XVB_ENABLED=${XVB_ENABLED}
