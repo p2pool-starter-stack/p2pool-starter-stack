@@ -2,10 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import mining_dashboard.web.server as server
-from mining_dashboard.web.server import (
-    create_app, get_cached_template, _apply_security_headers,
-)
+from mining_dashboard.web.server import create_app, _apply_security_headers
 from mining_dashboard.service.storage_service import StateManager
 
 
@@ -115,16 +112,7 @@ class TestErrorHandling:
         assert "X-Frame-Options" in resp.headers  # headers still applied
 
 
-class TestHelpers:
-    def test_get_cached_template_returns_str(self):
-        assert isinstance(get_cached_template(), str)
-        assert len(get_cached_template()) > 0
-
-    def test_template_error_fallback(self, monkeypatch):
-        server._TEMPLATE_CACHE = None
-        monkeypatch.setattr(server.os.path, "getmtime", lambda p: (_ for _ in ()).throw(OSError()))
-        assert get_cached_template() == "<h1>Template Error</h1>"
-
+class TestSecurityHeaders:
     def test_apply_security_headers(self):
         resp = MagicMock()
         resp.headers = {}
