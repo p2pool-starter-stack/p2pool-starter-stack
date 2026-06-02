@@ -214,10 +214,10 @@
                 <div class="stat-card"><h5>Total Hashrate</h5><p class="text-accent">{total_hr}</p></div>
                 <div class="stat-card"><h5>Share In Window</h5><p>{pool_shares_window}</p></div>
                 <div class="stat-card"><h5>Last Share</h5><p>{strat_last_share}</p></div>
-                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p>{p2p_1h}</p></div>
-                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p>{p2p_24h}</p></div>
-                <div class="stat-card"><h5>XvB 1h Avg</h5><p>{xvb_1h}</p></div>
-                <div class="stat-card"><h5>XvB 24h Avg</h5><p>{xvb_24h}</p></div>
+                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p style="color:{p2p_color}">{p2p_1h}</p></div>
+                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p style="color:{p2p_color}">{p2p_24h}</p></div>
+                <div class="stat-card"><h5>XvB 1h Avg</h5><p style="color:{xvb_color}">{xvb_1h}</p></div>
+                <div class="stat-card"><h5>XvB 24h Avg</h5><p style="color:{xvb_color}">{xvb_24h}</p></div>
                 <div class="stat-card"><h5>Current Tier</h5><p>{tier_name}</p></div>
                 <div class="stat-card"><h5>Target Tier</h5><p>{target_tier_name}</p></div>
                 <div class="stat-card"><h5>Tari Mining</h5><p class="{tari_status_class}">{tari_status}</p></div>
@@ -232,8 +232,8 @@
             <div class="stat-grid">
                 <div class="stat-card"><h5>Mining Mode</h5><p style="color:{mode_color}">{mode_name}</p></div>
                 <div class="stat-card"><h5>Total Hashrate</h5><p class="text-accent">{total_hr}</p></div>
-                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p>{p2p_1h}</p></div>
-                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p>{p2p_24h}</p></div>
+                <div class="stat-card"><h5>P2Pool 1h Avg</h5><p style="color:{p2p_color}">{p2p_1h}</p></div>
+                <div class="stat-card"><h5>P2Pool 24h Avg</h5><p style="color:{p2p_color}">{p2p_24h}</p></div>
                 
                 <div class="stat-card col-span-2">
                     <h5>Stratum (15m / 1h / 24h)</h5>
@@ -273,8 +273,8 @@
             <div class="stat-grid">
                 <div class="stat-card"><h5>Current Tier</h5><p>{tier_name}</p></div>
                 <div class="stat-card"><h5>Target Tier</h5><p>{target_tier_name}</p></div>
-                <div class="stat-card"><h5>1h Avg (Pool)</h5><p>{xvb_1h}</p></div>
-                <div class="stat-card"><h5>24h Avg (Pool)</h5><p>{xvb_24h}</p></div>
+                <div class="stat-card"><h5>1h Avg (Pool)</h5><p style="color:{xvb_color}">{xvb_1h}</p></div>
+                <div class="stat-card"><h5>24h Avg (Pool)</h5><p style="color:{xvb_color}">{xvb_24h}</p></div>
                 <div class="stat-card"><h5>Fail Count</h5><p>{xvb_fail_count}</p></div>
             </div>
             <div class="text-xs text-muted" style="margin-top:10px;">Stats fetched from xmrvsbeast.com (Updated: {xvb_updated})</div>
