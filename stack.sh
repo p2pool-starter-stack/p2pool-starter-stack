@@ -396,6 +396,54 @@ check_prerequisites() {
     log "All dependencies satisfied."
 }
 
+# Placeholder credentials shipped in config.json.template / config.advanced.example.json. We
+# treat them like empty values so a user who copies the template but never edits the node creds
+# still gets real, auto-generated ones (rather than working-but-predictable defaults).
+readonly PLACEHOLDER_NODE_USER="create_a_username_for_node"
+readonly PLACEHOLDER_NODE_PASS="create_a_password_for_node"
+
+# --- Local node RPC credential generation ---
+# These creds are internal to the stack (only monerod, p2pool and the dashboard use them), so we
+# generate them rather than asking the user to invent some. Security rests on the random password;
+# the username is just a label.
+
+# Default username for the local node's RPC.
+default_node_username() { printf '%s' "admin"; }
+
+# A random alphanumeric password. Alphanumeric only: special characters (':', '#', ...) break the
+# rpc-login=user:pass form rendered into bitmonero.conf, so we strip everything but [A-Za-z0-9].
+# 32 chars from openssl is ~190 bits of entropy. No `head` in the pipe (it would SIGPIPE openssl
+# under `set -o pipefail`); we over-generate and truncate in the shell instead.
+generate_node_password() {
+    local raw
+    raw=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9')
+    printf '%s' "${raw:0:32}"
+}
+
+# A stored local-node credential needs (re)generating when it is empty or still the shipped
+# template placeholder (an instruction string, not a real secret). Used in `if` conditions.
+cred_needs_generating() {
+    local value="$1" placeholder="$2"
+    [ -z "$value" ] || [ "$value" == "$placeholder" ]
+}
+
+# Persist the (possibly just-generated) local node RPC credentials back into config.json so they
+# stay stable across re-runs / `apply` and the user can see what was set for them. Atomic (write a
+# sibling temp file, then mv) and keeps config.json owner-only. Best-effort: a save failure warns
+# rather than aborting, since the in-memory creds still make this run work.
+persist_node_credentials() {
+    local user="$1" pass="$2" tmp="${CONFIG_FILE}.tmp"
+    if jq --arg u "$user" --arg p "$pass" \
+          '.monero.node_username = $u | .monero.node_password = $p' \
+          "$CONFIG_FILE" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    else
+        rm -f "$tmp"
+        warn "Could not write generated node credentials back to $CONFIG_FILE (they'll work for this run but may change on the next one)."
+    fi
+}
+
 ensure_config_exists() {
     [ -f "$CONFIG_FILE" ] && return 0
 
@@ -419,12 +467,13 @@ ensure_config_exists() {
 
     if [[ ! "$USE_LOCAL" =~ ^[Nn] ]]; then
         echo "Local node selected."
-        # The local node's RPC credentials are internal to the stack (only p2pool, monerod and
-        # the dashboard use them), so we generate them rather than asking you to invent some.
-        # They're stored in config.json / .env if you ever need them (e.g. to attach a wallet).
-        local IN_MONERO_USER="monero"
-        local IN_MONERO_PASS
-        IN_MONERO_PASS=$(openssl rand -hex 16)
+        # The local node's RPC credentials are internal to the stack, so we generate them rather
+        # than asking you to invent some. They're stored in config.json / .env if you ever need
+        # them (e.g. to attach a wallet). The same helpers back the auto-fill in
+        # parse_and_validate_config, so every path produces the same kind of creds.
+        local IN_MONERO_USER IN_MONERO_PASS
+        IN_MONERO_USER=$(default_node_username)
+        IN_MONERO_PASS=$(generate_node_password)
         log "Generated internal Monero node RPC credentials (saved in $CONFIG_FILE)."
         cat <<EOF > "$CONFIG_FILE"
 {
@@ -529,6 +578,25 @@ parse_and_validate_config() {
 
     MONERO_USER=$(jq -r '.monero.node_username // empty' "$CONFIG_FILE")
     MONERO_PASS=$(jq -r '.monero.node_password // empty' "$CONFIG_FILE")
+
+    # A local node always needs working RPC creds. If they're missing — empty, or still the
+    # template placeholder — generate them and persist back to config.json, so an unedited/partial
+    # config never produces a broken "rpc-login=:" and the creds stay stable across `apply`.
+    # Remote mode is left untouched: empty creds there mean "no auth", and we can't invent
+    # credentials for someone else's node.
+    if [ "$MONERO_MODE" == "local" ]; then
+        local creds_generated=0
+        if cred_needs_generating "$MONERO_USER" "$PLACEHOLDER_NODE_USER"; then
+            MONERO_USER=$(default_node_username); creds_generated=1
+        fi
+        if cred_needs_generating "$MONERO_PASS" "$PLACEHOLDER_NODE_PASS"; then
+            MONERO_PASS=$(generate_node_password); creds_generated=1
+        fi
+        if [ "$creds_generated" -eq 1 ]; then
+            persist_node_credentials "$MONERO_USER" "$MONERO_PASS"
+            log "Auto-generated missing local Monero node RPC credentials (saved in $CONFIG_FILE)."
+        fi
+    fi
 
     # Resolve data directories ("auto"/empty/legacy DYNAMIC_DATA → the stack default under ./data)
     MONERO_DIR=$(resolve_default "$(jq -r '.monero.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/monero")

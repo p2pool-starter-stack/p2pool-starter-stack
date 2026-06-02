@@ -78,6 +78,17 @@ assert_eq "env_get_file value with ="     "$(run_sourced "$SANDBOX" env_get_file
 changed="$(run_sourced "$SANDBOX" env_changed_keys "$SANDBOX/old.env" "$SANDBOX/new.env" | sort | tr '\n' ' ')"
 assert_eq "env_changed_keys finds B and C" "$changed" "B C "
 
+echo "== unit: node credential helpers =="
+assert_eq "default username is admin" "$(run_sourced "$SANDBOX" default_node_username)" "admin"
+PW="$(run_sourced "$SANDBOX" generate_node_password)"
+assert_eq "generated password is 32 chars"   "${#PW}" "32"
+assert_eq "generated password is alphanumeric" "$(printf '%s' "$PW" | tr -dc 'A-Za-z0-9')" "$PW"
+PW2="$(run_sourced "$SANDBOX" generate_node_password)"
+if [ "$PW" != "$PW2" ]; then ok "two generations differ"; else bad "two generations differ" "both were [$PW]"; fi
+run_sourced "$SANDBOX" cred_needs_generating "" "PLACE";      assert_rc "empty needs generating"       "$?" "0"
+run_sourced "$SANDBOX" cred_needs_generating "PLACE" "PLACE"; assert_rc "placeholder needs generating" "$?" "0"
+run_sourced "$SANDBOX" cred_needs_generating "real" "PLACE";  assert_rc "real value kept"              "$?" "1"
+
 # ---------------------------------------------------------------------------
 echo "== black-box: CLI dispatch =="
 "$STACK" help >/dev/null 2>&1; assert_rc "help exits 0" "$?" "0"
@@ -131,6 +142,29 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
 assert_eq "tari_required propagated false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
+
+echo "== black-box: local node creds auto-generated + persisted (#50) =="
+# A local node with BLANK creds: apply must generate them, write them into .env AND back into
+# config.json, and keep them stable on a second apply (don't regenerate every run).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"","node_password":""}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
+assert_contains "auto-gen is logged" "$out" "Auto-generated missing local"
+env_pass="$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_PASSWORD)"
+assert_eq "blank username -> admin in .env" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_USERNAME)" "admin"
+assert_eq "generated password is 32 chars"  "${#env_pass}" "32"
+assert_eq "username persisted to config.json" "$(jq -r '.monero.node_username' "$V/config.json")" "admin"
+assert_eq "password persisted to config.json" "$(jq -r '.monero.node_password' "$V/config.json")" "$env_pass"
+# Second apply must not rotate the now-populated creds.
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
+assert_eq "password stable across apply" "$(jq -r '.monero.node_password' "$V/config.json")" "$env_pass"
+
+# A REMOTE node with blank creds means "no auth" — leave it empty, don't invent credentials.
+seed_env
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","node_password":"","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./stack.sh apply -y 2>&1)"
+assert_eq "remote username left blank" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_USERNAME)" ""
+assert_eq "remote creds not persisted" "$(jq -r '.monero.node_username' "$V/config.json")" ""
 
 echo "== black-box: status health check =="
 # A docker stub driven by FAKE_STATES ("svc=state:health ..."; state "missing" = no container)
