@@ -1,0 +1,25 @@
+# Documentation
+
+Everything you need to run, configure, and operate the **P2Pool Starter Stack**.
+
+New here? Start with the [Getting Started](getting-started.md) guide — it takes you from a
+fresh Ubuntu machine to a synced, mining stack in a handful of commands. The other guides go
+deeper on individual topics once you're up and running.
+
+## Guides
+
+| Guide | What it covers |
+|---|---|
+| [Getting Started](getting-started.md) | Prerequisites, installation, first-run setup, and what to expect while the node syncs. |
+| [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, **reusing an existing node via data directories**, and connecting to a **remote Monero node**. |
+| [The Dashboard](dashboard.md) | **Sync Mode**, the live operational view, and how to read every panel. |
+| [Adding Workers](workers.md) | Pointing any XMRig rig at the stack, plus the high-performance worker provisioning kit. |
+| [Architecture](architecture.md) | The eight services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
+| [Operations & Maintenance](operations.md) | The full `stack.sh` command reference, upgrades, backups, and troubleshooting. |
+
+## Quick links
+
+- **Just want to start mining?** → [Getting Started](getting-started.md)
+- **Change a setting?** → [Configuration › Changing settings later](configuration.md#changing-settings-later)
+- **Already have a synced Monero node?** → [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node)
+- **Something's not working?** → [Operations › Troubleshooting](operations.md#troubleshooting)
