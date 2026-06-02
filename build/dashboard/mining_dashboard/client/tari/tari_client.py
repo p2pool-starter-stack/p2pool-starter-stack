@@ -4,7 +4,7 @@ import grpc
 import os
 import time
 
-from config.config import TARI_GRPC_ADDRESS
+from mining_dashboard.config.config import TARI_GRPC_ADDRESS
 
 logger = logging.getLogger("TariClient")
 

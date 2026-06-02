@@ -1,6 +1,6 @@
 import shutil
 import os
-from config.config import DISK_PATH
+from mining_dashboard.config.config import DISK_PATH
 
 BYTES_IN_GB = 1024 ** 3
 

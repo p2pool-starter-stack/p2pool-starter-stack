@@ -5,8 +5,8 @@ import logging
 import bisect
 import json
 from aiohttp import web
-from config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
-from helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
+from mining_dashboard.config.config import HOST_IP, BLOCK_PPLNS_WINDOW_MAIN, ENABLE_XVB
+from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs, get_tier_info
 
 logger = logging.getLogger("WebServer")
 

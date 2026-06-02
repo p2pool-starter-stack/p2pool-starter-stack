@@ -1,5 +1,5 @@
 import time
-from config.config import TIER_DEFAULTS
+from mining_dashboard.config.config import TIER_DEFAULTS
 
 def parse_hashrate(val_str, unit_str=None):
     """

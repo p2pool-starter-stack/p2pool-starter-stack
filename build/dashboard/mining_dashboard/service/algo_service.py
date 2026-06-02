@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import math
-from config.config import (
+from mining_dashboard.config.config import (
     XVB_TIME_ALGO_MS, 
     MONERO_WALLET_ADDRESS, 
     XVB_DONOR_ID,
@@ -13,7 +13,7 @@ from config.config import (
     ALGO_TARGET_BUFFER,
     XVB_SWITCH_OVERHEAD_MS
 )
-from helper.utils import get_tier_info
+from mining_dashboard.helper.utils import get_tier_info
 
 logger = logging.getLogger("AlgoService")
 

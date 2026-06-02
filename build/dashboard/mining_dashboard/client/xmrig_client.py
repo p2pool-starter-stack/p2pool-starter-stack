@@ -1,5 +1,5 @@
 import logging
-from config.config import XMRIG_API_PORT, PROXY_API_PORT, PROXY_AUTH_TOKEN, API_TIMEOUT
+from mining_dashboard.config.config import XMRIG_API_PORT, PROXY_API_PORT, PROXY_AUTH_TOKEN, API_TIMEOUT
 
 class XMRigWorkerClient:
     def __init__(self, session):
