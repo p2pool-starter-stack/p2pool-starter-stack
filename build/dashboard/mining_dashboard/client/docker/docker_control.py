@@ -29,17 +29,21 @@ class DockerControl:
         self.base_url = base.rstrip("/")
         self.timeout = timeout
 
-    async def stop(self, container, stop_timeout=10):
-        """Stop a container. Returns True on success (incl. already-stopped)."""
-        return await self._post(f"/containers/{container}/stop", params={"t": stop_timeout},
-                                action="stop", container=container)
+    async def stop(self, container, stop_timeout=10, quiet=False):
+        """Stop a container. Returns True on success (incl. already-stopped).
 
-    async def start(self, container):
+        `quiet` logs success at debug instead of info — used by the sync-gate hold (#35),
+        which re-asserts the stop every cycle and would otherwise flood the log for hours.
+        """
+        return await self._post(f"/containers/{container}/stop", params={"t": stop_timeout},
+                                action="stop", container=container, quiet=quiet)
+
+    async def start(self, container, quiet=False):
         """Start a container. Returns True on success (incl. already-running)."""
         return await self._post(f"/containers/{container}/start", params=None,
-                                action="start", container=container)
+                                action="start", container=container, quiet=quiet)
 
-    async def _post(self, path, params, action, container):
+    async def _post(self, path, params, action, container, quiet=False):
         url = f"{self.base_url}{path}"
         try:
             async with aiohttp.ClientSession() as session:
@@ -47,7 +51,8 @@ class DockerControl:
                     # 204 No Content = done; 304 Not Modified = already in that state
                     # (Docker's idempotent response) — both are success for us.
                     if resp.status in (204, 304):
-                        logger.info(f"Container {container} {action}: ok (HTTP {resp.status})")
+                        log = logger.debug if quiet else logger.info
+                        log(f"Container {container} {action}: ok (HTTP {resp.status})")
                         return True
                     body = await resp.text()
                     logger.error(f"Container {container} {action} failed: HTTP {resp.status} {body[:200]}")

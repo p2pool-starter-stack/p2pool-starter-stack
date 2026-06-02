@@ -221,10 +221,12 @@ services:
       - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
       - DOCKER_CONTROL_URL=tcp://172.28.0.31:2375
       - TARI_GRPC_ADDRESS=172.28.0.27:18142
-      # Reject workers when a required node is down so miners fail over to backups (Issue #31).
-      # Per-node, both default on; tune via dashboard.reject_workers_on_*_down in config.json.
-      - REJECT_WORKERS_ON_MONERO_DOWN=${REJECT_WORKERS_ON_MONERO_DOWN:-true}
-      - REJECT_WORKERS_ON_TARI_DOWN=${REJECT_WORKERS_ON_TARI_DOWN:-true}
+      # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
+      # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
+      # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the
+      # miner waits for Tari's sync, and whether a Tari-only sync takes over the dashboard
+      # (Issue #51). Set dashboard.tari_required:false to make Tari non-blocking.
+      - TARI_REQUIRED=${TARI_REQUIRED:-true}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.
@@ -244,11 +246,12 @@ services:
         ipv4_address: 172.28.0.30
 
   # --- Docker Control Proxy (start/stop only) ---
-  # A second, minimal proxy used ONLY to stop/start xmrig-proxy for node-down worker
-  # failover (Issue #31). With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left
-  # off, the v0.4.2 ruleset allows exactly `POST /containers/<id>/{start,stop}` and denies
-  # everything else (create/kill/exec/reads). Kept separate from the read-only proxy above
-  # so opening POST here can't widen that proxy's container access. (Reused later for #35.)
+  # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
+  # failover (Issue #31) and holding the miner until the nodes finish syncing (Issue #35).
+  # With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left off, the v0.4.2 ruleset
+  # allows exactly `POST /containers/<id>/{start,stop}` and denies everything else
+  # (create/kill/exec/reads). Kept separate from the read-only proxy above so opening POST
+  # here can't widen that proxy's container access.
   docker-control:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-control

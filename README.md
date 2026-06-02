@@ -59,7 +59,8 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 
 1. **Open the dashboard** at `https://<your-hostname>` (the script prints the exact URL).
 2. **Let it sync.** On first boot the dashboard shows **Sync Mode** while your Monero and Tari
-   nodes catch up to the network — it switches to the live view automatically once synced.
+   nodes catch up to the network — it switches to the live view automatically once synced. p2pool
+   and the proxy stay parked until then, so the sync logs stay clean.
 3. **Add a worker** by pointing any [XMRig](https://github.com/xmrig/xmrig) rig at
    `YOUR_STACK_IP:3333`. No wallet address needed in the worker config.
 

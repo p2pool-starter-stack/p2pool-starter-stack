@@ -72,6 +72,35 @@ class TestIndexRoute:
         assert "Tari DOWN" not in html
         assert "Workers rejected" in html
 
+    async def test_passive_tari_syncing_badge_rendered(self, aiohttp_client):
+        # Non-blocking Tari (Issue #51): the operational view stays up and shows a top-bar
+        # "Tari syncing" badge with the live percentage instead of the Sync-Mode takeover.
+        data = {
+            "shares": [], "workers": [], "global_sync": False,
+            "monero_sync": {"percent": 100, "current": 10, "target": 10},
+            "tari_sync": {"percent": 42, "current": 42, "target": 100, "is_syncing": True},
+            "tari_syncing_passive": True,
+        }
+        sm = StateManager(db_path=":memory:")
+        cli = await aiohttp_client(create_app(sm, data))
+        html = await (await cli.get("/")).text()
+        sm.close()
+        assert "Tari syncing 42%" in html
+
+    async def test_no_passive_tari_badge_when_not_syncing(self, aiohttp_client):
+        # Default (Tari synced / blocking): no passive badge in the operational view.
+        data = {
+            "shares": [], "workers": [], "global_sync": False,
+            "monero_sync": {"percent": 100, "current": 10, "target": 10},
+            "tari_sync": {"percent": 100, "current": 10, "target": 10},
+            "tari_syncing_passive": False,
+        }
+        sm = StateManager(db_path=":memory:")
+        cli = await aiohttp_client(create_app(sm, data))
+        html = await (await cli.get("/")).text()
+        sm.close()
+        assert "Tari syncing" not in html
+
 
 class TestErrorHandling:
     async def test_render_error_is_sanitized(self, aiohttp_client, app_data):
