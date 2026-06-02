@@ -137,12 +137,15 @@ assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PRO
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
 assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
-# tari.mem_limit absent => "auto" scales the cap to host RAM, clamped to 2048-4096 MB.
+# tari.mem_limit absent => "auto" is a safety ceiling: host RAM minus a >=2 GB reserve, floored at
+# 2048m. Assert it ends in 'm', is >= the 2048m floor, and never exceeds physical RAM.
 mem="$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)"
+host_ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
 case "$mem" in
     *m) n="${mem%m}"
-        if [ "$n" -ge 2048 ] && [ "$n" -le 4096 ]; then ok "tari mem auto within 2048-4096m ($mem)"
-        else bad "tari mem auto within 2048-4096m" "got [$mem]"; fi ;;
+        if [ "$n" -ge 2048 ] && { [ "$host_ram_mb" -le 0 ] || [ "$n" -le "$host_ram_mb" ]; }
+        then ok "tari mem auto is a sane ceiling ($mem, host ${host_ram_mb}m)"
+        else bad "tari mem auto sane ceiling" "got [$mem] on ${host_ram_mb}m host"; fi ;;
     *) bad "tari mem auto has m suffix" "got [$mem]" ;;
 esac
 

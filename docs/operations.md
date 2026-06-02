@@ -99,13 +99,20 @@ If a node looks genuinely stalled (no new blocks over a long period), restart it
 blockchain or a remote node — see
 [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
-**Tari keeps restarting / its memory climbs and then it bounces.**
-Expected on small hosts. The Tari container has a hard memory cap (`tari.mem_limit`, `auto` by
-default) so its slow, unbounded memory growth can't pressure the whole machine — it OOM-restarts
-cleanly while Monero and P2Pool keep mining throughout. If it restarts often enough to hurt merge
-mining, or it OOM-loops during its **initial** sync (the cap is too low to finish syncing), raise
-it — e.g. `"tari": { "mem_limit": "4g" }` — and run `./stack.sh apply`. See
-[Configuration reference](configuration.md#configuration-reference).
+**Tari is using a lot of RAM, or keeps restarting.**
+Both can be normal. Tari's memory grows over time (it's commonly seen using 10+ GB) — that by
+itself isn't a problem as long as the host has headroom (`free -h`, `docker stats`). To stop a
+*runaway* from taking the whole machine down, the Tari container has a **safety ceiling**
+(`tari.mem_limit`, `auto` by default ≈ 75% of host RAM); if Tari ever hits it, it restarts cleanly
+on its own while Monero and P2Pool keep mining.
+
+- **Tari restarts too often** — the ceiling is below Tari's real working set. Raise it, e.g.
+  `"tari": { "mem_limit": "16g" }`, then `./stack.sh apply`.
+- **You want to reserve more RAM for other apps on the box** — lower it, e.g.
+  `"tari": { "mem_limit": "6g" }`, then `./stack.sh apply`. Set it too low and Tari may OOM-loop
+  (restart repeatedly, never finishing its initial sync) — give it more.
+
+See [Configuration reference](configuration.md#configuration-reference).
 
 **Browser warns "your connection is not private."**
 Expected with `dashboard.secure: true` — Caddy uses a self-signed certificate. Accept the

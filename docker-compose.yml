@@ -71,14 +71,16 @@ services:
     stop_grace_period: 1m
     logging: *default-logging
     # Tari's memory grows unbounded over time (#55, first reported in #14); left uncapped it can
-    # pressure or OOM the whole host on small (e.g. 16 GB) machines. Cap it so it OOM-restarts
-    # cleanly instead of dragging the stack down — monerod/p2pool keep mining throughout. These
-    # are the legacy keys on purpose: deploy.resources has no swap field, and memswap_limit equal
-    # to mem_limit means zero swap => clean OOM-kill, no disk thrash. (Capping swap needs
-    # swapaccount=1 on older cgroup-v1 hosts; cgroup-v2 honors it by default.) stack.sh sets
-    # TARI_MEM_LIMIT from tari.mem_limit, whose "auto" default scales the cap to host RAM.
-    mem_limit: ${TARI_MEM_LIMIT:-2048m}
-    memswap_limit: ${TARI_MEM_LIMIT:-2048m}
+    # pressure or OOM the whole host on small (e.g. 16 GB) machines. Cap it as a SAFETY CEILING so a
+    # runaway OOM-restarts cleanly instead of dragging the stack down — monerod/p2pool keep mining
+    # throughout. These are the legacy keys on purpose: deploy.resources has no swap field, and
+    # memswap_limit equal to mem_limit means zero swap => clean OOM-kill, no disk thrash. (Capping
+    # swap needs swapaccount=1 on older cgroup-v1 hosts; cgroup-v2 honors it by default.) stack.sh
+    # sets TARI_MEM_LIMIT from tari.mem_limit — "auto" gives Tari ~75% of host RAM. The :-12288m
+    # fallback only applies to a stale .env that predates this and hasn't been re-rendered (=> assume
+    # a 16 GB host until the next `stack.sh apply`).
+    mem_limit: ${TARI_MEM_LIMIT:-12288m}
+    memswap_limit: ${TARI_MEM_LIMIT:-12288m}
     dns:
       - 1.1.1.1
       - 8.8.8.8

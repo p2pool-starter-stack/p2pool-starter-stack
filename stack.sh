@@ -787,13 +787,15 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
-    # Tari memory cap (#55). Tari's memory grows unbounded over time; uncapped it can OOM the whole
-    # host on small machines. The cap (paired with memswap_limit in compose => no swap) makes it
-    # OOM-restart cleanly instead. "auto" scales to host RAM: RAM/8, floored at 2048 MB (Tari needs
-    # ~2 GB to sync reliably) and capped at 4096 MB (a leak shouldn't get unlimited headroom). A
-    # 16 GB host => 2048 MB, the value validated firsthand in #14. Override with tari.mem_limit,
-    # e.g. "3072m" or "4g" — any Docker memory value is passed through verbatim.
-    local tari_mem_limit ram_mb
+    # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
+    # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
+    # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
+    # CEILING, not a tight leash: it lets Tari use what it wants and only OOM-restarts it (cleanly,
+    # since memswap_limit in compose disables swap) on a genuine runaway that would otherwise take the
+    # host down. "auto" reserves ~25% of RAM (at least 2 GB) for monerod/p2pool/Tor/the OS and gives
+    # Tari the rest (~75% of RAM), floored at 2 GB: ~12 GB on a 16 GB host, ~24 GB on 32 GB. Override
+    # with tari.mem_limit (any Docker value, e.g. "8g") to bound it tighter; passed through verbatim.
+    local tari_mem_limit ram_mb reserve_mb
     tari_mem_limit=$(jq -r '.tari.mem_limit // "auto"' "$CONFIG_FILE")
     case "$tari_mem_limit" in
         ""|auto)
@@ -803,9 +805,10 @@ render_env() {
                 ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
             fi
             [ "${ram_mb:-0}" -gt 0 ] 2>/dev/null || ram_mb=16384   # unknown host => assume 16 GB
-            tari_mem_limit=$(( ram_mb / 8 ))
-            [ "$tari_mem_limit" -lt 2048 ] && tari_mem_limit=2048
-            [ "$tari_mem_limit" -gt 4096 ] && tari_mem_limit=4096
+            reserve_mb=$(( ram_mb / 4 ))
+            [ "$reserve_mb" -lt 2048 ] && reserve_mb=2048          # always keep >=2 GB for the rest
+            tari_mem_limit=$(( ram_mb - reserve_mb ))
+            [ "$tari_mem_limit" -lt 2048 ] && tari_mem_limit=2048  # ...but never starve Tari below 2 GB
             tari_mem_limit="${tari_mem_limit}m"
             ;;
     esac
