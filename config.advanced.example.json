@@ -1,11 +1,11 @@
 {
-    "_docs": "Reference for every config.json key, each shown with its default value. Copy ONLY the keys you actually want to change into config.json; any key you omit keeps the default below. The string \"auto\" means 'let the stack decide' (default path / hostname / donor id). Full descriptions: https://github.com/p2pool-starter-stack/p2pool-starter-stack/blob/main/docs/configuration.md#configuration-reference",
+    "_docs": "Reference for every config.json key, each shown with its default value. Copy ONLY the keys you actually want to change into config.json; any key you omit keeps the default below. The string \"auto\" means 'let the stack decide' (default path / hostname / donor id), and blank node_username/node_password on a local node means 'auto-generate the RPC credentials'. Full descriptions: https://github.com/p2pool-starter-stack/p2pool-starter-stack/blob/main/docs/configuration.md#configuration-reference",
 
     "monero": {
         "mode": "local",
         "wallet_address": "your_monero_wallet_address",
-        "node_username": "create_a_username_for_node",
-        "node_password": "create_a_password_for_node",
+        "node_username": "",
+        "node_password": "",
 
         "prune": true,
         "prep_blocks_threads": "auto",

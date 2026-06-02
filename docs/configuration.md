@@ -6,28 +6,20 @@ running `./stack.sh apply`.
 
 ## The minimal config
 
-Only a few keys are required — your wallets, the node mode/credentials, the pool, and whether
-the dashboard is served securely. **Every other key is optional and falls back to a sensible
-default**, so leave it out unless you want to change it.
+Only your two **wallet addresses** are required. **Every other key is optional and falls back to
+a sensible default** — the node runs locally, on the `main` pool, with a secure dashboard, and the
+local node's RPC credentials are **auto-generated** for you — so leave a key out unless you want to
+change it.
 
-A fresh `config.json` looks like this (see [`config.json.template`](../config.json.template)):
+A fresh `config.json` is just this (see [`config.json.template`](../config.json.template)):
 
 ```json
 {
     "monero": {
-        "mode": "local",
-        "wallet_address": "your_monero_wallet_address",
-        "node_username": "create_a_username_for_node",
-        "node_password": "create_a_password_for_node"
+        "wallet_address": "your_monero_wallet_address"
     },
     "tari": {
         "wallet_address": "your_tari_wallet_address"
-    },
-    "p2pool": {
-        "pool": "main"
-    },
-    "dashboard": {
-        "secure": true
     }
 }
 ```
@@ -75,7 +67,7 @@ plain HTTP, edit `config.json` and run `./stack.sh apply`.
 |---|---|---|
 | `monero.mode` | `local` | `local` runs the bundled Monero node; `remote` connects to an external node (see `monero.remote`). |
 | `monero.wallet_address` | _required_ | Your Monero payout address. |
-| `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC. `setup` auto-generates them; they're internal to the stack (monerod, p2pool, and the dashboard use them — the dashboard reads the node's `get_info` RPC for sync status). For a remote node, set only if it requires auth. |
+| `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC, used only inside the stack (monerod, p2pool, and the dashboard, which reads the node's `get_info` for sync status). **Leave them blank** — on `setup` and on every `apply`, the stack fills in anything missing (username `admin`, a random alphanumeric password) and writes the values back into `config.json`, so they stay stable and you can see what was set. Set these yourself only for a **remote** node that requires RPC auth. |
 | `monero.prune` | `true` | Prune the Monero blockchain to save disk space. The dashboard's Monero panel shows the resulting **Pruned**/**Full** mode and the node's on-disk DB size, so you can spot a config-vs-data mismatch when reusing a chain. |
 | `monero.prep_blocks_threads` | `auto` | Block-verification threads during sync. `auto` = host cores − 2, clamped to 4–8. |
 | `monero.rpc_lan_access` | `false` | `true` publishes the node's RPC on the LAN (`0.0.0.0`) for wallets on other machines; default is localhost-only. |
