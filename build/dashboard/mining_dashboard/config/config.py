@@ -104,6 +104,11 @@ MONERO_RPC_URL = os.environ.get("MONERO_RPC_URL", "http://127.0.0.1:18081")
 MONERO_NODE_USERNAME = os.environ.get("MONERO_NODE_USERNAME", "")
 MONERO_NODE_PASSWORD = os.environ.get("MONERO_NODE_PASSWORD", "")
 
+# Whether the bundled monerod is configured to prune the blockchain (config.json
+# monero.prune → MONERO_PRUNE). Used to label the node Pruned/Full in the UI (Issue #32);
+# only meaningful for a local node (we don't control a remote node's pruning).
+MONERO_PRUNE = os.environ.get("MONERO_PRUNE", "true").strip().lower() == "true"
+
 # --- Tari Configuration ---
 # Connection details for the Tari Base Node and Block Explorer
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")

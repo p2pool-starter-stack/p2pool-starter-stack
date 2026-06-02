@@ -6,6 +6,7 @@ import pytest
 import mining_dashboard.web.server as server
 from mining_dashboard.web.server import (
     create_app, _get_chart_context, get_cached_template, _apply_security_headers,
+    _get_pool_network_context,
 )
 from mining_dashboard.service.storage_service import StateManager
 
@@ -218,3 +219,33 @@ class TestHelpers:
         _apply_security_headers(resp)
         for h in SECURITY_HEADERS:
             assert h in resp.headers
+
+
+class TestMoneroMode:
+    """Pruned/Full label + DB size in the Monero panel (Issue #32)."""
+
+    def _ctx(self, db_size=0):
+        return _get_pool_network_context({"monero_sync": {"db_size": db_size}})
+
+    def test_local_pruned(self, monkeypatch):
+        monkeypatch.setattr(server, "MONERO_NODE_HOST", "172.28.0.26")
+        monkeypatch.setattr(server, "MONERO_PRUNE", True)
+        ctx = self._ctx(db_size=85_000_000_000)
+        assert ctx["monero_mode"] == "Pruned"
+        assert ctx["monero_db_size"] == "85.0 GB"
+
+    def test_local_full(self, monkeypatch):
+        monkeypatch.setattr(server, "MONERO_NODE_HOST", "172.28.0.26")
+        monkeypatch.setattr(server, "MONERO_PRUNE", False)
+        assert self._ctx()["monero_mode"] == "Full"
+
+    def test_remote_unknown(self, monkeypatch):
+        # A remote node's pruning state isn't something we probe.
+        monkeypatch.setattr(server, "MONERO_NODE_HOST", "10.0.0.9")
+        monkeypatch.setattr(server, "MONERO_PRUNE", True)
+        assert self._ctx()["monero_mode"] == "Unknown"
+
+    def test_db_size_dash_when_unknown(self, monkeypatch):
+        monkeypatch.setattr(server, "MONERO_NODE_HOST", "172.28.0.26")
+        monkeypatch.setattr(server, "MONERO_PRUNE", True)
+        assert self._ctx(db_size=0)["monero_db_size"] == "—"

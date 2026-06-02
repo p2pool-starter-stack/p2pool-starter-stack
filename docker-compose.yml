@@ -207,6 +207,8 @@ services:
       # scraping docker logs. Only used for a local node; harmless for remote-node setups.
       - MONERO_NODE_USERNAME=${MONERO_NODE_USERNAME}
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
+      # Whether the local node prunes — shown as Pruned/Full in the Monero panel (Issue #32).
+      - MONERO_PRUNE=${MONERO_PRUNE:-true}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
       - XVB_ENABLED=${XVB_ENABLED}

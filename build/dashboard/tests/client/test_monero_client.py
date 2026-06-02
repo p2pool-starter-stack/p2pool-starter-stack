@@ -63,25 +63,28 @@ class TestGetSyncStatus:
         return client
 
     def test_syncing(self):
-        client = self._client_with_info({"status": "OK", "height": 50, "target_height": 100})
+        client = self._client_with_info(
+            {"status": "OK", "height": 50, "target_height": 100, "database_size": 85_000_000_000})
         assert client.get_sync_status() == {
             "is_syncing": True, "current": 50, "target": 100, "percent": 50,
+            "db_size": 85_000_000_000,
         }
 
     def test_synced_via_flag(self):
         # `synchronized` is authoritative even if heights look mid-sync.
         client = self._client_with_info(
-            {"status": "OK", "synchronized": True, "height": 90, "target_height": 100})
-        assert client.get_sync_status() == {"is_syncing": False}
+            {"status": "OK", "synchronized": True, "height": 90, "target_height": 100,
+             "database_size": 200_000_000_000})
+        assert client.get_sync_status() == {"is_syncing": False, "db_size": 200_000_000_000}
 
     def test_synced_via_zero_target(self):
         # Synced monerod reports target_height: 0.
         client = self._client_with_info({"status": "OK", "height": 100, "target_height": 0})
-        assert client.get_sync_status() == {"is_syncing": False}
+        assert client.get_sync_status() == {"is_syncing": False, "db_size": 0}
 
     def test_synced_when_height_reaches_target(self):
         client = self._client_with_info({"status": "OK", "height": 100, "target_height": 100})
-        assert client.get_sync_status() == {"is_syncing": False}
+        assert client.get_sync_status() == {"is_syncing": False, "db_size": 0}
 
     def test_unreachable_returns_none(self):
         client = self._client_with_info(None)

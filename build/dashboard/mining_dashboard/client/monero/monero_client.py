@@ -65,9 +65,13 @@ class MoneroClient:
         Map `get_info` onto the dashboard's sync dict.
 
         Returns the same shape as the log-scraping path so it's a drop-in:
-          - syncing:   {"is_syncing": True, "current", "target", "percent"}
-          - synced:    {"is_syncing": False}
+          - syncing:   {"is_syncing": True, "current", "target", "percent", "db_size"}
+          - synced:    {"is_syncing": False, "db_size"}
           - unreachable: None  (signals the caller to fall back to log scraping)
+
+        `db_size` is monerod's on-disk database size in bytes (from get_info, available even
+        under restricted RPC). The UI shows it next to the configured pruned/full mode so a
+        config/DB mismatch is visible at a glance (Issue #32).
         """
         info = self.get_info()
         if info is None:
@@ -75,12 +79,14 @@ class MoneroClient:
 
         height = int(info.get("height", 0) or 0)
         target = int(info.get("target_height", 0) or 0)
+        db_size = int(info.get("database_size", 0) or 0)
 
         # `synchronized` is monerod's authoritative "caught up" flag; once synced it also
         # reports target_height: 0. Trust it over the height comparison (mirrors how the
         # Tari client trusts initial_sync_achieved).
         if info.get("synchronized") or target == 0 or height >= target:
-            return {"is_syncing": False}
+            return {"is_syncing": False, "db_size": db_size}
 
         percent = int((height / target) * 100)
-        return {"is_syncing": True, "current": height, "target": target, "percent": percent}
+        return {"is_syncing": True, "current": height, "target": target,
+                "percent": percent, "db_size": db_size}
