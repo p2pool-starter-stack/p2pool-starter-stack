@@ -1,6 +1,6 @@
 # Architecture
 
-The stack orchestrates eight containerized services via Docker Compose. Together they give you a
+The stack orchestrates nine containerized services via Docker Compose. Together they give you a
 private Monero full node, decentralized P2Pool mining, Tari merge mining, a single worker
 endpoint, and a monitoring dashboard — all behind Tor, with no public port forwarding required.
 
@@ -14,8 +14,9 @@ endpoint, and a monitoring dashboard — all behind Tor, with no public port for
 | 4 | **XMRig Proxy** | A single connection point for all your mining hardware; the switching engine reconfigures it on the fly. |
 | 5 | **Tor** | A centralized anonymity layer providing SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
 | 6 | **Dashboard** | The web monitoring UI and the algorithmic switching engine. |
-| 7 | **Docker Proxy** | A secure, least-privilege proxy for the Docker socket: read-only for stats, plus a narrow start/stop grant (only) so the dashboard can reject workers when a node is down (Issue #31). No general Docker access. |
-| 8 | **Caddy** | A reverse proxy that serves the dashboard over HTTPS (automatic local TLS) on the LAN. |
+| 7 | **Docker Proxy** | A **read-only** proxy onto the Docker socket so the dashboard can read container stats/logs — no write access. |
+| 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31). Kept separate so its write grant can't widen the read-only proxy. |
+| 9 | **Caddy** | A reverse proxy that serves the dashboard over HTTPS (automatic local TLS) on the LAN. |
 
 ## High-level diagram
 
@@ -32,7 +33,7 @@ flowchart TB
 
         Caddy["🔒 Caddy<br/>HTTPS reverse proxy"]
         Dashboard["📊 Dashboard<br/>+ XvB switching engine"]
-        DockerProxy["🛡️ Docker Socket Proxy<br/>least-privilege"]
+        DockerProxy["🛡️ Docker Socket Proxies<br/>read-only + start/stop"]
         Tor["🧅 Tor<br/>anonymity layer"]
 
         subgraph core ["⚙️ Mining Core"]
@@ -101,9 +102,10 @@ explicitly via `monero.rpc_lan_access`).
 - **Pinned versions.** Service images and binaries are pinned to known-good versions.
 - **Hardened dashboard.** Security headers (a restrictive `Content-Security-Policy`,
   `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`) and a sanitized error handler; it reaches
-  Docker only through a least-privilege socket proxy — read-only for stats, plus a narrow
-  `ALLOW_START`/`ALLOW_STOP` grant (not general `POST`) so it can stop/start the proxy container to
-  fail workers over when a node is down. General Docker write access stays off.
+  Docker only through socket proxies, never the raw socket: a **read-only** one for stats/logs, and
+  a separate **control** proxy scoped to `start`/`stop` only (its ruleset denies create/kill/exec
+  and all reads). Splitting them means the write grant needed for node-down worker failover can't
+  widen the read-only proxy's access. General Docker write access stays off.
 - **Locked-down config.** `config.json` is created `chmod 600` (owner-only), and the internal RPC
   proxy token is generated once and preserved across re-runs.
 

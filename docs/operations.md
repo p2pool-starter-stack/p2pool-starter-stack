@@ -19,7 +19,7 @@ the full list.
 | `./stack.sh help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
-`tor`, `dashboard`, `docker-proxy`, `caddy`.
+`tor`, `dashboard`, `docker-proxy`, `docker-control`, `caddy`.
 
 ---
 

@@ -60,8 +60,12 @@ PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 PROXY_API_PORT = int(os.environ.get("PROXY_API_PORT", 3344))
 
 # --- Docker Proxy Configuration ---
-# Settings for connecting to the secure Docker Socket Proxy
+# Read-only socket proxy: container stats/logs only (no write access).
 DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://172.28.0.30:2375")
+# Control socket proxy: start/stop only, used to reject/readmit workers on node-down
+# (Issue #31). A separate proxy so opening POST for start/stop can't widen the read-only
+# proxy's access. See docker-compose.yml `docker-control`.
+DOCKER_CONTROL_URL = os.environ.get("DOCKER_CONTROL_URL", "tcp://172.28.0.31:2375")
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 

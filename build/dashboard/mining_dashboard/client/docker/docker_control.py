@@ -1,27 +1,27 @@
 import aiohttp
 import logging
 
-from mining_dashboard.config.config import DOCKER_PROXY_URL, DOCKER_TIMEOUT
+from mining_dashboard.config.config import DOCKER_CONTROL_URL, DOCKER_TIMEOUT
 
 logger = logging.getLogger("DockerControl")
 
 
 class DockerControl:
     """
-    Narrow start/stop control of stack containers via the read-only-ish Docker socket
-    proxy (Issue #31).
+    Narrow start/stop control of stack containers (Issue #31).
 
-    The dashboard reaches Docker only through `tecnativa/docker-socket-proxy`, which is
-    GET-only by default. We grant exactly the `ALLOW_START` / `ALLOW_STOP` endpoints (not
-    blanket `POST`), so this client can stop the xmrig-proxy container to reject workers
-    when a node is down, and start it again on recovery — nothing else.
+    Goes through a dedicated `docker-control` socket proxy whose ruleset allows exactly
+    `POST /containers/<id>/{start,stop}` and nothing else — not the read-only `docker-proxy`
+    the dashboard uses for stats/logs. (tecnativa/docker-socket-proxy v0.4.2 denies all POST
+    unless POST=1, and POST=1 on the read proxy would also open create/kill/exec via its
+    CONTAINERS grant — so container control lives on its own minimal proxy instead.)
 
     Stopping (not pausing) is deliberate: a stopped container closes its published port,
     so miners get a clean disconnect and fail over to their backup pools; a paused one
     leaves the port open-but-dead and they stall instead.
     """
 
-    def __init__(self, proxy_url=DOCKER_PROXY_URL, timeout=DOCKER_TIMEOUT):
+    def __init__(self, proxy_url=DOCKER_CONTROL_URL, timeout=DOCKER_TIMEOUT):
         # aiohttp needs an http:// scheme even though the env var uses tcp://.
         base = proxy_url
         if base.startswith("tcp://"):

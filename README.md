@@ -37,8 +37,8 @@ coffee gets cold**.
 - 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and kernel
   tuning, then starts everything for you.
 - 🔒 **Hardened out of the box.** Least-privilege containers, SHA256-verified binaries, pinned
-  versions, localhost-only RPC, and a least-privilege Docker socket proxy (read-only for stats,
-  plus a narrow start/stop grant for node-down worker failover).
+  versions, localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for
+  stats, plus a separate start/stop-only one for node-down worker failover).
 
 ---
 
@@ -87,9 +87,10 @@ Browse the full index at **[docs/](docs/README.md)**.
 
 ## 🏗️ How it works
 
-The stack orchestrates eight services via Docker Compose: a Monero **full node**, **P2Pool**, a
+The stack orchestrates nine services via Docker Compose: a Monero **full node**, **P2Pool**, a
 **Tari** base node, an **XMRig proxy** (your single worker endpoint), **Tor** for anonymity, the
-**dashboard** + switching engine, a least-privilege **Docker socket proxy**, and **Caddy** for HTTPS.
+**dashboard** + switching engine, a read-only **Docker socket proxy** (plus a tiny start/stop-only
+control proxy), and **Caddy** for HTTPS.
 
 ```mermaid
 flowchart TB
@@ -104,7 +105,7 @@ flowchart TB
 
         Caddy["🔒 Caddy<br/>HTTPS reverse proxy"]
         Dashboard["📊 Dashboard<br/>+ XvB switching engine"]
-        DockerProxy["🛡️ Docker Socket Proxy<br/>least-privilege"]
+        DockerProxy["🛡️ Docker Socket Proxies<br/>read-only + start/stop"]
         Tor["🧅 Tor<br/>anonymity layer"]
 
         subgraph core ["⚙️ Mining Core"]

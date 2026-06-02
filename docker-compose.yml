@@ -217,13 +217,17 @@ services:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
       - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
+      - DOCKER_CONTROL_URL=tcp://172.28.0.31:2375
       - TARI_GRPC_ADDRESS=172.28.0.27:18142
       # Reject workers when a required node is down so miners fail over to backups (Issue #31).
       # Per-node, both default on; tune via dashboard.reject_workers_on_*_down in config.json.
       - REJECT_WORKERS_ON_MONERO_DOWN=${REJECT_WORKERS_ON_MONERO_DOWN:-true}
       - REJECT_WORKERS_ON_TARI_DOWN=${REJECT_WORKERS_ON_TARI_DOWN:-true}
 
-  # --- Docker Socket Proxy ---
+  # --- Docker Socket Proxy (read-only) ---
+  # Read-only window onto the Docker API for the dashboard's container stats/logs.
+  # POST stays off, so this proxy can never write — container control goes through the
+  # separate, tightly-scoped docker-control proxy below.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-proxy
@@ -233,15 +237,29 @@ services:
     environment:
       - CONTAINERS=1
       - LOGS=1
-      # Narrow start/stop grant (Issue #31): lets the dashboard stop xmrig-proxy to reject
-      # workers when a node is down (so they fail over to backups) and start it on recovery.
-      # POST stays default-off, so this is NOT general write access — only these two
-      # endpoints. Reused later for startup gating (#35).
+    networks:
+      mining_net:
+        ipv4_address: 172.28.0.30
+
+  # --- Docker Control Proxy (start/stop only) ---
+  # A second, minimal proxy used ONLY to stop/start xmrig-proxy for node-down worker
+  # failover (Issue #31). With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left
+  # off, the v0.4.2 ruleset allows exactly `POST /containers/<id>/{start,stop}` and denies
+  # everything else (create/kill/exec/reads). Kept separate from the read-only proxy above
+  # so opening POST here can't widen that proxy's container access. (Reused later for #35.)
+  docker-control:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: docker-control
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - POST=1
       - ALLOW_START=1
       - ALLOW_STOP=1
     networks:
       mining_net:
-        ipv4_address: 172.28.0.30
+        ipv4_address: 172.28.0.31
 
   # --- Caddy Reverse Proxy ---
   # Bridges the local 127.0.0.1 application binding to the LAN

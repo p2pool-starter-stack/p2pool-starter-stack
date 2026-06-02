@@ -154,7 +154,7 @@ EOF
 ST="$SANDBOX/status"; mkdir -p "$ST/bin"; cp "$STACK" "$ST/stack.sh"
 make_status_stub "$ST/bin"
 printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' > "$ST/.env"
-ALL_UP="tor=running:healthy monerod=running:healthy p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none caddy=running:none"
+ALL_UP="tor=running:healthy monerod=running:healthy p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
 
 # All services up -> success, friendly summary.
 out="$(cd "$ST" && FAKE_STATES="$ALL_UP" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
@@ -175,7 +175,7 @@ assert_contains "status: lone proxy stop warns" "$out" "NOT mining"
 
 # Remote-node mode: the bundled monerod is not expected even if absent.
 printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=\nHOST_IP=box.lan\n' > "$ST/.env"
-REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none caddy=running:none"
+REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
 out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./stack.sh status 2>&1)"; rc=$?
 assert_rc "status: remote mode ignores monerod" "$rc" "0"
 
