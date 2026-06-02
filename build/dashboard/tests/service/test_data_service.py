@@ -5,6 +5,7 @@ import pytest
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
+    _parse_proxy_list_worker, _parse_legacy_dict_worker,
 )
 
 
@@ -30,6 +31,29 @@ def _make_service():
     svc.docker_control.stop = AsyncMock(return_value=True)
     svc.docker_control.start = AsyncMock(return_value=True)
     return svc, state_manager, proxy_client
+
+
+class TestProxyWorkerParsers:
+    """The per-shape row parsers used by _normalize_proxy_workers (Issue #39)."""
+
+    def test_parse_list_row_named_fields(self):
+        # idx2=connections, idx8=1m kH/s, idx9=10m kH/s, idx7=last share ms.
+        row = ["rig", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
+        w = _parse_proxy_list_worker(row)
+        assert w == {"name": "rig", "ip": "10.0.0.1", "status": "online",
+                     "h10": 1000, "h60": 1000, "h15": 2000, "uptime": 0}
+
+    def test_parse_list_row_offline_and_uptime(self):
+        row = ["rig", "10.0.0.1", 0, 0, 0, 0, 0, 1_000, 1.0, 2.0, 0, 0, 0]
+        w = _parse_proxy_list_worker(row)
+        assert w["status"] == "offline"
+        assert w["uptime"] > 0  # derived from the last-share timestamp
+
+    def test_parse_legacy_dict_row(self):
+        w = _parse_legacy_dict_worker({"id": "old", "ip": "1.2.3.4",
+                                       "hashrate": [10, 20, 30], "uptime": 5})
+        assert w == {"name": "old", "ip": "1.2.3.4", "status": "online",
+                     "h10": 10, "h60": 20, "h15": 30, "uptime": 5}
 
 
 class TestNormalizeProxyWorkers:

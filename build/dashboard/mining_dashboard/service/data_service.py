@@ -19,53 +19,73 @@ from mining_dashboard.service.node_health import NodeHealthMonitor
 
 logger = logging.getLogger("DataService")
 
+# xmrig-proxy 6.x /workers rows are positional arrays; name the fields we read so the
+# normalization below isn't a wall of magic indices. A row has >= _PX_MIN_FIELDS entries.
+_PX_NAME = 0
+_PX_IP = 1
+_PX_CONNECTIONS = 2     # active connections; 0 means a stale/disconnected worker
+_PX_LAST_SHARE_MS = 7   # epoch ms of the last accepted share
+_PX_HR_1M = 8           # 1-minute hashrate, kH/s
+_PX_HR_10M = 9          # 10-minute hashrate, kH/s
+_PX_MIN_FIELDS = 13
+
+# xmrig-proxy reports hashrate in kH/s; the dashboard works in H/s.
+_KHS_TO_HS = 1000
+
+
+def _parse_proxy_list_worker(w):
+    """Parse one xmrig-proxy 6.x positional row into a worker dict.
+
+    Online/offline is derived from the active connection count, not mere presence —
+    xmrig-proxy keeps a worker in /workers with a decaying hashrate after it disconnects,
+    so a stopped miner would otherwise stay green and inflate the total. The proxy lacks a
+    10s window, so the 1-minute rate backs both h10 and h60; the 10-minute rate is h15.
+    """
+    # Last-share timestamp gives a fallback "seconds since last share" for uptime when the
+    # direct worker API isn't reachable.
+    last_share_ms = w[_PX_LAST_SHARE_MS] or 0
+    uptime_estimate = int(time.time() - last_share_ms / 1000) if last_share_ms > 0 else 0
+    return {
+        "name": w[_PX_NAME],
+        "ip": w[_PX_IP],
+        "status": "online" if w[_PX_CONNECTIONS] > 0 else "offline",
+        "h10": w[_PX_HR_1M] * _KHS_TO_HS,
+        "h60": w[_PX_HR_1M] * _KHS_TO_HS,
+        "h15": w[_PX_HR_10M] * _KHS_TO_HS,
+        "uptime": uptime_estimate,
+    }
+
+
+def _parse_legacy_dict_worker(w):
+    """Parse one legacy dict-format xmrig-proxy worker into a worker dict."""
+    hr = w.get("hashrate", [0, 0, 0])
+    return {
+        "name": w.get("id", "Unknown"),
+        "ip": w.get("ip", "0.0.0.0"),
+        "status": "online",
+        "h10": hr[0] if len(hr) > 0 else 0,
+        "h60": hr[1] if len(hr) > 1 else 0,
+        "h15": hr[2] if len(hr) > 2 else 0,
+        "uptime": w.get("uptime", 0),
+    }
+
 
 def _normalize_proxy_workers(proxy_data):
     """Normalize an xmrig-proxy ``/workers`` payload into a uniform worker list.
 
-    Handles both shapes the proxy can return: the 6.x list format (>=13 positional
-    fields) and the legacy dict format. Online/offline is derived from the active
-    connection count (``w[2]``), not mere presence — xmrig-proxy keeps a worker in
-    ``/workers`` with a decaying hashrate after it disconnects, so a stopped miner would
-    otherwise stay green and inflate the total. Proxy hashrates are kH/s and scaled to
-    H/s here. Returns ``[]`` for a missing/empty payload.
+    Dispatches each entry to the right parser for the two shapes the proxy emits — the 6.x
+    positional-list format and the legacy dict format — and drops anything that matches
+    neither (e.g. a truncated row). Returns ``[]`` for a missing/empty payload.
     """
-    workers = []
     if not proxy_data or "workers" not in proxy_data:
-        return workers
+        return []
 
+    workers = []
     for w in proxy_data["workers"]:
-        # Handle list format (XMRig Proxy 6.x+)
-        if isinstance(w, list) and len(w) >= 13:
-            # w[7] = last share timestamp (ms). Use it as a fallback "seconds since last
-            # share" for uptime when the direct worker API isn't reachable.
-            last_share_ms = w[7] if w[7] else 0
-            uptime_estimate = int(time.time() - last_share_ms / 1000) if last_share_ms > 0 else 0
-            # w[2] = active connection count.
-            connections = w[2] if len(w) > 2 else 0
-            workers.append({
-                "name": w[0],
-                "ip": w[1],
-                "status": "online" if connections > 0 else "offline",
-                # Proxy returns kH/s, convert to H/s
-                # Mapping: 1m(idx8)->10s & 60s (Proxy lacks 10s), 10m(idx9)->15m
-                "h10": w[8] * 1000,
-                "h60": w[8] * 1000,
-                "h15": w[9] * 1000,
-                "uptime": uptime_estimate
-            })
-        # Handle dict format (Legacy)
+        if isinstance(w, list) and len(w) >= _PX_MIN_FIELDS:
+            workers.append(_parse_proxy_list_worker(w))
         elif isinstance(w, dict):
-            hr = w.get("hashrate", [0, 0, 0])
-            workers.append({
-                "name": w.get("id", "Unknown"),
-                "ip": w.get("ip", "0.0.0.0"),
-                "status": "online",
-                "h10": hr[0] if len(hr) > 0 else 0,
-                "h60": hr[1] if len(hr) > 1 else 0,
-                "h15": hr[2] if len(hr) > 2 else 0,
-                "uptime": w.get("uptime", 0)
-            })
+            workers.append(_parse_legacy_dict_worker(w))
     return workers
 
 
@@ -86,7 +106,7 @@ def _merge_direct_stats(workers, results, active_pool_port):
             w['uptime'] = extra_stats.get('uptime', w['uptime'])
 
             is_proxy = extra_stats.get('kind') == 'proxy'
-            hr_scale = 1000 if is_proxy else 1
+            hr_scale = _KHS_TO_HS if is_proxy else 1
 
             hr_total = extra_stats.get('hashrate', {}).get('total', [])
             if isinstance(hr_total, list) and len(hr_total) >= 3:
