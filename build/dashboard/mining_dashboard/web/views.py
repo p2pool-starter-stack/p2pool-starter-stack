@@ -10,6 +10,7 @@ emits HTML. The client maps tokens to CSS classes and builds the DOM.
 the client share; ``server.py`` stays pure transport.
 """
 import os
+import math
 import time
 import bisect
 import logging
@@ -20,8 +21,51 @@ from mining_dashboard.service.metrics import build_metrics
 
 logger = logging.getLogger("WebViews")
 
-# Cap on chart points sent to the frontend — keeps Chart.js responsive and the payload small.
-_MAX_CHART_POINTS = 800
+# Preset range -> window length in seconds. 'all'/unknown -> use the data's own extent.
+_RANGE_SECONDS = {'1h': 3600, '24h': 86400, '1w': 604800, '1m': 2592000}
+
+# Adaptive chart resolution (Issue #47). Point count and line smoothing are chosen from the
+# *visible window duration*: a wide span is a smooth, high-level overview (fewer points, more
+# curve smoothing); a short span keeps full 30s detail (choppier but accurate). The point count
+# is capped near the canvas pixel width — more points than pixels just slows hit-testing.
+# (limit_seconds, target_points); 0 target = send native resolution (no downsampling).
+_POINT_TIERS = ((3600, 0), (21600, 360), (86400, 480), (604800, 600))
+_MAX_CHART_POINTS = 700   # > 1w, and the hard ceiling (~1 point per canvas pixel)
+
+# (limit_seconds, tension). Chart.js line tension = curve smoothing.
+_TENSION_TIERS = ((3600, 0.0), (86400, 0.2), (604800, 0.35))
+_MAX_TENSION = 0.4        # > 1w: smooth / high-level
+
+
+def _target_points(duration_s):
+    """Target chart-point count for a window of ``duration_s`` seconds (0 = native resolution)."""
+    for limit, points in _POINT_TIERS:
+        if duration_s <= limit:
+            return points
+    return _MAX_CHART_POINTS
+
+
+def _chart_tension(duration_s):
+    """Chart.js line tension (curve smoothing) for a window of ``duration_s`` seconds."""
+    for limit, tension in _TENSION_TIERS:
+        if duration_s <= limit:
+            return tension
+    return _MAX_TENSION
+
+
+def parse_window(from_arg, to_arg):
+    """Parse optional ``from``/``to`` query params (epoch seconds) into a ``(from, to)`` window,
+    or ``None`` if absent or malformed. Defensive — any bad input falls back to ``None`` so the
+    caller uses the preset ``range`` instead of erroring (Issue #47)."""
+    if from_arg is None or to_arg is None:
+        return None
+    try:
+        lo, hi = float(from_arg), float(to_arg)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(lo) and math.isfinite(hi)) or lo <= 0 or hi <= 0 or lo >= hi:
+        return None
+    return (lo, hi)
 
 # A run of missing samples longer than this is drawn as a real break in the line rather than a
 # segment spanning the outage (Issue #65). Adaptive: a multiple of the series' own median
@@ -44,15 +88,22 @@ _LOW_HR_TITLE = ("Your hashrate can't sustain the selected XvB donation tier; "
 # Chart series (Issue #65: positioned by real time, with outage gaps as breaks).
 # --------------------------------------------------------------------------------------
 
-def build_chart(history, shares, range_arg):
+def build_chart(history, shares, range_arg, window=None):
     """Build the Chart.js datasets from history. Each point carries its real timestamp as the
     x value (epoch ms) so a linear time axis spaces points to scale; runs of missing samples
     (outages) are split by a ``null`` break so the line doesn't connect across the gap.
 
-    Returns ``{"p2pool": [{x, y}], "xvb": [{x, y}], "shares": [{x, y, r, c}]}`` — the line
-    series may contain ``{x, y: None}`` break markers; ``shares`` is a sparse scatter."""
-    filtered_history, filtered_shares = _filter_range(history, shares, range_arg)
-    filtered_history = _downsample_history(filtered_history)
+    ``window`` is an optional ``(from, to)`` epoch-second pair (a manual zoom) that bounds both
+    ends and overrides ``range_arg``. Point density and ``tension`` adapt to the visible window
+    duration (Issue #47).
+
+    Returns ``{"p2pool": [{x, y}], "xvb": [{x, y}], "shares": [{x, y, r, c}], "tension": float}``
+    — the P2Pool/XvB series are stacked on the client (they sum to the total hashrate) and may
+    contain ``{x, y: None}`` break markers, kept index-aligned across both series so stacking
+    stays correct; ``shares`` is a sparse scatter (rendered un-stacked)."""
+    filtered_history, filtered_shares = _filter_range(history, shares, range_arg, window)
+    duration_s = _window_duration(filtered_history, range_arg, window)
+    filtered_history = _downsample_history(filtered_history, duration_s)
 
     timestamps = [x['timestamp'] for x in filtered_history]
     gap_after = _gap_after_indices(timestamps)
@@ -69,19 +120,40 @@ def build_chart(history, shares, range_arg):
             p2pool.append({"x": mid_ms, "y": None})
             xvb.append({"x": mid_ms, "y": None})
 
-    return {"p2pool": p2pool, "xvb": xvb, "shares": _share_points(filtered_history, filtered_shares)}
+    return {"p2pool": p2pool, "xvb": xvb,
+            "shares": _share_points(filtered_history, filtered_shares),
+            "tension": _chart_tension(duration_s)}
 
 
-def _filter_range(history, shares, range_arg):
-    """Restrict history/shares to the selected range (``all`` keeps everything)."""
+def _filter_range(history, shares, range_arg, window=None):
+    """Restrict history/shares to the selected window. A custom ``window`` (from, to) epoch
+    seconds bounds both ends; otherwise the preset ``range`` bounds only the lower end (``all``
+    keeps everything)."""
+    if window is not None:
+        lo, hi = window
+        return ([x for x in history if lo <= x['timestamp'] <= hi],
+                [s for s in shares if lo <= s['ts'] <= hi])
     if range_arg == 'all':
         return history, shares
-    target_seconds = {'1h': 3600, '24h': 86400, '1w': 604800, '1m': 2592000}.get(range_arg, 0)
+    target_seconds = _RANGE_SECONDS.get(range_arg, 0)
     if target_seconds <= 0:
         return history, shares
     cutoff = time.time() - target_seconds
     return ([x for x in history if x['timestamp'] >= cutoff],
             [s for s in shares if s['ts'] >= cutoff])
+
+
+def _window_duration(filtered_history, range_arg, window):
+    """Seconds the chart currently spans — drives adaptive resolution/smoothing. From the
+    window if zoomed, else the preset length, else (``all``/unknown) the actual data extent."""
+    if window is not None:
+        return max(0, window[1] - window[0])
+    secs = _RANGE_SECONDS.get(range_arg, 0)
+    if secs > 0:
+        return secs
+    if len(filtered_history) >= 2:
+        return filtered_history[-1]['timestamp'] - filtered_history[0]['timestamp']
+    return 0
 
 
 def _split_values(x):
@@ -104,14 +176,17 @@ def _gap_after_indices(timestamps):
     return {i for i, d in enumerate(deltas) if d > threshold}
 
 
-def _downsample_history(filtered_history):
-    """Bucket-averages history down to ``_MAX_CHART_POINTS`` to cap the payload size."""
-    if len(filtered_history) <= _MAX_CHART_POINTS:
+def _downsample_history(filtered_history, duration_s):
+    """Bucket-averages history down to the duration's target point count (Issue #47). A target
+    of 0, or a series already at/under target, is returned untouched — so short/zoomed-in
+    windows keep their native 30s detail."""
+    target = _target_points(duration_s)
+    if target <= 0 or len(filtered_history) <= target:
         return filtered_history
 
-    chunk_size = len(filtered_history) / _MAX_CHART_POINTS
+    chunk_size = len(filtered_history) / target
     downsampled = []
-    for i in range(_MAX_CHART_POINTS):
+    for i in range(target):
         chunk = filtered_history[int(i * chunk_size):int((i + 1) * chunk_size)]
         if not chunk:
             continue
@@ -433,12 +508,13 @@ def build_badges(data, metrics, mode_variant):
 # Assembly.
 # --------------------------------------------------------------------------------------
 
-def build_state(data, state_mgr, range_arg):
+def build_state(data, state_mgr, range_arg, window=None):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
-    Computes domain values once (``build_metrics``), then formats each section. Every value is
-    a JSON-serializable primitive, list or dict. May raise (e.g. ``state_mgr.get_history``
-    failing); the caller turns that into a sanitized 500."""
+    ``window`` is an optional ``(from, to)`` epoch-second manual-zoom window (Issue #47) that
+    overrides ``range_arg`` for the chart. Computes domain values once (``build_metrics``), then
+    formats each section. Every value is a JSON-serializable primitive, list or dict. May raise
+    (e.g. ``state_mgr.get_history`` failing); the caller turns that into a sanitized 500."""
     data = data or {}
     history = state_mgr.get_history()
     metrics = build_metrics(data, state_mgr, history)
@@ -452,6 +528,7 @@ def build_state(data, state_mgr, range_arg):
         "host_ip": HOST_IP,
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
+        "window": {"from": window[0], "to": window[1]} if window else None,
         "badges": build_badges(data, metrics, mode_tok),
         "hashrate": build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok),
         "system": build_system(data),
@@ -464,7 +541,7 @@ def build_state(data, state_mgr, range_arg):
         "proxy_workers": metrics.workers_online,
         "tari": build_tari(data),
         "workers": build_workers(data.get('workers', [])),
-        "chart": build_chart(history, data.get('shares', []), range_arg),
+        "chart": build_chart(history, data.get('shares', []), range_arg, window),
     }
 
 

@@ -11,8 +11,13 @@
          before first paint; same-origin so it loads under the CSP's script-src 'self'. -->
     <script src="/static/theme-init.js"></script>
     <link rel="stylesheet" href="/static/dashboard.css">
-    <!-- Chart.js is a classic global (window.Chart); the app is an ES module that uses it. -->
+    <!-- Chart.js is a classic global (window.Chart); the app is an ES module that uses it.
+         Hammer.js (window.Hammer) must load BEFORE chartjs-plugin-zoom — the plugin captures it
+         at load to bind pan/pinch gestures. chartjs-plugin-zoom (UMD global ChartZoom) is
+         registered in chart.mjs — gives wheel/drag-zoom + Shift-drag pan (Issue #47). -->
     <script src="/static/chart.umd.min.js"></script>
+    <script src="/static/vendor/hammer.min.js"></script>
+    <script src="/static/vendor/chartjs-plugin-zoom.min.js"></script>
     <script type="module" src="/static/dashboard.js"></script>
 </head>
 <body>

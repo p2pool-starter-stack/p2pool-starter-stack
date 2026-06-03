@@ -99,10 +99,25 @@ tr:last-child td { border-bottom: none; }
 .wallet-text { font-size: 0.7rem; color: var(--text-muted); margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
 
 /* Chart Controls */
-.chart-controls { display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 15px; }
+.chart-controls { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 5px; margin-bottom: 15px; }
 .btn-range { display: inline-block; padding: 4px 12px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; border: 1px solid var(--border); background-color: var(--card); color: var(--text-muted); transition: all 0.2s; }
 .btn-range:hover { border-color: var(--text-muted); color: var(--text); }
 .btn-range.active { background-color: var(--ok); color: #fff; border-color: var(--ok); }
+/* Reset-zoom button reuses the range-button look but needs the <button> resets (Issue #47). */
+.btn-reset { cursor: pointer; font-family: inherit; line-height: 1.4; margin-left: 8px; }
+
+/* Series show/hide toggles (Issue #47): a quiet legend; click a chip to toggle that series.
+ * A hidden series is dimmed + struck through. Swatch colours track the theme palette. */
+.chart-legend { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text-muted);
+    font: inherit; font-size: 0.78rem; cursor: pointer; transition: color 0.15s, opacity 0.15s; }
+.legend-item:hover { color: var(--text); }
+.legend-item.off { opacity: 0.45; text-decoration: line-through; }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+.dot-p2pool { background: var(--accent); }
+.dot-xvb { background: var(--purple); }
+.dot-shares { background: var(--bad); }
 
 /* View Toggle */
 .view-controls { display: flex; justify-content: flex-end; margin-bottom: 15px; }
