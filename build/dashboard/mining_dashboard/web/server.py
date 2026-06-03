@@ -3,7 +3,7 @@ import logging
 import mimetypes
 from aiohttp import web
 
-from mining_dashboard.web.views import build_state, get_shell_html
+from mining_dashboard.web.views import build_state, get_shell_html, parse_window
 
 logger = logging.getLogger("WebServer")
 
@@ -28,9 +28,11 @@ async def handle_state(request):
     data = app['latest_data']
     state_mgr = app['state_manager']
     range_arg = request.query.get('range', 'all')
+    # Optional manual-zoom window (Issue #47); malformed from/to falls back to the preset range.
+    window = parse_window(request.query.get('from'), request.query.get('to'))
 
     try:
-        return web.json_response(build_state(data, state_mgr, range_arg))
+        return web.json_response(build_state(data, state_mgr, range_arg, window))
     except Exception:
         # Log the full error server-side; never leak exception details to the browser.
         logger.exception("Error building dashboard state")

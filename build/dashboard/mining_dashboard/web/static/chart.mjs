@@ -8,10 +8,28 @@
 // scale and outages render as proportional gaps (Issue #65) — a linear scale (not Chart.js's
 // `time` scale) avoids vendoring a date-adapter library. The server inserts {x, y: null} break
 // markers across outages so the line/fill doesn't span them.
+//
+// P2Pool and XvB are drawn as a STACKED area (Issue #47): at every sample the full hashrate
+// goes to exactly one pool, so the two series sum to the total — stacking shows the total as the
+// top edge with a clean blue/purple split, instead of two muddy overlapping fills. The Shares
+// scatter is kept on its own stack group so its y stays absolute. Zoom/pan (chartjs-plugin-zoom)
+// gestures hand the visible window up via onZoom, which refetches that window from the server at
+// duration-adaptive resolution — so zooming in reveals finer data.
 import { Component, createRef, html } from './preact.mjs';
-import { fmtTimestamp } from './logic.mjs';
+import { fmtTimestamp, clampZoomWindow } from './logic.mjs';
 
 const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']];
+
+// Smallest zoom window (ms) — guards against requesting a sub-sample slice (30s native cadence).
+const MIN_ZOOM_MS = 60000;
+// Coalesce a flurry of wheel/pan events into one refetch.
+const ZOOM_DEBOUNCE_MS = 300;
+
+// Register the zoom/pan plugin once (UMD global from chartjs-plugin-zoom.min.js; see index.html).
+// Guarded so the module is harmless if the global is absent (e.g. outside the browser).
+if (typeof Chart !== 'undefined' && typeof window !== 'undefined' && window.ChartZoom) {
+    Chart.register(window.ChartZoom);
+}
 
 // Append an 8-bit alpha to a #rrggbb hex (Chart.js accepts #rrggbbaa). Non-hex values pass
 // through opaque, so a future palette change can't break the fills.
@@ -19,6 +37,7 @@ const withAlpha = (hex, aa) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + aa : hex);
 
 // The chart's colours, read from the active theme's CSS variables (Issue #43) so the chart
 // matches light/dark/auto. Re-read on every sync() so a theme switch recolours it in place.
+// Fills are fairly solid now that the areas stack cleanly rather than overlapping.
 function paletteColors() {
     const cs = getComputedStyle(document.documentElement);
     const v = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
@@ -26,11 +45,12 @@ function paletteColors() {
     const purple = v('--purple', '#a371f7');
     return {
         accent, purple,
-        accentFill: withAlpha(accent, '1a'),   // ≈ 0.1 alpha
-        purpleFill: withAlpha(purple, '33'),   // ≈ 0.2 alpha
+        accentFill: withAlpha(accent, '33'),   // ≈ 0.2 alpha
+        purpleFill: withAlpha(purple, '4d'),   // ≈ 0.3 alpha
         shares: v('--bad', '#da3633'),
         grid: v('--border', '#30363d'),
         ticks: v('--text-muted', '#8b949e'),
+        band: withAlpha(accent, '26'),         // drag-to-zoom selection band (≈ 0.15 alpha)
     };
 }
 
@@ -39,12 +59,29 @@ export class ChartCard extends Component {
         super(props);
         this.canvasRef = createRef();
         this.shareCounts = [];
+        this.applyingServerData = false;   // suppress the gesture handler during programmatic resetZoom
+        this._zoomDebounce = null;
+        this._prevWindow = props.window;   // track window prop to detect the zoomed -> preset transition
     }
 
     componentDidMount() { this.create(); }
     componentDidUpdate() { this.sync(); }
     componentWillUnmount() {
+        clearTimeout(this._zoomDebounce);
         if (this.chart) { this.chart.destroy(); this.chart = null; }
+    }
+
+    // Debounced: a gesture (wheel/drag-zoom/pan) settled — hand the visible window up to refetch
+    // it from the server at the right resolution. Ignored while we're programmatically resetting.
+    onGesture() {
+        if (this.applyingServerData) return;
+        clearTimeout(this._zoomDebounce);
+        this._zoomDebounce = setTimeout(() => {
+            if (!this.chart) return;
+            const x = this.chart.scales.x;
+            const w = clampZoomWindow(x.min, x.max, MIN_ZOOM_MS);
+            if (w) this.props.onZoom(w.from / 1000, w.to / 1000);   // epoch ms -> seconds
+        }, ZOOM_DEBOUNCE_MS);
     }
 
     create() {
@@ -53,17 +90,19 @@ export class ChartCard extends Component {
         const d = this.props.chart;
         this.shareCounts = d.shares.map((s) => s.c);
         const c = paletteColors();
+        const tension = d.tension ?? 0.3;
         const self = this;
         this.chart = new Chart(canvas, {
             type: 'line',
             data: {
                 datasets: [
-                    { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, tension: 0.3, fill: true,
-                      backgroundColor: c.accentFill, pointRadius: 0, pointHitRadius: 20 },
-                    { label: 'XvB', data: d.xvb, borderColor: c.purple, tension: 0.3, fill: true,
-                      backgroundColor: c.purpleFill, pointRadius: 0, pointHitRadius: 20 },
+                    { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, tension, fill: true,
+                      stack: 'hr', backgroundColor: c.accentFill, pointRadius: 0, pointHitRadius: 20 },
+                    { label: 'XvB', data: d.xvb, borderColor: c.purple, tension, fill: true,
+                      stack: 'hr', backgroundColor: c.purpleFill, pointRadius: 0, pointHitRadius: 20 },
+                    // Own stack group so the scatter's y isn't summed onto the areas.
                     { label: 'Shares', data: d.shares, borderColor: c.shares, backgroundColor: c.shares,
-                      pointStyle: 'triangle', rotation: 180, pointRadius: d.shares.map((s) => s.r),
+                      stack: 'shares', pointStyle: 'triangle', rotation: 180, pointRadius: d.shares.map((s) => s.r),
                       pointHoverRadius: 15, pointHitRadius: 100, showLine: false },
                 ],
             },
@@ -83,12 +122,25 @@ export class ChartCard extends Component {
                             return label;
                         },
                     } },
+                    // Drag = box-zoom, wheel = zoom, Shift-drag = pan (Issue #47). Each settled
+                    // gesture triggers a server refetch of the visible window (onGesture).
+                    zoom: {
+                        zoom: {
+                            wheel: { enabled: true },
+                            drag: { enabled: true, backgroundColor: c.band, borderColor: c.accent, borderWidth: 1 },
+                            mode: 'x',
+                            onZoomComplete: () => self.onGesture(),
+                        },
+                        pan: { enabled: true, mode: 'x', modifierKey: 'shift', onPanComplete: () => self.onGesture() },
+                        limits: { x: { minRange: MIN_ZOOM_MS } },
+                    },
                 },
                 scales: {
                     // Linear x positions points by real elapsed time (gaps occupy proportional
-                    // space); axis hidden as before. y grid/ticks follow the theme.
+                    // space); axis hidden as before. y is stacked (P2Pool+XvB = total) and
+                    // grid/ticks follow the theme.
                     x: { type: 'linear', display: false },
-                    y: { stacked: false, grid: { color: c.grid }, ticks: { color: c.ticks } },
+                    y: { stacked: true, grid: { color: c.grid }, ticks: { color: c.ticks } },
                 },
             },
         });
@@ -98,26 +150,43 @@ export class ChartCard extends Component {
         if (!this.chart) { this.create(); return; }
         const d = this.props.chart;
         const c = paletteColors();   // re-read so a theme switch recolours in place
+        const tension = d.tension ?? 0.3;
         this.shareCounts = d.shares.map((s) => s.c);
         const ds = this.chart.data.datasets;
-        ds[0].data = d.p2pool; ds[0].borderColor = c.accent; ds[0].backgroundColor = c.accentFill;
-        ds[1].data = d.xvb;    ds[1].borderColor = c.purple; ds[1].backgroundColor = c.purpleFill;
+        ds[0].data = d.p2pool; ds[0].borderColor = c.accent; ds[0].backgroundColor = c.accentFill; ds[0].tension = tension;
+        ds[1].data = d.xvb;    ds[1].borderColor = c.purple; ds[1].backgroundColor = c.purpleFill; ds[1].tension = tension;
         ds[2].data = d.shares; ds[2].borderColor = c.shares; ds[2].backgroundColor = c.shares;
         ds[2].pointRadius = d.shares.map((s) => s.r);
         this.chart.options.scales.y.grid.color = c.grid;
         this.chart.options.scales.y.ticks.color = c.ticks;
+
+        // On the zoomed -> preset transition (Reset or picking a preset clears the window), drop
+        // any stale plugin zoom transform so the axis re-fits the new preset data. Keyed to the
+        // transition (not merely "window is null") so a refresh mid-gesture can't clobber an
+        // in-progress zoom before its debounce fires.
+        const justCleared = this._prevWindow && !this.props.window;
+        this._prevWindow = this.props.window;
+        if (justCleared && this.chart.isZoomedOrPanned && this.chart.isZoomedOrPanned()) {
+            this.applyingServerData = true;
+            this.chart.resetZoom('none');
+            this.applyingServerData = false;
+        }
         this.chart.update();
         this.chart.resize();
     }
 
-    render({ range, onRange }) {
+    render(props) {
+        const zoomed = !!props.window;
         return html`
         <div class="card">
             <div class="chart-controls">
                 <span class="text-muted text-small mr-1">Range:</span>
                 ${RANGES.map(([r, label]) => html`<a href=${'?range=' + r}
-                    class=${'btn-range' + (range === r ? ' active' : '')}
-                    onClick=${(e) => { e.preventDefault(); onRange(r); }}>${label}</a>`)}
+                    class=${'btn-range' + (!zoomed && props.range === r ? ' active' : '')}
+                    onClick=${(e) => { e.preventDefault(); props.onRange(r); }}>${label}</a>`)}
+                ${zoomed
+                    ? html`<button class="btn-range btn-reset" onClick=${() => props.onResetZoom()}>↺ Reset zoom</button>`
+                    : html`<span class="text-muted text-xs ml-2">Drag to zoom · Shift-drag to pan · Scroll to zoom</span>`}
             </div>
             <div class="chart-wrap"><canvas ref=${this.canvasRef}></canvas></div>
         </div>`;

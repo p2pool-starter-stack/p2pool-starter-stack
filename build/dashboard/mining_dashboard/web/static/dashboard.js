@@ -11,8 +11,19 @@ import { normalizeTheme } from './logic.mjs';
 const root = document.getElementById('app');
 const REFRESH_MS = 30000;
 
+// A manual-zoom window {from, to} (epoch seconds) read from ?from=&to= so a zoomed URL is
+// shareable and survives reload (Issue #47); null/garbage falls back to the preset range.
+function windowFromUrl() {
+    const p = new URL(location.href).searchParams;
+    const from = parseFloat(p.get('from'));
+    const to = parseFloat(p.get('to'));
+    return (Number.isFinite(from) && Number.isFinite(to) && from > 0 && to > from)
+        ? { from, to } : null;
+}
+
 const ui = {
     range: new URL(location.href).searchParams.get('range') || 'all',
+    window: windowFromUrl(),   // {from,to} epoch-s when zoomed, else null
     sortIndex: null,
     sortAsc: true,
     view: localStorage.getItem('dashboardView') === 'advanced' ? 'advanced' : 'simple',
@@ -35,7 +46,8 @@ let inflight = false;    // guard against overlapping fetches if one is slow
 function rerender() {
     render(
         html`<${App} state=${state} connected=${connected} ui=${ui}
-                     onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme} />`,
+                     onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme}
+                     onZoom=${setZoom} onResetZoom=${resetZoom} />`,
         root,
     );
 }
@@ -44,8 +56,11 @@ async function tick() {
     if (inflight) return;
     inflight = true;
     try {
-        const res = await fetch('/api/state?range=' + encodeURIComponent(ui.range),
-                                { headers: { 'X-Requested-With': 'fetch' } });
+        // A custom zoom window overrides the preset range; the server adapts resolution to it.
+        const qs = ui.window
+            ? ('from=' + ui.window.from + '&to=' + ui.window.to)
+            : ('range=' + encodeURIComponent(ui.range));
+        const res = await fetch('/api/state?' + qs, { headers: { 'X-Requested-With': 'fetch' } });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         state = await res.json();
         connected = true;
@@ -61,8 +76,23 @@ async function tick() {
 
 function setRange(r) {
     ui.range = r;
+    ui.window = null;   // picking a preset exits any manual zoom
     history.replaceState(null, '', r === 'all' ? location.pathname : ('?range=' + r));
     tick();   // re-fetch immediately; the chart/series depend on the range
+}
+
+// Called (debounced) by the chart when a zoom/pan gesture settles: pin the visible window and
+// refetch it from the server at duration-adaptive resolution (Issue #47).
+function setZoom(fromS, toS) {
+    ui.window = { from: fromS, to: toS };
+    history.replaceState(null, '', '?from=' + Math.round(fromS) + '&to=' + Math.round(toS));
+    tick();
+}
+
+function resetZoom() {
+    ui.window = null;
+    history.replaceState(null, '', ui.range === 'all' ? location.pathname : ('?range=' + ui.range));
+    tick();
 }
 
 function onSort(idx) {

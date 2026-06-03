@@ -305,7 +305,7 @@ function WorkersTable({ workers, ui, onSort }) {
 
 // --- Operational view ----------------------------------------------------------------
 
-function DashboardView({ state, ui, onRange, onSort, onView }) {
+function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom }) {
     const advanced = ui.view === 'advanced';
     return html`
     <div id="dashboard-view" class=${advanced ? 'mode-advanced' : ''}>
@@ -316,7 +316,8 @@ function DashboardView({ state, ui, onRange, onSort, onView }) {
             </div>
         </div>
         <div class="grid">
-            <${ChartCard} chart=${state.chart} range=${ui.range} onRange=${onRange} />
+            <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window}
+                          onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom} />
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${GlobalStats} state=${state} />
@@ -330,7 +331,7 @@ function DashboardView({ state, ui, onRange, onSort, onView }) {
 
 // --- Root ----------------------------------------------------------------------------
 
-export function App({ state, connected, ui, onRange, onSort, onView, onTheme }) {
+export function App({ state, connected, ui, onRange, onSort, onView, onTheme, onZoom, onResetZoom }) {
     // The theme toggle is fixed-position and always available, even before the first data load.
     const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
     if (!state) {
@@ -344,7 +345,8 @@ export function App({ state, connected, ui, onRange, onSort, onView, onTheme }) 
         ${!connected ? html`<div class="disconnected-banner">Disconnected — showing last known data. Retrying…</div>` : null}
         ${state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
-            : html`<${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort} onView=${onView} />`}
+            : html`<${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
+                                     onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom} />`}
         ${switcher}
     <//>`;
 }

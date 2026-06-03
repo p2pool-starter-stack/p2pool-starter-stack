@@ -60,6 +60,18 @@ class TestStateApi:
         assert resp.status == 200
         assert (await resp.json())["range"] == "24h"
 
+    async def test_from_to_window_accepted(self, client):
+        # A manual-zoom window (Issue #47) is parsed and echoed back in the payload.
+        resp = await client.get("/api/state?from=1000&to=2000")
+        assert resp.status == 200
+        assert (await resp.json())["window"] == {"from": 1000.0, "to": 2000.0}
+
+    async def test_malformed_from_to_falls_back(self, client):
+        # Garbage from/to must not 500 — it falls back to the preset range, window null.
+        resp = await client.get("/api/state?from=foo&to=2000")
+        assert resp.status == 200
+        assert (await resp.json())["window"] is None
+
     async def test_node_down_badges_in_state(self, aiohttp_client):
         # When a node is down / workers rejected, the state surfaces it (Issue #31).
         data = {
@@ -149,6 +161,7 @@ class TestStaticAssets:
             ("/static/logic.mjs", "javascript"),
             ("/static/vendor/preact.module.js", "javascript"),
             ("/static/vendor/htm.module.js", "javascript"),
+            ("/static/vendor/chartjs-plugin-zoom.min.js", "javascript"),
         ):
             resp = await client.get(path)
             assert resp.status == 200, path

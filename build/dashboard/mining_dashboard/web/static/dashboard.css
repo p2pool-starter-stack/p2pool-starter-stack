@@ -99,10 +99,12 @@ tr:last-child td { border-bottom: none; }
 .wallet-text { font-size: 0.7rem; color: var(--text-muted); margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
 
 /* Chart Controls */
-.chart-controls { display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 15px; }
+.chart-controls { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 5px; margin-bottom: 15px; }
 .btn-range { display: inline-block; padding: 4px 12px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; border: 1px solid var(--border); background-color: var(--card); color: var(--text-muted); transition: all 0.2s; }
 .btn-range:hover { border-color: var(--text-muted); color: var(--text); }
 .btn-range.active { background-color: var(--ok); color: #fff; border-color: var(--ok); }
+/* Reset-zoom button reuses the range-button look but needs the <button> resets (Issue #47). */
+.btn-reset { cursor: pointer; font-family: inherit; line-height: 1.4; margin-left: 8px; }
 
 /* View Toggle */
 .view-controls { display: flex; justify-content: flex-end; margin-bottom: 15px; }

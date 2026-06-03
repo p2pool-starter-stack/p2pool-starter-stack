@@ -16,6 +16,7 @@ import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
     build_system, build_sync, build_badges, build_state, get_shell_html, _mode_palette,
+    parse_window, _target_points, _chart_tension,
 )
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
@@ -168,7 +169,51 @@ class TestChart:
         assert len(build_chart(history, [], "bogus")["p2pool"]) == 3
 
     def test_empty_history(self):
-        assert build_chart([], [], "all") == {"p2pool": [], "xvb": [], "shares": []}
+        assert build_chart([], [], "all") == {"p2pool": [], "xvb": [], "shares": [], "tension": 0.0}
+
+    # --- Issue #47: custom zoom window + duration-adaptive resolution/smoothing ---------
+
+    def test_custom_window_filters_both_bounds(self):
+        # A preset bounds only the lower end; a custom window clips BOTH ends.
+        hist = self._line(10, 1000)   # timestamps 1000..1270 (step 30)
+        chart = build_chart(hist, [], "all", window=(1060, 1150))
+        xs = [p["x"] for p in chart["p2pool"]]
+        assert xs == [1060_000, 1090_000, 1120_000, 1150_000]   # only ts in [1060, 1150]
+
+    def test_window_overrides_range(self):
+        # When both a window and a range are given, the window wins.
+        hist = self._line(10, 1000)
+        windowed = build_chart(hist, [], "1h", window=(1060, 1150))
+        assert len(windowed["p2pool"]) == 4
+
+    def test_short_window_kept_at_native_resolution(self):
+        # A <=1h window is never downsampled — full 30s detail (the "more detail zoomed in" goal).
+        now = time.time()
+        hist = self._line(120, now - 119 * 30, step=30)   # ~1h of 30s samples, ending now
+        chart = build_chart(hist, [], "1h")
+        assert len([p for p in chart["p2pool"] if p["y"] is not None]) == 120
+
+    def test_long_window_downsamples_to_tier(self):
+        now = time.time()
+        # ~1 week of 30s data (20160 pts) -> capped at the <=1w tier (600).
+        chart = build_chart(self._line(20160, now - 604800, step=30), [], "1w")
+        assert len([p for p in chart["p2pool"] if p["y"] is not None]) <= 600
+
+    def test_target_points_tiers(self):
+        assert _target_points(3600) == 0          # <= 1h: native
+        assert _target_points(3601) == 360        # <= 6h
+        assert _target_points(86400) == 480       # <= 24h
+        assert _target_points(604800) == 600      # <= 1w
+        assert _target_points(604801) == 700      # > 1w
+        assert _target_points(30 * 86400) == 700  # ceiling
+
+    def test_chart_tension_tiers(self):
+        assert _chart_tension(3600) == 0.0
+        assert _chart_tension(86400) == 0.2
+        assert _chart_tension(604800) == 0.35
+        assert _chart_tension(604801) == 0.4
+        # The payload carries the duration-derived tension the client applies.
+        assert build_chart(self._line(5, 1000), [], "1h")["tension"] == 0.0
 
 
 # --- Hashrate / mode / tier formatting ------------------------------------------------
@@ -424,7 +469,7 @@ def _data(**over):
 class TestBuildState:
     def test_has_all_sections(self):
         st = build_state(_data(), _state_mgr(), "all")
-        for key in ("syncing", "page_title", "host_ip", "last_update", "range", "badges",
+        for key in ("syncing", "page_title", "host_ip", "last_update", "range", "window", "badges",
                     "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
                     "shares_window", "proxy_workers", "tari", "workers", "chart"):
             assert key in st, f"missing section: {key}"
@@ -434,6 +479,14 @@ class TestBuildState:
 
     def test_range_echoed(self):
         assert build_state(_data(), _state_mgr(), "24h")["range"] == "24h"
+
+    def test_window_null_on_preset(self):
+        assert build_state(_data(), _state_mgr(), "24h")["window"] is None
+
+    def test_window_echoed_when_zoomed(self):
+        # A custom zoom window is echoed so the client can render Reset / re-request on refresh.
+        st = build_state(_data(), _state_mgr(), "all", window=(1000.0, 2000.0))
+        assert st["window"] == {"from": 1000.0, "to": 2000.0}
 
     def test_syncing_flag_and_title(self):
         st = build_state(_data(global_sync=True), _state_mgr(), "all")
@@ -457,6 +510,26 @@ class TestBuildState:
         bad_sm.get_history.side_effect = RuntimeError("boom")
         with pytest.raises(RuntimeError):
             build_state(_data(), bad_sm, "all")
+
+
+class TestParseWindow:
+    def test_valid_pair(self):
+        assert parse_window("1000", "2000") == (1000.0, 2000.0)
+
+    def test_absent_is_none(self):
+        assert parse_window(None, None) is None
+        assert parse_window("1000", None) is None
+
+    @pytest.mark.parametrize("frm,to", [
+        ("bad", "2000"),   # non-numeric
+        ("2000", "1000"),  # from >= to
+        ("1000", "1000"),  # zero-width
+        ("-5", "2000"),    # non-positive
+        ("nan", "2000"),   # not finite
+        ("inf", "2000"),
+    ])
+    def test_malformed_falls_back_to_none(self, frm, to):
+        assert parse_window(frm, to) is None
 
 
 class TestShell:
