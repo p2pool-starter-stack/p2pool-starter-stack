@@ -42,25 +42,12 @@ few seconds.
 
 ---
 
-## High-performance worker provisioning kit
+## The worker provisioning kit
 
-For a fully automated, performance-tuned worker, use the provisioning kit in the
-[`worker/`](../worker/) directory. It builds XMRig from source and applies kernel- and CPU-level
-tuning for maximum hashrate, then runs it as a managed service.
-
-Highlights:
-
-- **Automated setup** — installs dependencies and compiles XMRig from the latest source.
-- **Hardware-aware tuning** — detects the CPU (e.g. AMD EPYC, Ryzen X3D) and applies a matching
-  performance profile.
-- **Kernel & system tuning (Linux)** — HugePages (1 GB and 2 MB), MSR access, and disabling
-  prefetchers on AMD Zen where it helps.
-- **Service management (Linux)** — runs XMRig as a `systemd` service with a performance governor
-  and log rotation.
-- **Interactive config** — if no config exists, it prompts you for the one thing it needs: your
-  stack's hostname or IP.
-
-Quick start on the worker machine:
+For a fully automated, performance-tuned worker, use the self-contained kit in the
+[`worker/`](../worker/) directory. It builds XMRig from source, applies kernel- and CPU-level tuning
+for maximum hashrate, and runs it as a managed `systemd` service — a fully provisioned worker in one
+command:
 
 ```bash
 git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
@@ -69,6 +56,5 @@ chmod +x p2pool-starter-worker.sh
 sudo ./p2pool-starter-worker.sh
 ```
 
-On Linux a **reboot is required** afterward to apply HugePages and other kernel tuning; the
-script tells you when. See the kit's own [README](../worker/Readme.md) for the full guide,
-including maintenance, log locations, and verification steps.
+The kit is documented end-to-end in its own **[README](../worker/Readme.md)** — capabilities,
+hardware requirements, deployment, kernel tuning, maintenance, and verification.

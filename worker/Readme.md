@@ -34,6 +34,32 @@ which this script applies for you.
 The stack host these workers connect to is sized separately — see
 [docs/hardware.md](../docs/hardware.md).
 
+## 🔌 Connecting to the Stack
+
+A worker connects to your **P2Pool Starter Stack** through a **single endpoint** — the stack's
+`xmrig-proxy` on port **3333**. The stack handles pool selection, payouts, and the P2Pool/XvB split
+centrally, so the worker config stays minimal, and you **never put a wallet address in it**.
+
+To connect any [XMRig](https://github.com/xmrig/xmrig) instance by hand, this is the whole config:
+
+```json
+{
+    "pools": [
+        {
+            "url": "YOUR_STACK_IP:3333",
+            "user": "my-rig-01"
+        }
+    ]
+}
+```
+
+*   The `user` field is just a label for the rig — use its hostname so you can tell workers apart on the dashboard.
+*   Port **3333** must be reachable from the worker to the stack host; if the host has a firewall, allow inbound `3333` on the LAN.
+*   Workers talk to the stack over plain stratum on your local network — they do **not** need Tor.
+
+The provisioning kit below automates this connection (and all the performance tuning) for you. The
+manual config above is the fallback if you'd rather run XMRig yourself.
+
 ## 🚀 Deployment Guide
 
 ### 1. Clone the Repository
