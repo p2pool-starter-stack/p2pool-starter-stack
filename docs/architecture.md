@@ -28,7 +28,7 @@ flowchart TB
     XvB(["🎲 XMRvsBeast Pool"])
     Net(["🌐 Tor Network / Internet"])
 
-    subgraph stack ["🐳 P2Pool Starter Stack"]
+    subgraph stack ["🐳 Pithead"]
         direction TB
 
         Caddy["🔒 Caddy<br/>HTTPS reverse proxy"]

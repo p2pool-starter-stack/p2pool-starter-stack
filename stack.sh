@@ -931,7 +931,7 @@ optimize_kernel() {
 }
 
 prompt_start_stack() {
-    read -r -p "Start the P2Pool Starter Stack now? (Y/n): " START_NOW || true
+    read -r -p "Start Pithead now? (Y/n): " START_NOW || true
     if [[ ! "$START_NOW" =~ ^[Nn] ]]; then
         stack_up
     else

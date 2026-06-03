@@ -1,6 +1,6 @@
 # Documentation
 
-Everything you need to run, configure, and operate the **P2Pool Starter Stack**.
+Everything you need to run, configure, and operate **Pithead**.
 
 New here? Start with the [Getting Started](getting-started.md) guide — it takes you from a
 fresh Ubuntu machine to a synced, mining stack in a handful of commands. The other guides go

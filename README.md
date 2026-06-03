@@ -1,12 +1,13 @@
 <div align="center">
 
-<img src="./images/p2pool-starter-stack-logo-large.png" alt="P2Pool Starter Stack" width="560">
+<!-- TODO(pithead): add a new Pithead logo (e.g. images/pithead-logo-large.png) and restore the <img> here.
+     The previous asset — images/p2pool-starter-stack-logo-large.png — still shows the old wordmark. -->
 
-# P2Pool Starter Stack
+# Pithead
 
 ### Private Monero + Tari merge mining, the whole stack, in one command.
 
-[![CI](https://github.com/p2pool-starter-stack/p2pool-starter-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/p2pool-starter-stack/actions/workflows/ci.yml)
+[![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Tor](https://img.shields.io/badge/Networking-Tor--only-7D4698?logo=torproject&logoColor=white)
@@ -49,8 +50,8 @@ coffee gets cold**.
 > [Hardware Requirements](docs/hardware.md). You'll need your Monero and Tari payout addresses handy.
 
 ```bash
-git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
-cd p2pool-starter-stack
+git clone https://github.com/p2pool-starter-stack/pithead.git
+cd pithead
 chmod +x stack.sh
 ./stack.sh setup
 ```
@@ -105,7 +106,7 @@ flowchart TB
     XvB(["🎲 XMRvsBeast Pool"])
     Net(["🌐 Tor Network / Internet"])
 
-    subgraph stack ["🐳 P2Pool Starter Stack"]
+    subgraph stack ["🐳 Pithead"]
         direction TB
 
         Caddy["🔒 Caddy<br/>HTTPS reverse proxy"]

@@ -1,6 +1,6 @@
 # Mining Dashboard
 
-The monitoring web UI and XvB switching engine for the P2Pool Starter Stack. It aggregates
+The monitoring web UI and XvB switching engine for Pithead. It aggregates
 stats from the local collectors, the XMRig proxy, and the Tari node, and serves a single-page
 dashboard (behind Caddy) on `127.0.0.1:8000`.
 

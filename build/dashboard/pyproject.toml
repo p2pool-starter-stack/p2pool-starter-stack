@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mining-dashboard"
 version = "0.2.0"
-description = "Monitoring dashboard and XvB switching engine for the P2Pool Starter Stack"
+description = "Monitoring dashboard and XvB switching engine for Pithead"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

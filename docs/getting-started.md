@@ -5,8 +5,8 @@ driven by a single script — `stack.sh` — and most of it is automated.
 
 > **TL;DR**
 > ```bash
-> git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
-> cd p2pool-starter-stack
+> git clone https://github.com/p2pool-starter-stack/pithead.git
+> cd pithead
 > chmod +x stack.sh
 > ./stack.sh setup
 > ```
@@ -43,8 +43,8 @@ On an unsupported OS — or if dependency detection misfires on an unusual setup
 ## 2. Get the code
 
 ```bash
-git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
-cd p2pool-starter-stack
+git clone https://github.com/p2pool-starter-stack/pithead.git
+cd pithead
 chmod +x stack.sh
 ```
 
