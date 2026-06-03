@@ -11,7 +11,7 @@ deeper on individual topics once you're up and running.
 | Guide | What it covers |
 |---|---|
 | [Getting Started](getting-started.md) | Prerequisites, installation, first-run setup, and what to expect while the node syncs. |
-| [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the **stack host** and **worker rigs** — CPU, RAM, disk, network, OS — plus lighter-footprint options. |
+| [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network, OS — plus lighter-footprint options. (Worker-rig hardware lives in the [worker kit](../worker/Readme.md).) |
 | [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, **reusing an existing node via data directories**, and connecting to a **remote Monero node**. |
 | [The Dashboard](dashboard.md) | **Sync Mode**, the live operational view, and how to read every panel. |
 | [Adding Workers](workers.md) | Pointing any XMRig rig at the stack, plus the high-performance worker provisioning kit. |

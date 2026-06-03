@@ -24,8 +24,9 @@ driven by a single script — `stack.sh` — and most of it is automated.
 | **Disk** | A **pruned** Monero node needs ~**80–100 GB** and a **full** one **200 GB+**, plus ~**50 GB** for the Tari node — so plan for ~**150 GB** (pruned) or ~**300 GB** (full) of **SSD**, with room to grow. |
 | **Software** | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
-> 📐 **Full sizing guidance** — minimum vs. recommended specs for the stack host *and* your worker
-> rigs, plus ways to run leaner — is in **[Hardware Requirements](hardware.md)**.
+> 📐 **Full sizing guidance** for the stack host — minimum vs. recommended specs, plus ways to run
+> leaner — is in **[Hardware Requirements](hardware.md)**. Worker-rig specs live in the
+> [worker kit](../worker/Readme.md).
 
 You don't have to install the software dependencies yourself. `setup` checks for them and, **on
 Ubuntu, offers to install anything that's missing**. If you'd rather do it manually:

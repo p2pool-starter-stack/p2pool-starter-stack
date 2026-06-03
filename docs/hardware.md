@@ -10,7 +10,10 @@ needs:
    These do the real RandomX hashing and point at the stack host's port `3333`. A worker can be the
    same machine as the host, but treating them separately is what lets you scale hashrate.
 
-Size the **host** for nodes, storage, and uptime. Size the **workers** for CPU mining performance.
+Size the **host** for nodes, storage, and uptime; size the **workers** for CPU mining performance.
+
+> **This page covers the stack host.** Worker-rig hardware lives with the worker kit — see the
+> [worker README](../worker/Readme.md#-hardware-requirements) in [`worker/`](../worker/).
 
 ---
 
@@ -155,36 +158,19 @@ away:
 
 ---
 
-## Worker rigs (the miners)
-
-Workers are where hashrate actually comes from. Each is a separate machine running XMRig that points
-at the host's `3333` endpoint — no wallet address in the worker config. Add as many as you like.
-
-| Resource | Guidance |
-|---|---|
-| **CPU** | A modern multi-core x86 CPU with **AVX2** is strongly recommended. RandomX is CPU-only — more (and faster) cores = more hashrate. The provisioning kit auto-detects the CPU (e.g. AMD EPYC, Ryzen X3D) and applies a matching profile. |
-| **RAM** | RandomX **fast mode** needs **~2.3 GB** (a 2080 MB dataset + 256 MB cache), plus **~2 MB of L3 per mining thread**. **4 GB+** is comfortable for most rigs; budget more for high-core-count CPUs. (Light mode needs only 256 MB but is far slower — fast mode is what you want.) |
-| **HugePages** | The worker kit configures **2 MB and 1 GB** HugePages (plus MSR tweaks) for maximum hashrate — standard huge pages alone can lift RandomX throughput substantially. On Linux this needs a **reboot** to take effect. |
-| **OS** | Ubuntu 22.04+, Debian 12, or macOS. |
-| **Network** | Must reach the stack host on port **3333** over the LAN/network. Workers do **not** need Tor. |
-
-These figures come from XMRig's own
-[RandomX optimization guide](https://xmrig.com/docs/miner/randomx-optimization-guide). The
-automated, performance-tuned setup lives in [`worker/`](../worker/) — see
-[Adding Workers](workers.md) and the kit's own [README](../worker/Readme.md). You can also point any
-hand-configured XMRig instance at the stack; the wallet and pool routing are handled centrally.
-
----
-
 ## Sizing examples
 
 - **Small home setup (pruned):** a 6-core / 16 GB / 240 GB SSD mini-PC as the host, HugePages on,
-  with one or two desktop/laptop workers pointed at it. Comfortable for getting started.
+  with one or two workers pointed at it. Comfortable for getting started.
 - **Full node + several workers:** an 8-core / 32 GB / 600 GB SSD host running an unpruned node,
   feeding a handful of dedicated mining rigs. Headroom for Tari growth and long uptimes.
 - **Minimal / reuse-an-existing-node:** point the stack at a Monero node you already run (remote
   mode), and the host needs only enough for Tari, P2Pool, the proxy, dashboard, and Tor — far less
   disk and RAM.
+
+> **Sizing the worker rigs** that connect to this host is a separate exercise — their CPU is what
+> determines hashrate. See the worker kit's
+> [Hardware Requirements](../worker/Readme.md#-hardware-requirements).
 
 ---
 
@@ -192,5 +178,6 @@ hand-configured XMRig instance at the stack; the wallet and pool routing are han
 
 - [Getting Started](getting-started.md) — prerequisites and first-run setup.
 - [Configuration](configuration.md) — pruning, data directories, remote nodes, and `tari.mem_limit`.
-- [Adding Workers](workers.md) — connecting rigs and the high-performance provisioning kit.
+- [Adding Workers](workers.md) — connecting rigs to this host.
+- [Worker kit README](../worker/Readme.md) — worker-rig hardware and the provisioning script.
 - [Architecture](architecture.md) — the services and how they fit together.

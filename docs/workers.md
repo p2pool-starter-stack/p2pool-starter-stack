@@ -8,7 +8,8 @@ centrally, so each rig's configuration stays dead simple.
 > P2Pool service on the stack. Workers only need to know *where the stack is*.
 
 > 🧮 **What hardware should a worker have?** Workers do the actual RandomX hashing, so their specs
-> matter most for hashrate. See [Hardware Requirements › Worker rigs](hardware.md#worker-rigs-the-miners).
+> matter most for hashrate. See the worker kit's
+> [Hardware Requirements](../worker/Readme.md#-hardware-requirements).
 
 ## Connect any XMRig worker
 

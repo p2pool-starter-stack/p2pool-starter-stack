@@ -77,7 +77,7 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 | Guide | What's inside |
 |---|---|
 | **[Getting Started](docs/getting-started.md)** | Prerequisites, install, first-run setup, and what to expect while the node syncs. |
-| **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the stack host and worker rigs — CPU, RAM, disk, network — and how to run leaner. |
+| **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network — and how to run leaner. (Worker-rig specs live in the [worker kit](worker/Readme.md).) |
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode and a tour of the live operational view. |
 | **[Adding Workers](docs/workers.md)** | Connect any rig, or use the high-performance worker provisioning kit. |

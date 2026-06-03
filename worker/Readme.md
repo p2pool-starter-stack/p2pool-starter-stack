@@ -13,11 +13,26 @@ This script automates the deployment of a high-performance [XMRig](https://githu
 *   **Service Management (Linux):** Deploys XMRig as a systemd service for reliable, unattended operation, complete with `cpupower` performance governor settings and automatic log rotation.
 *   **Interactive Configuration:** If no config file is found, an interactive prompt will guide you through the minimal setup required.
 
-## 🛠 Prerequisites
+## 🛠 Hardware Requirements
 
-*   **OS:** Ubuntu 22.04+, Debian 12, or macOS.
-*   **Hardware:** A CPU with AVX2 support is strongly recommended.
-*   **Network:** The worker machine must be able to reach your main **P2Pool Starter Stack** server over the network.
+A worker is where the actual RandomX hashing happens, so its **CPU is what determines your
+hashrate**. The requirements themselves are modest — most of the performance comes from tuning,
+which this script applies for you.
+
+| Resource | Requirement | Recommended |
+|---|---|---|
+| **CPU** | 64-bit x86 with **AVX2** support | A high-core-count CPU (e.g. AMD Ryzen / EPYC) — more and faster cores mean more hashrate. The script auto-detects the CPU and applies a matching profile. |
+| **RAM** | **~2.3 GB free** for RandomX *fast mode* — a 2080 MB dataset + 256 MB cache — plus **~2 MB of L3 cache per mining thread** | **4 GB+**; budget more on high-core-count CPUs |
+| **HugePages** | Optional, but a significant speedup | The script configures **2 MB and 1 GB** HugePages (plus MSR access) for you — Linux only, and it needs a **reboot** to take effect |
+| **OS** | Ubuntu 22.04+, Debian 12, or macOS | — |
+| **Network** | Reach your stack host on port **3333** | Local network; workers do **not** need Tor |
+
+> RandomX *light mode* needs only 256 MB of RAM but is far slower — **fast mode** (the default) is
+> what you want for real hashrate. These memory figures are from XMRig's own
+> [RandomX optimization guide](https://xmrig.com/docs/miner/randomx-optimization-guide).
+
+The stack host these workers connect to is sized separately — see
+[docs/hardware.md](../docs/hardware.md).
 
 ## 🚀 Deployment Guide
 
