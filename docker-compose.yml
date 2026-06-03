@@ -216,8 +216,9 @@ services:
         - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket:ro
       environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
-      # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in
-      # config.json (pithead renders it to DASHBOARD_TZ in .env); defaults to Etc/UTC.
+      # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
+      # (`auto` = the host's timezone, auto-detected); pithead renders it to DASHBOARD_TZ in
+      # .env. The Etc/UTC here is only a last-resort fallback if DASHBOARD_TZ is unset.
       - TZ=${DASHBOARD_TZ:-Etc/UTC}
       - MONERO_NODE_HOST=${MONERO_NODE_HOST:-172.28.0.26}
       # monerod get_info RPC creds (Issue #29): the dashboard reads sync height/target over

@@ -317,6 +317,32 @@ resolve_default() {
     esac
 }
 
+# Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
+# default when dashboard.timezone is "auto"/unset. Falls back to Etc/UTC if it can't tell.
+detect_host_timezone() {
+    local tz="" link
+    # 1) Explicit TZ in the environment wins.
+    if [ -n "${TZ:-}" ]; then tz="$TZ"
+    # 2) systemd hosts.
+    elif command -v timedatectl >/dev/null 2>&1; then
+        tz=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+    fi
+    # 3) Debian/Ubuntu file.
+    [ -z "$tz" ] && [ -r /etc/timezone ] && tz=$(cat /etc/timezone 2>/dev/null || true)
+    # 4) /etc/localtime symlink (works on Linux + macOS): .../zoneinfo/<Area/City>.
+    if [ -z "$tz" ] && [ -L /etc/localtime ]; then
+        link=$(readlink /etc/localtime 2>/dev/null || true)
+        tz=${link##*/zoneinfo/}
+        [ "$tz" = "$link" ] && tz=""   # prefix not found -> unusable
+    fi
+    # Sanity-check it looks like an IANA zone (Area/City, UTC, Etc/GMT+5, ...); else UTC.
+    if [ -n "$tz" ] && [[ "$tz" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]]; then
+        printf '%s' "$tz"
+    else
+        printf '%s' "Etc/UTC"
+    fi
+}
+
 # --- Setup Steps ---
 
 # Read the os-release file into OS_ID / OS_VERSION / OS_PRETTY (subshell-sourced to avoid clobber).
@@ -615,9 +641,10 @@ parse_and_validate_config() {
     DASHBOARD_HOST=$(resolve_default "$(jq -r '.dashboard.host // empty' "$CONFIG_FILE")" "")
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
-    # Timezone for the dashboard's timestamps/charts. "auto"/empty -> Etc/UTC; set an IANA
-    # name (e.g. America/Chicago) for local time. Rendered into .env as DASHBOARD_TZ.
-    DASHBOARD_TZ=$(resolve_default "$(jq -r '.dashboard.timezone // empty' "$CONFIG_FILE")" "Etc/UTC")
+    # Timezone for the dashboard's timestamps/charts. "auto"/empty -> the host's timezone
+    # (auto-detected; falls back to Etc/UTC). Set an IANA name (e.g. America/Chicago) to
+    # override. Rendered into .env as DASHBOARD_TZ.
+    DASHBOARD_TZ=$(resolve_default "$(jq -r '.dashboard.timezone // empty' "$CONFIG_FILE")" "$(detect_host_timezone)")
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
