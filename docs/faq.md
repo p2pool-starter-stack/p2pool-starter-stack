@@ -1,0 +1,129 @@
+# FAQ
+
+Common questions about what Pithead is, what it does for you, and how it compares to wiring the
+pieces together yourself. If you're new here, start with [Getting Started](getting-started.md);
+the deeper "why" lives in [Architecture](architecture.md).
+
+---
+
+## Why Pithead vs. doing it yourself / vs. Gupax
+
+### vs. doing it yourself
+
+You can absolutely run a private Monero + P2Pool + Tari setup by hand — plenty of people do, and
+the underlying projects ([monerod](https://www.getmonero.org/), [P2Pool](https://github.com/SChernykh/p2pool),
+[XMRig](https://github.com/xmrig/xmrig)) are excellent. Doing it yourself means standing up and
+maintaining each piece and the wiring between them:
+
+- A Monero full node with restricted RPC, ZMQ, and Tor transaction broadcasting.
+- P2Pool pointed at that node, with onion connectivity so you're not exposing your home IP.
+- Tari (Minotari) merge-mining alongside Monero.
+- Each rig configured for the pool, plus a plan for what happens when the node goes down.
+- Some way to actually *see* hashrate, sync progress, and your PPLNS window.
+
+Pithead automates that whole stack in one command and adds the parts that are tedious to build
+yourself:
+
+- **Tor by default.** A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion)
+  addresses — no public port forwarding, and your home IP isn't exposed. See
+  [Architecture › Privacy by design](architecture.md#privacy-by-design).
+- **One endpoint for every rig.** All workers point at a single `xmrig-proxy` endpoint on `:3333`.
+  There's nothing per-rig to configure — no wallet address, no pool URL juggling. See
+  [Connecting Miners](workers.md).
+- **Algorithmic XvB switching.** A feedback controller splits your hashrate between P2Pool and
+  XMRvsBeast (XvB) bonus rounds, donating only the minimum needed to hold your target tier and
+  routing the rest to P2Pool. See [Architecture › Algorithmic switching](architecture.md#algorithmic-switching).
+- **Node-down worker failover.** If monerod goes down, the stack stops `xmrig-proxy` so your
+  miners fail over to their backup pools instead of mining into a void. See
+  [Configuration › `dashboard.tari_required`](configuration.md#configuration-reference).
+- **A dashboard that tells you things.** Live hashrate, sync progress, the PPLNS window,
+  per-worker stats, and your P2Pool/XvB split — served over HTTPS on your LAN. See
+  [The Dashboard](dashboard.md).
+- **Hardened defaults.** Least-privilege containers, SHA256-verified and version-pinned binaries,
+  localhost-only RPC, and split read-only / start-stop Docker socket proxies. See
+  [Architecture › Security posture](architecture.md#security-posture).
+
+If you enjoy hand-wiring infrastructure, the manual route is a great learning exercise. If you'd
+rather get a private, multi-rig, merge-mining stack running before your coffee gets cold, that's
+what Pithead is for.
+
+### vs. Gupax
+
+[Gupax](https://github.com/hinto-janai/gupax) is an excellent GUI for running P2Pool + XMRig on a
+**single machine** — if you want a friendly, one-box way to solo-mine Monero on P2Pool, it's a
+great choice and worth a look.
+
+Pithead solves a different problem. It's a full self-hosted **stack**, not a single-machine GUI:
+your own Monero full node, Tor for privacy, Tari merge-mining, a single proxy endpoint for many
+rigs, algorithmic XvB switching, node-down failover, and a LAN dashboard — all orchestrated
+together. Think of Gupax as the right tool when you're mining on one PC, and Pithead as the right
+tool when you want to run the whole operation — node, privacy, dashboard, and a fleet of workers —
+yourself. Different tools for different goals.
+
+---
+
+## FAQ
+
+### Is my home IP exposed?
+
+No. A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so the
+stack participates in each network without exposing your home IP. Monero also broadcasts
+transactions over Tor, and the node's RPC is bound to localhost by default. See
+[Architecture › Privacy by design](architecture.md#privacy-by-design).
+
+### Do I need to port-forward?
+
+No. Because connectivity runs through Tor hidden services, there's **no public IPv4 port
+forwarding required**. (On your LAN, port `3333` does need to be reachable from each rig to the
+stack host — that's local network traffic, not an internet-facing port. See
+[Connecting Miners › Networking notes](workers.md#networking-notes).)
+
+### Is the XvB donation mandatory? Will it cost me?
+
+It's optional, and the engine is designed to minimize what you give up. XvB switching is on by
+default but can be turned off (`xvb.enabled: false`). When it's on, the decision engine donates
+only enough hashrate to **hold your target tier** and routes everything else to P2Pool — because
+the XvB raffle picks winners at random, donating above a tier's threshold earns nothing extra. See
+[Architecture › Algorithmic switching](architecture.md#algorithmic-switching) and the `xvb.*`
+keys in [Configuration](configuration.md#configuration-reference).
+
+### What is Tari? Do I have to mine it?
+
+Tari (the [Minotari](https://www.tari.com/) node) is a chain that's **merge-mined alongside
+Monero** through P2Pool — you earn on both at once for the same RandomX work. You do need a Tari
+payout address, but you don't have to let Tari problems hold up Monero mining: set
+`dashboard.tari_required: false` to keep mining Monero through a Tari outage or resync, with Tari
+catching up in the background. See [Configuration › `dashboard.tari_required`](configuration.md#configuration-reference).
+
+### Can I use my existing synced Monero node?
+
+Yes. You can skip most — or all — of the initial blockchain sync two ways: point the bundled node
+at your existing `.bitmonero` directory via `monero.data_dir`, or switch to **remote mode** and
+connect to a node you run elsewhere (it must have ZMQ publishing enabled for P2Pool). The same
+`data_dir` trick works for reusing a synced Tari node. See
+[Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
+
+### What hardware do I need?
+
+Plan for **16 GB+ RAM**, a CPU with **AVX2** for RandomX, and an **SSD** (~150 GB pruned /
+~300 GB full). Full minimum-vs-recommended sizing for the stack host is in
+[Hardware Requirements](hardware.md). (Miner hardware is sized separately in
+[RigForge](https://github.com/p2pool-starter-stack/rigforge).)
+
+### How do I connect my miners?
+
+Point any [XMRig](https://github.com/xmrig/xmrig) (or other RandomX miner) at
+`YOUR_STACK_IP:3333` — that single endpoint is the only pool setting your rigs need, and you do
+**not** put a wallet address in the miner config. Point all your rigs at the same address; the
+stack aggregates them. New to mining? [RigForge](https://github.com/p2pool-starter-stack/rigforge)
+provisions a tuned worker and wires up the `3333` connection in one command. See
+[Connecting Miners](workers.md).
+
+---
+
+## See also
+
+- [Getting Started](getting-started.md) — fresh machine to a synced, mining stack.
+- [Architecture](architecture.md) — the services, the privacy model, and the switching engine.
+- [Configuration](configuration.md) — every `config.json` key, reusing a node, and remote nodes.
+- [Connecting Miners](workers.md) — the single `3333` endpoint and RigForge.
