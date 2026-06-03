@@ -4,9 +4,30 @@ The monitoring web UI and XvB switching engine for the P2Pool Starter Stack. It 
 stats from the local collectors, the XMRig proxy, and the Tari node, and serves a single-page
 dashboard (behind Caddy) on `127.0.0.1:8000`.
 
-The page updates **live in place**: a small client loop re-fetches the rendered page and swaps
-the server-rendered region `<div>`s (and updates the chart from a JSON data island) instead of
-reloading, so scroll position, table sort, and chart state survive each refresh.
+## Architecture
+
+The server is a **data API**; the browser renders the UI. There is no server-side templating:
+
+- **`GET /`** serves a tiny static HTML shell.
+- **`GET /api/state?range=…`** returns the whole dashboard as JSON — the contract built by
+  `views.build_state`. Computed domain values (effective hashrate, P2Pool/XvB averages, XvB
+  tier qualification, shares-in-window, sync/down state) live in one typed place,
+  `service/metrics.py` → `build_metrics() -> Metrics`; the view layer **formats** those into
+  display strings + semantic tokens (`variant: "ok"`, `level: "high"`) and emits no HTML. The
+  same `Metrics` is meant to back future consumers (Telegram #45, calculator #12) without
+  re-deriving from the raw dict.
+- The client (`static/dashboard.js` + `components.mjs`) is a small **Preact** app (rendered with
+  `htm` tagged templates — no JSX, no build step). It polls `/api/state` every 30s and renders
+  declaratively, so the chart instance, table sort, selected range, and the simple/advanced view
+  all survive each refresh. UI state lives on the client; data lives on the server.
+
+Everything is served from `/static` — the vendored Preact, htm and Chart.js (`static/vendor/`),
+plus the app modules and `dashboard.css`. Nothing is inlined and the libraries are eval-free, so
+the page runs under a strict Content-Security-Policy with no `'unsafe-inline'`/`'unsafe-eval'`.
+
+The frontend has no JS unit tests (the repo is intentionally Node-/build-free); the Python API,
+where all the logic and formatting live, is fully unit-tested, and the client is verified with a
+browser smoke test.
 
 ## Layout
 
@@ -16,9 +37,11 @@ mining_dashboard/
 ├── config/            # configuration from environment variables
 ├── client/            # external service clients (xmrig, xmrig-proxy, xvb, tari gRPC, monerod RPC, docker control)
 ├── collector/         # local stats collectors (pools, system, docker logs)
-├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite)
-├── web/               # server.py (transport: routing + middleware), views.py (rendering:
-│                      #   typed context dataclasses + render_dashboard), HTML template, static assets
+├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite),
+│                      #   metrics (typed computed domain values consumed by the view layer)
+├── web/               # server.py (transport: / shell + /api/state + middleware),
+│                      #   views.py (build_state: the JSON state object), templates/index.html
+│                      #   (static shell), static/ (Preact app + dashboard.css + vendored libs)
 └── helper/            # formatting utilities
 ```
 

@@ -1,0 +1,226 @@
+"""Typed metrics/domain layer (Issue #61).
+
+``build_metrics`` turns the untyped ``latest_data`` snapshot (plus a little ``state_manager``
+state) into a frozen ``Metrics`` dataclass of **computed, unformatted domain values** —
+effective hashrate, P2Pool/XvB averages, XvB tiers, shares-in-PPLNS-window, worker counts,
+per-node sync/down state, and the raw pool/network figures a payout calculator needs.
+
+This is the single place those values are derived. The web view layer formats display strings
+*from* ``Metrics`` (format at the edge); other consumers — e.g. the planned Telegram notifier
+(#45) and XvB/P2Pool calculator (#12) — read the same ``Metrics`` instead of re-deriving from
+the raw dict or scraping rendered HTML. Nothing here formats or emits markup.
+"""
+import time
+from dataclasses import dataclass
+
+from mining_dashboard.config.config import (
+    ENABLE_XVB, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
+    MONERO_PRUNE, MONERO_NODE_HOST,
+)
+from mining_dashboard.helper.utils import get_tier_info, resolve_target_threshold
+
+# Nano sidechain blocks are 30s; Main/Mini are 10s. Drives the PPLNS-window duration.
+_BLOCK_TIME_NANO = 30
+_BLOCK_TIME_DEFAULT = 10
+
+# Only a local monerod's pruning state is knowable to us; a remote node isn't probed.
+_LOCAL_MONERO_HOST = "172.28.0.26"
+
+
+@dataclass(frozen=True)
+class SyncMetric:
+    """One chain's sync/health state (Issues #31, #51)."""
+    percent: int
+    current: int
+    target: int
+    remaining: int
+    has_target: bool   # a real target height is known (vs. still discovering it)
+    done: bool         # fully synced
+    down: bool         # debounced unreachable (node-health monitor)
+
+
+@dataclass(frozen=True)
+class Metrics:
+    """Computed dashboard domain values. All hashrates are raw H/s; no display formatting."""
+    # Effective hashrate (H/s).
+    total_h15: float
+    p2pool_1h: float
+    p2pool_24h: float
+    xvb_1h: float
+    xvb_24h: float
+    stratum_h15: float
+    stratum_h1h: float
+    stratum_h24h: float
+    # Mode + XvB tiers.
+    mode: str
+    xvb_enabled: bool
+    current_tier: str
+    target_tier: str
+    target_threshold: float
+    target_sustainable: bool
+    low_hr_warning: bool       # an explicit tier was chosen that the hashrate can't sustain
+    xvb_fail_count: int
+    xvb_last_update: float     # epoch seconds of the last XvB stats fetch
+    # Workers.
+    workers_online: int
+    workers_total: int
+    # Shares / PPLNS.
+    shares_in_window: int
+    pplns_window: int          # blocks
+    block_time: int            # seconds per sidechain block
+    # Pool / network (raw figures; e.g. payout-calculator inputs, #12).
+    pool_type: str
+    pool_hashrate: float
+    pool_difficulty: float
+    network_difficulty: float
+    network_height: int
+    # Sync / node health.
+    global_syncing: bool
+    monero: SyncMetric
+    tari: SyncMetric
+    monero_mode: str           # "Pruned" / "Full" / "Unknown"
+    tari_mining: bool          # Tari merge-mining active
+
+
+def build_metrics(latest_data, state_mgr, history=None):
+    """Derive :class:`Metrics` from the aggregated snapshot and shared state.
+
+    ``history`` (the hashrate DB history) is fetched from ``state_mgr`` when not supplied —
+    callers that already hold it (e.g. the dashboard, which also charts it) can pass it to
+    avoid a second read.
+    """
+    data = latest_data or {}
+    if history is None:
+        history = state_mgr.get_history()
+    xvb_stats = state_mgr.get_xvb_stats() or {}
+    tiers = state_mgr.get_tiers()
+
+    mode = xvb_stats.get('current_mode', 'P2POOL')
+    if not ENABLE_XVB:
+        mode = "P2POOL (XvB Disabled)"
+
+    total_h15 = data.get('total_live_h15', 0) or 0
+    xvb_1h = xvb_stats.get('avg_1h', 0) or 0
+    xvb_24h = xvb_stats.get('avg_24h', 0) or 0
+
+    # P2Pool 1h/24h from our own DB history (time-weighted v_p2pool), not p2pool's noisy
+    # stratum estimate or a total-minus-XvB subtraction (Issue #27).
+    p2pool_1h = _avg_p2pool_over_window(history, 3600)
+    p2pool_24h = _avg_p2pool_over_window(history, 86400)
+
+    current_tier, _ = get_tier_info(xvb_24h, tiers)
+    target_threshold, sustainable = resolve_target_threshold(
+        tiers, total_h15, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION
+    )
+    target_tier, _ = get_tier_info(target_threshold, tiers)
+    low_hr_warning = bool(
+        ENABLE_XVB and XVB_DONATION_LEVEL not in ("auto", "highest")
+        and target_threshold > 0 and not sustainable
+    )
+    if not ENABLE_XVB:
+        current_tier = "Disabled"
+        target_tier = "Disabled"
+        low_hr_warning = False
+
+    stratum = data.get('stratum', {})
+    pool_stats = data.get('pool', {})
+    p2p = pool_stats.get('p2p', {})
+    local_pool = pool_stats.get('pool', {})
+    network = data.get('network', {})
+
+    pool_type = p2p.get('type', 'Main')
+    block_time = _BLOCK_TIME_NANO if pool_type == 'Nano' else _BLOCK_TIME_DEFAULT
+    pplns_window = local_pool.get('pplns_window', 2160)
+    cutoff = time.time() - pplns_window * block_time
+    shares_in_window = sum(1 for s in data.get('shares', []) if s.get('ts', 0) >= cutoff)
+
+    workers = data.get('workers', [])
+    workers_online = sum(1 for w in workers if w.get('status') == 'online')
+
+    return Metrics(
+        total_h15=total_h15,
+        p2pool_1h=p2pool_1h,
+        p2pool_24h=p2pool_24h,
+        xvb_1h=xvb_1h,
+        xvb_24h=xvb_24h,
+        stratum_h15=stratum.get('hashrate_15m', 0) or 0,
+        stratum_h1h=stratum.get('hashrate_1h', 0) or 0,
+        stratum_h24h=stratum.get('hashrate_24h', 0) or 0,
+        mode=mode,
+        xvb_enabled=bool(ENABLE_XVB),
+        current_tier=current_tier,
+        target_tier=target_tier,
+        target_threshold=target_threshold,
+        target_sustainable=sustainable,
+        low_hr_warning=low_hr_warning,
+        xvb_fail_count=xvb_stats.get('fail_count', 0) or 0,
+        xvb_last_update=xvb_stats.get('last_update', 0) or 0,
+        workers_online=workers_online,
+        workers_total=len(workers),
+        shares_in_window=shares_in_window,
+        pplns_window=pplns_window,
+        block_time=block_time,
+        pool_type=pool_type,
+        pool_hashrate=local_pool.get('hashrate', 0) or 0,
+        pool_difficulty=local_pool.get('difficulty', 0) or 0,
+        network_difficulty=network.get('difficulty', 0) or 0,
+        network_height=network.get('height', 0) or 0,
+        global_syncing=bool(data.get('global_sync', False)),
+        monero=_sync_metric(data.get('monero_sync', {})),
+        tari=_sync_metric(data.get('tari_sync', {})),
+        monero_mode=_monero_mode(),
+        tari_mining=bool(data.get('tari', {}).get('active', False)),
+    )
+
+
+def _avg_p2pool_over_window(history, window_seconds):
+    """Time-weighted P2Pool hashrate over the trailing window, from DB history.
+
+    Averages the per-sample ``v_p2pool`` for samples within the window. Samples are written at
+    a fixed cadence, so a simple mean approximates a time-weighted average. Mirrors the chart's
+    legacy-data fallback: rows predating the p2pool/xvb split (v_p2pool == v_xvb == 0 but
+    v > 0) count as P2Pool. (Issue #27)
+    """
+    if not history:
+        return 0.0
+
+    cutoff = time.time() - window_seconds
+    total = 0.0
+    count = 0
+    for x in history:
+        if x.get('timestamp', 0) < cutoff:
+            continue
+        vp = x.get('v_p2pool', 0) or 0
+        vx = x.get('v_xvb', 0) or 0
+        v = x.get('v', 0) or 0
+        if vp == 0 and vx == 0 and v > 0:
+            vp = v
+        total += vp
+        count += 1
+
+    return total / count if count else 0.0
+
+
+def _sync_metric(sync):
+    """Build a :class:`SyncMetric` from a chain's raw ``*_sync`` dict."""
+    percent = sync.get('percent', 0) or 0
+    current = sync.get('current', 0) or 0
+    target = sync.get('target', 0) or 0
+    has_target = target > 0
+    return SyncMetric(
+        percent=percent,
+        current=current,
+        target=target,
+        remaining=target - current,
+        has_target=has_target,
+        done=has_target and percent >= 100,
+        down=bool(sync.get('down', False)),
+    )
+
+
+def _monero_mode():
+    """Monero node pruning mode (Issue #32). Only meaningful for a local node — a remote
+    node's pruning state isn't something we probe, so it reads 'Unknown'."""
+    if MONERO_NODE_HOST == _LOCAL_MONERO_HOST:
+        return "Pruned" if MONERO_PRUNE else "Full"
+    return "Unknown"

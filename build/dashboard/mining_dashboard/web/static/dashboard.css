@@ -1,0 +1,141 @@
+/* Dashboard stylesheet.
+ *
+ * Extracted from the inline <style> block in index.html (Issue #60) so the page can be
+ * served under a CSP without style-src 'unsafe-inline'. All dynamic styling that used to
+ * live in inline style="" attributes is expressed here as classes the server picks
+ * (palette colours, gauges) or set at runtime via the CSSOM in dashboard.js (the gauge
+ * fill %, which can't be a fixed class). Nothing here is templated — it's static CSS. */
+
+:root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --text: #c9d1d9; --text-muted: #8b949e;
+    --accent: #58a6ff; --ok: #238636; --bad: #da3633; --warn: #d29922; --purple: #a371f7;
+}
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; }
+
+.container { max-width: 1400px; margin: 0 auto; }
+
+/* Layout & Grid */
+.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 20px; display: flex; flex-direction: column; min-width: 0; }
+
+/* Typography */
+h2 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+h3 { margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.text-muted { color: var(--text-muted); }
+.text-accent { color: var(--accent); }
+.text-small { font-size: 0.85rem; }
+.text-xs { font-size: 0.75rem; }
+.font-mono { font-family: monospace; }
+.font-bold { font-weight: bold; }
+
+/* Stats */
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.stat-card { background: var(--bg); padding: 10px 12px; border-radius: 4px; border: 1px solid var(--border); }
+.stat-card h5 { margin: 0 0 4px 0; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+.stat-card p { margin: 0; font-weight: 600; font-size: 0.95rem; }
+.col-span-2 { grid-column: span 2; }
+
+/* Table */
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th { text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; cursor: pointer; }
+td { padding: 10px; border-bottom: 1px solid #21262d; }
+tr:last-child td { border-bottom: none; }
+
+/* Components */
+.status-ok { color: var(--ok); }
+.status-bad { color: var(--bad); }
+.status-warn { color: var(--warn); }
+
+.progress-bg { background: var(--border); border-radius: 4px; height: 6px; width: 100%; margin-top: 6px; overflow: hidden; }
+.progress-fill { background: var(--accent); height: 100%; border-radius: 4px; }
+.progress-fill.warning { background: var(--warn); }
+.progress-fill.critical { background: var(--bad); }
+
+.badge { padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; vertical-align: middle; display: inline-block; }
+.badge-outline { border: 1px solid var(--border); color: var(--text-muted); }
+.badge-ok { background: var(--ok); color: white; }
+.badge-purple { background: var(--purple); color: white; }
+.badge-accent { background: var(--accent); color: white; }
+.badge-bad { background: var(--bad); color: white; }
+.badge-warn { background: var(--warn); color: white; }
+/* Header status badges sit in a gapped row, so individual badges need no margins. */
+.badge-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: 10px; }
+
+.wallet-text { font-size: 0.7rem; color: #666; margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
+
+/* Chart Controls */
+.chart-controls { display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 15px; }
+.btn-range { display: inline-block; padding: 4px 12px; border-radius: 4px; text-decoration: none; font-size: 0.8rem; border: 1px solid var(--border); background-color: var(--card); color: var(--text-muted); transition: all 0.2s; }
+.btn-range:hover { border-color: var(--text-muted); color: var(--text); }
+.btn-range.active { background-color: var(--ok); color: #fff; border-color: var(--ok); }
+
+/* View Toggle */
+.view-controls { display: flex; justify-content: flex-end; margin-bottom: 15px; }
+.toggle-group { display: inline-flex; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.btn-toggle { background: transparent; border: none; color: var(--text-muted); padding: 6px 16px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+.btn-toggle:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+.btn-toggle.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* View Modes */
+.card-advanced { display: none !important; }
+.card-simple { display: flex !important; }
+
+.mode-advanced .card-advanced { display: flex !important; }
+.mode-advanced .card-simple { display: none !important; }
+
+/* Utilities */
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-end { justify-content: flex-end; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mt-xs { margin-top: 2px; }
+.mt-1 { margin-top: 5px; }
+.mt-2 { margin-top: 10px; }
+.mr-1 { margin-right: 5px; }
+.mr-2 { margin-right: 0.5rem; }
+.ml-1 { margin-left: 8px; }
+.ml-2 { margin-left: 10px; }
+.mx-1 { margin-left: 5px; margin-right: 5px; }
+
+/* Pool/mode palette. The server picks one of these classes (see views._mode_palette)
+ * instead of emitting an inline style="color:#..." — keeps the CSP free of
+ * style-src 'unsafe-inline' and makes #43 (theming) a stylesheet change. The hexes match
+ * the --ok/--purple/--accent/--text-muted variables they replace. */
+.c-ok { color: var(--ok); }
+.c-purple { color: var(--purple); }
+.c-accent { color: var(--accent); }
+.c-muted { color: var(--text-muted); }
+.bg-ok { background-color: var(--ok); }
+.bg-purple { background-color: var(--purple); }
+.bg-accent { background-color: var(--accent); }
+
+/* Misc component sizing previously carried as inline styles. */
+.hashrate-total { font-size: 24px; }
+.disk-bar { width: 150px; }
+.chart-wrap { position: relative; flex-grow: 1; min-height: 300px; width: 100%; overflow: hidden; }
+.check-inline { font-size: 1.2em; }
+.check-big { font-size: 3.5em; line-height: 1; }
+
+/* --- App states --- */
+/* The Preact app renders SyncView or DashboardView itself, so neither needs a default
+ * display rule. These cover the pre-data shell and a lost connection. */
+.loading { color: var(--text-muted); text-align: center; padding: 60px 20px; font-size: 1.1rem; }
+.disconnected-banner { background: var(--bad); color: #fff; padding: 8px 12px; border-radius: 6px;
+    margin-bottom: 16px; text-align: center; font-size: 0.85rem; }
+
+/* --- Sync View Styles --- */
+.loader-container { position: relative; width: 150px; height: 150px; margin: 20px auto; }
+.progress-wheel {
+  width: 100%; height: 100%; border-radius: 50%;
+  /* --p is set at runtime by dashboard.js from the data-percent attribute. */
+  background: conic-gradient(#238636 var(--p), #30363d 0deg);
+  display: flex; align-items: center; justify-content: center;
+}
+.progress-wheel::before { content: ""; position: absolute; width: 120px; height: 120px; border-radius: 50%; background: #161b22; }
+.progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #fff; z-index: 10; }
+.status-text { font-size: 1.1em; margin-top: 15px; color: #8b949e; text-align: center; }
+.header-placeholder { text-align: center; margin: 40px 0; border-bottom: 1px solid #30363d; padding-bottom: 20px; }
