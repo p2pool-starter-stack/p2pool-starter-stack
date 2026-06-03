@@ -179,6 +179,210 @@ stack_status() {
     fi
 }
 
+# --- Diagnostics (doctor) ---
+#
+# A strictly READ-ONLY health report: the "run this and paste the output" command for support
+# threads. It never modifies files or the system, and never hard-exits mid-run — every check is
+# guarded so a missing tool or unreachable service can't abort it. Each check prints one
+# OK/WARN/FAIL line with a short hint; a summary follows. It works whether or not the stack is
+# deployed (env-dependent checks degrade gracefully when .env is absent), and Linux-only probes
+# (e.g. /proc/meminfo) are skipped on macOS dev hosts.
+
+# Per-run tallies for the closing summary. Reset at the top of doctor().
+DR_OK=0; DR_WARN=0; DR_FAIL=0
+
+dr_ok()   { DR_OK=$((DR_OK + 1));     printf '  %b✓ OK%b   %s\n'   "$C_GREEN"  "$C_RESET" "$1"; }
+dr_warn() { DR_WARN=$((DR_WARN + 1)); printf '  %b⚠ WARN%b %s\n'   "$C_YELLOW" "$C_RESET" "$1"; }
+dr_fail() { DR_FAIL=$((DR_FAIL + 1)); printf '  %b✗ FAIL%b %s\n'   "$C_RED"    "$C_RESET" "$1"; }
+# Neutral note for context lines that aren't pass/fail (e.g. a skipped Linux-only check).
+dr_info() { printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
+
+doctor() {
+    DR_OK=0; DR_WARN=0; DR_FAIL=0
+    detect_os
+
+    log "Running pithead diagnostics (read-only)..."
+    echo "  Host: ${OS_PRETTY:-$OS_TYPE}"
+    echo ""
+
+    # --- Dependencies ---
+    echo "Dependencies:"
+    if command -v jq >/dev/null 2>&1; then
+        dr_ok "jq found ($(jq --version 2>/dev/null || echo 'unknown version'))."
+    else
+        dr_fail "jq not found — install it (Ubuntu: 'sudo apt-get install -y jq')."
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+        dr_ok "openssl found."
+    else
+        dr_fail "openssl not found — install it (Ubuntu: 'sudo apt-get install -y openssl')."
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        dr_ok "docker found ($(docker --version 2>/dev/null || echo 'unknown version'))."
+    else
+        dr_fail "docker not found — install Docker and the compose v2 plugin."
+    fi
+    if docker compose version >/dev/null 2>&1; then
+        dr_ok "docker compose (v2 plugin) found."
+    else
+        dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
+    fi
+
+    # --- Docker daemon ---
+    echo ""
+    echo "Docker daemon:"
+    if ! command -v docker >/dev/null 2>&1; then
+        dr_info "Skipped — docker is not installed."
+    elif docker info >/dev/null 2>&1; then
+        dr_ok "Docker daemon is reachable."
+    else
+        dr_fail "Docker daemon is not reachable — start it (e.g. 'sudo systemctl start docker') and ensure your user is in the 'docker' group."
+    fi
+
+    # --- CPU: AVX2 (performance only) ---
+    echo ""
+    echo "CPU:"
+    local avx2_detected=0
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        if sysctl -a 2>/dev/null | grep "machdep.cpu" | grep -q "AVX2"; then avx2_detected=1; fi
+    else
+        if grep -q "avx2" /proc/cpuinfo 2>/dev/null; then avx2_detected=1; fi
+    fi
+    if [ "$avx2_detected" -eq 1 ]; then
+        dr_ok "AVX2 supported."
+    else
+        dr_warn "AVX2 not detected — mining performance will be poor (performance only, not fatal)."
+    fi
+
+    # --- Memory (Linux only) ---
+    echo ""
+    echo "Memory:"
+    if [ "$OS_TYPE" != "Linux" ]; then
+        dr_info "Skipped HugePages / free-RAM checks — not supported on $OS_TYPE (Linux-only)."
+    else
+        local huge_total huge_free
+        huge_total=$(awk '/^HugePages_Total/{print $2}' /proc/meminfo 2>/dev/null || true)
+        huge_free=$(awk '/^HugePages_Free/{print $2}' /proc/meminfo 2>/dev/null || true)
+        if [ -z "$huge_total" ]; then
+            dr_warn "Could not read HugePages from /proc/meminfo."
+        elif [ "$huge_total" -gt 0 ] 2>/dev/null; then
+            dr_ok "HugePages reserved: ${huge_total} total, ${huge_free:-?} free (RandomX uses these)."
+        else
+            dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run 'pithead setup' (kernel optimization) to reserve them."
+        fi
+
+        local mem_avail_kb mem_avail_mb
+        mem_avail_kb=$(awk '/^MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || true)
+        if [ -z "$mem_avail_kb" ]; then
+            dr_warn "Could not read MemAvailable from /proc/meminfo."
+        else
+            mem_avail_mb=$(( mem_avail_kb / 1024 ))
+            if [ "$mem_avail_mb" -ge 2048 ] 2>/dev/null; then
+                dr_ok "Free RAM: ${mem_avail_mb} MiB available."
+            else
+                dr_warn "Free RAM low: ${mem_avail_mb} MiB available — the stack (Tari especially) may be memory-starved."
+            fi
+        fi
+    fi
+
+    # --- Disk: free space on the data directories ---
+    echo ""
+    echo "Disk:"
+    # Derive data dirs from .env when present, otherwise fall back to the default ./data layout.
+    # We never create anything here: df -P is run only on paths that already exist.
+    local dirs=() d df_line avail_h
+    if [ -f "$ENV_FILE" ]; then
+        for d in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR TOR_DATA_DIR; do
+            local v
+            v=$(env_get "$d")
+            [ -n "$v" ] && dirs+=("$v")
+        done
+    fi
+    if [ "${#dirs[@]}" -eq 0 ]; then
+        dirs=("$PWD/data")
+        dr_info "No data dirs in $ENV_FILE — checking the default ./data location."
+    fi
+    for d in "${dirs[@]}"; do
+        if [ ! -e "$d" ]; then
+            dr_info "Skipped $d — directory does not exist yet."
+            continue
+        fi
+        df_line=$(df -P "$d" 2>/dev/null | awk 'NR==2' || true)
+        if [ -z "$df_line" ]; then
+            dr_warn "Could not read free disk for $d."
+            continue
+        fi
+        avail_h=$(df -Ph "$d" 2>/dev/null | awk 'NR==2{print $4}' || true)
+        # 4th column of df -P is available 1K-blocks.
+        local avail_kb
+        avail_kb=$(printf '%s\n' "$df_line" | awk '{print $4}')
+        if [ -n "$avail_kb" ] && [ "$avail_kb" -ge 10485760 ] 2>/dev/null; then
+            dr_ok "Disk for $d: ${avail_h:-?} free."
+        else
+            dr_warn "Disk for $d low: ${avail_h:-?} free — the Monero blockchain needs tens of GB."
+        fi
+    done
+
+    # --- .env / deployment state ---
+    echo ""
+    echo "Deployment:"
+    if [ ! -f "$ENV_FILE" ]; then
+        dr_warn "No $ENV_FILE found — the stack has not been set up. Run 'pithead setup'. (Skipping env-dependent checks.)"
+    else
+        dr_ok "$ENV_FILE present."
+        if [ "$(env_get DEPLOYMENT_COMPLETED)" == "true" ]; then
+            dr_ok "DEPLOYMENT_COMPLETED=true — setup finished."
+        else
+            dr_warn "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run 'pithead setup'."
+        fi
+
+        # --- Tor onion addresses ---
+        echo ""
+        echo "Tor onion addresses:"
+        local k onion
+        for k in MONERO_ONION_ADDRESS TARI_ONION_ADDRESS P2POOL_ONION_ADDRESS; do
+            onion=$(env_get "$k")
+            if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
+                dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run 'pithead setup' to generate Tor hidden services."
+            else
+                dr_ok "$k set."
+            fi
+        done
+    fi
+
+    # --- Containers (best-effort) ---
+    echo ""
+    echo "Containers:"
+    if ! command -v docker >/dev/null 2>&1; then
+        dr_info "Skipped — docker is not installed."
+    elif ! docker info >/dev/null 2>&1; then
+        dr_info "Skipped — Docker daemon is not reachable."
+    else
+        local ps_out
+        ps_out=$(docker compose ps 2>/dev/null || true)
+        if [ -n "$ps_out" ]; then
+            printf '%s\n' "$ps_out" | while IFS= read -r line; do
+                printf '    %s\n' "$line"
+            done
+            dr_ok "Read container status from 'docker compose ps' (review the table above)."
+        else
+            dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run 'pithead up') or run from a different directory."
+        fi
+    fi
+
+    # --- Summary ---
+    echo ""
+    log "Diagnostics summary: ${DR_OK} OK, ${DR_WARN} warning(s), ${DR_FAIL} failure(s)."
+    if [ "$DR_FAIL" -gt 0 ]; then
+        warn "One or more critical checks FAILED — address the ✗ lines above."
+    elif [ "$DR_WARN" -gt 0 ]; then
+        log "No critical failures. Review the ⚠ warnings above."
+    else
+        log "All checks passed."
+    fi
+    return 0
+}
+
 announce_dashboard_url() {
     local display_host
     display_host=$(env_get HOST_IP)
@@ -247,6 +451,8 @@ Inspection:
   logs [service]            Follow logs for all containers, or a single service.
   status                    Show container status + health-check every expected service
                             (warns about anything down; non-zero exit if so).
+  doctor                    Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk,
+                            .env/onion state, and container status — a paste-able health report.
 
 Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
@@ -1171,6 +1377,7 @@ main() {
         upgrade)          require_deployed; stack_upgrade ;;
         logs)             require_env; log "Following logs (Ctrl+C to exit)..."; docker compose logs -f "$@" ;;
         status)           require_env; stack_status || exit 1 ;;
+        doctor)           doctor ;;
         reset-dashboard)  require_deployed; reset_dashboard ;;
         help|-h|--help)   show_help ;;
         *)                error "Unknown command: $cmd. Run '$0 help'." ;;
