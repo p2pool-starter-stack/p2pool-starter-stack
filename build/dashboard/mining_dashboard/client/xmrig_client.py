@@ -24,14 +24,12 @@ class XMRigWorkerClient:
         """
         name_token = name.split('+')[0].strip()
 
-        # IP is the most reliable target for remote proxies.
-        # Hostname variants are fallbacks for LAN miners with mDNS.
+        # IP is the most reliable target for remote proxies; the rig name is a fallback.
         hosts = []
         if ip and ip != "0.0.0.0":
             hosts.append(ip)
         if name_token:
             hosts.append(name_token)
-            hosts.append(f"{name_token}.local")
 
         attempts = []
         for host in hosts:

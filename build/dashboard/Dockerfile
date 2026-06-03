@@ -3,11 +3,9 @@
 # ==========================================================================
 FROM python:3.11-slim AS base
 
-# System dependencies for network discovery (mDNS/Avahi) and routing.
+# System dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
-    libnss-mdns \
-    avahi-utils \
     iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
