@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 import {
     sortWorkers, fmtTimestamp, WORKER_COLUMNS,
     THEMES, THEME_ORDER, normalizeTheme,
+    clampZoomWindow, fmtWindowDuration,
+    SERIES_KEYS, normalizeSeries,
 } from '../../mining_dashboard/web/static/logic.mjs';
 
 const col = (key) => WORKER_COLUMNS.findIndex((c) => c.key === key);
@@ -86,4 +88,39 @@ test('THEME_ORDER: the control renders every theme exactly once', () => {
     // The segmented control maps over THEME_ORDER, so it must cover the same set as THEMES with
     // no dupes/strays — otherwise a mode would be unreachable or rendered twice.
     assert.deepEqual([...THEME_ORDER].sort(), [...THEMES].sort());
+});
+
+// --- Issue #47: zoom window helpers --------------------------------------------------
+
+test('clampZoomWindow: orders endpoints and enforces a minimum span', () => {
+    // Reversed drag is normalized low->high.
+    assert.deepEqual(clampZoomWindow(2000, 1000, 100), { from: 1000, to: 2000 });
+    // A too-narrow window is widened around its centre to minSpanMs.
+    assert.deepEqual(clampZoomWindow(1000, 1010, 100), { from: 955, to: 1055 });
+    // A comfortably wide window is left as-is.
+    assert.deepEqual(clampZoomWindow(0, 5000, 1000), { from: 0, to: 5000 });
+});
+
+test('clampZoomWindow: rejects unusable input', () => {
+    assert.equal(clampZoomWindow(NaN, 1000, 100), null);
+    assert.equal(clampZoomWindow(1000, 1000, 100), null);   // zero-width selection
+    assert.equal(clampZoomWindow(Infinity, 1, 100), null);
+});
+
+test('fmtWindowDuration: two coarsest units, trailing zeros dropped', () => {
+    assert.equal(fmtWindowDuration(0), '0s');
+    assert.equal(fmtWindowDuration(45_000), '45s');
+    assert.equal(fmtWindowDuration(90_000), '1m 30s');
+    assert.equal(fmtWindowDuration(3_600_000), '1h');          // exactly 1h -> no "0m"
+    assert.equal(fmtWindowDuration(4_800_000), '1h 20m');
+    assert.equal(fmtWindowDuration(3 * 86_400_000), '3d');     // exactly 3d -> no "0h"
+});
+
+test('normalizeSeries: defaults every series to visible, only explicit false hides', () => {
+    assert.deepEqual(normalizeSeries(null), { p2pool: true, xvb: true, shares: true });
+    assert.deepEqual(normalizeSeries({}), { p2pool: true, xvb: true, shares: true });
+    assert.deepEqual(normalizeSeries({ xvb: false }), { p2pool: true, xvb: false, shares: true });
+    // Garbage / stray keys are ignored; output is always the full key set.
+    assert.deepEqual(Object.keys(normalizeSeries({ junk: 1 })).sort(), [...SERIES_KEYS].sort());
+    assert.deepEqual(normalizeSeries('nope'), { p2pool: true, xvb: true, shares: true });
 });

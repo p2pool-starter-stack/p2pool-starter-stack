@@ -37,6 +37,56 @@ export function fmtTimestamp(ms) {
     });
 }
 
+// Manual chart zoom (Issue #47). Pure window math, kept here (no DOM/Chart) so it's unit-tested;
+// the chartjs-plugin-zoom gestures and the /api/state refetch wiring live in chart.mjs /
+// dashboard.js.
+
+// Normalize a dragged/zoomed pixel→time window to an ordered {from, to} (epoch ms) with at
+// least `minSpanMs`. Returns null for unusable input (NaN, or a zero-width selection) so a
+// degenerate gesture is treated as "no zoom". A too-narrow but valid window is widened around
+// its centre to `minSpanMs` (so you can't request a sub-sample window).
+export function clampZoomWindow(aMs, bMs, minSpanMs = 60000) {
+    if (!Number.isFinite(aMs) || !Number.isFinite(bMs) || aMs === bMs) return null;
+    let from = Math.min(aMs, bMs);
+    let to = Math.max(aMs, bMs);
+    if (to - from < minSpanMs) {
+        const mid = (from + to) / 2;
+        from = mid - minSpanMs / 2;
+        to = mid + minSpanMs / 2;
+    }
+    return { from, to };
+}
+
+// Chart series the user can show/hide, and a normalizer for the persisted state (Issue #47).
+// Kept pure so the default-visible logic is unit-tested; dashboard.js persists it in localStorage
+// and chart.mjs applies it. Anything not explicitly false defaults to visible.
+export const SERIES_KEYS = ['p2pool', 'xvb', 'shares'];
+export function normalizeSeries(obj) {
+    const o = (obj && typeof obj === 'object') ? obj : {};
+    const out = {};
+    for (const k of SERIES_KEYS) out[k] = o[k] !== false;
+    return out;
+}
+
+// Human-readable span for the "Zoomed: …" label — the two coarsest units from the first
+// non-zero one (e.g. "3d 4h", "1h 20m", "45s"), trailing zero units dropped. Pure and
+// locale-independent, unlike fmtTimestamp.
+export function fmtWindowDuration(ms) {
+    const totalSec = Math.max(0, Math.round(ms / 1000));
+    if (totalSec === 0) return '0s';
+    const units = [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]];
+    const counts = [];
+    let rem = totalSec;
+    for (const [label, size] of units) { counts.push([Math.floor(rem / size), label]); rem %= size; }
+    const first = counts.findIndex(([n]) => n > 0);
+    const parts = [];
+    for (let i = first; i < counts.length && parts.length < 2; i++) {
+        if (counts[i][0] > 0) parts.push(counts[i][0] + counts[i][1]);
+        else if (parts.length > 0) break;   // stop at a trailing zero unit
+    }
+    return parts.join(' ');
+}
+
 // Theme switching (Issue #43). Three modes; "auto" follows the browser's prefers-color-scheme.
 // The valid set, display order and labels live here (pure, no DOM) so they're unit-tested; the
 // localStorage + <html data-theme> wiring is in dashboard.js and the segmented control (with its
