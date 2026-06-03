@@ -146,6 +146,7 @@ class TestStaticAssets:
             ("/static/dashboard.css", "text/css"),
             ("/static/dashboard.js", "javascript"),
             ("/static/components.mjs", "javascript"),
+            ("/static/logic.mjs", "javascript"),
             ("/static/vendor/preact.module.js", "javascript"),
             ("/static/vendor/htm.module.js", "javascript"),
         ):

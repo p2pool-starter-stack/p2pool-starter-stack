@@ -4,6 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
+import { WORKER_COLUMNS, sortWorkers } from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => 'c-' + v;
@@ -240,29 +241,7 @@ function TariCard({ tari }) {
     </div>`;
 }
 
-// --- Workers table -------------------------------------------------------------------
-
-// Columns carry the state key they sort on. Hashrate/uptime/IP sort numerically (raw values
-// the server includes alongside the formatted strings); name sorts as text.
-const COLUMNS = [
-    { label: 'Worker', key: 'name' },
-    { label: 'IP', key: 'ip_sort' },
-    { label: 'Uptime', key: 'uptime' },
-    { label: '10s', key: 'h10' },
-    { label: '60s', key: 'h60' },
-    { label: '15m', key: 'h15' },
-];
-
-function sortWorkers(workers, idx, asc) {
-    if (idx === null) return workers;
-    const key = COLUMNS[idx].key;
-    const sorted = [...workers].sort((a, b) => {
-        const va = a[key], vb = b[key];
-        if (typeof va === 'number' && typeof vb === 'number') return va - vb;
-        return String(va).localeCompare(String(vb));
-    });
-    return asc ? sorted : sorted.reverse();
-}
+// --- Workers table (WORKER_COLUMNS + sortWorkers live in logic.mjs, unit-tested) -----
 
 function PoolBadge({ pool }) {
     if (pool === 'p2pool') return html`<span class="badge badge-ok">P2Pool</span>`;
@@ -277,7 +256,7 @@ function WorkersTable({ workers, ui, onSort }) {
         <h3>Workers Alive</h3>
         <table id="workers-table">
             <thead>
-                <tr>${COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
+                <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
             </thead>
             <tbody id="workers-tbody">
                 ${rows.map((w) => html`

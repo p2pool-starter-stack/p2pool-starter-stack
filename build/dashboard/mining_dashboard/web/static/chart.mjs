@@ -9,16 +9,9 @@
 // `time` scale) avoids vendoring a date-adapter library. The server inserts {x, y: null} break
 // markers across outages so the line/fill doesn't span them.
 import { Component, createRef, html } from './preact.mjs';
+import { fmtTimestamp } from './logic.mjs';
 
 const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']];
-
-// Format an epoch-ms x value for the tooltip title. Day + time so long ranges read clearly;
-// uses the browser locale (≈ the server's, for a localhost dashboard).
-function fmtTimestamp(ms) {
-    return new Date(ms).toLocaleString([], {
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-}
 
 export class ChartCard extends Component {
     constructor(props) {

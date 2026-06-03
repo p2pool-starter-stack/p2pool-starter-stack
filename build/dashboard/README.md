@@ -25,9 +25,11 @@ Everything is served from `/static` — the vendored Preact, htm and Chart.js (`
 plus the app modules and `dashboard.css`. Nothing is inlined and the libraries are eval-free, so
 the page runs under a strict Content-Security-Policy with no `'unsafe-inline'`/`'unsafe-eval'`.
 
-The frontend has no JS unit tests (the repo is intentionally Node-/build-free); the Python API,
-where all the logic and formatting live, is fully unit-tested, and the client is verified with a
-browser smoke test.
+Testing: the Python API — where all the logic and formatting live — is fully unit-tested. The
+pure client logic (worker sort, tooltip formatting in `static/logic.mjs`) is unit-tested with
+**Node's built-in runner** (`node --test build/dashboard/tests/frontend/*.test.mjs`) — no
+`package.json`/`node_modules`/build step, so the repo stays Node-free. Component *rendering* has
+no unit tests by design; it's covered by a manual browser smoke test.
 
 ## Layout
 
@@ -61,9 +63,12 @@ pip install -e ".[test]"
 ```bash
 pytest                                   # quick run
 pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
+
+# pure client logic (needs only Node >= 18, no install):
+node --test tests/frontend/*.test.mjs
 ```
 
-Or from the repo root: `make test-dashboard`. The same suite runs in the Docker test stage:
+Or from the repo root: `make test-dashboard`. The same Python suite runs in the Docker test stage:
 
 ```bash
 docker build --target test ./build/dashboard
