@@ -62,8 +62,10 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 2. **Let it sync.** On first boot the dashboard shows **Sync Mode** while your Monero and Tari
    nodes catch up to the network — it switches to the live view automatically once synced. p2pool
    and the proxy stay parked until then, so the sync logs stay clean.
-3. **Add a worker** by pointing any [XMRig](https://github.com/xmrig/xmrig) rig at
-   `YOUR_STACK_IP:3333`. No wallet address needed in the worker config.
+3. **Connect your miners** by pointing any [XMRig](https://github.com/xmrig/xmrig) rig at
+   `YOUR_STACK_IP:3333` (no wallet address needed). New to mining?
+   [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a tuned worker in one
+   command.
 
 📖 **Full walkthrough:** [docs/getting-started.md](docs/getting-started.md)
 
@@ -77,10 +79,10 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 | Guide | What's inside |
 |---|---|
 | **[Getting Started](docs/getting-started.md)** | Prerequisites, install, first-run setup, and what to expect while the node syncs. |
-| **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network — and how to run leaner. (Worker-rig specs live in the [worker kit](worker/Readme.md).) |
+| **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network — and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode and a tour of the live operational view. |
-| **[Adding Workers](docs/workers.md)** | Connect any rig, or use the high-performance worker provisioning kit. |
+| **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
 | **[Architecture](docs/architecture.md)** | The eight services, the privacy model, and the algorithmic XvB switching engine. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
