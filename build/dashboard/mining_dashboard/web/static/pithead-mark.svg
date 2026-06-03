@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Pithead">
+  <title>Pithead</title>
+  <g stroke="#F26822" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- sheave wheel (the winding pulley at the top of the headframe) -->
+    <circle cx="32" cy="13" r="7.6"/>
+    <line x1="32" y1="5.4" x2="32" y2="20.6"/>
+    <line x1="24.4" y1="13" x2="39.6" y2="13"/>
+    <!-- headframe truss -->
+    <path d="M26 21 L18 53 M38 21 L46 53 M26 21 L38 21"/>
+    <!-- bracing rungs -->
+    <path d="M23.5 31 H40.5 M20.7 43 H43.3"/>
+    <!-- king post / hoist rope descending into the shaft -->
+    <line x1="32" y1="21" x2="32" y2="58"/>
+    <!-- ground line -->
+    <line x1="12" y1="53" x2="52" y2="53"/>
+  </g>
+  <circle cx="32" cy="13" r="2.3" fill="#F26822"/>
+</svg>

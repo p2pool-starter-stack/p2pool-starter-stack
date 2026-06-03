@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="./images/p2pool-starter-stack-logo-large.png" alt="P2Pool Starter Stack" width="560">
+<img src="./images/pithead-mark.svg" alt="Pithead" width="120">
 
-# P2Pool Starter Stack
+# Pithead
 
 ### Private Monero + Tari merge mining, the whole stack, in one command.
 
-[![CI](https://github.com/p2pool-starter-stack/p2pool-starter-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/p2pool-starter-stack/actions/workflows/ci.yml)
+[![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Tor](https://img.shields.io/badge/Networking-Tor--only-7D4698?logo=torproject&logoColor=white)
@@ -49,10 +49,10 @@ coffee gets cold**.
 > [Hardware Requirements](docs/hardware.md). You'll need your Monero and Tari payout addresses handy.
 
 ```bash
-git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
-cd p2pool-starter-stack
-chmod +x stack.sh
-./stack.sh setup
+git clone https://github.com/p2pool-starter-stack/pithead.git
+cd pithead
+chmod +x pithead
+./pithead setup
 ```
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
@@ -105,7 +105,7 @@ flowchart TB
     XvB(["🎲 XMRvsBeast Pool"])
     Net(["🌐 Tor Network / Internet"])
 
-    subgraph stack ["🐳 P2Pool Starter Stack"]
+    subgraph stack ["🐳 Pithead"]
         direction TB
 
         Caddy["🔒 Caddy<br/>HTTPS reverse proxy"]
@@ -162,16 +162,16 @@ Read the full breakdown — including the privacy model and the algorithmic swit
 
 ## 🛠️ Common commands
 
-Everything runs through `stack.sh` (`./stack.sh help` lists it all):
+Everything runs through `pithead` (`./pithead help` lists it all):
 
 | Command | Description |
 |---|---|
-| `./stack.sh setup` | First-time interactive setup. |
-| `./stack.sh apply` | Preview and apply `config.json` changes. |
-| `./stack.sh up` / `down` / `restart` | Start / stop / restart the stack. |
-| `./stack.sh upgrade` | Rebuild and restart after a `git pull`. |
-| `./stack.sh logs [service]` | Follow logs (all, or one service). |
-| `./stack.sh status` | Container status + health-check of every expected service (warns on anything down). |
+| `./pithead setup` | First-time interactive setup. |
+| `./pithead apply` | Preview and apply `config.json` changes. |
+| `./pithead up` / `down` / `restart` | Start / stop / restart the stack. |
+| `./pithead upgrade` | Rebuild and restart after a `git pull`. |
+| `./pithead logs [service]` | Follow logs (all, or one service). |
+| `./pithead status` | Container status + health-check of every expected service (warns on anything down). |
 
 Full reference: **[Operations & Maintenance](docs/operations.md)**.
 

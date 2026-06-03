@@ -16,7 +16,7 @@ fi
 ENV_FILE="$(mktemp)"
 trap 'rm -f "$ENV_FILE"' EXIT
 
-# A representative, fully-populated environment (mirrors what stack.sh renders).
+# A representative, fully-populated environment (mirrors what pithead renders).
 cat > "$ENV_FILE" <<'EOF'
 MONERO_DATA_DIR=/srv/data/monero
 TARI_DATA_DIR=/srv/data/tari

@@ -3,7 +3,7 @@
 This stack involves **two different kinds of machine**, and they have very different hardware
 needs:
 
-1. **The stack host** — the one machine that runs `./stack.sh` and the Docker stack (Monero node,
+1. **The stack host** — the one machine that runs `./pithead` and the Docker stack (Monero node,
    P2Pool, Tari, the XMRig proxy, the dashboard, Tor). **It does not mine.** It runs the nodes and
    coordinates everything; the actual hashing happens elsewhere.
 2. **Worker rigs** — one or more separate machines running [XMRig](https://github.com/xmrig/xmrig).
@@ -86,7 +86,7 @@ On a 16 GB machine this all fits but is tight, which is exactly why Tari is capp
 recommended** if you run a full (unpruned) node, drive a lot of workers, or want long uptimes
 without Tari's growth ever pressing on the cap.
 
-> **Running with only 8 GB?** It can boot **only** if you disable HugePages (`./stack.sh setup
+> **Running with only 8 GB?** It can boot **only** if you disable HugePages (`./pithead setup
 > --skip-optimize`), which frees the 6 GB reservation — but it leaves very little headroom and
 > hurts RandomX verification performance. Not recommended; prefer 16 GB+.
 
@@ -130,7 +130,7 @@ You can put any service's data on a dedicated disk by pointing its `*.data_dir` 
 - The **kernel/HugePages tuning is Linux-only.** On Linux, making HugePages persistent edits GRUB
   and needs a **reboot** (you're prompted first, and can skip with `--skip-optimize`).
 - Required software: **Docker Engine**, **Docker Compose v2**, **`jq`**, and **`openssl`**. On
-  Ubuntu, `./stack.sh setup` offers to install anything missing — or do it yourself:
+  Ubuntu, `./pithead setup` offers to install anything missing — or do it yourself:
 
   ```bash
   sudo apt update && sudo apt install -y jq docker.io docker-compose-v2 openssl
@@ -147,7 +147,7 @@ away:
 |---|---|---|
 | Skip the Monero node entirely | **Remote-node mode** (`monero.mode: remote`) — the bundled `monerod` isn't started | ~80–200 GB disk + Monero's 4 GB RAM/CPU |
 | Skip the initial sync wait | [Reuse an existing synced chain](configuration.md#reusing-an-existing-node) | Hours–days + sync bandwidth |
-| Free the 6 GB HugePages reservation | `./stack.sh setup --skip-optimize` | ~6 GB RAM (at the cost of RandomX performance) |
+| Free the 6 GB HugePages reservation | `./pithead setup --skip-optimize` | ~6 GB RAM (at the cost of RandomX performance) |
 | Free RAM for other apps | Lower `tari.mem_limit` (e.g. `"4g"`) | Caps Tari's ceiling lower |
 | Keep mining when Tari has issues | `dashboard.tari_required: false` | Tari outages/syncs stop blocking Monero mining |
 

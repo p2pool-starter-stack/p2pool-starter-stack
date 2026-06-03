@@ -2,7 +2,7 @@
 
 `config.json` is the **single source of truth** for the entire stack. The interactive `setup`
 writes a minimal one for you; from then on you change the stack by editing `config.json` and
-running `./stack.sh apply`.
+running `./pithead apply`.
 
 ## The minimal config
 
@@ -36,7 +36,7 @@ want to override.
 ## Changing settings later
 
 1. Edit `config.json`.
-2. Run `./stack.sh apply`.
+2. Run `./pithead apply`.
 
 `apply` is designed to be safe to run anytime:
 
@@ -52,12 +52,12 @@ want to override.
 
 ```bash
 # edit config.json, then:
-./stack.sh apply        # shows the changes and asks before disruptive ones
-./stack.sh apply -y     # skip the confirmation prompt (for scripting)
+./pithead apply        # shows the changes and asks before disruptive ones
+./pithead apply -y     # skip the confirmation prompt (for scripting)
 ```
 
 For example, to switch P2Pool from `main` to `mini`, or to flip the dashboard from HTTPS to
-plain HTTP, edit `config.json` and run `./stack.sh apply`.
+plain HTTP, edit `config.json` and run `./pithead apply`.
 
 ---
 
@@ -116,7 +116,7 @@ Monero blockchain on a dedicated SSD:
 }
 ```
 
-Then run `./stack.sh apply`. Moving a data directory is treated as a disruptive change, so
+Then run `./pithead apply`. Moving a data directory is treated as a disruptive change, so
 `apply` confirms before recreating the affected container. `apply` creates any missing directory
 and sets ownership automatically (Monero/Tari/P2Pool to your user, Tor to the container's user).
 
@@ -147,7 +147,7 @@ point `monero.data_dir` at your existing `.bitmonero` directory:
 }
 ```
 
-Then run `./stack.sh apply`. The bundled `monerod` reuses the blockchain in place — no re-sync
+Then run `./pithead apply`. The bundled `monerod` reuses the blockchain in place — no re-sync
 from genesis, just a quick catch-up of any blocks produced since your node last ran.
 
 A few things to keep in mind:
@@ -205,7 +205,7 @@ applying it.
 
 ## See also
 
-- [Operations & Maintenance](operations.md) — the full `stack.sh` command reference and
+- [Operations & Maintenance](operations.md) — the full `pithead` command reference and
   troubleshooting.
 - [Architecture](architecture.md) — how the services use these settings, and the XvB switching
   engine behind `xvb.*`.

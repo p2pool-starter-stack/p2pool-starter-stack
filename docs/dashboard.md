@@ -52,8 +52,8 @@ waits only for Monero and starts mining while Tari finishes syncing in the backg
 You can also follow sync progress from the command line:
 
 ```bash
-./stack.sh logs monerod
-./stack.sh logs tari
+./pithead logs monerod
+./pithead logs tari
 ```
 
 ---
@@ -132,11 +132,11 @@ proxy-derived hashrate); a worker whose miner has stopped drops out of the total
 - **First visit certificate warning.** With `dashboard.secure: true` (the default), Caddy uses a
   self-signed certificate, so your browser shows a one-time "connection is not private" warning.
   Accept it to proceed. To use plain HTTP instead, set `dashboard.secure: false` and run
-  `./stack.sh apply`.
+  `./pithead apply`.
 - **Reaching it from another machine.** Use the hostname/IP of the stack server. If your hostname
   doesn't resolve on your LAN, set `dashboard.host` in `config.json` to an address that does.
 - **Stuck on Sync Mode?** That usually just means the chain is still downloading. Check
-  `./stack.sh logs monerod` / `./stack.sh logs tari` for steady progress; see
+  `./pithead logs monerod` / `./pithead logs tari` for steady progress; see
   [Operations › Troubleshooting](operations.md#troubleshooting) if a node looks stalled.
 
 For how the switching engine decides the P2Pool/XvB split, see

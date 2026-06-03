@@ -1,6 +1,6 @@
 # Documentation
 
-Everything you need to run, configure, and operate the **P2Pool Starter Stack**.
+Everything you need to run, configure, and operate **Pithead**.
 
 New here? Start with the [Getting Started](getting-started.md) guide — it takes you from a
 fresh Ubuntu machine to a synced, mining stack in a handful of commands. The other guides go
@@ -16,7 +16,7 @@ deeper on individual topics once you're up and running.
 | [The Dashboard](dashboard.md) | **Sync Mode**, the live operational view, and how to read every panel. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The eight services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
-| [Operations & Maintenance](operations.md) | The full `stack.sh` command reference, upgrades, backups, and troubleshooting. |
+| [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
 
 ## Quick links
 
