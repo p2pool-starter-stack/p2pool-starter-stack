@@ -3,10 +3,9 @@ FROM ubuntu:24.04
 ARG P2POOL_VERSION=v4.15.1
 ARG P2POOL_HASH=efd8b23579774711a5b86743da980e0936b7c220894063296719116d7f9ba254
 
-# Install dependencies, including avahi-utils for the resolve script
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     wget ca-certificates libgomp1 \
-    avahi-utils dbus \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget -O p2pool.tar.gz https://github.com/SChernykh/p2pool/releases/download/${P2POOL_VERSION}/p2pool-${P2POOL_VERSION}-linux-x64.tar.gz \
