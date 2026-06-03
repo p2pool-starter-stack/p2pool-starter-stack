@@ -9,7 +9,10 @@ prune-blockchain=${MONERO_PRUNE}
 sync-pruned-blocks=${MONERO_PRUNE}
 
 # --- Network Interface Binding ---
-# Bind to all interfaces (0.0.0.0) to allow communication with P2Pool and Tari containers
+# Bind to all interfaces (0.0.0.0) to allow communication with P2Pool and Tari containers.
+# NOTE: this 0.0.0.0 is *container-internal* only. Host-level RPC exposure is controlled
+# separately by MONERO_RPC_BIND in docker-compose.yml (default 127.0.0.1 — localhost only).
+# Combined with restricted-rpc=1 + rpc-login below, the RPC is not reachable off-host by default.
 p2p-bind-ip=0.0.0.0
 p2p-bind-port=18080
 rpc-bind-ip=0.0.0.0
