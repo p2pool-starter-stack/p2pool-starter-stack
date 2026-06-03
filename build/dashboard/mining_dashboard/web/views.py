@@ -185,6 +185,7 @@ def build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok):
         "p2p_variant": p2p_tok,
         "xvb_1h": format_hashrate(metrics.xvb_1h),
         "xvb_24h": format_hashrate(metrics.xvb_24h),
+        "xvb_routed": format_hashrate(metrics.xvb_routed),
         "xvb_variant": xvb_tok,
         "tier": metrics.current_tier,
         "target_tier": metrics.target_tier,

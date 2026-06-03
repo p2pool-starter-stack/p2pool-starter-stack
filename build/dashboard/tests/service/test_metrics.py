@@ -90,6 +90,18 @@ class TestHashrate:
         assert m.xvb_1h == 2100
         assert m.xvb_24h == 2300
 
+    def test_xvb_routed_is_fraction_of_hashrate(self):
+        # Routed = controller's donation fraction * our hashrate (what we send),
+        # distinct from the credited averages XvB reports.
+        m = build_metrics(_data(total_live_h15=40_000),
+                          _mgr(xvb={"avg_1h": 30_000, "donation_fraction": 0.25}))
+        assert m.xvb_routed == 10_000  # 0.25 * 40k
+        assert m.xvb_1h == 30_000      # credited stays independent
+
+    def test_xvb_routed_zero_without_fraction(self):
+        m = build_metrics(_data(total_live_h15=40_000), _mgr())
+        assert m.xvb_routed == 0
+
 
 class TestModeAndTiers:
     def test_mode_default(self):

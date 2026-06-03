@@ -231,8 +231,9 @@ function XvBStats({ state }) {
         <div class="stat-grid">
             <${StatCard} label="Current Tier" value=${hr.tier} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
-            <${StatCard} label="1h Avg (Pool)" value=${hr.xvb_1h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="24h Avg (Pool)" value=${hr.xvb_24h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="Donating (routed)" value=${hr.xvb_routed} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="1h Avg (Credited)" value=${hr.xvb_1h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="24h Avg (Credited)" value=${hr.xvb_24h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="Fail Count" value=${hr.xvb_fail_count} />
         </div>
         <div class="text-xs text-muted mt-2">Stats fetched from xmrvsbeast.com (Updated: ${hr.xvb_updated})</div>

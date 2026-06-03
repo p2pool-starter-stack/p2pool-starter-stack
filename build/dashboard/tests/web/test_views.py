@@ -27,6 +27,7 @@ _SYNC_DONE = SyncMetric(percent=100, current=10, target=10, remaining=0,
 
 _BASE = Metrics(
     total_h15=10500.0, p2pool_1h=8000.0, p2pool_24h=8100.0, xvb_1h=2100.0, xvb_24h=2300.0,
+    xvb_routed=2000.0,
     stratum_h15=10300.0, stratum_h1h=10400.0, stratum_h24h=10200.0,
     mode="P2POOL", xvb_enabled=True, current_tier="Donor (1.00 kH/s+)",
     target_tier="Donor (1.00 kH/s+)", target_threshold=1000.0, target_sustainable=True,
@@ -178,6 +179,13 @@ class TestHashrate:
         assert hr["total"] == "10.50 kH/s"
         assert hr["p2p_1h"] == "8.00 kH/s"
         assert hr["xvb_1h"] == "2.10 kH/s"
+
+    def test_routed_distinct_from_credited(self):
+        # Routed (what we send) is shown alongside the credited averages so the
+        # live credit factor is visible.
+        hr = _hashrate(_metrics(xvb_routed=2000, xvb_1h=6000))
+        assert hr["xvb_routed"] == "2.00 kH/s"
+        assert hr["xvb_1h"] == "6.00 kH/s"
 
     def test_p2pool_mode_grays_xvb(self):
         hr = _hashrate(_metrics(mode="P2POOL"))

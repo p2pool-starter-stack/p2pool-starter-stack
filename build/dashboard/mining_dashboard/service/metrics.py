@@ -48,6 +48,7 @@ class Metrics:
     p2pool_24h: float
     xvb_1h: float
     xvb_24h: float
+    xvb_routed: float          # what we currently route to XvB (fraction * total_h15)
     stratum_h15: float
     stratum_h1h: float
     stratum_h24h: float
@@ -102,6 +103,10 @@ def build_metrics(latest_data, state_mgr, history=None):
     total_h15 = data.get('total_live_h15', 0) or 0
     xvb_1h = xvb_stats.get('avg_1h', 0) or 0
     xvb_24h = xvb_stats.get('avg_24h', 0) or 0
+    # What we currently route to XvB (controller's per-cycle donation fraction *
+    # our hashrate). Shown next to the credited averages so the gap — the live
+    # credit factor — is visible: routed is our input, avg_1h/24h is XvB's output.
+    xvb_routed = (xvb_stats.get('donation_fraction', 0) or 0) * total_h15
 
     # P2Pool 1h/24h from our own DB history (time-weighted v_p2pool), not p2pool's noisy
     # stratum estimate or a total-minus-XvB subtraction (Issue #27).
@@ -143,6 +148,7 @@ def build_metrics(latest_data, state_mgr, history=None):
         p2pool_24h=p2pool_24h,
         xvb_1h=xvb_1h,
         xvb_24h=xvb_24h,
+        xvb_routed=xvb_routed,
         stratum_h15=stratum.get('hashrate_15m', 0) or 0,
         stratum_h1h=stratum.get('hashrate_1h', 0) or 0,
         stratum_h24h=stratum.get('hashrate_24h', 0) or 0,
