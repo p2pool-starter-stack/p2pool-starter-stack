@@ -21,7 +21,7 @@ driven by a single script — `stack.sh` — and most of it is automated.
 | **Operating system** | Ubuntu Server **24.04 LTS** is the officially supported platform. Other Linux distributions and macOS may work but aren't officially supported. |
 | **CPU** | A processor with **AVX2** support is highly recommended for RandomX performance. |
 | **RAM** | **16 GB** minimum with HugePages enabled (~6 GB is reserved for RandomX); **32 GB** recommended for a full node or long uptimes. |
-| **Disk** | A **pruned** Monero node needs roughly **80–100 GB**; a **full** (unpruned) node needs **200 GB+** — and the chain keeps growing. An SSD is strongly recommended. |
+| **Disk** | A **pruned** Monero node needs ~**80–100 GB** and a **full** one **200 GB+**, plus ~**50 GB** for the Tari node — so plan for ~**150 GB** (pruned) or ~**300 GB** (full) of **SSD**, with room to grow. |
 | **Software** | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
 > 📐 **Full sizing guidance** — minimum vs. recommended specs for the stack host *and* your worker

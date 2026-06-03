@@ -45,7 +45,7 @@ coffee gets cold**.
 ## 🚀 Quick Start
 
 > **Platform:** Ubuntu Server **24.04 LTS** is officially supported. Plan for **16 GB+ RAM** and an
-> **SSD** (~120 GB pruned / ~300 GB full) — full sizing is in
+> **SSD** (~150 GB pruned / ~300 GB full) — full sizing is in
 > [Hardware Requirements](docs/hardware.md). You'll need your Monero and Tari payout addresses handy.
 
 ```bash

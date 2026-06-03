@@ -20,10 +20,10 @@ Size the **host** for nodes, storage, and uptime. Size the **workers** for CPU m
 
 | Resource | Minimum | Recommended |
 |---|---|---|
-| **CPU** | 4 cores, 64-bit x86 | 6–8+ cores with **AVX2** |
-| **RAM** | **16 GB** (HugePages on) | **32 GB** |
-| **Disk (pruned node)** | ~120 GB SSD | 250 GB+ SSD |
-| **Disk (full node)** | ~300 GB SSD | 500 GB+ SSD |
+| **CPU** | 4 cores, 64-bit x86 (AVX2 advised) | 6–8+ cores with **AVX2** |
+| **RAM** | **16 GB** | **32 GB** |
+| **Disk — pruned node** | ~150 GB SSD | 300 GB+ SSD |
+| **Disk — full node** | ~300 GB SSD | 600 GB+ SSD |
 | **Network** | Always-on broadband | Unmetered broadband |
 | **OS** | Ubuntu Server **24.04 LTS** | Ubuntu Server 24.04 LTS |
 
@@ -31,33 +31,53 @@ Size the **host** for nodes, storage, and uptime. Size the **workers** for CPU m
 > enabled**. Remote-node mode and other tweaks lower them — see
 > [Lighter-footprint options](#lighter-footprint-options).
 
+### Where these numbers come from
+
+The host runs several services in one box, so its requirement is really the **sum of what each
+service needs**, plus headroom for the operating system. Here's the per-component breakdown, taken
+from each project's own guidance:
+
+| Service | RAM it wants | Disk | Notes |
+|---|---|---|---|
+| **[Monero node](https://docs.getmonero.org/running-node/)** (`monerod`) | **4 GB** minimum; more RAM = bigger DB cache and faster sync | **~95 GB** pruned · **~230 GB** full — and growing | SSD strongly recommended. Not run at all in remote-node mode. |
+| **[P2Pool](https://github.com/SChernykh/p2pool)** | **~2.3 GB** for the RandomX dataset it uses to verify blocks fast (`--light-mode` skips it, saving ~2 GB, but verifies slower) | tiny (sidechain state) | Needs a 64-bit CPU with **AVX2** and a synced `monerod`. |
+| **[Tari base node](https://www.tari.com/integration-guide)** (`minotari_node`) | **4 GB** minimum, **8 GB+** recommended; grows over time | **50 GB+** SSD | Light enough to run on a Raspberry Pi; the stack caps its memory so growth can't take the host down. |
+| **XMRig proxy · Tor · Caddy · dashboard · Docker** | a few hundred MB combined | a few GB (Docker images) | These coordinate and serve the UI — they don't mine, so no special CPU. |
+
+Add the three heavy services together — Monero (4 GB), P2Pool (~2.3 GB), Tari (4 GB) — plus a
+couple of GB for the OS, page cache, and supporting containers, and you land on the **16 GB / ~150 GB
+minimum** above. Double the RAM and disk so Monero gets a roomier cache and both chains have space
+to grow, and you reach the **32 GB / 300 GB recommendation**.
+
+> **Heads-up on RandomX RAM:** Monero and P2Pool both want large memory pages for RandomX, so they
+> share **one ~6 GB HugePages reservation** rather than each adding their own — see
+> [Memory](#memory) for what that means for the 16 GB floor.
+
 ### CPU
 
-The host CPU runs the Monero and Tari nodes, P2Pool (which uses RandomX to **verify** shares and
-blocks), the proxy, and the dashboard. It is **not** your miner, so it doesn't need to be a
-high-end mining chip — but two things matter:
+The host CPU runs the nodes, P2Pool's block verification, the proxy, and the dashboard — it is
+**not** your miner, so it doesn't need to be a high-end mining chip. Two things matter:
 
-- **AVX2 is strongly recommended.** RandomX (used by P2Pool for verification) runs far better with
-  AVX2. Setup warns *"AVX2 not detected. Mining performance will be poor."* if it's missing — the
-  stack still runs, just slower.
-- **More cores speed up the initial sync.** Monero block verification during the first sync is
-  parallelized: `monero.prep_blocks_threads` defaults to `auto` = **host cores − 2, clamped to
-  4–8**. So 6–10 cores let it use the full thread budget while leaving headroom for the rest of the
-  stack. After the initial sync, steady-state CPU load is low.
+- **AVX2 is strongly recommended.** P2Pool verifies blocks with RandomX, which runs far better with
+  AVX2; setup warns *"AVX2 not detected. Mining performance will be poor."* if it's missing. (P2Pool
+  also requires a 64-bit CPU — ARMv7 and older aren't supported.)
+- **More cores speed up the first sync.** Monero parallelizes block verification during the initial
+  sync: `monero.prep_blocks_threads` defaults to `auto` = **host cores − 2, clamped to 4–8**. So
+  6–10 cores let it use the full thread budget while leaving headroom for the rest of the stack.
+  After the initial sync, steady-state CPU load is low.
 
-### Memory (RAM)
+### Memory
 
-**16 GB is the practical floor** with the default configuration. The budget breaks down roughly as:
+**16 GB is the practical floor** with the default configuration. The budget breaks down as:
 
 - **~6 GB reserved for HugePages.** RandomX wants large pages, so setup configures
-  `vm.nr_hugepages=3072` (3072 × 2 MB = **6 GB**). This RAM is carved out of the kernel up front and
-  is **invisible** to container memory stats — it's gone whether or not it's fully used at any
-  moment.
-- **Tari** needs a few GB and its memory **grows over time**, so the stack puts an auto-sized
-  **safety ceiling** on it (`tari.mem_limit: auto`) that lets a genuine runaway restart cleanly
-  instead of taking the host down. On a 16 GB host that ceiling lands around **7.5 GB**; on 32 GB,
-  around **19 GB**.
-- **monerod, P2Pool, Tor, the dashboard, the OS, and page cache** take the rest.
+  `vm.nr_hugepages=3072` (3072 × 2 MB = **6 GB**), shared by `monerod` and P2Pool. This RAM is
+  carved out of the kernel up front and is **invisible** to container memory stats — it's gone
+  whether or not it's fully used at any moment.
+- **Tari** (4 GB+, growing) gets an auto-sized **safety ceiling** (`tari.mem_limit: auto`) so a
+  genuine runaway restarts cleanly instead of taking the host down. On a 16 GB host that ceiling
+  lands around **7.5 GB**; on 32 GB, around **19 GB**.
+- **The OS, page cache, and the lighter containers** take the rest.
 
 On a 16 GB machine this all fits but is tight, which is exactly why Tari is capped. **32 GB is
 recommended** if you run a full (unpruned) node, drive a lot of workers, or want long uptimes
@@ -69,20 +89,19 @@ without Tari's growth ever pressing on the cap.
 
 ### Disk
 
-The blockchains dominate disk usage, and an **SSD is strongly recommended** — initial-sync
-verification and the node databases do a lot of random I/O that punishes spinning disks.
+The two blockchains dominate, and an **SSD is strongly recommended** — initial-sync verification
+and the node databases do a lot of random I/O that punishes spinning disks. What to provision:
 
-| What | Pruned (default) | Full (`monero.prune: false`) |
+| | Pruned (default) | Full (`monero.prune: false`) |
 |---|---|---|
-| Monero blockchain | **~80–100 GB** | **200 GB+** and growing |
-| Tari (Minotari) chain | a few GB, growing | a few GB, growing |
-| P2Pool + dashboard data | small (≤ a few GB) | small |
-| Docker images | a few GB | a few GB |
-| **Plan for** | **~120 GB+** | **~300 GB+** |
+| Monero chain | ~80–100 GB | 200 GB+ |
+| Tari chain | 50 GB+ | 50 GB+ |
+| P2Pool + dashboard + Docker images | a few GB | a few GB |
+| **Plan for** | **~150 GB+ SSD** | **~300 GB+ SSD** |
 
-The Monero chain **keeps growing**, so leave headroom. Pruning (the default) keeps a fully
-validating node at a fraction of the size and is the right choice for almost everyone; only disable
-it if you specifically need the full transaction history.
+Both chains **keep growing**, so leave headroom — the *recommended* sizes above (300 GB pruned /
+600 GB full) exist for exactly that. Pruning (the default) keeps a fully validating Monero node at a
+fraction of the size and is the right choice for almost everyone.
 
 You can put any service's data on a dedicated disk by pointing its `*.data_dir` at an absolute path
 — e.g. to keep the Monero blockchain on a separate SSD. See
@@ -92,33 +111,27 @@ You can put any service's data on a dedicated disk by pointing its `*.data_dir` 
 
 - **Always-on broadband.** All upstream traffic (Monero, Tari, P2Pool) goes over **Tor**, with **no
   public port forwarding** required — the stack uses hidden services for inbound peers.
-- **Initial sync is the heavy part.** The first run downloads and verifies the whole chain over Tor
-  (slower than clearnet): tens of GB pruned, ~200 GB for a full node. This can take anywhere from a
-  few hours to a day or more. You can avoid it by
+- **Initial sync is the heavy part.** The first run downloads and verifies both chains over Tor
+  (slower than clearnet): tens of GB pruned, ~200 GB+ for a full Monero node. This can take anywhere
+  from a few hours to a day or more. You can avoid it by
   [reusing an existing synced node](configuration.md#reusing-an-existing-node).
 - **Steady state is light.** Once synced, bandwidth is modest.
 - **LAN reachability for workers.** Each worker rig connects to the host on **port 3333** over your
   local network (plain stratum, not Tor). If the host has a firewall, allow inbound `3333` from your
   LAN.
 
-### Operating system
+### Operating system & dependencies
 
-- **Ubuntu Server 24.04 LTS** is the officially supported platform.
+- **Ubuntu Server 24.04 LTS** is the officially supported platform. macOS and other Linux distros
+  may work but aren't officially supported.
 - The **kernel/HugePages tuning is Linux-only.** On Linux, making HugePages persistent edits GRUB
   and needs a **reboot** (you're prompted first, and can skip with `--skip-optimize`).
-- **macOS and other Linux distributions may work** but aren't officially supported; on non-Linux
-  hosts the kernel optimization step is skipped automatically.
+- Required software: **Docker Engine**, **Docker Compose v2**, **`jq`**, and **`openssl`**. On
+  Ubuntu, `./stack.sh setup` offers to install anything missing — or do it yourself:
 
-### Software dependencies
-
-- **Docker Engine** and **Docker Compose v2**
-- **`jq`** and **`openssl`**
-
-On Ubuntu, `./stack.sh setup` detects anything missing and offers to install it. To do it manually:
-
-```bash
-sudo apt update && sudo apt install -y jq docker.io docker-compose-v2 openssl
-```
+  ```bash
+  sudo apt update && sudo apt install -y jq docker.io docker-compose-v2 openssl
+  ```
 
 ---
 
@@ -129,7 +142,7 @@ away:
 
 | Want to… | Do this | Saves |
 |---|---|---|
-| Skip the Monero node entirely | **Remote-node mode** (`monero.mode: remote`) — the bundled `monerod` isn't started | ~80–200 GB disk + monerod's RAM/CPU |
+| Skip the Monero node entirely | **Remote-node mode** (`monero.mode: remote`) — the bundled `monerod` isn't started | ~80–200 GB disk + Monero's 4 GB RAM/CPU |
 | Skip the initial sync wait | [Reuse an existing synced chain](configuration.md#reusing-an-existing-node) | Hours–days + sync bandwidth |
 | Free the 6 GB HugePages reservation | `./stack.sh setup --skip-optimize` | ~6 GB RAM (at the cost of RandomX performance) |
 | Free RAM for other apps | Lower `tari.mem_limit` (e.g. `"4g"`) | Caps Tari's ceiling lower |
@@ -150,12 +163,14 @@ at the host's `3333` endpoint — no wallet address in the worker config. Add as
 | Resource | Guidance |
 |---|---|
 | **CPU** | A modern multi-core x86 CPU with **AVX2** is strongly recommended. RandomX is CPU-only — more (and faster) cores = more hashrate. The provisioning kit auto-detects the CPU (e.g. AMD EPYC, Ryzen X3D) and applies a matching profile. |
-| **RAM** | RandomX in fast mode needs **~2.3 GB** for its dataset/cache, plus **~2 MB per mining thread**. **4 GB+** is comfortable for most rigs; budget more for high-core-count CPUs. |
-| **HugePages** | The worker kit configures **1 GB and 2 MB** HugePages (plus MSR tweaks) for maximum hashrate. On Linux this needs a **reboot** to take effect. |
+| **RAM** | RandomX **fast mode** needs **~2.3 GB** (a 2080 MB dataset + 256 MB cache), plus **~2 MB of L3 per mining thread**. **4 GB+** is comfortable for most rigs; budget more for high-core-count CPUs. (Light mode needs only 256 MB but is far slower — fast mode is what you want.) |
+| **HugePages** | The worker kit configures **2 MB and 1 GB** HugePages (plus MSR tweaks) for maximum hashrate — standard huge pages alone can lift RandomX throughput substantially. On Linux this needs a **reboot** to take effect. |
 | **OS** | Ubuntu 22.04+, Debian 12, or macOS. |
 | **Network** | Must reach the stack host on port **3333** over the LAN/network. Workers do **not** need Tor. |
 
-The automated, performance-tuned setup lives in [`worker/`](../worker/) — see
+These figures come from XMRig's own
+[RandomX optimization guide](https://xmrig.com/docs/miner/randomx-optimization-guide). The
+automated, performance-tuned setup lives in [`worker/`](../worker/) — see
 [Adding Workers](workers.md) and the kit's own [README](../worker/Readme.md). You can also point any
 hand-configured XMRig instance at the stack; the wallet and pool routing are handled centrally.
 
@@ -165,7 +180,7 @@ hand-configured XMRig instance at the stack; the wallet and pool routing are han
 
 - **Small home setup (pruned):** a 6-core / 16 GB / 240 GB SSD mini-PC as the host, HugePages on,
   with one or two desktop/laptop workers pointed at it. Comfortable for getting started.
-- **Full node + several workers:** an 8-core / 32 GB / 500 GB SSD host running an unpruned node,
+- **Full node + several workers:** an 8-core / 32 GB / 600 GB SSD host running an unpruned node,
   feeding a handful of dedicated mining rigs. Headroom for Tari growth and long uptimes.
 - **Minimal / reuse-an-existing-node:** point the stack at a Monero node you already run (remote
   mode), and the host needs only enough for Tari, P2Pool, the proxy, dashboard, and Tor — far less
