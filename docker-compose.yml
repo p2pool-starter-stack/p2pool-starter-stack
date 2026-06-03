@@ -75,11 +75,11 @@ services:
     # runaway OOM-restarts cleanly instead of dragging the stack down — monerod/p2pool keep mining
     # throughout. These are the legacy keys on purpose: deploy.resources has no swap field, and
     # memswap_limit equal to mem_limit means zero swap => clean OOM-kill, no disk thrash. (Capping
-    # swap needs swapaccount=1 on older cgroup-v1 hosts; cgroup-v2 honors it by default.) stack.sh
+    # swap needs swapaccount=1 on older cgroup-v1 hosts; cgroup-v2 honors it by default.) pithead
     # sets TARI_MEM_LIMIT from tari.mem_limit — "auto" gives Tari most of RAM after subtracting the
     # ~6 GB RandomX HugePages reservation and a reserve for the rest of the stack. The :-7680m
     # fallback only applies to a stale .env that predates this and hasn't been re-rendered (=> a safe
-    # value for a 16 GB host with HugePages on, until the next `stack.sh apply`).
+    # value for a 16 GB host with HugePages on, until the next `pithead apply`).
     mem_limit: ${TARI_MEM_LIMIT:-7680m}
     memswap_limit: ${TARI_MEM_LIMIT:-7680m}
     dns:

@@ -7,11 +7,11 @@ test-dashboard: ## Dashboard unit/component tests with coverage gate
 	cd build/dashboard && PYTHONPATH=. python3 -m pytest \
 		--cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
 
-test-stack: ## stack.sh shell test suite
+test-stack: ## pithead shell test suite
 	bash tests/stack/run.sh
 
 test-compose: ## Validate docker-compose.yml interpolation
 	bash tests/stack/test_compose.sh
 
 lint: ## shellcheck the stack scripts
-	shellcheck --severity=warning stack.sh tests/stack/run.sh tests/stack/test_compose.sh
+	shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh

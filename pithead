@@ -2,12 +2,12 @@
 #
 # Management script for the Monero + Tari merge-mining stack.
 #
-#   ./stack.sh setup            First-time setup (interactive config, Tor, optimize, start)
-#   ./stack.sh apply            Re-read config.json and propagate changes to a running stack
-#   ./stack.sh up | down | restart | upgrade
-#   ./stack.sh logs [service] | status | reset-dashboard | help
+#   ./pithead setup            First-time setup (interactive config, Tor, optimize, start)
+#   ./pithead apply            Re-read config.json and propagate changes to a running stack
+#   ./pithead up | down | restart | upgrade
+#   ./pithead logs [service] | status | reset-dashboard | help
 #
-# config.json is the single source of truth. Edit it, then run `./stack.sh apply`
+# config.json is the single source of truth. Edit it, then run `./pithead apply`
 # to regenerate .env / Caddyfile / Tari config and recreate only the changed containers
 # WITHOUT re-provisioning Tor, re-prompting, touching GRUB, or rotating the proxy token.
 #
@@ -28,7 +28,7 @@ error() { echo -e "${C_RED}[ERROR]${C_RESET} $1" >&2; exit 1; }
 
 on_err() {
     local ec=$?
-    echo -e "${C_RED}[ERROR]${C_RESET} stack.sh aborted unexpectedly (exit $ec)." >&2
+    echo -e "${C_RED}[ERROR]${C_RESET} pithead aborted unexpectedly (exit $ec)." >&2
     echo "Re-run with 'bash -x $0 <command>' to see where, and check the output above." >&2
 }
 
@@ -49,7 +49,7 @@ if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _STACK_SOURCED=1; fi
 
 if [ "$_STACK_SOURCED" = "0" ]; then
     # Always operate from the directory containing this script, so the stack can be managed from
-    # anywhere (./stack.sh, an absolute path, cron, systemd, ...). All paths below are relative to it.
+    # anywhere (./pithead, an absolute path, cron, systemd, ...). All paths below are relative to it.
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     cd "$SCRIPT_DIR" || error "Cannot enter the script directory: $SCRIPT_DIR"
 

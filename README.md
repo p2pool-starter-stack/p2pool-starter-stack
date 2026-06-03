@@ -1,7 +1,6 @@
 <div align="center">
 
-<!-- TODO(pithead): add a new Pithead logo (e.g. images/pithead-logo-large.png) and restore the <img> here.
-     The previous asset — images/p2pool-starter-stack-logo-large.png — still shows the old wordmark. -->
+<img src="./images/pithead-mark.svg" alt="Pithead" width="120">
 
 # Pithead
 
@@ -52,8 +51,8 @@ coffee gets cold**.
 ```bash
 git clone https://github.com/p2pool-starter-stack/pithead.git
 cd pithead
-chmod +x stack.sh
-./stack.sh setup
+chmod +x pithead
+./pithead setup
 ```
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
@@ -163,16 +162,16 @@ Read the full breakdown — including the privacy model and the algorithmic swit
 
 ## 🛠️ Common commands
 
-Everything runs through `stack.sh` (`./stack.sh help` lists it all):
+Everything runs through `pithead` (`./pithead help` lists it all):
 
 | Command | Description |
 |---|---|
-| `./stack.sh setup` | First-time interactive setup. |
-| `./stack.sh apply` | Preview and apply `config.json` changes. |
-| `./stack.sh up` / `down` / `restart` | Start / stop / restart the stack. |
-| `./stack.sh upgrade` | Rebuild and restart after a `git pull`. |
-| `./stack.sh logs [service]` | Follow logs (all, or one service). |
-| `./stack.sh status` | Container status + health-check of every expected service (warns on anything down). |
+| `./pithead setup` | First-time interactive setup. |
+| `./pithead apply` | Preview and apply `config.json` changes. |
+| `./pithead up` / `down` / `restart` | Start / stop / restart the stack. |
+| `./pithead upgrade` | Rebuild and restart after a `git pull`. |
+| `./pithead logs [service]` | Follow logs (all, or one service). |
+| `./pithead status` | Container status + health-check of every expected service (warns on anything down). |
 
 Full reference: **[Operations & Maintenance](docs/operations.md)**.
 

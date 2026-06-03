@@ -1,14 +1,14 @@
 # Getting Started
 
 This guide takes you from a fresh machine to a synced, mining stack. The whole process is
-driven by a single script — `stack.sh` — and most of it is automated.
+driven by a single script — `pithead` — and most of it is automated.
 
 > **TL;DR**
 > ```bash
 > git clone https://github.com/p2pool-starter-stack/pithead.git
 > cd pithead
-> chmod +x stack.sh
-> ./stack.sh setup
+> chmod +x pithead
+> ./pithead setup
 > ```
 > Answer a few prompts, let it run, and open the dashboard at `https://<your-hostname>`.
 
@@ -45,7 +45,7 @@ On an unsupported OS — or if dependency detection misfires on an unusual setup
 ```bash
 git clone https://github.com/p2pool-starter-stack/pithead.git
 cd pithead
-chmod +x stack.sh
+chmod +x pithead
 ```
 
 You'll need your **Monero** payout address and your **Tari (Minotari)** payout address ready
@@ -56,7 +56,7 @@ before you start setup.
 ## 3. Run setup
 
 ```bash
-./stack.sh setup
+./pithead setup
 ```
 
 Setup walks through five stages. It's interactive on the first run and safe to re-run later.
@@ -80,7 +80,7 @@ Setup walks through five stages. It's interactive on the first run and safe to r
 5. **Start.** Once everything is provisioned, setup offers to start the stack for you.
 
 > **If you enabled persistent HugePages, reboot before mining.** After the reboot, start the
-> stack with `./stack.sh up`.
+> stack with `./pithead up`.
 
 ### Setup flags
 
@@ -101,8 +101,8 @@ This is normal and can take anywhere from a few hours to a day or more depending
 hardware, disk, and network. You can watch progress on the dashboard or in the logs:
 
 ```bash
-./stack.sh logs monerod
-./stack.sh logs tari
+./pithead logs monerod
+./pithead logs tari
 ```
 
 Once both chains report fully synced, the dashboard automatically switches from Sync Mode to
@@ -127,7 +127,7 @@ https://<your-hostname>
 starts the stack). Caddy uses a self-signed certificate (`tls internal`), so the **first** time
 you visit, your browser shows a one-time "your connection is not private" / untrusted-certificate
 warning — accept it to continue. Prefer plain HTTP on your LAN? Set `dashboard.secure: false` in
-`config.json` and run `./stack.sh apply`.
+`config.json` and run `./pithead apply`.
 
 ---
 
