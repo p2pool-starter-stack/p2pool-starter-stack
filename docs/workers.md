@@ -7,6 +7,9 @@ centrally, so each rig's configuration stays dead simple.
 > **You do not put your wallet address in your worker config.** Payouts are managed by the
 > P2Pool service on the stack. Workers only need to know *where the stack is*.
 
+> 🧮 **What hardware should a worker have?** Workers do the actual RandomX hashing, so their specs
+> matter most for hashrate. See [Hardware Requirements › Worker rigs](hardware.md#worker-rigs-the-miners).
+
 ## Connect any XMRig worker
 
 Point your worker at the IP (or hostname) of the machine running the stack, on port `3333`. The
