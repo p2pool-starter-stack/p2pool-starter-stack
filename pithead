@@ -615,6 +615,9 @@ parse_and_validate_config() {
     DASHBOARD_HOST=$(resolve_default "$(jq -r '.dashboard.host // empty' "$CONFIG_FILE")" "")
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
+    # Timezone for the dashboard's timestamps/charts. "auto"/empty -> Etc/UTC; set an IANA
+    # name (e.g. America/Chicago) for local time. Rendered into .env as DASHBOARD_TZ.
+    DASHBOARD_TZ=$(resolve_default "$(jq -r '.dashboard.timezone // empty' "$CONFIG_FILE")" "Etc/UTC")
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
@@ -861,6 +864,7 @@ MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
+DASHBOARD_TZ=$DASHBOARD_TZ
 HOST_IP=$HOST_IP
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
