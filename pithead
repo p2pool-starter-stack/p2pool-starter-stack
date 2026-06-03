@@ -699,22 +699,23 @@ ensure_directories() {
     fi
 }
 
-# Decide the hostname the dashboard is reached at: config wins, then the preserved .env value,
-# then (only during interactive setup) a prompt, otherwise the machine hostname.
+# Decide the hostname the dashboard is reached at: an explicit dashboard.host wins; otherwise
+# "auto"/unset means this machine's hostname, re-derived each run (so reverting to "auto" takes
+# effect). Interactive setup prompts, defaulting to any previously-set value then the hostname.
 resolve_dashboard_host() {
     local allow_prompt="${1:-}"
     if [ -n "${DASHBOARD_HOST:-}" ]; then
         HOST_IP="$DASHBOARD_HOST"
         log "Using dashboard hostname '$HOST_IP' from $CONFIG_FILE."
-    elif [ -n "${PRESERVED_HOST_IP:-}" ]; then
-        HOST_IP="$PRESERVED_HOST_IP"
     elif [ "$allow_prompt" == "interactive" ]; then
         local default_host
-        default_host=$(hostname)
+        default_host="${PRESERVED_HOST_IP:-$(hostname)}"
         echo "The stack needs to know what hostname you will use to access the dashboard in your browser."
         read -r -p "Enter Hostname [$default_host]: " input_host || true
         HOST_IP="${input_host:-$default_host}"
     else
+        # "auto"/unset on a non-interactive run (e.g. apply): always the machine hostname, so
+        # setting dashboard.host back to "auto" reverts HOST_IP instead of keeping a stale value.
         HOST_IP=$(hostname)
     fi
 }
