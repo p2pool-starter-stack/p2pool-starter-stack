@@ -1,0 +1,5 @@
+# Code owners — every PR requires review from the owner(s) below.
+# Activates the ruleset's "require code owner review" rule.
+# https://docs.github.com/articles/about-code-owners
+
+* @VijitSingh97
