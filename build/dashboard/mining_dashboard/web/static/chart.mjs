@@ -20,6 +20,14 @@ import { fmtTimestamp, clampZoomWindow } from './logic.mjs';
 
 const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']];
 
+// Series the user can show/hide (Issue #47): dataset index, label and swatch colour class.
+// Visibility lives in dashboard.js ui.series (persisted); applied to the chart in applyVisibility.
+const SERIES = [
+    { key: 'p2pool', label: 'P2Pool', idx: 0, dot: 'dot-p2pool' },
+    { key: 'xvb', label: 'XvB', idx: 1, dot: 'dot-xvb' },
+    { key: 'shares', label: 'Shares', idx: 2, dot: 'dot-shares' },
+];
+
 // Smallest zoom window (ms) — guards against requesting a sub-sample slice (30s native cadence).
 const MIN_ZOOM_MS = 60000;
 // Coalesce a flurry of wheel/pan events into one refetch.
@@ -91,17 +99,21 @@ export class ChartCard extends Component {
         this.shareCounts = d.shares.map((s) => s.c);
         const c = paletteColors();
         const tension = d.tension ?? 0.3;
+        const vis = this.props.series || {};   // persisted show/hide state (Issue #47)
         const self = this;
         this.chart = new Chart(canvas, {
             type: 'line',
             data: {
                 datasets: [
                     { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, tension, fill: true,
+                      hidden: vis.p2pool === false,
                       stack: 'hr', backgroundColor: c.accentFill, pointRadius: 0, pointHitRadius: 20 },
                     { label: 'XvB', data: d.xvb, borderColor: c.purple, tension, fill: true,
+                      hidden: vis.xvb === false,
                       stack: 'hr', backgroundColor: c.purpleFill, pointRadius: 0, pointHitRadius: 20 },
                     // Own stack group so the scatter's y isn't summed onto the areas.
                     { label: 'Shares', data: d.shares, borderColor: c.shares, backgroundColor: c.shares,
+                      hidden: vis.shares === false,
                       stack: 'shares', pointStyle: 'triangle', rotation: 180, pointRadius: d.shares.map((s) => s.r),
                       pointHoverRadius: 15, pointHitRadius: 100, showLine: false },
                 ],
@@ -146,6 +158,13 @@ export class ChartCard extends Component {
         });
     }
 
+    // Apply the persisted show/hide state to the datasets (Issue #47); each defaults to visible.
+    // Hiding a stacked series re-stacks the rest (Chart.js excludes hidden datasets from the sum).
+    applyVisibility() {
+        const vis = this.props.series || {};
+        for (const s of SERIES) this.chart.setDatasetVisibility(s.idx, vis[s.key] !== false);
+    }
+
     sync() {
         if (!this.chart) { this.create(); return; }
         const d = this.props.chart;
@@ -159,6 +178,7 @@ export class ChartCard extends Component {
         ds[2].pointRadius = d.shares.map((s) => s.r);
         this.chart.options.scales.y.grid.color = c.grid;
         this.chart.options.scales.y.ticks.color = c.ticks;
+        this.applyVisibility();
 
         // On the zoomed -> preset transition (Reset or picking a preset clears the window), drop
         // any stale plugin zoom transform so the axis re-fits the new preset data. Keyed to the
@@ -187,6 +207,16 @@ export class ChartCard extends Component {
                 ${zoomed
                     ? html`<button class="btn-range btn-reset" onClick=${() => props.onResetZoom()}>↺ Reset zoom</button>`
                     : html`<span class="text-muted text-xs ml-2">Drag to zoom · Shift-drag to pan · Scroll to zoom</span>`}
+            </div>
+            <div class="chart-legend" role="group" aria-label="Toggle series">
+                ${SERIES.map((s) => {
+                    const on = (props.series || {})[s.key] !== false;
+                    return html`<button type="button" class=${'legend-item' + (on ? '' : ' off')}
+                        aria-pressed=${on} title=${(on ? 'Hide ' : 'Show ') + s.label}
+                        onClick=${() => props.onToggleSeries(s.key)}>
+                        <span class=${'legend-dot ' + s.dot}></span>${s.label}
+                    </button>`;
+                })}
             </div>
             <div class="chart-wrap"><canvas ref=${this.canvasRef}></canvas></div>
         </div>`;

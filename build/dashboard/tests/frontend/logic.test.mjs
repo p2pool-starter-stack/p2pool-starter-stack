@@ -13,6 +13,7 @@ import {
     sortWorkers, fmtTimestamp, WORKER_COLUMNS,
     THEMES, THEME_ORDER, normalizeTheme,
     clampZoomWindow, fmtWindowDuration,
+    SERIES_KEYS, normalizeSeries,
 } from '../../mining_dashboard/web/static/logic.mjs';
 
 const col = (key) => WORKER_COLUMNS.findIndex((c) => c.key === key);
@@ -113,4 +114,13 @@ test('fmtWindowDuration: two coarsest units, trailing zeros dropped', () => {
     assert.equal(fmtWindowDuration(3_600_000), '1h');          // exactly 1h -> no "0m"
     assert.equal(fmtWindowDuration(4_800_000), '1h 20m');
     assert.equal(fmtWindowDuration(3 * 86_400_000), '3d');     // exactly 3d -> no "0h"
+});
+
+test('normalizeSeries: defaults every series to visible, only explicit false hides', () => {
+    assert.deepEqual(normalizeSeries(null), { p2pool: true, xvb: true, shares: true });
+    assert.deepEqual(normalizeSeries({}), { p2pool: true, xvb: true, shares: true });
+    assert.deepEqual(normalizeSeries({ xvb: false }), { p2pool: true, xvb: false, shares: true });
+    // Garbage / stray keys are ignored; output is always the full key set.
+    assert.deepEqual(Object.keys(normalizeSeries({ junk: 1 })).sort(), [...SERIES_KEYS].sort());
+    assert.deepEqual(normalizeSeries('nope'), { p2pool: true, xvb: true, shares: true });
 });

@@ -57,6 +57,17 @@ export function clampZoomWindow(aMs, bMs, minSpanMs = 60000) {
     return { from, to };
 }
 
+// Chart series the user can show/hide, and a normalizer for the persisted state (Issue #47).
+// Kept pure so the default-visible logic is unit-tested; dashboard.js persists it in localStorage
+// and chart.mjs applies it. Anything not explicitly false defaults to visible.
+export const SERIES_KEYS = ['p2pool', 'xvb', 'shares'];
+export function normalizeSeries(obj) {
+    const o = (obj && typeof obj === 'object') ? obj : {};
+    const out = {};
+    for (const k of SERIES_KEYS) out[k] = o[k] !== false;
+    return out;
+}
+
 // Human-readable span for the "Zoomed: …" label — the two coarsest units from the first
 // non-zero one (e.g. "3d 4h", "1h 20m", "45s"), trailing zero units dropped. Pure and
 // locale-independent, unlike fmtTimestamp.

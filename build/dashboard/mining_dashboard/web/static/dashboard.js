@@ -6,7 +6,7 @@
 // the simple/advanced view — plus the latest data snapshot and connection status.
 import { render, html } from './preact.mjs';
 import { App } from './components.mjs';
-import { normalizeTheme } from './logic.mjs';
+import { normalizeTheme, normalizeSeries } from './logic.mjs';
 
 const root = document.getElementById('app');
 const REFRESH_MS = 30000;
@@ -21,9 +21,16 @@ function windowFromUrl() {
         ? { from, to } : null;
 }
 
+// Which chart series are shown — persisted so a hidden series stays hidden across reloads.
+function loadSeries() {
+    try { return normalizeSeries(JSON.parse(localStorage.getItem('dashboardSeries'))); }
+    catch (e) { return normalizeSeries(null); }
+}
+
 const ui = {
     range: new URL(location.href).searchParams.get('range') || 'all',
     window: windowFromUrl(),   // {from,to} epoch-s when zoomed, else null
+    series: loadSeries(),      // {p2pool, xvb, shares} booleans (Issue #47)
     sortIndex: null,
     sortAsc: true,
     view: localStorage.getItem('dashboardView') === 'advanced' ? 'advanced' : 'simple',
@@ -47,7 +54,7 @@ function rerender() {
     render(
         html`<${App} state=${state} connected=${connected} ui=${ui}
                      onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme}
-                     onZoom=${setZoom} onResetZoom=${resetZoom} />`,
+                     onZoom=${setZoom} onResetZoom=${resetZoom} onToggleSeries=${toggleSeries} />`,
         root,
     );
 }
@@ -112,6 +119,12 @@ function setTheme(theme) {
     localStorage.setItem('dashboardTheme', theme);
     applyTheme(theme);   // updates <html data-theme>; the chart recolours on the next render
     rerender();
+}
+
+function toggleSeries(key) {
+    ui.series = { ...ui.series, [key]: !ui.series[key] };
+    localStorage.setItem('dashboardSeries', JSON.stringify(ui.series));
+    rerender();   // visibility-only; the chart hides/shows the dataset, no refetch needed
 }
 
 applyTheme(ui.theme);            // re-assert the (normalized) theme before the first paint

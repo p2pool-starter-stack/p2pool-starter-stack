@@ -305,7 +305,7 @@ function WorkersTable({ workers, ui, onSort }) {
 
 // --- Operational view ----------------------------------------------------------------
 
-function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom }) {
+function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom, onToggleSeries }) {
     const advanced = ui.view === 'advanced';
     return html`
     <div id="dashboard-view" class=${advanced ? 'mode-advanced' : ''}>
@@ -316,8 +316,9 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
             </div>
         </div>
         <div class="grid">
-            <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window}
-                          onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom} />
+            <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
+                          onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom}
+                          onToggleSeries=${onToggleSeries} />
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${GlobalStats} state=${state} />
@@ -331,7 +332,7 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
 
 // --- Root ----------------------------------------------------------------------------
 
-export function App({ state, connected, ui, onRange, onSort, onView, onTheme, onZoom, onResetZoom }) {
+export function App({ state, connected, ui, onRange, onSort, onView, onTheme, onZoom, onResetZoom, onToggleSeries }) {
     // The theme toggle is fixed-position and always available, even before the first data load.
     const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
     if (!state) {
@@ -346,7 +347,8 @@ export function App({ state, connected, ui, onRange, onSort, onView, onTheme, on
         ${state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
             : html`<${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
-                                     onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom} />`}
+                                     onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
+                                     onToggleSeries=${onToggleSeries} />`}
         ${switcher}
     <//>`;
 }
