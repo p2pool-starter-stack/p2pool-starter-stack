@@ -1,45 +1,54 @@
 import os
 import logging
+import mimetypes
 from aiohttp import web
 
-from mining_dashboard.web.views import render_dashboard
+from mining_dashboard.web.views import build_state, get_shell_html
 
 logger = logging.getLogger("WebServer")
 
+# Slim/minimal containers (the production image is python:3.11-slim) often lack
+# /etc/mime.types, so ES modules (.mjs) — and on some setups .js — would be served as
+# application/octet-stream, which browsers refuse to execute as modules. Register the JS
+# types explicitly so the /static frontend always loads, regardless of the host's mime db.
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/javascript", ".js")
+
 
 async def handle_index(request):
-    """Render the dashboard. Pure transport: pull shared state, delegate to the view layer,
-    and turn the result (or a failure) into an HTTP response."""
+    """Serve the static HTML shell. It carries no data — the client fetches ``/api/state``
+    and renders the dashboard. Pure transport."""
+    return web.Response(text=get_shell_html(), content_type='text/html')
+
+
+async def handle_state(request):
+    """The dashboard's data API. Pull shared state, delegate to the view layer, and return
+    the assembled state object as JSON (or a sanitized 500 on failure)."""
     app = request.app
     data = app['latest_data']
     state_mgr = app['state_manager']
     range_arg = request.query.get('range', 'all')
 
     try:
-        return web.Response(
-            text=render_dashboard(data, state_mgr, range_arg),
-            content_type='text/html',
-        )
+        return web.json_response(build_state(data, state_mgr, range_arg))
     except Exception:
         # Log the full error server-side; never leak exception details to the browser.
-        logger.exception("Error rendering dashboard")
-        return web.Response(
-            text="<h1>Dashboard error</h1><p>Something went wrong rendering the page. "
-                 "See the dashboard container logs for details.</p>",
-            status=500,
-            content_type='text/html',
-        )
+        logger.exception("Error building dashboard state")
+        return web.json_response({"error": "Failed to build dashboard state."}, status=500)
 
 
 def _apply_security_headers(response):
-    """Baseline hardening headers. CSP is self-only (Chart.js is vendored locally);
-    'unsafe-inline' is required because the template has inline <style>/<script> blocks."""
+    """Baseline hardening headers. CSP is self-only: HTML shell, CSS/JS (the vendored Preact,
+    htm and Chart.js, plus the dashboard's own modules) and the JSON API are all same-origin,
+    so no 'unsafe-inline' or 'unsafe-eval' is needed (Issue #60). The frontend libraries are
+    eval-free ES modules; dynamic styling is applied via the CSSOM, which style-src doesn't
+    govern."""
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['Content-Security-Policy'] = (
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+        "default-src 'self'; img-src 'self' data:; style-src 'self'; "
+        "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'self'; form-action 'self'"
     )
     return response
@@ -61,7 +70,10 @@ def create_app(state_manager, latest_data_ref):
     app['state_manager'] = state_manager
     app['latest_data'] = latest_data_ref
 
-    app.add_routes([web.get('/', handle_index)])
+    app.add_routes([
+        web.get('/', handle_index),
+        web.get('/api/state', handle_state),
+    ])
 
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.router.add_static('/static', static_path)

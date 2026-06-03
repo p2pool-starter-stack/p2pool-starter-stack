@@ -20,6 +20,20 @@ jobs:
         working-directory: build/dashboard
         run: python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
 
+  frontend:
+    name: Frontend logic tests (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Pure client logic (worker sort, tooltip formatting) lives in static/logic.mjs and is
+      # tested with Node's built-in runner — no package.json/node_modules/build step. Component
+      # rendering is covered by a manual browser smoke test, not here.
+      - name: Run frontend logic tests
+        run: node --test build/dashboard/tests/frontend/*.test.mjs
+
   dashboard-image:
     name: Dashboard image (Docker test stage)
     runs-on: ubuntu-latest
