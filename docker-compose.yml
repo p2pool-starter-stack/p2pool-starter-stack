@@ -212,7 +212,10 @@ services:
         - ${DASHBOARD_DATA_DIR}:/data
       environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
-      - TZ=${TZ:-America/Chicago}
+      # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
+      # (`auto` = the host's timezone, auto-detected); pithead renders it to DASHBOARD_TZ in
+      # .env. The Etc/UTC here is only a last-resort fallback if DASHBOARD_TZ is unset.
+      - TZ=${DASHBOARD_TZ:-Etc/UTC}
       - MONERO_NODE_HOST=${MONERO_NODE_HOST:-172.28.0.26}
       # monerod get_info RPC creds (Issue #29): the dashboard reads sync height/target over
       # 127.0.0.1:18081 (reachable via network_mode: host) using digest auth, instead of
