@@ -44,6 +44,7 @@
     "dashboard": {
         "secure": true,
         "host": "auto",
+        "timezone": "auto",
         "data_dir": "auto",
         "tari_required": true
     }

@@ -83,7 +83,7 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode and a tour of the live operational view. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
-| **[Architecture](docs/architecture.md)** | The eight services, the privacy model, and the algorithmic XvB switching engine. |
+| **[Architecture](docs/architecture.md)** | The nine services, the privacy model, and the algorithmic XvB switching engine. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
 Browse the full index at **[docs/](docs/README.md)**.
