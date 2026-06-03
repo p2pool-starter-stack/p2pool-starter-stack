@@ -181,6 +181,7 @@ class TestStaticAssets:
             ("/static/vendor/preact.module.js", "javascript"),
             ("/static/vendor/htm.module.js", "javascript"),
             ("/static/vendor/chartjs-plugin-zoom.min.js", "javascript"),
+            ("/static/vendor/hammer.min.js", "javascript"),
         ):
             resp = await client.get(path)
             assert resp.status == 200, path
