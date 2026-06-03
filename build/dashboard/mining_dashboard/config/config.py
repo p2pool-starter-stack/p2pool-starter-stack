@@ -127,26 +127,40 @@ MONERO_PRUNE = os.environ.get("MONERO_PRUNE", "true").strip().lower() == "true"
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
 TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 
-# --- XvB Donation Controller (Issue #9) ---
-# Max fraction of any switching cycle donated to XvB. Always leaves room on p2pool
-# so it keeps finding shares (required to stay a "VIP" and to validate raffle
-# rounds) and caps how high a tier we will try to sustain. (Replaces the old
-# hardcoded 0.85 tier-selection margin.)
+# --- XvB Donation Controller (Issues #9, #70) ---
+# Closed-loop controller. The raffle pays nothing above a tier threshold, so the
+# objective is: hold XvB's *reported* 1h average just above the tier on minimum
+# donation, send everything else to p2pool, and never donate so much that p2pool
+# stops finding shares (which would forfeit "VIP" status — non-VIP winners are
+# skipped and failed). It steers off XvB's own hard numbers and self-calibrates,
+# so it holds the tier regardless of how XvB scales our donation. Validated by the
+# closed-loop simulator in mining_dashboard/sim/donation_model.py.
+
+# Hard ceiling on the donated fraction, independent of the VIP reserve below. A
+# last-resort cap so a misconfigured/zero difficulty reading can never donate the
+# whole cycle.
 XVB_MAX_DONATION_FRACTION = float(os.environ.get("XVB_MAX_DONATION_FRACTION", 0.85))
 
-# Steady-state cushion held above the tier threshold so normal variance doesn't
-# drop the measured 1h/24h average below it. A small percentage, but capped in
-# ABSOLUTE H/s so high tiers don't over-donate (5% of 1M = 50k H/s wasted; the
-# cap bounds that to a fixed amount regardless of tier).
-XVB_MAINT_MARGIN_PCT = float(os.environ.get("XVB_MAINT_MARGIN_PCT", 0.02))
+# Cushion held above the tier threshold: the controller targets the 1h average at
+# threshold * (1 + pct), capped in ABSOLUTE H/s. The raffle terminates a win if the
+# 1h average dips below the round minimum, so we sit a small, noise-covering margin
+# above it — not a percentage of the tier (which wastes more the higher the tier).
+XVB_MAINT_MARGIN_PCT = float(os.environ.get("XVB_MAINT_MARGIN_PCT", 0.03))
 XVB_MAINT_MARGIN_ABS_CAP = float(os.environ.get("XVB_MAINT_MARGIN_ABS_CAP", 1000))
 
-# Proportional catch-up gains: when a trailing average is below target, donate
-# extra proportional to the deficit instead of dumping a full cycle. The 1h
-# average recovers within the hour (larger gain); the 24h average is sluggish
-# (gentle gain) to avoid sustained over-donation while it climbs.
-XVB_CATCHUP_GAIN_1H = float(os.environ.get("XVB_CATCHUP_GAIN_1H", 1.5))
-XVB_CATCHUP_GAIN_24H = float(os.environ.get("XVB_CATCHUP_GAIN_24H", 0.5))
+# Integral gain of the calibration loop. Each cycle the donated fraction is nudged
+# by gain * (reference - measured_1h) / current_hr. Low by design: the 1h average
+# is laggy, so high gain hunts (the simulator finds oscillation above ~0.05,
+# especially if XvB over-credits). 0.03 converges in a few hours and stays stable.
+XVB_CONTROL_GAIN = float(os.environ.get("XVB_CONTROL_GAIN", 0.03))
+
+# VIP / PPLNS reserve. To stay "VIP" we must keep finding p2pool shares, so we
+# reserve enough hashrate for p2pool to hold a share in the PPLNS window. The bare
+# minimum (one expected share per window) is sidechain_difficulty / window_seconds;
+# this factor multiplies it for headroom against Poisson variance (2.0 => ~2
+# expected shares, P(zero) ~ 13%). Donation is capped so p2pool always keeps at
+# least this. Falls back to XVB_MAX_DONATION_FRACTION when difficulty is unknown.
+XVB_P2POOL_RESERVE_FACTOR = float(os.environ.get("XVB_P2POOL_RESERVE_FACTOR", 2.0))
 
 # Switching overhead (ms) to account for connection ramp-up time
 XVB_SWITCH_OVERHEAD_MS = 5000

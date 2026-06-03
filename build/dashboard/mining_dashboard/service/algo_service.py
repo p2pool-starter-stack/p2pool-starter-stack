@@ -14,8 +14,8 @@ from mining_dashboard.config.config import (
     XVB_MAX_DONATION_FRACTION,
     XVB_MAINT_MARGIN_PCT,
     XVB_MAINT_MARGIN_ABS_CAP,
-    XVB_CATCHUP_GAIN_1H,
-    XVB_CATCHUP_GAIN_24H,
+    XVB_CONTROL_GAIN,
+    XVB_P2POOL_RESERVE_FACTOR,
     XVB_SWITCH_OVERHEAD_MS,
     UPDATE_INTERVAL
 )
@@ -33,8 +33,12 @@ class AlgoService:
         self.max_donation_fraction = XVB_MAX_DONATION_FRACTION
         self.maint_margin_pct = XVB_MAINT_MARGIN_PCT
         self.maint_margin_abs_cap = XVB_MAINT_MARGIN_ABS_CAP
-        self.catchup_gain_1h = XVB_CATCHUP_GAIN_1H
-        self.catchup_gain_24h = XVB_CATCHUP_GAIN_24H
+        self.control_gain = XVB_CONTROL_GAIN
+        self.p2pool_reserve_factor = XVB_P2POOL_RESERVE_FACTOR
+        # Closed-loop state: the fraction of each cycle currently donated to XvB.
+        # Advanced once per real cycle by the calibration loop (not in _smart_sleep).
+        # None until the first decision seeds it from the feedforward estimate.
+        self.donation_fraction = None
 
     async def switch_miners(self, mode, state_label=None):
         """
@@ -70,17 +74,25 @@ class AlgoService:
         except Exception as e:
             logger.error(f"Failed to switch proxy mode: {e}")
 
-    def get_decision(self, current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares):
+    def get_decision(self, current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats,
+                     shares, advance=True):
         """
         Evaluates the current mining state to determine the next operation mode.
 
+        The donated fraction is held in ``self.donation_fraction`` and steered by a
+        closed-loop calibration on XvB's reported 1h average (see
+        ``_advance_controller``). This method reads that state and turns it into a
+        concrete time-slice, applying the VIP/PPLNS reserve and the dwell rules.
+
         Args:
-            current_hr (float): Current real-time (10s) hashrate for calculation.
+            current_hr (float): Current real-time (10s) hashrate.
             stable_hr (float): Stable (15m) hashrate for tier selection.
-            p2pool_stats (dict): Statistics from the local P2Pool node.
-            p2p_stats (dict): P2P network statistics (for pool type detection).
-            xvb_stats (dict): Historical statistics for XvB mining.
-            shares (list): List of recent shares with timestamps.
+            p2pool_stats (dict): Local P2Pool stats (pplns_window, difficulty).
+            p2p_stats (dict): P2P network stats (pool type detection).
+            xvb_stats (dict): XvB API stats (avg_1h, avg_24h, fail_count).
+            shares (list): Recent shares with timestamps.
+            advance (bool): Advance the calibration loop this call. True from the
+                main per-cycle loop; False from _smart_sleep, which only re-reads.
 
         Returns:
             tuple: (Mode String ["P2POOL"|"XVB"|"SPLIT"], Duration in ms)
@@ -93,7 +105,7 @@ class AlgoService:
         # This uses the same logic as the dashboard UI to count shares within the PPLNS window.
         pool_type = p2p_stats.get('type', 'Main')
         pplns_window = p2pool_stats.get('pplns_window', 2160)
-        
+
         block_time = 10  # Default for Main/Mini
         if pool_type == "Nano":
             block_time = 30
@@ -118,14 +130,19 @@ class AlgoService:
 
         # If no tier qualifies (can't sustain even the lowest), stay on P2Pool.
         if target_hr == 0:
-             return "P2POOL", 0
+            return "P2POOL", 0
 
-        avg_24h = xvb_stats.get('avg_24h', 0)
+        # Cap the donated fraction so p2pool keeps finding shares (VIP status).
+        max_fraction = self._max_donation_fraction(current_hr, window_duration, p2pool_stats)
         avg_1h = xvb_stats.get('avg_1h', 0)
+        avg_24h = xvb_stats.get('avg_24h', 0)
 
-        # Feedback controller: time to donate this cycle to hold the measured
-        # averages just above target (maintenance), ramping up when behind.
-        needed_time_ms = self._get_needed_time(current_hr, target_hr, avg_1h, avg_24h)
+        # Advance the calibration loop once per real cycle (not during _smart_sleep).
+        if advance:
+            self._advance_controller(current_hr, target_hr, avg_1h, max_fraction)
+
+        fraction = min(self.donation_fraction or 0.0, max_fraction)
+        needed_time_ms = self._fraction_to_ms(fraction)
         if needed_time_ms <= 0:
             return "P2POOL", 0
 
@@ -142,7 +159,8 @@ class AlgoService:
             logger.info(f"Decision: Full XVB cycle (target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})")
             return "XVB", XVB_TIME_ALGO_MS
 
-        logger.info(f"Decision: Split ({needed_time_ms}ms to XvB; target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})")
+        logger.info(f"Decision: Split ({needed_time_ms}ms to XvB; frac {fraction:.3f}; "
+                    f"target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})")
         return "SPLIT", int(needed_time_ms)
 
     def _get_target_donation_hr(self, stable_hr):
@@ -157,39 +175,74 @@ class AlgoService:
         )
         return target
 
-    def _get_needed_time(self, current_hr, target_hr, avg_1h=0, avg_24h=0):
+    def _reference_hr(self, target_hr):
+        """Hashrate the controller holds XvB's 1h average at: the tier threshold
+        plus a small, noise-covering cushion (capped in absolute H/s). The raffle
+        terminates a win if the 1h average dips below the round minimum, so we sit
+        a hair above it — never a fat percentage that wastes p2pool hashrate."""
+        return target_hr + min(target_hr * self.maint_margin_pct, self.maint_margin_abs_cap)
+
+    def _max_donation_fraction(self, current_hr, window_duration, p2pool_stats):
         """
-        Donation time (ms) for this cycle to hold the measured average just above
-        the tier threshold.
+        Largest fraction of the cycle we may donate while keeping p2pool eligible
+        for "VIP" — i.e. still finding shares within the PPLNS window. A miner that
+        wins while non-VIP is skipped and gains a fail, so this reserve is a hard
+        constraint, not a preference.
 
-        The proxy donates the full hashrate during a slice, so the windowed
-        average XvB measures ≈ donated_fraction * current_hr. We pick a desired
-        effective rate R and convert it via R / current_hr:
+        p2pool needs ~``sidechain_difficulty / window_seconds`` H/s to land one
+        expected share per window; we reserve ``reserve_factor`` times that for
+        headroom against variance. When difficulty is unknown (stats not ready),
+        fall back to the flat hard cap.
+        """
+        difficulty = p2pool_stats.get('difficulty', 0) or 0
+        if current_hr <= 0 or difficulty <= 0 or window_duration <= 0:
+            return self.max_donation_fraction
 
-            R = target
-                + maintenance cushion (small %, capped in absolute H/s)
-                + proportional catch-up for any trailing average below target
+        min_p2pool_hr = (difficulty / window_duration) * self.p2pool_reserve_factor
+        sparable_fraction = max(0.0, 1.0 - (min_p2pool_hr / current_hr))
+        return min(sparable_fraction, self.max_donation_fraction)
 
-        The maintenance cushion keeps us just above target without the flat-5%
-        waste at high tiers; the catch-up ramps donation when behind instead of
-        dumping a full cycle. The fraction is clamped to max_donation_fraction so
-        p2pool always keeps a slice (needed for VIP status / round validity).
+    def _advance_controller(self, current_hr, target_hr, avg_1h, max_fraction):
+        """
+        One step of the closed-loop calibration. Nudges the donated fraction so
+        XvB's *reported* 1h average tracks the reference (tier + cushion):
+
+            fraction += gain * (reference - avg_1h) / current_hr
+
+        Because it steers off XvB's authoritative number rather than assuming
+        ``credited == fraction * current_hr``, it holds the tier no matter how XvB
+        scales our donation — and it can't wind up: the gain is small and the
+        fraction is clamped to ``[0, max_fraction]`` (the VIP reserve), so a
+        still-ramping or stale 1h read can only drift it slowly within bounds.
         """
         if current_hr <= 0:
+            return
+
+        # Seed from the feedforward estimate so we converge from a sane point.
+        if self.donation_fraction is None:
+            self.donation_fraction = min(self._reference_hr(target_hr) / current_hr, max_fraction)
+            return
+
+        error = self._reference_hr(target_hr) - avg_1h
+        self.donation_fraction += self.control_gain * error / current_hr
+        self.donation_fraction = max(0.0, min(self.donation_fraction, max_fraction))
+
+    def _fraction_to_ms(self, fraction):
+        """Convert a donated fraction of the cycle to a slice length (ms), adding
+        the fixed switch/ramp-up overhead. Returns 0 for a non-positive fraction."""
+        if fraction <= 0:
             return 0
+        return math.ceil(fraction * XVB_TIME_ALGO_MS + XVB_SWITCH_OVERHEAD_MS)
 
-        # Steady-state: sit just above target. Small %, capped absolutely.
-        rate = target_hr + min(target_hr * self.maint_margin_pct, self.maint_margin_abs_cap)
-
-        # Proportional catch-up when a trailing average is below target.
-        if avg_1h < target_hr:
-            rate += (target_hr - avg_1h) * self.catchup_gain_1h
-        if avg_24h < target_hr:
-            rate += (target_hr - avg_24h) * self.catchup_gain_24h
-
-        fraction = min(rate / current_hr, self.max_donation_fraction)
-        needed = fraction * XVB_TIME_ALGO_MS + XVB_SWITCH_OVERHEAD_MS
-        return math.ceil(needed)
+    @staticmethod
+    def _routed_fraction(decision, xvb_duration_ms):
+        """Fraction of this cycle actually routed to XvB, for the routed-vs-credited
+        instrumentation: 0 on p2pool, 1 on a full XvB cycle, the time-slice on SPLIT."""
+        if decision == "XVB":
+            return 1.0
+        if decision == "SPLIT":
+            return xvb_duration_ms / XVB_TIME_ALGO_MS
+        return 0.0
 
     async def _smart_sleep(self, duration_sec, check_interval_sec=None):
         """
@@ -217,10 +270,17 @@ class AlgoService:
                 p2pool_stats = latest.get("pool", {}).get("pool", {})
                 p2p_stats = latest.get("pool", {}).get("p2p", {})
 
+                # Re-read WITHOUT advancing the calibration loop (that happens once
+                # per real cycle in run()). Bail early if we'd now donate, or if
+                # XvB's 1h average has slipped below the tier and we need to catch
+                # up — so the next cycle reacts in seconds, not after the full dwell.
                 decision, _ = self.get_decision(
-                    current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares
+                    current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares,
+                    advance=False,
                 )
-                if decision in ("XVB", "SPLIT"):
+                target_hr = self._get_target_donation_hr(stable_hr)
+                under_tier = target_hr > 0 and xvb_stats.get('avg_1h', 0) < target_hr
+                if decision in ("XVB", "SPLIT") or under_tier:
                     logger.info("Smart-sleep: donation target needs attention — ending P2Pool dwell early.")
                     return
             except Exception as e:
@@ -263,7 +323,14 @@ class AlgoService:
                 
                 # Execute decision logic
                 decision, xvb_duration = self.get_decision(current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares)
-                
+
+                # Record the fraction of this cycle actually routed to XvB so the
+                # dashboard can show routed-vs-credited (the live credit factor).
+                await asyncio.to_thread(
+                    self.state_manager.update_xvb_stats,
+                    donation_fraction=self._routed_fraction(decision, xvb_duration),
+                )
+
                 if decision == "P2POOL":
                     await self.switch_miners("P2POOL", state_label="P2POOL")
                     # Poll during the dwell so a hashrate/average drop is caught

@@ -32,7 +32,12 @@ class StateManager:
                 "avg_24h": 0.0,
                 "avg_1h": 0.0,
                 "fail_count": 0,
-                "last_update": 0.0
+                "last_update": 0.0,
+                # Fraction of the current cycle routed to XvB, written by the
+                # controller each cycle. Lets the dashboard show what we *send*
+                # (routed) next to what XvB *credits* (avg_1h/24h) — the live
+                # credit-factor signal (Issue #70).
+                "donation_fraction": 0.0
             },
             # Initialize state with default values from configuration
             "tiers": TIER_DEFAULTS.copy()

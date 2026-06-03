@@ -159,6 +159,7 @@ class AlgoContext:
     p2p_24h: str
     xvb_1h: str
     xvb_24h: str
+    xvb_routed: str
     tier_name: str
     target_tier_name: str
     low_hr_badge: str
@@ -568,6 +569,10 @@ def build_algo_context(data, state_mgr, history):
 
     total_hr_val = data.get('total_live_h15', 0)
     xvb_24h_val = xvb_stats.get('avg_24h', 0)
+    # What we currently route to XvB (fraction of our hashrate this cycle). Shown
+    # next to the credited averages so the gap — the live credit factor — is
+    # visible: routed is our input, avg_1h/24h is XvB's authoritative output.
+    routed_hr_val = (xvb_stats.get('donation_fraction', 0) or 0) * total_hr_val
 
     # P2Pool 1h/24h averages from our own DB history: the time-weighted hashrate actually
     # delivered to P2Pool (v_p2pool), rather than p2pool's noisy stratum estimate or a
@@ -612,6 +617,7 @@ def build_algo_context(data, state_mgr, history):
         p2p_24h=format_hashrate(p2p_24h_val),
         xvb_1h=format_hashrate(xvb_stats.get('avg_1h', 0)),
         xvb_24h=format_hashrate(xvb_24h_val),
+        xvb_routed=format_hashrate(routed_hr_val),
         tier_name=tier_name,
         target_tier_name=target_tier_name,
         low_hr_badge=low_hr_badge,

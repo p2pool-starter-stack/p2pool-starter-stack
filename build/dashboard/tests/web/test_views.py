@@ -126,6 +126,29 @@ class TestAlgoContextColors:
         assert ctx.tier_name == "Disabled"
 
 
+class TestRoutedInstrumentation:
+    def test_routed_reflects_donation_fraction(self):
+        """xvb_routed shows what we send (fraction * total), distinct from the
+        credited averages the API reports — the live credit-factor signal."""
+        sm = StateManager(db_path=":memory:")
+        sm.update_xvb_stats(mode="XVB (Split)", donation_fraction=0.25)
+        try:
+            ctx = build_algo_context({"total_live_h15": 40_000}, sm, [])
+        finally:
+            sm.close()
+        # 0.25 * 40k = 10 kH/s routed.
+        assert "10" in ctx.xvb_routed and "kH/s" in ctx.xvb_routed
+
+    def test_routed_zero_when_not_donating(self):
+        sm = StateManager(db_path=":memory:")
+        sm.update_xvb_stats(mode="P2POOL", donation_fraction=0.0)
+        try:
+            ctx = build_algo_context({"total_live_h15": 40_000}, sm, [])
+        finally:
+            sm.close()
+        assert ctx.xvb_routed.startswith("0")
+
+
 class TestLowHashrateWarning:
     def _ctx(self, monkeypatch, level, total_hr):
         monkeypatch.setattr(views, "XVB_DONATION_LEVEL", level)
