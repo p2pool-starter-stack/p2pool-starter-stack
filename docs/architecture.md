@@ -147,4 +147,4 @@ you can watch the controller work.
 
 - [The Dashboard](dashboard.md) — Sync Mode and the live operational view.
 - [Configuration](configuration.md) — the `xvb.*` settings, data directories, and remote nodes.
-- [Adding Workers](workers.md) — connecting hardware to the single `3333` endpoint.
+- [Connecting Miners](workers.md) — connecting hardware to the single `3333` endpoint.

@@ -12,8 +12,8 @@ needs:
 
 Size the **host** for nodes, storage, and uptime; size the **workers** for CPU mining performance.
 
-> **This page covers the stack host.** Worker-rig hardware lives with the worker kit — see the
-> [worker README](../worker/Readme.md#-hardware-requirements) in [`worker/`](../worker/).
+> **This page covers the stack host.** Miner (worker-rig) hardware lives with the miner kit — see
+> [RigForge](https://github.com/p2pool-starter-stack/rigforge#-hardware-requirements).
 
 ---
 
@@ -168,9 +168,9 @@ away:
   mode), and the host needs only enough for Tari, P2Pool, the proxy, dashboard, and Tor — far less
   disk and RAM.
 
-> **Sizing the worker rigs** that connect to this host is a separate exercise — their CPU is what
-> determines hashrate. See the worker kit's
-> [Hardware Requirements](../worker/Readme.md#-hardware-requirements).
+> **Sizing the miners** that connect to this host is a separate exercise — their CPU is what
+> determines hashrate. See RigForge's
+> [Hardware Requirements](https://github.com/p2pool-starter-stack/rigforge#-hardware-requirements).
 
 ---
 
@@ -178,6 +178,6 @@ away:
 
 - [Getting Started](getting-started.md) — prerequisites and first-run setup.
 - [Configuration](configuration.md) — pruning, data directories, remote nodes, and `tari.mem_limit`.
-- [Adding Workers](workers.md) — connecting rigs to this host.
-- [Worker kit README](../worker/Readme.md) — worker-rig hardware and the provisioning script.
+- [Connecting Miners](workers.md) — connecting rigs to this host.
+- [RigForge](https://github.com/p2pool-starter-stack/rigforge) — provision a tuned miner; miner hardware specs.
 - [Architecture](architecture.md) — the services and how they fit together.

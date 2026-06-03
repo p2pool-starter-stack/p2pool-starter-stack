@@ -25,8 +25,8 @@ driven by a single script — `stack.sh` — and most of it is automated.
 | **Software** | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
 > 📐 **Full sizing guidance** for the stack host — minimum vs. recommended specs, plus ways to run
-> leaner — is in **[Hardware Requirements](hardware.md)**. Worker-rig specs live in the
-> [worker kit](../worker/Readme.md).
+> leaner — is in **[Hardware Requirements](hardware.md)**. Miner specs live in
+> [RigForge](https://github.com/p2pool-starter-stack/rigforge).
 
 You don't have to install the software dependencies yourself. `setup` checks for them and, **on
 Ubuntu, offers to install anything that's missing**. If you'd rather do it manually:
@@ -131,14 +131,15 @@ warning — accept it to continue. Prefer plain HTTP on your LAN? Set `dashboard
 
 ---
 
-## 6. Add your mining hardware
+## 6. Connect your miners
 
-Point your XMRig workers at the stack machine on port **3333** — that's the single endpoint for
-all your rigs. You do **not** put your wallet address in the worker config; the stack handles
-payouts centrally.
+Point your XMRig miners at the stack machine on port **3333** — that's the single endpoint for all
+your rigs. You do **not** put your wallet address in the miner config; the stack handles payouts
+centrally.
 
-See [Adding Workers](workers.md) for a manual XMRig config and for the automated,
-performance-tuned worker provisioning kit.
+See [Connecting Miners](workers.md) to point an **existing** rig at the stack, or use
+[RigForge](https://github.com/p2pool-starter-stack/rigforge) to provision a tuned miner from scratch
+in one command.
 
 ---
 

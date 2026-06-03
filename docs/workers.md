@@ -1,23 +1,21 @@
-# Adding Workers
+# Connecting Miners
 
-Your mining hardware connects to the stack through a **single endpoint**: the `xmrig-proxy`
-service on port **3333**. The stack handles pool selection, payouts, and the P2Pool/XvB split
-centrally, so each rig's configuration stays dead simple.
+This stack is the **orchestrator** for your mining operation: every miner you own connects to a
+**single endpoint**, and the stack routes their combined hashrate — handling pool selection,
+payouts, and the P2Pool/XvB split centrally. Your miners stay dead simple; all the coordination
+lives here.
 
-> **You do not put your wallet address in your worker config.** Payouts are managed by the
-> P2Pool service on the stack. Workers only need to know *where the stack is*.
+The endpoint is the `xmrig-proxy` service on port **3333**.
 
-> 🧮 **What hardware should a worker have?** Workers do the actual RandomX hashing, so their specs
-> matter most for hashrate. See the worker kit's
-> [Hardware Requirements](../worker/Readme.md#-hardware-requirements).
+> **You do not put a wallet address in your miner config.** Payouts are managed by the P2Pool
+> service on the stack — miners only need to know *where the stack is*.
 
-## Connect any XMRig worker
+---
 
-Point your worker at the IP (or hostname) of the machine running the stack, on port `3333`. The
-`user` field is just a label for the rig — use its hostname so you can tell workers apart on the
-dashboard.
+## Already have miners? Connect them
 
-Minimal `config.json` for a manually configured [XMRig](https://github.com/xmrig/xmrig) worker:
+If you already run [XMRig](https://github.com/xmrig/xmrig) (or any RandomX miner), point it at the
+stack and you're done. Use the machine running the stack as the host, on port `3333`:
 
 ```json
 {
@@ -30,31 +28,60 @@ Minimal `config.json` for a manually configured [XMRig](https://github.com/xmrig
 }
 ```
 
-That's it — start XMRig and the rig appears in the dashboard's **Workers Alive** table within a
-few seconds.
+That's the whole pool config. Start the miner and it appears in the dashboard's **Workers Alive**
+table within a few seconds.
+
+- **`user` is just a label** for the rig — use its hostname so you can tell workers apart on the
+  dashboard. (No wallet address — see above.)
+- **Point all your rigs at the same `YOUR_STACK_IP:3333`.** The stack aggregates them; there's
+  nothing per-rig to configure beyond the label.
+- **`YOUR_STACK_IP`** can be an IP or a hostname. On a LAN with mDNS, the stack host's
+  `<hostname>.local` works too.
+
+### Miner version & compatibility
+
+There's **no required miner version**. The stack's `xmrig-proxy` and P2Pool speak the standard
+Stratum protocol and accept any miner that supports NiceHash (XMRig enables this automatically when
+it connects through a proxy). Any reasonably recent **XMRig (5.0+, which introduced RandomX)** works
+— the stack's component versions don't dictate a miner version. When in doubt, run the latest XMRig.
 
 ### Networking notes
 
-- Port **3333** must be reachable from each worker to the stack machine. If the stack host has a
+- Port **3333** must be reachable from each miner to the stack machine. If the stack host has a
   firewall, allow inbound `3333` from your LAN.
-- Workers connect over your local network (plain stratum). The Tor layer is for the stack's
-  *upstream* connections to the Monero/Tari/P2Pool networks — your rigs don't need Tor.
+- Miners connect over your local network (plain stratum). The Tor layer is for the stack's
+  *upstream* connections to the Monero/Tari/P2Pool networks — **your rigs don't need Tor**.
+
+If a worker doesn't show up, see
+[Operations › Troubleshooting](operations.md#troubleshooting).
 
 ---
 
-## The worker provisioning kit
+## New to mining? Start with RigForge
 
-For a fully automated, performance-tuned worker, use the self-contained kit in the
-[`worker/`](../worker/) directory. It builds XMRig from source, applies kernel- and CPU-level tuning
-for maximum hashrate, and runs it as a managed `systemd` service — a fully provisioned worker in one
-command:
+If you don't have miners set up yet — or you want the best hashrate without hand-tuning — use
+**[RigForge](https://github.com/p2pool-starter-stack/rigforge)**, the companion miner kit for this
+stack.
+
+RigForge turns a fresh machine into a fully tuned worker in one command: it builds XMRig from
+source, applies CPU- and kernel-level tuning (HugePages, MSR, NUMA), and runs it as a managed
+service. During setup it asks for your stack's hostname and wires up the `3333` connection for you.
 
 ```bash
-git clone https://github.com/p2pool-starter-stack/p2pool-starter-stack.git
-cd p2pool-starter-stack/worker
-chmod +x p2pool-starter-worker.sh
-sudo ./p2pool-starter-worker.sh
+git clone https://github.com/p2pool-starter-stack/rigforge.git
+cd rigforge
+chmod +x rigforge.sh
+sudo ./rigforge.sh
 ```
 
-The kit is documented end-to-end in its own **[README](../worker/Readme.md)** — capabilities,
-hardware requirements, deployment, kernel tuning, maintenance, and verification.
+See the **[RigForge README](https://github.com/p2pool-starter-stack/rigforge)** for the full guide,
+including **[worker hardware requirements](https://github.com/p2pool-starter-stack/rigforge#-hardware-requirements)**,
+kernel tuning, and verification.
+
+---
+
+## See also
+
+- [Getting Started](getting-started.md) — first-run setup and what to expect while the node syncs.
+- [The Dashboard](dashboard.md) — the Workers Alive table and per-worker stats.
+- [Hardware Requirements](hardware.md) — sizing the **stack host** (miners are sized in RigForge).
