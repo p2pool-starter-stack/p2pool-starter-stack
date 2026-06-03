@@ -13,6 +13,27 @@ import { fmtTimestamp } from './logic.mjs';
 
 const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']];
 
+// Append an 8-bit alpha to a #rrggbb hex (Chart.js accepts #rrggbbaa). Non-hex values pass
+// through opaque, so a future palette change can't break the fills.
+const withAlpha = (hex, aa) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + aa : hex);
+
+// The chart's colours, read from the active theme's CSS variables (Issue #43) so the chart
+// matches light/dark/auto. Re-read on every sync() so a theme switch recolours it in place.
+function paletteColors() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
+    const accent = v('--accent', '#58a6ff');
+    const purple = v('--purple', '#a371f7');
+    return {
+        accent, purple,
+        accentFill: withAlpha(accent, '1a'),   // ≈ 0.1 alpha
+        purpleFill: withAlpha(purple, '33'),   // ≈ 0.2 alpha
+        shares: v('--bad', '#da3633'),
+        grid: v('--border', '#30363d'),
+        ticks: v('--text-muted', '#8b949e'),
+    };
+}
+
 export class ChartCard extends Component {
     constructor(props) {
         super(props);
@@ -31,16 +52,17 @@ export class ChartCard extends Component {
         if (!canvas || typeof Chart === 'undefined') return;
         const d = this.props.chart;
         this.shareCounts = d.shares.map((s) => s.c);
+        const c = paletteColors();
         const self = this;
         this.chart = new Chart(canvas, {
             type: 'line',
             data: {
                 datasets: [
-                    { label: 'P2Pool', data: d.p2pool, borderColor: '#58a6ff', tension: 0.3, fill: true,
-                      backgroundColor: 'rgba(88,166,255,0.1)', pointRadius: 0, pointHitRadius: 20 },
-                    { label: 'XvB', data: d.xvb, borderColor: '#a371f7', tension: 0.3, fill: true,
-                      backgroundColor: 'rgba(163, 113, 247, 0.2)', pointRadius: 0, pointHitRadius: 20 },
-                    { label: 'Shares', data: d.shares, borderColor: '#FF0000', backgroundColor: '#FF0000',
+                    { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, tension: 0.3, fill: true,
+                      backgroundColor: c.accentFill, pointRadius: 0, pointHitRadius: 20 },
+                    { label: 'XvB', data: d.xvb, borderColor: c.purple, tension: 0.3, fill: true,
+                      backgroundColor: c.purpleFill, pointRadius: 0, pointHitRadius: 20 },
+                    { label: 'Shares', data: d.shares, borderColor: c.shares, backgroundColor: c.shares,
                       pointStyle: 'triangle', rotation: 180, pointRadius: d.shares.map((s) => s.r),
                       pointHoverRadius: 15, pointHitRadius: 100, showLine: false },
                 ],
@@ -64,9 +86,9 @@ export class ChartCard extends Component {
                 },
                 scales: {
                     // Linear x positions points by real elapsed time (gaps occupy proportional
-                    // space); axis hidden as before. y unchanged.
+                    // space); axis hidden as before. y grid/ticks follow the theme.
                     x: { type: 'linear', display: false },
-                    y: { stacked: false, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+                    y: { stacked: false, grid: { color: c.grid }, ticks: { color: c.ticks } },
                 },
             },
         });
@@ -75,11 +97,15 @@ export class ChartCard extends Component {
     sync() {
         if (!this.chart) { this.create(); return; }
         const d = this.props.chart;
+        const c = paletteColors();   // re-read so a theme switch recolours in place
         this.shareCounts = d.shares.map((s) => s.c);
-        this.chart.data.datasets[0].data = d.p2pool;
-        this.chart.data.datasets[1].data = d.xvb;
-        this.chart.data.datasets[2].data = d.shares;
-        this.chart.data.datasets[2].pointRadius = d.shares.map((s) => s.r);
+        const ds = this.chart.data.datasets;
+        ds[0].data = d.p2pool; ds[0].borderColor = c.accent; ds[0].backgroundColor = c.accentFill;
+        ds[1].data = d.xvb;    ds[1].borderColor = c.purple; ds[1].backgroundColor = c.purpleFill;
+        ds[2].data = d.shares; ds[2].borderColor = c.shares; ds[2].backgroundColor = c.shares;
+        ds[2].pointRadius = d.shares.map((s) => s.r);
+        this.chart.options.scales.y.grid.color = c.grid;
+        this.chart.options.scales.y.ticks.color = c.ticks;
         this.chart.update();
         this.chart.resize();
     }

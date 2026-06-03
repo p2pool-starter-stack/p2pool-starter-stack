@@ -6,12 +6,45 @@
  * (palette colours, gauges) or set at runtime via the CSSOM in dashboard.js (the gauge
  * fill %, which can't be a fixed class). Nothing here is templated — it's static CSS. */
 
-:root {
+/* ---- Theme palettes (Issue #43) -------------------------------------------------------
+ * Three modes, selected by a `data-theme` attribute on <html> — set by theme-init.js before
+ * the first paint and updated by dashboard.js on toggle, persisted in localStorage:
+ *   - "dark"          explicit dark
+ *   - "light"         explicit light
+ *   - "auto" / unset  follow the browser via prefers-color-scheme
+ * Dark is the base (`:root`) so the pre-JS shell — and any stale/unknown value — defaults to
+ * it; the light palette applies for explicit light and for auto/unset under a light system.
+ * Everything downstream is expressed in these variables, so components, the sync gauge and the
+ * Chart.js chart (which reads them via getComputedStyle) all follow the active theme. */
+:root,
+:root[data-theme="dark"] {
     --bg: #0d1117; --card: #161b22; --border: #30363d;
     --text: #c9d1d9; --text-muted: #8b949e;
     --accent: #58a6ff; --ok: #238636; --bad: #da3633; --warn: #d29922; --purple: #a371f7;
+    --elevated: #2d333b;   /* raised surface (e.g. the active theme segment): lighter than --card */
 }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; }
+
+/* Light palette — GitHub Primer light, mirroring the dark set's GitHub-dark origin. Kept in
+ * sync with the auto block below (plain CSS has no way to share one declaration list across a
+ * selector and a media query). */
+:root[data-theme="light"] {
+    --bg: #ffffff; --card: #f6f8fa; --border: #d0d7de;
+    --text: #1f2328; --text-muted: #656d76;
+    --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700; --purple: #8250df;
+    --elevated: #ffffff;   /* white raised thumb on the off-white --card track */
+}
+
+/* Auto: follow the system, but only when the user hasn't pinned dark or light. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) {
+        --bg: #ffffff; --card: #f6f8fa; --border: #d0d7de;
+        --text: #1f2328; --text-muted: #656d76;
+        --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700; --purple: #8250df;
+        --elevated: #ffffff;
+    }
+}
+
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; transition: background-color 0.2s ease, color 0.2s ease; }
 
 .container { max-width: 1400px; margin: 0 auto; }
 
@@ -40,7 +73,7 @@ h3 { margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: v
 /* Table */
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th { text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; cursor: pointer; }
-td { padding: 10px; border-bottom: 1px solid #21262d; }
+td { padding: 10px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 
 /* Components */
@@ -63,7 +96,7 @@ tr:last-child td { border-bottom: none; }
 /* Header status badges sit in a gapped row, so individual badges need no margins. */
 .badge-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: 10px; }
 
-.wallet-text { font-size: 0.7rem; color: #666; margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
+.wallet-text { font-size: 0.7rem; color: var(--text-muted); margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
 
 /* Chart Controls */
 .chart-controls { display: flex; justify-content: center; align-items: center; gap: 5px; margin-bottom: 15px; }
@@ -75,8 +108,28 @@ tr:last-child td { border-bottom: none; }
 .view-controls { display: flex; justify-content: flex-end; margin-bottom: 15px; }
 .toggle-group { display: inline-flex; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .btn-toggle { background: transparent; border: none; color: var(--text-muted); padding: 6px 16px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
-.btn-toggle:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+.btn-toggle:hover { color: var(--text); background: rgba(128,128,128,0.15); }
 .btn-toggle.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* Theme switcher (Issue #43): a small fixed segmented control in the bottom-right that picks
+ * light / auto / dark. Kept visually quiet — muted icons on a subtle pill — with the active
+ * segment raised. The chosen mode is persisted in localStorage and re-applied before the first
+ * paint (see dashboard.js / theme-init.js), so it survives reloads and stack restarts. */
+.theme-switcher {
+    position: fixed; bottom: 16px; right: 16px; z-index: 50;
+    display: inline-flex; gap: 2px; padding: 3px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.theme-seg {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 28px; padding: 0; border: 0; border-radius: 999px;
+    background: transparent; color: var(--text-muted); cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.theme-seg:hover { color: var(--text); }
+.theme-seg.active { background: var(--elevated); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22); }
+.theme-seg svg { display: block; }
 
 /* View Modes */
 .card-advanced { display: none !important; }
@@ -132,10 +185,10 @@ tr:last-child td { border-bottom: none; }
 .progress-wheel {
   width: 100%; height: 100%; border-radius: 50%;
   /* --p is set at runtime by dashboard.js from the data-percent attribute. */
-  background: conic-gradient(#238636 var(--p), #30363d 0deg);
+  background: conic-gradient(var(--ok) var(--p), var(--border) 0deg);
   display: flex; align-items: center; justify-content: center;
 }
-.progress-wheel::before { content: ""; position: absolute; width: 120px; height: 120px; border-radius: 50%; background: #161b22; }
-.progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: #fff; z-index: 10; }
-.status-text { font-size: 1.1em; margin-top: 15px; color: #8b949e; text-align: center; }
-.header-placeholder { text-align: center; margin: 40px 0; border-bottom: 1px solid #30363d; padding-bottom: 20px; }
+.progress-wheel::before { content: ""; position: absolute; width: 120px; height: 120px; border-radius: 50%; background: var(--card); }
+.progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: var(--text); z-index: 10; }
+.status-text { font-size: 1.1em; margin-top: 15px; color: var(--text-muted); text-align: center; }
+.header-placeholder { text-align: center; margin: 40px 0; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
