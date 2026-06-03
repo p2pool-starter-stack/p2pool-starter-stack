@@ -82,9 +82,10 @@ class TestChart:
     def test_downsampling_caps_points(self):
         now = time.time()
         chart = build_chart(self._line(2000, now - 60000), [], "all")
-        # ≤ 800 real points (+ at most a handful of gap-break markers).
+        # Adaptive cap (Issue #47): never more than the ceiling, and actually downsampled.
         real = [p for p in chart["p2pool"] if p["y"] is not None]
-        assert len(real) <= 800
+        assert len(real) <= 700
+        assert len(real) < 2000
 
     def test_outage_inserts_null_break(self):
         # 10 regular 30s samples, a 2-hour outage, then 5 more.
@@ -214,6 +215,41 @@ class TestChart:
         assert _chart_tension(604801) == 0.4
         # The payload carries the duration-derived tension the client applies.
         assert build_chart(self._line(5, 1000), [], "1h")["tension"] == 0.0
+
+    def test_stacked_series_sum_to_the_total(self):
+        # The client stacks P2Pool + XvB so the top edge is the total. That's correct only
+        # because at each sample the full hashrate goes to one pool (v_p2pool + v_xvb == v).
+        # Guard that invariant on the emitted points so a future data change can't silently
+        # break the stack (Issue #47).
+        hist = [
+            {"timestamp": 1000, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},   # P2Pool sample
+            {"timestamp": 1030, "v": 700, "v_p2pool": 0, "v_xvb": 700, "t": "b"},   # XvB sample
+            {"timestamp": 1060, "v": 600, "v_p2pool": 600, "v_xvb": 0, "t": "c"},
+        ]
+        chart = build_chart(hist, [], "all")
+        for p2p, xvb, row in zip(chart["p2pool"], chart["xvb"], hist):
+            assert p2p["y"] + xvb["y"] == row["v"]      # stack top == total at every point
+
+    def test_zoom_reveals_more_detail(self):
+        # Core intent (Issue #47): zooming into a sub-window shows finer data than the wide view
+        # of the same history. 8h of dense 30s samples — a ~1h window stays native resolution
+        # while the full 8h downsamples, so the narrow window has more points per hour.
+        now = time.time()
+        dense = self._line(960, now - 8 * 3600, step=30)          # 8h @ 30s
+        wide = build_chart(dense, [], "all", window=(dense[0]["timestamp"], dense[-1]["timestamp"]))
+        narrow = build_chart(dense, [], "all", window=(dense[-120]["timestamp"], dense[-1]["timestamp"]))
+        wide_pts = len([p for p in wide["p2pool"] if p["y"] is not None])
+        narrow_pts = len([p for p in narrow["p2pool"] if p["y"] is not None])
+        assert narrow_pts == 120                                  # 1h window: native, untouched
+        assert narrow_pts / 1 > wide_pts / 8                      # more points per hour zoomed in
+
+    def test_all_range_adapts_density_to_data_extent(self):
+        # With "all" (no preset length, no window) the adaptive density keys off the actual data
+        # extent (_window_duration). A ~2-week span lands in the widest tier and downsamples.
+        now = time.time()
+        dense = self._line(5000, now - 14 * 86400, step=int(14 * 86400 / 5000))
+        real = [p for p in build_chart(dense, [], "all")["p2pool"] if p["y"] is not None]
+        assert len(real) <= 700 and len(real) < 5000
 
 
 # --- Hashrate / mode / tier formatting ------------------------------------------------

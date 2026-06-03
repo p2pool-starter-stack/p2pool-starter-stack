@@ -72,6 +72,25 @@ class TestStateApi:
         assert resp.status == 200
         assert (await resp.json())["window"] is None
 
+    async def test_window_filters_history_end_to_end(self, aiohttp_client):
+        # Functionality through the whole stack (Issue #47): a from/to window restricts the
+        # chart series to that span. 20 minute-spaced points; a window over 5 of them returns 5.
+        sm = StateManager(db_path=":memory:")
+        base = 1_000_000
+        for i in range(20):
+            sm.state["hashrate_history"].append(
+                {"t": "x", "v": 100, "v_p2pool": 100, "v_xvb": 0, "timestamp": base + i * 60})
+        data = {"shares": [], "workers": [], "global_sync": False,
+                "monero_sync": {"percent": 100, "current": 1, "target": 1},
+                "tari_sync": {"percent": 100, "current": 1, "target": 1}}
+        cli = await aiohttp_client(create_app(sm, data))
+        resp = await cli.get(f"/api/state?from={base + 300}&to={base + 540}")   # indices 5..9
+        body = await resp.json()
+        sm.close()
+        pts = [p for p in body["chart"]["p2pool"] if p["y"] is not None]
+        assert len(pts) == 5
+        assert body["window"] == {"from": base + 300, "to": base + 540}
+
     async def test_node_down_badges_in_state(self, aiohttp_client):
         # When a node is down / workers rejected, the state surfaces it (Issue #31).
         data = {
