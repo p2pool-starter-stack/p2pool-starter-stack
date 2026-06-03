@@ -4,7 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
-import { WORKER_COLUMNS, sortWorkers } from './logic.mjs';
+import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS } from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => 'c-' + v;
@@ -37,6 +37,35 @@ const Badges = ({ badges }) => html`
 
 const HighUsage = ({ level }) =>
     level === 'high' ? html`<span class="badge badge-bad mx-1">High Usage</span>` : null;
+
+// Theme icons (Issue #43) — minimal Lucide-style line glyphs drawn with currentColor, so they
+// pick up the segment's text colour (muted → full on hover/active). Inline SVG keeps them crisp
+// at any DPI and needs no extra asset or CSP allowance.
+const svgIcon = (body) => html`
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const THEME_ICON = {
+    light: () => svgIcon(html`<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />`),
+    auto: () => svgIcon(html`<rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />`),
+    dark: () => svgIcon(html`<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />`),
+};
+
+// Fixed bottom-right segmented control to pick light / auto / dark (Issue #43). Icon-only and
+// visually quiet, with the active segment raised; the order/labels come from logic.mjs. Rendered
+// in every app state (loading / sync / dashboard) so it's always reachable; the choice is
+// persisted by the onTheme handler in dashboard.js.
+const ThemeSwitcher = ({ theme, onTheme }) => {
+    const current = theme || 'auto';
+    return html`
+    <div class="theme-switcher" role="group" aria-label="Theme">
+        ${THEME_ORDER.map((id) => html`
+            <button type="button" class=${'theme-seg' + (id === current ? ' active' : '')}
+                    title=${'Theme: ' + THEME_LABELS[id]} aria-label=${THEME_LABELS[id]}
+                    aria-pressed=${id === current} onClick=${() => onTheme(id)}>
+                ${THEME_ICON[id]()}
+            </button>`)}
+    </div>`;
+};
 
 // --- Top bar -------------------------------------------------------------------------
 
@@ -300,9 +329,14 @@ function DashboardView({ state, ui, onRange, onSort, onView }) {
 
 // --- Root ----------------------------------------------------------------------------
 
-export function App({ state, connected, ui, onRange, onSort, onView }) {
+export function App({ state, connected, ui, onRange, onSort, onView, onTheme }) {
+    // The theme toggle is fixed-position and always available, even before the first data load.
+    const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
     if (!state) {
-        return html`<div class="loading">${connected ? 'Connecting to the dashboard…' : 'Cannot reach the dashboard.'}</div>`;
+        return html`<${Fragment}>
+            <div class="loading">${connected ? 'Connecting to the dashboard…' : 'Cannot reach the dashboard.'}</div>
+            ${switcher}
+        <//>`;
     }
     return html`<${Fragment}>
         <${Header} state=${state} />
@@ -310,5 +344,6 @@ export function App({ state, connected, ui, onRange, onSort, onView }) {
         ${state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
             : html`<${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort} onView=${onView} />`}
+        ${switcher}
     <//>`;
 }

@@ -9,7 +9,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { sortWorkers, fmtTimestamp, WORKER_COLUMNS } from '../../mining_dashboard/web/static/logic.mjs';
+import {
+    sortWorkers, fmtTimestamp, WORKER_COLUMNS,
+    THEMES, THEME_ORDER, normalizeTheme,
+} from '../../mining_dashboard/web/static/logic.mjs';
 
 const col = (key) => WORKER_COLUMNS.findIndex((c) => c.key === key);
 
@@ -71,4 +74,16 @@ test('fmtTimestamp: returns a non-empty string for an epoch-ms value', () => {
     const out = fmtTimestamp(0);
     assert.equal(typeof out, 'string');
     assert.ok(out.length > 0);
+});
+
+test('normalizeTheme: passes valid modes through, defaults the rest to auto', () => {
+    for (const t of THEMES) assert.equal(normalizeTheme(t), t);
+    assert.equal(normalizeTheme(null), 'auto');       // nothing saved yet
+    assert.equal(normalizeTheme('sepia'), 'auto');    // garbage in localStorage
+});
+
+test('THEME_ORDER: the control renders every theme exactly once', () => {
+    // The segmented control maps over THEME_ORDER, so it must cover the same set as THEMES with
+    // no dupes/strays — otherwise a mode would be unreachable or rendered twice.
+    assert.deepEqual([...THEME_ORDER].sort(), [...THEMES].sort());
 });

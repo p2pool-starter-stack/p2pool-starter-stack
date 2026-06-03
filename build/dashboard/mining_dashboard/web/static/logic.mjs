@@ -36,3 +36,18 @@ export function fmtTimestamp(ms) {
         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     });
 }
+
+// Theme switching (Issue #43). Three modes; "auto" follows the browser's prefers-color-scheme.
+// The valid set, display order and labels live here (pure, no DOM) so they're unit-tested; the
+// localStorage + <html data-theme> wiring is in dashboard.js and the segmented control (with its
+// SVG icons) in components.mjs.
+export const THEMES = ['auto', 'light', 'dark'];
+export const THEME_LABELS = { auto: 'Auto', light: 'Light', dark: 'Dark' };
+// Left→right order of the segmented control: light · auto · dark (brightness low→high with the
+// system option in the middle).
+export const THEME_ORDER = ['light', 'auto', 'dark'];
+
+// Clamp any value (incl. a stale/garbage localStorage entry) to a valid theme; default "auto".
+export function normalizeTheme(t) {
+    return THEMES.includes(t) ? t : 'auto';
+}
