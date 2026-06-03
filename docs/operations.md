@@ -111,7 +111,7 @@ warning once. To use plain HTTP, set `dashboard.secure: false` and run `./stack.
 
 **Workers don't show up in the dashboard.**
 Check that each rig points at `YOUR_STACK_IP:3333` and that port `3333` is reachable from the
-worker (firewall on the stack host?). See [Adding Workers](workers.md).
+worker (firewall on the stack host?). See [Connecting Miners](workers.md).
 
 **Hashrate reads zero or the chart is blank.**
 Give it a minute after a worker connects for stats to populate. Confirm the worker is actually
