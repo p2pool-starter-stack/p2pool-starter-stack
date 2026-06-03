@@ -35,8 +35,8 @@ table within a few seconds.
   dashboard. (No wallet address — see above.)
 - **Point all your rigs at the same `YOUR_STACK_IP:3333`.** The stack aggregates them; there's
   nothing per-rig to configure beyond the label.
-- **`YOUR_STACK_IP`** can be an IP or a hostname. On a LAN with mDNS, the stack host's
-  `<hostname>.local` works too.
+- **`YOUR_STACK_IP`** is the stack host's IP or a DNS-resolvable hostname. For a stable address
+  on a home LAN, set a DHCP reservation (or a static IP) for the stack host.
 
 ### Miner version & compatibility
 
