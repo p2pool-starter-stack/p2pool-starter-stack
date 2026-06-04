@@ -24,6 +24,14 @@ class TestDetectPoolType:
     def test_unknown_ports(self):
         assert detect_pool_type(["1.1.1.1:9999"]) == "Unknown"
 
+    def test_port_matched_exactly_not_as_substring(self):
+        # The port must match exactly (last colon-segment), not as a substring of the peer string.
+        # Each of these returned a WRONG pool under the old `"37889" in p` substring check (#142).
+        assert detect_pool_type(["1.1.1.1:137889"]) == "Unknown"  # old: contained "37889" -> Main
+        assert detect_pool_type(["1.1.1.1:378880"]) == "Unknown"  # old: contained "37888" -> Mini
+        assert detect_pool_type(["1.1.1.1:37889x"]) == "Unknown"  # trailing junk -> not the Main port
+        assert detect_pool_type(["1.1.1.1:37888"]) == "Mini"      # exact port still detected
+
 
 def _read_json_map(mapping):
     """Return a side_effect that maps a stats path to a fixture dict."""

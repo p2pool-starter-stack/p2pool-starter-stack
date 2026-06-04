@@ -239,6 +239,13 @@ dr_fail() { DR_FAIL=$((DR_FAIL + 1)); printf '  %b✗ FAIL%b %s\n'   "$C_RED"   
 # Neutral note for context lines that aren't pass/fail (e.g. a skipped Linux-only check).
 dr_info() { printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
 
+# True if Docker is set to start at boot (docker.service OR docker.socket enabled). systemd only —
+# the caller checks that systemctl exists. Checking docker.socket too covers socket-activated
+# installs where docker.service is "static" but Docker still comes up at boot.
+docker_boot_enabled() {
+    systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
+}
+
 doctor() {
     DR_OK=0; DR_WARN=0; DR_FAIL=0
     detect_os
@@ -279,6 +286,21 @@ doctor() {
         dr_ok "Docker daemon is reachable."
     else
         dr_fail "Docker daemon is not reachable — start it (e.g. 'sudo systemctl start docker') and ensure your user is in the 'docker' group."
+    fi
+
+    # --- Docker boot persistence (Linux/systemd) ---
+    # `restart: unless-stopped` only brings the stack back after a reboot if the Docker daemon
+    # itself starts at boot. Ubuntu's docker.io/docker-ce enables it by default, but --skip-deps,
+    # rootless, or a manually-disabled unit won't come back after a power loss — surface that, since
+    # the documented use case is an unattended miner (#137).
+    if [ "$OS_TYPE" != "Darwin" ] && command -v systemctl >/dev/null 2>&1; then
+        echo ""
+        echo "Boot persistence:"
+        if docker_boot_enabled; then
+            dr_ok "Docker is enabled to start at boot — the stack will come back after a reboot."
+        else
+            dr_warn "Docker is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker'."
+        fi
     fi
 
     # --- CPU: AVX2 (performance only) ---
@@ -413,6 +435,9 @@ doctor() {
     else
         log "All checks passed."
     fi
+    # Propagate a non-zero exit when any critical check FAILED, so `doctor` is usable as a health
+    # gate in cron/CI/monitoring (mirrors `status`). Warnings alone still exit 0 (#127).
+    [ "$DR_FAIL" -gt 0 ] && return 1
     return 0
 }
 
@@ -447,20 +472,31 @@ reset_dashboard() {
     fi
 
     log "Resetting dashboard and p2pool..."
-    parse_and_validate_config
+    # Resolve what to delete from .env (the LIVE deployment's data dirs), NOT a fresh config.json
+    # parse — otherwise editing a *.data_dir in config.json before `reset-dashboard` (without an
+    # `apply`) would wipe a directory the running stack never used, possibly one the user just
+    # pointed at. Refuse to guess if .env doesn't name them, and re-check they're safe to rm (#139).
+    local dashboard_dir p2pool_dir
+    dashboard_dir=$(env_get DASHBOARD_DATA_DIR)
+    p2pool_dir=$(env_get P2POOL_DATA_DIR)
+    if [ -z "$dashboard_dir" ] || [ -z "$p2pool_dir" ]; then
+        error "Could not read DASHBOARD_DATA_DIR / P2POOL_DATA_DIR from .env — refusing to guess what to delete. Run '$0 setup' or '$0 apply' first."
+    fi
+    assert_safe_dir "$dashboard_dir"
+    assert_safe_dir "$p2pool_dir"
 
     log "Stopping dashboard and p2pool containers..."
     docker compose rm -s -f -v dashboard p2pool
 
     log "Removing data directories..."
-    [ -d "$DASHBOARD_DIR" ] && sudo rm -rf "$DASHBOARD_DIR"
-    [ -d "$P2POOL_DIR" ] && sudo rm -rf "$P2POOL_DIR"
+    [ -d "$dashboard_dir" ] && sudo rm -rf "$dashboard_dir"
+    [ -d "$p2pool_dir" ] && sudo rm -rf "$p2pool_dir"
 
     log "Recreating data directories..."
-    mkdir -p "$DASHBOARD_DIR" "$P2POOL_DIR"
-    sudo chown -R "$REAL_USER":"$REAL_USER" "$P2POOL_DIR"
-    mkdir -p "$P2POOL_DIR/stats"
-    sudo chmod -R 755 "$P2POOL_DIR/stats"
+    mkdir -p "$dashboard_dir" "$p2pool_dir"
+    sudo chown -R "$REAL_USER":"$REAL_USER" "$p2pool_dir"
+    mkdir -p "$p2pool_dir/stats"
+    sudo chmod -R 755 "$p2pool_dir/stats"
 
     log "Bringing services back up..."
     docker compose up -d dashboard p2pool
@@ -525,8 +561,12 @@ stack_backup() {
     # so we assume the archive needs roughly the source size plus a ~5% safety margin.
     local need_kb avail_kb
     # sudo: the Tor data dir is owned by 100:101; -c gives a grand total across all items.
-    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}')
-    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}')
+    # `|| true`: du exits non-zero if it can't read any descendant (a permission-denied subdir, a
+    # file vanishing mid-walk, an NFS hiccup) even though 2>/dev/null hides the message and a total
+    # is still printed. Without this, errexit (set -e) aborts the whole backup on a bare assignment,
+    # making the graceful "proceeding without a space check" fallback below unreachable (#127).
+    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}') || true
+    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}') || true
     if [ -n "$need_kb" ] && [ -n "$avail_kb" ]; then
         if [ "$avail_kb" -lt "$((need_kb + need_kb / 20))" ]; then
             local avail_gib=$((avail_kb / 1048576)) need_gib=$((need_kb / 1048576))
@@ -777,6 +817,14 @@ is_ipv4() {
         [ "$o" -le 255 ] || return 1
     done
     return 0
+}
+
+# True if $1 is a plausible hostname or IP literal — i.e. only the characters a host can contain
+# (letters, digits, dot, hyphen, colon for IPv6). Used to validate dashboard.host before it's
+# rendered into the Caddyfile site address: anything with whitespace, a newline, or Caddy-significant
+# characters ({ } /) could break or inject into the generated Caddyfile.
+is_valid_host() {
+    [[ "$1" =~ ^[A-Za-z0-9.:_-]+$ ]]
 }
 
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
@@ -1110,6 +1158,12 @@ parse_and_validate_config() {
 
     # "auto"/empty/DYNAMIC_HOST here means "decide later" (preserved value, prompt, or hostname)
     DASHBOARD_HOST=$(resolve_default "$(jq -r '.dashboard.host // empty' "$CONFIG_FILE")" "")
+    # A non-"auto" host is rendered verbatim into the Caddyfile site address (generate_caddyfile),
+    # so reject anything that isn't a bare hostname/IP — a space, newline, or `{`/`}` would break
+    # the Caddyfile (or inject directives). Mirrors the stratum_bind validation above (#130).
+    if [ -n "$DASHBOARD_HOST" ] && ! is_valid_host "$DASHBOARD_HOST"; then
+        error "dashboard.host must be a hostname or IP address — only letters, digits, dots, hyphens, and colons (got \"$DASHBOARD_HOST\")."
+    fi
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
     # Timezone for the dashboard's timestamps/charts. "auto"/empty -> the host's timezone
@@ -1786,7 +1840,7 @@ main() {
         upgrade)          require_deployed; stack_upgrade ;;
         logs)             require_env; log "Following logs (Ctrl+C to exit)..."; docker compose logs -f "$@" ;;
         status)           require_env; stack_status || exit 1 ;;
-        doctor)           doctor ;;
+        doctor)           doctor || exit 1 ;;
         reset-dashboard)  require_deployed; reset_dashboard "$@" ;;
         backup)           stack_backup "$@" ;;
         restore)          stack_restore "$@" ;;
