@@ -8,7 +8,7 @@
 # and AI agents to discover what they are working with.
 set -uo pipefail
 
-STACK_DIR="${STACK_DIR:-$HOME/pithead}"
+STACK_DIR="${STACK_DIR:-$HOME/code/pithead}"
 
 h()    { printf '\n## %s\n\n' "$1"; }
 fence(){ printf '```\n'; cat; printf '```\n'; }

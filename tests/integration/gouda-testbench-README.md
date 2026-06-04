@@ -14,7 +14,7 @@ This is a **test bench, not a production miner** — downtime and teardown/redep
 constraints that matter:
 
 1. **Never lose the synced chains.** They are the only slow-to-acquire asset (days to re-sync) —
-   reuse them. They live at `/srv/code/pithead/data/`, decoupled from the checkout, so you can
+   reuse them. They live at `/srv/code/pithead-data/`, decoupled from the checkout, so you can
    refresh/redeploy the stack freely without touching them.
 2. **Chains on the SSD, HDD only for cold storage.** Active chains stay on the **NVMe**; the
    `/home` HDD (7200 rpm) is for backup tarballs / archives only — a chain there makes tests crawl.
@@ -27,8 +27,8 @@ constraints that matter:
 
 | Path | What |
 |---|---|
-| `~/pithead/` | the stack checkout: `docker-compose.yml`, the `pithead` CLI, your `config.json`/`.env` |
-| `/srv/code/pithead/data/{monero,tari,p2pool,dashboard,tor}/` | the chains — **the asset**, on the SSD, decoupled from the checkout |
+| `~/code/pithead/` (`/srv/code/pithead`, NVMe) | the stack checkout: `docker-compose.yml`, the `pithead` CLI, your `config.json`/`.env` |
+| `/srv/code/pithead-data/{monero,tari,p2pool,dashboard,tor}/` | the chains — **the asset**, on the NVMe, decoupled from the checkout |
 | `~/pithead-testbench/` | **this dir** — build-server docs + tools |
 | `~/pithead-testbench/bin/monero-blockchain-prune` | verified offline Monero tool (version matches monerod) |
 | `~/pithead-testbench/{build-pruned-chain,compact-chain,system-info}.sh` | chain ops + system snapshot (also versioned in the repo `tests/integration/`) |
@@ -46,17 +46,17 @@ constraints that matter:
 
 **Compacting the Monero chain** (reclaim bloat; hours, but no downtime until the swap):
 ```bash
-~/pithead-testbench/compact-chain.sh /srv/code/pithead/data/monero   # builds lmdb-pruned/ (monerod stays up)
+~/pithead-testbench/compact-chain.sh /srv/code/pithead-data/monero   # builds lmdb-pruned/ (monerod stays up)
 # when DONE, swap it in (brief downtime):
 docker stop monerod
-cd /srv/code/pithead/data/monero && mv lmdb lmdb.bloated && mv lmdb-pruned lmdb
+cd /srv/code/pithead-data/monero && mv lmdb lmdb.bloated && mv lmdb-pruned lmdb
 docker start monerod        # re-syncs the few blocks added during the copy
 # confirm `pithead status` healthy, then: rm -rf lmdb.bloated
 ```
 
 ## Running the stack
 ```bash
-cd ~/pithead
+cd ~/code/pithead
 ./pithead status         # health summary
 ./pithead doctor         # deeper diagnostics
 ./pithead up | down | apply | backup
@@ -67,12 +67,12 @@ cd ~/pithead
 Tiers 1–3 run anywhere with no real chains; **Tier 4 (the live matrix) runs here.**
 ```bash
 # Drive gouda over SSH from a dev checkout (start non-destructive):
-tests/integration/run.sh --host vijit@gouda --dir pithead --check       # assert current live state
-tests/integration/run.sh --host vijit@gouda --dir pithead --readiness   # is the box fit to gate a release?
+tests/integration/run.sh --host vijit@gouda --dir code/pithead --check       # assert current live state
+tests/integration/run.sh --host vijit@gouda --dir code/pithead --readiness   # is the box fit to gate a release?
 # Full destructive config matrix, with a pithead backup + auto-rollback on failure:
-tests/integration/run.sh --host vijit@gouda --dir pithead --safety-backup
+tests/integration/run.sh --host vijit@gouda --dir code/pithead --safety-backup
 # On the box itself:
-cd ~/pithead && tests/integration/run.sh --local --dir "$PWD" --lifecycle
+cd ~/code/pithead && tests/integration/run.sh --local --dir "$PWD" --lifecycle
 ```
 Always start with `--check`/`--readiness`. Use `--safety-backup` for the destructive matrix so a
 failure rolls the box back (down → restore → up). See `docs/integration-testing.md` in the repo.

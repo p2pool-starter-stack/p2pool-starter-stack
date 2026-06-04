@@ -20,11 +20,12 @@ It is **not** a production miner — downtime is fine; tear-down/redeploy is fin
 ## Hardware & storage policy
 
 ```
-NVMe SSD (fast, PRIMARY)            HDD (slow, SPARING)
-  /boot, /boot/efi                   /home   ← light checkouts only
-  / (root, LVM ext4)                 + cold backups / archives
-    ├─ /var/lib/docker  (images)
-    └─ /srv/code/pithead/data  (CHAINS)  ← the asset, on fast storage
+NVMe SSD (fast, PRIMARY)               HDD (slow, SPARING)
+  /boot, /boot/efi                      /home   ← cold backups / archives only
+  / (root, LVM ext4)
+    ├─ /var/lib/docker        (images)
+    ├─ /srv/code/pithead      (CHECKOUT, = ~/code/pithead)
+    └─ /srv/code/pithead-data (CHAINS)  ← the asset, on fast storage
 ```
 
 **Policy — the single most important hardware rule:** the chains monerod/Tari actively run against
@@ -53,8 +54,8 @@ busy multi-agent bench; it's not needed for correctness.
 
 | Path | Disk | What | Lose it? |
 |---|---|---|---|
-| `~/pithead/` | HDD | stack checkout (`docker-compose.yml`, the `pithead` CLI), `config.json`, `.env` | reproducible (clone) |
-| `/srv/code/pithead/data/{monero,tari,p2pool,dashboard,tor}/` | **SSD** | the chains + Tor onion keys — **the asset** | **don't** (days to re-sync) |
+| `~/code/pithead/` (`/srv/code/pithead`) | SSD | stack checkout (`docker-compose.yml`, the `pithead` CLI), `config.json`, `.env` | reproducible (clone) |
+| `/srv/code/pithead-data/{monero,tari,p2pool,dashboard,tor}/` | **SSD** | the chains + Tor onion keys — **the asset** | **don't** (days to re-sync) |
 | `/var/lib/docker/` | SSD | images / build cache | reproducible (rebuild) |
 | `~/pithead-testbench/` | HDD | build-server docs + ops tools (see its `README.md`) | reproducible (repo) |
 | `/home` … `/mnt/chains` | HDD | cold backups / archives | — |
@@ -86,7 +87,7 @@ box (`./pithead down`) so the LMDBs are consistent, then copy `/srv/.../pithead/
 box's SSD — over the network or a fast external drive:
 ```bash
 # from the new box, pulling from the old one (chains are ~230 GB; hours over GbE, faster over USB3/10G):
-rsync -aP --info=progress2 olduser@oldbox:/srv/code/pithead/data/ /srv/<you>/pithead/data/
+rsync -aP --info=progress2 olduser@oldbox:/srv/code/pithead-data/ /srv/<you>/pithead/data/
 ```
 The Tor onion keys travel in `data/tor`, so the box keeps its onion identity. (No old box yet? Omit
 this and let monerod/Tari sync from scratch — days, but hands-off.)
