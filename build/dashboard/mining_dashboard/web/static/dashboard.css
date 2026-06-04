@@ -133,6 +133,10 @@ tr:last-child td { border-bottom: none; }
 .badge-warn { background: var(--warn); color: white; }
 /* Header status badges sit in a gapped row, so individual badges need no margins. */
 .badge-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: 10px; }
+/* Build-version badge (Issue #58): monospace for the version/hash; a dev build keeps the muted
+   palette but swaps to a dashed border so it's quietly, unmistakably not a release. */
+.version-badge { font-family: monospace; font-weight: 500; }
+.version-badge.version-dev { border-style: dashed; }
 
 .wallet-text { font-size: 0.7rem; color: var(--text-muted); margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
 

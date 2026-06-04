@@ -22,6 +22,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   the number stays consistent with the rest of the dashboard) and Tari merge-mining is
   excluded. Includes a what-if hashrate input and a clear "estimates, not guarantees"
   disclaimer. Tari (#117) and the XvB tier estimate (#118) are deferred (#12).
+- Dashboard header now shows which build is running, as a muted badge on both the
+  syncing and main screens: a clean release shows `vX.Y.Z` (from the top-level
+  `VERSION` file), while any dev/working-tree build shows `dev · branch @ hash` so
+  it's never mistaken for a release. The version is baked into the dashboard image at
+  build time (build-arg → env + OCI labels), so the running container is
+  self-describing.
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy
