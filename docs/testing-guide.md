@@ -38,6 +38,7 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 | A client that parses a daemon (monerod RPC, Tari gRPC) | `tests/integration/fakes/test_contract.py` (+ extend the fakes) | 2 |
 | The control plane (sync-gate #35, failover #31) | `tests/service/test_data_service.py` (+ a `mini-stack` scenario) | 1 + 3 |
 | `pithead` CLI behavior | `tests/stack/run.sh` | 1 |
+| A compose **security/hardening** invariant (caps, `no-new-privileges`, no secret in a healthcheck, socket-proxy scope) | `tests/stack/test_security.sh` | 1 |
 | A new `config.json` axis | one row in `tests/integration/scenarios.sh` | 4 |
 | A failure mode needing real containers | `run.sh` `--fault-injection` and/or a `mini-stack` scenario | 4 / 3 |
 | The integration harness's own logic | `tests/integration/selftest.sh` | — |

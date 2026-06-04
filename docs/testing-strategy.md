@@ -132,6 +132,7 @@ we know about. The full enumerated coverage is in the generated
 | Dashboard image test stage (in-container) | 1 | every PR | ✅ required |
 | `pithead` shell suite + shellcheck | 1 | every PR | ✅ required |
 | Compose interpolation validation | 1 | every PR | ✅ required |
+| Compose **security/hardening** invariants | 1 | every PR | ✅ required |
 | Fake-daemon **contract test** | 2 | every PR | ✅ required |
 | Integration harness **self-test** | 4 | every PR | ✅ required |
 | **Test-inventory drift** check | — | every PR | ✅ required |
@@ -184,8 +185,11 @@ These are deliberately **not** yet covered and are the road to full production c
 - **Soak / longevity.** No multi-hour run asserting no leaks, no log/DB growth runaway, and that
   the XvB controller converges over a realistic window.
 - **Load / capacity.** No test drives many workers or high share rates to find limits.
-- **Security review.** Tracked separately (`SECURITY.md`); the harness avoids leaking secrets
-  but is not itself a security audit.
+- **Security review.** The compose **hardening invariants are regression-guarded**
+  (`tests/stack/test_security.sh`: RPC creds never in a healthcheck command, `no-new-privileges`
+  / `cap_drop` on the leaf containers, the Docker socket proxies stay least-privilege), so a
+  past fix can't be silently undone. A full security *audit* is still a separate exercise
+  (`SECURITY.md`) — these tests pin the decisions we've already made, they don't find new ones.
 
 ## Adding a scenario
 

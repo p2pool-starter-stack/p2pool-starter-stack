@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 412 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 15 `pithead` shell sections · 11 harness self-test sections ·
+tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,8 +16,9 @@ tests · 15 `pithead` shell sections · 11 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 412 |
 | 1 — Unit | frontend (node --test) | 25 |
-| 1 — Unit | `pithead` shell suite | 15 sections |
+| 1 — Unit | `pithead` shell suite | 16 sections |
 | 1 — Unit | compose interpolation | 1 |
+| 1 — Unit | compose security/hardening | 14 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
 | 4 — Live matrix | config scenarios | 8 (15 axis values) |
@@ -512,10 +513,11 @@ tests · 15 `pithead` shell sections · 11 harness self-test sections ·
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 
-### `pithead` shell suite (tests/stack/run.sh) — 15 sections
+### `pithead` shell suite (tests/stack/run.sh) — 16 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_ipv4
+- unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0)
 - unit: describe_change
 - unit: env helpers
 - unit: export_build_provenance (Issue #58)
@@ -531,6 +533,22 @@ tests · 15 `pithead` shell sections · 11 harness self-test sections ·
 
 ### Compose validation (tests/stack/test_compose.sh)
 - docker-compose.yml `${VAR}` interpolation resolves against a representative .env
+
+### Security / hardening invariants (tests/stack/test_security.sh) — 14
+- no RPC creds in any healthcheck command
+- monerod healthcheck uses the external script
+- no-new-privileges: $svc
+- cap_drop ALL: $svc
+- dashboard does NOT cap_drop ALL (writes its DB as root)
+- caddy keeps only NET_BIND_SERVICE
+- docker-proxy cannot POST (read-only API)
+- docker-control allows start+stop
+- docker-control does NOT allow exec
+- docker-control does NOT allow image ops
+- $svc mounts the docker socket read-only
+- $svc runs read-only root fs
+- p2pool has a liveness healthcheck
+- tari healthcheck uses the [m]inotari self-match guard
 
 ## Tier 2 — Contract (real clients vs controllable fakes)
 
@@ -636,5 +654,5 @@ tests · 15 `pithead` shell sections · 11 harness self-test sections ·
 
 ---
 
-_Grand total: **489** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **504** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

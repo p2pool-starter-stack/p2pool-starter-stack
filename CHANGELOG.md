@@ -40,6 +40,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     `proxy_workers` for mining liveness (`stratum.conns` can read 0 while mining).
   - A developer testing guide (`docs/testing-guide.md`): per-change recipes, conventions, and
     the calibration gotchas learned on real hardware.
+  - Regression guards for past bugs/security fixes: a **compose security/hardening suite**
+    (`tests/stack/test_security.sh`, run on every PR) asserting the #90 sweep — RPC credentials
+    never appear in a healthcheck command (the `docker inspect` leak fix), `no-new-privileges` /
+    `cap_drop` on the leaf containers (and the deliberate dashboard exception), the Docker socket
+    proxies stay least-privilege, and p2pool has its liveness probe — plus a `dashboard.host`
+    "auto"-revert test and the schema-migration test that caught the DB upgrade bug above.
   - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
 - Dashboard header shows the host's **IP address** next to the hostname when the configured
   `dashboard.host` is a name, as `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), so you can still reach the
