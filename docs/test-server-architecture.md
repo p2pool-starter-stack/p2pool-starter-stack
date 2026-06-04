@@ -46,9 +46,31 @@ crawl. The HDD is for **cold** things only (backup tarballs, archived snapshots)
 | *+ a few full chain copies* | *95–250 GB each* |
 
 A 1 TB NVMe holds the pruned bench with ~650 GB to spare — room for a full node and copies too.
-Add a **second m.2 NVMe (PCIe) with btrfs/zfs** only when you want **copy-on-write snapshots** —
-instant, near-free chain clones for isolated/parallel test runs. That's the upgrade that helps a
-busy multi-agent bench; it's not needed for correctness.
+
+> **⚠️ Verify the disk is actually fast.** "SSD" in the model name is not enough — check the *bus*.
+> On the reference box (`gouda`), the "1 TB SSD" enumerated as `/dev/sdb` on **SATA** (not
+> `/dev/nvme0n1`), on a link that negotiated down to 1.5 Gbps, and benchmarked at **~37–98 MB/s —
+> HDD-class**. There was **no NVMe** in the machine at all. That single fact bottlenecks monerod,
+> builds, and makes LMDB compaction (heavy random I/O) impractical (~16 h instead of ~10 min).
+>
+> **The highest-value upgrade by far is a real m.2 PCIe NVMe** (~$80–150): ~20–50× faster, which
+> turns chain compaction into minutes and makes CoW snapshots actually worth doing. Confirm a
+> drive is genuinely NVMe before relying on it:
+> ```bash
+> lsblk -d -o NAME,TRAN,ROTA,MODEL   # want TRAN=nvme, not sata
+> ls /dev/nvme*                       # an NVMe drive appears as /dev/nvme0n1
+> # quick reality check on random read (what monerod does):
+> dd if=/path/to/data.mdb of=/dev/null bs=4k count=200000 skip=10000000   # want >>100 MB/s
+> ```
+> Until a fast disk is added, keep the chain at its working ~253 GB (it's correctly pruned; the
+> size is reclaimable free-page bloat, not a full chain) and skip CoW. The matching
+> `mdb_copy` (LMDB 0.9.70, built from Monero's vendored source) is staged at
+> `~/pithead-testbench/bin/mdb_copy` — on a fast disk, `mdb_copy -c <chain>/lmdb <dest>` compacts
+> in minutes.
+
+A **second m.2 NVMe (PCIe) with btrfs/zfs** additionally enables **copy-on-write snapshots** —
+instant, near-free chain clones for isolated/parallel test runs — the upgrade that helps a busy
+multi-agent bench.
 
 ## Directory layout
 

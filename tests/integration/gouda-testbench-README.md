@@ -16,8 +16,10 @@ constraints that matter:
 1. **Never lose the synced chains.** They are the only slow-to-acquire asset (days to re-sync) —
    reuse them. They live at `/srv/code/pithead-data/`, decoupled from the checkout, so you can
    refresh/redeploy the stack freely without touching them.
-2. **Chains on the SSD, HDD only for cold storage.** Active chains stay on the **NVMe**; the
-   `/home` HDD (7200 rpm) is for backup tarballs / archives only — a chain there makes tests crawl.
+2. **Storage is the bottleneck (no NVMe yet).** `sdb` (the SATA "SSD") benchmarks at ~37–98 MB/s —
+   HDD-class — so monerod, builds, and especially LMDB compaction are slow. Chains live on it at
+   `/srv/code/pithead-data` (still better than the `/home` HDD for random I/O, which stays cold
+   storage). A real **m.2 PCIe NVMe is the #1 upgrade** — see `docs/test-server-architecture.md`.
 3. **Least privilege.** `sudo` is password-protected and interactive-only — don't expect or leave
    passwordless grants. Almost everything here needs **no sudo** (your user is in the `docker` group).
 4. **Secrets stay put.** `.env` (RPC creds) and `config.json` (wallet addresses) are owner-only.
