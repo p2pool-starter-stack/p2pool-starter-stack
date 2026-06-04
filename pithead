@@ -271,6 +271,9 @@ doctor() {
             dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run 'pithead setup' (kernel optimization) to reserve them."
         fi
 
+        # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
+        # (does the host have enough RAM at all), this checks MemAvailable (is enough free right
+        # now). The split is intentional — keep both.
         local mem_avail_kb mem_avail_mb
         mem_avail_kb=$(awk '/^MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || true)
         if [ -z "$mem_avail_kb" ]; then
@@ -285,43 +288,31 @@ doctor() {
         fi
     fi
 
-    # --- Disk: free space on the data directories ---
+    # --- Disk: free space per underlying filesystem ---
     echo ""
     echo "Disk:"
-    # Derive data dirs from .env when present, otherwise fall back to the default ./data layout.
-    # We never create anything here: df -P is run only on paths that already exist.
-    local dirs=() d df_line avail_h
+    # Treat the stack as one unit: group the five data dirs by the filesystem they live on and check
+    # each filesystem ONCE against the combined requirement of the dirs sharing it (so dirs on the
+    # same volume yield a single line, not one redundant "N GB free" line per dir). Dirs come from
+    # .env when present, else the default ./data layout. check_disk_grouped is read-only (df -P only,
+    # on existing ancestors) and never creates anything. The component order MUST match its arg list:
+    # monero, tari, p2pool, dashboard, tor.
+    local mono_dir tari_dir p2pool_dir dash_dir tor_dir doctor_prune
     if [ -f "$ENV_FILE" ]; then
-        for d in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR TOR_DATA_DIR; do
-            local v
-            v=$(env_get "$d")
-            [ -n "$v" ] && dirs+=("$v")
-        done
-    fi
-    if [ "${#dirs[@]}" -eq 0 ]; then
-        dirs=("$PWD/data")
+        mono_dir=$(env_get MONERO_DATA_DIR);     [ -n "$mono_dir" ]   || mono_dir="$PWD/data/monero"
+        tari_dir=$(env_get TARI_DATA_DIR);       [ -n "$tari_dir" ]   || tari_dir="$PWD/data/tari"
+        p2pool_dir=$(env_get P2POOL_DATA_DIR);   [ -n "$p2pool_dir" ] || p2pool_dir="$PWD/data/p2pool"
+        dash_dir=$(env_get DASHBOARD_DATA_DIR);  [ -n "$dash_dir" ]   || dash_dir="$PWD/data/dashboard"
+        tor_dir=$(env_get TOR_DATA_DIR);         [ -n "$tor_dir" ]    || tor_dir="$PWD/data/tor"
+        # .env renders MONERO_PRUNE as 1 (pruning on) / 0 (off); default to pruned if unset.
+        doctor_prune=$(env_get MONERO_PRUNE); [ -n "$doctor_prune" ] || doctor_prune=1
+    else
+        mono_dir="$PWD/data/monero"; tari_dir="$PWD/data/tari"; p2pool_dir="$PWD/data/p2pool"
+        dash_dir="$PWD/data/dashboard"; tor_dir="$PWD/data/tor"; doctor_prune=1
         dr_info "No data dirs in $ENV_FILE — checking the default ./data location."
     fi
-    for d in "${dirs[@]}"; do
-        if [ ! -e "$d" ]; then
-            dr_info "Skipped $d — directory does not exist yet."
-            continue
-        fi
-        df_line=$(df -P "$d" 2>/dev/null | awk 'NR==2' || true)
-        if [ -z "$df_line" ]; then
-            dr_warn "Could not read free disk for $d."
-            continue
-        fi
-        avail_h=$(df -Ph "$d" 2>/dev/null | awk 'NR==2{print $4}' || true)
-        # 4th column of df -P is available 1K-blocks.
-        local avail_kb
-        avail_kb=$(printf '%s\n' "$df_line" | awk '{print $4}')
-        if [ -n "$avail_kb" ] && [ "$avail_kb" -ge 10485760 ] 2>/dev/null; then
-            dr_ok "Disk for $d: ${avail_h:-?} free."
-        else
-            dr_warn "Disk for $d low: ${avail_h:-?} free — the Monero blockchain needs tens of GB."
-        fi
-    done
+    check_disk_grouped doctor "$doctor_prune" \
+        "$mono_dir" "$tari_dir" "$p2pool_dir" "$dash_dir" "$tor_dir"
 
     # --- .env / deployment state ---
     echo ""
@@ -1275,6 +1266,137 @@ prompt_start_stack() {
     fi
 }
 
+# Per-component free-disk requirement in GiB — the single source of truth for the stack's disk
+# budget, shared by setup's preflight_resources and doctor's Disk check. Monero (the blockchain) is
+# pruning-aware: ~95 GiB pruned, ~230 GiB full. The rest are fixed. Summed, this is ~150 GiB pruned
+# / ~288 GiB full, matching the documented ~150 GB pruned / ~300 GB full headline (docs/hardware.md).
+# Args: <component> [<prune>] where prune (1 = on, 0 = off) only matters for "monero". Prints GiB.
+disk_component_gib() {
+    case "$1" in
+        monero)    if [ "${2:-1}" -eq 1 ] 2>/dev/null; then echo 95; else echo 230; fi ;;
+        tari)      echo 50 ;;
+        p2pool)    echo 5 ;;
+        dashboard) echo 2 ;;
+        tor)       echo 1 ;;
+        *)         echo 0 ;;
+    esac
+}
+
+# Resolve the filesystem mount point a (possibly not-yet-created) path lives on. Walks up to the
+# nearest EXISTING ancestor — df needs a real path — then prints `df -P`'s mount point (field 6).
+# Prints nothing (and returns non-zero) if no ancestor resolves, so callers can skip cleanly.
+disk_fs_mount() {
+    local p="$1"
+    while [ -n "$p" ] && [ ! -e "$p" ] && [ "$p" != "/" ]; do
+        p=$(dirname "$p")
+    done
+    [ -n "$p" ] && [ -e "$p" ] || return 1
+    df -P "$p" 2>/dev/null | awk 'NR==2{print $6}'
+}
+
+# Shared per-filesystem disk check used by BOTH preflight_resources and doctor. Treats the stack as
+# ONE unit: groups the five data dirs by the filesystem they live on and checks each filesystem ONCE
+# against the COMBINED requirement of the components that share it — so dirs on the same volume yield
+# a single line (not one misleading "N GB free" line per dir). Read-only / never exits; a dir whose
+# ancestor can't be resolved is skipped.
+#
+# Args: <mode> <prune> <monero_dir> <tari_dir> <p2pool_dir> <dashboard_dir> <tor_dir>
+#   mode  = "doctor" (emit dr_ok/dr_warn) or "preflight" (emit warn only when under requirement)
+#   prune = 1 (pruning on) / 0 (off); only affects the Monero requirement.
+check_disk_grouped() {
+    local mode="$1" prune="$2"
+    shift 2
+    local components=(monero tari p2pool dashboard tor)
+    local dirs=("$@")
+
+    # Group by mount point: accumulate required GiB and the component list per mount, and remember
+    # one representative path per mount so we can read its free space once. Parallel arrays keyed by
+    # a positional index (portable to Bash 3.2 on macOS — no associative arrays).
+    local mounts=() req_gib=() comp_list=() rep_path=()
+    local i mount comp gib idx
+    for i in "${!components[@]}"; do
+        comp="${components[$i]}"
+        local dir="${dirs[$i]:-}"
+        [ -n "$dir" ] || continue
+        mount=$(disk_fs_mount "$dir") || continue
+        [ -n "$mount" ] || continue
+        gib=$(disk_component_gib "$comp" "$prune")
+
+        # Find an existing group for this mount.
+        idx=-1
+        local j
+        for j in "${!mounts[@]}"; do
+            if [ "${mounts[$j]}" = "$mount" ]; then idx="$j"; break; fi
+        done
+        if [ "$idx" -lt 0 ]; then
+            mounts+=("$mount"); req_gib+=("$gib"); comp_list+=("$comp"); rep_path+=("$dir")
+        else
+            req_gib[idx]=$(( req_gib[idx] + gib ))
+            comp_list[idx]="${comp_list[idx]}, $comp"
+        fi
+    done
+
+    if [ "${#mounts[@]}" -eq 0 ]; then
+        [ "$mode" = "doctor" ] && dr_info "No data dirs resolved to a filesystem — skipping disk check."
+        return 0
+    fi
+
+    # One result line per DISTINCT filesystem: read free space once, compare to the summed need.
+    local need_kb avail_kb avail_h comps
+    for i in "${!mounts[@]}"; do
+        mount="${mounts[$i]}"
+        comps="${comp_list[$i]}"
+        need_kb=$(( req_gib[i] * 1048576 ))          # GiB -> KiB (df -P is 1K-blocks)
+        avail_kb=$(df -P "${rep_path[$i]}" 2>/dev/null | awk 'NR==2{print $4}')
+        avail_h=$(df -Ph "${rep_path[$i]}" 2>/dev/null | awk 'NR==2{print $4}')
+        if [ "$mode" = "doctor" ]; then
+            if [ -n "$avail_kb" ] && [ "$avail_kb" -ge "$need_kb" ] 2>/dev/null; then
+                dr_ok "Data on $mount ($comps): ${avail_h:-?} free — needs ~${req_gib[i]} GB."
+            else
+                dr_warn "Data on $mount ($comps): ${avail_h:-?} free — below the ~${req_gib[i]} GB the stack needs there."
+            fi
+        else
+            if [ -n "$avail_kb" ] && [ "$avail_kb" -lt "$need_kb" ] 2>/dev/null; then
+                warn "Low disk on $mount (hosts $comps): ${avail_h:-?} free, below the ~${req_gib[i]} GB the stack needs there — free space or move a data_dir to a larger volume."
+            fi
+        fi
+    done
+    return 0
+}
+
+# Pre-flight resource check (#87). Best-effort, WARN-only: catch the most demoralizing first-run
+# failure — an undersized host that fills its disk mid-sync — before we commit to a sync. Never
+# blocks or exits: a missing path or unreadable file just skips that check. Call after
+# parse_and_validate_config has resolved the data dirs, before starting the stack.
+preflight_resources() {
+    # Pruning is on unless config explicitly sets monero.prune:false (matches render_env's
+    # `!= null` form, not `//`, so a literal false isn't mistaken for absent).
+    local prune_bool prune
+    prune_bool=$(jq -r 'if .monero.prune != null then .monero.prune else true end' "$CONFIG_FILE" 2>/dev/null || echo true)
+    if [ "$prune_bool" == "true" ]; then prune=1; else prune=0; fi
+
+    # --- Disk: free space per underlying filesystem ---
+    # Treat the stack as one unit: group all five data dirs by the filesystem they live on and warn
+    # once per volume that can't hold the combined requirement of the components sharing it (so dirs
+    # on the same disk produce a single line, not one per dir). check_disk_grouped is WARN-only here.
+    check_disk_grouped preflight "$prune" \
+        "${MONERO_DIR:-}" "${TARI_DIR:-}" "${P2POOL_DIR:-}" "${DASHBOARD_DIR:-}" "${TOR_DATA_DIR:-}"
+
+    # --- RAM: total memory (Linux only — /proc/meminfo isn't available on macOS dev hosts) ---
+    if [ "$OS_TYPE" == "Linux" ]; then
+        local mem_total_kb
+        mem_total_kb=$(awk '/^MemTotal/{print $2}' /proc/meminfo 2>/dev/null)
+        # 16 GiB in KiB.
+        if [ -n "$mem_total_kb" ] && [ "$mem_total_kb" -lt 16777216 ] 2>/dev/null; then
+            local mem_total_gb
+            mem_total_gb=$(( mem_total_kb / 1048576 ))
+            warn "Low total RAM: ${mem_total_gb} GB detected, below the recommended ~16 GB. The stack (Tari especially) may be memory-starved during sync."
+        fi
+    fi
+
+    return 0
+}
+
 # --- Top-level Commands ---
 
 setup() {
@@ -1291,6 +1413,7 @@ setup() {
     check_prerequisites
     ensure_config_exists
     parse_and_validate_config
+    preflight_resources   # WARN-only: low disk/RAM heads-up before committing to a sync (#87)
     load_preserved_state
     resolve_dashboard_host "interactive"
     prepare_directories
