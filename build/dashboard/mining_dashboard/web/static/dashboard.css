@@ -83,11 +83,14 @@ table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th { text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; cursor: pointer; }
 td { padding: 10px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
+/* Pool-wide proxy share totals under the Workers table (Issue #82). */
+.proxy-totals { margin-top: 12px; }
 
 /* Horizontal-scroll wrapper for the workers table (Issue #83): the table can be wider than a
- * phone viewport (six columns), so it lives in this wrapper that scrolls sideways within its
- * card instead of stretching the whole page. Cells stay on one line so columns don't collapse;
- * harmless on desktop, where the table already fits and no scrollbar appears. */
+ * phone viewport (eight columns, incl. accepted/rejected per #82), so it lives in this wrapper
+ * that scrolls sideways within its card instead of stretching the whole page. Cells stay on one
+ * line so columns don't collapse; harmless on desktop, where the table fits and no scrollbar
+ * appears. */
 .table-scroll { overflow-x: auto; }
 .table-scroll th, .table-scroll td { white-space: nowrap; }
 

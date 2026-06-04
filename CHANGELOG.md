@@ -13,6 +13,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
+  folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
+  (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy
+  `/summary` endpoint. The proxy already reported all of this; it was being parsed and discarded
+  (#82).
 - Responsive dashboard layout: the web UI now reflows for phone-sized screens — the header
   stacks, the card grid collapses to a single column, the disk bar goes full-width, and the
   workers table scrolls horizontally within its card instead of overflowing the page. Desktop

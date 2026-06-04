@@ -67,7 +67,16 @@ test('sortWorkers: does not mutate the input array', () => {
 test('WORKER_COLUMNS: keys match the worker fields the server sends', () => {
     assert.deepEqual(
         WORKER_COLUMNS.map((c) => c.key),
-        ['name', 'ip_sort', 'uptime', 'h10', 'h60', 'h15'],
+        ['name', 'ip_sort', 'uptime', 'h10', 'h60', 'h15', 'accepted', 'rejected'],
+    );
+});
+
+test('sortWorkers: rejected column sorts numerically (find problem rigs)', () => {
+    // Per-worker share counts are raw numbers so the operator can sort the worst rejecters up.
+    const ws = [{ rejected: 12 }, { rejected: 0 }, { rejected: 3 }];
+    assert.deepEqual(
+        sortWorkers(ws, col('rejected'), false).map((w) => w.rejected),
+        [12, 3, 0],
     );
 });
 

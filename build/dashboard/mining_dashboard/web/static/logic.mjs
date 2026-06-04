@@ -3,9 +3,9 @@
 // without a browser or a JS toolchain. Presentation (components, the canvas) stays elsewhere and
 // is covered by the browser smoke test.
 
-// Worker table columns, each carrying the state key it sorts on. Hashrate/uptime/IP sort
-// numerically (raw values the server includes alongside the formatted strings); name sorts as
-// text. The order matches the rendered <th>s.
+// Worker table columns, each carrying the state key it sorts on. Hashrate/uptime/IP and the
+// accepted/rejected share counts sort numerically (raw values the server includes alongside the
+// formatted strings); name sorts as text. The order matches the rendered <th>s.
 export const WORKER_COLUMNS = [
     { label: 'Worker', key: 'name' },
     { label: 'IP', key: 'ip_sort' },
@@ -13,6 +13,8 @@ export const WORKER_COLUMNS = [
     { label: '10s', key: 'h10' },
     { label: '60s', key: 'h60' },
     { label: '15m', key: 'h15' },
+    { label: 'Accepted', key: 'accepted' },
+    { label: 'Rejected', key: 'rejected' },
 ];
 
 // Return a new array of workers sorted by the given column index. ``idx == null`` keeps the
