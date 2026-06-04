@@ -15,8 +15,9 @@ import pytest
 import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
-    build_system, build_sync, build_badges, build_state, get_shell_html, _mode_palette,
-    parse_window, _target_points, _chart_tension, build_proxy_summary, _reject_flag,
+    build_system, build_sync, build_badges, build_earnings, build_state, get_shell_html,
+    _mode_palette, parse_window, _target_points, _chart_tension,
+    build_proxy_summary, _reject_flag,
 )
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
@@ -562,6 +563,61 @@ class TestPoolNetwork:
         assert pn["monero"]["db_size"] == "—"
 
 
+# --- Earnings calculator (Issue #12) --------------------------------------------------
+
+class TestEarnings:
+    _NET = {"network": {"reward": 600_000_000_000}}   # 0.6 XMR block reward (atomic units)
+
+    def test_publishes_rate_and_inputs(self):
+        # The server sends the daily XMR-per-H/s *rate* + the raw inputs the client scales/inverts
+        # (the P2Pool hashrate, P2Pool share difficulty) — not pre-formatted earnings.
+        e = build_earnings(self._NET, _metrics(p2pool_1h=10500,
+                                               network_difficulty=400_000_000_000,
+                                               pool_difficulty=250_000_000))
+        assert e["available"] is True
+        assert e["p2pool_hr"] == 10500
+        assert e["p2pool_hr_str"] == "10.50 kH/s"
+        assert e["pool_difficulty"] == 250_000_000
+        assert e["block_reward"] == "0.6000 XMR"
+        # The disclaimer makes the P2Pool-only scope explicit (not XvB / not Tari).
+        assert e["disclaimer"] and "P2Pool mining only" in e["disclaimer"]
+        # Rate matches reward_xmr / difficulty * 86400.
+        assert e["coeff_day"] == pytest.approx(0.6 / 400_000_000_000 * 86_400)
+
+    def test_default_hashrate_is_the_displayed_p2pool_1h(self):
+        # Consistency: the calculator's default must be the *same* P2Pool 1h average shown in the
+        # header / Overview (metrics.p2pool_1h) — not the total, and not a bespoke total-minus-routed
+        # figure. That recorded average already excludes the XvB-donated slice, so the value here
+        # (and its display string) matches build_hashrate's "p2p_1h" exactly.
+        m = _metrics(total_h15=46_300, xvb_routed=10_000, p2pool_1h=35_000)
+        e = build_earnings(self._NET, m)
+        assert e["p2pool_hr"] == 35_000                       # p2pool_1h, independent of total/routed
+        assert e["p2pool_hr_str"] == _hashrate(m)["p2p_1h"]   # identical display string to the header
+
+    def test_no_p2pool_hashrate_when_average_is_zero(self):
+        # E.g. fresh start (no history) or full-XvB: p2pool_1h is 0 -> client shows 0 / "—" (honest).
+        e = build_earnings(self._NET, _metrics(p2pool_1h=0))
+        assert e["p2pool_hr"] == 0.0
+
+    def test_unavailable_when_network_reward_missing(self):
+        # No reward collected yet -> rate is unavailable; the card degrades to "—" (no crash).
+        e = build_earnings({}, _metrics(network_difficulty=400_000_000_000))
+        assert e["available"] is False
+        assert e["coeff_day"] == 0.0
+        assert e["block_reward"] == "0.0000 XMR"
+
+    def test_unavailable_when_difficulty_missing(self):
+        e = build_earnings(self._NET, _metrics(network_difficulty=0))
+        assert e["available"] is False
+        assert e["coeff_day"] == 0.0
+
+    def test_p2pool_hr_passthrough_is_raw(self):
+        # The what-if default must be the exact P2Pool H/s (not the rounded display string), so
+        # the client's default estimate isn't skewed by display rounding.
+        e = build_earnings(self._NET, _metrics(p2pool_1h=10543.7))
+        assert e["p2pool_hr"] == 10543.7
+
+
 # --- build_state integration ----------------------------------------------------------
 
 def _state_mgr(history=None, mode="P2POOL"):
@@ -587,7 +643,8 @@ class TestBuildState:
         st = build_state(_data(), _state_mgr(), "all")
         for key in ("syncing", "page_title", "host_ip", "version", "last_update", "range", "window",
                     "badges", "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
-                    "shares_window", "proxy_workers", "tari", "workers", "proxy_summary", "chart"):
+                    "shares_window", "proxy_workers", "earnings", "tari", "workers",
+                    "proxy_summary", "chart"):
             assert key in st, f"missing section: {key}"
 
     def test_version_section_shape(self):
