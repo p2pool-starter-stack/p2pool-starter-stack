@@ -82,6 +82,29 @@ pointed each `*.data_dir` — see [Configuration › Data directories](configura
 Stop the stack (`./pithead down`) before copying data directories so files are in a consistent
 state.
 
+### `backup` / `restore`
+
+Instead of copying by hand, `pithead` can archive the irreplaceable bits for you:
+
+```bash
+./pithead backup                 # config.json + .env + Caddyfile + Tor onion keys
+./pithead backup --with-chains   # also include the Monero/Tari/P2Pool data dirs (large)
+```
+
+This writes a timestamped, `chmod 600` `tar.gz` under `backups/` and prints its path. The
+blockchains are excluded by default (they re-sync); pass `--with-chains` to fold them in.
+
+To recover on a new machine (or after a wipe), copy the archive back and run:
+
+```bash
+./pithead down                       # stop the stack first
+./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz
+./pithead up
+```
+
+`restore` prompts before overwriting, restores the files in place, and fixes the Tor data
+directory's ownership so the onion keys load correctly.
+
 ---
 
 ## Troubleshooting

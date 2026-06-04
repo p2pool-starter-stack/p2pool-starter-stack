@@ -423,6 +423,99 @@ reset_dashboard() {
     docker compose up -d dashboard p2pool
 }
 
+# --- Backup / Restore ---
+# Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, and the Tor
+# data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
+# by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
+stack_backup() {
+    local with_chains=0
+    for arg in "$@"; do
+        case "$arg" in
+            --with-chains) with_chains=1 ;;
+            *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
+        esac
+    done
+
+    require_env
+    parse_and_validate_config
+
+    local backups_dir="$PWD/backups"
+    mkdir -p "$backups_dir"
+
+    local stamp archive
+    stamp=$(date +%Y%m%d-%H%M%S)
+    archive="$backups_dir/pithead-backup-$stamp.tar.gz"
+
+    # Collect what exists, as absolute paths. We tar with -C / and strip the leading slash, so
+    # restore (extract at /) puts every file back exactly where it came from regardless of where
+    # config.json / the data dirs live. config.json/.env/Caddyfile sit in the script dir ($PWD).
+    local items=("$PWD/$CONFIG_FILE" "$PWD/$ENV_FILE")
+    [ -f "Caddyfile" ] && items+=("$PWD/Caddyfile")
+
+    if [ -d "$TOR_DATA_DIR" ]; then
+        items+=("$TOR_DATA_DIR")
+    else
+        warn "Tor data dir not found ($TOR_DATA_DIR) — onion keys will NOT be in the backup."
+    fi
+
+    if [ "$with_chains" -eq 1 ]; then
+        log "Including blockchain data (this can be very large)..."
+        local d
+        for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR"; do
+            [ -d "$d" ] && items+=("$d")
+        done
+    fi
+
+    # Strip the leading "/" so paths are stored relative to / inside the archive.
+    local rel=()
+    local p
+    for p in "${items[@]}"; do rel+=("${p#/}"); done
+
+    log "Creating backup archive..."
+    # Read with sudo because the Tor data dir is owned by 100:101.
+    ( umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}" )
+    sudo chown "$REAL_USER":"$REAL_USER" "$archive"
+    chmod 600 "$archive"
+
+    log "Backup written to: $archive"
+    if [ "$with_chains" -eq 0 ]; then
+        log "Blockchains excluded (they re-sync). Use 'backup --with-chains' to include them."
+    fi
+}
+
+stack_restore() {
+    local archive="${1:-}"
+    [ -n "$archive" ] || error "Usage: $0 restore <archive.tar.gz>"
+    [ -f "$archive" ] || error "Archive not found: $archive"
+    # Resolve to an absolute path now, since we extract from "/" below.
+    archive=$(cd "$(dirname "$archive")" && printf '%s/%s' "$PWD" "$(basename "$archive")")
+
+    # Note: we do NOT require/parse the current config here — restore must work even when the
+    # on-disk config.json is lost or corrupt. The config comes back out of the archive.
+
+    warn "Restore will OVERWRITE config.json, .env, Caddyfile, and the Tor data dir from the archive."
+    warn "Stop the stack first with '$0 down' so files are restored in a consistent state."
+    read -r -p "Continue and overwrite these files? (y/N): " CONFIRM || true
+    if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+        log "Restore cancelled."
+        return
+    fi
+
+    log "Restoring from $archive ..."
+    # The archive stores paths relative to / (leading slash stripped), so extracting at / puts
+    # every file back exactly where it came from. sudo so we can write into the 100:101-owned
+    # Tor data dir.
+    sudo tar -xzf "$archive" -C "/"
+
+    # Now that config.json is back, resolve the Tor data dir from it and fix ownership so the
+    # onion keys load (matching prepare_directories).
+    parse_and_validate_config
+    log "Fixing Tor data ownership (100:101)..."
+    sudo chown -R 100:101 "$TOR_DATA_DIR"
+
+    log "Restore complete. Start the stack with '$0 up'."
+}
+
 show_help() {
     cat <<EOF
 Usage: $0 <command> [options]
@@ -456,6 +549,11 @@ Inspection:
 
 Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
+  backup [--with-chains]    Write a timestamped, chmod-600 tar.gz under backups/ holding the
+                            irreplaceable bits: config.json, .env, Caddyfile, and the Tor data
+                            dir (onion keys). Blockchains are excluded unless --with-chains.
+  restore <archive>         Restore config.json, .env, Caddyfile, and the Tor data dir from a
+                            backup archive (prompts before overwriting; fixes Tor ownership).
 
   help, -h, --help          Show this message.
 
@@ -1379,6 +1477,8 @@ main() {
         status)           require_env; stack_status || exit 1 ;;
         doctor)           doctor ;;
         reset-dashboard)  require_deployed; reset_dashboard ;;
+        backup)           stack_backup "$@" ;;
+        restore)          stack_restore "$@" ;;
         help|-h|--help)   show_help ;;
         *)                error "Unknown command: $cmd. Run '$0 help'." ;;
     esac
