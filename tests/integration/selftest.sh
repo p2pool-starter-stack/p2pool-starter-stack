@@ -83,6 +83,13 @@ assert_eq "parse pool type"         "$(jq_get "$ST" '.pool.type')" "Main"
 assert_eq "parse worker count"      "$(jq_get "$ST" '.proxy_workers')" "2"
 assert_eq "missing key -> empty"    "$(jq_get "$ST" '.nope.nope')" ""
 
+echo "== service_state parsing (fault-injection predicates) =="
+assert_eq "state of 'running healthy'"  "$(svc_state_of 'running healthy')"  "running"
+assert_eq "health of 'running healthy'" "$(svc_health_of 'running healthy')" "healthy"
+assert_eq "state of 'missing none'"     "$(svc_state_of 'missing none')"     "missing"
+assert_eq "health of 'running unhealthy'" "$(svc_health_of 'running unhealthy')" "unhealthy"
+assert_eq "state of 'exited none'"      "$(svc_state_of 'exited none')"      "exited"
+
 echo "== assertion helpers: counters behave =="
 _p="$IT_PASS"; _f="$IT_FAIL"
 assert_num_ge "num_ge passes when equal" 5 5

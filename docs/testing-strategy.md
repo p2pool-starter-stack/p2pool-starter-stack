@@ -1,0 +1,130 @@
+# Testing Strategy
+
+How Pithead simulates **every situation the stack can be in** — and which layer proves each
+one. This is the map behind the [integration suite](integration-testing.md); read that for how
+to run the live matrix, and this for *what we test where, and why*.
+
+The guiding idea: the stack's runtime behaviour is a **state machine** (syncing → held →
+released; healthy → down → rejected → recovered → readmitted; XvB tiers; container health),
+and a healthy, already-synced box only ever shows you one corner of it. So we simulate the rest
+— at the cheapest layer that can prove each situation honestly.
+
+## The four tiers
+
+| Tier | What it is | Simulates | Where it runs |
+|---|---|---|---|
+| **1 — Unit** | `build/dashboard/tests/` (pytest, mocked clients) and `tests/stack/` (shell, `docker`/`sudo` stubbed) | Decision logic & field mapping: sync-gate, failover, node-health debounce, XvB engine, `/api/state` shapes, `pithead` config/status logic | Every PR (`make test`) |
+| **2 — Contract** | `tests/integration/fakes/test_contract.py` | The real Monero/Tari **clients** parsing the real daemons' wire format — points the actual clients at controllable fakes | Every PR (docker-free) |
+| **3 — Mini-stack** | `tests/integration/mini-stack/` (real dashboard + docker-control vs fake daemons) | The control plane **end-to-end with real containers**: hold/release and reject/readmit actually stopping/starting `p2pool`/`xmrig-proxy`, driven deterministically | CI with Docker (`make test-mini-stack`) |
+| **4 — Live matrix** | `tests/integration/run.sh` against a real, synced box | What only reality proves: real merge-mining, prune/full DB size, Caddy TLS, Tor onions, HugePages, plus fault injection for real container health verdicts | Manual / release gate (`make test-integration`) |
+
+**Why this shape, and the answer to "should we use stubs?"** Stubs already do the heavy
+lifting — the dashboard has ~140 unit tests that exhaustively drive the hard runtime states with
+mocked clients. Adding *more* mocks for the same logic would be duplication. What stubs **can't**
+prove is wiring: that the real clients parse real daemon output (tier 2), that the dashboard's
+stop/start actually moves real containers (tier 3), and that real daemons sync/merge-mine and
+real containers go unhealthy (tier 4). So the strategy is **stubs for logic, controllable fake
+daemons for the control-plane wiring, and the real box for the irreducibly-real** — each
+situation tested once, at the lowest tier that's honest.
+
+The fakes are the key enabler: because the whole control plane is env-configurable
+(`MONERO_RPC_URL`, `TARI_GRPC_ADDRESS`, `DOCKER_CONTROL_URL`, `NODE_DOWN_AFTER_SEC`,
+`UPDATE_INTERVAL`, …), we can point the real code at tiny controllable servers and drive the
+entire state machine in seconds, in CI, with no chain and no test box.
+
+## Scenario catalog
+
+Every situation we care about, what triggers it, and the tier(s) that cover it. ✅ = covered
+today; ▶ = exercised by the live matrix / mini-stack when run.
+
+### A. Configuration permutations
+The deploy-time axes — each changes a real runtime path. Full table and assertions in
+[Integration Testing › The config matrix](integration-testing.md#the-config-matrix).
+
+| Situation | Trigger | Tier |
+|---|---|---|
+| `monero.mode` local vs remote (monerod present/absent, profile gating) | config | 4 ▶ |
+| `monero.prune` pruned vs full (DB size, #32 display) | config | 1 ✅ (display) · 4 ▶ (real DB) |
+| `monero.rpc_lan_access`, `dashboard.secure`, `xvb.enabled`, `dashboard.tari_required` | config → `.env`/Caddyfile | 4 ▶ |
+| `p2pool.pool` main / mini / nano (sidechain, flags) | config | 4 ▶ |
+
+### B. Sync lifecycle (#35)
+| Situation | Trigger | Tier |
+|---|---|---|
+| Cold start, chains syncing → **hold** `p2pool`+`xmrig-proxy` | both `is_syncing` | 1 ✅ · 3 ▶ |
+| Monero synced, Tari **required** but still syncing → keep holding | `monero_synced ∧ ¬tari_synced ∧ TARI_REQUIRED` | 1 ✅ (added) · 3 ▶ |
+| Monero synced, Tari **non-blocking** → release, passive Tari badge (#51) | `¬TARI_REQUIRED` | 1 ✅ · 4 ▶ |
+| Both synced → **release** (one-way latch) | gate satisfied | 1 ✅ · 3 ▶ |
+| Network-height UI override doesn't deadlock the gate | p2pool held → height 0 | 1 ✅ |
+| Restart mid-sync / post-release (latch persisted) | snapshot reload | 1 ✅ |
+
+### C. Node health & failover (#31)
+| Situation | Trigger | Tier |
+|---|---|---|
+| monerod down → **reject workers** (stop `xmrig-proxy`) | unreachable ≥ `NODE_DOWN_AFTER_SEC` | 1 ✅ · 3 ▶ · 4 ▶ |
+| Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ |
+| Recovery hysteresis — readmit only after stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
+| Transient blip / never-reachable → **no** false reject | debounce / `ever_up` | 1 ✅ |
+| Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) |
+| #35 latch × #31 failover coexist after release | down post-release | 1 ✅ (added) · 3 ▶ |
+| Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |
+
+### D. Container health verdicts (`pithead status`)
+| Situation | Trigger | Tier |
+|---|---|---|
+| All healthy → exit 0 | steady state | 1 ✅ · 4 ▶ |
+| Required node **down** / **missing** → exit 1 | stop / `rm` monerod | 1 ✅ (node-down) · 4 ▶ (`--fault-injection`) |
+| Running but **unhealthy** → exit 1 | healthcheck fails (SIGSTOP) | 4 ▶ (`--fault-injection`) |
+| Miner stopped under sync-hold / failover → exit **0** (intentional) | held / rejected | 1 ✅ · 4 ▶ |
+| Remote mode ignores monerod | profile off | 1 ✅ · 4 ▶ |
+
+### E. XvB switching engine
+| Situation | Trigger | Tier |
+|---|---|---|
+| Disabled / zero shares / `fail_count ≥ 3` / no sustainable tier → P2POOL | guards | 1 ✅ |
+| Closed-loop ramp/back-off, cold-start seed, VIP-reserve anti-overshoot (#70) | controller | 1 ✅ |
+| P2POOL / XVB / SPLIT modes, tiers, smart-sleep early exit | decision | 1 ✅ |
+| Real XvB endpoint reachable / failing | network | 4 (real endpoint) |
+
+### F. Dashboard `/api/state` field states
+| Situation | Trigger | Tier |
+|---|---|---|
+| sync state loading/syncing/done; pruned/full/unknown; db_size | metrics | 1 ✅ |
+| badges (node-down, workers-rejected, miner-held, passive-Tari, pruned/full, low-HR) | metrics | 1 ✅ |
+| system levels (cpu/mem/disk/hugepages), worker pool/online, chart outage breaks | metrics | 1 ✅ |
+| Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
+
+### G. CLI lifecycle (`pithead`)
+| Situation | Trigger | Tier |
+|---|---|---|
+| Config validation, secret preservation, `apply` no-op/destructive guards | sourced fns | 1 ✅ |
+| `setup`→`up`→`status`→`apply`→`restart`→`down`; idempotency; secret preservation | real box | 4 ▶ (`--lifecycle`) |
+| `upgrade` (image pull/rebuild) | real box | release staging smoke (docs) |
+| `backup`/`restore`, `reset-dashboard`, `doctor` | real box | 1 ✅ (partial) · 4 (future) |
+
+### H. Host / infrastructure (real-only)
+| Situation | Trigger | Tier |
+|---|---|---|
+| Real merge-mining share lands; real hashrate on dashboard | live mining | 4 ▶ |
+| Caddy TLS scheme; Tor onion provisioning; HugePages/AVX2; real disk pressure; prune DB size | real host | 4 ▶ |
+
+## Running each tier
+
+```bash
+make test                 # tiers 1 + 2 (+ harness self-test) — every-PR, no docker/server
+make test-fakes           # tier 2 contract test on its own
+make test-mini-stack      # tier 3 — needs docker
+make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-injection"  # tier 4
+```
+
+## Adding a scenario
+
+- **Logic** (a new decision/branch) → a unit test (tier 1). Cheapest, fastest.
+- **A new daemon state** the clients must parse → extend the fakes + the contract test (tier 2),
+  and it becomes drivable in the mini-stack (tier 3).
+- **A config axis** → one row in `tests/integration/scenarios.sh` (tier 4). The self-test
+  enforces every axis value is covered.
+- **A failure mode needing real containers** → a fault in `run.sh`'s fault-injection phase
+  (tier 4) and/or a mini-stack scenario (tier 3).
+
+Keep each situation at the lowest honest tier; don't re-prove logic with a heavier harness.

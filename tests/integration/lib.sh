@@ -148,6 +148,11 @@ pithead() { rx "$IT_PITHEAD $*"; }
 # network). Empty output on failure so callers can detect unreachable.
 api_state() { rx "curl -fsS --max-time 10 http://127.0.0.1:8000/api/state" 2>/dev/null; }
 
+# Split a "<state> <health>" string (from service_state) into its two fields. Pure helpers so
+# the self-test can verify the fault-injection predicates classify correctly.
+svc_state_of()  { printf '%s' "${1%% *}"; }
+svc_health_of() { printf '%s' "${1##* }"; }
+
 # Pull a jq path out of a JSON blob, printing nothing for an absent/null value. The `?`
 # swallows "cannot index null" on a missing parent, and `values` drops nulls — but NOT
 # boolean false (so `.monero.prune == false` reads as "false", not ""; `// empty` would

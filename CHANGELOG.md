@@ -13,13 +13,23 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
-- End-to-end integration test suite (`tests/integration/`) that drives a real, already-synced
-  Pithead server through the config matrix and asserts the stack behaves — containers healthy,
-  nodes synced, miners mining, the dashboard reading correct live state, `status` exit codes,
-  and secrets preserved across re-applies. Runs over SSH or `--local`, reuses the synced chain
-  data dirs (never re-syncs), and is the blocking pre-release gate (#54). Surfaced as `make
-  test-integration`; a pure-logic `selftest` runs in CI on every PR. See
-  `docs/integration-testing.md`.
+- A four-tier test strategy for simulating every runtime situation (#54), documented in
+  `docs/testing-strategy.md` with a full scenario catalog:
+  - **Live config-matrix suite** (`tests/integration/`, tier 4) that drives a real, synced
+    server through the config matrix and asserts the stack behaves — containers healthy, nodes
+    synced, miners mining, dashboard reading correct live state, `status` exit codes, secrets
+    preserved. Runs over SSH or `--local`; the blocking pre-release gate. A `--fault-injection`
+    phase deliberately breaks monerod (stop / SIGSTOP / remove) to assert `pithead status`'
+    down/unhealthy/missing verdicts and the failover→recovery cycle. `make test-integration`.
+  - **Controllable fake monerod/Tari + a contract test** (`tests/integration/fakes/`, tier 2)
+    that points the real dashboard clients at the fakes and asserts they parse every state —
+    docker-free, runs on every PR. `make test-fakes`.
+  - **Fake-daemon docker mini-stack** (`tests/integration/mini-stack/`, tier 3) running the real
+    dashboard + docker-control proxy against the fakes, asserting sync hold/release and
+    node-down reject/readmit end-to-end with real containers. `make test-mini-stack`.
+  - New dashboard unit tests for the required-Tari sync gate, the #35-latch × #31-failover
+    interaction, and simultaneous double outages.
+  - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy

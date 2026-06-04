@@ -34,6 +34,7 @@ IT_PITHEAD="./pithead"
 IT_CURRENT_SCENARIO=""
 ONLY_SCENARIO=""
 RUN_LIFECYCLE=0
+RUN_FAULTS=0
 KEEP_STATE=0
 EXPECTED_WORKERS=2
 REMOTE_MONERO_HOST=""
@@ -72,7 +73,12 @@ MATRIX:
                          box's baseline is full)
   --full-data-dir <d>    synced FULL monero data dir (enables the full case when the box's
                          baseline is pruned)
-  --lifecycle            also run the lifecycle + node-down failover phase
+  --lifecycle            also run the lifecycle phase (restart, apply secret-preservation)
+  --fault-injection      also run the fault-injection phase: deliberately break monerod
+                         (stop / SIGSTOP / remove) and assert pithead's status verdicts
+                         (down / unhealthy / missing) and the failover→recovery cycle.
+                         DESTRUCTIVE-then-restored; local mode only. Slow (healthcheck +
+                         node-health debounce).
   --keep                 do NOT restore the original config.json at the end (leaves the box
                          on the last scenario — useful for debugging)
 
@@ -102,6 +108,7 @@ parse_args() {
             --pruned-data-dir)    PRUNED_DATA_DIR="$2"; shift 2 ;;
             --full-data-dir)      FULL_DATA_DIR="$2"; shift 2 ;;
             --lifecycle)  RUN_LIFECYCLE=1; shift ;;
+            --fault-injection) RUN_FAULTS=1; shift ;;
             --keep)       KEEP_STATE=1; shift ;;
             --out)        OUT_DIR="$2"; shift 2 ;;
             --list)       print_list; exit 0 ;;
@@ -145,6 +152,14 @@ env_on_box() { rx "grep -E '^$1=' .env 2>/dev/null | head -n1 | cut -d= -f2-"; }
 # Services currently running, one per line, sorted. Honours active compose profiles, so
 # monerod is absent in remote mode.
 running_services() { rx "docker compose ps --services --status running 2>/dev/null | sort"; }
+
+# Print "<state> <health>" for one service, exactly as stack_status reads it: state is the
+# container State.Status (running/exited/paused/restarting/…) and health is the healthcheck
+# verdict (healthy/unhealthy/starting/none), or "missing none" when absent. The fault-injection
+# predicates assert pithead's status verdicts against this.
+service_state() {
+    rx 'cid=$(docker compose ps -aq '"$1"' 2>/dev/null | head -n1); if [ -z "$cid" ]; then echo "missing none"; else docker inspect --format "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" "$cid" 2>/dev/null || echo "unknown none"; fi'
+}
 
 # A stable fingerprint of the secrets we must preserve across applies (proxy token + onion
 # addresses). Hashed ON THE BOX so the plaintext never crosses the wire or hits a log.
@@ -412,6 +427,81 @@ run_lifecycle() {
 # Predicate: status reports a problem (non-zero) — used to detect node-down deterministically.
 _pred_status_down() { ! pithead status >/dev/null 2>&1; }
 
+# --- Fault-injection phase (--fault-injection) ------------------------------
+# Deliberately break monerod three ways and assert pithead's status verdicts plus the
+# dashboard's failover, then restore. Local mode only (needs a local monerod to break).
+# These are destructive-then-restored and slow (healthcheck + node-health debounce), so the
+# phase is opt-in.
+_monerod_is() {  # _monerod_is <state> [<health>]
+    local s; s="$(service_state monerod)"
+    [ "$(svc_state_of "$s")" = "$1" ] && { [ -z "${2:-}" ] || [ "$(svc_health_of "$s")" = "$2" ]; }
+}
+_pred_monerod_missing()   { _monerod_is missing; }
+_pred_monerod_unhealthy() { _monerod_is running unhealthy; }
+_pred_monerod_healthy()   { _monerod_is running healthy; }
+_pred_proxy_stopped()     { [ "$(svc_state_of "$(service_state xmrig-proxy)")" != "running" ]; }
+
+fault_node_down() {
+    it_step "fault: stop monerod (required node down)…"
+    rx "docker compose stop monerod" >/dev/null 2>&1
+    wait_for 60 5 "status to report a problem" _pred_status_down || true
+    pithead status >/dev/null 2>&1; assert_rc "status non-zero when monerod is down" "$?" "1"
+    # The dashboard rejects workers (stops xmrig-proxy) after its node-health debounce so they
+    # fail over to backup pools (#31).
+    wait_for 180 10 "xmrig-proxy stopped by failover" _pred_proxy_stopped || true
+    assert_eq "xmrig-proxy stopped for failover" "$(svc_state_of "$(service_state xmrig-proxy)")" "exited"
+    it_step "recover: start monerod…"
+    rx "docker compose start monerod" >/dev/null 2>&1
+    wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
+    wait_status_ok 240 || true
+    pithead status >/dev/null 2>&1; assert_rc "status OK after monerod recovery" "$?" "0"
+}
+
+fault_unhealthy() {
+    it_step "fault: freeze monerod (SIGSTOP) so its healthcheck fails…"
+    rx "docker compose kill -s SIGSTOP monerod" >/dev/null 2>&1
+    # The get_info healthcheck now times out; after its retries the container flips to
+    # running-but-unhealthy — the verdict stack_status flags as a problem.
+    wait_for 200 10 "monerod to report unhealthy" _pred_monerod_unhealthy || true
+    assert_eq "monerod running-but-unhealthy" "$(service_state monerod)" "running unhealthy"
+    pithead status >/dev/null 2>&1; assert_rc "status non-zero when monerod unhealthy" "$?" "1"
+    it_step "recover: thaw monerod (SIGCONT)…"
+    rx "docker compose kill -s SIGCONT monerod" >/dev/null 2>&1
+    wait_for 120 5 "monerod healthy" _pred_monerod_healthy || true
+}
+
+fault_missing() {
+    it_step "fault: remove the monerod container…"
+    rx "docker compose rm -sf monerod" >/dev/null 2>&1
+    wait_for 30 3 "monerod to be missing" _pred_monerod_missing || true
+    assert_eq "monerod reported missing" "$(svc_state_of "$(service_state monerod)")" "missing"
+    pithead status >/dev/null 2>&1; assert_rc "status non-zero when monerod missing" "$?" "1"
+    it_step "recover: recreate monerod…"
+    rx "docker compose up -d monerod" >/dev/null 2>&1
+    wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
+}
+
+run_fault_injection() {
+    IT_CURRENT_SCENARIO="fault-injection"
+    echo ""
+    it_log "── fault-injection phase ───────────────────────────"
+    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+        it_warn "skipping fault injection (remote mode: no local monerod to break)"
+        return 0
+    fi
+
+    local fails_before="$IT_FAIL"
+    fault_node_down
+    fault_unhealthy
+    fault_missing
+    [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "fault-injection" "$OUT_DIR"
+
+    # Belt-and-braces: whatever happened above, leave monerod up and the stack healthy.
+    rx "docker compose up -d monerod" >/dev/null 2>&1 || true
+    wait_for 240 5 "monerod healthy after fault phase" _pred_monerod_healthy || true
+    wait_status_ok 240 || true
+}
+
 # --- Restore + summary ------------------------------------------------------
 restore_baseline() {
     [ "$KEEP_STATE" = "1" ] && { it_warn "--keep set: leaving the box on the last scenario."; return; }
@@ -458,6 +548,7 @@ main() {
     fi
 
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
+    [ "$RUN_FAULTS" = "1" ] && run_fault_injection
 
     restore_baseline
     summary

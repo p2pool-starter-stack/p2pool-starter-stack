@@ -11,6 +11,13 @@ dashboard pytest mocks its clients. They prove the *code* is correct; they can't
 real `apply → sync-gate → mine → status` flow works on a real host. That's what this suite is
 for.
 
+> This live matrix is **tier 4** of a four-tier plan. The runtime *situations* a healthy box
+> can't show (cold sync, node-down, unhealthy containers, XvB tiers) are simulated more cheaply
+> at lower tiers — unit tests, a client **contract test** against controllable fakes
+> ([`tests/integration/fakes/`](../tests/integration/fakes/)), and a **fake-daemon docker
+> mini-stack** ([`tests/integration/mini-stack/`](../tests/integration/mini-stack/)). See
+> [Testing Strategy](testing-strategy.md) for the full picture and scenario catalog.
+
 The lives under [`tests/integration/`](../tests/integration/):
 
 | File | Role |
@@ -118,7 +125,8 @@ Useful flags (full list in `run.sh --help`):
 | `--workers <n>` | Miners expected online while mining (default `2`). |
 | `--remote-monero-host <h>` | External node endpoint for the `remote` scenario. |
 | `--pruned-data-dir` / `--full-data-dir` | Synced alt DB to enable the opposite prune mode. |
-| `--lifecycle` | Also run the lifecycle + node-down failover phase. |
+| `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
+| `--fault-injection` | Also break monerod (stop / SIGSTOP / remove) and assert `status`' down/unhealthy/missing verdicts and the failover→recovery cycle. Destructive-then-restored; local mode only; slow. |
 | `--keep` | Don't restore the original config (leave the box on the last scenario). |
 | `--out <dir>` | Where to write the manifest and failure artifacts. |
 | `--list` | Print the matrix and axis coverage and exit. |

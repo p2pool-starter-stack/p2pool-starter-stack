@@ -24,7 +24,7 @@ HOST_IP = os.environ.get("HOST_IP", "Unknown Host")
 # XMRig Worker API Configuration
 XMRIG_API_PORT = 8080
 API_TIMEOUT = 1         # Connection timeout (seconds) for worker API calls
-UPDATE_INTERVAL = 30    # Frequency (seconds) of the main data aggregation loop
+UPDATE_INTERVAL = int(os.environ.get("UPDATE_INTERVAL", 30))  # main data-loop period (s); lowered in integration tests
 
 # --- XvB Algorithm Constants ---
 # Duration of the donation switching cycle (10 minutes)
