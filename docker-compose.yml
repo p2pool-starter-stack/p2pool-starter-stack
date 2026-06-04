@@ -67,7 +67,8 @@ services:
 
   # --- Tari Base Node ---
   tari:
-    image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet
+    # Pinned by digest (#135) so the v5.3.1-mainnet tag can't be silently re-pointed.
+    image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0
     container_name: tari
     restart: unless-stopped
     stop_grace_period: 1m
@@ -301,9 +302,10 @@ services:
   # POST stays off, so this proxy can never write — container control goes through the
   # separate, tightly-scoped docker-control proxy below.
   docker-proxy:
-    image: tecnativa/docker-socket-proxy:v0.4.2
+    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     container_name: docker-proxy
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -331,9 +333,10 @@ services:
   # (create/kill/exec/reads). Kept separate from the read-only proxy above so opening POST
   # here can't widen that proxy's container access.
   docker-control:
-    image: tecnativa/docker-socket-proxy:v0.4.2
+    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     container_name: docker-control
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -358,9 +361,10 @@ services:
   # Bridges the local 127.0.0.1 application binding to the LAN
   # Serves HTTPS or HTTP depending on configuration
   caddy:
-    image: caddy:2.11
+    image: caddy:2.11@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13
     container_name: caddy
     restart: unless-stopped
+    logging: *default-logging
     network_mode: "host"
     # Drop all capabilities, then add back only NET_BIND_SERVICE — Caddy serves the dashboard on
     # :80/:443 (privileged ports) and would otherwise fail to bind once ALL caps are dropped (#90).

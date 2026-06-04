@@ -34,11 +34,16 @@ def detect_pool_type(peers):
     if not peers: 
         return "Unknown"
         
+    # Match the port exactly (the last colon-segment), not as a substring of the whole peer
+    # string — an IP that merely contains the port digits (e.g. "37.88.9.1:18080") would
+    # otherwise be miscounted, and pool type drives block_time / the PPLNS-window duration the
+    # XvB controller relies on (#142).
+    by_port = {"37889": "Main", "37888": "Mini", "37890": "Nano"}
     for p in peers:
-        if "37889" in p: counts["Main"] += 1
-        elif "37888" in p: counts["Mini"] += 1
-        elif "37890" in p: counts["Nano"] += 1
-        
+        pool = by_port.get(str(p).rsplit(":", 1)[-1])
+        if pool:
+            counts[pool] += 1
+
     winner = max(counts, key=counts.get)
     return winner if counts[winner] > 0 else "Unknown"
 

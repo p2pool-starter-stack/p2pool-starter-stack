@@ -8,7 +8,7 @@ presentation tokens), the chart series (Issue #65), and the full ``build_state``
 import json
 import time
 from dataclasses import replace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,7 +17,7 @@ from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
     build_system, build_sync, build_badges, build_earnings, build_state, get_shell_html,
     _mode_palette, parse_window, _target_points, _chart_tension,
-    build_proxy_summary, _reject_flag,
+    build_proxy_summary, _reject_flag, host_display_addr,
 )
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
@@ -144,7 +144,9 @@ class TestChart:
         chart = build_chart([{"timestamp": 1, "v": 5, "v_p2pool": 5, "v_xvb": 0, "t": "a"}], [], "all")
         assert len(chart["p2pool"]) == 1
 
-    def test_share_points_sparse_and_lifted(self):
+    def test_share_points_sparse_and_top_pinned(self):
+        # Markers ride a dedicated 0–1 axis pinned near the top, independent of hashrate, so they
+        # don't inflate the y-range and bury a flat line (Issue #145). Radius still scales by count.
         history = [
             {"timestamp": 1000, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},
             {"timestamp": 1030, "v": 600, "v_p2pool": 600, "v_xvb": 0, "t": "b"},
@@ -152,14 +154,15 @@ class TestChart:
         shares = [{"ts": 1001}, {"ts": 1029}]   # one near each sample
         pts = build_chart(history, shares, "all")["shares"]
         assert pts == [
-            {"x": 1_000_000, "y": 550.0, "r": 9, "c": 1},   # 500 * 1.1, radius 6+3
-            {"x": 1_030_000, "y": 660.0, "r": 9, "c": 1},
+            {"x": 1_000_000, "y": 0.93, "r": 9, "c": 1},   # fixed top position, radius 6+3
+            {"x": 1_030_000, "y": 0.93, "r": 9, "c": 1},
         ]
 
-    def test_share_offset_floor_when_value_zero(self):
+    def test_share_marker_top_pinned_when_value_zero(self):
+        # Same fixed position even at zero hashrate — the marker stays visible without a floor hack.
         pts = build_chart([{"timestamp": 1000, "v": 0, "v_p2pool": 0, "v_xvb": 0, "t": "a"}],
                           [{"ts": 1000}], "all")["shares"]
-        assert pts == [{"x": 1_000_000, "y": 100, "r": 9, "c": 1}]
+        assert pts == [{"x": 1_000_000, "y": 0.93, "r": 9, "c": 1}]
 
     def test_no_shares_no_points(self):
         assert build_chart([{"timestamp": 1, "v": 5, "v_p2pool": 5, "v_xvb": 0, "t": "a"}], [], "all")["shares"] == []
@@ -368,6 +371,23 @@ class TestBadges:
         out = build_badges({}, _metrics(monero_mode="Unknown"), "ok")
         assert not any("XMR" in b["text"] for b in out)
 
+    def test_disk_badge_critical(self):
+        out = build_badges({"system": {"disk": {"percent": 96}}}, _metrics(), "ok")
+        assert any(b["variant"] == "bad" and "Disk 96% full" in b["text"] for b in out)
+
+    def test_disk_badge_warn(self):
+        out = build_badges({"system": {"disk": {"percent": 88}}}, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "Disk 88% full" in b["text"] for b in out)
+
+    def test_no_disk_badge_when_ample(self):
+        out = build_badges({"system": {"disk": {"percent": 50}}}, _metrics(), "ok")
+        assert not any("Disk" in b["text"] for b in out)
+
+    def test_no_disk_badge_when_missing(self):
+        # No system/disk data (e.g. an early poll) must not emit a spurious or crashing badge.
+        out = build_badges({}, _metrics(), "ok")
+        assert not any("Disk" in b["text"] for b in out)
+
 
 # --- System (presentation thresholds) -------------------------------------------------
 
@@ -563,6 +583,28 @@ class TestPoolNetwork:
         assert pn["monero"]["db_size"] == "—"
 
 
+# --- Host address beside the hostname (Issue #119) ------------------------------------
+
+class TestHostDisplayAddr:
+    def test_resolves_ip_for_a_hostname(self):
+        with patch.object(views, "detect_host_ipv4", return_value="192.168.1.42"):
+            assert host_display_addr("pithead.local") == "192.168.1.42"
+
+    def test_none_when_host_is_already_an_ip(self):
+        # Nothing to add beside a literal address — don't call detection at all.
+        with patch.object(views, "detect_host_ipv4") as detect:
+            assert host_display_addr("192.168.1.42") is None
+            detect.assert_not_called()
+
+    def test_none_when_ip_undetectable(self):
+        with patch.object(views, "detect_host_ipv4", return_value=None):
+            assert host_display_addr("pithead.local") is None
+
+    def test_none_when_detected_ip_equals_host(self):
+        with patch.object(views, "detect_host_ipv4", return_value="my-rig"):
+            assert host_display_addr("my-rig") is None
+
+
 # --- Earnings calculator (Issue #12) --------------------------------------------------
 
 class TestEarnings:
@@ -641,10 +683,10 @@ def _data(**over):
 class TestBuildState:
     def test_has_all_sections(self):
         st = build_state(_data(), _state_mgr(), "all")
-        for key in ("syncing", "page_title", "host_ip", "version", "last_update", "range", "window",
-                    "badges", "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
-                    "shares_window", "proxy_workers", "earnings", "tari", "workers",
-                    "proxy_summary", "chart"):
+        for key in ("syncing", "page_title", "host_ip", "host_addr", "version", "last_update",
+                    "range", "window", "badges", "hashrate", "system", "sync", "stratum", "pool",
+                    "network", "monero", "shares_window", "proxy_workers", "earnings", "tari",
+                    "workers", "proxy_summary", "chart"):
             assert key in st, f"missing section: {key}"
 
     def test_version_section_shape(self):

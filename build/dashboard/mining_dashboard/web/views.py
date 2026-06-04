@@ -15,8 +15,10 @@ import time
 import bisect
 import logging
 
-from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL
-from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs
+from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL, DISK_WARN_PERCENT, DISK_CRITICAL_PERCENT
+from mining_dashboard.helper.utils import (
+    format_hashrate, format_duration, format_time_abs, is_ip_address, detect_host_ipv4,
+)
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.earnings import xmr_per_hs_day
 from mining_dashboard.version import resolve_version
@@ -203,10 +205,17 @@ def _downsample_history(filtered_history, duration_s):
     return downsampled
 
 
+# Where the share markers ride on their own hidden 0–1 axis on the client: a constant near the
+# top, so they form a "rug" along the top edge instead of riding the hashrate line. Pinning them
+# off the hashrate axis keeps a single tall marker from inflating the y-range and burying a flat
+# line at the bottom of the card (Issue #145).
+_SHARE_MARKER_Y = 0.93
+
+
 def _share_points(filtered_history, filtered_shares):
     """Sparse share markers: bucket each share onto its nearest history sample and emit one
-    ``{x, y, r, c}`` point per sample that has shares (x = sample time ms, y = lifted above the
-    line, r = radius scaled by count, c = count)."""
+    ``{x, y, r, c}`` point per sample that has shares (x = sample time ms, y = the fixed top-of-
+    chart position on the client's dedicated share axis, r = radius scaled by count, c = count)."""
     if not (filtered_history and filtered_shares):
         return []
 
@@ -225,12 +234,11 @@ def _share_points(filtered_history, filtered_shares):
     points = []
     for idx in sorted(counts):
         count = counts[idx]
-        v = filtered_history[idx].get('v', 0)
-        # Lift the marker 10% above the line so it doesn't sit on the curve; floor to 100 for
-        # zero-hashrate samples so it stays visible.
+        # y is fixed (a fraction of the dedicated 0–1 share axis): the marker no longer tracks the
+        # hashrate, so it never stretches the y-range. Radius still scales with the share count.
         points.append({
             "x": int(hist_ts[idx] * 1000),
-            "y": v * 1.1 if v > 0 else 100,
+            "y": _SHARE_MARKER_Y,
             "r": min(6 + (count * 3), 15),
             "c": count,
         })
@@ -559,6 +567,17 @@ def build_badges(data, metrics, mode_variant):
     elif metrics.monero_mode == "Full":
         badges.append({"text": "XMR Full", "variant": "outline", "title": "Monero blockchain is full (not pruned)"})
 
+    # Low-disk badge (Issue #138). The data filesystem fills as the chains grow and logs accumulate;
+    # a full disk corrupts monerod's DB mid-write. The disk *bar* shows the percentage, but it's easy
+    # to miss — surface a prominent top-bar badge near full, on both the sync and main screens.
+    disk_percent = (data.get('system', {}).get('disk', {}) or {}).get('percent', 0) or 0
+    if disk_percent >= DISK_CRITICAL_PERCENT:
+        badges.append({"text": f"⚠ Disk {disk_percent:.0f}% full", "variant": "bad",
+                       "title": "The data disk is almost full — free space now; a full disk can corrupt the Monero database."})
+    elif disk_percent >= DISK_WARN_PERCENT:
+        badges.append({"text": f"Disk {disk_percent:.0f}% full", "variant": "warn",
+                       "title": "The data disk is filling up — free space or move a data_dir before it runs out."})
+
     return badges
 
 
@@ -613,6 +632,23 @@ def build_earnings(data, metrics):
 # Assembly.
 # --------------------------------------------------------------------------------------
 
+def host_display_addr(host):
+    """The numeric IP to show *beside* the configured host in the header, or ``None`` (Issue #119).
+
+    The configured ``dashboard.host`` is often a hostname that won't resolve from another machine
+    on the LAN (flaky mDNS/``.local``, no DNS entry), so we surface the host's primary IP next to
+    it as a fallback way in. Returns ``None`` — meaning "show the host alone" — when there's
+    nothing useful to add: the host is already an IP, the address can't be determined, or it just
+    duplicates the host.
+    """
+    if is_ip_address(host):
+        return None
+    addr = detect_host_ipv4()
+    if not addr or addr == host:
+        return None
+    return addr
+
+
 def build_state(data, state_mgr, range_arg, window=None):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
@@ -631,6 +667,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "syncing": metrics.global_syncing,
         "page_title": "Mining Dashboard - Syncing" if metrics.global_syncing else "Mining Dashboard",
         "host_ip": HOST_IP,
+        "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
         "last_update": format_time_abs(time.time()),
         "range": range_arg,

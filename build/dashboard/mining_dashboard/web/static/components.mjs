@@ -97,7 +97,7 @@ function Header({ state }) {
                         <${Badges} badges=${state.badges} />
                         <${VersionBadge} version=${state.version} />
                     </div>
-                    <div class="brand-host font-mono text-muted">${state.host_ip}</div>
+                    <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
                 </div>
             </div>
             <div class="text-small mt-2">

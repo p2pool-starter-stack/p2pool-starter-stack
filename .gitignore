@@ -7,6 +7,11 @@ config.json
 /build/tari/config.toml
 Caddyfile
 
+# Leftover worker-kit dir (tech debt). The worker/ kit was extracted to the RigForge repo (#71/#74);
+# a stale top-level worker/ can linger locally with miner runtime logs/state until that cutover is
+# finished. Ignore it so a stray `git add -A` can't pull those (sometimes huge) files into the repo.
+/worker/
+
 # Python
 __pycache__/
 *.pyc
