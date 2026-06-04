@@ -187,6 +187,16 @@ class TestStaticAssets:
             assert resp.status == 200, path
             assert ctype in resp.headers["Content-Type"], path
 
+    async def test_static_assets_revalidate(self, client):
+        # Cache-Control: no-cache makes the browser revalidate, so a rebuilt dashboard's new
+        # CSS/JS is picked up on the next load instead of a stale copy lingering (Issue #83).
+        resp = await client.get("/static/dashboard.css")
+        assert resp.headers.get("Cache-Control") == "no-cache"
+
+    async def test_shell_revalidates(self, client):
+        resp = await client.get("/")
+        assert resp.headers.get("Cache-Control") == "no-cache"
+
 
 class TestResponsiveLayout:
     """The mobile/responsive layout (Issue #83) is pure CSS + a markup wrapper, with no DOM
