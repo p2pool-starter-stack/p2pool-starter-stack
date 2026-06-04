@@ -18,6 +18,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   dashboard when the hostname doesn't resolve from your phone or another machine on the LAN. The
   address is detected on the host (the dashboard runs `network_mode: host`), and is omitted when
   the host is already an IP or can't be determined (#119).
+- **P2Pool Earnings (estimated) card** on the dashboard's Advanced view: expected XMR
+  per day / month / year from **P2Pool mining only**, computed from your P2Pool hashrate
+  and the live Monero block reward + network difficulty, plus an expected time-to-share.
+  Explicitly scoped to P2Pool — XvB donations are excluded (the what-if hashrate defaults
+  to your P2Pool 1h average, the same figure shown in the header / Overview, which already
+  excludes any XvB-donated slice, so an active XvB split doesn't inflate the estimate and
+  the number stays consistent with the rest of the dashboard) and Tari merge-mining is
+  excluded. Includes a what-if hashrate input and a clear "estimates, not guarantees"
+  disclaimer. Tari (#117) and the XvB tier estimate (#118) are deferred (#12).
 - Dashboard header now shows which build is running, as a muted badge on both the
   syncing and main screens: a clean release shows `vX.Y.Z` (from the top-level
   `VERSION` file), while any dev/working-tree build shows `dev · branch @ hash` so
