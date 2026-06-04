@@ -16,7 +16,7 @@ the full list.
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
-| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, and the Tor onion keys to a timestamped `tar.gz` under `backups/` (checks free space first). `--with-chains` also includes the blockchain data; `--force` skips the space check. |
+| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, and the Tor onion keys to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--force` skips the space check; `-y` / `--yes` skips the stop-the-stack prompt. |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. |
 | `./pithead help` | Show all commands. |
@@ -98,6 +98,9 @@ That's it. This saves the things you can't get back — your `config.json`, your
 It's quick and small because your blockchains are **not** included (they just re-sync). The
 archive is locked down to `chmod 600`, and `pithead` prints its path when it's done. Before it
 writes anything, it does a quick free-space check so a backup can't fill your disk.
+
+If the stack is running, `backup` offers to briefly stop it for a clean copy and start it again
+when it's done (pass `-y` to skip the prompt).
 
 **Optional extras** (you usually don't need these):
 

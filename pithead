@@ -419,17 +419,42 @@ reset_dashboard() {
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
 stack_backup() {
-    local with_chains=0 force=0
+    local with_chains=0 force=0 assume_yes=0 was_running=0
     for arg in "$@"; do
         case "$arg" in
             --with-chains) with_chains=1 ;;
             --force|-f) force=1 ;;
+            -y|--yes) assume_yes=1 ;;
             *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
         esac
     done
 
     require_env
     parse_and_validate_config
+
+    # A consistent backup needs the services stopped — otherwise files (especially the blockchain
+    # DBs under --with-chains) can be archived mid-write. Detect a running stack and offer to stop
+    # it for the duration of the backup, restarting afterwards. The docker check is best-effort:
+    # if docker (or its daemon) is unavailable we treat the stack as not running and continue.
+    local running=""
+    if command -v docker >/dev/null 2>&1; then
+        running=$(docker compose ps --status running -q 2>/dev/null)
+    fi
+    if [ -n "$running" ]; then
+        log "A consistent backup needs the services stopped, so the archive isn't captured mid-write."
+        log "The stack will be stopped during the backup and started again afterwards."
+        if [ "$assume_yes" -eq 1 ]; then
+            log "Stopping the stack for the backup (--yes)..."
+        else
+            read -r -p "Stop the stack, back up, then start it again? (y/N): " CONFIRM || true
+            if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+                log "Backup cancelled — nothing was changed. Stop the stack first ($0 down) or re-run and choose to stop."
+                return
+            fi
+        fi
+        was_running=1
+        stack_down
+    fi
 
     local backups_dir="$PWD/backups"
     mkdir -p "$backups_dir"
@@ -491,6 +516,11 @@ stack_backup() {
     log "Backup written to: $archive"
     if [ "$with_chains" -eq 0 ]; then
         log "Blockchains excluded (they re-sync). Use 'backup --with-chains' to include them."
+    fi
+
+    if [ "$was_running" -eq 1 ]; then
+        stack_up
+        log "Stack restarted after the backup."
     fi
 }
 
@@ -570,12 +600,15 @@ Inspection:
 
 Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
-  backup [--with-chains] [--force]
+  backup [--with-chains] [--force] [-y|--yes]
                             Write a timestamped, chmod-600 tar.gz under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, and the Tor data
                             dir (onion keys). Blockchains are excluded unless --with-chains.
+                            If the stack is running, backup stops it for a consistent copy and
+                            starts it again when it's done.
                               --with-chains    also include the blockchain data (large).
                               --force, -f      skip the free-space pre-check.
+                              -y, --yes        skip the stop-the-stack prompt.
   restore [-y|--yes] <archive>
                             Restore config.json, .env, Caddyfile, and the Tor data dir from a
                             backup archive (prompts before overwriting; fixes Tor ownership).
