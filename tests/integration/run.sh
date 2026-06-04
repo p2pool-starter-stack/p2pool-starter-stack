@@ -230,39 +230,10 @@ record_manifest() {
 }
 
 # --- Scenario execution -----------------------------------------------------
-# Decide whether a scenario can run on this box, augmenting its overrides where needed (an
-# alt data dir for the prune axis, a remote endpoint for remote mode). On success sets
-# RESOLVED to the final override string and returns 0; on a missing prerequisite sets
-# SKIP_REASON and returns 1. No silent drops, and never mutates the canonical chain.
-RESOLVED=""
-SKIP_REASON=""
-resolve_overrides() {
-    local overrides="$1" prune mode out="$1"
-    RESOLVED=""; SKIP_REASON=""
-
-    prune="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.prune=//p')"
-    mode="$(printf '%s' "$overrides"  | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
-
-    # Prune axis: only flip away from the baseline DB if a matching synced dir is provided —
-    # flipping prune on the canonical dir would invalidate it (a DEST change).
-    if [ "$prune" = "true" ] && [ "$BASELINE_PRUNE" = "0" ]; then
-        [ -n "$PRUNED_DATA_DIR" ] || { SKIP_REASON="needs --pruned-data-dir (box baseline is full)"; return 1; }
-        out="$out monero.data_dir=$PRUNED_DATA_DIR"
-    fi
-    if [ "$prune" = "false" ] && [ "$BASELINE_PRUNE" = "1" ]; then
-        [ -n "$FULL_DATA_DIR" ] || { SKIP_REASON="needs --full-data-dir (box baseline is pruned)"; return 1; }
-        out="$out monero.data_dir=$FULL_DATA_DIR"
-    fi
-
-    # Remote mode needs an external endpoint to point at.
-    if [ "$mode" = "remote" ]; then
-        [ -n "$REMOTE_MONERO_HOST" ] || { SKIP_REASON="needs --remote-monero-host"; return 1; }
-        out="$out monero.remote.host=$REMOTE_MONERO_HOST"
-    fi
-
-    RESOLVED="$out"
-    return 0
-}
+# resolve_overrides (the prerequisite gate that decides whether a scenario can run on this box,
+# and never mutates the canonical chain) lives in lib.sh so the self-test can exercise it. It
+# reads BASELINE_PRUNE / PRUNED_DATA_DIR / FULL_DATA_DIR / REMOTE_MONERO_HOST and sets the
+# globals RESOLVED / SKIP_REASON.
 
 run_scenario() {
     local name="$1" overrides="$2"

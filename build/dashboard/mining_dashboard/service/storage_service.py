@@ -63,6 +63,11 @@ class StateManager:
                 with self._conn:
                     self._create_tables()
                     self._migrate_db()
+                    # Indexes come AFTER migration: idx_ts is on history(timestamp), a column
+                    # _migrate_db adds when upgrading a pre-timestamp DB. Creating it in
+                    # _create_tables would throw "no such column: timestamp" on that old schema
+                    # and abort the whole migration, leaving the DB half-upgraded.
+                    self._create_indexes()
         except sqlite3.Error as e:
             self.logger.error(f"DB Init Error: {e}")
 
@@ -72,6 +77,10 @@ class StateManager:
         self._conn.execute("CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)")
+
+    def _create_indexes(self):
+        """Creates indexes. Called after migrations so the indexed columns are guaranteed to
+        exist even on a database created by an older schema version."""
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON history(timestamp)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_ts ON shares(ts)")
 

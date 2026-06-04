@@ -18,6 +18,7 @@ deeper on individual topics once you're up and running.
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
 | [Testing Strategy](testing-strategy.md) | The four test tiers (unit → contract → fake-daemon mini-stack → live matrix), the full scenario catalog, and which tier proves each situation. |
+| [Testing Guide](testing-guide.md) | For developers: how to write and run tests, per-change recipes, conventions, and real-hardware gotchas. |
 | [Test Inventory](test-inventory.md) | Generated, exhaustive list of every test/scenario across all suites — the inventory of what's covered. |
 | [Integration Testing](integration-testing.md) | The end-to-end config-matrix suite that validates the stack against real Monero + Tari nodes — the blocking pre-release gate. |
 | [Releasing](releasing.md) | How Pithead is versioned and released — one product, one version, the `VERSION` source of truth, and the GHCR stage→promote pipeline. |

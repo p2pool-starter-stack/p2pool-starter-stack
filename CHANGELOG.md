@@ -45,6 +45,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 - Dashboard pruned/full label (#32) always showed **Full** on local nodes: the dashboard parsed
   `MONERO_PRUNE` with `== "true"`, but pithead writes it as `1`/`0`, so a pruned node read as
   Full. Now accepts `1`/`true`/`yes`/`on`. Found by the live integration harness on a real box.
+- Dashboard DB upgrade path: opening a database created by an early (pre-`timestamp`) schema
+  threw `no such column: timestamp` and aborted the migration, leaving the DB half-upgraded —
+  `_create_tables` built the `idx_ts` index on a column `_migrate_db` hadn't added yet. Indexes
+  are now created after migrations. Found by a new schema-migration intent test.
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy
