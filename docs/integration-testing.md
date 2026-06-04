@@ -97,6 +97,9 @@ A one-time setup. Target the Ubuntu LTS releases we support (22.04 / 24.04).
 ## Running it
 
 ```bash
+# Non-destructive health check first (recommended): no config changes, no apply
+tests/integration/run.sh --host miner@10.0.0.5 --dir pithead --check
+
 # Whole matrix over SSH
 make test-integration ARGS="--host miner@10.0.0.5 --dir pithead"
 
@@ -121,6 +124,7 @@ Useful flags (full list in `run.sh --help`):
 | `--host <user@host>` / `--local` | Drive the box over SSH, or a stack on this machine. |
 | `--dir <path>` | The Pithead stack directory **on the box** — relative to the SSH login dir or absolute (default `pithead`). Avoid a literal `~`; your local shell expands it before the box sees it. |
 | `--pithead <cmd>` | How to invoke pithead there (e.g. `"sudo ./pithead"`). |
+| `--check` | **Non-destructive**: assert the box's current live state only — no config change, no apply, no restore. The safe first run / ongoing health check. |
 | `--scenario <name>` | Run just one scenario. |
 | `--workers <n>` | Miners expected online while mining (default `2`). |
 | `--remote-monero-host <h>` | External node endpoint for the `remote` scenario. |

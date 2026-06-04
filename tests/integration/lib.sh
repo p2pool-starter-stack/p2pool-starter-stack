@@ -159,6 +159,19 @@ svc_health_of() { printf '%s' "${1##* }"; }
 # wrongly swallow it because false is falsy in jq).
 jq_get() { printf '%s' "$1" | jq -r "($2)? | values" 2>/dev/null; }
 
+# Authoritative "is Monero caught up?" — query monerod's own get_info on the box (creds stay
+# on the box) and trust its `synchronized` flag / target_height 0, exactly like the sync gate.
+# We do NOT use the dashboard's `.sync.monero.state`: a synced LOCAL node has no target height,
+# so that field reads "loading", not "done" (a real-hardware gotcha). Returns 0 when synced.
+monero_caught_up() {
+    rx 'u=$(grep -E "^MONERO_NODE_USERNAME=" .env 2>/dev/null | cut -d= -f2-);
+        p=$(grep -E "^MONERO_NODE_PASSWORD=" .env 2>/dev/null | cut -d= -f2-);
+        url=$(grep -E "^MONERO_RPC_URL=" .env 2>/dev/null | cut -d= -f2-); [ -n "$url" ] || url="http://127.0.0.1:18081";
+        if [ -n "$u" ]; then body=$(curl -fsS --max-time 8 --digest -u "$u:$p" "$url/get_info" 2>/dev/null);
+        else body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null); fi;
+        printf "%s" "$body" | jq -e "(.status==\"OK\") and ((.synchronized==true) or (.target_height==0))" >/dev/null 2>&1'
+}
+
 # --- Readiness waiters ------------------------------------------------------
 # Poll a predicate until it succeeds or the timeout elapses. The interval is a *poll* cadence
 # against a real readiness signal — not a fixed "sleep and hope" (issue #54). Returns 0 on
@@ -182,18 +195,15 @@ wait_for() {  # wait_for <timeout_s> <interval_s> <desc> <predicate-cmd...>
 # Predicate: pithead status exits 0 (all expected services healthy / intentional-stops aside).
 _pred_status_ok() { pithead status >/dev/null 2>&1; }
 
-# Predicate: the dashboard reports Monero done syncing.
-_pred_monero_synced() {
-    local st; st="$(api_state)"; [ -n "$st" ] || return 1
-    [ "$(jq_get "$st" '.sync.monero.state')" = "done" ]
-}
+# Predicate: monerod itself reports caught up (authoritative; see monero_caught_up).
+_pred_monero_synced() { monero_caught_up; }
 
-# Predicate: the sync gate has released the miner (xmrig-proxy + p2pool actually running).
+# Predicate: the sync gate has released the miner — at least one worker is online on the proxy.
+# (proxy_workers is the reliable signal; stratum.conns can read 0 on a healthy, mining box.)
 _pred_miner_running() {
     local st; st="$(api_state)"; [ -n "$st" ] || return 1
-    # proxy_workers tracks online workers; >0 means xmrig-proxy is up and accepting miners.
-    local conns; conns="$(jq_get "$st" '.stratum.conns')"
-    [ -n "$conns" ] && [ "$conns" -ge 1 ] 2>/dev/null
+    local w; w="$(jq_get "$st" '.proxy_workers')"
+    [ -n "$w" ] && [ "$w" -ge 1 ] 2>/dev/null
 }
 
 wait_status_ok()     { wait_for "${1:-180}" 5 "pithead status OK"     _pred_status_ok; }

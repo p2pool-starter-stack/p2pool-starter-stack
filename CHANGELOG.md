@@ -31,7 +31,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     interaction, and simultaneous double outages.
   - A generated **test inventory** (`docs/test-inventory.md`, `make test-inventory`) listing
     every test/scenario across all suites, kept honest by a CI drift check.
+  - A non-destructive **`--check`** mode for the live harness (assert the box's current state —
+    no config change/apply/restore); the safe first run / ongoing health check. Validated with
+    a 22/22 green run against a real synced, mining box, which calibrated the harness to trust
+    monerod's own sync flag (a synced local node's dashboard sync panel reads "loading") and
+    `proxy_workers` for mining liveness (`stratum.conns` can read 0 while mining).
   - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
+
+### Fixed
+
+- Dashboard pruned/full label (#32) always showed **Full** on local nodes: the dashboard parsed
+  `MONERO_PRUNE` with `== "true"`, but pithead writes it as `1`/`0`, so a pruned node read as
+  Full. Now accepts `1`/`true`/`yes`/`on`. Found by the live integration harness on a real box.
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy

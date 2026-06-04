@@ -172,9 +172,11 @@ fast with artifacts.
 
 These are deliberately **not** yet covered and are the road to full production confidence:
 
-- **First green run on real hardware.** The live matrix (tier 4) and the docker mini-stack
-  (tier 3) are built and validated structurally; their first end-to-end runs happen on the test
-  box / CI. Treat them as "pending first green" until then.
+- **First green run on real hardware.** ✅ The live harness has had its first green run against
+  a real synced + mining box (`run.sh --check`, 22/22) — which calibrated three over-strict
+  assertions and surfaced a real dashboard bug (the pruned/full label, now fixed). The full
+  *destructive* matrix and the docker mini-stack are still pending their first green end-to-end
+  run (the matrix on the box, the mini-stack in CI).
 - **CLI breadth in automation.** `backup`/`restore`, `reset-dashboard`, and `upgrade` are
   documented and partly unit-covered, but not yet asserted end-to-end in the integration tiers.
 - **Soak / longevity.** No multi-hour run asserting no leaks, no log/DB growth runaway, and that
