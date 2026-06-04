@@ -73,6 +73,32 @@ run_sourced "$SANDBOX" is_ipv4 "192.168.1.0/24" >/dev/null 2>&1; assert_rc "reje
 run_sourced "$SANDBOX" is_ipv4 "example.com"  >/dev/null 2>&1; assert_rc "rejects hostname"    "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 ""             >/dev/null 2>&1; assert_rc "rejects empty"       "$?" "1"
 
+echo "== unit: docker_boot_enabled (#137) =="
+# A systemctl stub on PATH; FAKE_BOOT picks which unit reports "enabled". Docker counts as
+# boot-enabled if EITHER docker.service or docker.socket is enabled.
+BOOT="$SANDBOX/boot"; mkdir -p "$BOOT/bin"
+cat > "$BOOT/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "is-enabled docker.service") [ "${FAKE_BOOT:-}" = "service" ] && exit 0 || exit 1 ;;
+  "is-enabled docker.socket")  [ "${FAKE_BOOT:-}" = "socket"  ] && exit 0 || exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$BOOT/bin/systemctl"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=service run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "docker.service enabled -> 0" "$?" "0"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=socket  run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "docker.socket enabled -> 0"  "$?" "0"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=none    run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "neither enabled -> 1"        "$?" "1"
+
+echo "== unit: is_valid_host (#130) =="
+run_sourced "$SANDBOX" is_valid_host "box.lan"       >/dev/null 2>&1; assert_rc "accepts hostname"      "$?" "0"
+run_sourced "$SANDBOX" is_valid_host "192.168.1.10"  >/dev/null 2>&1; assert_rc "accepts IPv4"          "$?" "0"
+run_sourced "$SANDBOX" is_valid_host "fe80::1"       >/dev/null 2>&1; assert_rc "accepts IPv6"          "$?" "0"
+run_sourced "$SANDBOX" is_valid_host "bad host"      >/dev/null 2>&1; assert_rc "rejects space"         "$?" "1"
+run_sourced "$SANDBOX" is_valid_host 'evil{block}'   >/dev/null 2>&1; assert_rc "rejects braces"        "$?" "1"
+run_sourced "$SANDBOX" is_valid_host "a/b"           >/dev/null 2>&1; assert_rc "rejects slash"         "$?" "1"
+run_sourced "$SANDBOX" is_valid_host ""              >/dev/null 2>&1; assert_rc "rejects empty"         "$?" "1"
+
 echo "== unit: describe_change =="
 assert_contains "prune is DEST"      "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)"        "DEST"
 assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
@@ -225,6 +251,13 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
 assert_rc "invalid stratum_bind rejected" "$rc" "1"
 assert_contains "invalid stratum_bind message" "$out" "p2pool.stratum_bind"
 
+# A dashboard.host with Caddyfile-breaking characters (space/braces) must be rejected before render.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"bad host{x}"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "invalid dashboard.host rejected" "$rc" "1"
+assert_contains "invalid dashboard.host message" "$out" "dashboard.host"
+
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
@@ -373,6 +406,59 @@ printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=\nHOST_IP=box.lan\n' > "$ST/
 REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
 out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"; rc=$?
 assert_rc "status: remote mode ignores monerod" "$rc" "0"
+
+echo "== black-box: doctor exit code (#127) =="
+# doctor must EXIT NON-ZERO when a critical check fails, so it's usable as a cron/CI health gate
+# (it previously always returned 0). Drive one failure via an unreachable Docker daemon; jq/openssl
+# stay real on PATH so only the daemon check fails.
+DOC="$SANDBOX/doctor"; mkdir -p "$DOC/bin"; cp "$STACK" "$DOC/pithead"
+cat > "$DOC/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "info") exit 1 ;;   # daemon unreachable -> doctor records a critical FAIL
+  *)      exit 0 ;;   # `--version`, `compose version`, etc. succeed
+esac
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DOC/bin/sudo"
+chmod +x "$DOC/bin/docker" "$DOC/bin/sudo"
+out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"; rc=$?
+assert_contains "doctor runs to the summary"          "$out" "Diagnostics summary"
+assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
+assert_rc       "doctor exits 1 on a critical FAIL"   "$rc" "1"
+
+echo "== black-box: reset-dashboard targets .env dirs, not config.json (#139) =="
+# reset-dashboard must wipe the LIVE deployment's data dirs (from .env), not a path the user may
+# have edited into config.json without applying. docker = noop; sudo only LOGS (never executes the
+# rm), so we can assert what it would have targeted without deleting anything.
+R="$SANDBOX/reset"; mkdir -p "$R/bin" "$R/envdir/dashboard" "$R/envdir/p2pool"; cp "$STACK" "$R/pithead"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$R/bin/docker"
+cat > "$R/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+echo "[sudo] $*" >> "${SUDO_LOG:-/dev/null}"
+exit 0
+EOF
+chmod +x "$R/bin/docker" "$R/bin/sudo"
+cat > "$R/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+HOST_IP=box.lan
+DASHBOARD_DATA_DIR=$R/envdir/dashboard
+P2POOL_DATA_DIR=$R/envdir/p2pool
+EOF
+# config.json points the data dirs somewhere ELSE (a path the running stack never used).
+printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"data_dir":"%s/CONFIGONLY/p2pool"}, "dashboard":{"data_dir":"%s/CONFIGONLY/dashboard"} }\n' "$WALLET" "$R" "$R" > "$R/config.json"
+SUDO_LOG="$R/sudo.log"; : > "$SUDO_LOG"
+out="$(cd "$R" && SUDO_LOG="$SUDO_LOG" PATH="$R/bin:$PATH" ./pithead reset-dashboard -y 2>&1)"; rc=$?
+assert_rc "reset-dashboard succeeds" "$rc" "0"
+sudo_calls="$(cat "$SUDO_LOG")"
+assert_contains "reset rm targets the .env dashboard dir" "$sudo_calls" "rm -rf $R/envdir/dashboard"
+case "$sudo_calls" in *CONFIGONLY*) bad "reset must ignore the config-only data_dir" "$sudo_calls" ;; *) ok "reset ignores the config-only data_dir" ;; esac
+
+echo "== black-box: reset-dashboard refuses to guess without .env dirs (#139) =="
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' > "$R/.env"
+out="$(cd "$R" && SUDO_LOG=/dev/null PATH="$R/bin:$PATH" ./pithead reset-dashboard -y 2>&1)"; rc=$?
+assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
+assert_contains "reset refuse message" "$out" "refusing to guess"
 
 # ---------------------------------------------------------------------------
 echo ""
