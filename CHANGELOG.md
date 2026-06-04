@@ -17,10 +17,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   per day / month / year from **P2Pool mining only**, computed from your P2Pool hashrate
   and the live Monero block reward + network difficulty, plus an expected time-to-share.
   Explicitly scoped to P2Pool — XvB donations are excluded (the what-if hashrate defaults
-  to your P2Pool hashrate, i.e. total minus any XvB-donated slice, so an active XvB split
-  doesn't inflate the estimate) and Tari merge-mining is excluded. Includes a what-if
-  hashrate input and a clear "estimates, not guarantees" disclaimer. Tari (#117) and the
-  XvB tier estimate (#118) are deferred (#12).
+  to your P2Pool 1h average, the same figure shown in the header / Overview, which already
+  excludes any XvB-donated slice, so an active XvB split doesn't inflate the estimate and
+  the number stays consistent with the rest of the dashboard) and Tari merge-mining is
+  excluded. Includes a what-if hashrate input and a clear "estimates, not guarantees"
+  disclaimer. Tari (#117) and the XvB tier estimate (#118) are deferred (#12).
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy

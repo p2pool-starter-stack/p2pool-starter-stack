@@ -156,16 +156,18 @@ only**, turning your P2Pool hashrate and the live Monero network figures into a 
 estimate. It is deliberately scoped to P2Pool — it is **not** an XvB or a Tari calculator:
 
 - **XvB donations are excluded.** Hashrate you route to XvB earns no P2Pool payout, so it isn't
-  counted. If you're running an **XvB split**, the calculator defaults to your *P2Pool* hashrate
-  (your total minus the slice currently donated to XvB), not your full rig output — so the figure
-  is your real P2Pool earnings, not an inflated one. (Donating everything to XvB leaves 0 P2Pool
-  hashrate, so the estimate is 0 until you enter a what-if value.)
+  counted. The default is your **P2Pool 1h-average hashrate** — the *same* `P2Pool (1h)` figure
+  shown in the header and the Overview / My Node cards — which already excludes any XvB-donated
+  slice. So if you're running an **XvB split**, the estimate reflects your real P2Pool earnings,
+  not an inflated total, and it stays consistent with the hashrate shown elsewhere on the page.
+  (When that average is 0 — a fresh start with no history yet, or donating everything to XvB —
+  the estimate is 0 until you enter a what-if value.)
 - **Tari merge-mining is excluded.** Tari is earned alongside Monero but is a separate payout
   (its own calculator is planned).
 
 | Field | Meaning |
 |---|---|
-| **P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your live **P2Pool** hashrate (excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
+| **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
 | **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty` — the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
 | **XMR Block Reward** | The current Monero block reward, for context. |

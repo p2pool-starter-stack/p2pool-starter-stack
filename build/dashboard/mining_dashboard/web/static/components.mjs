@@ -284,8 +284,8 @@ function NetworkCard({ state }) {
 // layer that estimates XMR from *P2Pool mining only* — explicitly not XvB or Tari. The server
 // sends the daily XMR rate per H/s; this card scales it to a what-if hashrate. Stateful because
 // the what-if input is local UI: `input` is null until the user edits it, so the field tracks the
-// live P2Pool hashrate (total minus the XvB-donated slice) until they take control, then holds
-// their raw text.
+// live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header / Overview show, which
+// already excludes the XvB-donated slice) until they take control, then holds their raw text.
 class EarningsCard extends Component {
     constructor(props) {
         super(props);
@@ -304,8 +304,8 @@ class EarningsCard extends Component {
         }
         const { input } = this.state;
         const useDefault = input === null;
-        // Default to the live P2Pool hashrate (excludes the XvB-donated slice); once edited, use
-        // the parsed what-if value.
+        // Default to your P2Pool 1h-average hashrate (the figure shown in the header / Overview,
+        // already excluding the XvB-donated slice); once edited, use the parsed what-if value.
         const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
         const est = computeEarnings(hr, e);
         return html`
@@ -313,7 +313,7 @@ class EarningsCard extends Component {
             <h3>P2Pool Earnings (estimated)</h3>
             <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining only — excludes XvB donations and Tari merge-mining.</p>
             <div class="earnings-input">
-                <label for="whatif-hr">P2Pool Hashrate</label>
+                <label for="whatif-hr">Your P2Pool Hashrate</label>
                 <input id="whatif-hr" type="text" inputmode="decimal" spellcheck="false"
                        autocomplete="off" value=${useDefault ? e.p2pool_hr_str : input}
                        onInput=${this.onInput} />

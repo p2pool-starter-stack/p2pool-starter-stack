@@ -576,9 +576,11 @@ def build_earnings(data, metrics):
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
     This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
-    actually mining on your P2Pool node — *not* the rig's total output. When XvB split is active
-    the donated slice earns no P2Pool payout, so the what-if default is the P2Pool-effective
-    hashrate (total minus what's currently routed to XvB), and in full-XVB mode it is ~0. Tari
+    actually mining on your P2Pool node — *not* the rig's total output. The what-if default is
+    ``p2pool_1h`` — the **same P2Pool 1h-average hashrate shown in the header / Overview / My Node
+    cards** (a time-weighted average of the recorded P2Pool hashrate), so the figure here matches
+    those exactly. That recorded average already excludes any XvB-donated slice (XvB hashrate is a
+    separate series), which is why an active XvB split doesn't inflate the estimate. Tari
     merge-mining earnings are a separate thing entirely (deferred, #117).
 
     Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus that
@@ -591,10 +593,10 @@ def build_earnings(data, metrics):
     then shows ``—`` instead of a bogus estimate (graceful degradation)."""
     reward_atomic = (data.get('network', {}) or {}).get('reward', 0) or 0
     coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
-    # The P2Pool-earning hashrate: total minus the slice currently routed to XvB. In pure-P2Pool
-    # mode xvb_routed is 0 (so this is the full hashrate); during an XvB split it's only the
-    # P2Pool portion — the honest basis for a "P2Pool earnings" estimate.
-    p2pool_hr = max(0.0, metrics.total_h15 - metrics.xvb_routed)
+    # Reuse the displayed P2Pool 1h average (header / Overview / My Node) so the calculator's
+    # hashrate is consistent with the rest of the dashboard — and because that recorded average
+    # already excludes the XvB-donated portion, it's the honest basis for a P2Pool estimate.
+    p2pool_hr = metrics.p2pool_1h
     return {
         "available": coeff_day > 0,
         "p2pool_hr": p2pool_hr,                             # raw H/s — the what-if default

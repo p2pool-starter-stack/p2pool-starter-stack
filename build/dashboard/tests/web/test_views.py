@@ -571,7 +571,7 @@ class TestEarnings:
     def test_publishes_rate_and_inputs(self):
         # The server sends the daily XMR-per-H/s *rate* + the raw inputs the client scales/inverts
         # (the P2Pool hashrate, P2Pool share difficulty) — not pre-formatted earnings.
-        e = build_earnings(self._NET, _metrics(total_h15=10500, xvb_routed=0,
+        e = build_earnings(self._NET, _metrics(p2pool_1h=10500,
                                                network_difficulty=400_000_000_000,
                                                pool_difficulty=250_000_000))
         assert e["available"] is True
@@ -584,16 +584,19 @@ class TestEarnings:
         # Rate matches reward_xmr / difficulty * 86400.
         assert e["coeff_day"] == pytest.approx(0.6 / 400_000_000_000 * 86_400)
 
-    def test_default_hashrate_excludes_xvb_donation(self):
-        # The whole point of a *P2Pool* calculator: during an XvB split the donated slice earns no
-        # P2Pool payout, so the default is the P2Pool-effective hashrate (total minus routed), not
-        # the rig's total output — otherwise the estimate would overstate P2Pool earnings.
-        e = build_earnings(self._NET, _metrics(total_h15=46_300, xvb_routed=10_000))
-        assert e["p2pool_hr"] == 36_300
+    def test_default_hashrate_is_the_displayed_p2pool_1h(self):
+        # Consistency: the calculator's default must be the *same* P2Pool 1h average shown in the
+        # header / Overview (metrics.p2pool_1h) — not the total, and not a bespoke total-minus-routed
+        # figure. That recorded average already excludes the XvB-donated slice, so the value here
+        # (and its display string) matches build_hashrate's "p2p_1h" exactly.
+        m = _metrics(total_h15=46_300, xvb_routed=10_000, p2pool_1h=35_000)
+        e = build_earnings(self._NET, m)
+        assert e["p2pool_hr"] == 35_000                       # p2pool_1h, independent of total/routed
+        assert e["p2pool_hr_str"] == _hashrate(m)["p2p_1h"]   # identical display string to the header
 
-    def test_full_xvb_donation_leaves_no_p2pool_hashrate(self):
-        # Routing everything to XvB -> 0 P2Pool hashrate -> client shows 0 / "—" (honest, not a bug).
-        e = build_earnings(self._NET, _metrics(total_h15=46_300, xvb_routed=46_300))
+    def test_no_p2pool_hashrate_when_average_is_zero(self):
+        # E.g. fresh start (no history) or full-XvB: p2pool_1h is 0 -> client shows 0 / "—" (honest).
+        e = build_earnings(self._NET, _metrics(p2pool_1h=0))
         assert e["p2pool_hr"] == 0.0
 
     def test_unavailable_when_network_reward_missing(self):
@@ -611,7 +614,7 @@ class TestEarnings:
     def test_p2pool_hr_passthrough_is_raw(self):
         # The what-if default must be the exact P2Pool H/s (not the rounded display string), so
         # the client's default estimate isn't skewed by display rounding.
-        e = build_earnings(self._NET, _metrics(total_h15=10543.7, xvb_routed=0))
+        e = build_earnings(self._NET, _metrics(p2pool_1h=10543.7))
         assert e["p2pool_hr"] == 10543.7
 
 
