@@ -17,6 +17,7 @@ deeper on individual topics once you're up and running.
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
+| [Releasing](releasing.md) | How Pithead is versioned and released — one product, one version, the `VERSION` source of truth, and the GHCR stage→promote pipeline. |
 | [FAQ](faq.md) | Common questions, plus why Pithead vs. doing it yourself or Gupax. |
 
 ## Quick links
