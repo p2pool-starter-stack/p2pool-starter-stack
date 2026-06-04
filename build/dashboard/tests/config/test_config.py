@@ -39,6 +39,12 @@ class TestConfig:
             with patch.dict(os.environ, {"MONERO_PRUNE": v}):
                 assert _reload_config().MONERO_PRUNE is False, f"{v!r} should be full"
 
+    def test_update_interval_tolerates_bad_values(self):
+        # A malformed override must fall back to the default, not crash the dashboard at import.
+        for v, expected in [("2", 2), ("2.5", 2), ("", 30), ("nonsense", 30)]:
+            with patch.dict(os.environ, {"UPDATE_INTERVAL": v}):
+                assert _reload_config().UPDATE_INTERVAL == expected, f"{v!r} -> {expected}"
+
     def test_tier_config_env_override_valid(self):
         custom = {"donor_ultra": 5_000_000, "donor_basic": 500}
         # deploy injects the JSON wrapped in single quotes

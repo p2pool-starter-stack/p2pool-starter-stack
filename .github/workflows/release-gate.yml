@@ -42,10 +42,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate against the real synced nodes
+        # Inputs go through env (not interpolated into the script) to avoid shell injection.
+        env:
+          STACK_DIR_INPUT: ${{ github.event.inputs.stack_dir }}
+          MODE_INPUT: ${{ github.event.inputs.mode }}
         run: |
           set -euo pipefail
-          DIR="${{ github.event.inputs.stack_dir }}"; DIR="${DIR:-$HOME/code/pithead}"
-          MODE="${{ github.event.inputs.mode }}";     MODE="${MODE:-check}"
+          DIR="${STACK_DIR_INPUT:-$HOME/code/pithead}"
+          MODE="${MODE_INPUT:-check}"
           echo "Release gate: stack dir=$DIR, mode=$MODE"
 
           # Always assess fitness + the non-destructive live state first.

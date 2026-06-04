@@ -107,8 +107,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   the stack's images, network and volumes are prefixed `pithead*` regardless of the checkout
   directory — instead of inheriting the directory's name (which left older checkouts named after
   the repo's previous name). `pithead up`/`apply`/`upgrade` detect a stack still running under
-  the old, directory-derived project name and migrate it automatically (the old-named containers
-  are removed so the renamed project can take over; bind-mounted chain data is untouched).
+  the old, directory-derived project name and migrate it automatically (only that project's
+  containers are removed so the renamed project can take over — bind-mounted chain data and the
+  Tor onion keys are untouched). One-time after the rename, Caddy re-issues its local TLS cert
+  under the new project, so re-trust the dashboard cert if you'd installed the old one.
 - Hardened the leaf containers (caddy, xmrig-proxy, dashboard, docker-proxy, docker-control)
   with `no-new-privileges`. All except the dashboard also `cap_drop: [ALL]` (caddy keeps
   `NET_BIND_SERVICE` for `:80`/`:443`); the dashboard keeps its default capabilities because it
