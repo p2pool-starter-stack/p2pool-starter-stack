@@ -106,6 +106,11 @@ Both chains **keep growing**, so leave headroom — the *recommended* sizes abov
 600 GB full) exist for exactly that. Pruning (the default) keeps a fully validating Monero node at a
 fraction of the size and is the right choice for almost everyone.
 
+> **`setup` pre-flights these.** Before committing to a sync, `./pithead setup` checks free disk and
+> total RAM against the minimums on this page (~150 GB pruned / ~300 GB full disk, 16 GB RAM) and
+> **warns** if the host falls short — it never blocks. `./pithead doctor` re-runs the same disk and
+> RAM checks on demand, so you can re-verify a host at any time.
+
 You can put any service's data on a dedicated disk by pointing its `*.data_dir` at an absolute path
 — e.g. to keep the Monero blockchain on a separate SSD. See
 [Configuration › Data directories](configuration.md#data-directories).
