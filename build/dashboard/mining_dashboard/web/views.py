@@ -18,6 +18,7 @@ import logging
 from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL
 from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs
 from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.service.earnings import xmr_per_hs_day
 
 logger = logging.getLogger("WebViews")
 
@@ -505,6 +506,41 @@ def build_badges(data, metrics, mode_variant):
 
 
 # --------------------------------------------------------------------------------------
+# Earnings calculator (Issue #12): expected-XMR inputs for the Advanced view.
+# --------------------------------------------------------------------------------------
+
+_EARNINGS_DISCLAIMER = (
+    "Expected values only — mining is variance-heavy, so real payouts swing well above and "
+    "below these figures. Assumes all of this hashrate mines Monero via P2Pool (hashrate "
+    "donated to XvB earns no P2Pool payout). Estimates, not guarantees."
+)
+
+
+def build_earnings(data, metrics):
+    """Expected-XMR calculator inputs for the Advanced view (Issue #12).
+
+    Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus the
+    raw measured hashrate and P2Pool share difficulty. The client scales the rate to the
+    entered *what-if* hashrate and formats the day/month/year figures + expected time-to-share
+    — sending a rate (not pre-formatted earnings) keeps the live recompute a single source of
+    truth with no duplicated math (see ``web/static/logic.mjs``).
+
+    ``available`` is False when the network figures needed for the rate are missing; the client
+    then shows ``—`` instead of a bogus estimate (graceful degradation)."""
+    reward_atomic = (data.get('network', {}) or {}).get('reward', 0) or 0
+    coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
+    return {
+        "available": coeff_day > 0,
+        "measured_hr": metrics.total_h15,                    # raw H/s — the what-if default
+        "measured_hr_str": format_hashrate(metrics.total_h15),
+        "coeff_day": coeff_day,                              # XMR per H/s per day
+        "pool_difficulty": metrics.pool_difficulty,         # for expected time-to-share (diff/hr)
+        "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
+        "disclaimer": _EARNINGS_DISCLAIMER,
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Assembly.
 # --------------------------------------------------------------------------------------
 
@@ -539,6 +575,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "monero": pool_net["monero"],
         "shares_window": pool_net["shares_window"],
         "proxy_workers": metrics.workers_online,
+        "earnings": build_earnings(data, metrics),
         "tari": build_tari(data),
         "workers": build_workers(data.get('workers', [])),
         "chart": build_chart(history, data.get('shares', []), range_arg, window),

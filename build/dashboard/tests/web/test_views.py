@@ -15,8 +15,8 @@ import pytest
 import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
-    build_system, build_sync, build_badges, build_state, get_shell_html, _mode_palette,
-    parse_window, _target_points, _chart_tension,
+    build_system, build_sync, build_badges, build_earnings, build_state, get_shell_html,
+    _mode_palette, parse_window, _target_points, _chart_tension,
 )
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
@@ -482,6 +482,44 @@ class TestPoolNetwork:
         assert pn["monero"]["db_size"] == "—"
 
 
+# --- Earnings calculator (Issue #12) --------------------------------------------------
+
+class TestEarnings:
+    _NET = {"network": {"reward": 600_000_000_000}}   # 0.6 XMR block reward (atomic units)
+
+    def test_publishes_rate_and_inputs(self):
+        # The server sends the daily XMR-per-H/s *rate* + the raw inputs the client scales/inverts
+        # (measured hashrate, P2Pool share difficulty) — not pre-formatted earnings.
+        e = build_earnings(self._NET, _metrics(total_h15=10500, network_difficulty=400_000_000_000,
+                                               pool_difficulty=250_000_000))
+        assert e["available"] is True
+        assert e["measured_hr"] == 10500
+        assert e["measured_hr_str"] == "10.50 kH/s"
+        assert e["pool_difficulty"] == 250_000_000
+        assert e["block_reward"] == "0.6000 XMR"
+        assert e["disclaimer"] and "Expected" in e["disclaimer"]
+        # Rate matches reward_xmr / difficulty * 86400.
+        assert e["coeff_day"] == pytest.approx(0.6 / 400_000_000_000 * 86_400)
+
+    def test_unavailable_when_network_reward_missing(self):
+        # No reward collected yet -> rate is unavailable; the card degrades to "—" (no crash).
+        e = build_earnings({}, _metrics(network_difficulty=400_000_000_000))
+        assert e["available"] is False
+        assert e["coeff_day"] == 0.0
+        assert e["block_reward"] == "0.0000 XMR"
+
+    def test_unavailable_when_difficulty_missing(self):
+        e = build_earnings(self._NET, _metrics(network_difficulty=0))
+        assert e["available"] is False
+        assert e["coeff_day"] == 0.0
+
+    def test_measured_hr_passthrough_is_raw(self):
+        # The what-if default must be the exact measured H/s (not the rounded display string), so
+        # the client's default estimate isn't skewed by display rounding.
+        e = build_earnings(self._NET, _metrics(total_h15=10543.7))
+        assert e["measured_hr"] == 10543.7
+
+
 # --- build_state integration ----------------------------------------------------------
 
 def _state_mgr(history=None, mode="P2POOL"):
@@ -507,7 +545,7 @@ class TestBuildState:
         st = build_state(_data(), _state_mgr(), "all")
         for key in ("syncing", "page_title", "host_ip", "last_update", "range", "window", "badges",
                     "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
-                    "shares_window", "proxy_workers", "tari", "workers", "chart"):
+                    "shares_window", "proxy_workers", "earnings", "tari", "workers", "chart"):
             assert key in st, f"missing section: {key}"
 
     def test_is_json_serializable(self):

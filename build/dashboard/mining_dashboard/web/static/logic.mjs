@@ -101,3 +101,53 @@ export const THEME_ORDER = ['light', 'auto', 'dark'];
 export function normalizeTheme(t) {
     return THEMES.includes(t) ? t : 'auto';
 }
+
+// Expected-earnings what-if (Issue #12). The server publishes the per-H/s daily XMR *rate*
+// (earnings.coeff_day — authoritative, computed once in service/earnings.py) and the P2Pool
+// share difficulty. Earnings are linear in hashrate, so the client only scales that one rate to
+// the entered hashrate (and to month/year), and inverts the share difficulty for expected
+// time-to-share — no formula is re-derived here. Kept pure so it's unit-tested (no DOM); the
+// EarningsCard input wiring lives in components.mjs.
+export const DAYS_PER_MONTH = 30;   // estimate convention (not 30.44); a year is 365 days
+export const DAYS_PER_YEAR = 365;
+
+// Parse a what-if hashrate string into H/s, accepting an optional k/M/G suffix so users can type
+// "10.5k", "1.2 MH/s", or a bare "50000". Returns null for empty/unparseable input (the card then
+// shows "—"). Mirrors helper/utils.parse_hashrate on the server side.
+export function parseHashrate(str) {
+    if (typeof str !== 'string') return null;
+    const m = str.trim().match(/^([0-9]*\.?[0-9]+)\s*([kKmMgG])?/);
+    if (!m) return null;
+    const val = parseFloat(m[1]);
+    if (!Number.isFinite(val) || val < 0) return null;
+    const unit = (m[2] || '').toLowerCase();
+    return val * (unit === 'g' ? 1e9 : unit === 'm' ? 1e6 : unit === 'k' ? 1e3 : 1);
+}
+
+// Scale the server's daily rate to expected XMR over day/month/year for `hashrateHs`, plus the
+// expected seconds to find one P2Pool share (share difficulty / hashrate). Returns nulls when the
+// estimate can't be computed (rate unavailable, or a non-positive hashrate) so the card shows "—".
+export function computeEarnings(hashrateHs, earnings) {
+    if (!earnings || !earnings.available || !(hashrateHs > 0)) {
+        return { day: null, month: null, year: null, timeToShareSec: null };
+    }
+    const day = hashrateHs * earnings.coeff_day;
+    const tts = earnings.pool_difficulty > 0 ? earnings.pool_difficulty / hashrateHs : null;
+    return { day, month: day * DAYS_PER_MONTH, year: day * DAYS_PER_YEAR, timeToShareSec: tts };
+}
+
+// Format a client-computed XMR amount. More decimal places for small amounts (a day's earnings can
+// be a tiny fraction) so the figure isn't rounded to "0.0000"; "—" for the null/invalid case.
+export function formatXmr(xmr) {
+    if (xmr === null || xmr === undefined || !Number.isFinite(xmr)) return '—';
+    if (xmr === 0) return '0 XMR';
+    const dp = xmr >= 1 ? 4 : xmr >= 0.001 ? 6 : 8;
+    return xmr.toFixed(dp) + ' XMR';
+}
+
+// Format the expected time-to-share (seconds) for display; "—" when not computable. Reuses the
+// two-coarsest-units duration formatter (e.g. "3d 4h", "1h 20m").
+export function formatTimeToShare(sec) {
+    if (sec === null || sec === undefined || !Number.isFinite(sec) || sec <= 0) return '—';
+    return fmtWindowDuration(sec * 1000);
+}

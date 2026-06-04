@@ -125,6 +125,33 @@ several windows (e.g. 10s / 60s / 15m) — so you can spot a rig that has droppe
 underperforming. A worker that's connected but whose direct API is unreachable still counts (with
 proxy-derived hashrate); a worker whose miner has stopped drops out of the total.
 
+### Simple vs. Advanced view
+
+A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) keeps the page to
+the essentials — the chart, the Overview summary, and the worker table. **Advanced** swaps the
+Overview for a set of power-user cards that break out the same data in more detail: **My P2Pool
+Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**, **Tari Merge
+Mining**, and the **Earnings (estimated)** calculator below. Your choice is remembered across
+reloads.
+
+### Earnings (estimated)
+
+An expected-earnings calculator (Advanced view) that turns your hashrate and the live network
+figures into a rough payout estimate:
+
+| Field | Meaning |
+|---|---|
+| **Hashrate** | The hashrate the estimate is based on. Defaults to your live measured hashrate; type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed hashpower. |
+| **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty` — the standard variance-free mining expectation. |
+| **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
+| **Block Reward** | The current Monero block reward, for context. |
+
+> **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
+> above and below these figures — the calculator says so in a disclaimer on the card. The estimate
+> assumes all of the entered hashrate mines Monero via P2Pool; hashrate you donate to XvB earns no
+> P2Pool payout. If the network figures aren't available yet, the card shows `—` rather than a
+> bogus number. **Tari** earnings and an **XvB tier** projection aren't included yet.
+
 ---
 
 ## Tips

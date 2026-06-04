@@ -4,7 +4,10 @@
 // classes — it does no number formatting or business logic of its own.
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
-import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS } from './logic.mjs';
+import {
+    WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS,
+    computeEarnings, formatXmr, formatTimeToShare, parseHashrate,
+} from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => 'c-' + v;
@@ -257,6 +260,52 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
+// Expected-earnings calculator (Issue #12). A power-user card (Advanced view) over the metrics
+// layer: the server sends the daily XMR rate per H/s; this card scales it to a what-if hashrate.
+// Stateful because the what-if input is local UI: `input` is null until the user edits it, so the
+// field tracks the live measured hashrate until they take control, then holds their raw text.
+class EarningsCard extends Component {
+    constructor(props) {
+        super(props);
+        this.state = { input: null };
+        this.onInput = (e) => this.setState({ input: e.target.value });
+    }
+
+    render() {
+        const e = this.props.earnings;
+        if (!e || !e.available) {
+            return html`
+            <div class="card card-advanced" id="card-earnings">
+                <h3>Earnings (estimated)</h3>
+                <p class="text-muted text-small">Network stats unavailable — the estimate can't be computed right now.</p>
+            </div>`;
+        }
+        const { input } = this.state;
+        const useMeasured = input === null;
+        // Default to the live measured hashrate; once edited, use the parsed what-if value.
+        const hr = useMeasured ? e.measured_hr : parseHashrate(input);
+        const est = computeEarnings(hr, e);
+        return html`
+        <div class="card card-advanced" id="card-earnings">
+            <h3>Earnings (estimated)</h3>
+            <div class="earnings-input">
+                <label for="whatif-hr">Hashrate</label>
+                <input id="whatif-hr" type="text" inputmode="decimal" spellcheck="false"
+                       autocomplete="off" value=${useMeasured ? e.measured_hr_str : input}
+                       onInput=${this.onInput} />
+            </div>
+            <div class="stat-grid">
+                <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
+                <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
+                <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
+                <${StatCard} label="Block Reward" value=${e.block_reward} />
+            </div>
+            <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
+        </div>`;
+    }
+}
+
 function TariCard({ tari }) {
     return html`
     <div class="card card-advanced" id="card-tari">
@@ -324,6 +373,7 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
             <${GlobalStats} state=${state} />
             <${XvBStats} state=${state} />
             <${NetworkCard} state=${state} />
+            <${EarningsCard} earnings=${state.earnings} />
             <${TariCard} tari=${state.tari} />
         </div>
         <${WorkersTable} workers=${state.workers} ui=${ui} onSort=${onSort} />
