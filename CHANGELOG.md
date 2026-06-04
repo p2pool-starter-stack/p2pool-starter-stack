@@ -83,6 +83,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   instead of as a substring of the whole peer string, so a peer on an unrelated port that merely
   contains the digits can't misclassify the sidechain (which drives block-time and the PPLNS
   window the XvB controller uses) (#142).
+- `pithead reset-dashboard` now resolves the data directories it wipes from `.env` (the live
+  deployment) instead of re-reading `config.json` — editing a `*.data_dir` in `config.json`
+  before resetting (without an `apply`) can no longer wipe a directory the stack never used. It
+  also refuses to run rather than guess if `.env` doesn't name them (#139).
 
 ### Security
 
@@ -94,3 +98,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 - All externally-pulled base/runtime images are now pinned by immutable `@sha256` digest
   (caddy, docker-socket-proxy, the Tari node, and the `ubuntu`/`python`/`alpine` build bases),
   so a re-pushed tag or a registry MITM can't silently change the running image (#135).
+- `dashboard.host` is now validated (hostname/IP characters only) before it's rendered into the
+  Caddyfile, so a value containing whitespace, a newline, or `{`/`}` can no longer break the
+  Caddyfile or inject reverse-proxy directives — mirroring the `stratum_bind` validation (#130).
