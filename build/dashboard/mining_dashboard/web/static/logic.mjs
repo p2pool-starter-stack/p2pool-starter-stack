@@ -31,6 +31,22 @@ export function sortWorkers(workers, idx, asc) {
     return asc ? sorted : sorted.reverse();
 }
 
+// Hero KPI band (Issue #81). The headline numbers surfaced as a prominent top strip: each entry
+// is { label, value, cls } where `value` is an already-formatted display string from build_state
+// and `cls` is the text-colour class applied to it ('' = default text colour). Pure selection +
+// labelling is kept here so the wiring (which state field feeds which KPI, and the mode/shares
+// colouring) is unit-tested; <HeroBand> in components.mjs only renders the returned list.
+export function heroKpis(state) {
+    const hr = state.hashrate, sw = state.shares_window, p = state.pool;
+    return [
+        { label: 'Total Hashrate', value: hr.total, cls: 'text-accent' },
+        { label: 'Shares in Window', value: sw.count, cls: sw.ok ? 'status-ok' : 'status-bad' },
+        { label: 'Blocks Found', value: p.blocks, cls: '' },
+        { label: 'XvB Tier', value: hr.tier, cls: '' },
+        { label: 'Mining Mode', value: hr.mode_name, cls: 'c-' + hr.mode_variant },
+    ];
+}
+
 // Format an epoch-ms x value for the chart tooltip title (Issue #65). Day + time so long ranges
 // read clearly; browser locale (≈ the server's, for a localhost dashboard).
 export function fmtTimestamp(ms) {

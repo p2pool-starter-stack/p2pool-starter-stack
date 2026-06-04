@@ -229,6 +229,7 @@ class TestResponsiveLayout:
 
     async def test_css_lets_hostname_wrap(self, client):
         # HOST_IP is arbitrary user input; a long unbroken hostname would push the header (and
-        # the page) wider than a phone without a wrap rule on the header's <h2>.
+        # the page) wider than a phone without a wrap rule. Since #81 the host IP lives in the
+        # brand subtitle (`.brand-host`), which carries the overflow-wrap protection.
         css = await (await client.get("/static/dashboard.css")).text()
-        assert ".header h2" in css
+        assert ".brand-host" in css and "overflow-wrap" in css

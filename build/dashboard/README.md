@@ -26,7 +26,7 @@ plus the app modules and `dashboard.css`. Nothing is inlined and the libraries a
 the page runs under a strict Content-Security-Policy with no `'unsafe-inline'`/`'unsafe-eval'`.
 
 Testing: the Python API — where all the logic and formatting live — is fully unit-tested. The
-pure client logic (worker sort, tooltip formatting in `static/logic.mjs`) is unit-tested with
+pure client logic (worker sort, tooltip formatting, hero-KPI selection in `static/logic.mjs`) is unit-tested with
 **Node's built-in runner** (`node --test build/dashboard/tests/frontend/*.test.mjs`) — no
 `package.json`/`node_modules`/build step, so the repo stays Node-free. Component *rendering* has
 no unit tests by design; it's covered by a manual browser smoke test.
