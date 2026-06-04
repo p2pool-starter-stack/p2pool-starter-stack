@@ -197,6 +197,13 @@ dr_fail() { DR_FAIL=$((DR_FAIL + 1)); printf '  %b✗ FAIL%b %s\n'   "$C_RED"   
 # Neutral note for context lines that aren't pass/fail (e.g. a skipped Linux-only check).
 dr_info() { printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
 
+# True if Docker is set to start at boot (docker.service OR docker.socket enabled). systemd only —
+# the caller checks that systemctl exists. Checking docker.socket too covers socket-activated
+# installs where docker.service is "static" but Docker still comes up at boot.
+docker_boot_enabled() {
+    systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
+}
+
 doctor() {
     DR_OK=0; DR_WARN=0; DR_FAIL=0
     detect_os
@@ -237,6 +244,21 @@ doctor() {
         dr_ok "Docker daemon is reachable."
     else
         dr_fail "Docker daemon is not reachable — start it (e.g. 'sudo systemctl start docker') and ensure your user is in the 'docker' group."
+    fi
+
+    # --- Docker boot persistence (Linux/systemd) ---
+    # `restart: unless-stopped` only brings the stack back after a reboot if the Docker daemon
+    # itself starts at boot. Ubuntu's docker.io/docker-ce enables it by default, but --skip-deps,
+    # rootless, or a manually-disabled unit won't come back after a power loss — surface that, since
+    # the documented use case is an unattended miner (#137).
+    if [ "$OS_TYPE" != "Darwin" ] && command -v systemctl >/dev/null 2>&1; then
+        echo ""
+        echo "Boot persistence:"
+        if docker_boot_enabled; then
+            dr_ok "Docker is enabled to start at boot — the stack will come back after a reboot."
+        else
+            dr_warn "Docker is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker'."
+        fi
     fi
 
     # --- CPU: AVX2 (performance only) ---

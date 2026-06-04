@@ -53,6 +53,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   (`3333`) is published on (default `0.0.0.0`; set a LAN IP or `127.0.0.1` to narrow it).
 - Liveness healthcheck for the p2pool container (probes the stratum port), so a stalled
   p2pool is now visible in `pithead status` and the dashboard.
+- `pithead doctor` now checks that Docker is enabled to start at boot (systemd) and warns if not —
+  `restart: unless-stopped` only brings the stack back after a reboot when the daemon does too,
+  which matters for an unattended miner (#137).
 
 ### Changed
 
