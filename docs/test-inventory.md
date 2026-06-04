@@ -591,16 +591,22 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 - dashboard.tari_required=false
 
 ### Per-scenario assertions (tests/integration/run.sh)
+- .env is owner-only (mode $envmode)
 - Caddyfile uses correct scheme
 - DASHBOARD_SECURE matches config
 - MONERO_RPC_BIND matches rpc_lan_access
+- Monero is synced (chain reusable by the matrix)
 - TARI_REQUIRED env matches config
 - XVB_ENABLED matches config
 - backup archive contains .env
 - backup archive contains config.json
+- backup/rollback prerequisites present (writable backups/, tar)
+- chain FS is snapshot/reflink-capable ($fstype)
 - check
 - container up: $svc
 - dashboard /api/state reachable
+- dashboard bound to localhost only (Caddy fronts it)
+- disk headroom on the chain FS (${avail} GiB free)
 - monero display mode determinate ($dmode)
 - monero display mode present ($dmode)
 - monerod absent in remote mode
@@ -615,6 +621,7 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 - secrets intact (token + onions)
 - secrets intact after restore
 - secrets preserved across pool change
+- stack is healthy (pithead status)
 - status OK after monerod recovery
 - status OK after node recovery
 - status OK after restart

@@ -1,0 +1,68 @@
+name: Release gate (self-hosted)
+
+# Tier-4 end-to-end validation against the REAL synced Monero + Tari nodes — the pre-release
+# gate (#54). It runs on the dedicated, self-hosted release server (which holds real wallet /
+# onion keys), so it MUST only ever run code we trust.
+#
+# SECURITY: there is deliberately NO `pull_request` trigger. A fork PR's code running on this
+# runner could steal the box's keys or persist a backdoor (GitHub recommends against self-hosted
+# runners on public repos for exactly this reason). The gate runs only on:
+#   - workflow_dispatch — a maintainer manually runs it on a ref they've reviewed, OR
+#   - push to main      — post-merge, on trusted code.
+# To end-to-end a specific fork PR, review it first, then dispatch this workflow on that ref.
+# See docs/release-server.md.
+on:
+  workflow_dispatch:
+    inputs:
+      stack_dir:
+        description: "Path to the deployed Pithead stack on the runner (absolute; default $HOME/code/pithead)"
+        required: false
+        default: ""
+      mode:
+        description: "check = non-destructive; matrix = full destructive config matrix (with a safety backup + auto-rollback)"
+        required: false
+        default: "check"
+        type: choice
+        options: [check, matrix]
+  push:
+    branches: [main]
+
+# Never run two gates against the one shared box at the same time.
+concurrency:
+  group: release-gate
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Tier-4 live matrix (real nodes)
+    # Register the server with these labels: `pithead-release` scopes the gate to the dedicated
+    # box; prefer an ephemeral / just-in-time runner in its own runner group.
+    runs-on: [self-hosted, pithead-release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate against the real synced nodes
+        run: |
+          set -euo pipefail
+          DIR="${{ github.event.inputs.stack_dir }}"; DIR="${DIR:-$HOME/code/pithead}"
+          MODE="${{ github.event.inputs.mode }}";     MODE="${MODE:-check}"
+          echo "Release gate: stack dir=$DIR, mode=$MODE"
+
+          # Always assess fitness + the non-destructive live state first.
+          bash tests/integration/run.sh --local --dir "$DIR" --readiness
+          bash tests/integration/run.sh --local --dir "$DIR" --check
+
+          # The full destructive config matrix is opt-in; --safety-backup rolls the box back if
+          # anything fails, so a red run leaves the server as it found it.
+          if [ "$MODE" = "matrix" ]; then
+            bash tests/integration/run.sh --local --dir "$DIR" --workers 2 --safety-backup --lifecycle
+          fi
+
+      - name: Upload artifacts (redacted)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-results
+          path: tests/integration/results/
+          if-no-files-found: ignore
+          retention-days: 14

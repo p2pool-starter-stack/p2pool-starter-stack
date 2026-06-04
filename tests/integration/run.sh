@@ -34,6 +34,7 @@ IT_PITHEAD="./pithead"
 IT_CURRENT_SCENARIO=""
 ONLY_SCENARIO=""
 CHECK_ONLY=0
+READINESS=0
 RUN_LIFECYCLE=0
 RUN_FAULTS=0
 SAFETY_BACKUP=0
@@ -70,6 +71,9 @@ CONNECTION:
 MATRIX:
   --check                NON-DESTRUCTIVE: assert the box's current live state only — no config
                          changes, no apply, no restore. The safe first run / health check.
+  --readiness            NON-DESTRUCTIVE: assess whether the box is fit to be a release/
+                         validation server (synced chains reusable, snapshot-capable FS, disk
+                         headroom, secrets not world-readable, dashboard localhost-only).
   --scenario <name>      run only one scenario (see --list)
   --workers <n>          miners expected online while mining (default: 2)
   --remote-monero-host <h>  external node endpoint for the remote-mode scenario
@@ -113,6 +117,7 @@ parse_args() {
             --dir)        IT_REMOTE_DIR="$2"; shift 2 ;;
             --pithead)    IT_PITHEAD="$2"; shift 2 ;;
             --check)      CHECK_ONLY=1; shift ;;
+            --readiness)  READINESS=1; shift ;;
             --scenario)   ONLY_SCENARIO="$2"; shift 2 ;;
             --workers)    EXPECTED_WORKERS="$2"; shift 2 ;;
             --remote-monero-host) REMOTE_MONERO_HOST="$2"; shift 2 ;;
@@ -391,6 +396,77 @@ assert_current_state() {
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "check" "$OUT_DIR"
 }
 
+# --- Release-server readiness (--readiness) ---------------------------------
+# Read-only assessment of whether the box is fit to be a RELEASE / validation server: it must
+# reuse already-synced chains, vary configs cheaply, and keep its keys/secrets and dashboard
+# from leaking. Complements `pithead doctor` (stack health) — this checks the server's fitness
+# for the integration harness's job. A WARN is "works, but not ideal"; a FAIL is "fix before
+# using as a release gate".
+box_fstype()   { rx "df --output=fstype $(quote_arg "$1") 2>/dev/null | tail -n1 | tr -d ' '"; }
+box_avail_gb() { rx "df -BG --output=avail $(quote_arg "$1") 2>/dev/null | tail -n1 | tr -dc '0-9'"; }
+box_mode()     { rx "stat -c %a $(quote_arg "$1") 2>/dev/null"; }
+
+assert_release_readiness() {
+    IT_CURRENT_SCENARIO="readiness"
+    echo ""
+    it_log "── release-server readiness ────────────────────────"
+
+    # 1. The whole point of a release server: chains already synced, reused in minutes.
+    if monero_caught_up; then it_pass "Monero is synced (chain reusable by the matrix)"; else it_fail "Monero is synced" "monerod not caught up — the matrix would have to re-sync"; fi
+    pithead status >/dev/null 2>&1; assert_rc "stack is healthy (pithead status)" "$?" "0"
+
+    # 2. Chain data dirs on a snapshot/reflink-capable filesystem so the prune axis can vary the
+    #    DB without re-syncing or mutating the canonical copy.
+    local mdir fstype
+    mdir="$(env_on_box MONERO_DATA_DIR)"
+    if [ -n "$mdir" ]; then
+        fstype="$(box_fstype "$mdir")"
+        case "$fstype" in
+            btrfs|zfs|xfs) it_pass "chain FS is snapshot/reflink-capable ($fstype)" ;;
+            "")            it_warn "could not determine the chain filesystem type" ;;
+            *)             it_warn "chain FS is '$fstype' (no cheap snapshots — the prune axis must copy the DB or be skipped)" ;;
+        esac
+    fi
+
+    # 3. Disk headroom for snapshots + a second (full vs pruned) chain.
+    if [ -n "$mdir" ]; then
+        local avail; avail="$(box_avail_gb "$mdir")"
+        if [ -n "$avail" ] && [ "$avail" -ge 100 ] 2>/dev/null; then
+            it_pass "disk headroom on the chain FS (${avail} GiB free)"
+        else
+            it_warn "low disk headroom on the chain FS (${avail:-?} GiB free) — snapshots / a full+pruned matrix may not fit"
+        fi
+    fi
+
+    # 4. Secrets must not be world/group readable (the box holds wallet/RPC creds + onion keys).
+    local envmode; envmode="$(box_mode .env)"
+    case "$envmode" in
+        ""|*[!0-9]*) it_warn ".env permissions unknown" ;;
+        ?00)         it_pass ".env is owner-only (mode $envmode)" ;;
+        *)           it_fail ".env is owner-only" "mode is $envmode — group/other can read RPC creds & onions; run: chmod 600 .env" ;;
+    esac
+
+    # 5. The dashboard must sit behind Caddy on localhost, never bound to a public interface.
+    local d_addrs exposed=0 st _q1 _q2 laddr
+    d_addrs="$(rx "ss -tlnH 'sport = :8000' 2>/dev/null")"
+    if [ -z "$d_addrs" ]; then
+        it_warn "nothing listening on :8000 (dashboard) — can't assess exposure"
+    else
+        while read -r st _q1 _q2 laddr _; do
+            [ -n "$laddr" ] || continue
+            case "$laddr" in 127.0.0.1:*|"[::1]:"*) : ;; *) exposed=1 ;; esac
+        done <<< "$d_addrs"
+        if [ "$exposed" -eq 0 ]; then it_pass "dashboard bound to localhost only (Caddy fronts it)"; else it_fail "dashboard bound to localhost only" "it is listening on a non-loopback address — do not expose the dashboard directly"; fi
+    fi
+
+    # 6. The backup/rollback safety net must be usable (writable backups dir + tar).
+    if rx "mkdir -p backups && touch backups/.itest-rw 2>/dev/null && rm -f backups/.itest-rw && command -v tar" >/dev/null 2>&1; then
+        it_pass "backup/rollback prerequisites present (writable backups/, tar)"
+    else
+        it_fail "backup prerequisites present" "backups/ not writable or tar missing — --safety-backup won't work"
+    fi
+}
+
 # --- Lifecycle + edge phase (--lifecycle) -----------------------------------
 run_lifecycle() {
     IT_CURRENT_SCENARIO="lifecycle"
@@ -620,6 +696,13 @@ IT_SKIPPED=0
 main() {
     parse_args "$@"
     preflight
+
+    # Non-destructive release-server fitness assessment.
+    if [ "$READINESS" = "1" ]; then
+        assert_release_readiness
+        summary
+        return
+    fi
 
     # Non-destructive health check: assert the current live state and stop.
     if [ "$CHECK_ONLY" = "1" ]; then

@@ -125,6 +125,7 @@ Useful flags (full list in `run.sh --help`):
 | `--dir <path>` | The Pithead stack directory **on the box** — relative to the SSH login dir or absolute (default `pithead`). Avoid a literal `~`; your local shell expands it before the box sees it. |
 | `--pithead <cmd>` | How to invoke pithead there (e.g. `"sudo ./pithead"`). |
 | `--check` | **Non-destructive**: assert the box's current live state only — no config change, no apply, no restore. The safe first run / ongoing health check. |
+| `--readiness` | **Non-destructive**: assess whether the box is fit to be a release/validation server (synced chains reusable, snapshot-capable FS, disk headroom, secrets owner-only, dashboard localhost-only). See [Release Server](release-server.md). |
 | `--scenario <name>` | Run just one scenario. |
 | `--workers <n>` | Miners expected online while mining (default `2`). |
 | `--remote-monero-host <h>` | External node endpoint for the `remote` scenario. |

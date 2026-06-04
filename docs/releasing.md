@@ -64,6 +64,10 @@ nodes (the integration-test environment from
 point — `make release` (or `pithead release`) — runs the whole pipeline. **Nothing is
 promoted or published until every gate is green.**
 
+> How to provision and **harden** that server, why end-to-end validation can't run on
+> GitHub-hosted runners (and what does run free on every PR), and the safe self-hosted-runner
+> setup are covered in **[Release / Validation Server](release-server.md)**.
+
 ### Pipeline: stage → smoke-test → promote
 
 1. **Preflight** — clean working tree; read the product version from the top-level

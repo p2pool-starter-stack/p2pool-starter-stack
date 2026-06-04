@@ -47,6 +47,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     no-new-privileges / cap_drop / credential-free-healthcheck assertions. Plus a
     `dashboard.host` "auto"-revert test and the schema-migration test that caught the DB upgrade
     bug above.
+  - Release/validation-server tooling: a `--readiness` mode for the live harness (non-destructive
+    assessment that a box is fit to be a release server — synced chains reusable, snapshot-capable
+    filesystem, disk headroom, secrets owner-only, dashboard localhost-only), a
+    `docs/release-server.md` guide (why end-to-end validation needs a dedicated server vs. what
+    GitHub Actions runs free on every PR, the hardening checklist, and the **safe** self-hosted-
+    runner setup), and a `release-gate.yml` workflow that runs the tier-4 matrix on a self-hosted
+    runner only on trusted code (manual dispatch / push to main — never on a fork PR).
   - A `--safety-backup` rollback net for the live harness: takes a real `pithead backup` before
     the destructive scenarios and automatically rolls the box back (down → restore → up) if
     anything fails, removing the archive on success — so the destructive matrix can run on a
