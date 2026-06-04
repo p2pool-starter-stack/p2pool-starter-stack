@@ -79,6 +79,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   a space check" fallback was previously unreachable under `set -e`) (#127).
 - `pithead doctor` now exits non-zero when a critical check FAILS, so it can be used as a
   cron/CI/monitoring health gate (it previously always exited 0); warnings alone still exit 0 (#127).
+- Dashboard P2Pool pool-type detection (Main/Mini/Nano) now matches the peer's port exactly
+  instead of as a substring of the whole peer string, so a peer on an unrelated port that merely
+  contains the digits can't misclassify the sidechain (which drives block-time and the PPLNS
+  window the XvB controller uses) (#142).
 
 ### Security
 
