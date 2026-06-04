@@ -462,6 +462,21 @@ stack_backup() {
     local p
     for p in "${items[@]}"; do rel+=("${p#/}"); done
 
+    # Disk-space pre-check: bail out before we touch tar if the destination filesystem
+    # can't hold the backup. Blockchains (--with-chains) are largely incompressible, so we
+    # assume the archive needs roughly the source size plus a ~5% safety margin.
+    local need_kb avail_kb
+    # sudo: the Tor data dir is owned by 100:101; -c gives a grand total across all items.
+    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}')
+    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}')
+    if [ -n "$need_kb" ] && [ -n "$avail_kb" ]; then
+        if [ "$avail_kb" -lt "$((need_kb + need_kb / 20))" ]; then
+            error "Not enough disk space for backup: need ~$((need_kb / 1048576)) GiB but only $((avail_kb / 1048576)) GiB free on the backups filesystem. Free up space or point backups/ at a larger volume."
+        fi
+    else
+        warn "Could not determine free disk space for the backup — proceeding without a space check."
+    fi
+
     log "Creating backup archive..."
     # Read with sudo because the Tor data dir is owned by 100:101.
     ( umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}" )
