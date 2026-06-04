@@ -110,34 +110,28 @@ set_tari synced
 assert_state "released: itest-p2pool running"      itest-p2pool      running 90
 assert_state "released: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
-# 4. monerod down → reject workers (stop itest-xmrig-proxy); itest-p2pool keeps running. (#31)
-log "scenario 4: rejects workers when monerod is down"
-set_monerod down
-assert_state "rejected: itest-xmrig-proxy stopped" itest-xmrig-proxy exited  90
+# 4. Tari down while required → reject workers (stop the proxy); itest-p2pool keeps running. (#31)
+#    NOTE: monerod-down failover is deliberately NOT simulated here — the dashboard's monerod
+#    down-path falls back to log-scraping a real `monerod` container, which this fake stack has
+#    no equivalent of. That path is covered on real hardware by the tier-4 --fault-injection
+#    phase. Tari has no such fallback, so its reject/readmit exercises the failover cleanly.
+log "scenario 4: rejects workers when required Tari is down"
+set_tari down
+assert_state "rejected on Tari outage: itest-xmrig-proxy stopped" itest-xmrig-proxy exited 90
 if [ "$(cstate itest-p2pool)" = "running" ]; then
     c_ok "rejection leaves itest-p2pool running (only the proxy fails over)"
 else
     c_bad "rejection leaves itest-p2pool running" "itest-p2pool is '$(cstate itest-p2pool)'"
 fi
 
-# 5. monerod recovers → readmit workers (after the recovery-hysteresis window). (#31)
-log "scenario 5: readmits workers when monerod recovers"
-set_monerod synced
-assert_state "readmitted: itest-xmrig-proxy running" itest-xmrig-proxy running 90
-
-# 6. Tari down while required → reject again (proves the required-Tari failover path).
-log "scenario 6: rejects workers when required Tari is down"
-set_tari down
-assert_state "rejected on Tari outage: itest-xmrig-proxy stopped" itest-xmrig-proxy exited 90
-
-# 7. Tari recovers → readmit.
-log "scenario 7: readmits workers when Tari recovers"
+# 5. Tari recovers → readmit (after the recovery-hysteresis window).
+log "scenario 5: readmits workers when Tari recovers"
 set_tari synced
 assert_state "readmitted after Tari recovery: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
-# 8. Dashboard restart after release → the one-way latch is persisted, so the miner is NOT
+# 6. Dashboard restart after release → the one-way latch is persisted, so the miner is NOT
 #    re-held: both containers stay running across the restart. (#35 persistence)
-log "scenario 8: a dashboard restart does not re-hold a released miner"
+log "scenario 6: a dashboard restart does not re-hold a released miner"
 compose restart dashboard >/dev/null 2>&1
 for _ in $(seq 1 30); do
     compose exec -T dashboard python3 -c \

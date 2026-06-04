@@ -6,7 +6,7 @@ how the tiers fit together._
 
 **Totals:** 373 dashboard unit tests · 12 contract tests · 20 frontend
 tests · 14 `pithead` shell sections · 10 harness self-test sections ·
-8 live config scenarios (15 axis values) · 8 mini-stack scenarios.
+8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
 > run time — e.g. the dashboard suite collects ~381). Generated statically by grep, so it's
@@ -19,7 +19,7 @@ tests · 14 `pithead` shell sections · 10 harness self-test sections ·
 | 1 — Unit | `pithead` shell suite | 14 sections |
 | 1 — Unit | compose interpolation | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
-| 3 — Mini-stack | docker control-plane scenarios | 8 |
+| 3 — Mini-stack | docker control-plane scenarios | 6 |
 | 4 — Live matrix | config scenarios | 8 (15 axis values) |
 | 4 — Live matrix | harness self-test | 10 sections |
 
@@ -501,15 +501,13 @@ tests · 14 `pithead` shell sections · 10 harness self-test sections ·
 
 ## Tier 3 — Fake-daemon mini-stack (docker)
 
-### tests/integration/mini-stack/run-mini-stack.sh — 8 scenarios
+### tests/integration/mini-stack/run-mini-stack.sh — 6 scenarios
 - scenario 1: holds the miner while both chains sync
 - scenario 2: keeps holding while Tari (required) is still syncing
 - scenario 3: releases the miner once both chains are synced
-- scenario 4: rejects workers when monerod is down
-- scenario 5: readmits workers when monerod recovers
-- scenario 6: rejects workers when required Tari is down
-- scenario 7: readmits workers when Tari recovers
-- scenario 8: a dashboard restart does not re-hold a released miner
+- scenario 4: rejects workers when required Tari is down
+- scenario 5: readmits workers when Tari recovers
+- scenario 6: a dashboard restart does not re-hold a released miner
 
 ## Tier 4 — Live config matrix (real synced server)
 
@@ -588,5 +586,5 @@ tests · 14 `pithead` shell sections · 10 harness self-test sections ·
 
 ---
 
-_Grand total: **445** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **443** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
