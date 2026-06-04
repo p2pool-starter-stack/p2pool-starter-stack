@@ -386,12 +386,22 @@ announce_dashboard_url() {
 }
 
 reset_dashboard() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            -y|--yes) assume_yes=1 ;;
+            *) error "Unknown option for reset-dashboard: $arg. Run '$0 help'." ;;
+        esac
+    done
+
     echo -e "${C_RED}[WARNING] This is a DESTRUCTIVE action.${C_RESET}"
     echo "It will stop the dashboard/p2pool containers and WIPE their data directories."
-    read -r -p "Are you sure you want to continue? (y/N): " CONFIRM || true
-    if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
-        log "Reset cancelled."
-        return
+    if [ "$assume_yes" -eq 0 ]; then
+        read -r -p "Are you sure you want to continue? (y/N): " CONFIRM || true
+        if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+            log "Reset cancelled."
+            return
+        fi
     fi
 
     log "Resetting dashboard and p2pool..."
@@ -609,7 +619,9 @@ Inspection:
                             .env/onion state, and container status — a paste-able health report.
 
 Maintenance:
-  reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
+  reset-dashboard [-y|--yes]
+                            DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
+                              -y, --yes        skip the confirmation prompt.
   backup [--with-chains] [-y|--yes]
                             Write a timestamped, chmod-600 tar.gz under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, the Tor data dir
@@ -1679,7 +1691,7 @@ main() {
         logs)             require_env; log "Following logs (Ctrl+C to exit)..."; docker compose logs -f "$@" ;;
         status)           require_env; stack_status || exit 1 ;;
         doctor)           doctor ;;
-        reset-dashboard)  require_deployed; reset_dashboard ;;
+        reset-dashboard)  require_deployed; reset_dashboard "$@" ;;
         backup)           stack_backup "$@" ;;
         restore)          stack_restore "$@" ;;
         help|-h|--help)   show_help ;;
