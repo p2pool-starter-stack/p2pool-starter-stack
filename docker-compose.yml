@@ -1,3 +1,9 @@
+# Pin the Compose project name so the stack is always "pithead" — its images, network and
+# volumes are prefixed `pithead*` regardless of the checkout directory's name. Without this,
+# Compose derives the project from the directory, which left older checkouts named after the
+# repo's previous name. `pithead up`/`apply`/`upgrade` migrate an old-named stack automatically.
+name: pithead
+
 x-logging: &default-logging
   driver: "json-file"
   options:

@@ -40,9 +40,8 @@ n_selftest=$(sh_sections tests/integration/selftest.sh | count)
 n_scen=$(awk -F'\t' 'NF>1{print $1}' <(sed -n '/scenario_matrix() {/,/^EOF/p' tests/integration/scenarios.sh | grep -E '\t') | count)
 n_axes=$(grep -cE '=' <(sed -n '/axis_coverage() {/,/^EOF/p' tests/integration/scenarios.sh | grep -E '^[a-z].*='))
 n_mini=$(grep -cE 'log "scenario [0-9]' tests/integration/mini-stack/run-mini-stack.sh)
-n_sec=$(grep -cE 'sec_check "' tests/stack/test_security.sh)
 
-total=$((n_py_dash + n_py_fake + n_node + n_stack + n_selftest + n_scen + n_mini + n_sec))
+total=$((n_py_dash + n_py_fake + n_node + n_stack + n_selftest + n_scen + n_mini))
 
 # --- emit -----------------------------------------------------------------
 cat <<EOF
@@ -65,8 +64,7 @@ ${n_scen} live config scenarios (${n_axes} axis values) · ${n_mini} mini-stack 
 | 1 — Unit | dashboard pytest | ${n_py_dash} |
 | 1 — Unit | frontend (node --test) | ${n_node} |
 | 1 — Unit | \`pithead\` shell suite | ${n_stack} sections |
-| 1 — Unit | compose interpolation | 1 |
-| 1 — Unit | compose security/hardening | ${n_sec} |
+| 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | ${n_py_fake} |
 | 3 — Mini-stack | docker control-plane scenarios | ${n_mini} |
 | 4 — Live matrix | config scenarios | ${n_scen} (${n_axes} axis values) |
@@ -99,14 +97,10 @@ sh_sections tests/stack/run.sh | bullets
 
 cat <<EOF
 
-### Compose validation (tests/stack/test_compose.sh)
+### Compose validation + hardening (tests/stack/test_compose.sh)
 - docker-compose.yml \`\${VAR}\` interpolation resolves against a representative .env
-
-### Security / hardening invariants (tests/stack/test_security.sh) — ${n_sec}
-EOF
-grep -oE 'sec_check "[^"]+"' tests/stack/test_security.sh | sed -E 's/^sec_check "//; s/"$//' | bullets
-
-cat <<EOF
+- #90 hardening invariants: no-new-privileges / cap_drop / read-only roots, credential-free
+  healthchecks, least-privilege Docker socket proxies, and the pinned \`pithead\` project name
 
 ## Tier 2 — Contract (real clients vs controllable fakes)
 

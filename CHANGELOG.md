@@ -40,12 +40,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     `proxy_workers` for mining liveness (`stratum.conns` can read 0 while mining).
   - A developer testing guide (`docs/testing-guide.md`): per-change recipes, conventions, and
     the calibration gotchas learned on real hardware.
-  - Regression guards for past bugs/security fixes: a **compose security/hardening suite**
-    (`tests/stack/test_security.sh`, run on every PR) asserting the #90 sweep — RPC credentials
-    never appear in a healthcheck command (the `docker inspect` leak fix), `no-new-privileges` /
-    `cap_drop` on the leaf containers (and the deliberate dashboard exception), the Docker socket
-    proxies stay least-privilege, and p2pool has its liveness probe — plus a `dashboard.host`
-    "auto"-revert test and the schema-migration test that caught the DB upgrade bug above.
+  - Regression guards for past bugs/security fixes: extended the #90 hardening section of
+    `tests/stack/test_compose.sh` with per-service least-privilege checks for the Docker socket
+    proxies (the read proxy can't POST; the control proxy is start/stop-only; both mount the
+    socket read-only) and the Tari `[m]inotari` self-match guard — alongside the existing
+    no-new-privileges / cap_drop / credential-free-healthcheck assertions. Plus a
+    `dashboard.host` "auto"-revert test and the schema-migration test that caught the DB upgrade
+    bug above.
   - A `--safety-backup` rollback net for the live harness: takes a real `pithead backup` before
     the destructive scenarios and automatically rolls the box back (down → restore → up) if
     anything fails, removing the archive on success — so the destructive matrix can run on a
@@ -95,6 +96,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
+- The Compose **project name is now pinned to `pithead`** (`name:` in `docker-compose.yml`), so
+  the stack's images, network and volumes are prefixed `pithead*` regardless of the checkout
+  directory — instead of inheriting the directory's name (which left older checkouts named after
+  the repo's previous name). `pithead up`/`apply`/`upgrade` detect a stack still running under
+  the old, directory-derived project name and migrate it automatically (the old-named containers
+  are removed so the renamed project can take over; bind-mounted chain data is untouched).
 - Hardened the leaf containers (caddy, xmrig-proxy, dashboard, docker-proxy, docker-control)
   with `no-new-privileges`. All except the dashboard also `cap_drop: [ALL]` (caddy keeps
   `NET_BIND_SERVICE` for `:80`/`:443`); the dashboard keeps its default capabilities because it

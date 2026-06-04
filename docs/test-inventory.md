@@ -17,8 +17,7 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 | 1 — Unit | dashboard pytest | 412 |
 | 1 — Unit | frontend (node --test) | 25 |
 | 1 — Unit | `pithead` shell suite | 16 sections |
-| 1 — Unit | compose interpolation | 1 |
-| 1 — Unit | compose security/hardening | 14 |
+| 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
 | 4 — Live matrix | config scenarios | 8 (15 axis values) |
@@ -531,24 +530,10 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 - black-box: local node creds auto-generated + persisted (#50)
 - black-box: status health check
 
-### Compose validation (tests/stack/test_compose.sh)
+### Compose validation + hardening (tests/stack/test_compose.sh)
 - docker-compose.yml `${VAR}` interpolation resolves against a representative .env
-
-### Security / hardening invariants (tests/stack/test_security.sh) — 14
-- no RPC creds in any healthcheck command
-- monerod healthcheck uses the external script
-- no-new-privileges: $svc
-- cap_drop ALL: $svc
-- dashboard does NOT cap_drop ALL (writes its DB as root)
-- caddy keeps only NET_BIND_SERVICE
-- docker-proxy cannot POST (read-only API)
-- docker-control allows start+stop
-- docker-control does NOT allow exec
-- docker-control does NOT allow image ops
-- $svc mounts the docker socket read-only
-- $svc runs read-only root fs
-- p2pool has a liveness healthcheck
-- tari healthcheck uses the [m]inotari self-match guard
+- #90 hardening invariants: no-new-privileges / cap_drop / read-only roots, credential-free
+  healthchecks, least-privilege Docker socket proxies, and the pinned `pithead` project name
 
 ## Tier 2 — Contract (real clients vs controllable fakes)
 
@@ -658,5 +643,5 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 
 ---
 
-_Grand total: **504** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **490** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

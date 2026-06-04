@@ -60,8 +60,40 @@ fi
 
 # --- Lifecycle Helpers ---
 
+# The Compose project name is pinned to "pithead" (docker-compose.yml `name:`). A stack first
+# deployed under the old directory-derived project name still has containers holding our
+# container_names (tor, monerod, …) under that old project — they'd block `up` with a name
+# clash. Detect and remove those stale containers so the renamed project can take over. Chain
+# data lives in the bind-mounted data dirs (and the dashboard DB / Tor keys in their volumes),
+# so nothing is lost; the next `up` recreates the containers under the "pithead" project.
+migrate_compose_project() {
+    local cfg our_project names name cid proj
+    cfg=$(docker compose config --format json 2>/dev/null) || return 0
+    [ -n "$cfg" ] || return 0
+    our_project=$(printf '%s' "$cfg" | jq -r '.name // "pithead"' 2>/dev/null)
+    names=$(printf '%s' "$cfg" | jq -r '.services[].container_name // empty' 2>/dev/null)
+    [ -n "$names" ] || return 0
+
+    local stale=()
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        cid=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null | head -n1)
+        [ -n "$cid" ] || continue
+        proj=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$cid" 2>/dev/null || true)
+        if [ -n "$proj" ] && [ "$proj" != "$our_project" ]; then
+            stale+=("$name")
+        fi
+    done <<< "$names"
+
+    [ "${#stale[@]}" -gt 0 ] || return 0
+    warn "Found containers from a previous project name ('$proj') — this stack is now '$our_project'."
+    log "Removing the old-named containers so the renamed stack can take over (data dirs/volumes are untouched)..."
+    docker rm -f "${stale[@]}" >/dev/null 2>&1 || true
+}
+
 stack_up() {
     log "Starting stack..."
+    migrate_compose_project
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     docker compose up -d
     log "Stack started successfully!"
@@ -82,6 +114,7 @@ stack_restart() {
 
 stack_upgrade() {
     log "Upgrading stack (rebuilding containers)..."
+    migrate_compose_project
     docker compose up -d --build
     log "Stack upgraded."
 }
@@ -1700,6 +1733,7 @@ apply() {
     generate_caddyfile
 
     log "Updating containers..."
+    migrate_compose_project
     # Compose recreates only the services whose resolved config changed; --remove-orphans
     # drops monerod when a local→remote switch deactivates the local_node profile.
     docker compose up -d --remove-orphans
