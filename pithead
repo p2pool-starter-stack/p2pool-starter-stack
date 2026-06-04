@@ -1247,6 +1247,24 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Telegram alerts (#121). Notifications-only push alerter, disabled by default. bot_token is
+    # a secret: it lives only in this owner-only .env (chmod 600 below) and the dashboard never
+    # logs it. Per-event toggles default to on, so enabling Telegram turns on the full set and an
+    # operator only opts *out* of the noisy ones. A blank chat_id/bot_token keeps it off even if
+    # enabled=true (the dashboard guards that too). See docs/telegram.md.
+    local tg_enabled tg_token tg_chat
+    tg_enabled=$(jq -r 'if .telegram.enabled != null then .telegram.enabled | tostring else "false" end' "$CONFIG_FILE")
+    tg_token=$(jq -r '.telegram.bot_token // empty' "$CONFIG_FILE")
+    tg_chat=$(jq -r '.telegram.chat_id // empty' "$CONFIG_FILE")
+    # One toggle per event, defaulting to true when the key is absent.
+    tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
+    local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered tg_ev_sync_finished
+    tg_ev_node_down=$(tg_event node_down)
+    tg_ev_node_recovered=$(tg_event node_recovered)
+    tg_ev_worker_offline=$(tg_event worker_offline)
+    tg_ev_worker_recovered=$(tg_event worker_recovered)
+    tg_ev_sync_finished=$(tg_event sync_finished)
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -1311,6 +1329,14 @@ XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
 TARI_MEM_LIMIT=$tari_mem_limit
+TELEGRAM_ENABLED=$tg_enabled
+TELEGRAM_BOT_TOKEN=$tg_token
+TELEGRAM_CHAT_ID=$tg_chat
+TELEGRAM_EVENT_NODE_DOWN=$tg_ev_node_down
+TELEGRAM_EVENT_NODE_RECOVERED=$tg_ev_node_recovered
+TELEGRAM_EVENT_WORKER_OFFLINE=$tg_ev_worker_offline
+TELEGRAM_EVENT_WORKER_RECOVERED=$tg_ev_worker_recovered
+TELEGRAM_EVENT_SYNC_FINISHED=$tg_ev_sync_finished
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -1610,6 +1636,15 @@ describe_change() {
             msg="Monero node RPC credential updated ($key)." ;;
         XVB_ENABLED|XVB_POOL_URL|XVB_DONOR_ID|XVB_DONATION_LEVEL)
             msg="XMRvsBeast setting ($key): $old → $new." ;;
+        TELEGRAM_ENABLED)
+            msg="Telegram alerts → $([ "$new" == "true" ] && echo on || echo off)." ;;
+        TELEGRAM_BOT_TOKEN)
+            # Never echo the token value into the apply preview — it's a secret.
+            msg="Telegram bot token updated." ;;
+        TELEGRAM_CHAT_ID)
+            msg="Telegram chat id: $old → $new." ;;
+        TELEGRAM_EVENT_*)
+            msg="Telegram alert toggle ($key): $old → $new." ;;
         TARI_REQUIRED)
             if [ "$new" == "true" ]; then
                 msg="Tari → required — a Tari outage rejects workers, the miner waits for Tari's sync, and a Tari-only sync takes over the dashboard."

@@ -13,6 +13,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Telegram alerts (notifications-only)** (#121): the stack can push a small, high-value set
+  of operational alerts to Telegram — **node down / recovered**, **worker offline / back
+  online**, and **sync finished**. Off by default; enable it with a `telegram` block in
+  `config.json` (`enabled`, `bot_token`, `chat_id`, and per-event `events` toggles). Every
+  alert is **debounced** so a momentary blip won't ping you and you get one message per real
+  transition: node edges reuse the existing failover detector, and worker offline/online uses a
+  new flap-protected per-worker presence tracker. The `bot_token` is treated as a secret
+  (owner-only `.env`, never logged), and sends **fail silently** on a Tor-only / offline host.
+  Messages are prefixed with the dashboard hostname so multiple stacks can share one chat. Full
+  walkthrough — creating a bot, finding your chat id, and the "one chat, two bots" pattern for
+  sharing a chat with the Healthchecks.io monitor (#79) — in [`docs/telegram.md`](docs/telegram.md).
+  The interactive bot / command interface remains a separate, later feature (#45).
 - **P2Pool Earnings (estimated) card** on the dashboard's Advanced view: expected XMR
   per day / month / year from **P2Pool mining only**, computed from your P2Pool hashrate
   and the live Monero block reward + network difficulty, plus an expected time-to-share.

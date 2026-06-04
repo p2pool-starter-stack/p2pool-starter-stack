@@ -105,6 +105,48 @@ SYNC_GATE_CONTAINERS = [
 NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
 NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 
+# --- Operator alerts: Telegram (Issue #121) ---
+# Notifications-only Telegram pusher: a thin notifier that pushes a small, high-value set of
+# operational edges (node down/recovered, worker offline/back, sync finished) to one chat.
+# Disabled by default — with TELEGRAM_ENABLED unset/false the stack runs with no Telegram
+# config and never sends or errors. The interactive bot / command interface is a separate
+# feature (#45); this is the notifications-only split.
+#
+# `bot_token` is a secret: the pithead CLI renders it into the owner-only .env (like the node
+# RPC password), and the notifier never writes it to a log line. On a Tor-only / no-clearnet
+# host the Telegram API is unreachable and sends fail silently (consistent with #59).
+TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "false").strip().lower() == "true"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+
+def _telegram_event_enabled(name, default=True):
+    """Read one per-event toggle from TELEGRAM_EVENT_<NAME> (rendered from config.json's
+    telegram.events by pithead). Any toggle left unset defaults to on, so enabling Telegram
+    turns on the full set and an operator only has to opt *out* of the noisy ones."""
+    raw = os.environ.get(f"TELEGRAM_EVENT_{name.upper()}")
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() == "true"
+
+
+# Per-event delivery toggles. Keys here are the canonical event names used throughout the
+# alerter (AlertService.EVT_*) and must match the config.json telegram.events block.
+TELEGRAM_EVENTS = {
+    "node_down": _telegram_event_enabled("node_down"),
+    "node_recovered": _telegram_event_enabled("node_recovered"),
+    "worker_offline": _telegram_event_enabled("worker_offline"),
+    "worker_recovered": _telegram_event_enabled("worker_recovered"),
+    "sync_finished": _telegram_event_enabled("sync_finished"),
+}
+
+# Worker offline/online debounce (Issue #121). A worker must be unseen this long before it's
+# reported OFFLINE, and seen continuously this long before "back online" — so a brief miner
+# reconnect doesn't spam the chat. Workers flap more than nodes (rig reboots, Wi-Fi blips),
+# so the window is wider than the node debounce above.
+WORKER_OFFLINE_AFTER_SEC = int(os.environ.get("WORKER_OFFLINE_AFTER_SEC", 300))
+WORKER_RECOVERY_AFTER_SEC = int(os.environ.get("WORKER_RECOVERY_AFTER_SEC", 120))
+
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")

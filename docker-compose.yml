@@ -282,6 +282,19 @@ services:
       # miner waits for Tari's sync, and whether a Tari-only sync takes over the dashboard
       # (Issue #51). Set dashboard.tari_required:false to make Tari non-blocking.
       - TARI_REQUIRED=${TARI_REQUIRED:-true}
+      # --- Operator alerts: Telegram (Issue #121) ---
+      # Notifications-only push alerter; disabled by default. bot_token is a secret sourced from
+      # the owner-only .env and is never logged by the dashboard. On a Tor-only / no-clearnet
+      # host the Telegram API is unreachable and sends fail silently. Per-event toggles default
+      # on. See docs/telegram.md.
+      - TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_EVENT_NODE_DOWN=${TELEGRAM_EVENT_NODE_DOWN:-true}
+      - TELEGRAM_EVENT_NODE_RECOVERED=${TELEGRAM_EVENT_NODE_RECOVERED:-true}
+      - TELEGRAM_EVENT_WORKER_OFFLINE=${TELEGRAM_EVENT_WORKER_OFFLINE:-true}
+      - TELEGRAM_EVENT_WORKER_RECOVERED=${TELEGRAM_EVENT_WORKER_RECOVERED:-true}
+      - TELEGRAM_EVENT_SYNC_FINISHED=${TELEGRAM_EVENT_SYNC_FINISHED:-true}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

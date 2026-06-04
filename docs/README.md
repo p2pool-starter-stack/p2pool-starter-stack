@@ -14,6 +14,7 @@ deeper on individual topics once you're up and running.
 | [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network, OS — plus lighter-footprint options. (Miner hardware lives in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, **reusing an existing node via data directories**, and connecting to a **remote Monero node**. |
 | [The Dashboard](dashboard.md) | **Sync Mode**, the live operational view, and how to read every panel. |
+| [Telegram Alerts](telegram.md) | Push **operator alerts** (node down/recovered, worker offline/back, sync finished) to Telegram — creating a bot, finding your chat id, and per-event toggles. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
