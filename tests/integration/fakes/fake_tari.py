@@ -55,11 +55,16 @@ class FakeBaseNode(bn_grpc.BaseNodeServicer):
         return resp
 
 
-async def start_server(port, state):
-    """Start a gRPC server on `port` (0 = ephemeral). Returns (server, bound_port)."""
+async def start_server(port, state, host="127.0.0.1"):
+    """Start a gRPC server on `host:port` (port 0 = ephemeral). Returns (server, bound_port).
+
+    Defaults to loopback for the in-process contract test; the standalone container passes
+    0.0.0.0 so the dashboard can reach it across the docker network (binding 127.0.0.1 inside
+    a container makes the port unreachable from peer containers).
+    """
     server = grpc.aio.server()
     bn_grpc.add_BaseNodeServicer_to_server(FakeBaseNode(state), server)
-    bound = server.add_insecure_port(f"127.0.0.1:{port}")
+    bound = server.add_insecure_port(f"{host}:{port}")
     await server.start()
     return server, bound
 
@@ -98,7 +103,7 @@ class _ControlServer(ThreadingHTTPServer):
 
 
 async def _main_async(args, state):
-    server, _ = await start_server(args.grpc_port, state)
+    server, _ = await start_server(args.grpc_port, state, host="0.0.0.0")  # noqa: S104 — test container
     ctrl = _ControlServer(("0.0.0.0", args.control_port), state)  # noqa: S104 — test-only
     threading.Thread(target=ctrl.serve_forever, daemon=True).start()
     print(
