@@ -209,3 +209,10 @@ class TestResponsiveLayout:
         # The CSS rule only helps if the markup actually wraps the table in it.
         mjs = await (await client.get("/static/components.mjs")).text()
         assert "table-scroll" in mjs
+
+    async def test_css_lets_stat_values_wrap(self, client):
+        # The stat-card grid is `1fr 1fr`; without overflow-wrap on the value a long unbroken
+        # string (a shortened wallet/hash, "Donor (1.00 kH/s+)") keeps the grid wider than the
+        # card and overflows it on a phone. Guard that the wrap rule stays present.
+        css = await (await client.get("/static/dashboard.css")).text()
+        assert "overflow-wrap" in css

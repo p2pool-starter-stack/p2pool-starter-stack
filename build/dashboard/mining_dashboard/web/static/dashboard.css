@@ -65,9 +65,13 @@ h3 { margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: v
 
 /* Stats */
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.stat-card { background: var(--bg); padding: 10px 12px; border-radius: 4px; border: 1px solid var(--border); }
+/* min-width:0 lets the 1fr tracks shrink below their content's intrinsic width — without it a
+ * long unbroken value (a shortened wallet like "48edf…aZ1", a hash, "Donor (1.00 kH/s+)") keeps
+ * the grid wider than the card and overflows it on narrow screens (Issue #83). The values then
+ * wrap via overflow-wrap on the <p> below rather than spilling out. */
+.stat-card { background: var(--bg); padding: 10px 12px; border-radius: 4px; border: 1px solid var(--border); min-width: 0; }
 .stat-card h5 { margin: 0 0 4px 0; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
-.stat-card p { margin: 0; font-weight: 600; font-size: 0.95rem; }
+.stat-card p { margin: 0; font-weight: 600; font-size: 0.95rem; overflow-wrap: anywhere; }
 .col-span-2 { grid-column: span 2; }
 
 /* Table */
