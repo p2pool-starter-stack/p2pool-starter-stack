@@ -1,7 +1,8 @@
 # ==========================================================================
 # Shared base: system deps + package metadata + source.
 # ==========================================================================
-FROM python:3.11-slim AS base
+# Pinned by digest (#135) so the python:3.11-slim tag can't be silently re-pointed.
+FROM python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0 AS base
 
 # System dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
