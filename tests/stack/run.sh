@@ -90,6 +90,63 @@ run_sourced "$SANDBOX" cred_needs_generating "" "PLACE";      assert_rc "empty n
 run_sourced "$SANDBOX" cred_needs_generating "PLACE" "PLACE"; assert_rc "placeholder needs generating" "$?" "0"
 run_sourced "$SANDBOX" cred_needs_generating "real" "PLACE";  assert_rc "real value kept"              "$?" "1"
 
+echo "== unit: disk_component_gib =="
+assert_eq "monero pruned -> 95"  "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "95"
+assert_eq "monero full -> 230"   "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "230"
+assert_eq "tari -> 50"           "$(run_sourced "$SANDBOX" disk_component_gib tari)"     "50"
+assert_eq "tor -> 1"             "$(run_sourced "$SANDBOX" disk_component_gib tor)"      "1"
+
+echo "== unit: check_disk_grouped (mocked df) =="
+# A df stub on PATH so check_disk_grouped sees a scripted filesystem layout. DF_MAP maps each data
+# dir to a mount point ("path=mount" space-separated); DF_AVAIL_KB / DF_AVAIL_H give the (single)
+# free figure every mount reports. Real temp dirs make disk_fs_mount resolve without walking up.
+DISK="$SANDBOX/disk"; mkdir -p "$DISK/bin"
+cat > "$DISK/bin/df" <<'EOF'
+#!/usr/bin/env bash
+human=0; path=""
+for a in "$@"; do case "$a" in -Ph) human=1 ;; -*) : ;; *) path="$a" ;; esac; done
+mount=""
+for kv in $DF_MAP; do [ "${kv%%=*}" = "$path" ] && mount="${kv#*=}"; done
+[ -n "$mount" ] || exit 1
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+if [ "$human" = 1 ]; then echo "src 9 9 ${DF_AVAIL_H} 1% $mount"; else echo "src 9 9 ${DF_AVAIL_KB} 1% $mount"; fi
+EOF
+chmod +x "$DISK/bin/df"
+DM="$DISK/data"; mkdir -p "$DM/monero" "$DM/tari" "$DM/p2pool" "$DM/dashboard" "$DM/tor"
+md="$DM/monero" td="$DM/tari" pd="$DM/p2pool" dd="$DM/dashboard" rd="$DM/tor"
+
+# All five dirs on ONE filesystem with plenty of space -> a SINGLE grouped OK line naming every
+# component, with the combined pruned requirement (95+50+5+2+1 = 153 GB).
+one_map="$md=/data $td=/data $pd=/data $dd=/data $rd=/data"
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
+       run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
+assert_eq "one fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
+assert_contains "single line names all components" "$out" "(monero, tari, p2pool, dashboard, tor)"
+assert_contains "single line shows combined ~153 GB" "$out" "needs ~153 GB"
+assert_contains "ample space -> OK" "$out" "OK"
+
+# Same single filesystem but too small (100 GiB < 153 GiB) -> ONE WARN line.
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=104857600 DF_AVAIL_H=100G \
+       run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
+assert_eq "one small fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
+assert_contains "small fs warns below need" "$out" "below the ~153 GB"
+
+# Two filesystems: monero+tari on /big, the rest on /small -> ONE line per filesystem.
+two_map="$md=/big $td=/big $pd=/small $dd=/small $rd=/small"
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$two_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
+       run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
+assert_eq "two fs -> two lines" "$(printf '%s\n' "$out" | grep -c 'Data on')" "2"
+assert_contains "/big groups monero+tari (~145 GB)" "$out" "/big (monero, tari): 600G free — needs ~145 GB"
+assert_contains "/small groups the small three (~8 GB)" "$out" "/small (p2pool, dashboard, tor): 600G free — needs ~8 GB"
+
+# Preflight mode is WARN-only and silent when there's enough room.
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
+       run_sourced "$SANDBOX" check_disk_grouped preflight 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
+assert_eq "preflight silent when ample" "$out" ""
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=104857600 DF_AVAIL_H=100G \
+       run_sourced "$SANDBOX" check_disk_grouped preflight 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
+assert_contains "preflight warns once when low" "$out" "Low disk on /data (hosts monero, tari, p2pool, dashboard, tor)"
+
 # ---------------------------------------------------------------------------
 echo "== black-box: CLI dispatch =="
 "$STACK" help >/dev/null 2>&1; assert_rc "help exits 0" "$?" "0"
