@@ -52,6 +52,27 @@ def test_monero_down_is_unreachable():
         assert client.get_sync_status() is None
 
 
+def test_monero_busy_status_is_unreachable():
+    # HTTP 200 but status=BUSY (e.g. mid-reorg): the client must distrust it, not read it synced.
+    with FakeMonerod() as m:
+        m.set(mode="busy")
+        assert MoneroClient(url=m.url, username="").get_sync_status() is None
+
+
+def test_monero_synced_by_height_even_without_flag():
+    # synchronized=false but height has reached target → caught up (mirrors monerod at the tip).
+    with FakeMonerod() as m:
+        m.set(mode="syncing", height=3_000_000, target_height=3_000_000)
+        st = MoneroClient(url=m.url, username="").get_sync_status()
+    assert st["is_syncing"] is False
+
+
+def test_monero_db_size_unknown_reads_zero():
+    with FakeMonerod(database_size=0) as m:
+        st = MoneroClient(url=m.url, username="").get_sync_status()
+    assert st == {"is_syncing": False, "db_size": 0}
+
+
 def test_monero_http_control_mutates_state():
     # Validates the /control path the docker mini-stack drives over the network.
     with FakeMonerod() as m:
@@ -88,3 +109,32 @@ def test_tari_down_is_unreachable_with_no_cache():
     # No prior good reading to cache, so a down node is reported unreachable immediately.
     st = asyncio.run(_tari_get_status({"mode": "down", "height": 0, "target_height": 0}))
     assert st["reachable"] is False
+
+
+def test_tari_syncing_without_reliable_target_avoids_false_100():
+    # Early sync: the node can't give a target above local height yet → report syncing at 0%,
+    # never a premature ✔ (target 0, not a bogus 100%).
+    st = asyncio.run(_tari_get_status({"mode": "syncing", "height": 1000, "target_height": 1000}))
+    assert st["is_syncing"] is True and st["target"] == 0 and st["percent"] == 0
+
+
+def test_tari_serves_cached_reading_when_briefly_unreachable():
+    # A busy-but-alive node (gRPC blips) should keep showing its last good reading, flagged
+    # reachable=False so node-down detection still sees the outage.
+    async def _impl():
+        state = {"mode": "synced", "height": 2000, "target_height": 2000}
+        server, bound = await start_server(0, state)
+        client = TariClient(MagicMock())
+        client.grpc_address = f"127.0.0.1:{bound}"
+        try:
+            first = await client.get_sync_status()    # live: synced + reachable
+            state["mode"] = "down"
+            second = await client.get_sync_status()    # cached: last reading, reachable False
+            return first, second
+        finally:
+            await client.close()
+            await server.stop(None)
+
+    first, second = asyncio.run(_impl())
+    assert first["reachable"] is True and first["is_syncing"] is False
+    assert second["reachable"] is False and second["is_syncing"] is False

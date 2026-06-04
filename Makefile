@@ -22,6 +22,14 @@ test-fakes: ## Fake-daemon contract test — real dashboard clients vs controlla
 test-mini-stack: ## Fake-daemon docker mini-stack end-to-end (needs docker; CI)
 	bash tests/integration/mini-stack/run-mini-stack.sh
 
+test-inventory: ## Regenerate the test coverage inventory (docs/test-inventory.md)
+	bash tests/inventory.sh > docs/test-inventory.md
+
+test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard)
+	@bash tests/inventory.sh | diff -u docs/test-inventory.md - \
+		&& echo "test-inventory is up to date" \
+		|| { echo "docs/test-inventory.md is stale — run 'make test-inventory'"; exit 1; }
+
 # End-to-end matrix against a REAL test server (issue #54). Needs a provisioned box; pass
 # connection + options through ARGS, e.g.:
 #   make test-integration ARGS="--host miner@10.0.0.5 --dir pithead --lifecycle"
@@ -31,4 +39,4 @@ test-integration: ## Run the live config-matrix integration suite (requires a te
 
 lint: ## shellcheck the stack scripts
 	shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh \
-		tests/integration/*.sh tests/integration/mini-stack/*.sh
+		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh

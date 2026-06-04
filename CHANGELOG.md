@@ -29,6 +29,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     node-down reject/readmit end-to-end with real containers. `make test-mini-stack`.
   - New dashboard unit tests for the required-Tari sync gate, the #35-latch × #31-failover
     interaction, and simultaneous double outages.
+  - A generated **test inventory** (`docs/test-inventory.md`, `make test-inventory`) listing
+    every test/scenario across all suites, kept honest by a CI drift check.
   - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer

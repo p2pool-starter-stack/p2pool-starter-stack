@@ -57,6 +57,12 @@ class _Handler(BaseHTTPRequestHandler):
         if st["mode"] == "down":
             self._send(503, {"status": "BUSY"})
             return
+        # "busy" → RPC answers HTTP 200 but reports a non-OK status (e.g. mid-reorg). The
+        # client must distrust the heights and treat it as unreachable, not as synced.
+        if st["mode"] == "busy":
+            self._send(200, {"status": "BUSY", "height": st["height"],
+                             "target_height": st["target_height"]})
+            return
         if st["mode"] == "syncing":
             payload = {
                 "status": "OK",

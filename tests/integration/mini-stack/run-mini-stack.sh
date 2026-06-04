@@ -50,6 +50,22 @@ assert_state() {  # assert_state <label> <container> <expected> [timeout]
     fi
 }
 
+# Assert a container STAYS in a state for a window — proves the gate does NOT release/act
+# prematurely (e.g. holds while only one required chain is synced). At UPDATE_INTERVAL=2 a
+# few seconds spans multiple control-loop cycles.
+assert_stays() {  # assert_stays <label> <container> <state> <seconds>
+    sleep "$4"
+    if [ "$(cstate "$2")" = "$3" ]; then
+        c_ok "$1 ($2 stays $3 for ${4}s)"
+    else
+        c_bad "$1" "$2 became '$(cstate "$2")', expected to stay '$3'"
+    fi
+}
+
+# POST a new mode to a fake's /control endpoint with a clear failure label.
+set_monerod() { ctl "http://127.0.0.1:18081/control" "{\"mode\":\"$1\"}" || c_bad "set monerod $1" "control POST failed"; }
+set_tari()    { ctl "http://127.0.0.1:18152/control" "{\"mode\":\"$1\"}" || c_bad "set tari $1" "control POST failed"; }
+
 teardown() {
     log "tearing down"
     compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -77,32 +93,58 @@ for _ in $(seq 1 30); do
 done
 [ "$api_up" = 1 ] && c_ok "dashboard API is up" || c_bad "dashboard API is up" "no /api/state after ~60s"
 
-# 1. Booting mid-sync → the gate holds both miner containers (stops them).
-log "scenario 1: holds the miner while syncing"
+# 1. Booting mid-sync → the gate holds both miner containers (stops them). (#35)
+log "scenario 1: holds the miner while both chains sync"
 assert_state "held: p2pool stopped"      p2pool      exited  90
 assert_state "held: xmrig-proxy stopped" xmrig-proxy exited  90
 
-# 2. Both chains report synced → release.
-log "scenario 2: releases the miner once synced"
-ctl "http://127.0.0.1:18081/control" '{"mode":"synced"}' || c_bad "set monerod synced" "control POST failed"
-ctl "http://127.0.0.1:18152/control" '{"mode":"synced"}' || c_bad "set tari synced" "control POST failed"
+# 2. Monerod synced but Tari still syncing, Tari REQUIRED → STILL held (the gate needs both).
+log "scenario 2: keeps holding while Tari (required) is still syncing"
+set_monerod synced
+assert_stays "still held on monerod-only" p2pool exited 8
+
+# 3. Tari synced too → release both. (#35)
+log "scenario 3: releases the miner once both chains are synced"
+set_tari synced
 assert_state "released: p2pool running"      p2pool      running 90
 assert_state "released: xmrig-proxy running" xmrig-proxy running 90
 
-# 3. monerod goes down → reject workers (stop xmrig-proxy); p2pool keeps running.
-log "scenario 3: rejects workers when monerod is down"
-ctl "http://127.0.0.1:18081/control" '{"mode":"down"}' || c_bad "set monerod down" "control POST failed"
+# 4. monerod down → reject workers (stop xmrig-proxy); p2pool keeps running. (#31)
+log "scenario 4: rejects workers when monerod is down"
+set_monerod down
 assert_state "rejected: xmrig-proxy stopped" xmrig-proxy exited  90
 if [ "$(cstate p2pool)" = "running" ]; then
-    c_ok "rejection leaves p2pool running (only the proxy is failed over)"
+    c_ok "rejection leaves p2pool running (only the proxy fails over)"
 else
     c_bad "rejection leaves p2pool running" "p2pool is '$(cstate p2pool)'"
 fi
 
-# 4. monerod recovers → readmit workers.
-log "scenario 4: readmits workers when monerod recovers"
-ctl "http://127.0.0.1:18081/control" '{"mode":"synced"}' || c_bad "set monerod synced" "control POST failed"
+# 5. monerod recovers → readmit workers (after the recovery-hysteresis window). (#31)
+log "scenario 5: readmits workers when monerod recovers"
+set_monerod synced
 assert_state "readmitted: xmrig-proxy running" xmrig-proxy running 90
+
+# 6. Tari down while required → reject again (proves the required-Tari failover path).
+log "scenario 6: rejects workers when required Tari is down"
+set_tari down
+assert_state "rejected on Tari outage: xmrig-proxy stopped" xmrig-proxy exited 90
+
+# 7. Tari recovers → readmit.
+log "scenario 7: readmits workers when Tari recovers"
+set_tari synced
+assert_state "readmitted after Tari recovery: xmrig-proxy running" xmrig-proxy running 90
+
+# 8. Dashboard restart after release → the one-way latch is persisted, so the miner is NOT
+#    re-held: both containers stay running across the restart. (#35 persistence)
+log "scenario 8: a dashboard restart does not re-hold a released miner"
+compose restart dashboard >/dev/null 2>&1
+for _ in $(seq 1 30); do
+    compose exec -T dashboard python3 -c \
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=3)" >/dev/null 2>&1 && break
+    sleep 2
+done
+assert_stays "p2pool stays up across restart"      p2pool      running 6
+assert_stays "xmrig-proxy stays up across restart" xmrig-proxy running 6
 
 echo ""
 log "mini-stack: $PASS passed, $FAIL failed"

@@ -117,6 +117,72 @@ make test-mini-stack      # tier 3 — needs docker
 make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-injection"  # tier 4
 ```
 
+## Production-readiness posture
+
+What gates a merge vs. a release, the engineering standards every test holds to, and the gaps
+we know about. The full enumerated coverage is in the generated
+[Test Inventory](test-inventory.md) (kept honest by a CI drift check).
+
+### What runs where
+
+| Check | Tier | When | Blocking? |
+|---|---|---|---|
+| Dashboard pytest + **≥80% coverage gate** | 1 | every PR | ✅ required |
+| Frontend logic (`node --test`) | 1 | every PR | ✅ required |
+| Dashboard image test stage (in-container) | 1 | every PR | ✅ required |
+| `pithead` shell suite + shellcheck | 1 | every PR | ✅ required |
+| Compose interpolation validation | 1 | every PR | ✅ required |
+| Fake-daemon **contract test** | 2 | every PR | ✅ required |
+| Integration harness **self-test** | 4 | every PR | ✅ required |
+| **Test-inventory drift** check | — | every PR | ✅ required |
+| Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
+| **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
+
+The first three tiers run on every PR with no special infrastructure; tier 4 is the blocking
+**pre-release** gate (see [Releasing](releasing.md)) because it needs the real synced nodes.
+
+### Engineering standards
+
+Every scenario, at every tier, holds to the same discipline:
+
+- **Deterministic, no sleep-and-hope.** Wait on real readiness signals — container health,
+  `pithead status`, dashboard sync %, miner-released — with timeouts. The only fixed sleeps are
+  *poll intervals* and the deliberate "stays in state" windows that prove the gate does **not**
+  act prematurely.
+- **Isolated & idempotent.** Each scenario starts from a known baseline and restores it; the
+  live matrix snapshots `config.json` and reuses (never mutates) the canonical chain dirs; the
+  mini-stack tears down with `down -v`.
+- **Actionable failures.** Per-scenario pass/fail, continue-on-error to collect the whole
+  matrix, and artifact capture (redacted logs, `compose ps`, `.env`-minus-secrets, dashboard
+  responses) on failure.
+- **Secrets hygiene.** Tokens / RPC creds / onions are never printed; preservation is checked
+  by hashing on the box; all artifacts pass a redactor.
+- **Reproducible.** The live run records a manifest (stack `VERSION`, git rev, image digests).
+- **Test code is real code.** Same lint (shellcheck), the coverage gate, and the inventory
+  drift check apply to the tests themselves.
+
+### Flake policy
+
+Integration scenarios **quarantine, never blind-retry**: a scenario that fails intermittently
+is marked and investigated, not wrapped in a retry loop that hides a real race. The waiters
+have generous timeouts so a slow-but-correct stack passes while a genuinely broken one fails
+fast with artifacts.
+
+### Known gaps (honest)
+
+These are deliberately **not** yet covered and are the road to full production confidence:
+
+- **First green run on real hardware.** The live matrix (tier 4) and the docker mini-stack
+  (tier 3) are built and validated structurally; their first end-to-end runs happen on the test
+  box / CI. Treat them as "pending first green" until then.
+- **CLI breadth in automation.** `backup`/`restore`, `reset-dashboard`, and `upgrade` are
+  documented and partly unit-covered, but not yet asserted end-to-end in the integration tiers.
+- **Soak / longevity.** No multi-hour run asserting no leaks, no log/DB growth runaway, and that
+  the XvB controller converges over a realistic window.
+- **Load / capacity.** No test drives many workers or high share rates to find limits.
+- **Security review.** Tracked separately (`SECURITY.md`); the harness avoids leaking secrets
+  but is not itself a security audit.
+
 ## Adding a scenario
 
 - **Logic** (a new decision/branch) → a unit test (tier 1). Cheapest, fastest.
