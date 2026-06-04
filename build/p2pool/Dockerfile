@@ -19,6 +19,10 @@ RUN wget -O p2pool.tar.gz https://github.com/SChernykh/p2pool/releases/download/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Stratum-port liveness healthcheck (#90)
+COPY healthcheck.sh /usr/local/bin/p2pool-healthcheck.sh
+RUN chmod +x /usr/local/bin/p2pool-healthcheck.sh
+
 WORKDIR /root
 
 # Use the wrapper script as the entrypoint
