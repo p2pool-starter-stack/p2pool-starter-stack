@@ -69,6 +69,7 @@ run_sourced "$SANDBOX" is_ipv4 "127.0.0.1"    >/dev/null 2>&1; assert_rc "accept
 run_sourced "$SANDBOX" is_ipv4 "192.168.1.10" >/dev/null 2>&1; assert_rc "accepts LAN IP"      "$?" "0"
 run_sourced "$SANDBOX" is_ipv4 "256.0.0.1"    >/dev/null 2>&1; assert_rc "rejects octet >255"  "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "1.2.3"        >/dev/null 2>&1; assert_rc "rejects 3 octets"    "$?" "1"
+run_sourced "$SANDBOX" is_ipv4 "192.168.1.0/24" >/dev/null 2>&1; assert_rc "rejects CIDR/subnet" "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "example.com"  >/dev/null 2>&1; assert_rc "rejects hostname"    "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 ""             >/dev/null 2>&1; assert_rc "rejects empty"       "$?" "1"
 

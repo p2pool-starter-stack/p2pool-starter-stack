@@ -56,10 +56,46 @@ it connects through a proxy). Any reasonably recent **XMRig (5.0+, which introdu
   firewall, allow inbound `3333` from your LAN.
 - By default the stack publishes `3333` on **all** of the host's interfaces (`0.0.0.0`) so any rig
   on your LAN can connect with no extra setup. **On a host with a public IP, that port is reachable
-  from the internet** — keep it firewalled to your LAN, and/or narrow the bind: set
-  [`p2pool.stratum_bind`](configuration.md#configuration-reference) to a specific LAN IP (e.g.
-  `192.168.1.10`) or to `127.0.0.1` to disable LAN access entirely. The stratum protocol is
-  unauthenticated, so it should never be exposed to the public internet.
+  from the internet** — the stratum protocol is unauthenticated, so it should never be exposed
+  there. Lock it down two ways, which complement each other: narrow the **bind address** with
+  [`p2pool.stratum_bind`](configuration.md#configuration-reference), and/or restrict the **source
+  range** with a host firewall.
+
+#### `p2pool.stratum_bind` — which interface to listen on
+
+This is the host **bind address**: it controls *which network interface* the `3333` port is
+published on. It takes a **single IPv4 address** (it maps directly to Docker's port-publish host
+IP), **not** a subnet/CIDR — `192.168.1.0/24` is invalid and is rejected at setup.
+
+| Value | Effect |
+|---|---|
+| `0.0.0.0` (default) | All interfaces — every rig on the LAN can connect (and the public IP, if any). |
+| `192.168.1.10` | Only the interface holding that LAN IP — not published on a public/WAN interface. Must be an IP actually assigned to the host. |
+| `127.0.0.1` | Loopback only — disables LAN access entirely (e.g. when every worker runs on the stack host itself). |
+
+Narrowing the bind to a LAN IP stops the port appearing on a public interface, but **any host that
+can route to that LAN IP can still connect**. To allow only a specific subnet, use a firewall.
+
+#### Restricting by subnet — use a firewall
+
+Limiting *which source addresses* may connect (e.g. only `192.168.1.0/24`) is source-based access
+control, which a bind address can't express — that's a firewall rule. Examples that allow your LAN
+subnet and drop everything else on `3333`:
+
+```bash
+# ufw (Ubuntu's default): allow the LAN subnet, deny the rest
+sudo ufw allow from 192.168.1.0/24 to any port 3333 proto tcp
+sudo ufw deny 3333/tcp
+```
+
+```bash
+# nftables: allow 192.168.1.0/24, drop other inbound 3333
+sudo nft add rule inet filter input tcp dport 3333 ip saddr 192.168.1.0/24 accept
+sudo nft add rule inet filter input tcp dport 3333 drop
+```
+
+Adjust `192.168.1.0/24` to your own LAN range. Combining both — bind to the LAN IP **and**
+firewall the subnet — is the belt-and-suspenders setup for a host that also has a public IP.
 
 If a worker doesn't show up, see
 [Operations › Troubleshooting](operations.md#troubleshooting).
