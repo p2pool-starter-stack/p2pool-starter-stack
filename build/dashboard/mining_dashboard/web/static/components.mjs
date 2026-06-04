@@ -283,11 +283,14 @@ function PoolBadge({ pool }) {
 // has reported any shares so it isn't an all-zero line on a fresh start.
 const ProxyTotals = ({ summary }) => {
     if (!summary || !summary.has_data) return null;
+    // htm trims whitespace that wraps across a newline at an element boundary, so the spaces
+    // around the rejected <span> are added explicitly via ${' '} rather than left to indentation.
+    const rejCls = summary.reject_level === 'high' ? 'status-bad' : '';
     return html`
     <div class="proxy-totals text-small text-muted">
-        Proxy totals: <span class="status-ok">${summary.accepted}</span> accepted ·
-        <span class=${summary.reject_level === 'high' ? 'status-bad' : ''}>${summary.rejected}</span>
-        rejected (${summary.reject_pct}) · ${summary.invalid} invalid · Best diff ${summary.best}
+        Proxy totals: <span class="status-ok">${summary.accepted}</span> accepted ·${' '}
+        <span class=${rejCls}>${summary.rejected}</span> rejected (${summary.reject_pct}) ·${' '}
+        ${summary.invalid} invalid · Best diff ${summary.best}
     </div>`;
 };
 

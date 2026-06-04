@@ -93,6 +93,26 @@ class TestSnapshot:
     def test_load_missing_snapshot_returns_none(self, state_manager):
         assert state_manager.load_snapshot() is None
 
+    def test_share_stats_persist_across_instances(self, tmp_path):
+        # Issue #82: the per-worker share counts and the proxy /summary totals ride along in the
+        # latest_data snapshot, so they survive a dashboard restart (the snapshot is what
+        # DataService restores on init). Save with one instance, read back with a fresh one.
+        db = str(tmp_path / "state.db")
+        sm1 = StateManager(db_path=db)
+        sm1.save_snapshot({
+            "workers": [{"name": "rig1", "ip": "10.0.0.1", "status": "online",
+                         "accepted": 1234, "rejected": 5, "invalid": 0}],
+            "proxy_summary": {"accepted": 12345, "rejected": 67, "invalid": 2,
+                              "expired": 1, "best": 9876543},
+        })
+        sm1.close()
+
+        snap = StateManager(db_path=db).load_snapshot()  # fresh instance -> reads from disk
+        assert snap["workers"][0]["accepted"] == 1234
+        assert snap["workers"][0]["rejected"] == 5
+        assert snap["proxy_summary"] == {"accepted": 12345, "rejected": 67, "invalid": 2,
+                                         "expired": 1, "best": 9876543}
+
 
 class TestPersistenceAndMigration:
     def test_state_persists_across_instances(self, tmp_path):
