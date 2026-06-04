@@ -367,6 +367,25 @@ REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:hea
 out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"; rc=$?
 assert_rc "status: remote mode ignores monerod" "$rc" "0"
 
+echo "== black-box: doctor exit code (#127) =="
+# doctor must EXIT NON-ZERO when a critical check fails, so it's usable as a cron/CI health gate
+# (it previously always returned 0). Drive one failure via an unreachable Docker daemon; jq/openssl
+# stay real on PATH so only the daemon check fails.
+DOC="$SANDBOX/doctor"; mkdir -p "$DOC/bin"; cp "$STACK" "$DOC/pithead"
+cat > "$DOC/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "info") exit 1 ;;   # daemon unreachable -> doctor records a critical FAIL
+  *)      exit 0 ;;   # `--version`, `compose version`, etc. succeed
+esac
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DOC/bin/sudo"
+chmod +x "$DOC/bin/docker" "$DOC/bin/sudo"
+out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"; rc=$?
+assert_contains "doctor runs to the summary"          "$out" "Diagnostics summary"
+assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
+assert_rc       "doctor exits 1 on a critical FAIL"   "$rc" "1"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
