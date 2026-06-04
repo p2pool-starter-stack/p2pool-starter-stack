@@ -8,7 +8,7 @@
 # and AI agents to discover what they are working with.
 set -uo pipefail
 
-STACK_DIR="${STACK_DIR:-$HOME/code/p2pool-starter-stack}"
+STACK_DIR="${STACK_DIR:-$HOME/pithead}"
 
 h()    { printf '\n## %s\n\n' "$1"; }
 fence(){ printf '```\n'; cat; printf '```\n'; }
@@ -42,8 +42,11 @@ df -hT / /home /mnt/chains 2>/dev/null | fence
 
 h "Chains"
 {
-    mdir="$(readlink -f "$STACK_DIR/data/monero" 2>/dev/null)"
-    tdir="$(readlink -f "$STACK_DIR/data/tari" 2>/dev/null)"
+    # Read the real data-dir locations from .env (they're decoupled from the checkout).
+    mdir="$(grep -E '^MONERO_DATA_DIR=' "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+    tdir="$(grep -E '^TARI_DATA_DIR=' "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2-)"
+    [ -n "$mdir" ] || mdir="$(readlink -f "$STACK_DIR/data/monero" 2>/dev/null)"
+    [ -n "$tdir" ] || tdir="$(readlink -f "$STACK_DIR/data/tari" 2>/dev/null)"
     echo "Monero : ${mdir:-?}"
     echo "         size $(du -sh "$mdir" 2>/dev/null | cut -f1)  |  MONERO_PRUNE=$(grep -E '^MONERO_PRUNE=' "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2-) (1=pruned)"
     echo "Tari   : ${tdir:-?}"

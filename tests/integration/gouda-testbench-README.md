@@ -1,34 +1,38 @@
 # Pithead reference build & test server (`gouda`)
 
-This box runs the **live Pithead stack** (Monero node + P2Pool + Tari merge-mining + dashboard)
-and is the **Tier-4 release gate**: changes are validated end-to-end here against real, synced
-chains before release. It is used by **developers and AI agents** — read this first.
+A dedicated **dev + AI-agent test platform** that runs the **live Pithead stack** (Monero node +
+P2Pool + Tari merge-mining + dashboard) against real, synced chains, and serves as the **Tier-4
+release gate** — changes are validated end-to-end here before release. Read this first.
 
-`system-info.md` (next to this file) is a live hardware/layout snapshot. Regenerate any time:
-`~/pithead-testbench/system-info.sh > ~/pithead-testbench/system-info.md`.
+See **`docs/test-server-architecture.md`** in the repo for the full architecture + how to recreate
+this box on another machine. `system-info.md` (next to this file) is a live hardware snapshot:
+regenerate with `~/pithead-testbench/system-info.sh > ~/pithead-testbench/system-info.md`.
 
-## ⚠️ Golden rules — this is a PRODUCTION miner
+## ⚠️ Golden rules
 
-1. **Never delete a data dir.** The synced Monero/Tari chains are the irreplaceable asset.
-2. **Minimize mining downtime.** monerod stopped = no mining. Prefer no-downtime operations; when
-   a stop is unavoidable keep it short and say so.
-3. **Chains on NVMe, backups on HDD.** Active chains must stay on the NVMe (root LV). The `/home`
-   HDD is a 7200 rpm spinner — fine for backups/cold storage, fatal for an active chain's latency.
-4. **Least privilege.** `sudo` is password-protected and interactive-only — don't expect or leave
+This is a **test bench, not a production miner** — downtime and teardown/redeploy are fine. The
+constraints that matter:
+
+1. **Never lose the synced chains.** They are the only slow-to-acquire asset (days to re-sync) —
+   reuse them. They live at `/srv/code/pithead/data/`, decoupled from the checkout, so you can
+   refresh/redeploy the stack freely without touching them.
+2. **Chains on the SSD, HDD only for cold storage.** Active chains stay on the **NVMe**; the
+   `/home` HDD (7200 rpm) is for backup tarballs / archives only — a chain there makes tests crawl.
+3. **Least privilege.** `sudo` is password-protected and interactive-only — don't expect or leave
    passwordless grants. Almost everything here needs **no sudo** (your user is in the `docker` group).
-5. **Secrets stay put.** `.env` (RPC creds) and `config.json` (wallet addresses) are owner-only.
+4. **Secrets stay put.** `.env` (RPC creds) and `config.json` (wallet addresses) are owner-only.
    Never print, copy, or commit them.
 
 ## Where things are
 
 | Path | What |
 |---|---|
-| `~/code/p2pool-starter-stack/` | the stack: `docker-compose.yml` + the `pithead` CLI |
-| `~/code/p2pool-starter-stack/data/{monero,tari,p2pool,dashboard,tor}/` | chain/data dirs (NVMe) |
+| `~/pithead/` | the stack checkout: `docker-compose.yml`, the `pithead` CLI, your `config.json`/`.env` |
+| `/srv/code/pithead/data/{monero,tari,p2pool,dashboard,tor}/` | the chains — **the asset**, on the SSD, decoupled from the checkout |
 | `~/pithead-testbench/` | **this dir** — build-server docs + tools |
 | `~/pithead-testbench/bin/monero-blockchain-prune` | verified offline Monero tool (version matches monerod) |
-| `~/pithead-testbench/{build-pruned-chain,compact-chain}.sh` | chain ops (also versioned in the repo `tests/integration/`) |
-| `/mnt/chains` | btrfs CoW loopback on the HDD — backups / cold storage |
+| `~/pithead-testbench/{build-pruned-chain,compact-chain,system-info}.sh` | chain ops + system snapshot (also versioned in the repo `tests/integration/`) |
+| `/home`, `/mnt/chains` | HDD — cold backups / archives only |
 
 ## The chains (this was the confusing part)
 
@@ -42,17 +46,17 @@ chains before release. It is used by **developers and AI agents** — read this 
 
 **Compacting the Monero chain** (reclaim bloat; hours, but no downtime until the swap):
 ```bash
-~/pithead-testbench/compact-chain.sh ~/code/p2pool-starter-stack/data/monero   # builds lmdb-pruned/ (monerod stays up)
+~/pithead-testbench/compact-chain.sh /srv/code/pithead/data/monero   # builds lmdb-pruned/ (monerod stays up)
 # when DONE, swap it in (brief downtime):
 docker stop monerod
-cd ~/code/p2pool-starter-stack/data/monero && mv lmdb lmdb.bloated && mv lmdb-pruned lmdb
+cd /srv/code/pithead/data/monero && mv lmdb lmdb.bloated && mv lmdb-pruned lmdb
 docker start monerod        # re-syncs the few blocks added during the copy
 # confirm `pithead status` healthy, then: rm -rf lmdb.bloated
 ```
 
 ## Running the stack
 ```bash
-cd ~/code/p2pool-starter-stack
+cd ~/pithead
 ./pithead status         # health summary
 ./pithead doctor         # deeper diagnostics
 ./pithead up | down | apply | backup
@@ -63,12 +67,12 @@ cd ~/code/p2pool-starter-stack
 Tiers 1–3 run anywhere with no real chains; **Tier 4 (the live matrix) runs here.**
 ```bash
 # Drive gouda over SSH from a dev checkout (start non-destructive):
-tests/integration/run.sh --host vijit@gouda --dir code/p2pool-starter-stack --check       # assert current live state
-tests/integration/run.sh --host vijit@gouda --dir code/p2pool-starter-stack --readiness   # is the box fit to gate a release?
+tests/integration/run.sh --host vijit@gouda --dir pithead --check       # assert current live state
+tests/integration/run.sh --host vijit@gouda --dir pithead --readiness   # is the box fit to gate a release?
 # Full destructive config matrix, with a pithead backup + auto-rollback on failure:
-tests/integration/run.sh --host vijit@gouda --dir code/p2pool-starter-stack --safety-backup
+tests/integration/run.sh --host vijit@gouda --dir pithead --safety-backup
 # On the box itself:
-cd ~/code/p2pool-starter-stack && tests/integration/run.sh --local --dir "$PWD" --lifecycle
+cd ~/pithead && tests/integration/run.sh --local --dir "$PWD" --lifecycle
 ```
 Always start with `--check`/`--readiness`. Use `--safety-backup` for the destructive matrix so a
 failure rolls the box back (down → restore → up). See `docs/integration-testing.md` in the repo.
