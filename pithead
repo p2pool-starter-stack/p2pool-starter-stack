@@ -450,6 +450,11 @@ stack_backup() {
         warn "Tor data dir not found ($TOR_DATA_DIR) — onion keys will NOT be in the backup."
     fi
 
+    # The dashboard's data dir holds its database (hashrate history & settings). It's small and
+    # irreplaceable (it does NOT re-sync), so it always goes in the default backup, not behind
+    # --with-chains.
+    [ -d "$DASHBOARD_DIR" ] && items+=("$DASHBOARD_DIR")
+
     if [ "$with_chains" -eq 1 ]; then
         log "Including blockchain data (this can be very large)..."
         local d
@@ -607,8 +612,9 @@ Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
   backup [--with-chains] [-y|--yes]
                             Write a timestamped, chmod-600 tar.gz under backups/ holding the
-                            irreplaceable bits: config.json, .env, Caddyfile, and the Tor data
-                            dir (onion keys). Blockchains are excluded unless --with-chains.
+                            irreplaceable bits: config.json, .env, Caddyfile, the Tor data dir
+                            (onion keys), and the dashboard's database (your hashrate history &
+                            settings). Blockchains are excluded unless --with-chains.
                             If the stack is running, backup stops it for a consistent copy and
                             starts it again when it's done.
                               --with-chains    also include the blockchain data (large).
