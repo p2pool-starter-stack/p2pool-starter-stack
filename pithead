@@ -197,6 +197,13 @@ dr_fail() { DR_FAIL=$((DR_FAIL + 1)); printf '  %b✗ FAIL%b %s\n'   "$C_RED"   
 # Neutral note for context lines that aren't pass/fail (e.g. a skipped Linux-only check).
 dr_info() { printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
 
+# True if Docker is set to start at boot (docker.service OR docker.socket enabled). systemd only —
+# the caller checks that systemctl exists. Checking docker.socket too covers socket-activated
+# installs where docker.service is "static" but Docker still comes up at boot.
+docker_boot_enabled() {
+    systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
+}
+
 doctor() {
     DR_OK=0; DR_WARN=0; DR_FAIL=0
     detect_os
@@ -237,6 +244,21 @@ doctor() {
         dr_ok "Docker daemon is reachable."
     else
         dr_fail "Docker daemon is not reachable — start it (e.g. 'sudo systemctl start docker') and ensure your user is in the 'docker' group."
+    fi
+
+    # --- Docker boot persistence (Linux/systemd) ---
+    # `restart: unless-stopped` only brings the stack back after a reboot if the Docker daemon
+    # itself starts at boot. Ubuntu's docker.io/docker-ce enables it by default, but --skip-deps,
+    # rootless, or a manually-disabled unit won't come back after a power loss — surface that, since
+    # the documented use case is an unattended miner (#137).
+    if [ "$OS_TYPE" != "Darwin" ] && command -v systemctl >/dev/null 2>&1; then
+        echo ""
+        echo "Boot persistence:"
+        if docker_boot_enabled; then
+            dr_ok "Docker is enabled to start at boot — the stack will come back after a reboot."
+        else
+            dr_warn "Docker is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker'."
+        fi
     fi
 
     # --- CPU: AVX2 (performance only) ---
@@ -371,6 +393,9 @@ doctor() {
     else
         log "All checks passed."
     fi
+    # Propagate a non-zero exit when any critical check FAILED, so `doctor` is usable as a health
+    # gate in cron/CI/monitoring (mirrors `status`). Warnings alone still exit 0 (#127).
+    [ "$DR_FAIL" -gt 0 ] && return 1
     return 0
 }
 
@@ -483,8 +508,12 @@ stack_backup() {
     # so we assume the archive needs roughly the source size plus a ~5% safety margin.
     local need_kb avail_kb
     # sudo: the Tor data dir is owned by 100:101; -c gives a grand total across all items.
-    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}')
-    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}')
+    # `|| true`: du exits non-zero if it can't read any descendant (a permission-denied subdir, a
+    # file vanishing mid-walk, an NFS hiccup) even though 2>/dev/null hides the message and a total
+    # is still printed. Without this, errexit (set -e) aborts the whole backup on a bare assignment,
+    # making the graceful "proceeding without a space check" fallback below unreachable (#127).
+    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}') || true
+    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}') || true
     if [ -n "$need_kb" ] && [ -n "$avail_kb" ]; then
         if [ "$avail_kb" -lt "$((need_kb + need_kb / 20))" ]; then
             local avail_gib=$((avail_kb / 1048576)) need_gib=$((need_kb / 1048576))
@@ -1743,7 +1772,7 @@ main() {
         upgrade)          require_deployed; stack_upgrade ;;
         logs)             require_env; log "Following logs (Ctrl+C to exit)..."; docker compose logs -f "$@" ;;
         status)           require_env; stack_status || exit 1 ;;
-        doctor)           doctor ;;
+        doctor)           doctor || exit 1 ;;
         reset-dashboard)  require_deployed; reset_dashboard "$@" ;;
         backup)           stack_backup "$@" ;;
         restore)          stack_restore "$@" ;;

@@ -205,10 +205,17 @@ def _downsample_history(filtered_history, duration_s):
     return downsampled
 
 
+# Where the share markers ride on their own hidden 0–1 axis on the client: a constant near the
+# top, so they form a "rug" along the top edge instead of riding the hashrate line. Pinning them
+# off the hashrate axis keeps a single tall marker from inflating the y-range and burying a flat
+# line at the bottom of the card (Issue #145).
+_SHARE_MARKER_Y = 0.93
+
+
 def _share_points(filtered_history, filtered_shares):
     """Sparse share markers: bucket each share onto its nearest history sample and emit one
-    ``{x, y, r, c}`` point per sample that has shares (x = sample time ms, y = lifted above the
-    line, r = radius scaled by count, c = count)."""
+    ``{x, y, r, c}`` point per sample that has shares (x = sample time ms, y = the fixed top-of-
+    chart position on the client's dedicated share axis, r = radius scaled by count, c = count)."""
     if not (filtered_history and filtered_shares):
         return []
 
@@ -227,12 +234,11 @@ def _share_points(filtered_history, filtered_shares):
     points = []
     for idx in sorted(counts):
         count = counts[idx]
-        v = filtered_history[idx].get('v', 0)
-        # Lift the marker 10% above the line so it doesn't sit on the curve; floor to 100 for
-        # zero-hashrate samples so it stays visible.
+        # y is fixed (a fraction of the dedicated 0–1 share axis): the marker no longer tracks the
+        # hashrate, so it never stretches the y-range. Radius still scales with the share count.
         points.append({
             "x": int(hist_ts[idx] * 1000),
-            "y": v * 1.1 if v > 0 else 100,
+            "y": _SHARE_MARKER_Y,
             "r": min(6 + (count * 3), 15),
             "c": count,
         })

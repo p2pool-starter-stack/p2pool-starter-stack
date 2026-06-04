@@ -73,6 +73,23 @@ run_sourced "$SANDBOX" is_ipv4 "192.168.1.0/24" >/dev/null 2>&1; assert_rc "reje
 run_sourced "$SANDBOX" is_ipv4 "example.com"  >/dev/null 2>&1; assert_rc "rejects hostname"    "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 ""             >/dev/null 2>&1; assert_rc "rejects empty"       "$?" "1"
 
+echo "== unit: docker_boot_enabled (#137) =="
+# A systemctl stub on PATH; FAKE_BOOT picks which unit reports "enabled". Docker counts as
+# boot-enabled if EITHER docker.service or docker.socket is enabled.
+BOOT="$SANDBOX/boot"; mkdir -p "$BOOT/bin"
+cat > "$BOOT/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "is-enabled docker.service") [ "${FAKE_BOOT:-}" = "service" ] && exit 0 || exit 1 ;;
+  "is-enabled docker.socket")  [ "${FAKE_BOOT:-}" = "socket"  ] && exit 0 || exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$BOOT/bin/systemctl"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=service run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "docker.service enabled -> 0" "$?" "0"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=socket  run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "docker.socket enabled -> 0"  "$?" "0"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=none    run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "neither enabled -> 1"        "$?" "1"
+
 echo "== unit: describe_change =="
 assert_contains "prune is DEST"      "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)"        "DEST"
 assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
@@ -349,6 +366,25 @@ printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=\nHOST_IP=box.lan\n' > "$ST/
 REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
 out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"; rc=$?
 assert_rc "status: remote mode ignores monerod" "$rc" "0"
+
+echo "== black-box: doctor exit code (#127) =="
+# doctor must EXIT NON-ZERO when a critical check fails, so it's usable as a cron/CI health gate
+# (it previously always returned 0). Drive one failure via an unreachable Docker daemon; jq/openssl
+# stay real on PATH so only the daemon check fails.
+DOC="$SANDBOX/doctor"; mkdir -p "$DOC/bin"; cp "$STACK" "$DOC/pithead"
+cat > "$DOC/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "info") exit 1 ;;   # daemon unreachable -> doctor records a critical FAIL
+  *)      exit 0 ;;   # `--version`, `compose version`, etc. succeed
+esac
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DOC/bin/sudo"
+chmod +x "$DOC/bin/docker" "$DOC/bin/sudo"
+out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"; rc=$?
+assert_contains "doctor runs to the summary"          "$out" "Diagnostics summary"
+assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
+assert_rc       "doctor exits 1 on a critical FAIL"   "$rc" "1"
 
 # ---------------------------------------------------------------------------
 echo ""
