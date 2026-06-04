@@ -78,6 +78,12 @@ assert_eq "env_get_file reads value"      "$(run_sourced "$SANDBOX" env_get_file
 assert_eq "env_get_file value with ="     "$(run_sourced "$SANDBOX" env_get_file "$SANDBOX/old.env" PROXY_AUTH_TOKEN)" "keep=me"
 changed="$(run_sourced "$SANDBOX" env_changed_keys "$SANDBOX/old.env" "$SANDBOX/new.env" | sort | tr '\n' ' ')"
 assert_eq "env_changed_keys finds B and C" "$changed" "B C "
+# Build-provenance keys (Issue #58) are baked at image-build time, so apply must ignore them in the
+# diff — otherwise the commit hash would churn on every git pull and needlessly recreate the dashboard.
+printf 'A=1\nPITHEAD_VERSION=0.1.0\nPITHEAD_GIT_COMMIT=aaaaaaa\nPITHEAD_GIT_BRANCH=main\n' > "$SANDBOX/provo.env"
+printf 'A=2\nPITHEAD_VERSION=0.2.0\nPITHEAD_GIT_COMMIT=bbbbbbb\nPITHEAD_GIT_BRANCH=dev\n'  > "$SANDBOX/provn.env"
+changed="$(run_sourced "$SANDBOX" env_changed_keys "$SANDBOX/provo.env" "$SANDBOX/provn.env" | sort | tr '\n' ' ')"
+assert_eq "env_changed_keys ignores PITHEAD_* provenance" "$changed" "A "
 
 echo "== unit: node credential helpers =="
 assert_eq "default username is admin" "$(run_sourced "$SANDBOX" default_node_username)" "admin"
@@ -187,12 +193,17 @@ assert_contains "invalid pool message" "$out" "p2pool.pool"
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+# Stack version (Issue #58): render_env bakes the top-level VERSION file into PITHEAD_VERSION for
+# the dashboard build-arg, trimming surrounding whitespace. (The sandbox isn't a git repo, so the
+# dev branch/commit are empty here — the resolver's release/dev split is unit-tested separately.)
+printf '  1.2.3 \n' > "$V/VERSION"
 DOCKER_LOG="$V/docker.log"; : > "$DOCKER_LOG"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "pool flag propagated"  "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)"  "--mini"
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
+assert_eq "stack version baked from VERSION file" "$(run_sourced "$V" env_get_file "$V/.env" PITHEAD_VERSION)" "1.2.3"
 assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
 # tari.mem_limit absent => "auto" is a safety ceiling: host RAM minus a >=2 GB reserve, floored at
 # 2048m. Assert it ends in 'm', is >= the 2048m floor, and never exceeds physical RAM.

@@ -660,8 +660,13 @@ env_get() { env_get_file "$ENV_FILE" "$1"; }
 
 # Keys whose value differs between two env files (added, removed, or changed), one per line.
 env_changed_keys() {
+    # Build-provenance keys (Issue #58) are baked into the image at build time, so `apply` — which
+    # recreates containers but never rebuilds — can't act on them. Exclude them from the diff so a
+    # changed commit hash after a `git pull` doesn't show as a spurious change or needlessly recreate
+    # the dashboard; they take effect on the next `pithead upgrade` (rebuild).
     comm -3 <(sort "$1") <(sort "$2") 2>/dev/null \
         | sed -E 's/^[[:space:]]+//; s/=.*$//' \
+        | grep -Ev '^PITHEAD_(VERSION|GIT_COMMIT|GIT_BRANCH|RELEASE)$' \
         | sort -u
 }
 
@@ -1245,6 +1250,22 @@ render_env() {
             ;;
     esac
 
+    # Stack version + build provenance for the dashboard header badge (Issue #58). VERSION (the
+    # top-level source of truth) is always emitted; git branch + short commit are added when this
+    # is a git checkout — i.e. a dev/working-tree build — so the badge shows `dev · branch @ hash`
+    # and is never mistaken for a release. `-dirty` flags uncommitted tracked changes. A normal
+    # deploy is never a release (the resolver treats absent PITHEAD_RELEASE as dev); the future
+    # release pipeline is what builds images with a clean version and PITHEAD_RELEASE=1.
+    local ph_version="" ph_commit="" ph_branch=""
+    [ -f VERSION ] && ph_version="$(tr -d ' \t\r\n' < VERSION 2>/dev/null || true)"
+    if git rev-parse --git-dir >/dev/null 2>&1; then
+        ph_commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
+        ph_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+        if [ -n "$ph_commit" ] && ! git diff --quiet HEAD 2>/dev/null; then
+            ph_commit="${ph_commit}-dirty"
+        fi
+    fi
+
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
     cat <<EOF > "$target"
@@ -1281,6 +1302,9 @@ COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
 DASHBOARD_TZ=$DASHBOARD_TZ
 HOST_IP=$HOST_IP
+PITHEAD_VERSION=$ph_version
+PITHEAD_GIT_COMMIT=$ph_commit
+PITHEAD_GIT_BRANCH=$ph_branch
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
     # Contains the node RPC password; keep it owner-only.

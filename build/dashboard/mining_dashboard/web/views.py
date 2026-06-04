@@ -18,6 +18,7 @@ import logging
 from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL
 from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs
 from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
 
@@ -526,6 +527,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "syncing": metrics.global_syncing,
         "page_title": "Mining Dashboard - Syncing" if metrics.global_syncing else "Mining Dashboard",
         "host_ip": HOST_IP,
+        "version": resolve_version(),
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,
