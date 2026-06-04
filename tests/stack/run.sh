@@ -73,6 +73,23 @@ run_sourced "$SANDBOX" is_ipv4 "192.168.1.0/24" >/dev/null 2>&1; assert_rc "reje
 run_sourced "$SANDBOX" is_ipv4 "example.com"  >/dev/null 2>&1; assert_rc "rejects hostname"    "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 ""             >/dev/null 2>&1; assert_rc "rejects empty"       "$?" "1"
 
+echo "== unit: docker_boot_enabled (#137) =="
+# A systemctl stub on PATH; FAKE_BOOT picks which unit reports "enabled". Docker counts as
+# boot-enabled if EITHER docker.service or docker.socket is enabled.
+BOOT="$SANDBOX/boot"; mkdir -p "$BOOT/bin"
+cat > "$BOOT/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "is-enabled docker.service") [ "${FAKE_BOOT:-}" = "service" ] && exit 0 || exit 1 ;;
+  "is-enabled docker.socket")  [ "${FAKE_BOOT:-}" = "socket"  ] && exit 0 || exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$BOOT/bin/systemctl"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=service run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "docker.service enabled -> 0" "$?" "0"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=socket  run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "docker.socket enabled -> 0"  "$?" "0"
+PATH="$BOOT/bin:$PATH" FAKE_BOOT=none    run_sourced "$SANDBOX" docker_boot_enabled; assert_rc "neither enabled -> 1"        "$?" "1"
+
 echo "== unit: describe_change =="
 assert_contains "prune is DEST"      "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)"        "DEST"
 assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"

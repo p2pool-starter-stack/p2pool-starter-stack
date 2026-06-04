@@ -54,6 +54,12 @@ chains finish their initial sync — check the dashboard to see which.
 **Change a setting:** edit `config.json`, then `./pithead apply`. See
 [Configuration › Changing settings later](configuration.md#changing-settings-later).
 
+**Reboot resilience:** every service runs with `restart: unless-stopped`, so the whole stack
+comes back **on its own after a reboot or power loss** — *provided the Docker daemon itself starts
+at boot*. On Ubuntu's packaged Docker that's the default, but a custom/rootless install (or
+`setup --skip-deps`) may leave it disabled. `./pithead doctor` checks this and warns if Docker
+isn't boot-enabled; the fix is `sudo systemctl enable --now docker`.
+
 ---
 
 ## Updating the stack
