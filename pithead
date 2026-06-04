@@ -1177,6 +1177,58 @@ prompt_start_stack() {
     fi
 }
 
+# Pre-flight resource check (#87). Best-effort, WARN-only: catch the most demoralizing first-run
+# failure — an undersized host that fills its disk mid-sync — before we commit to a sync. Never
+# blocks or exits: a missing path or unreadable file just skips that check. Call after
+# parse_and_validate_config has resolved the data dirs, before starting the stack.
+preflight_resources() {
+    # Pruning is on unless config explicitly sets monero.prune:false (matches render_env's
+    # `!= null` form, not `//`, so a literal false isn't mistaken for absent).
+    local prune_bool prune
+    prune_bool=$(jq -r 'if .monero.prune != null then .monero.prune else true end' "$CONFIG_FILE" 2>/dev/null || echo true)
+    if [ "$prune_bool" == "true" ]; then prune=1; else prune=0; fi
+
+    # --- Disk: free space on the Monero data dir's filesystem ---
+    # The Monero blockchain is by far the biggest consumer; check the filesystem its data dir lives
+    # on. Thresholds (in 1K-blocks): ~150 GB pruned, ~300 GB full.
+    local disk_min_kb disk_min_label
+    if [ "$prune" -eq 1 ]; then
+        disk_min_kb=157286400   # 150 GiB
+        disk_min_label="~150 GB (pruning on)"
+    else
+        disk_min_kb=314572800   # 300 GiB
+        disk_min_label="~300 GB (pruning off)"
+    fi
+    # df needs an existing path; walk up to the nearest existing ancestor if the dir isn't created
+    # yet, so we still check the right filesystem. Skip cleanly if nothing resolves.
+    local check_path="${MONERO_DIR:-}"
+    while [ -n "$check_path" ] && [ ! -e "$check_path" ] && [ "$check_path" != "/" ]; do
+        check_path=$(dirname "$check_path")
+    done
+    if [ -n "$check_path" ] && [ -e "$check_path" ]; then
+        local avail_kb avail_h
+        avail_kb=$(df -P "$check_path" 2>/dev/null | awk 'NR==2{print $4}')
+        avail_h=$(df -Ph "$check_path" 2>/dev/null | awk 'NR==2{print $4}')
+        if [ -n "$avail_kb" ] && [ "$avail_kb" -lt "$disk_min_kb" ] 2>/dev/null; then
+            warn "Low free disk for the Monero data dir ($MONERO_DIR): ${avail_h:-?} free, below the recommended ${disk_min_label}. The blockchain sync may fill the disk — free up space or point monero.data_dir at a larger volume."
+        fi
+    fi
+
+    # --- RAM: total memory (Linux only — /proc/meminfo isn't available on macOS dev hosts) ---
+    if [ "$OS_TYPE" == "Linux" ]; then
+        local mem_total_kb
+        mem_total_kb=$(awk '/^MemTotal/{print $2}' /proc/meminfo 2>/dev/null)
+        # 16 GiB in KiB.
+        if [ -n "$mem_total_kb" ] && [ "$mem_total_kb" -lt 16777216 ] 2>/dev/null; then
+            local mem_total_gb
+            mem_total_gb=$(( mem_total_kb / 1048576 ))
+            warn "Low total RAM: ${mem_total_gb} GB detected, below the recommended ~16 GB. The stack (Tari especially) may be memory-starved during sync."
+        fi
+    fi
+
+    return 0
+}
+
 # --- Top-level Commands ---
 
 setup() {
@@ -1193,6 +1245,7 @@ setup() {
     check_prerequisites
     ensure_config_exists
     parse_and_validate_config
+    preflight_resources   # WARN-only: low disk/RAM heads-up before committing to a sync (#87)
     load_preserved_state
     resolve_dashboard_host "interactive"
     prepare_directories
