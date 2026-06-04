@@ -612,12 +612,12 @@ tests · 21 `pithead` shell sections · 11 harness self-test sections ·
 - backup archive contains .env
 - backup archive contains config.json
 - backup/rollback prerequisites present (writable backups/, tar)
-- chain FS is snapshot/reflink-capable ($fstype)
+- both prune modes exercisable (live=$baseline_mode + supplied $opp_label chain at $opp_dir)
 - check
 - container up: $svc
 - dashboard /api/state reachable
 - dashboard bound to localhost only (Caddy fronts it)
-- disk headroom on the chain FS (${avail} GiB free)
+- disk headroom on the live chain FS (${avail} GiB free)
 - monero display mode determinate ($dmode)
 - monero display mode present ($dmode)
 - monerod absent in remote mode
@@ -626,12 +626,14 @@ tests · 21 `pithead` shell sections · 11 harness self-test sections ·
 - monerod running-but-unhealthy
 - pool actually changed
 - pool type
+- prune axis: live FS is snapshot-capable ($fstype) — the $opp_label variant can be built cheaply
 - re-apply is a no-op
 - restore preserves secrets
 - restore reverts the pool to the backed-up value
 - secrets intact (token + onions)
 - secrets intact after restore
 - secrets preserved across pool change
+- snapshot-isolated $baseline_mode chain on a CoW FS ($same_dir, $sfs) — destructive scenarios needn't touch the live chain
 - stack is healthy (pithead status)
 - status OK after monerod recovery
 - status OK after node recovery

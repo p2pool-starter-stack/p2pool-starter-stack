@@ -113,7 +113,10 @@ tests/integration/run.sh --local --dir /home/miner/pithead --lifecycle
 tests/integration/run.sh --host miner@10.0.0.5 --scenario remote-main-secure-tari \
     --remote-monero-host 10.0.0.5:18081
 
-# Cover both prune modes (needs a second synced DB)
+# Cover the OPPOSITE prune mode. The box mines one mode against its live chain; the other is
+# skipped unless you supply a chain for it (it's otherwise covered by the fake mini-stack). A
+# pruned box supplies a full chain; a full box supplies a pruned one (build one with
+# tests/integration/build-pruned-chain.sh). See docs/release-server.md → prune-axis recipe.
 tests/integration/run.sh --host miner@10.0.0.5 --full-data-dir /srv/monero-full
 ```
 

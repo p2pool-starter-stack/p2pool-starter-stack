@@ -415,26 +415,59 @@ assert_release_readiness() {
     if monero_caught_up; then it_pass "Monero is synced (chain reusable by the matrix)"; else it_fail "Monero is synced" "monerod not caught up — the matrix would have to re-sync"; fi
     pithead status >/dev/null 2>&1; assert_rc "stack is healthy (pithead status)" "$?" "0"
 
-    # 2. Chain data dirs on a snapshot/reflink-capable filesystem so the prune axis can vary the
-    #    DB without re-syncing or mutating the canonical copy.
-    local mdir fstype
+    # 2. The prune axis must vary the DB without re-syncing or mutating the canonical chain. The
+    #    OTHER prune mode is unlocked either by (a) a snapshot/reflink-capable live FS (so a
+    #    variant can be made cheaply) or (b) supplying a pre-built chain of the OPPOSITE mode
+    #    (--full-data-dir when the box is pruned, --pruned-data-dir when it's full). A SAME-mode
+    #    copy on a CoW volume is also useful: it lets destructive scenarios run off the live chain.
+    #    gouda is a pruned box (MONERO_PRUNE=1) with a pruned copy on a btrfs CoW loopback, so it
+    #    exercises pruned mode live with snapshot isolation; full mode is covered by the fakes.
+    local mdir fstype="" cow_live=0 baseline_mode="full" bp
     mdir="$(env_on_box MONERO_DATA_DIR)"
-    if [ -n "$mdir" ]; then
-        fstype="$(box_fstype "$mdir")"
-        case "$fstype" in
-            btrfs|zfs|xfs) it_pass "chain FS is snapshot/reflink-capable ($fstype)" ;;
-            "")            it_warn "could not determine the chain filesystem type" ;;
-            *)             it_warn "chain FS is '$fstype' (no cheap snapshots — the prune axis must copy the DB or be skipped)" ;;
-        esac
+    bp="${BASELINE_PRUNE:-$(env_on_box MONERO_PRUNE)}"   # so standalone --readiness sees it too
+    [ -n "$mdir" ] && fstype="$(box_fstype "$mdir")"
+    case "$fstype" in btrfs|zfs|xfs) cow_live=1 ;; esac
+    [ "$bp" = "1" ] && baseline_mode="pruned"
+    it_log "   live chain: ${mdir:-?} (${fstype:-unknown}, ${baseline_mode})"
+
+    # Classify any supplied chains by prune mode relative to the live baseline.
+    local opp_dir opp_label same_dir
+    if [ "$bp" = "1" ]; then opp_dir="${FULL_DATA_DIR:-}"; opp_label="full"; same_dir="${PRUNED_DATA_DIR:-}"
+    else opp_dir="${PRUNED_DATA_DIR:-}"; opp_label="pruned"; same_dir="${FULL_DATA_DIR:-}"; fi
+
+    # A same-mode copy (e.g. the CoW pruned chain) — snapshot isolation for destructive scenarios.
+    if [ -n "$same_dir" ]; then
+        local sfs; sfs="$(box_fstype "$same_dir")"
+        if rx "test -e $(quote_arg "$same_dir")/lmdb/data.mdb" >/dev/null 2>&1; then
+            case "$sfs" in
+                btrfs|zfs|xfs) it_pass "snapshot-isolated $baseline_mode chain on a CoW FS ($same_dir, $sfs) — destructive scenarios needn't touch the live chain" ;;
+                *)             it_log "   same-mode copy at $same_dir ($sfs — not CoW)" ;;
+            esac
+        else
+            it_warn "supplied same-mode dir has no lmdb/data.mdb ($same_dir)"
+        fi
     fi
 
-    # 3. Disk headroom for snapshots + a second (full vs pruned) chain.
+    # The opposite-mode chain is what unlocks the OTHER value of the prune axis.
+    if [ -n "$opp_dir" ]; then
+        if rx "test -e $(quote_arg "$opp_dir")/lmdb/data.mdb" >/dev/null 2>&1; then
+            it_pass "both prune modes exercisable (live=$baseline_mode + supplied $opp_label chain at $opp_dir)"
+        else
+            it_fail "supplied $opp_label chain present" "$opp_dir has no lmdb/data.mdb"
+        fi
+    elif [ "$cow_live" -eq 1 ]; then
+        it_pass "prune axis: live FS is snapshot-capable ($fstype) — the $opp_label variant can be built cheaply"
+    else
+        it_warn "prune axis: only $baseline_mode is testable live — no $opp_label chain supplied, so $opp_label scenarios skip (cover that mode via the fake mini-stack, or build one)"
+    fi
+
+    # 3. Disk headroom on the live chain FS (room to operate + hold a co-located second chain).
     if [ -n "$mdir" ]; then
         local avail; avail="$(box_avail_gb "$mdir")"
         if [ -n "$avail" ] && [ "$avail" -ge 100 ] 2>/dev/null; then
-            it_pass "disk headroom on the chain FS (${avail} GiB free)"
+            it_pass "disk headroom on the live chain FS (${avail} GiB free)"
         else
-            it_warn "low disk headroom on the chain FS (${avail:-?} GiB free) — snapshots / a full+pruned matrix may not fit"
+            it_warn "low disk headroom on the live chain FS (${avail:-?} GiB free) — snapshots / a full+pruned matrix may not fit"
         fi
     fi
 

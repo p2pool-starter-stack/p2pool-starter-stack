@@ -72,11 +72,12 @@ Target an LTS Ubuntu (22.04 / 24.04). One-time:
 1. **Install Pithead and let it fully sync** ([Getting Started](getting-started.md)) — full
    Monero + full Tari, all containers healthy, a worker (ideally two) mining. The synced
    `monero.data_dir` / `tari.data_dir` are the asset the harness reuses.
-2. **Put the chains on a snapshot/reflink-capable filesystem** — **btrfs**, **zfs**, or
-   **xfs (reflink=1)**. The pruned-vs-full axis needs two different DBs; on a CoW filesystem the
-   harness can snapshot/restore the canonical chain cheaply instead of copying ~270 GiB (or
-   skipping the axis). On ext4 the prune axis must copy the DB or be skipped — everything else in
-   the matrix (which only changes `config.json` and reuses one chain) still works.
+2. **Keep the active chain on fast storage (SSD/NVMe).** monerod is random-I/O heavy, so the
+   chain it runs against must not sit on a spinning HDD — that alone makes every scenario crawl.
+   A snapshot/reflink-capable filesystem (**btrfs**/**zfs**/**xfs reflink**) is a *bonus*: it lets
+   the harness snapshot/restore a chain cheaply for the prune axis. But it's optional — on plain
+   ext4-on-SSD the matrix only edits `config.json` and reuses one chain, with `--safety-backup`
+   isolating destructive runs. See the recipe below for the prune-axis details.
 3. **Disk headroom** — enough for the chains plus a snapshot / second DB (budget ≥ ~150 GiB
    free beyond the live chains).
 4. **Tools** — `jq`, `curl`, `docker` (compose v2), `sha256sum`, `git`, `tar`.
@@ -87,8 +88,61 @@ Check the box is fit at any time, **non-destructively**:
 tests/integration/run.sh --host you@server --dir pithead --readiness
 ```
 
-It asserts: chains synced (reusable), the chain filesystem is snapshot-capable, disk headroom,
-`.env` is owner-only, the dashboard is bound to localhost, and the backup/rollback net is usable.
+It asserts: chains synced (reusable), the prune axis is exercisable (the live chain FS is
+snapshot-capable **or** a pre-built variant chain is supplied), disk headroom, `.env` is
+owner-only, the dashboard is bound to localhost, and the backup/rollback net is usable.
+
+### Recipe: prune-axis coverage, and the storage that actually matters
+
+**Put the active chain on fast storage.** The biggest factor is the *disk*, not the filesystem:
+monerod does heavy random LMDB I/O, so a chain on a 7200 rpm HDD makes every scenario crawl.
+Check what you have before placing chains:
+
+```bash
+lsblk -d -o NAME,ROTA,SIZE,MODEL   # ROTA=0 is SSD/NVMe, ROTA=1 is a spinning HDD
+```
+
+Keep the chain monerod runs against on an **SSD/NVMe**. A spare **HDD** is fine for cold backups
+and `pithead backup` archives — but *not* for an active test chain.
+
+**A CoW filesystem (btrfs/zfs/xfs-reflink) is a bonus, not a requirement.** On a CoW volume the
+harness can snapshot/restore a chain cheaply for per-scenario isolation — but only if it's on
+fast storage. A loopback btrfs on a spare HDD gives you CoW semantics at HDD speed, which is the
+wrong trade for an *active* chain. If your root FS is ext4 on an SSD (the common case) you don't
+need CoW at all: the matrix only edits `config.json` and reuses one chain, and `--safety-backup`
+(a `pithead backup` + auto-rollback) isolates the destructive scenarios.
+
+**Covering both prune modes.** The box mines one mode (its real config). The harness exercises
+that mode against the live chain and **skips** the other unless you supply a chain for it
+(`--full-data-dir` / `--pruned-data-dir`). You usually don't need to: the opposite mode is
+covered by the fake mini-stack ([integration-testing](integration-testing.md)) plus the
+compose/config tests, which need no real chain. Supply the opposite-mode chain only to exercise
+it end-to-end — and build it on fast storage:
+
+- **Pruned chain next to a full one?** [`build-pruned-chain.sh`](../tests/integration/build-pruned-chain.sh)
+  copies the LMDB consistently (brief monerod stop, then immediate restart) and prunes the *copy*,
+  leaving the canonical chain untouched. Fetch `monero-blockchain-prune` at the **same version**
+  as the running monerod and verify it against the hash the image pins (`build/monero/Dockerfile`
+  → `MONERO_VERSION` / `MONERO_HASH`).
+- **Full chain?** Pruning is irreversible, so a full chain means a fresh full sync
+  (`MONERO_PRUNE=0`, ~1–3 days) — rarely worth it just for test coverage.
+
+`gouda` (the reference box) is a **pruned** node on NVMe: it validates pruned mode live with
+`--safety-backup`, and full mode comes from the fakes. `--readiness` reports exactly this:
+
+```bash
+tests/integration/run.sh --host you@server --dir pithead --readiness
+```
+
+> **Gotcha — a pruned chain's file stays large.** An in-place prune does *not* shrink the LMDB
+> file: it stays at the full-chain high-water mark (~250 GiB) with the freed space sitting as
+> internal free pages (Monero reuses them as the chain grows). To actually reclaim it you must
+> rewrite the DB with `monero-blockchain-prune --copy-pruned-database` (see
+> [`compact-chain.sh`](../tests/integration/compact-chain.sh)) — slow (it copies every block over
+> hours), though it reads through a snapshot so monerod keeps mining; you then swap the compact
+> copy in during a ~2 min window. The generic `mdb_copy -c` does **not** work: Monero ships a
+> patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest
+> to leave the free pages.
 
 ## Hardening checklist (the pitfalls)
 
@@ -127,3 +181,30 @@ releases.
    real `setup → up → status → mine` check).
 3. **Nothing is tagged or published until that's green**, and promotion is by digest, so the
    version users get is the exact bundle the server validated.
+
+## End-to-end coverage & gaps
+
+What the live tier-4 gate actually exercises, and what it doesn't — so a release decision is made
+with eyes open. (The reference box `gouda` is a **pruned** Monero node on NVMe; its own snapshot
+and this table also live at `~/pithead-testbench/` on the box, for operators and AI agents.)
+
+**Validated live** (real synced chains): the config matrix (remote/local node, dashboard
+secure/insecure, Tari required/optional, RPC LAN access, XvB on/off) applied + asserted; lifecycle
+(restart, secret-preserving `apply`, backup→restore round-trip); node-down failover → recovery;
+release readiness; pruned monerod (the real prod config). **Covered without a real chain**
+(tiers 1–3): client↔daemon contract tests, the fake-daemon mini-stack (incl. full-prune behavior),
+compose hardening, config rendering, dashboard tests.
+
+| Gap (not tested live) | Worth filling before release? |
+|---|---|
+| **Full (unpruned) Monero** live — a pruned box can't exercise it | **Low** — stack paths don't differ by prune mode; fakes/config cover it. A multi-day full sync isn't justified. |
+| **Privacy / Tor egress** — no clearnet-leak assertions in the live harness (#160) | **High** — privacy is a core promise. Add egress checks (no clearnet to XvB stats, p2pool, Tari DNS). |
+| **Automated PR gate** — the self-hosted runner is manual/opt-in | **Medium-high, high-leverage** — wire the live harness as a required check on `workflow_dispatch`/push-to-`main` only (never fork PRs). |
+| **Upgrade / migration** across image versions with chain continuity | **Medium** — add a scenario: pull new images → `apply` → assert no re-sync + secrets intact. |
+| **XvB live routing** end-to-end (the raffle optimization) | **Medium** — core value-prop but unit/sim-tested today; a periodic live smoke test would help. |
+| **Multi-worker scale** — the harness assumes ~2 workers | **Medium** — add a load-gen worker + assert proxy routing/hashrate for perf confidence. |
+| **Real Tari merge-mined block** acceptance | **Low** — probabilistic; rely on template/connectivity checks. |
+| **Fault injection over SSH** (currently local-mode only) | **Low-Medium** — extend the SIGSTOP/remove cases to the `--host` path. |
+
+**Recommended before release:** the privacy-egress checks and the automated PR gate; then the
+upgrade scenario and an XvB live smoke test. The remainder are nice-to-have.
