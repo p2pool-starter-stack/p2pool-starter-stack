@@ -419,11 +419,10 @@ reset_dashboard() {
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
 stack_backup() {
-    local with_chains=0 force=0 assume_yes=0 was_running=0
+    local with_chains=0 assume_yes=0 was_running=0
     for arg in "$@"; do
         case "$arg" in
             --with-chains) with_chains=1 ;;
-            --force|-f) force=1 ;;
             -y|--yes) assume_yes=1 ;;
             *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
         esac
@@ -431,30 +430,6 @@ stack_backup() {
 
     require_env
     parse_and_validate_config
-
-    # A consistent backup needs the services stopped — otherwise files (especially the blockchain
-    # DBs under --with-chains) can be archived mid-write. Detect a running stack and offer to stop
-    # it for the duration of the backup, restarting afterwards. The docker check is best-effort:
-    # if docker (or its daemon) is unavailable we treat the stack as not running and continue.
-    local running=""
-    if command -v docker >/dev/null 2>&1; then
-        running=$(docker compose ps --status running -q 2>/dev/null)
-    fi
-    if [ -n "$running" ]; then
-        log "A consistent backup needs the services stopped, so the archive isn't captured mid-write."
-        log "The stack will be stopped during the backup and started again afterwards."
-        if [ "$assume_yes" -eq 1 ]; then
-            log "Stopping the stack for the backup (--yes)..."
-        else
-            read -r -p "Stop the stack, back up, then start it again? (y/N): " CONFIRM || true
-            if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
-                log "Backup cancelled — nothing was changed. Stop the stack first ($0 down) or re-run and choose to stop."
-                return
-            fi
-        fi
-        was_running=1
-        stack_down
-    fi
 
     local backups_dir="$PWD/backups"
     mkdir -p "$backups_dir"
@@ -488,23 +463,53 @@ stack_backup() {
     local p
     for p in "${items[@]}"; do rel+=("${p#/}"); done
 
-    # Disk-space pre-check: bail out before we touch tar if the destination filesystem
-    # can't hold the backup. Blockchains (--with-chains) are largely incompressible, so we
-    # assume the archive needs roughly the source size plus a ~5% safety margin.
+    # Disk-space pre-check — run BEFORE we touch the running stack, so a "not enough space"
+    # answer leaves everything as it was. Blockchains (--with-chains) are largely incompressible,
+    # so we assume the archive needs roughly the source size plus a ~5% safety margin.
     local need_kb avail_kb
     # sudo: the Tor data dir is owned by 100:101; -c gives a grand total across all items.
     need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}')
     avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}')
     if [ -n "$need_kb" ] && [ -n "$avail_kb" ]; then
         if [ "$avail_kb" -lt "$((need_kb + need_kb / 20))" ]; then
-            if [ "$force" -eq 1 ]; then
-                warn "Disk space looks insufficient for backup: need ~$((need_kb / 1048576)) GiB but only $((avail_kb / 1048576)) GiB free on the backups filesystem. Proceeding anyway because of --force."
+            local avail_gib=$((avail_kb / 1048576)) need_gib=$((need_kb / 1048576))
+            if [ "$assume_yes" -eq 1 ]; then
+                warn "Low free space (~$avail_gib GiB free, ~$need_gib GiB needed) — backing up anyway (--yes)."
             else
-                error "Not enough disk space for backup: need ~$((need_kb / 1048576)) GiB but only $((avail_kb / 1048576)) GiB free on the backups filesystem. Free up space, point backups/ at a larger volume, or pass --force to skip this check."
+                read -r -p "Low free space (~$avail_gib GiB free, ~$need_gib GiB needed). Back up anyway? (y/N): " CONFIRM || true
+                if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+                    log "Backup cancelled — nothing was changed."
+                    return
+                fi
             fi
         fi
     else
         warn "Could not determine free disk space for the backup — proceeding without a space check."
+    fi
+
+    # A consistent backup needs the services stopped — otherwise files (especially the blockchain
+    # DBs under --with-chains) can be archived mid-write. Detect a running stack and offer to stop
+    # it for the duration of the backup, restarting afterwards. The docker check is best-effort:
+    # if docker (or its daemon) is unavailable we treat the stack as not running and continue.
+    # This runs AFTER the disk check so an aborted backup never leaves the stack stopped.
+    local running=""
+    if command -v docker >/dev/null 2>&1; then
+        running=$(docker compose ps --status running -q 2>/dev/null)
+    fi
+    if [ -n "$running" ]; then
+        log "A consistent backup needs the services stopped, so the archive isn't captured mid-write."
+        log "The stack will be stopped during the backup and started again afterwards."
+        if [ "$assume_yes" -eq 1 ]; then
+            log "Stopping the stack for the backup (--yes)..."
+        else
+            read -r -p "Stop the stack, back up, then start it again? (y/N): " CONFIRM || true
+            if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+                log "Backup cancelled — nothing was changed. Stop the stack first ($0 down) or re-run and choose to stop."
+                return
+            fi
+        fi
+        was_running=1
+        stack_down
     fi
 
     log "Creating backup archive..."
@@ -600,15 +605,15 @@ Inspection:
 
 Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
-  backup [--with-chains] [--force] [-y|--yes]
+  backup [--with-chains] [-y|--yes]
                             Write a timestamped, chmod-600 tar.gz under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, and the Tor data
                             dir (onion keys). Blockchains are excluded unless --with-chains.
                             If the stack is running, backup stops it for a consistent copy and
                             starts it again when it's done.
                               --with-chains    also include the blockchain data (large).
-                              --force, -f      skip the free-space pre-check.
-                              -y, --yes        skip the stop-the-stack prompt.
+                              -y, --yes        skip the confirmation prompts (low free space,
+                                               and stopping a running stack).
   restore [-y|--yes] <archive>
                             Restore config.json, .env, Caddyfile, and the Tor data dir from a
                             backup archive (prompts before overwriting; fixes Tor ownership).
