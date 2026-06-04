@@ -75,6 +75,10 @@ HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** fo
 XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
 **`XMR Full`** badge shows the Monero node's blockchain mode at a glance.
 
+When the dashboard host is a name (not already an IP), the machine's **IP address** is shown
+beside it (e.g. `pithead.local · 192.168.1.42`) — a reliable way back in when the hostname doesn't
+resolve from your phone or another machine on the LAN.
+
 A small **version badge** sits beside the hostname so you always know which build is running. A
 released build shows the version (e.g. **`v1.3.0`**); a development or working-tree build shows a
 dashed **`dev · branch @ commit`** marker instead, so it's never mistaken for a release. It appears

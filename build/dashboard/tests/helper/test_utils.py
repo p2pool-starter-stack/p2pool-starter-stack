@@ -3,6 +3,7 @@ from unittest.mock import patch
 from mining_dashboard.helper.utils import (
     parse_hashrate, format_hashrate, format_duration,
     format_time_abs, get_tier_info, resolve_target_threshold,
+    is_ip_address, detect_host_ipv4,
 )
 
 
@@ -115,3 +116,48 @@ class TestResolveTargetThreshold:
     def test_unknown_level_falls_back_to_lowest(self):
         target, _ = resolve_target_threshold(self.TIERS, 1_000_000, "bogus", 0.85)
         assert target == 1_000
+
+
+class TestIsIpAddress:
+    def test_ipv4_is_an_address(self):
+        assert is_ip_address("192.168.1.42") is True
+        assert is_ip_address("127.0.0.1") is True
+
+    def test_ipv6_is_an_address(self):
+        assert is_ip_address("::1") is True
+        assert is_ip_address("fe80::1") is True
+
+    def test_hostname_is_not_an_address(self):
+        assert is_ip_address("pithead.local") is False
+        assert is_ip_address("my-rig") is False
+        assert is_ip_address("256.256.256.256") is False
+
+    def test_surrounding_whitespace_tolerated(self):
+        assert is_ip_address("  10.0.0.5  ") is True
+
+    def test_non_string_and_empty_are_not_addresses(self):
+        assert is_ip_address("") is False
+        assert is_ip_address(None) is False
+
+
+class TestDetectHostIpv4:
+    def test_returns_socket_source_address(self):
+        # UDP connect only fixes the route; getsockname() then exposes the chosen source IP.
+        sock = patch("mining_dashboard.helper.utils.socket.socket").start()
+        try:
+            sock.return_value.getsockname.return_value = ("192.168.1.42", 54321)
+            assert detect_host_ipv4() == "192.168.1.42"
+        finally:
+            patch.stopall()
+
+    def test_none_when_no_route(self):
+        with patch("mining_dashboard.helper.utils.socket.socket") as sock:
+            sock.return_value.connect.side_effect = OSError("network unreachable")
+            assert detect_host_ipv4() is None
+
+    def test_socket_is_closed_even_on_error(self):
+        with patch("mining_dashboard.helper.utils.socket.socket") as sock:
+            inst = sock.return_value
+            inst.connect.side_effect = OSError("boom")
+            detect_host_ipv4()
+            inst.close.assert_called_once()
