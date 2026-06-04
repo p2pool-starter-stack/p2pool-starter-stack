@@ -53,9 +53,14 @@ jobs:
       # the job when one is briefly out of sync — see issue #64.
       - name: Lint pithead and test scripts
         # Gate on warnings+errors (real issues); info-level style nits vary by shellcheck version.
-        run: shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh
+        run: shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh tests/integration/*.sh
       - name: Run pithead test suite
         run: bash tests/stack/run.sh
+      - name: Run integration harness self-test
+        # Pure-logic checks for the tests/integration/ harness (config rendering, matrix
+        # coverage, redaction). The LIVE matrix (tests/integration/run.sh) needs a real test
+        # server and runs as a gated/manual release gate (#54), not on every PR.
+        run: bash tests/integration/selftest.sh
 
   compose:
     name: Compose config validation

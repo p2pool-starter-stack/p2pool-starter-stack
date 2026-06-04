@@ -133,6 +133,10 @@ What exists today:
 - ✅ Top-level `VERSION` file (single source of truth).
 - ✅ `CHANGELOG.md` (Keep a Changelog + SemVer, with an `Unreleased` section).
 - ✅ This document.
+- ✅ The [#54](https://github.com/p2pool-starter-stack/pithead/issues/54) integration test
+  suite — the live config-matrix gate against real nodes (`tests/integration/`, `make
+  test-integration`). See [Integration Testing](integration-testing.md). Still to wire: making
+  it a *blocking step* inside the (not-yet-built) `make release` pipeline.
 
 **TODO — not yet implemented:**
 

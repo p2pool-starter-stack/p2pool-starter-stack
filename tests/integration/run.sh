@@ -1,0 +1,466 @@
+#!/usr/bin/env bash
+#
+# Pithead end-to-end integration test runner (issue #54).
+#
+# Drives a REAL, already-provisioned Pithead server through the config matrix and asserts the
+# stack behaves — containers healthy, nodes synced, miners mining, the dashboard reading the
+# right live state, status exit codes correct, and secrets preserved across re-applies.
+#
+# The box is assumed already deployed and synced with miners connected; the harness moves
+# between scenarios with non-interactive `pithead apply -y` (recreates only changed
+# containers, reuses the synced chain data dirs — never re-syncs, never re-provisions Tor).
+# It saves the box's original config.json up front and restores it at the end.
+#
+#   ./run.sh --host user@1.2.3.4 [--dir ~/pithead] [options]
+#   ./run.sh --local             [--dir /path/to/stack] [options]
+#
+# Read-only against the canonical chain data dirs; safe to run against the live box. See
+# docs/integration-testing.md for provisioning, the safety model, and CI/release wiring.
+#
+set -uo pipefail   # NOT -e: we deliberately continue-on-error to collect the whole matrix.
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/integration/lib.sh
+source "$HERE/lib.sh"
+# shellcheck source=tests/integration/scenarios.sh
+source "$HERE/scenarios.sh"
+
+# --- Defaults / globals -----------------------------------------------------
+IT_MODE="ssh"
+IT_SSH_DEST=""
+IT_SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+IT_REMOTE_DIR="pithead"
+IT_PITHEAD="./pithead"
+IT_CURRENT_SCENARIO=""
+ONLY_SCENARIO=""
+RUN_LIFECYCLE=0
+KEEP_STATE=0
+EXPECTED_WORKERS=2
+REMOTE_MONERO_HOST=""
+PRUNED_DATA_DIR=""
+FULL_DATA_DIR=""
+OUT_DIR="$HERE/results"
+BASELINE_CONFIG=""
+BASELINE_PRUNE=""
+BASELINE_SECRET_FP=""
+
+usage() {
+    cat <<'EOF'
+Pithead integration test runner
+
+USAGE:
+  run.sh --host <user@host> [options]     drive the box over SSH
+  run.sh --local            [options]     drive a stack on this machine
+
+CONNECTION:
+  --host <user@host>     SSH destination of the test server
+  --identity <keyfile>   SSH private key (adds -i <keyfile>)
+  --ssh-opt <opt>        extra ssh -o option (repeatable), e.g. --ssh-opt Port=2222
+  --local                run against a stack on this machine instead of over SSH
+  --dir <path>           the Pithead stack directory ON THE BOX, relative to the SSH login
+                         dir or absolute (default: pithead). Avoid a literal ~ — your local
+                         shell would expand it before the box sees it.
+  --pithead <cmd>        how to invoke pithead on the box (default: ./pithead;
+                         use "sudo ./pithead" if docker needs root there)
+
+MATRIX:
+  --scenario <name>      run only one scenario (see --list)
+  --workers <n>          miners expected online while mining (default: 2)
+  --remote-monero-host <h>  external node endpoint for the remote-mode scenario
+                            (e.g. the box's own synced node on its LAN IP)
+  --pruned-data-dir <d>  synced PRUNED monero data dir (enables the pruned case when the
+                         box's baseline is full)
+  --full-data-dir <d>    synced FULL monero data dir (enables the full case when the box's
+                         baseline is pruned)
+  --lifecycle            also run the lifecycle + node-down failover phase
+  --keep                 do NOT restore the original config.json at the end (leaves the box
+                         on the last scenario — useful for debugging)
+
+OUTPUT:
+  --out <dir>            where to write artifacts (default: tests/integration/results)
+  --list                 print the scenario matrix and axis coverage, then exit
+  -h, --help             this help
+
+Scenarios whose prerequisites are missing (a full/pruned alt data dir, or a remote endpoint)
+are reported SKIPPED — never silently dropped, never mutating the canonical synced chain.
+EOF
+}
+
+# --- Arg parsing ------------------------------------------------------------
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --host)       IT_SSH_DEST="$2"; IT_MODE="ssh"; shift 2 ;;
+            --identity)   IT_SSH_OPTS+=(-i "$2"); shift 2 ;;
+            --ssh-opt)    IT_SSH_OPTS+=(-o "$2"); shift 2 ;;
+            --local)      IT_MODE="local"; shift ;;
+            --dir)        IT_REMOTE_DIR="$2"; shift 2 ;;
+            --pithead)    IT_PITHEAD="$2"; shift 2 ;;
+            --scenario)   ONLY_SCENARIO="$2"; shift 2 ;;
+            --workers)    EXPECTED_WORKERS="$2"; shift 2 ;;
+            --remote-monero-host) REMOTE_MONERO_HOST="$2"; shift 2 ;;
+            --pruned-data-dir)    PRUNED_DATA_DIR="$2"; shift 2 ;;
+            --full-data-dir)      FULL_DATA_DIR="$2"; shift 2 ;;
+            --lifecycle)  RUN_LIFECYCLE=1; shift ;;
+            --keep)       KEEP_STATE=1; shift ;;
+            --out)        OUT_DIR="$2"; shift 2 ;;
+            --list)       print_list; exit 0 ;;
+            -h|--help)    usage; exit 0 ;;
+            *)            it_err "Unknown option: $1 (try --help)"; exit 2 ;;
+        esac
+    done
+
+    if [ "$IT_MODE" = "ssh" ] && [ -z "$IT_SSH_DEST" ]; then
+        it_err "Provide --host <user@host> or --local. See --help."
+        exit 2
+    fi
+}
+
+print_list() {
+    echo "Scenarios:"
+    local name rest
+    while IFS=$'\t' read -r name rest; do
+        printf '  %-32s %s\n' "$name" "$rest"
+    done < <(scenario_matrix)
+    echo ""
+    echo "Axis coverage (every value below must appear at least once):"
+    axis_coverage | sed 's/^/  /'
+}
+
+# --- Target I/O helpers (depend on globals set above) -----------------------
+# Write a config.json onto the box from stdin-less arg.
+push_config() {
+    local json="$1"
+    if [ "$IT_MODE" = "local" ]; then
+        printf '%s\n' "$json" > "$IT_REMOTE_DIR/config.json"
+    else
+        printf '%s\n' "$json" | ssh "${IT_SSH_OPTS[@]}" "$IT_SSH_DEST" \
+            "cd $(quote_arg "$IT_REMOTE_DIR") && cat > config.json"
+    fi
+}
+
+# Read a single (non-secret) .env value off the box.
+env_on_box() { rx "grep -E '^$1=' .env 2>/dev/null | head -n1 | cut -d= -f2-"; }
+
+# Services currently running, one per line, sorted. Honours active compose profiles, so
+# monerod is absent in remote mode.
+running_services() { rx "docker compose ps --services --status running 2>/dev/null | sort"; }
+
+# A stable fingerprint of the secrets we must preserve across applies (proxy token + onion
+# addresses). Hashed ON THE BOX so the plaintext never crosses the wire or hits a log.
+secret_fingerprint() {
+    rx "grep -E '^(PROXY_AUTH_TOKEN|[A-Z]+_ONION_ADDRESS)=' .env 2>/dev/null | sort | sha256sum | cut -d' ' -f1"
+}
+
+# --- Preflight --------------------------------------------------------------
+preflight() {
+    it_log "Connecting to target ($IT_MODE${IT_SSH_DEST:+ $IT_SSH_DEST}) at $IT_REMOTE_DIR …"
+    if ! rx "true" >/dev/null 2>&1; then
+        it_err "Cannot reach the target. Check --host/--local, --dir, and SSH access."
+        exit 1
+    fi
+
+    # The stack dir must contain a deployed pithead.
+    if ! rx "test -x $IT_PITHEAD" >/dev/null 2>&1; then
+        it_err "pithead not found/executable at $IT_REMOTE_DIR/$IT_PITHEAD (set --dir/--pithead)."
+        exit 1
+    fi
+    if ! rx "grep -q '^DEPLOYMENT_COMPLETED=true' .env" >/dev/null 2>&1; then
+        it_err "Box is not fully deployed (.env missing DEPLOYMENT_COMPLETED). Run 'pithead setup' there first."
+        exit 1
+    fi
+
+    # Tools the harness leans on, on the box.
+    local tool
+    for tool in jq curl docker sha256sum; do
+        if ! rx "command -v $tool" >/dev/null 2>&1; then
+            it_err "Required tool '$tool' missing on the box."
+            exit 1
+        fi
+    done
+
+    mkdir -p "$OUT_DIR"
+    record_manifest
+
+    # Snapshot the baseline so we can restore it and compare secrets later.
+    BASELINE_CONFIG="$(rx 'cat config.json')"
+    BASELINE_PRUNE="$(env_on_box MONERO_PRUNE)"   # 1 = pruned, 0 = full
+    BASELINE_SECRET_FP="$(secret_fingerprint)"
+    if [ -z "$BASELINE_CONFIG" ]; then
+        it_err "Could not read baseline config.json from the box."
+        exit 1
+    fi
+    it_log "Baseline captured (prune=$BASELINE_PRUNE). Original config will be restored at the end."
+}
+
+# Record exactly what's under test, so a run is reproducible (#54 manifest).
+record_manifest() {
+    local f="$OUT_DIR/manifest.txt"
+    {
+        echo "# Pithead integration run manifest"
+        echo "stack_version: $(rx 'cat VERSION 2>/dev/null' | tr -d '\n')"
+        echo "git_rev:       $(rx 'git rev-parse --short HEAD 2>/dev/null' | tr -d '\n')"
+        echo "target_mode:   $IT_MODE"
+        echo "remote_dir:    $IT_REMOTE_DIR"
+        echo "expected_workers: $EXPECTED_WORKERS"
+        echo ""
+        echo "# docker compose images"
+        rx "docker compose images 2>/dev/null"
+    } | redact > "$f" 2>/dev/null || true
+    it_step "wrote run manifest to $f"
+}
+
+# --- Scenario execution -----------------------------------------------------
+# Decide whether a scenario can run on this box, augmenting its overrides where needed (an
+# alt data dir for the prune axis, a remote endpoint for remote mode). On success sets
+# RESOLVED to the final override string and returns 0; on a missing prerequisite sets
+# SKIP_REASON and returns 1. No silent drops, and never mutates the canonical chain.
+RESOLVED=""
+SKIP_REASON=""
+resolve_overrides() {
+    local overrides="$1" prune mode out="$1"
+    RESOLVED=""; SKIP_REASON=""
+
+    prune="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.prune=//p')"
+    mode="$(printf '%s' "$overrides"  | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
+
+    # Prune axis: only flip away from the baseline DB if a matching synced dir is provided —
+    # flipping prune on the canonical dir would invalidate it (a DEST change).
+    if [ "$prune" = "true" ] && [ "$BASELINE_PRUNE" = "0" ]; then
+        [ -n "$PRUNED_DATA_DIR" ] || { SKIP_REASON="needs --pruned-data-dir (box baseline is full)"; return 1; }
+        out="$out monero.data_dir=$PRUNED_DATA_DIR"
+    fi
+    if [ "$prune" = "false" ] && [ "$BASELINE_PRUNE" = "1" ]; then
+        [ -n "$FULL_DATA_DIR" ] || { SKIP_REASON="needs --full-data-dir (box baseline is pruned)"; return 1; }
+        out="$out monero.data_dir=$FULL_DATA_DIR"
+    fi
+
+    # Remote mode needs an external endpoint to point at.
+    if [ "$mode" = "remote" ]; then
+        [ -n "$REMOTE_MONERO_HOST" ] || { SKIP_REASON="needs --remote-monero-host"; return 1; }
+        out="$out monero.remote.host=$REMOTE_MONERO_HOST"
+    fi
+
+    RESOLVED="$out"
+    return 0
+}
+
+run_scenario() {
+    local name="$1" overrides="$2"
+    IT_CURRENT_SCENARIO="$name"
+    echo ""
+    it_log "── scenario: ${name} ───────────────────────────────"
+
+    if ! resolve_overrides "$overrides"; then
+        it_warn "SKIPPED ${name}: ${SKIP_REASON}"
+        IT_SKIPPED=$((IT_SKIPPED + 1))
+        return 0
+    fi
+
+    # Render + push config, then apply non-interactively.
+    local config
+    # shellcheck disable=SC2086  # RESOLVED is a space-separated list of override tokens, on purpose
+    config="$(render_scenario_config "$BASELINE_CONFIG" $RESOLVED)"
+    if ! printf '%s' "$config" | jq empty 2>/dev/null; then
+        it_fail "rendered config is valid JSON" "jq rejected the rendered config"
+        return 0
+    fi
+    push_config "$config"
+
+    it_step "applying config (pithead apply -y)…"
+    if ! pithead apply -y > "$OUT_DIR/${name}.apply.log" 2>&1; then
+        it_fail "apply succeeded" "see $OUT_DIR/${name}.apply.log"
+        capture_artifacts "$name" "$OUT_DIR"
+        return 0
+    fi
+
+    # Wait for the stack to settle on real readiness signals before asserting.
+    wait_status_ok 240    || true
+    wait_monero_synced 120 || true
+    wait_miner_running 180 || true
+
+    local fails_before="$IT_FAIL"
+    assert_scenario "$name" "$config"
+    # If this scenario turned anything red, grab artifacts for it.
+    [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "$name" "$OUT_DIR"
+    return 0
+}
+
+# The per-scenario assertion battery (infrastructure-level, from the issue).
+assert_scenario() {
+    local name="$1" config="$2"
+    local st mode prune pool secure tari_req xvb rpc_lan
+    mode="$(jq_get "$config" '.monero.mode')";          mode="${mode:-local}"
+    prune="$(jq_get "$config" '.monero.prune')"
+    pool="$(jq_get "$config" '.p2pool.pool')";          pool="${pool:-main}"
+    secure="$(jq_get "$config" '.dashboard.secure')"
+    tari_req="$(jq_get "$config" '.dashboard.tari_required')"
+    xvb="$(jq_get "$config" '.xvb.enabled')"
+    rpc_lan="$(jq_get "$config" '.monero.rpc_lan_access')"
+
+    # 1. Expected containers up; unexpected ones absent.
+    local running expected svc
+    running="$(running_services)"
+    expected="$(expected_services "$config")"
+    while IFS= read -r svc; do
+        [ -z "$svc" ] && continue
+        case "$running" in
+            *"$svc"*) it_pass "container up: $svc" ;;
+            *)        it_fail "container up: $svc" "not in running services" ;;
+        esac
+    done <<< "$expected"
+    if [ "$mode" = "remote" ]; then
+        case "$running" in
+            *monerod*) it_fail "monerod absent in remote mode" "monerod is running" ;;
+            *)         it_pass "monerod absent in remote mode" ;;
+        esac
+    fi
+
+    # 2. pithead status is green for a healthy config.
+    pithead status >/dev/null 2>&1; assert_rc "status exit code is 0 (healthy)" "$?" "0"
+
+    # 3. Dashboard reachable and reading live state.
+    st="$(api_state)"
+    if [ -z "$st" ]; then
+        it_fail "dashboard /api/state reachable" "empty response"
+        return 0
+    fi
+    it_pass "dashboard /api/state reachable"
+
+    # 4. Monero synced, and pruned/full matches config (#32).
+    assert_eq "monero sync complete" "$(jq_get "$st" '.sync.monero.state')" "done"
+    local want_mode; [ "$prune" = "false" ] && want_mode="Full" || want_mode="Pruned"
+    assert_eq "monero display mode" "$(jq_get "$st" '.monero.mode')" "$want_mode"
+
+    # 5. Sidechain selection matches the pool axis.
+    assert_eq "pool type" "$(jq_get "$st" '.pool.type')" "$(pool_label "$pool")"
+
+    # 6. End-to-end mining: workers online, hashes accumulating (#28).
+    local workers conns hashes
+    workers="$(jq_get "$st" '.proxy_workers')"
+    conns="$(jq_get "$st" '.stratum.conns')"
+    hashes="$(jq_get "$st" '.stratum.total_hashes')"
+    assert_num_ge "workers online (>= $EXPECTED_WORKERS)" "${workers:-0}" "$EXPECTED_WORKERS"
+    assert_num_ge "stratum connections" "${conns:-0}" 1
+    assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
+
+    # 7. Tari sync-gate posture matches tari_required.
+    assert_eq "TARI_REQUIRED env matches config" "$(env_on_box TARI_REQUIRED)" "${tari_req:-true}"
+    if [ "$tari_req" = "true" ]; then
+        assert_eq "tari synced (required)" "$(jq_get "$st" '.sync.tari.state')" "done"
+    fi
+
+    # 8. Security/posture axes propagated to .env (#configuration).
+    local want_bind; [ "$rpc_lan" = "true" ] && want_bind="0.0.0.0" || want_bind="127.0.0.1"
+    assert_eq "MONERO_RPC_BIND matches rpc_lan_access" "$(env_on_box MONERO_RPC_BIND)" "$want_bind"
+    assert_eq "DASHBOARD_SECURE matches config" "$(env_on_box DASHBOARD_SECURE)" "${secure:-true}"
+    assert_eq "XVB_ENABLED matches config" "$(env_on_box XVB_ENABLED)" "${xvb:-true}"
+
+    # 9. Caddy scheme matches dashboard.secure.
+    local scheme; [ "$secure" = "false" ] && scheme="http://" || scheme="https://"
+    assert_contains "Caddyfile uses correct scheme" "$(rx 'head -n1 Caddyfile 2>/dev/null')" "$scheme"
+
+    # 10. Idempotency: a second apply with no change is a clean no-op.
+    local again; again="$(pithead apply -y 2>&1)"
+    assert_contains "re-apply is a no-op" "$again" "No configuration changes detected"
+
+    # 11. Secrets preserved across every apply so far (proxy token + onions unchanged).
+    assert_eq "secrets preserved (token + onions)" "$(secret_fingerprint)" "$BASELINE_SECRET_FP"
+}
+
+# --- Lifecycle + edge phase (--lifecycle) -----------------------------------
+run_lifecycle() {
+    IT_CURRENT_SCENARIO="lifecycle"
+    echo ""
+    it_log "── lifecycle + failover phase ──────────────────────"
+
+    # restart brings the stack back healthy.
+    it_step "pithead restart…"
+    pithead restart >/dev/null 2>&1
+    wait_status_ok 240 || true
+    pithead status >/dev/null 2>&1; assert_rc "status OK after restart" "$?" "0"
+
+    # apply that changes the sidechain recreates only the affected containers, preserving
+    # secrets. We flip main<->mini and assert the token/onions are untouched, then revert.
+    local cur_pool fp_before
+    cur_pool="$(jq_get "$BASELINE_CONFIG" '.p2pool.pool')"; cur_pool="${cur_pool:-main}"
+    local other; [ "$cur_pool" = "mini" ] && other="main" || other="mini"
+    fp_before="$(secret_fingerprint)"
+    push_config "$(render_scenario_config "$BASELINE_CONFIG" "p2pool.pool=$other")"
+    it_step "apply pool $cur_pool -> $other…"
+    pithead apply -y >/dev/null 2>&1
+    wait_status_ok 180 || true
+    assert_eq "secrets preserved across pool change" "$(secret_fingerprint)" "$fp_before"
+    assert_eq "pool actually changed" "$(jq_get "$(api_state)" '.pool.type')" "$(pool_label "$other")"
+
+    # Node-down failover (#31): stop monerod -> status non-zero (node down), dashboard rejects
+    # workers (xmrig-proxy stopped) -> start monerod -> readmitted -> status 0 again.
+    if [ "$(env_on_box COMPOSE_PROFILES)" = "local_node" ]; then
+        it_step "stopping monerod to exercise node-down failover…"
+        rx "docker compose stop monerod" >/dev/null 2>&1
+        wait_for 120 5 "status to report node down" _pred_status_down || true
+        pithead status >/dev/null 2>&1; assert_rc "status non-zero when node down" "$?" "1"
+        it_step "starting monerod and waiting for readmit…"
+        rx "docker compose start monerod" >/dev/null 2>&1
+        wait_status_ok 240 || true
+        pithead status >/dev/null 2>&1; assert_rc "status OK after node recovery" "$?" "0"
+    else
+        it_warn "skipping node-down failover (remote mode: no local monerod to stop)"
+    fi
+}
+
+# Predicate: status reports a problem (non-zero) — used to detect node-down deterministically.
+_pred_status_down() { ! pithead status >/dev/null 2>&1; }
+
+# --- Restore + summary ------------------------------------------------------
+restore_baseline() {
+    [ "$KEEP_STATE" = "1" ] && { it_warn "--keep set: leaving the box on the last scenario."; return; }
+    [ -z "$BASELINE_CONFIG" ] && return
+    it_log "Restoring original config.json and re-applying…"
+    push_config "$BASELINE_CONFIG"
+    pithead apply -y >/dev/null 2>&1 || it_warn "restore apply reported a non-zero exit; check the box."
+    wait_status_ok 240 || true
+    assert_eq "secrets intact after restore" "$(secret_fingerprint)" "$BASELINE_SECRET_FP"
+}
+
+summary() {
+    echo ""
+    it_log "════════════════ summary ════════════════"
+    it_log "passed:  $IT_PASS"
+    it_log "skipped: $IT_SKIPPED"
+    if [ "$IT_FAIL" -gt 0 ]; then
+        it_err "failed:  $IT_FAIL"
+        echo -e "$IT_FAILED_NAMES" >&2
+        it_err "Artifacts for failed scenarios are under $OUT_DIR/"
+        return 1
+    fi
+    it_log "failed:  0"
+    it_log "All assertions passed. Artifacts/manifest under $OUT_DIR/"
+    return 0
+}
+
+# --- Main -------------------------------------------------------------------
+IT_SKIPPED=0
+
+main() {
+    parse_args "$@"
+    preflight
+
+    local name rest
+    if [ -n "$ONLY_SCENARIO" ]; then
+        rest="$(scenario_overrides "$ONLY_SCENARIO")" || { it_err "Unknown scenario: $ONLY_SCENARIO"; exit 2; }
+        run_scenario "$ONLY_SCENARIO" "$rest"
+    else
+        while IFS=$'\t' read -r name rest; do
+            [ -z "$name" ] && continue
+            run_scenario "$name" "$rest"
+        done < <(scenario_matrix)
+    fi
+
+    [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
+
+    restore_baseline
+    summary
+}
+
+main "$@"

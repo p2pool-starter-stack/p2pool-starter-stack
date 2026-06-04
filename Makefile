@@ -1,7 +1,7 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-stack test-compose lint
+.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest lint
 
-test: lint test-dashboard test-stack test-compose ## Run everything
+test: lint test-dashboard test-stack test-compose test-integration-selftest ## Run everything that doesn't need a server
 
 test-dashboard: ## Dashboard unit/component tests with coverage gate
 	cd build/dashboard && PYTHONPATH=. python3 -m pytest \
@@ -13,5 +13,15 @@ test-stack: ## pithead shell test suite
 test-compose: ## Validate docker-compose.yml interpolation
 	bash tests/stack/test_compose.sh
 
+test-integration-selftest: ## Integration harness pure-logic self-test (no server needed)
+	bash tests/integration/selftest.sh
+
+# End-to-end matrix against a REAL test server (issue #54). Needs a provisioned box; pass
+# connection + options through ARGS, e.g.:
+#   make test-integration ARGS="--host miner@10.0.0.5 --dir pithead --lifecycle"
+# See docs/integration-testing.md.
+test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
+	bash tests/integration/run.sh $(ARGS)
+
 lint: ## shellcheck the stack scripts
-	shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh
+	shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh tests/integration/*.sh
