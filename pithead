@@ -430,20 +430,31 @@ reset_dashboard() {
     fi
 
     log "Resetting dashboard and p2pool..."
-    parse_and_validate_config
+    # Resolve what to delete from .env (the LIVE deployment's data dirs), NOT a fresh config.json
+    # parse — otherwise editing a *.data_dir in config.json before `reset-dashboard` (without an
+    # `apply`) would wipe a directory the running stack never used, possibly one the user just
+    # pointed at. Refuse to guess if .env doesn't name them, and re-check they're safe to rm (#139).
+    local dashboard_dir p2pool_dir
+    dashboard_dir=$(env_get DASHBOARD_DATA_DIR)
+    p2pool_dir=$(env_get P2POOL_DATA_DIR)
+    if [ -z "$dashboard_dir" ] || [ -z "$p2pool_dir" ]; then
+        error "Could not read DASHBOARD_DATA_DIR / P2POOL_DATA_DIR from .env — refusing to guess what to delete. Run '$0 setup' or '$0 apply' first."
+    fi
+    assert_safe_dir "$dashboard_dir"
+    assert_safe_dir "$p2pool_dir"
 
     log "Stopping dashboard and p2pool containers..."
     docker compose rm -s -f -v dashboard p2pool
 
     log "Removing data directories..."
-    [ -d "$DASHBOARD_DIR" ] && sudo rm -rf "$DASHBOARD_DIR"
-    [ -d "$P2POOL_DIR" ] && sudo rm -rf "$P2POOL_DIR"
+    [ -d "$dashboard_dir" ] && sudo rm -rf "$dashboard_dir"
+    [ -d "$p2pool_dir" ] && sudo rm -rf "$p2pool_dir"
 
     log "Recreating data directories..."
-    mkdir -p "$DASHBOARD_DIR" "$P2POOL_DIR"
-    sudo chown -R "$REAL_USER":"$REAL_USER" "$P2POOL_DIR"
-    mkdir -p "$P2POOL_DIR/stats"
-    sudo chmod -R 755 "$P2POOL_DIR/stats"
+    mkdir -p "$dashboard_dir" "$p2pool_dir"
+    sudo chown -R "$REAL_USER":"$REAL_USER" "$p2pool_dir"
+    mkdir -p "$p2pool_dir/stats"
+    sudo chmod -R 755 "$p2pool_dir/stats"
 
     log "Bringing services back up..."
     docker compose up -d dashboard p2pool
@@ -764,6 +775,14 @@ is_ipv4() {
         [ "$o" -le 255 ] || return 1
     done
     return 0
+}
+
+# True if $1 is a plausible hostname or IP literal — i.e. only the characters a host can contain
+# (letters, digits, dot, hyphen, colon for IPv6). Used to validate dashboard.host before it's
+# rendered into the Caddyfile site address: anything with whitespace, a newline, or Caddy-significant
+# characters ({ } /) could break or inject into the generated Caddyfile.
+is_valid_host() {
+    [[ "$1" =~ ^[A-Za-z0-9.:_-]+$ ]]
 }
 
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
@@ -1097,6 +1116,12 @@ parse_and_validate_config() {
 
     # "auto"/empty/DYNAMIC_HOST here means "decide later" (preserved value, prompt, or hostname)
     DASHBOARD_HOST=$(resolve_default "$(jq -r '.dashboard.host // empty' "$CONFIG_FILE")" "")
+    # A non-"auto" host is rendered verbatim into the Caddyfile site address (generate_caddyfile),
+    # so reject anything that isn't a bare hostname/IP — a space, newline, or `{`/`}` would break
+    # the Caddyfile (or inject directives). Mirrors the stratum_bind validation above (#130).
+    if [ -n "$DASHBOARD_HOST" ] && ! is_valid_host "$DASHBOARD_HOST"; then
+        error "dashboard.host must be a hostname or IP address — only letters, digits, dots, hyphens, and colons (got \"$DASHBOARD_HOST\")."
+    fi
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
     # Timezone for the dashboard's timestamps/charts. "auto"/empty -> the host's timezone
