@@ -5,7 +5,7 @@ import pytest
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
-    _parse_proxy_list_worker, _parse_legacy_dict_worker,
+    _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary,
 )
 
 
@@ -37,11 +37,19 @@ class TestProxyWorkerParsers:
     """The per-shape row parsers used by _normalize_proxy_workers (Issue #39)."""
 
     def test_parse_list_row_named_fields(self):
-        # idx2=connections, idx8=1m kH/s, idx9=10m kH/s, idx7=last share ms.
+        # idx2=connections, idx3/4/5=accepted/rejected/invalid, idx8=1m kH/s, idx9=10m kH/s,
+        # idx7=last share ms.
         row = ["rig", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
         w = _parse_proxy_list_worker(row)
         assert w == {"name": "rig", "ip": "10.0.0.1", "status": "online",
-                     "h10": 1000, "h60": 1000, "h15": 2000, "uptime": 0}
+                     "h10": 1000, "h60": 1000, "h15": 2000, "uptime": 0,
+                     "accepted": 0, "rejected": 0, "invalid": 0}
+
+    def test_parse_list_row_share_counts(self):
+        # idx3=accepted, idx4=rejected, idx5=invalid are carried through (Issue #82).
+        row = ["rig", "10.0.0.1", 1, 500, 7, 2, 0, 0, 1.0, 2.0, 0, 0, 0]
+        w = _parse_proxy_list_worker(row)
+        assert (w["accepted"], w["rejected"], w["invalid"]) == (500, 7, 2)
 
     def test_parse_list_row_offline_and_uptime(self):
         row = ["rig", "10.0.0.1", 0, 0, 0, 0, 0, 1_000, 1.0, 2.0, 0, 0, 0]
@@ -53,7 +61,13 @@ class TestProxyWorkerParsers:
         w = _parse_legacy_dict_worker({"id": "old", "ip": "1.2.3.4",
                                        "hashrate": [10, 20, 30], "uptime": 5})
         assert w == {"name": "old", "ip": "1.2.3.4", "status": "online",
-                     "h10": 10, "h60": 20, "h15": 30, "uptime": 5}
+                     "h10": 10, "h60": 20, "h15": 30, "uptime": 5,
+                     "accepted": 0, "rejected": 0, "invalid": 0}
+
+    def test_parse_legacy_dict_share_counts(self):
+        # When a legacy payload happens to carry share counts, they pass through.
+        w = _parse_legacy_dict_worker({"id": "old", "accepted": 9, "rejected": 1, "invalid": 0})
+        assert (w["accepted"], w["rejected"], w["invalid"]) == (9, 1, 0)
 
 
 class TestNormalizeProxyWorkers:
@@ -105,6 +119,30 @@ class TestNormalizeProxyWorkers:
         assert _normalize_proxy_workers(None) == []
         assert _normalize_proxy_workers({}) == []
         assert _normalize_proxy_workers({"nope": 1}) == []
+
+
+class TestParseProxySummary:
+    """Pool-wide share totals from the proxy /summary `results` block (Issue #82)."""
+
+    def test_extracts_results_and_best(self):
+        summary = {"results": {"accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1,
+                               "best": [987654, 5000, 100]}}
+        assert _parse_proxy_summary(summary) == {
+            "accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1, "best": 987654,
+        }
+
+    def test_best_defaults_to_zero_when_empty(self):
+        assert _parse_proxy_summary({"results": {"accepted": 5, "best": []}})["best"] == 0
+        assert _parse_proxy_summary({"results": {"accepted": 5}})["best"] == 0
+
+    def test_missing_results_block_zeros_out(self):
+        out = _parse_proxy_summary({"version": "6.x"})
+        assert out == {"accepted": 0, "rejected": 0, "invalid": 0, "expired": 0, "best": 0}
+
+    def test_malformed_payload_returns_empty(self):
+        assert _parse_proxy_summary(None) == {}
+        assert _parse_proxy_summary([1, 2, 3]) == {}
+        assert _parse_proxy_summary("nope") == {}
 
 
 class TestMergeDirectStats:
@@ -374,6 +412,8 @@ class TestRunIteration:
         # idx8=1.0 kH/s, idx9=2.0 kH/s -> h15 = 2000 H/s.
         worker_row = ["rig1", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
         proxy.get_workers.return_value = {"workers": [worker_row]}
+        proxy.get_summary.return_value = {"results": {"accepted": 100, "rejected": 5, "invalid": 1,
+                                                      "expired": 2, "best": [123456]}}
 
         worker_client = MagicMock()
         worker_client.get_stats = AsyncMock(return_value={})  # direct API unreachable
@@ -402,6 +442,10 @@ class TestRunIteration:
         assert svc.latest_data["workers"][0]["name"] == "rig1"
         assert svc.latest_data["workers"][0]["status"] == "online"
         assert svc.latest_data["total_live_h15"] == 2000.0
+        # The proxy /summary totals were collected and surfaced (Issue #82).
+        assert svc.latest_data["proxy_summary"] == {
+            "accepted": 100, "rejected": 5, "invalid": 1, "expired": 2, "best": 123456,
+        }
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
 

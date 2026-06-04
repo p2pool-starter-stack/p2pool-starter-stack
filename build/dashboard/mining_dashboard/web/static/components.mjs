@@ -279,7 +279,19 @@ function PoolBadge({ pool }) {
     return html`<span class="badge badge-bad">Unknown</span>`;
 }
 
-function WorkersTable({ workers, ui, onSort }) {
+// Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
+// has reported any shares so it isn't an all-zero line on a fresh start.
+const ProxyTotals = ({ summary }) => {
+    if (!summary || !summary.has_data) return null;
+    return html`
+    <div class="proxy-totals text-small text-muted">
+        Proxy totals: <span class="status-ok">${summary.accepted}</span> accepted ·
+        <span class=${summary.reject_level === 'high' ? 'status-bad' : ''}>${summary.rejected}</span>
+        rejected (${summary.reject_pct}) · ${summary.invalid} invalid · Best diff ${summary.best}
+    </div>`;
+};
+
+function WorkersTable({ workers, summary, ui, onSort }) {
     const rows = sortWorkers(workers, ui.sortIndex, ui.sortAsc);
     return html`
     <div class="card">
@@ -297,9 +309,14 @@ function WorkersTable({ workers, ui, onSort }) {
                         <td>${w.h10_str}</td>
                         <td>${w.h60_str}</td>
                         <td>${w.h15_str}</td>
+                        <td>${w.accepted_str}</td>
+                        <td>${w.rejected_str}${w.reject_flag
+                            ? html` <span class="badge badge-bad" title=${w.reject_flag.title}>${w.reject_flag.text}</span>`
+                            : null}</td>
                     </tr>`)}
             </tbody>
         </table>
+        <${ProxyTotals} summary=${summary} />
     </div>`;
 }
 
@@ -326,7 +343,7 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
             <${NetworkCard} state=${state} />
             <${TariCard} tari=${state.tari} />
         </div>
-        <${WorkersTable} workers=${state.workers} ui=${ui} onSort=${onSort} />
+        <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
     </div>`;
 }
 

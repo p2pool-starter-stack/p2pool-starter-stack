@@ -13,6 +13,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
+  folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
+  (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy
+  `/summary` endpoint. The proxy already reported all of this; it was being parsed and discarded
+  (#82).
 - Release & versioning scaffold: top-level `VERSION` file (single source of truth),
   this changelog, and `docs/releasing.md` documenting the release process. The
   GHCR publishing pipeline and `make release` / `pithead release` command are still

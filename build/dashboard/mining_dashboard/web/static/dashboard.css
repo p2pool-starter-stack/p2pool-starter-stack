@@ -75,6 +75,8 @@ table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th { text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; cursor: pointer; }
 td { padding: 10px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
+/* Pool-wide proxy share totals under the Workers table (Issue #82). */
+.proxy-totals { margin-top: 12px; }
 
 /* Components */
 .status-ok { color: var(--ok); }

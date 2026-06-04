@@ -125,6 +125,19 @@ several windows (e.g. 10s / 60s / 15m) — so you can spot a rig that has droppe
 underperforming. A worker that's connected but whose direct API is unreachable still counts (with
 proxy-derived hashrate); a worker whose miner has stopped drops out of the total.
 
+Each rig also shows its **accepted** and **rejected** share counts (with invalid shares folded
+into the rejected column as `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5%
+gets a red **⚠** flag next to its rejected count — a quick way to catch a rig that's submitting
+stale or bad shares (bad overclock, flaky network, clock drift) rather than earning. Every column
+is sortable, so you can click **Rejected** to float the worst offenders to the top. The shares are
+cumulative since the proxy last started, so a brief early-run blip clears itself as good shares
+accumulate.
+
+Below the table, a **Proxy totals** line sums the whole stack's share health as reported by the
+xmrig-proxy: total accepted / rejected (with the aggregate reject %) / invalid shares submitted
+upstream, plus the **best difficulty** any of your shares has hit. It's hidden until the proxy has
+submitted its first shares.
+
 ---
 
 ## Tips
