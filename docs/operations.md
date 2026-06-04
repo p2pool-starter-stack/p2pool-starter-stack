@@ -18,7 +18,7 @@ the full list.
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
-| `./pithead reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. |
+| `./pithead reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
 | `./pithead help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
@@ -176,7 +176,7 @@ Persistent HugePages require a GRUB change and a **reboot**. Re-run `./pithead s
 **Something looks broken in the dashboard data and you want a clean slate.**
 `./pithead reset-dashboard` wipes and recreates the dashboard and P2Pool data. This is
 **destructive** — you'll lose P2Pool sidechain state and dashboard history (your blockchains and
-wallets are unaffected).
+wallets are unaffected). Pass `-y` / `--yes` to skip the confirmation prompt.
 
 ---
 
