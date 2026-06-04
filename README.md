@@ -172,6 +172,9 @@ Everything runs through `pithead` (`./pithead help` lists it all):
 | `./pithead upgrade` | Rebuild and restart after a `git pull`. |
 | `./pithead logs [service]` | Follow logs (all, or one service). |
 | `./pithead status` | Container status + health-check of every expected service (warns on anything down). |
+| `./pithead doctor` | Read-only health report (deps, Docker, AVX2, HugePages, RAM/disk, onion state). |
+| `./pithead backup` | Save config, secrets, and Tor onion keys to `backups/` (`--with-chains` adds blockchain data). |
+| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting). |
 
 Full reference: **[Operations & Maintenance](docs/operations.md)**.
 

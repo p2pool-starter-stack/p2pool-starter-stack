@@ -419,10 +419,11 @@ reset_dashboard() {
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
 stack_backup() {
-    local with_chains=0
+    local with_chains=0 force=0
     for arg in "$@"; do
         case "$arg" in
             --with-chains) with_chains=1 ;;
+            --force|-f) force=1 ;;
             *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
         esac
     done
@@ -471,7 +472,11 @@ stack_backup() {
     avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}')
     if [ -n "$need_kb" ] && [ -n "$avail_kb" ]; then
         if [ "$avail_kb" -lt "$((need_kb + need_kb / 20))" ]; then
-            error "Not enough disk space for backup: need ~$((need_kb / 1048576)) GiB but only $((avail_kb / 1048576)) GiB free on the backups filesystem. Free up space or point backups/ at a larger volume."
+            if [ "$force" -eq 1 ]; then
+                warn "Disk space looks insufficient for backup: need ~$((need_kb / 1048576)) GiB but only $((avail_kb / 1048576)) GiB free on the backups filesystem. Proceeding anyway because of --force."
+            else
+                error "Not enough disk space for backup: need ~$((need_kb / 1048576)) GiB but only $((avail_kb / 1048576)) GiB free on the backups filesystem. Free up space, point backups/ at a larger volume, or pass --force to skip this check."
+            fi
         fi
     else
         warn "Could not determine free disk space for the backup — proceeding without a space check."
@@ -555,9 +560,12 @@ Inspection:
 
 Maintenance:
   reset-dashboard           DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
-  backup [--with-chains]    Write a timestamped, chmod-600 tar.gz under backups/ holding the
+  backup [--with-chains] [--force]
+                            Write a timestamped, chmod-600 tar.gz under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, and the Tor data
                             dir (onion keys). Blockchains are excluded unless --with-chains.
+                              --with-chains    also include the blockchain data (large).
+                              --force, -f      skip the free-space pre-check.
   restore <archive>         Restore config.json, .env, Caddyfile, and the Tor data dir from a
                             backup archive (prompts before overwriting; fixes Tor ownership).
 

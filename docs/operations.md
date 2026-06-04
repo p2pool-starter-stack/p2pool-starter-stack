@@ -15,6 +15,9 @@ the full list.
 | `./pithead upgrade` | Rebuild and restart the containers (run after a `git pull`). |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
+| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, and the Tor onion keys to a timestamped `tar.gz` under `backups/` (checks free space first). `--with-chains` also includes the blockchain data; `--force` skips the space check. |
+| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). |
 | `./pithead reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. |
 | `./pithead help` | Show all commands. |
 
@@ -84,26 +87,36 @@ state.
 
 ### `backup` / `restore`
 
-Instead of copying by hand, `pithead` can archive the irreplaceable bits for you:
+Rather than copying files by hand, let `pithead` do it for you:
 
 ```bash
-./pithead backup                 # config.json + .env + Caddyfile + Tor onion keys
-./pithead backup --with-chains   # also include the Monero/Tari/P2Pool data dirs (large)
+./pithead backup
 ```
 
-This writes a timestamped, `chmod 600` `tar.gz` under `backups/` and prints its path. The
-blockchains are excluded by default (they re-sync); pass `--with-chains` to fold them in.
+That's it. This saves the things you can't get back — your `config.json`, your secrets
+(`.env`), and the **Tor onion address keys** — into a small, timestamped file under `backups/`.
+It's quick and small because your blockchains are **not** included (they just re-sync). The
+archive is locked down to `chmod 600`, and `pithead` prints its path when it's done. Before it
+writes anything, it does a quick free-space check so a backup can't fill your disk.
 
-To recover on a new machine (or after a wipe), copy the archive back and run:
+**Optional extras** (you usually don't need these):
 
 ```bash
-./pithead down                       # stop the stack first
+./pithead backup --with-chains   # also include the blockchain data — much bigger and slower
+./pithead backup --force         # skip the free-space check and back up anyway
+```
+
+To recover — on a new machine, or after a wipe — copy the archive back and run:
+
+```bash
+./pithead down                       # stop the stack first so files restore cleanly
 ./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz
 ./pithead up
 ```
 
-`restore` prompts before overwriting, restores the files in place, and fixes the Tor data
-directory's ownership so the onion keys load correctly.
+`restore` always **asks before it overwrites anything**, so you can change your mind. It puts
+the files back where they belong and sorts out the Tor key ownership for you, so your onion
+address comes back exactly as it was.
 
 ---
 
