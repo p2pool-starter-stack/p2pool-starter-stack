@@ -53,6 +53,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   (`3333`) is published on (default `0.0.0.0`; set a LAN IP or `127.0.0.1` to narrow it).
 - Liveness healthcheck for the p2pool container (probes the stratum port), so a stalled
   p2pool is now visible in `pithead status` and the dashboard.
+- Low-disk warning badge in the dashboard header (#138): a heads-up at 85% used of the data
+  filesystem and a prominent critical alert at 95%, on both the sync and main screens — the disk
+  bar alone is easy to miss, and a full data disk corrupts the Monero database mid-write.
 
 ### Changed
 

@@ -368,6 +368,23 @@ class TestBadges:
         out = build_badges({}, _metrics(monero_mode="Unknown"), "ok")
         assert not any("XMR" in b["text"] for b in out)
 
+    def test_disk_badge_critical(self):
+        out = build_badges({"system": {"disk": {"percent": 96}}}, _metrics(), "ok")
+        assert any(b["variant"] == "bad" and "Disk 96% full" in b["text"] for b in out)
+
+    def test_disk_badge_warn(self):
+        out = build_badges({"system": {"disk": {"percent": 88}}}, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "Disk 88% full" in b["text"] for b in out)
+
+    def test_no_disk_badge_when_ample(self):
+        out = build_badges({"system": {"disk": {"percent": 50}}}, _metrics(), "ok")
+        assert not any("Disk" in b["text"] for b in out)
+
+    def test_no_disk_badge_when_missing(self):
+        # No system/disk data (e.g. an early poll) must not emit a spurious or crashing badge.
+        out = build_badges({}, _metrics(), "ok")
+        assert not any("Disk" in b["text"] for b in out)
+
 
 # --- System (presentation thresholds) -------------------------------------------------
 
