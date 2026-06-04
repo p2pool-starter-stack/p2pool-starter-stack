@@ -226,3 +226,9 @@ class TestResponsiveLayout:
         # card and overflows it on a phone. Guard that the wrap rule stays present.
         css = await (await client.get("/static/dashboard.css")).text()
         assert "overflow-wrap" in css
+
+    async def test_css_lets_hostname_wrap(self, client):
+        # HOST_IP is arbitrary user input; a long unbroken hostname would push the header (and
+        # the page) wider than a phone without a wrap rule on the header's <h2>.
+        css = await (await client.get("/static/dashboard.css")).text()
+        assert ".header h2" in css

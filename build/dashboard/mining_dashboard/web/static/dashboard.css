@@ -50,6 +50,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 
 /* Layout & Grid */
 .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px; }
+/* The hostname (HOST_IP) is arbitrary user input; a long unbroken value (no hyphens/dots to
+ * break at) would otherwise push the header — and the page — wider than a phone (Issue #83).
+ * overflow-wrap:anywhere lets it break mid-token so it wraps instead of overflowing. */
+.header h2 { overflow-wrap: anywhere; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 20px; display: flex; flex-direction: column; min-width: 0; }
 
