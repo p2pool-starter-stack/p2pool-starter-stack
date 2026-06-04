@@ -45,7 +45,6 @@ const withAlpha = (hex, aa) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + aa : hex);
 
 // The chart's colours, read from the active theme's CSS variables (Issue #43) so the chart
 // matches light/dark/auto. Re-read on every sync() so a theme switch recolours it in place.
-// Fills are fairly solid now that the areas stack cleanly rather than overlapping.
 function paletteColors() {
     const cs = getComputedStyle(document.documentElement);
     const v = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
@@ -53,13 +52,43 @@ function paletteColors() {
     const purple = v('--purple', '#a371f7');
     return {
         accent, purple,
-        accentFill: withAlpha(accent, '33'),   // ≈ 0.2 alpha
-        purpleFill: withAlpha(purple, '4d'),   // ≈ 0.3 alpha
         shares: v('--bad', '#da3633'),
         grid: v('--border', '#30363d'),
         ticks: v('--text-muted', '#8b949e'),
         band: withAlpha(accent, '26'),         // drag-to-zoom selection band (≈ 0.15 alpha)
     };
+}
+
+// Area-fill gradient stops (Issue #145): strong near the line, fading toward the axis, so a flat
+// series reads as a solid mass instead of a thin strip. Line a touch thicker than the default so
+// the top edge pops against the fill.
+const FILL_TOP = '59';   // ≈ 0.35 alpha at the line
+const FILL_BOTTOM = '0d';  // ≈ 0.05 alpha at the axis
+const AREA_BORDER_WIDTH = 3.5;
+
+// A vertical gradient fill for a stacked area, keyed to the live chart area (pixels, not data) so
+// it spans the visible card regardless of the y-range. Scriptable: re-evaluated on resize/zoom.
+// Before the first layout `chartArea` is undefined, so fall back to the flat top tint.
+function areaFill(baseHex) {
+    return (ctx) => {
+        const area = ctx.chart.chartArea;
+        if (!area) return withAlpha(baseHex, FILL_TOP);
+        const g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+        g.addColorStop(0, withAlpha(baseHex, FILL_TOP));
+        g.addColorStop(1, withAlpha(baseHex, FILL_BOTTOM));
+        return g;
+    };
+}
+
+// Pad the auto-fitted y-range so a near-flat line fills the card instead of hugging the bottom
+// (Issue #145). Pads by a fraction of the visible span, with a floor tied to the magnitude so a
+// dead-flat series isn't magnified into pure noise; never drops below zero.
+function padYAxis(scale) {
+    const { min, max } = scale;
+    if (!isFinite(min) || !isFinite(max)) return;   // all series hidden / no data
+    const pad = Math.max((max - min) * 0.2, max * 0.03);
+    scale.min = Math.max(0, min - pad);
+    scale.max = max + pad;
 }
 
 export class ChartCard extends Component {
@@ -105,16 +134,17 @@ export class ChartCard extends Component {
             type: 'line',
             data: {
                 datasets: [
-                    { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, tension, fill: true,
-                      hidden: vis.p2pool === false,
-                      stack: 'hr', backgroundColor: c.accentFill, pointRadius: 0, pointHitRadius: 20 },
-                    { label: 'XvB', data: d.xvb, borderColor: c.purple, tension, fill: true,
-                      hidden: vis.xvb === false,
-                      stack: 'hr', backgroundColor: c.purpleFill, pointRadius: 0, pointHitRadius: 20 },
-                    // Own stack group so the scatter's y isn't summed onto the areas.
+                    { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, borderWidth: AREA_BORDER_WIDTH,
+                      tension, fill: true, hidden: vis.p2pool === false,
+                      stack: 'hr', backgroundColor: areaFill(c.accent), pointRadius: 0, pointHitRadius: 20 },
+                    { label: 'XvB', data: d.xvb, borderColor: c.purple, borderWidth: AREA_BORDER_WIDTH,
+                      tension, fill: true, hidden: vis.xvb === false,
+                      stack: 'hr', backgroundColor: areaFill(c.purple), pointRadius: 0, pointHitRadius: 20 },
+                    // On its own hidden 0–1 axis (yAxisID) so the markers ride near the top edge and
+                    // never inflate the hashrate y-range (Issue #145).
                     { label: 'Shares', data: d.shares, borderColor: c.shares, backgroundColor: c.shares,
-                      hidden: vis.shares === false,
-                      stack: 'shares', pointStyle: 'triangle', rotation: 180, pointRadius: d.shares.map((s) => s.r),
+                      hidden: vis.shares === false, yAxisID: 'shares',
+                      pointStyle: 'triangle', rotation: 180, pointRadius: d.shares.map((s) => s.r),
                       pointHoverRadius: 15, pointHitRadius: 100, showLine: false },
                 ],
             },
@@ -150,9 +180,12 @@ export class ChartCard extends Component {
                 scales: {
                     // Linear x positions points by real elapsed time (gaps occupy proportional
                     // space); axis hidden as before. y is stacked (P2Pool+XvB = total) and
-                    // grid/ticks follow the theme.
+                    // grid/ticks follow the theme; padYAxis keeps a flat line off the floor.
                     x: { type: 'linear', display: false },
-                    y: { stacked: true, grid: { color: c.grid }, ticks: { color: c.ticks } },
+                    y: { stacked: true, grid: { color: c.grid }, ticks: { color: c.ticks }, afterDataLimits: padYAxis },
+                    // Hidden 0–1 axis the Shares scatter rides on; markers pin near the top (0.93,
+                    // set server-side) so they never affect the hashrate y-range (Issue #145).
+                    shares: { type: 'linear', display: false, min: 0, max: 1 },
                 },
             },
         });
@@ -172,8 +205,8 @@ export class ChartCard extends Component {
         const tension = d.tension ?? 0.3;
         this.shareCounts = d.shares.map((s) => s.c);
         const ds = this.chart.data.datasets;
-        ds[0].data = d.p2pool; ds[0].borderColor = c.accent; ds[0].backgroundColor = c.accentFill; ds[0].tension = tension;
-        ds[1].data = d.xvb;    ds[1].borderColor = c.purple; ds[1].backgroundColor = c.purpleFill; ds[1].tension = tension;
+        ds[0].data = d.p2pool; ds[0].borderColor = c.accent; ds[0].backgroundColor = areaFill(c.accent); ds[0].tension = tension;
+        ds[1].data = d.xvb;    ds[1].borderColor = c.purple; ds[1].backgroundColor = areaFill(c.purple); ds[1].tension = tension;
         ds[2].data = d.shares; ds[2].borderColor = c.shares; ds[2].backgroundColor = c.shares;
         ds[2].pointRadius = d.shares.map((s) => s.r);
         this.chart.options.scales.y.grid.color = c.grid;
