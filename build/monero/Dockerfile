@@ -23,5 +23,9 @@ RUN wget -O monero.tar.bz2 https://downloads.getmonero.org/cli/monero-linux-x64-
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# RPC liveness healthcheck — reads creds from env so they stay off the compose command line (#90)
+COPY healthcheck.sh /usr/local/bin/monerod-healthcheck.sh
+RUN chmod +x /usr/local/bin/monerod-healthcheck.sh
+
 WORKDIR /root
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
