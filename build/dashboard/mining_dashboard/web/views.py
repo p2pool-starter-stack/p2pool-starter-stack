@@ -16,7 +16,9 @@ import bisect
 import logging
 
 from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL
-from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs
+from mining_dashboard.helper.utils import (
+    format_hashrate, format_duration, format_time_abs, is_ip_address, detect_host_ipv4,
+)
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.earnings import xmr_per_hs_day
 from mining_dashboard.version import resolve_version
@@ -613,6 +615,23 @@ def build_earnings(data, metrics):
 # Assembly.
 # --------------------------------------------------------------------------------------
 
+def host_display_addr(host):
+    """The numeric IP to show *beside* the configured host in the header, or ``None`` (Issue #119).
+
+    The configured ``dashboard.host`` is often a hostname that won't resolve from another machine
+    on the LAN (flaky mDNS/``.local``, no DNS entry), so we surface the host's primary IP next to
+    it as a fallback way in. Returns ``None`` — meaning "show the host alone" — when there's
+    nothing useful to add: the host is already an IP, the address can't be determined, or it just
+    duplicates the host.
+    """
+    if is_ip_address(host):
+        return None
+    addr = detect_host_ipv4()
+    if not addr or addr == host:
+        return None
+    return addr
+
+
 def build_state(data, state_mgr, range_arg, window=None):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
@@ -631,6 +650,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "syncing": metrics.global_syncing,
         "page_title": "Mining Dashboard - Syncing" if metrics.global_syncing else "Mining Dashboard",
         "host_ip": HOST_IP,
+        "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
         "last_update": format_time_abs(time.time()),
         "range": range_arg,

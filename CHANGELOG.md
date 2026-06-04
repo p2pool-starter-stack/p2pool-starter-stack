@@ -13,6 +13,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- Dashboard header shows the host's **IP address** next to the hostname when the configured
+  `dashboard.host` is a name, as `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), so you can still reach the
+  dashboard when the hostname doesn't resolve from your phone or another machine on the LAN. The
+  address is detected on the host (the dashboard runs `network_mode: host`), and is omitted when
+  the host is already an IP or can't be determined (#119).
 - **P2Pool Earnings (estimated) card** on the dashboard's Advanced view: expected XMR
   per day / month / year from **P2Pool mining only**, computed from your P2Pool hashrate
   and the live Monero block reward + network difficulty, plus an expected time-to-share.

@@ -8,7 +8,7 @@ presentation tokens), the chart series (Issue #65), and the full ``build_state``
 import json
 import time
 from dataclasses import replace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,7 +17,7 @@ from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
     build_system, build_sync, build_badges, build_earnings, build_state, get_shell_html,
     _mode_palette, parse_window, _target_points, _chart_tension,
-    build_proxy_summary, _reject_flag,
+    build_proxy_summary, _reject_flag, host_display_addr,
 )
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
@@ -563,6 +563,28 @@ class TestPoolNetwork:
         assert pn["monero"]["db_size"] == "—"
 
 
+# --- Host address beside the hostname (Issue #119) ------------------------------------
+
+class TestHostDisplayAddr:
+    def test_resolves_ip_for_a_hostname(self):
+        with patch.object(views, "detect_host_ipv4", return_value="192.168.1.42"):
+            assert host_display_addr("pithead.local") == "192.168.1.42"
+
+    def test_none_when_host_is_already_an_ip(self):
+        # Nothing to add beside a literal address — don't call detection at all.
+        with patch.object(views, "detect_host_ipv4") as detect:
+            assert host_display_addr("192.168.1.42") is None
+            detect.assert_not_called()
+
+    def test_none_when_ip_undetectable(self):
+        with patch.object(views, "detect_host_ipv4", return_value=None):
+            assert host_display_addr("pithead.local") is None
+
+    def test_none_when_detected_ip_equals_host(self):
+        with patch.object(views, "detect_host_ipv4", return_value="my-rig"):
+            assert host_display_addr("my-rig") is None
+
+
 # --- Earnings calculator (Issue #12) --------------------------------------------------
 
 class TestEarnings:
@@ -641,10 +663,10 @@ def _data(**over):
 class TestBuildState:
     def test_has_all_sections(self):
         st = build_state(_data(), _state_mgr(), "all")
-        for key in ("syncing", "page_title", "host_ip", "version", "last_update", "range", "window",
-                    "badges", "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
-                    "shares_window", "proxy_workers", "earnings", "tari", "workers",
-                    "proxy_summary", "chart"):
+        for key in ("syncing", "page_title", "host_ip", "host_addr", "version", "last_update",
+                    "range", "window", "badges", "hashrate", "system", "sync", "stratum", "pool",
+                    "network", "monero", "shares_window", "proxy_workers", "earnings", "tari",
+                    "workers", "proxy_summary", "chart"):
             assert key in st, f"missing section: {key}"
 
     def test_version_section_shape(self):
