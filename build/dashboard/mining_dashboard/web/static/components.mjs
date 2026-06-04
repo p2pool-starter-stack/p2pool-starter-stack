@@ -4,7 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
-import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS } from './logic.mjs';
+import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis } from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => 'c-' + v;
@@ -76,9 +76,15 @@ function Header({ state }) {
     return html`
     <div class="header" id="top-header">
         <div>
-            <div class="flex items-center">
-                <h2>${state.host_ip}</h2>
-                <${Badges} badges=${state.badges} />
+            <div class="brand">
+                <img class="brand-logo" src="/static/pithead-mark.svg" alt="" width="40" height="40" />
+                <div>
+                    <div class="flex items-center">
+                        <h1 class="brand-name">Pithead</h1>
+                        <${Badges} badges=${state.badges} />
+                    </div>
+                    <div class="brand-host font-mono text-muted">${state.host_ip}</div>
+                </div>
             </div>
             <div class="text-small mt-2">
                 <div class="mb-1">
@@ -102,13 +108,27 @@ function Header({ state }) {
             </div>
         </div>
         <div class="text-right">
-            <div class="text-accent font-bold hashrate-total">${hr.total}</div>
             <div class="text-muted text-xs">Last Update: ${state.last_update}</div>
             <div class=${'text-xs mt-1 ' + cVar(hr.p2p_variant)}>P2Pool: ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
             <div class=${'text-xs mt-xs ' + cVar(hr.xvb_variant)}>XvB: ${hr.xvb_1h} (1h) / ${hr.xvb_24h} (24h)</div>
         </div>
     </div>`;
 }
+
+// --- Hero KPI band -------------------------------------------------------------------
+
+// A prominent strip of the headline numbers (total hashrate, shares in window, blocks found, XvB
+// tier, mining mode) shown above the operational view (Issue #81). heroKpis (logic.mjs,
+// unit-tested) does the selection/labelling/colouring; this only renders the list. Rendered only
+// when operational — during sync the numbers aren't meaningful yet.
+const HeroBand = ({ state }) => html`
+    <div class="hero-band" id="hero-band">
+        ${heroKpis(state).map((k) => html`
+            <div class="hero-kpi">
+                <div class=${'hero-value ' + (k.cls || '')}>${k.value}</div>
+                <div class="hero-label">${k.label}</div>
+            </div>`)}
+    </div>`;
 
 // --- Sync Mode -----------------------------------------------------------------------
 
@@ -368,9 +388,12 @@ export function App({ state, connected, ui, onRange, onSort, onView, onTheme, on
         ${!connected ? html`<div class="disconnected-banner">Disconnected — showing last known data. Retrying…</div>` : null}
         ${state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
-            : html`<${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
-                                     onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                                     onToggleSeries=${onToggleSeries} />`}
+            : html`<${Fragment}>
+                <${HeroBand} state=${state} />
+                <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
+                                  onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
+                                  onToggleSeries=${onToggleSeries} />
+              <//>`}
         ${switcher}
     <//>`;
 }

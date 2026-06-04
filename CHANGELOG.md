@@ -22,6 +22,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   stacks, the card grid collapses to a single column, the disk bar goes full-width, and the
   workers table scrolls horizontally within its card instead of overflowing the page. Desktop
   is unchanged.
+- Dashboard branding (#81): the header now leads with the Pithead mark + wordmark and demotes
+  the host IP to a subtitle, and a hero KPI band above the dashboard surfaces the headline
+  numbers — total hashrate, shares in the PPLNS window, blocks found, XvB tier, and mining mode.
 - Release & versioning scaffold: top-level `VERSION` file (single source of truth),
   this changelog, and `docs/releasing.md` documenting the release process. The
   GHCR publishing pipeline and `make release` / `pithead release` command are still

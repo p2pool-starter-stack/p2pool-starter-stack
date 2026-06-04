@@ -50,12 +50,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 
 /* Layout & Grid */
 .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px; }
-/* The hostname (HOST_IP) is arbitrary user input; a long unbroken value (no hyphens/dots to
- * break at) would otherwise push the header — and the page — wider than a phone (Issue #83).
- * overflow-wrap:anywhere lets it break mid-token so it wraps instead of overflowing. */
-.header h2 { overflow-wrap: anywhere; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 20px; display: flex; flex-direction: column; min-width: 0; }
+
+/* Brand block (Issue #81): the Pithead mark + wordmark in the header, with the host IP demoted
+ * to a subtitle beneath the name. The host IP (HOST_IP) is arbitrary user input; a long unbroken
+ * value (no hyphens/dots to break at) would otherwise push the header — and the page — wider than
+ * a phone (Issue #83), so overflow-wrap:anywhere lets it break mid-token and wrap instead. */
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand-logo { width: 40px; height: 40px; flex: none; }
+.brand-name { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
+.brand-host { font-size: 0.8rem; margin-top: 2px; overflow-wrap: anywhere; }
+
+/* Hero KPI band (Issue #81): a prominent strip of the headline numbers under the header. A
+ * responsive auto-fit grid so the cards sit in one row on a wide screen and reflow when narrow;
+ * long tier/mode text wraps inside its card rather than overflowing. */
+.hero-band { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.hero-kpi { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; text-align: center; }
+.hero-value { font-size: 1.6rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.hero-label { margin-top: 6px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
 
 /* Typography */
 h2 { margin: 0; font-size: 1.5rem; font-weight: 600; }
@@ -65,7 +78,6 @@ h3 { margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: v
 .text-small { font-size: 0.85rem; }
 .text-xs { font-size: 0.75rem; }
 .font-mono { font-family: monospace; }
-.font-bold { font-weight: bold; }
 
 /* Stats */
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -200,7 +212,6 @@ tr:last-child td { border-bottom: none; }
 .bg-accent { background-color: var(--accent); }
 
 /* Misc component sizing previously carried as inline styles. */
-.hashrate-total { font-size: 24px; }
 .disk-bar { width: 150px; }
 .chart-wrap { position: relative; flex-grow: 1; min-height: 300px; width: 100%; overflow: hidden; }
 .check-inline { font-size: 1.2em; }
