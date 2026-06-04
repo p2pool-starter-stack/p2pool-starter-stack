@@ -105,6 +105,38 @@ SYNC_GATE_CONTAINERS = [
 NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
 NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 
+# --- Healthchecks.io dead-man's switch (Issue #79) ---
+# Optional external liveness monitor. When enabled, the dashboard loop pings a unique URL
+# every cycle; if the whole host dies (power loss, kernel panic, NIC death) the dashboard
+# dies with it, the pings stop, and Healthchecks.io alerts the operator on the *absence* of
+# a ping — the one failure mode an in-stack notifier (#45) structurally can't report.
+# Default OFF: with HEALTHCHECKS_ENABLED unset nothing ever pings and there are no errors.
+HEALTHCHECKS_ENABLED = os.environ.get("HEALTHCHECKS_ENABLED", "false").strip().lower() == "true"
+
+# Manual mode (MVP): paste the full ping URL Healthchecks.io shows you, e.g.
+# https://hc-ping.com/<uuid>. A bare uuid/slug is also accepted and is joined onto
+# HEALTHCHECKS_BASE_URL — which is what `base_url` is for: pointing at a *self-hosted*
+# Healthchecks instance instead of the hosted hc-ping.com. No API key is stored (model B
+# auto-provisioning is intentionally out of scope).
+HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
+HEALTHCHECKS_BASE_URL = os.environ.get("HEALTHCHECKS_BASE_URL", "https://hc-ping.com").strip()
+
+# How often to ping. The loop runs every UPDATE_INTERVAL, so this is a throttle floor — a
+# value below UPDATE_INTERVAL just pings every cycle. Set your Healthchecks period + grace
+# comfortably above this so a single missed cycle (e.g. a dashboard restart) doesn't alert.
+try:
+    HEALTHCHECKS_INTERVAL_SEC = int(os.environ.get("HEALTHCHECKS_INTERVAL_SECONDS", "60"))
+except ValueError:
+    HEALTHCHECKS_INTERVAL_SEC = 60
+if HEALTHCHECKS_INTERVAL_SEC < 0:
+    HEALTHCHECKS_INTERVAL_SEC = 0
+
+# When true, send Healthchecks a `/fail` (instead of a success ping) while a *required* node
+# is down — i.e. the same condition that rejects workers in #31 (monerod always; Tari only
+# when TARI_REQUIRED). This makes the check health-aware: it goes red on a degraded-but-alive
+# stack, not just a dead host. Set false for plain liveness (only host death trips it).
+HEALTHCHECKS_FAIL_ON_NODE_DOWN = os.environ.get("HEALTHCHECKS_FAIL_ON_NODE_DOWN", "true").strip().lower() == "true"
+
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")

@@ -1247,6 +1247,17 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor; default off.
+    # Manual mode only — the operator pastes the ping URL Healthchecks.io shows them. The ping
+    # URL is a capability secret, so it lives in the owner-only .env (chmod 600 below) alongside
+    # the other secrets, never in a world-readable file. See docs/monitoring.md.
+    local hc_enabled hc_ping_url hc_base_url hc_interval hc_fail_on_down
+    hc_enabled=$(jq -r 'if .healthchecks.enabled != null then .healthchecks.enabled | tostring else "false" end' "$CONFIG_FILE")
+    hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
+    hc_base_url=$(jq -r '.healthchecks.base_url // "https://hc-ping.com"' "$CONFIG_FILE")
+    hc_interval=$(jq -r '.healthchecks.interval_seconds // 60' "$CONFIG_FILE")
+    hc_fail_on_down=$(jq -r 'if .healthchecks.signal_fail_on_node_down != null then .healthchecks.signal_fail_on_node_down | tostring else "true" end' "$CONFIG_FILE")
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -1311,6 +1322,11 @@ XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
 TARI_MEM_LIMIT=$tari_mem_limit
+HEALTHCHECKS_ENABLED=$hc_enabled
+HEALTHCHECKS_PING_URL=$hc_ping_url
+HEALTHCHECKS_BASE_URL=$hc_base_url
+HEALTHCHECKS_INTERVAL_SECONDS=$hc_interval
+HEALTHCHECKS_FAIL_ON_NODE_DOWN=$hc_fail_on_down
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -1624,6 +1640,13 @@ describe_change() {
             msg="Dashboard hostname: $old → $new." ;;
         MONERO_PREP_THREADS)
             msg="Monero block-prep threads: $old → $new." ;;
+        HEALTHCHECKS_ENABLED)
+            msg="Healthchecks.io dead-man's switch → $([ "$new" == "true" ] && echo ENABLED || echo disabled)." ;;
+        HEALTHCHECKS_PING_URL)
+            # The ping URL is a capability secret — report the change without printing it.
+            msg="Healthchecks.io ping URL updated." ;;
+        HEALTHCHECKS_BASE_URL|HEALTHCHECKS_INTERVAL_SECONDS|HEALTHCHECKS_FAIL_ON_NODE_DOWN)
+            msg="Healthchecks.io setting ($key): $old → $new." ;;
         *)
             msg="$key: $old → $new." ;;
     esac

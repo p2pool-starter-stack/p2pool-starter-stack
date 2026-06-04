@@ -565,6 +565,80 @@ class TestRunIteration:
         assert svc.latest_data["global_sync"] is False
         assert svc.latest_data["tari_syncing_passive"] is True
 
+    async def _run_one_iteration(self, svc, monero_sync, tari_sync):
+        """Drive a single loop iteration with the given per-node sync signals."""
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(return_value=tari_sync)
+        tari_client.close = AsyncMock()
+
+        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
+             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
+             patch.object(ds_mod, "TariClient", return_value=tari_client), \
+             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
+             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
+             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
+             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
+             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value=monero_sync)), \
+             patch.object(ds_mod, "get_disk_usage", return_value={}), \
+             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
+             patch.object(ds_mod, "get_memory_usage", return_value={}), \
+             patch.object(ds_mod, "get_load_average", return_value="0"), \
+             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
+             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+    async def test_healthchecks_pinged_when_healthy(self):
+        # Both nodes reachable & synced → a plain success ping (fail=False) each cycle.
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        svc.healthchecks = MagicMock()
+        svc.healthchecks.enabled = True
+        svc.healthchecks.ping.return_value = True
+
+        await self._run_one_iteration(
+            svc,
+            monero_sync={"is_syncing": False, "reachable": True, "percent": 100, "current": 100, "target": 100},
+            tari_sync={"is_syncing": False, "reachable": True},
+        )
+        svc.healthchecks.ping.assert_called_once_with(fail=False)
+
+    async def test_healthchecks_fail_when_required_node_down(self):
+        # A debounced-down required node (monerod) → /fail signal (fail=True).
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        svc.healthchecks = MagicMock()
+        svc.healthchecks.enabled = True
+        svc.healthchecks.ping.return_value = True
+        # Force the debounced node-health verdict to DOWN for this cycle.
+        svc.monero_health = MagicMock()
+        svc.monero_health.update.return_value = True
+        svc.tari_health = MagicMock()
+        svc.tari_health.update.return_value = False
+
+        await self._run_one_iteration(
+            svc,
+            monero_sync={"is_syncing": False, "reachable": False},
+            tari_sync={"is_syncing": False, "reachable": True},
+        )
+        svc.healthchecks.ping.assert_called_once_with(fail=True)
+
+    async def test_healthchecks_not_pinged_when_disabled(self):
+        # Default: the disabled client is never invoked from the loop (no worker thread).
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        svc.healthchecks = MagicMock()
+        svc.healthchecks.enabled = False
+
+        await self._run_one_iteration(
+            svc,
+            monero_sync={"is_syncing": False, "reachable": True},
+            tari_sync={"is_syncing": False, "reachable": True},
+        )
+        svc.healthchecks.ping.assert_not_called()
+
     async def test_iteration_survives_collector_error(self):
         svc, sm, proxy = _make_service()
         worker_client = MagicMock()

@@ -89,6 +89,11 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `dashboard.timezone` | `auto` | Timezone for the dashboard's timestamps and charts. `auto` = **the host machine's timezone** (auto-detected, falling back to `Etc/UTC`); set an IANA name (e.g. `America/Chicago`) to override. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
 | `dashboard.tari_required` | `true` | How much a Tari problem holds up the rest of the stack. Monero is **required** to mine, so its behavior isn't configurable: a monerod outage always rejects workers (stops `xmrig-proxy` so miners **fail over to their backup pools**), and the miner is always held until monerod finishes syncing. Tari is **only needed for merge mining**, so this one flag decides how much it blocks. **`true` (default):** a Tari outage also rejects workers, the miner waits for Tari's initial sync too, and a Tari-only (re)sync shows the full-screen Sync view. **`false` (non-blocking):** keep mining Monero through a Tari outage, start mining as soon as Monero is synced (Tari finishes in the background), and keep the normal dashboard — with a `Tari syncing` indicator — instead of the takeover screen. |
+| `healthchecks.enabled` | `false` | Turn on the optional [Healthchecks.io dead-man's switch](monitoring.md) — get alerted when your host stops responding (power loss, crash), even when it can't alert you itself. When off, nothing pings. |
+| `healthchecks.ping_url` | _(blank)_ | The ping URL from Healthchecks.io (e.g. `https://hc-ping.com/<uuid>`). Required when `enabled`. Treated as a secret — stored in the owner-only `.env`. See [Monitoring & Alerting](monitoring.md). |
+| `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid rather than a full URL; override it to point at a **self-hosted** Healthchecks instance. |
+| `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (the loop pings at most this often). Keep your Healthchecks **period + grace** comfortably above it. |
+| `healthchecks.signal_fail_on_node_down` | `true` | Send a `/fail` (red the check immediately) while a required node is down — same condition as worker rejection above. `false` = plain liveness (only a dead host trips it). |
 
 ---
 

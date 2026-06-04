@@ -16,6 +16,7 @@ from mining_dashboard.collector.pools import get_p2pool_stats, get_network_stats
 from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.system import get_disk_usage, get_hugepages_status, get_memory_usage, get_load_average, get_cpu_usage
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.healthchecks import HealthchecksClient
 
 logger = logging.getLogger("DataService")
 
@@ -206,6 +207,11 @@ class DataService:
         self.docker_control = DockerControl()
         self.monero_health = NodeHealthMonitor()
         self.tari_health = NodeHealthMonitor()
+
+        # Healthchecks.io dead-man's switch (Issue #79). Disabled by default — when off this is
+        # a no-op. When on, each cycle pings a unique URL; the alert fires externally on the
+        # *absence* of a ping, so it survives a host death the in-stack notifier can't report.
+        self.healthchecks = HealthchecksClient.from_config()
         # True while we've stopped the proxy to reject workers. Persisted in the snapshot so
         # a dashboard restart mid-outage still readmits workers once the node recovers.
         self.workers_rejected = False
@@ -477,6 +483,16 @@ class DataService:
                     snapshot_data = self.latest_data.copy()
                     snapshot_data.pop("shares", None)
                     await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
+
+                    # 6b. Healthchecks.io dead-man's switch (Issue #79). Ping each cycle so the
+                    # external monitor alerts on the *absence* of a ping if the host ever dies
+                    # (power loss, crash, NIC death). Send /fail instead while a *required* node
+                    # is down — the same predicate as #31's worker rejection: monerod always,
+                    # Tari only when required. The client throttles and fails silently; gate on
+                    # `enabled` so a disabled (default) stack never spawns the worker thread.
+                    if self.healthchecks.enabled:
+                        required_node_down = monero_down or (tari_down and TARI_REQUIRED)
+                        await asyncio.to_thread(self.healthchecks.ping, fail=required_node_down)
 
                     # 7. External API Sync (Throttled to every 10th iteration)
                     if iteration_count % 10 == 0:

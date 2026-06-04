@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Healthchecks.io dead-man's switch** (`healthchecks.*` in `config.json`, **default off**):
+  an optional external liveness monitor. When enabled, the dashboard loop pings a unique
+  Healthchecks.io URL every cycle; if the host dies (power loss, kernel panic, NIC death) the
+  pings stop and Healthchecks.io alerts you — the one failure mode an in-stack notifier can't
+  report from a dead machine. Optionally sends `/fail` while a required node is down
+  (`signal_fail_on_node_down`, on by default), supports self-hosted instances via `base_url`,
+  and fails silently when offline / Tor-only. Manual setup (paste the ping URL; the URL is
+  stored as a secret in the owner-only `.env`). See [`docs/monitoring.md`](docs/monitoring.md)
+  (#79).
 - **P2Pool Earnings (estimated) card** on the dashboard's Advanced view: expected XMR
   per day / month / year from **P2Pool mining only**, computed from your P2Pool hashrate
   and the live Monero block reward + network difficulty, plus an expected time-to-share.

@@ -82,6 +82,14 @@ assert_contains "wallet is DEST"     "$(run_sourced "$SANDBOX" describe_change M
 assert_contains "xvb url is INFO"    "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)"        "INFO"
 assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)"   "DEST"
 assert_contains "tari mem is INFO"   "$(run_sourced "$SANDBOX" describe_change TARI_MEM_LIMIT 2048m 4g)" "INFO"
+# Healthchecks.io (#79): toggling is INFO, and the ping URL (a capability secret) must NOT be
+# echoed in the apply preview — only the fact that it changed.
+assert_contains "hc enable is INFO"  "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_ENABLED false true)" "INFO"
+assert_contains "hc enable says ENABLED" "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_ENABLED false true)" "ENABLED"
+case "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_PING_URL old https://hc-ping.com/SECRET)" in
+    *SECRET*) bad "hc ping_url not printed" "leaked the ping URL into the preview" ;;
+    *)        ok  "hc ping_url not printed" ;;
+esac
 
 echo "== unit: env helpers =="
 printf 'A=1\nB=two\nPROXY_AUTH_TOKEN=keep=me\n' > "$SANDBOX/old.env"
@@ -265,6 +273,22 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
+
+# Healthchecks.io (#79): absent => disabled with the hosted base_url default.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "healthchecks default disabled"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "false"
+assert_eq "healthchecks default base_url"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_BASE_URL)" "https://hc-ping.com"
+
+# An enabled config propagates the ping URL + tuning knobs verbatim to .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"enabled":true,"ping_url":"https://hc-ping.com/abc","interval_seconds":120,"signal_fail_on_node_down":false} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "healthchecks enabled propagated"   "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "true"
+assert_eq "healthchecks ping_url propagated"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
+assert_eq "healthchecks interval propagated"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_INTERVAL_SECONDS)" "120"
+assert_eq "healthchecks fail-on-down propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_FAIL_ON_NODE_DOWN)" "false"
 
 echo "== black-box: local node creds auto-generated + persisted (#50) =="
 # A local node with BLANK creds: apply must generate them, write them into .env AND back into
