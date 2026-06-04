@@ -371,6 +371,9 @@ doctor() {
     else
         log "All checks passed."
     fi
+    # Propagate a non-zero exit when any critical check FAILED, so `doctor` is usable as a health
+    # gate in cron/CI/monitoring (mirrors `status`). Warnings alone still exit 0 (#127).
+    [ "$DR_FAIL" -gt 0 ] && return 1
     return 0
 }
 
@@ -483,8 +486,12 @@ stack_backup() {
     # so we assume the archive needs roughly the source size plus a ~5% safety margin.
     local need_kb avail_kb
     # sudo: the Tor data dir is owned by 100:101; -c gives a grand total across all items.
-    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}')
-    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}')
+    # `|| true`: du exits non-zero if it can't read any descendant (a permission-denied subdir, a
+    # file vanishing mid-walk, an NFS hiccup) even though 2>/dev/null hides the message and a total
+    # is still printed. Without this, errexit (set -e) aborts the whole backup on a bare assignment,
+    # making the graceful "proceeding without a space check" fallback below unreachable (#127).
+    need_kb=$(sudo du -sck "${items[@]}" 2>/dev/null | awk 'END{print $1}') || true
+    avail_kb=$(df -Pk "$backups_dir" 2>/dev/null | awk 'NR==2{print $4}') || true
     if [ -n "$need_kb" ] && [ -n "$avail_kb" ]; then
         if [ "$avail_kb" -lt "$((need_kb + need_kb / 20))" ]; then
             local avail_gib=$((avail_kb / 1048576)) need_gib=$((need_kb / 1048576))
@@ -1743,7 +1750,7 @@ main() {
         upgrade)          require_deployed; stack_upgrade ;;
         logs)             require_env; log "Following logs (Ctrl+C to exit)..."; docker compose logs -f "$@" ;;
         status)           require_env; stack_status || exit 1 ;;
-        doctor)           doctor ;;
+        doctor)           doctor || exit 1 ;;
         reset-dashboard)  require_deployed; reset_dashboard "$@" ;;
         backup)           stack_backup "$@" ;;
         restore)          stack_restore "$@" ;;
