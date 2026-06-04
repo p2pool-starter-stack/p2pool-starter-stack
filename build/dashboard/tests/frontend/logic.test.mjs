@@ -14,6 +14,7 @@ import {
     THEMES, THEME_ORDER, normalizeTheme,
     clampZoomWindow, fmtWindowDuration,
     SERIES_KEYS, normalizeSeries,
+    heroKpis,
     parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
 } from '../../mining_dashboard/web/static/logic.mjs';
@@ -69,7 +70,16 @@ test('sortWorkers: does not mutate the input array', () => {
 test('WORKER_COLUMNS: keys match the worker fields the server sends', () => {
     assert.deepEqual(
         WORKER_COLUMNS.map((c) => c.key),
-        ['name', 'ip_sort', 'uptime', 'h10', 'h60', 'h15'],
+        ['name', 'ip_sort', 'uptime', 'h10', 'h60', 'h15', 'accepted', 'rejected'],
+    );
+});
+
+test('sortWorkers: rejected column sorts numerically (find problem rigs)', () => {
+    // Per-worker share counts are raw numbers so the operator can sort the worst rejecters up.
+    const ws = [{ rejected: 12 }, { rejected: 0 }, { rejected: 3 }];
+    assert.deepEqual(
+        sortWorkers(ws, col('rejected'), false).map((w) => w.rejected),
+        [12, 3, 0],
     );
 });
 
@@ -187,4 +197,50 @@ test('formatTimeToShare: formats seconds, "—" for null / non-positive', () => 
     assert.equal(formatTimeToShare(null), '—');
     assert.equal(formatTimeToShare(0), '—');
     assert.equal(formatTimeToShare(Infinity), '—');
+});
+
+// --- Issue #81: hero KPI band selector ------------------------------------------------
+
+// Minimal /api/state shape carrying just the fields the band reads; `over` deep-overrides a
+// section so each test changes only what it asserts on.
+const _heroState = (over = {}) => ({
+    hashrate: { total: '10.50 kH/s', tier: 'Donor (1.00 kH/s+)', mode_name: 'P2POOL',
+                mode_variant: 'ok', ...over.hashrate },
+    shares_window: { count: 5, ok: true, ...over.shares_window },
+    pool: { blocks: 42, ...over.pool },
+});
+const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.label, k]));
+
+test('heroKpis: surfaces the five headline numbers under stable labels, in order', () => {
+    assert.deepEqual(
+        heroKpis(_heroState()).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'XvB Tier', 'Mining Mode'],
+    );
+});
+
+test('heroKpis: wires each KPI to its build_state field', () => {
+    const k = _byLabel(_heroState());
+    assert.equal(k['Total Hashrate'].value, '10.50 kH/s');   // hashrate.total
+    assert.equal(k['Shares in Window'].value, 5);            // shares_window.count
+    assert.equal(k['Blocks Found'].value, 42);               // pool.blocks
+    assert.equal(k['XvB Tier'].value, 'Donor (1.00 kH/s+)'); // hashrate.tier
+    assert.equal(k['Mining Mode'].value, 'P2POOL');          // hashrate.mode_name
+});
+
+test('heroKpis: shares colour reflects the ok flag', () => {
+    assert.equal(_byLabel(_heroState({ shares_window: { count: 3, ok: true } }))['Shares in Window'].cls, 'status-ok');
+    assert.equal(_byLabel(_heroState({ shares_window: { count: 0, ok: false } }))['Shares in Window'].cls, 'status-bad');
+});
+
+test('heroKpis: mode colour follows the server mode_variant token', () => {
+    // Same c-<token> mapping the Overview card uses, so the band's mode matches the rest of the UI.
+    assert.equal(_byLabel(_heroState({ hashrate: { mode_variant: 'purple' } }))['Mining Mode'].cls, 'c-purple');
+    assert.equal(_byLabel(_heroState({ hashrate: { mode_variant: 'accent' } }))['Mining Mode'].cls, 'c-accent');
+});
+
+test('heroKpis: total is accent-coloured; blocks and tier carry no colour class', () => {
+    const k = _byLabel(_heroState());
+    assert.equal(k['Total Hashrate'].cls, 'text-accent');
+    assert.equal(k['Blocks Found'].cls, '');
+    assert.equal(k['XvB Tier'].cls, '');
 });
