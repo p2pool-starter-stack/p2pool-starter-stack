@@ -566,29 +566,39 @@ def build_badges(data, metrics, mode_variant):
 # --------------------------------------------------------------------------------------
 
 _EARNINGS_DISCLAIMER = (
-    "Expected values only — mining is variance-heavy, so real payouts swing well above and "
-    "below these figures. Assumes all of this hashrate mines Monero via P2Pool (hashrate "
-    "donated to XvB earns no P2Pool payout). Estimates, not guarantees."
+    "Estimated XMR from P2Pool mining only — excludes XvB donations (donated hashrate earns no "
+    "P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so "
+    "real payouts swing well above and below these figures. Estimates, not guarantees."
 )
 
 
 def build_earnings(data, metrics):
-    """Expected-XMR calculator inputs for the Advanced view (Issue #12).
+    """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
-    Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus the
-    raw measured hashrate and P2Pool share difficulty. The client scales the rate to the
-    entered *what-if* hashrate and formats the day/month/year figures + expected time-to-share
-    — sending a rate (not pre-formatted earnings) keeps the live recompute a single source of
-    truth with no duplicated math (see ``web/static/logic.mjs``).
+    This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
+    actually mining on your P2Pool node — *not* the rig's total output. When XvB split is active
+    the donated slice earns no P2Pool payout, so the what-if default is the P2Pool-effective
+    hashrate (total minus what's currently routed to XvB), and in full-XVB mode it is ~0. Tari
+    merge-mining earnings are a separate thing entirely (deferred, #117).
+
+    Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus that
+    P2Pool hashrate and the P2Pool share difficulty. The client scales the rate to the entered
+    *what-if* hashrate and formats the day/month/year figures + expected time-to-share — sending
+    a rate (not pre-formatted earnings) keeps the live recompute a single source of truth with no
+    duplicated math (see ``web/static/logic.mjs``).
 
     ``available`` is False when the network figures needed for the rate are missing; the client
     then shows ``—`` instead of a bogus estimate (graceful degradation)."""
     reward_atomic = (data.get('network', {}) or {}).get('reward', 0) or 0
     coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
+    # The P2Pool-earning hashrate: total minus the slice currently routed to XvB. In pure-P2Pool
+    # mode xvb_routed is 0 (so this is the full hashrate); during an XvB split it's only the
+    # P2Pool portion — the honest basis for a "P2Pool earnings" estimate.
+    p2pool_hr = max(0.0, metrics.total_h15 - metrics.xvb_routed)
     return {
         "available": coeff_day > 0,
-        "measured_hr": metrics.total_h15,                    # raw H/s — the what-if default
-        "measured_hr_str": format_hashrate(metrics.total_h15),
+        "p2pool_hr": p2pool_hr,                             # raw H/s — the what-if default
+        "p2pool_hr_str": format_hashrate(p2pool_hr),
         "coeff_day": coeff_day,                              # XMR per H/s per day
         "pool_difficulty": metrics.pool_difficulty,         # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard

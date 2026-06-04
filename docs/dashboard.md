@@ -146,26 +146,34 @@ A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) ke
 the essentials — the chart, the Overview summary, and the worker table. **Advanced** swaps the
 Overview for a set of power-user cards that break out the same data in more detail: **My P2Pool
 Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**, **Tari Merge
-Mining**, and the **Earnings (estimated)** calculator below. Your choice is remembered across
-reloads.
+Mining**, and the **P2Pool Earnings (estimated)** calculator below. Your choice is remembered
+across reloads.
 
-### Earnings (estimated)
+### P2Pool Earnings (estimated)
 
-An expected-earnings calculator (Advanced view) that turns your hashrate and the live network
-figures into a rough payout estimate:
+A **P2Pool** mining calculator (Advanced view): it estimates the **XMR earned from P2Pool mining
+only**, turning your P2Pool hashrate and the live Monero network figures into a rough payout
+estimate. It is deliberately scoped to P2Pool — it is **not** an XvB or a Tari calculator:
+
+- **XvB donations are excluded.** Hashrate you route to XvB earns no P2Pool payout, so it isn't
+  counted. If you're running an **XvB split**, the calculator defaults to your *P2Pool* hashrate
+  (your total minus the slice currently donated to XvB), not your full rig output — so the figure
+  is your real P2Pool earnings, not an inflated one. (Donating everything to XvB leaves 0 P2Pool
+  hashrate, so the estimate is 0 until you enter a what-if value.)
+- **Tari merge-mining is excluded.** Tari is earned alongside Monero but is a separate payout
+  (its own calculator is planned).
 
 | Field | Meaning |
 |---|---|
-| **Hashrate** | The hashrate the estimate is based on. Defaults to your live measured hashrate; type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed hashpower. |
-| **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty` — the standard variance-free mining expectation. |
+| **P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your live **P2Pool** hashrate (excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
+| **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty` — the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
-| **Block Reward** | The current Monero block reward, for context. |
+| **XMR Block Reward** | The current Monero block reward, for context. |
 
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
-> above and below these figures — the calculator says so in a disclaimer on the card. The estimate
-> assumes all of the entered hashrate mines Monero via P2Pool; hashrate you donate to XvB earns no
-> P2Pool payout. If the network figures aren't available yet, the card shows `—` rather than a
-> bogus number. **Tari** earnings and an **XvB tier** projection aren't included yet.
+> above and below these figures — the calculator says so in a disclaimer on the card. If the
+> network figures aren't available yet, the card shows `—` rather than a bogus number. **Tari**
+> earnings and an **XvB tier** projection aren't included yet.
 
 ---
 

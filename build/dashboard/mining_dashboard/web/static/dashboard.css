@@ -91,6 +91,7 @@ h3 { margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: v
 .col-span-2 { grid-column: span 2; }
 
 /* Earnings calculator what-if input (Issue #12) */
+.earnings-subtitle { margin: -4px 0 12px 0; line-height: 1.4; }
 .earnings-input { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .earnings-input label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
 .earnings-input input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 10px; font-family: inherit; font-size: 0.9rem; }
