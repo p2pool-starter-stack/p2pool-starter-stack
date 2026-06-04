@@ -77,6 +77,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `tari.data_dir` | `auto` | Where the Tari node data lives on the host. `auto` = `./data/tari`. |
 | `tari.mem_limit` | `auto` | Upper limit on the Tari container's memory, so a runaway Tari restarts cleanly on its own instead of dragging down the whole host. `auto` picks a safe size for your machine — leave it unless you want to give Tari less RAM (to free it for other apps) or more (if it ever restarts too often). Accepts any Docker memory value, e.g. `"8g"`. |
 | `p2pool.pool` | `main` | P2Pool sidechain: `main`, `mini`, or `nano`. |
+| `p2pool.stratum_bind` | `0.0.0.0` | Host **bind address** for the stratum port (`3333`) your rigs connect to — a single IPv4 address (maps to Docker's port-publish host IP), **not** a subnet/CIDR. Default `0.0.0.0` reaches the whole LAN out of the box; set a specific LAN IP (e.g. `192.168.1.10`) to limit it to one interface, or `127.0.0.1` to disable LAN access entirely. To restrict *which source subnet* may connect, use a firewall — see [Connecting Miners › Firewall](workers.md#firewall). |
 | `p2pool.data_dir` | `auto` | Where P2Pool data lives on the host. `auto` = `./data/p2pool`. |
 | `xvb.enabled` | `true` | Enable XMRvsBeast bonus-round hashrate switching. |
 | `xvb.url` | `na.xmrvsbeast.com:4247` | XMRvsBeast pool endpoint. |

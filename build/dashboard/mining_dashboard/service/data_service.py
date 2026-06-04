@@ -24,6 +24,9 @@ logger = logging.getLogger("DataService")
 _PX_NAME = 0
 _PX_IP = 1
 _PX_CONNECTIONS = 2     # active connections; 0 means a stale/disconnected worker
+_PX_ACCEPTED = 3        # accepted shares (cumulative)
+_PX_REJECTED = 4        # rejected shares (cumulative)
+_PX_INVALID = 5         # invalid shares (cumulative)
 _PX_LAST_SHARE_MS = 7   # epoch ms of the last accepted share
 _PX_HR_1M = 8           # 1-minute hashrate, kH/s
 _PX_HR_10M = 9          # 10-minute hashrate, kH/s
@@ -53,6 +56,10 @@ def _parse_proxy_list_worker(w):
         "h60": w[_PX_HR_1M] * _KHS_TO_HS,
         "h15": w[_PX_HR_10M] * _KHS_TO_HS,
         "uptime": uptime_estimate,
+        # Per-worker share health (Issue #82) — collected here, surfaced in the Workers table.
+        "accepted": w[_PX_ACCEPTED] or 0,
+        "rejected": w[_PX_REJECTED] or 0,
+        "invalid": w[_PX_INVALID] or 0,
     }
 
 
@@ -67,6 +74,10 @@ def _parse_legacy_dict_worker(w):
         "h60": hr[1] if len(hr) > 1 else 0,
         "h15": hr[2] if len(hr) > 2 else 0,
         "uptime": w.get("uptime", 0),
+        # Share health (Issue #82); the legacy shape rarely carries these, so default to 0.
+        "accepted": w.get("accepted", 0),
+        "rejected": w.get("rejected", 0),
+        "invalid": w.get("invalid", 0),
     }
 
 
@@ -87,6 +98,27 @@ def _normalize_proxy_workers(proxy_data):
         elif isinstance(w, dict):
             workers.append(_parse_legacy_dict_worker(w))
     return workers
+
+
+def _parse_proxy_summary(summary_data):
+    """Extract the pool-wide share-health totals from an xmrig-proxy ``/summary`` payload (#82).
+
+    The ``results`` block carries the proxy's cumulative accepted/rejected/invalid/expired share
+    counts to the upstream pool, plus ``best`` (a list of best difficulties found, highest first).
+    Returns a flat dict of just the fields the dashboard surfaces, and ``{}`` for a missing or
+    malformed payload — so one bad poll leaves the last good value in place rather than erroring.
+    """
+    if not isinstance(summary_data, dict):
+        return {}
+    results = summary_data.get("results", {}) or {}
+    best = results.get("best", []) or []
+    return {
+        "accepted": results.get("accepted", 0) or 0,
+        "rejected": results.get("rejected", 0) or 0,
+        "invalid": results.get("invalid", 0) or 0,
+        "expired": results.get("expired", 0) or 0,
+        "best": best[0] if best else 0,
+    }
 
 
 def _merge_direct_stats(workers, results, active_pool_port):
@@ -152,6 +184,7 @@ class DataService:
         
         self.latest_data = {
             "workers": [],
+            "proxy_summary": {},
             "total_live_h15": 0,
             "total_live_h10": 0,
             "pool": {"p2p": {}, "pool": {}},
@@ -309,6 +342,16 @@ class DataService:
                     except Exception as e:
                         logger.error(f"Proxy Data Fetch Error: {e}")
 
+                    # 2b. Fetch the proxy /summary for pool-wide share totals (Issue #82). Kept
+                    # separate from the workers fetch so one failing doesn't blank the other; a
+                    # bad poll leaves the last good summary in latest_data.
+                    proxy_summary = self.latest_data.get("proxy_summary", {})
+                    try:
+                        summary_data = await asyncio.to_thread(self.proxy_client.get_summary)
+                        proxy_summary = _parse_proxy_summary(summary_data)
+                    except Exception as e:
+                        logger.error(f"Proxy Summary Fetch Error: {e}")
+
                     # 3. Augment with Direct Worker Stats (Uptime, Hashrate) via Local API
                     tasks = [worker_client.get_stats(w['ip'], w['name']) for w in proxy_workers]
                     worker_results = await asyncio.gather(*tasks)
@@ -399,6 +442,7 @@ class DataService:
 
                     self.latest_data.update({
                         "workers": final_workers,
+                        "proxy_summary": proxy_summary,
                         "shares": shares_list,
                         "total_live_h15": total_hr,
                         "total_live_h10": total_h10,

@@ -27,6 +27,7 @@
 
     "p2pool": {
         "pool": "main",
+        "stratum_bind": "0.0.0.0",
         "data_dir": "auto"
     },
 

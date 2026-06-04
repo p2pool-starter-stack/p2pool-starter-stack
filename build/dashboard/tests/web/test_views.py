@@ -16,7 +16,7 @@ import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
     build_system, build_sync, build_badges, build_state, get_shell_html, _mode_palette,
-    parse_window, _target_points, _chart_tension,
+    parse_window, _target_points, _chart_tension, build_proxy_summary, _reject_flag,
 )
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
@@ -433,6 +433,55 @@ class TestWorkers:
         # Raw name as data; the client text-escapes it on render.
         assert build_workers([{"name": "<rig>", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}])[0]["name"] == "<rig>"
 
+    def test_share_counts_raw_and_formatted(self):
+        # Per-worker accepted/rejected/invalid: raw counts (sort keys) + display strings (#82).
+        row = build_workers([{"name": "r", "ip": "10.0.0.1", "status": "online", "active_pool": "3333",
+                              "accepted": 1234, "rejected": 5, "invalid": 0}])[0]
+        assert row["accepted"] == 1234 and row["accepted_str"] == "1,234"
+        assert row["rejected"] == 5 and row["rejected_str"] == "5"
+        assert row["invalid"] == 0
+
+    def test_invalid_appended_to_rejected_string_only_when_nonzero(self):
+        with_inv = build_workers([{"name": "r", "ip": "1.1.1.1", "status": "online",
+                                   "active_pool": "3333", "rejected": 3, "invalid": 2}])[0]
+        assert with_inv["rejected_str"] == "3 (+2 inv)"
+
+    def test_missing_share_fields_default_to_zero(self):
+        # Workers restored from an old snapshot (pre-#82) lack the share fields entirely.
+        row = build_workers([{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}])[0]
+        assert (row["accepted"], row["rejected"], row["invalid"]) == (0, 0, 0)
+        assert row["reject_flag"] is None
+
+    def test_reject_flag_set_on_high_reject_rate(self):
+        row = build_workers([{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333",
+                              "accepted": 90, "rejected": 10, "invalid": 0}])[0]
+        assert row["reject_flag"] and row["reject_flag"]["text"] == "⚠"
+        assert "10.0%" in row["reject_flag"]["title"]
+
+
+class TestRejectFlag:
+    """The per-worker reject-rate flag (Issue #82)."""
+
+    def test_none_without_rejects(self):
+        assert _reject_flag(1000, 0) is None
+
+    def test_none_below_noise_floor(self):
+        # A couple of rejects out of a few shares is noise, even at a high rate.
+        assert _reject_flag(2, 1) is None     # 33% but only 1 reject
+        assert _reject_flag(0, 2) is None     # 100% but below the 3-reject floor
+
+    def test_none_when_rate_low(self):
+        assert _reject_flag(1000, 5) is None  # 5 rejects but only 0.5%
+
+    def test_flags_high_rate_above_floor(self):
+        flag = _reject_flag(90, 10)           # 10% with 10 rejects
+        assert flag["text"] == "⚠"
+        assert "10.0%" in flag["title"] and "10 rejected" in flag["title"]
+
+    def test_flags_all_rejects_at_floor(self):
+        # A worker submitting only rejects trips the floor immediately (rate 100%).
+        assert _reject_flag(0, 3) is not None
+
 
 # --- Tari -----------------------------------------------------------------------------
 
@@ -452,6 +501,37 @@ class TestTari:
     def test_long_wallet_shortened(self):
         t = build_tari({"tari": {"active": True, "address": "T" * 40}})
         assert "..." in t["wallet_short"] and t["wallet"] == "T" * 40
+
+
+# --- Proxy summary (Issue #82) --------------------------------------------------------
+
+class TestProxySummary:
+    def test_formats_totals_and_best(self):
+        ps = build_proxy_summary({"proxy_summary": {
+            "accepted": 12345, "rejected": 67, "invalid": 2, "expired": 1, "best": 9876543}})
+        assert ps["accepted"] == "12,345"
+        assert ps["rejected"] == "67"
+        assert ps["invalid"] == "2"
+        assert ps["expired"] == "1"
+        assert ps["best"] == "9,876,543"
+        assert ps["has_data"] is True
+
+    def test_reject_pct_and_level(self):
+        # 5 rejected of 105 submitted -> ~4.76%, below the 5% highlight threshold.
+        ok = build_proxy_summary({"proxy_summary": {"accepted": 100, "rejected": 5}})
+        assert ok["reject_pct"] == "4.76%" and ok["reject_level"] == "ok"
+        # 10 of 100 -> 10%, highlighted.
+        high = build_proxy_summary({"proxy_summary": {"accepted": 90, "rejected": 10}})
+        assert high["reject_pct"] == "10.00%" and high["reject_level"] == "high"
+
+    def test_best_dash_when_unknown(self):
+        assert build_proxy_summary({"proxy_summary": {"accepted": 1, "best": 0}})["best"] == "—"
+
+    def test_empty_summary_has_no_data(self):
+        ps = build_proxy_summary({})
+        assert ps["has_data"] is False
+        assert ps["reject_pct"] == "0.00%"
+        assert ps["best"] == "—"
 
 
 # --- pool/network passthrough ---------------------------------------------------------
@@ -507,7 +587,7 @@ class TestBuildState:
         st = build_state(_data(), _state_mgr(), "all")
         for key in ("syncing", "page_title", "host_ip", "version", "last_update", "range", "window",
                     "badges", "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
-                    "shares_window", "proxy_workers", "tari", "workers", "chart"):
+                    "shares_window", "proxy_workers", "tari", "workers", "proxy_summary", "chart"):
             assert key in st, f"missing section: {key}"
 
     def test_version_section_shape(self):

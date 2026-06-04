@@ -63,9 +63,21 @@ run_sourced "$SANDBOX" assert_safe_dir "/home"   >/dev/null 2>&1; assert_rc "rej
 run_sourced "$SANDBOX" assert_safe_dir ""        >/dev/null 2>&1; assert_rc "rejects empty"    "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/srv/p2pool/data" >/dev/null 2>&1; assert_rc "allows real dir" "$?" "0"
 
+echo "== unit: is_ipv4 =="
+run_sourced "$SANDBOX" is_ipv4 "0.0.0.0"      >/dev/null 2>&1; assert_rc "accepts 0.0.0.0"     "$?" "0"
+run_sourced "$SANDBOX" is_ipv4 "127.0.0.1"    >/dev/null 2>&1; assert_rc "accepts 127.0.0.1"   "$?" "0"
+run_sourced "$SANDBOX" is_ipv4 "192.168.1.10" >/dev/null 2>&1; assert_rc "accepts LAN IP"      "$?" "0"
+run_sourced "$SANDBOX" is_ipv4 "256.0.0.1"    >/dev/null 2>&1; assert_rc "rejects octet >255"  "$?" "1"
+run_sourced "$SANDBOX" is_ipv4 "1.2.3"        >/dev/null 2>&1; assert_rc "rejects 3 octets"    "$?" "1"
+run_sourced "$SANDBOX" is_ipv4 "192.168.1.0/24" >/dev/null 2>&1; assert_rc "rejects CIDR/subnet" "$?" "1"
+run_sourced "$SANDBOX" is_ipv4 "example.com"  >/dev/null 2>&1; assert_rc "rejects hostname"    "$?" "1"
+run_sourced "$SANDBOX" is_ipv4 ""             >/dev/null 2>&1; assert_rc "rejects empty"       "$?" "1"
+
 echo "== unit: describe_change =="
 assert_contains "prune is DEST"      "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)"        "DEST"
 assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
+assert_contains "stratum open is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 127.0.0.1 0.0.0.0)" "DEST"
+assert_contains "stratum lan is INFO"  "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 0.0.0.0 127.0.0.1)" "INFO"
 assert_contains "wallet is DEST"     "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
 assert_contains "xvb url is INFO"    "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)"        "INFO"
 assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)"   "DEST"
@@ -190,6 +202,13 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
 assert_rc "invalid pool rejected" "$rc" "1"
 assert_contains "invalid pool message" "$out" "p2pool.pool"
 
+# A non-IP stratum_bind must be rejected before it reaches the compose port mapping.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_bind":"not-an-ip"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "invalid stratum_bind rejected" "$rc" "1"
+assert_contains "invalid stratum_bind message" "$out" "p2pool.stratum_bind"
+
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
@@ -200,6 +219,7 @@ printf '  1.2.3 \n' > "$V/VERSION"
 DOCKER_LOG="$V/docker.log"; : > "$DOCKER_LOG"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "pool flag propagated"  "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)"  "--mini"
+assert_eq "stratum_bind default"  "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_BIND)" "0.0.0.0"
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"

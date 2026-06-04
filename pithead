@@ -709,6 +709,17 @@ resolve_default() {
     esac
 }
 
+# True if $1 is a syntactically valid dotted-quad IPv4 address (each octet 0-255). Used to
+# validate user-supplied bind addresses before they reach docker-compose port mappings.
+is_ipv4() {
+    local o
+    [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+    for o in "${BASH_REMATCH[@]:1}"; do
+        [ "$o" -le 255 ] || return 1
+    done
+    return 0
+}
+
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
 # default when dashboard.timezone is "auto"/unset. Falls back to Etc/UTC if it can't tell.
 detect_host_timezone() {
@@ -993,6 +1004,15 @@ parse_and_validate_config() {
         main|mini|nano) ;;
         *) error "p2pool.pool must be \"main\", \"mini\", or \"nano\" (got \"$POOL_TYPE\")." ;;
     esac
+
+    # Host interface the stratum port (:3333) publishes on. Default 0.0.0.0 so LAN rigs can
+    # reach it out of the box; narrow it (e.g. a specific LAN IP, or 127.0.0.1 to disable LAN
+    # access) on a public-IP host. Validate it's an IPv4 literal so a typo can't produce an
+    # unparseable compose port binding. Rendered to STRATUM_BIND in .env.
+    STRATUM_BIND=$(jq -r '.p2pool.stratum_bind // "0.0.0.0"' "$CONFIG_FILE")
+    if ! is_ipv4 "$STRATUM_BIND"; then
+        error "p2pool.stratum_bind must be an IPv4 address like \"0.0.0.0\", \"127.0.0.1\", or your LAN IP (got \"$STRATUM_BIND\")."
+    fi
 
     MONERO_USER=$(jq -r '.monero.node_username // empty' "$CONFIG_FILE")
     MONERO_PASS=$(jq -r '.monero.node_password // empty' "$CONFIG_FILE")
@@ -1283,6 +1303,7 @@ TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
 P2POOL_FLAGS=$p2pool_flags
 P2POOL_PORT=$p2pool_port
+STRATUM_BIND=$STRATUM_BIND
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
@@ -1574,6 +1595,12 @@ describe_change() {
                 flag=DEST; msg="Monero RPC will be EXPOSED on your LAN ($old → $new) — make sure this is intended."
             else
                 msg="Monero RPC bind address: $old → $new."
+            fi ;;
+        STRATUM_BIND)
+            if [ "$new" == "0.0.0.0" ]; then
+                flag=DEST; msg="Stratum (:3333) will be published on ALL interfaces ($old → $new) — keep it firewalled to your LAN."
+            else
+                msg="Stratum (:3333) bind address: $old → $new (workers must reach this address)."
             fi ;;
         *_DATA_DIR)
             flag=DEST; msg="$key: $old → $new — the service will use the new (empty) directory and re-sync; old data is left in place." ;;

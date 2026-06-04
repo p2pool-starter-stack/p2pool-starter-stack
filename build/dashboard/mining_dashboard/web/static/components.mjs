@@ -4,7 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
-import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS } from './logic.mjs';
+import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis } from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => 'c-' + v;
@@ -86,10 +86,16 @@ function Header({ state }) {
     return html`
     <div class="header" id="top-header">
         <div>
-            <div class="flex items-center">
-                <h2>${state.host_ip}</h2>
-                <${Badges} badges=${state.badges} />
-                <${VersionBadge} version=${state.version} />
+            <div class="brand">
+                <img class="brand-logo" src="/static/pithead-mark.svg" alt="" width="40" height="40" />
+                <div>
+                    <div class="flex items-center">
+                        <h1 class="brand-name">Pithead</h1>
+                        <${Badges} badges=${state.badges} />
+                        <${VersionBadge} version=${state.version} />
+                    </div>
+                    <div class="brand-host font-mono text-muted">${state.host_ip}</div>
+                </div>
             </div>
             <div class="text-small mt-2">
                 <div class="mb-1">
@@ -113,13 +119,27 @@ function Header({ state }) {
             </div>
         </div>
         <div class="text-right">
-            <div class="text-accent font-bold hashrate-total">${hr.total}</div>
             <div class="text-muted text-xs">Last Update: ${state.last_update}</div>
             <div class=${'text-xs mt-1 ' + cVar(hr.p2p_variant)}>P2Pool: ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
             <div class=${'text-xs mt-xs ' + cVar(hr.xvb_variant)}>XvB: ${hr.xvb_1h} (1h) / ${hr.xvb_24h} (24h)</div>
         </div>
     </div>`;
 }
+
+// --- Hero KPI band -------------------------------------------------------------------
+
+// A prominent strip of the headline numbers (total hashrate, shares in window, blocks found, XvB
+// tier, mining mode) shown above the operational view (Issue #81). heroKpis (logic.mjs,
+// unit-tested) does the selection/labelling/colouring; this only renders the list. Rendered only
+// when operational — during sync the numbers aren't meaningful yet.
+const HeroBand = ({ state }) => html`
+    <div class="hero-band" id="hero-band">
+        ${heroKpis(state).map((k) => html`
+            <div class="hero-kpi">
+                <div class=${'hero-value ' + (k.cls || '')}>${k.value}</div>
+                <div class="hero-label">${k.label}</div>
+            </div>`)}
+    </div>`;
 
 // --- Sync Mode -----------------------------------------------------------------------
 
@@ -290,27 +310,49 @@ function PoolBadge({ pool }) {
     return html`<span class="badge badge-bad">Unknown</span>`;
 }
 
-function WorkersTable({ workers, ui, onSort }) {
+// Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
+// has reported any shares so it isn't an all-zero line on a fresh start.
+const ProxyTotals = ({ summary }) => {
+    if (!summary || !summary.has_data) return null;
+    // htm trims whitespace that wraps across a newline at an element boundary, so the spaces
+    // around the rejected <span> are added explicitly via ${' '} rather than left to indentation.
+    const rejCls = summary.reject_level === 'high' ? 'status-bad' : '';
+    return html`
+    <div class="proxy-totals text-small text-muted">
+        Proxy totals: <span class="status-ok">${summary.accepted}</span> accepted ·${' '}
+        <span class=${rejCls}>${summary.rejected}</span> rejected (${summary.reject_pct}) ·${' '}
+        ${summary.invalid} invalid · Best diff ${summary.best}
+    </div>`;
+};
+
+function WorkersTable({ workers, summary, ui, onSort }) {
     const rows = sortWorkers(workers, ui.sortIndex, ui.sortAsc);
     return html`
     <div class="card">
         <h3>Workers Alive</h3>
-        <table id="workers-table">
-            <thead>
-                <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
-            </thead>
-            <tbody id="workers-tbody">
-                ${rows.map((w) => html`
-                    <tr class=${w.status === 'online' ? 'status-ok' : 'status-bad'}>
-                        <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
-                        <td>${w.ip}</td>
-                        <td>${w.uptime_str}</td>
-                        <td>${w.h10_str}</td>
-                        <td>${w.h60_str}</td>
-                        <td>${w.h15_str}</td>
-                    </tr>`)}
-            </tbody>
-        </table>
+        <div class="table-scroll">
+            <table id="workers-table">
+                <thead>
+                    <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
+                </thead>
+                <tbody id="workers-tbody">
+                    ${rows.map((w) => html`
+                        <tr class=${w.status === 'online' ? 'status-ok' : 'status-bad'}>
+                            <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
+                            <td>${w.ip}</td>
+                            <td>${w.uptime_str}</td>
+                            <td>${w.h10_str}</td>
+                            <td>${w.h60_str}</td>
+                            <td>${w.h15_str}</td>
+                            <td>${w.accepted_str}</td>
+                            <td>${w.rejected_str}${w.reject_flag
+                                ? html` <span class="badge badge-bad" title=${w.reject_flag.title}>${w.reject_flag.text}</span>`
+                                : null}</td>
+                        </tr>`)}
+                </tbody>
+            </table>
+        </div>
+        <${ProxyTotals} summary=${summary} />
     </div>`;
 }
 
@@ -337,7 +379,7 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
             <${NetworkCard} state=${state} />
             <${TariCard} tari=${state.tari} />
         </div>
-        <${WorkersTable} workers=${state.workers} ui=${ui} onSort=${onSort} />
+        <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
     </div>`;
 }
 
@@ -357,9 +399,12 @@ export function App({ state, connected, ui, onRange, onSort, onView, onTheme, on
         ${!connected ? html`<div class="disconnected-banner">Disconnected — showing last known data. Retrying…</div>` : null}
         ${state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
-            : html`<${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
-                                     onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                                     onToggleSeries=${onToggleSeries} />`}
+            : html`<${Fragment}>
+                <${HeroBand} state=${state} />
+                <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
+                                  onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
+                                  onToggleSeries=${onToggleSeries} />
+              <//>`}
         ${switcher}
     <//>`;
 }

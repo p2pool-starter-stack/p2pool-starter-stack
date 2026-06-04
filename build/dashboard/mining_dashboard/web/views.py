@@ -336,6 +336,25 @@ def _usage_level(percent, threshold=80):
     return "high" if percent > threshold else "ok"
 
 
+# Per-worker reject flag (Issue #82). Purely presentational: flag a worker once its rejected-share
+# rate crosses _REJECT_FLAG_RATE *and* it has enough rejects to not just be early-run noise, so an
+# operator can spot a misbehaving rig. A worker submitting all-rejects (rate 100%) still trips the
+# noise floor, so it flags as soon as the floor is reached.
+_REJECT_FLAG_RATE = 0.05   # >= 5% of submitted shares rejected
+_REJECT_FLAG_MIN = 3       # and at least this many rejects
+
+
+def _reject_flag(accepted, rejected):
+    """A ``{text, title}`` warning flag for a high per-worker reject rate, or ``None``."""
+    total = accepted + rejected
+    if total <= 0 or rejected < _REJECT_FLAG_MIN:
+        return None
+    rate = rejected / total
+    if rate < _REJECT_FLAG_RATE:
+        return None
+    return {"text": "⚠", "title": f"High reject rate: {rate * 100:.1f}% ({rejected} rejected)"}
+
+
 def build_system(data):
     """System resource metrics (CPU, RAM, Disk, HugePages) as formatted values + level tokens.
 
@@ -405,6 +424,13 @@ def build_workers(workers):
             h10 = worker.get('h10', 0)
             h60 = worker.get('h60', 0)
             h15 = worker.get('h15', 0)
+            # Per-worker share health (Issue #82). Raw counts for client-side sorting; a display
+            # string that appends invalid only when it's non-zero (keeps the common case clean);
+            # and an optional warning flag the client renders when the reject rate is high.
+            accepted = worker.get('accepted', 0)
+            rejected = worker.get('rejected', 0)
+            invalid = worker.get('invalid', 0)
+            rejected_str = f"{rejected:,} (+{invalid:,} inv)" if invalid else f"{rejected:,}"
             rows.append({
                 "name": worker['name'],
                 "ip": worker['ip'],
@@ -415,11 +441,41 @@ def build_workers(workers):
                 "h10": h10, "h10_str": format_hashrate(h10),
                 "h60": h60, "h60_str": format_hashrate(h60),
                 "h15": h15, "h15_str": format_hashrate(h15),
+                "accepted": accepted, "accepted_str": f"{accepted:,}",
+                "rejected": rejected, "rejected_str": rejected_str,
+                "invalid": invalid,
+                "reject_flag": _reject_flag(accepted, rejected),
             })
         except Exception as e:
             logger.error(f"Error processing worker {worker.get('name', 'unknown')}: {e}")
             continue
     return rows
+
+
+def build_proxy_summary(data):
+    """Pool-wide share-health totals from the xmrig-proxy ``/summary`` (Issue #82): cumulative
+    accepted/rejected/invalid/expired shares submitted to the upstream pool, the aggregate reject
+    rate, and the best difficulty found. ``has_data`` is False until the proxy has been polled (no
+    shares yet) so the client can hide an all-zero footer."""
+    summary = data.get('proxy_summary', {}) or {}
+    accepted = summary.get('accepted', 0) or 0
+    rejected = summary.get('rejected', 0) or 0
+    invalid = summary.get('invalid', 0) or 0
+    expired = summary.get('expired', 0) or 0
+    best = summary.get('best', 0) or 0
+
+    total = accepted + rejected
+    reject_pct = (rejected / total * 100) if total > 0 else 0.0
+    return {
+        "accepted": f"{accepted:,}",
+        "rejected": f"{rejected:,}",
+        "invalid": f"{invalid:,}",
+        "expired": f"{expired:,}",
+        "best": f"{int(best):,}" if best else "—",
+        "reject_pct": f"{reject_pct:.2f}%",
+        "reject_level": _usage_level(reject_pct, threshold=_REJECT_FLAG_RATE * 100),
+        "has_data": (accepted + rejected + invalid) > 0,
+    }
 
 
 def _ip_to_sort_int(ip):
@@ -543,6 +599,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "proxy_workers": metrics.workers_online,
         "tari": build_tari(data),
         "workers": build_workers(data.get('workers', [])),
+        "proxy_summary": build_proxy_summary(data),
         "chart": build_chart(history, data.get('shares', []), range_arg, window),
     }
 

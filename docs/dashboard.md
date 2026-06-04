@@ -129,7 +129,22 @@ The summary panel pulls the key numbers together:
 A live table of every connected rig — worker name, IP, uptime, and per-worker hashrate over
 several windows (e.g. 10s / 60s / 15m) — so you can spot a rig that has dropped off or is
 underperforming. A worker that's connected but whose direct API is unreachable still counts (with
-proxy-derived hashrate); a worker whose miner has stopped drops out of the total.
+proxy-derived hashrate); a worker whose miner has stopped drops out of the total. On a narrow
+screen the table scrolls sideways within its card, so its columns stay readable rather than
+stretching the page.
+
+Each rig also shows its **accepted** and **rejected** share counts (with invalid shares folded
+into the rejected column as `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5%
+gets a red **⚠** flag next to its rejected count — a quick way to catch a rig that's submitting
+stale or bad shares (bad overclock, flaky network, clock drift) rather than earning. Every column
+is sortable, so you can click **Rejected** to float the worst offenders to the top. The shares are
+cumulative since the proxy last started, so a brief early-run blip clears itself as good shares
+accumulate.
+
+Below the table, a **Proxy totals** line sums the whole stack's share health as reported by the
+xmrig-proxy: total accepted / rejected (with the aggregate reject %) / invalid shares submitted
+upstream, plus the **best difficulty** any of your shares has hit. It's hidden until the proxy has
+submitted its first shares.
 
 ---
 
@@ -141,6 +156,8 @@ proxy-derived hashrate); a worker whose miner has stopped drops out of the total
   `./pithead apply`.
 - **Reaching it from another machine.** Use the hostname/IP of the stack server. If your hostname
   doesn't resolve on your LAN, set `dashboard.host` in `config.json` to an address that does.
+- **On your phone.** The dashboard is responsive — open the same URL on a phone and the layout
+  reflows to a single column with a stacked header, so you can check on the stack from the couch.
 - **Stuck on Sync Mode?** That usually just means the chain is still downloading. Check
   `./pithead logs monerod` / `./pithead logs tari` for steady progress; see
   [Operations › Troubleshooting](operations.md#troubleshooting) if a node looks stalled.

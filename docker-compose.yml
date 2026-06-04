@@ -57,7 +57,9 @@ services:
       tor:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "--digest", "-u", "${MONERO_NODE_USERNAME}:${MONERO_NODE_PASSWORD}", "http://localhost:18081/get_info"]
+      # The RPC username/password are read from the container's env inside the script, NOT
+      # interpolated into the test command — so they no longer leak via `docker inspect` (#90).
+      test: ["CMD", "/usr/local/bin/monerod-healthcheck.sh"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -163,6 +165,17 @@ services:
       # monerod dependency removed to allow remote node operation
       tari:
         condition: service_healthy
+    healthcheck:
+      # Liveness for the core revenue service (#90). Probe the stratum listener directly: a TCP
+      # connect to :3333 proves p2pool is up and accepting miners, which is the failure miners
+      # actually feel. /dev/tcp is a bash builtin (the image ships bash) so it needs no extra
+      # tooling. Surfaced in `pithead status` / the dashboard; it does NOT gate startup or
+      # auto-restart — xmrig-proxy still depends on p2pool only being *started*.
+      test: ["CMD", "/usr/local/bin/p2pool-healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # --- XMRig Proxy ---
   xmrig-proxy:
@@ -170,8 +183,18 @@ services:
     container_name: xmrig-proxy
     restart: unless-stopped
     logging: *default-logging
+    # Defense-in-depth: this leaf service never needs extra privileges or Linux capabilities
+    # (it only listens on :3333/:3344 and forwards to p2pool). Drop them all (#90).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
-      - "3333:3333"
+      # The stratum endpoint your rigs connect to. Published on 0.0.0.0 (all interfaces) by
+      # default so LAN workers can reach it; set p2pool.stratum_bind in config.json to a specific
+      # address (e.g. your LAN IP, or 127.0.0.1 to disable LAN access) to narrow exposure on a
+      # public-IP host. Either way, firewall :3333 to your LAN — see docs/workers.md.
+      - "${STRATUM_BIND:-0.0.0.0}:3333:3333"
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
@@ -217,6 +240,13 @@ services:
       restart: unless-stopped
       logging: *default-logging
       network_mode: "host"
+      # Hardened with no-new-privileges (#90). Deliberately NOT cap_drop: [ALL] like the other
+      # leaf services: the dashboard runs as root and persists its SQLite history into the
+      # ${DASHBOARD_DATA_DIR} bind mount, which pithead creates owned by the host user. Dropping
+      # all capabilities strips CAP_DAC_OVERRIDE, so root could no longer create the SQLite
+      # WAL/journal files in that user-owned directory and history writes would fail.
+      security_opt:
+        - no-new-privileges:true
       volumes:
         - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
         - ${DASHBOARD_DATA_DIR}:/data
@@ -261,6 +291,16 @@ services:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-proxy
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Immutable root filesystem (#90): HAProxy reads its config and the (read-only) Docker socket
+    # and writes nothing persistent — only ephemeral scratch is needed.
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
@@ -281,6 +321,16 @@ services:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-control
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Immutable root filesystem (#90): HAProxy reads its config and the (read-only) Docker socket
+    # and writes nothing persistent — only ephemeral scratch is needed.
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
@@ -299,9 +349,24 @@ services:
     container_name: caddy
     restart: unless-stopped
     network_mode: "host"
+    # Drop all capabilities, then add back only NET_BIND_SERVICE — Caddy serves the dashboard on
+    # :80/:443 (privileged ports) and would otherwise fail to bind once ALL caps are dropped (#90).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    # Immutable root filesystem (#90). Persistent state (the internal CA + issued certs) lives in
+    # the caddy_data volume; the only other writes are Caddy's config autosave (/config) and temp
+    # scratch (/tmp), which are ephemeral tmpfs. Nothing else on the rootfs can be modified.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /config
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data 
+      - caddy_data:/data
 
 # --- Volumes ---
 volumes:
