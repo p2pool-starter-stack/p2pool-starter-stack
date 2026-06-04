@@ -233,3 +233,11 @@ class TestResponsiveLayout:
         # brand subtitle (`.brand-host`), which carries the overflow-wrap protection.
         css = await (await client.get("/static/dashboard.css")).text()
         assert ".brand-host" in css and "overflow-wrap" in css
+
+    async def test_host_at_separator_styled_and_rendered(self, client):
+        # The "hostname @ ip" subtitle (#119) renders the @ as a dimmed connector span, so the
+        # markup must emit `.brand-host-at` and the CSS must carry a matching dimming rule.
+        mjs = await (await client.get("/static/components.mjs")).text()
+        css = await (await client.get("/static/dashboard.css")).text()
+        assert "brand-host-at" in mjs and "state.host_addr" in mjs
+        assert ".brand-host-at" in css and "opacity" in css
