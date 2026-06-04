@@ -95,8 +95,9 @@ Rather than copying files by hand, let `pithead` do it for you:
 ```
 
 That's it. This saves the things you can't get back — your `config.json`, your secrets
-(`.env`), the **Tor onion address keys**, and the **dashboard's database** (your hashrate
-history and settings) — into a small, timestamped file under `backups/`.
+(`.env`), your `Caddyfile` (if you have one), the **Tor onion address keys**, and the
+**dashboard's database** (your hashrate history and settings) — into a small, timestamped file
+under `backups/`.
 It's quick and small because your blockchains are **not** included (they just re-sync). The
 archive is locked down to `chmod 600`, and `pithead` prints its path when it's done. Before it
 writes anything, it checks there's room — if free space looks tight, it asks before going ahead
@@ -124,6 +125,9 @@ To recover — on a new machine, or after a wipe — copy the archive back and r
 `-y` / `--yes` to skip that prompt). It puts the files back where they belong and sorts out the
 Tor key ownership for you, so your onion address comes back exactly as it was — and your
 hashrate history and dashboard settings come back too.
+
+> **Note:** After a restore, the dashboard's HTTPS certificate is regenerated, so your browser
+> may show its "not trusted" warning once — that's expected; accept it as you did on first setup.
 
 ---
 

@@ -552,7 +552,7 @@ stack_restore() {
     # Note: we do NOT require/parse the current config here — restore must work even when the
     # on-disk config.json is lost or corrupt. The config comes back out of the archive.
 
-    warn "Restore will OVERWRITE config.json, .env, Caddyfile, and the Tor data dir from the archive."
+    warn "Restore will OVERWRITE config.json, .env, Caddyfile, the Tor data dir, and the dashboard's database from the archive."
     warn "Stop the stack first with '$0 down' so files are restored in a consistent state."
     if [ "$assume_yes" -eq 0 ]; then
         read -r -p "Continue and overwrite these files? (y/N): " CONFIRM || true
@@ -621,8 +621,9 @@ Maintenance:
                               -y, --yes        skip the confirmation prompts (low free space,
                                                and stopping a running stack).
   restore [-y|--yes] <archive>
-                            Restore config.json, .env, Caddyfile, and the Tor data dir from a
-                            backup archive (prompts before overwriting; fixes Tor ownership).
+                            Restore config.json, .env, Caddyfile, the Tor data dir, and the
+                            dashboard's database from a backup archive (prompts before
+                            overwriting; fixes Tor ownership).
                               -y, --yes        restore without the confirmation prompt.
 
   help, -h, --help          Show this message.
