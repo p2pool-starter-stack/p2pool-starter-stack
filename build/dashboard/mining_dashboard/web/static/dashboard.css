@@ -76,6 +76,13 @@ th { text-align: left; font-size: 0.75rem; color: var(--text-muted); padding: 10
 td { padding: 10px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 
+/* Horizontal-scroll wrapper for the workers table (Issue #83): the table can be wider than a
+ * phone viewport (six columns), so it lives in this wrapper that scrolls sideways within its
+ * card instead of stretching the whole page. Cells stay on one line so columns don't collapse;
+ * harmless on desktop, where the table already fits and no scrollbar appears. */
+.table-scroll { overflow-x: auto; }
+.table-scroll th, .table-scroll td { white-space: nowrap; }
+
 /* Components */
 .status-ok { color: var(--ok); }
 .status-bad { color: var(--bad); }
@@ -207,3 +214,30 @@ tr:last-child td { border-bottom: none; }
 .progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: var(--text); z-index: 10; }
 .status-text { font-size: 1.1em; margin-top: 15px; color: var(--text-muted); text-align: center; }
 .header-placeholder { text-align: center; margin: 40px 0; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
+
+/* ---- Responsive / mobile (Issue #83) --------------------------------------------------
+ * The desktop layout above is fluid down to tablet widths via the card grid's auto-fit, but a
+ * few fixed sizes break or overflow on phones: the 350px card-track minimum forces a column
+ * wider than the screen, the header is a fixed two-up row, the disk bar is a hard 150px, and
+ * the body padding is a roomy 20px. These overrides take over at phone widths — tighter
+ * padding, a stacked header, a single-column card grid, and a full-width disk bar. The workers
+ * table is handled separately by .table-scroll above. One breakpoint is enough: above it the
+ * grid's auto-fit already reflows cleanly. */
+@media (max-width: 640px) {
+    body { padding: 12px; }
+
+    /* Stack the header: the host/telemetry block sits above the hashrate readout, both
+       left-aligned, and each inner row may wrap rather than overflow. */
+    .header { flex-direction: column; gap: 12px; }
+    .header .text-right { text-align: left; }
+    .header .items-center { flex-wrap: wrap; }
+
+    /* One card per row — the 350px minmax floor overflows a phone, so collapse to a single
+       fluid column. */
+    .grid { grid-template-columns: 1fr; gap: 12px; }
+    .card { padding: 16px; }
+
+    /* Let the disk bar fill the row (dropping to its own line when the label wraps) instead of
+       holding a fixed 150px next to the disk label. */
+    .disk-bar { width: 100%; }
+}

@@ -186,3 +186,26 @@ class TestStaticAssets:
             resp = await client.get(path)
             assert resp.status == 200, path
             assert ctype in resp.headers["Content-Type"], path
+
+
+class TestResponsiveLayout:
+    """The mobile/responsive layout (Issue #83) is pure CSS + a markup wrapper, with no DOM
+    test harness in this repo (rendering is covered by the manual browser smoke test). These
+    guard the pieces that have to be present and wired together so the feature can't silently
+    regress: the served CSS must carry a phone breakpoint and the horizontal-scroll rule, and
+    the workers-table markup must opt into that scroll wrapper."""
+
+    async def test_css_has_phone_breakpoint(self, client):
+        css = await (await client.get("/static/dashboard.css")).text()
+        # A max-width media query is what makes the layout reflow on phones; without one the
+        # only @media block left would be the prefers-color-scheme theme query.
+        assert "@media" in css and "max-width" in css
+
+    async def test_css_has_horizontal_scroll_rule(self, client):
+        css = await (await client.get("/static/dashboard.css")).text()
+        assert ".table-scroll" in css and "overflow-x" in css
+
+    async def test_workers_table_opts_into_scroll_wrapper(self, client):
+        # The CSS rule only helps if the markup actually wraps the table in it.
+        mjs = await (await client.get("/static/components.mjs")).text()
+        assert "table-scroll" in mjs
