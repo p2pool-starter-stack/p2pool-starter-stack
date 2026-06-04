@@ -6,9 +6,9 @@
 # test-mini-stack`.
 #
 # Scenarios:
-#   1. boot syncing            → dashboard HOLDS p2pool + xmrig-proxy (#35)
+#   1. boot syncing            → dashboard HOLDS itest-p2pool + itest-xmrig-proxy (#35)
 #   2. both chains synced      → dashboard RELEASES them
-#   3. monerod down            → dashboard REJECTS workers (stops xmrig-proxy) (#31)
+#   3. monerod down            → dashboard REJECTS workers (stops itest-xmrig-proxy) (#31)
 #   4. monerod back            → dashboard READMITS workers
 #
 set -uo pipefail
@@ -62,9 +62,10 @@ assert_stays() {  # assert_stays <label> <container> <state> <seconds>
     fi
 }
 
-# POST a new mode to a fake's /control endpoint with a clear failure label.
-set_monerod() { ctl "http://127.0.0.1:18081/control" "{\"mode\":\"$1\"}" || c_bad "set monerod $1" "control POST failed"; }
-set_tari()    { ctl "http://127.0.0.1:18152/control" "{\"mode\":\"$1\"}" || c_bad "set tari $1" "control POST failed"; }
+# POST a new mode to a fake's /control endpoint with a clear failure label. Host ports are
+# 28081/28152 (namespaced away from a real monerod/dashboard on the same host).
+set_monerod() { ctl "http://127.0.0.1:28081/control" "{\"mode\":\"$1\"}" || c_bad "set monerod $1" "control POST failed"; }
+set_tari()    { ctl "http://127.0.0.1:28152/control" "{\"mode\":\"$1\"}" || c_bad "set tari $1" "control POST failed"; }
 
 teardown() {
     log "tearing down"
@@ -95,44 +96,44 @@ done
 
 # 1. Booting mid-sync → the gate holds both miner containers (stops them). (#35)
 log "scenario 1: holds the miner while both chains sync"
-assert_state "held: p2pool stopped"      p2pool      exited  90
-assert_state "held: xmrig-proxy stopped" xmrig-proxy exited  90
+assert_state "held: itest-p2pool stopped"      itest-p2pool      exited  90
+assert_state "held: itest-xmrig-proxy stopped" itest-xmrig-proxy exited  90
 
 # 2. Monerod synced but Tari still syncing, Tari REQUIRED → STILL held (the gate needs both).
 log "scenario 2: keeps holding while Tari (required) is still syncing"
 set_monerod synced
-assert_stays "still held on monerod-only" p2pool exited 8
+assert_stays "still held on monerod-only" itest-p2pool exited 8
 
 # 3. Tari synced too → release both. (#35)
 log "scenario 3: releases the miner once both chains are synced"
 set_tari synced
-assert_state "released: p2pool running"      p2pool      running 90
-assert_state "released: xmrig-proxy running" xmrig-proxy running 90
+assert_state "released: itest-p2pool running"      itest-p2pool      running 90
+assert_state "released: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
-# 4. monerod down → reject workers (stop xmrig-proxy); p2pool keeps running. (#31)
+# 4. monerod down → reject workers (stop itest-xmrig-proxy); itest-p2pool keeps running. (#31)
 log "scenario 4: rejects workers when monerod is down"
 set_monerod down
-assert_state "rejected: xmrig-proxy stopped" xmrig-proxy exited  90
-if [ "$(cstate p2pool)" = "running" ]; then
-    c_ok "rejection leaves p2pool running (only the proxy fails over)"
+assert_state "rejected: itest-xmrig-proxy stopped" itest-xmrig-proxy exited  90
+if [ "$(cstate itest-p2pool)" = "running" ]; then
+    c_ok "rejection leaves itest-p2pool running (only the proxy fails over)"
 else
-    c_bad "rejection leaves p2pool running" "p2pool is '$(cstate p2pool)'"
+    c_bad "rejection leaves itest-p2pool running" "itest-p2pool is '$(cstate itest-p2pool)'"
 fi
 
 # 5. monerod recovers → readmit workers (after the recovery-hysteresis window). (#31)
 log "scenario 5: readmits workers when monerod recovers"
 set_monerod synced
-assert_state "readmitted: xmrig-proxy running" xmrig-proxy running 90
+assert_state "readmitted: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
 # 6. Tari down while required → reject again (proves the required-Tari failover path).
 log "scenario 6: rejects workers when required Tari is down"
 set_tari down
-assert_state "rejected on Tari outage: xmrig-proxy stopped" xmrig-proxy exited 90
+assert_state "rejected on Tari outage: itest-xmrig-proxy stopped" itest-xmrig-proxy exited 90
 
 # 7. Tari recovers → readmit.
 log "scenario 7: readmits workers when Tari recovers"
 set_tari synced
-assert_state "readmitted after Tari recovery: xmrig-proxy running" xmrig-proxy running 90
+assert_state "readmitted after Tari recovery: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
 # 8. Dashboard restart after release → the one-way latch is persisted, so the miner is NOT
 #    re-held: both containers stay running across the restart. (#35 persistence)
@@ -143,8 +144,8 @@ for _ in $(seq 1 30); do
         "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=3)" >/dev/null 2>&1 && break
     sleep 2
 done
-assert_stays "p2pool stays up across restart"      p2pool      running 6
-assert_stays "xmrig-proxy stays up across restart" xmrig-proxy running 6
+assert_stays "itest-p2pool stays up across restart"      itest-p2pool      running 6
+assert_stays "itest-xmrig-proxy stays up across restart" itest-xmrig-proxy running 6
 
 echo ""
 log "mini-stack: $PASS passed, $FAIL failed"

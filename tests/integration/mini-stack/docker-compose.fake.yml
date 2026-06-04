@@ -42,13 +42,15 @@ services:
       TARI_GRPC_ADDRESS: "fake-tari:18142"
       DOCKER_PROXY_URL: "tcp://docker-proxy:2375"
       DOCKER_CONTROL_URL: "tcp://docker-control:2375"
-      SYNC_GATE_CONTAINERS: "p2pool,xmrig-proxy"
-      REJECT_WORKERS_CONTAINER: "xmrig-proxy"
+      # Namespaced container names so the mini-stack never collides with — or controls — a real
+      # deployment's p2pool/xmrig-proxy on the same host.
+      SYNC_GATE_CONTAINERS: "itest-p2pool,itest-xmrig-proxy"
+      REJECT_WORKERS_CONTAINER: "itest-xmrig-proxy"
       TARI_REQUIRED: "true"
       XVB_ENABLED: "false"
       XVB_POOL_URL: ""
       XVB_DONOR_ID: ""
-      P2POOL_URL: "p2pool:3333"
+      P2POOL_URL: "itest-p2pool:3333"
       MONERO_WALLET_ADDRESS: "49iTestWalletPlaceholderXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
       PROXY_HOST: "xmrig-proxy"
       PROXY_API_PORT: "3344"
@@ -65,7 +67,7 @@ services:
     entrypoint: []
     # Boot mid-sync so the dashboard holds the miner; the runner flips it to synced/down.
     command: ["python3", "/fakes/fake_monerod.py", "--port", "18081", "--mode", "syncing"]
-    ports: ["18081:18081"]   # control + get_info, reachable from the runner
+    ports: ["28081:18081"]   # 28081 on the host (avoids a real monerod's 18081), → 18081 inside
     volumes: ["../fakes:/fakes:ro"]
 
   fake-tari:
@@ -74,20 +76,20 @@ services:
     networks: [itestnet]
     entrypoint: []
     command: ["python3", "/fakes/fake_tari.py", "--grpc-port", "18142", "--control-port", "18152", "--mode", "syncing"]
-    ports: ["18152:18152"]   # HTTP control side-channel, reachable from the runner
+    ports: ["28152:18152"]   # HTTP control side-channel on host 28152
     volumes: ["../fakes:/fakes:ro"]
 
   # Stand-ins for the miner containers: real, named containers the dashboard genuinely
   # stops/starts via docker-control. They just idle.
   p2pool:
     image: busybox:1.36
-    container_name: p2pool
+    container_name: itest-p2pool
     networks: [itestnet]
     command: ["sh", "-c", "while true; do sleep 30; done"]
 
   xmrig-proxy:
     image: busybox:1.36
-    container_name: xmrig-proxy
+    container_name: itest-xmrig-proxy
     networks: [itestnet]
     command: ["sh", "-c", "while true; do sleep 30; done"]
 
