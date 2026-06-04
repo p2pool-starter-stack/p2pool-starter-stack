@@ -131,6 +131,7 @@ Useful flags (full list in `run.sh --help`):
 | `--pruned-data-dir` / `--full-data-dir` | Synced alt DB to enable the opposite prune mode. |
 | `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
 | `--fault-injection` | Also break monerod (stop / SIGSTOP / remove) and assert `status`' down/unhealthy/missing verdicts and the failover→recovery cycle. Destructive-then-restored; local mode only; slow. |
+| `--safety-backup` | Take a `pithead backup` before the destructive scenarios and **auto-roll-back** (down → restore → up) if anything fails; the archive is removed on success. Recommended for the destructive matrix on a precious box; also exercises backup/restore end-to-end. |
 | `--keep` | Don't restore the original config (leave the box on the last scenario). |
 | `--out <dir>` | Where to write the manifest and failure artifacts. |
 | `--list` | Print the matrix and axis coverage and exit. |

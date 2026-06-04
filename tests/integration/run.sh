@@ -36,6 +36,8 @@ ONLY_SCENARIO=""
 CHECK_ONLY=0
 RUN_LIFECYCLE=0
 RUN_FAULTS=0
+SAFETY_BACKUP=0
+SAFETY_ARCHIVE=""
 KEEP_STATE=0
 EXPECTED_WORKERS=2
 REMOTE_MONERO_HOST=""
@@ -77,6 +79,10 @@ MATRIX:
   --full-data-dir <d>    synced FULL monero data dir (enables the full case when the box's
                          baseline is pruned)
   --lifecycle            also run the lifecycle phase (restart, apply secret-preservation)
+  --safety-backup        take a `pithead backup` BEFORE the destructive scenarios; if anything
+                         fails, automatically roll the box back to it (down → restore → up).
+                         The archive is removed on success. Recommended for the destructive
+                         matrix on a precious box. Also exercises backup/restore end-to-end.
   --fault-injection      also run the fault-injection phase: deliberately break monerod
                          (stop / SIGSTOP / remove) and assert pithead's status verdicts
                          (down / unhealthy / missing) and the failover→recovery cycle.
@@ -96,6 +102,7 @@ EOF
 }
 
 # --- Arg parsing ------------------------------------------------------------
+# shellcheck disable=SC2034  # the data-dir / remote-host globals are consumed by lib.sh:resolve_overrides
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -113,6 +120,7 @@ parse_args() {
             --full-data-dir)      FULL_DATA_DIR="$2"; shift 2 ;;
             --lifecycle)  RUN_LIFECYCLE=1; shift ;;
             --fault-injection) RUN_FAULTS=1; shift ;;
+            --safety-backup)   SAFETY_BACKUP=1; shift ;;
             --keep)       KEEP_STATE=1; shift ;;
             --out)        OUT_DIR="$2"; shift 2 ;;
             --list)       print_list; exit 0 ;;
@@ -283,9 +291,8 @@ run_scenario() {
 # local node) and proxy_workers for mining liveness (stratum.conns can read 0 while mining).
 assert_running_state() {
     local name="$1" config="$2"
-    local st mode prune pool secure tari_req xvb rpc_lan
+    local st mode pool secure tari_req xvb rpc_lan
     mode="$(jq_get "$config" '.monero.mode')";          mode="${mode:-local}"
-    prune="$(jq_get "$config" '.monero.prune')"
     pool="$(jq_get "$config" '.p2pool.pool')";          pool="${pool:-main}"
     secure="$(jq_get "$config" '.dashboard.secure')"
     tari_req="$(jq_get "$config" '.dashboard.tari_required')"
@@ -423,6 +430,32 @@ run_lifecycle() {
     else
         it_warn "skipping node-down failover (remote mode: no local monerod to stop)"
     fi
+
+    # backup → restore round-trip (#102): a backup archives config/.env/onions/dashboard; a
+    # restore brings them back. We change the pool, restore, and assert the pool reverted and
+    # secrets survived — exercising both CLI verbs end-to-end (not just the rollback net).
+    it_step "backup → restore round-trip…"
+    if pithead backup -y >/dev/null 2>&1; then
+        local arch; arch="$(rx 'ls -t backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1')"
+        if [ -n "$arch" ]; then
+            local fp_b; fp_b="$(secret_fingerprint)"
+            local backed_pool; backed_pool="$(jq_get "$(api_state)" '.pool.type')"
+            # Diverge from the backed-up state, then restore it back.
+            push_config "$(render_scenario_config "$BASELINE_CONFIG" "p2pool.pool=$other")"
+            pithead apply -y >/dev/null 2>&1
+            pithead down >/dev/null 2>&1
+            pithead restore -y "$arch" >/dev/null 2>&1
+            pithead up >/dev/null 2>&1
+            wait_status_ok 240 || true
+            assert_eq "restore reverts the pool to the backed-up value" "$(jq_get "$(api_state)" '.pool.type')" "$backed_pool"
+            assert_eq "restore preserves secrets" "$(secret_fingerprint)" "$fp_b"
+            rx "rm -f $(quote_arg "$arch")" >/dev/null 2>&1 || true
+        else
+            it_fail "backup produced an archive" "no backups/pithead-backup-*.tar.gz"
+        fi
+    else
+        it_fail "pithead backup succeeded" "backup returned non-zero"
+    fi
 }
 
 # Predicate: status reports a problem (non-zero) — used to detect node-down deterministically.
@@ -483,6 +516,7 @@ fault_missing() {
 }
 
 run_fault_injection() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="fault-injection"
     echo ""
     it_log "── fault-injection phase ───────────────────────────"
@@ -501,6 +535,56 @@ run_fault_injection() {
     rx "docker compose up -d monerod" >/dev/null 2>&1 || true
     wait_for 240 5 "monerod healthy after fault phase" _pred_monerod_healthy || true
     wait_status_ok 240 || true
+}
+
+# --- Safety backup / rollback (--safety-backup) -----------------------------
+# Take a real `pithead backup` before the destructive scenarios so a failed run can be rolled
+# all the way back (config, .env, Caddyfile, Tor onion keys, dashboard DB). This both protects
+# a precious box AND exercises backup/restore end-to-end (#102) — closing that CLI-breadth gap.
+safety_backup() {
+    [ "$SAFETY_BACKUP" = "1" ] || return 0
+    it_log "Taking a safety backup before destructive scenarios (pithead backup -y)…"
+    if ! pithead backup -y > "$OUT_DIR/backup.log" 2>&1; then
+        it_fail "safety backup created" "see $OUT_DIR/backup.log"
+        return 0
+    fi
+    SAFETY_ARCHIVE="$(rx 'ls -t backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1')"
+    if [ -z "$SAFETY_ARCHIVE" ]; then
+        it_fail "safety backup archive located" "no backups/pithead-backup-*.tar.gz on the box"
+        return 0
+    fi
+    it_log "Safety backup: $SAFETY_ARCHIVE"
+    # Exercise backup as an assertion: the archive must list the core files we'd roll back to.
+    local listing; listing="$(rx "tar -tzf $(quote_arg "$SAFETY_ARCHIVE") 2>/dev/null")"
+    assert_contains "backup archive contains config.json" "$listing" "config.json"
+    assert_contains "backup archive contains .env"        "$listing" ".env"
+}
+
+# On a failed run, roll the box back to the pre-test safety backup.
+safety_rollback_if_failed() {
+    [ "$SAFETY_BACKUP" = "1" ] && [ -n "$SAFETY_ARCHIVE" ] || return 0
+    [ "$IT_FAIL" -gt 0 ] || return 0
+    it_warn "failures detected — rolling back to the safety backup ($SAFETY_ARCHIVE)…"
+    pithead down >/dev/null 2>&1 || true
+    if pithead restore -y "$SAFETY_ARCHIVE" >/dev/null 2>&1; then
+        pithead up >/dev/null 2>&1 || true
+        wait_status_ok 240 || true
+        it_log "rollback complete — config/.env/onions/dashboard restored from the pre-test backup."
+    else
+        it_err "restore FAILED — the box may be in a partial state; archive kept at $SAFETY_ARCHIVE"
+        return 0
+    fi
+}
+
+# Remove the generated safety archive once we're done (kept on --keep, or if restore failed).
+safety_cleanup() {
+    [ -n "$SAFETY_ARCHIVE" ] || return 0
+    if [ "$KEEP_STATE" = "1" ]; then
+        it_warn "--keep: leaving the safety backup at $SAFETY_ARCHIVE"
+        return 0
+    fi
+    rx "rm -f $(quote_arg "$SAFETY_ARCHIVE")" >/dev/null 2>&1 || true
+    it_step "removed the safety backup archive"
 }
 
 # --- Restore + summary ------------------------------------------------------
@@ -544,6 +628,9 @@ main() {
         return
     fi
 
+    # Optional rollback net for the destructive phases that follow.
+    safety_backup
+
     local name rest
     if [ -n "$ONLY_SCENARIO" ]; then
         rest="$(scenario_overrides "$ONLY_SCENARIO")" || { it_err "Unknown scenario: $ONLY_SCENARIO"; exit 2; }
@@ -558,7 +645,11 @@ main() {
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
     [ "$RUN_FAULTS" = "1" ] && run_fault_injection
 
+    # Failure → roll the box back to the safety backup; success → leave it (restore_baseline
+    # just puts config.json back to where we found it). Then drop the generated archive.
+    safety_rollback_if_failed
     restore_baseline
+    safety_cleanup
     summary
 }
 

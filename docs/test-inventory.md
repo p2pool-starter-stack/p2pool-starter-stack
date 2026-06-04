@@ -611,6 +611,8 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 - MONERO_RPC_BIND matches rpc_lan_access
 - TARI_REQUIRED env matches config
 - XVB_ENABLED matches config
+- backup archive contains .env
+- backup archive contains config.json
 - check
 - container up: $svc
 - dashboard /api/state reachable
@@ -623,6 +625,8 @@ tests · 16 `pithead` shell sections · 11 harness self-test sections ·
 - pool actually changed
 - pool type
 - re-apply is a no-op
+- restore preserves secrets
+- restore reverts the pool to the backed-up value
 - secrets intact (token + onions)
 - secrets intact after restore
 - secrets preserved across pool change

@@ -180,8 +180,14 @@ These are deliberately **not** yet covered and are the road to full production c
   assertions (monero-synced, conns, prune display); the fake Tari binding gRPC to loopback; and
   the mini-stack's container-name/port isolation. Still pending: the full **destructive** config
   matrix run on the box (its read path is already proven via `--check`).
-- **CLI breadth in automation.** `backup`/`restore`, `reset-dashboard`, and `upgrade` are
-  documented and partly unit-covered, but not yet asserted end-to-end in the integration tiers.
+- **Destructive-matrix safety.** ✅ `run.sh --safety-backup` takes a real `pithead backup`
+  before the destructive scenarios and **automatically rolls the box back** (down → restore →
+  up) if anything fails; the archive is removed on success. So the matrix can run on a precious
+  box with a one-command rollback net.
+- **CLI breadth in automation.** ✅ `backup`/`restore` are now exercised end-to-end — by
+  `--safety-backup` and by a `--lifecycle` backup→restore round-trip (assert the pool reverts
+  and secrets survive). `reset-dashboard` and `upgrade` are still only unit-covered (upgrade
+  belongs to the release staging smoke test, since it rebuilds/pulls the bundle under test).
 - **Soak / longevity.** No multi-hour run asserting no leaks, no log/DB growth runaway, and that
   the XvB controller converges over a realistic window.
 - **Load / capacity.** No test drives many workers or high share rates to find limits.

@@ -46,6 +46,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     `cap_drop` on the leaf containers (and the deliberate dashboard exception), the Docker socket
     proxies stay least-privilege, and p2pool has its liveness probe — plus a `dashboard.host`
     "auto"-revert test and the schema-migration test that caught the DB upgrade bug above.
+  - A `--safety-backup` rollback net for the live harness: takes a real `pithead backup` before
+    the destructive scenarios and automatically rolls the box back (down → restore → up) if
+    anything fails, removing the archive on success — so the destructive matrix can run on a
+    precious box. The `--lifecycle` phase also does a `backup` → `restore` round-trip (assert the
+    pool reverts and secrets survive), exercising both verbs end-to-end.
   - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
 - Dashboard header shows the host's **IP address** next to the hostname when the configured
   `dashboard.host` is a name, as `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), so you can still reach the
