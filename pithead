@@ -271,6 +271,9 @@ doctor() {
             dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run 'pithead setup' (kernel optimization) to reserve them."
         fi
 
+        # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
+        # (does the host have enough RAM at all), this checks MemAvailable (is enough free right
+        # now). The split is intentional — keep both.
         local mem_avail_kb mem_avail_mb
         mem_avail_kb=$(awk '/^MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || true)
         if [ -z "$mem_avail_kb" ]; then
@@ -290,13 +293,18 @@ doctor() {
     echo "Disk:"
     # Derive data dirs from .env when present, otherwise fall back to the default ./data layout.
     # We never create anything here: df -P is run only on paths that already exist.
-    local dirs=() d df_line avail_h
+    # The Monero data dir gets the same pruning-aware threshold setup pre-flights (monero_disk_min);
+    # the other (small) dirs keep the generic ~10 GiB floor.
+    local dirs=() d df_line avail_h monero_dir="" mono_min_kb mono_min_label
     if [ -f "$ENV_FILE" ]; then
         for d in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR TOR_DATA_DIR; do
             local v
             v=$(env_get "$d")
             [ -n "$v" ] && dirs+=("$v")
         done
+        monero_dir=$(env_get MONERO_DATA_DIR)
+        # .env renders MONERO_PRUNE as 1 (pruning on) / 0 (off); default to pruned if unset.
+        read -r mono_min_kb mono_min_label <<<"$(monero_disk_min "$(env_get MONERO_PRUNE)")"
     fi
     if [ "${#dirs[@]}" -eq 0 ]; then
         dirs=("$PWD/data")
@@ -316,7 +324,14 @@ doctor() {
         # 4th column of df -P is available 1K-blocks.
         local avail_kb
         avail_kb=$(printf '%s\n' "$df_line" | awk '{print $4}')
-        if [ -n "$avail_kb" ] && [ "$avail_kb" -ge 10485760 ] 2>/dev/null; then
+        if [ -n "$monero_dir" ] && [ "$d" == "$monero_dir" ]; then
+            # Monero data dir: hold it to the full blockchain requirement, not the generic floor.
+            if [ -n "$avail_kb" ] && [ "$avail_kb" -ge "$mono_min_kb" ] 2>/dev/null; then
+                dr_ok "Disk for $d: ${avail_h:-?} free."
+            else
+                dr_warn "Disk for $d: ${avail_h:-?} free — below the ${mono_min_label} needed for a full sync."
+            fi
+        elif [ -n "$avail_kb" ] && [ "$avail_kb" -ge 10485760 ] 2>/dev/null; then
             dr_ok "Disk for $d: ${avail_h:-?} free."
         else
             dr_warn "Disk for $d low: ${avail_h:-?} free — the Monero blockchain needs tens of GB."
@@ -1177,6 +1192,18 @@ prompt_start_stack() {
     fi
 }
 
+# Pruning-aware minimum free disk for the Monero blockchain — the single source of truth for the
+# 150/300 GB numbers, shared by setup's preflight_resources and doctor's Disk check. Takes a prune
+# flag (1 = pruning on, 0 = off) and prints "<min_kb> <human_label>" (min in 1K-blocks, to match
+# `df -P`). Keep these numbers in sync with docs/hardware.md.
+monero_disk_min() {
+    if [ "${1:-1}" -eq 1 ] 2>/dev/null; then
+        echo "157286400 ~150 GB (pruning on)"    # 150 GiB
+    else
+        echo "314572800 ~300 GB (pruning off)"   # 300 GiB
+    fi
+}
+
 # Pre-flight resource check (#87). Best-effort, WARN-only: catch the most demoralizing first-run
 # failure — an undersized host that fills its disk mid-sync — before we commit to a sync. Never
 # blocks or exits: a missing path or unreadable file just skips that check. Call after
@@ -1190,15 +1217,9 @@ preflight_resources() {
 
     # --- Disk: free space on the Monero data dir's filesystem ---
     # The Monero blockchain is by far the biggest consumer; check the filesystem its data dir lives
-    # on. Thresholds (in 1K-blocks): ~150 GB pruned, ~300 GB full.
+    # on. Thresholds (in 1K-blocks) come from monero_disk_min: ~150 GB pruned, ~300 GB full.
     local disk_min_kb disk_min_label
-    if [ "$prune" -eq 1 ]; then
-        disk_min_kb=157286400   # 150 GiB
-        disk_min_label="~150 GB (pruning on)"
-    else
-        disk_min_kb=314572800   # 300 GiB
-        disk_min_label="~300 GB (pruning off)"
-    fi
+    read -r disk_min_kb disk_min_label <<<"$(monero_disk_min "$prune")"
     # df needs an existing path; walk up to the nearest existing ancestor if the dir isn't created
     # yet, so we still check the right filesystem. Skip cleanly if nothing resolves.
     local check_path="${MONERO_DIR:-}"

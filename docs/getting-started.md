@@ -28,6 +28,11 @@ driven by a single script — `pithead` — and most of it is automated.
 > leaner — is in **[Hardware Requirements](hardware.md)**. Miner specs live in
 > [RigForge](https://github.com/p2pool-starter-stack/rigforge).
 
+> 🔎 **`setup` checks this for you.** Before it starts anything, `pithead setup` runs a best-effort
+> pre-flight on free disk and total RAM. If either is below the recommended minimums (~150 GB
+> pruned / ~300 GB full disk, 16 GB RAM), it prints a **warning** — but it never blocks setup, so
+> you can proceed on a smaller host at your own risk. See **[Hardware Requirements](hardware.md)**.
+
 You don't have to install the software dependencies yourself. `setup` checks for them and, **on
 Ubuntu, offers to install anything that's missing**. If you'd rather do it manually:
 
