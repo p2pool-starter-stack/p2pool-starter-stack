@@ -284,22 +284,24 @@ function WorkersTable({ workers, ui, onSort }) {
     return html`
     <div class="card">
         <h3>Workers Alive</h3>
-        <table id="workers-table">
-            <thead>
-                <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
-            </thead>
-            <tbody id="workers-tbody">
-                ${rows.map((w) => html`
-                    <tr class=${w.status === 'online' ? 'status-ok' : 'status-bad'}>
-                        <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
-                        <td>${w.ip}</td>
-                        <td>${w.uptime_str}</td>
-                        <td>${w.h10_str}</td>
-                        <td>${w.h60_str}</td>
-                        <td>${w.h15_str}</td>
-                    </tr>`)}
-            </tbody>
-        </table>
+        <div class="table-scroll">
+            <table id="workers-table">
+                <thead>
+                    <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
+                </thead>
+                <tbody id="workers-tbody">
+                    ${rows.map((w) => html`
+                        <tr class=${w.status === 'online' ? 'status-ok' : 'status-bad'}>
+                            <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
+                            <td>${w.ip}</td>
+                            <td>${w.uptime_str}</td>
+                            <td>${w.h10_str}</td>
+                            <td>${w.h60_str}</td>
+                            <td>${w.h15_str}</td>
+                        </tr>`)}
+                </tbody>
+            </table>
+        </div>
     </div>`;
 }
 

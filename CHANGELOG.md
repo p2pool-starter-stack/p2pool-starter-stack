@@ -13,6 +13,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- Responsive dashboard layout: the web UI now reflows for phone-sized screens — the header
+  stacks, the card grid collapses to a single column, the disk bar goes full-width, and the
+  workers table scrolls horizontally within its card instead of overflowing the page. Desktop
+  is unchanged.
 - Release & versioning scaffold: top-level `VERSION` file (single source of truth),
   this changelog, and `docs/releasing.md` documenting the release process. The
   GHCR publishing pipeline and `make release` / `pithead release` command are still

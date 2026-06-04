@@ -53,6 +53,12 @@ def _apply_security_headers(response):
         "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'self'; form-action 'self'"
     )
+    # Make browsers revalidate instead of holding a stale copy under heuristic freshness. The
+    # static CSS/JS is baked into the image, so a `pithead upgrade` changes the served bytes;
+    # without this, a browser (notably iOS Safari) can keep serving the pre-upgrade dashboard.css
+    # for an unpredictable while (Issue #83). 'no-cache' still allows a conditional request, so an
+    # unchanged asset costs only a 304 — no re-download of the vendored libs on each page load.
+    response.headers['Cache-Control'] = 'no-cache'
     return response
 
 

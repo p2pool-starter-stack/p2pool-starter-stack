@@ -186,3 +186,43 @@ class TestStaticAssets:
             resp = await client.get(path)
             assert resp.status == 200, path
             assert ctype in resp.headers["Content-Type"], path
+
+    async def test_static_assets_revalidate(self, client):
+        # Cache-Control: no-cache makes the browser revalidate, so a rebuilt dashboard's new
+        # CSS/JS is picked up on the next load instead of a stale copy lingering (Issue #83).
+        resp = await client.get("/static/dashboard.css")
+        assert resp.headers.get("Cache-Control") == "no-cache"
+
+    async def test_shell_revalidates(self, client):
+        resp = await client.get("/")
+        assert resp.headers.get("Cache-Control") == "no-cache"
+
+
+class TestResponsiveLayout:
+    """The mobile/responsive layout (Issue #83) is pure CSS + a markup wrapper, with no DOM
+    test harness in this repo (rendering is covered by the manual browser smoke test). These
+    guard the pieces that have to be present and wired together so the feature can't silently
+    regress: the served CSS must carry a phone breakpoint and the horizontal-scroll rule, and
+    the workers-table markup must opt into that scroll wrapper."""
+
+    async def test_css_has_phone_breakpoint(self, client):
+        css = await (await client.get("/static/dashboard.css")).text()
+        # A max-width media query is what makes the layout reflow on phones; without one the
+        # only @media block left would be the prefers-color-scheme theme query.
+        assert "@media" in css and "max-width" in css
+
+    async def test_css_has_horizontal_scroll_rule(self, client):
+        css = await (await client.get("/static/dashboard.css")).text()
+        assert ".table-scroll" in css and "overflow-x" in css
+
+    async def test_workers_table_opts_into_scroll_wrapper(self, client):
+        # The CSS rule only helps if the markup actually wraps the table in it.
+        mjs = await (await client.get("/static/components.mjs")).text()
+        assert "table-scroll" in mjs
+
+    async def test_css_lets_stat_values_wrap(self, client):
+        # The stat-card grid is `1fr 1fr`; without overflow-wrap on the value a long unbroken
+        # string (a shortened wallet/hash, "Donor (1.00 kH/s+)") keeps the grid wider than the
+        # card and overflows it on a phone. Guard that the wrap rule stays present.
+        css = await (await client.get("/static/dashboard.css")).text()
+        assert "overflow-wrap" in css
