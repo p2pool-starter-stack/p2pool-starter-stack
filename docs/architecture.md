@@ -97,7 +97,15 @@ explicitly via `monero.rpc_lan_access`).
 
 - **Containerized & least-privilege.** Services run in containers; where privileges are needed
   (e.g. P2Pool's memory locking) they're granted narrowly via specific Linux capabilities rather
-  than running fully privileged.
+  than running fully privileged. The leaf services (Caddy, the dashboard, the two Docker socket
+  proxies, and `xmrig-proxy`) run with `no-new-privileges` and **all Linux capabilities dropped**
+  (`cap_drop: [ALL]`); Caddy keeps only `NET_BIND_SERVICE` so it can bind `:80`/`:443`. Caddy and
+  both socket proxies additionally run with a **read-only root filesystem**, writing only to a
+  small ephemeral `tmpfs` and (for Caddy) the `caddy_data` volume that holds its certs.
+- **Mining endpoint stays on the LAN.** The stratum port (`3333`) your rigs connect to is meant
+  for your local network, never the public internet. It's published on all interfaces by default
+  so LAN rigs work out of the box; narrow it with `p2pool.stratum_bind` (a specific LAN IP, or
+  `127.0.0.1`) and firewall it to your LAN. See [Connecting Miners › Firewall](workers.md#firewall).
 - **Verified binaries.** Third-party binaries are SHA256-verified during the image build.
 - **Pinned versions.** Service images and binaries are pinned to known-good versions.
 - **Hardened dashboard.** Security headers (a restrictive `Content-Security-Policy`,

@@ -47,10 +47,19 @@ it connects through a proxy). Any reasonably recent **XMRig (5.0+, which introdu
 
 ### Networking notes
 
-- Port **3333** must be reachable from each miner to the stack machine. If the stack host has a
-  firewall, allow inbound `3333` from your LAN.
 - Miners connect over your local network (plain stratum). The Tor layer is for the stack's
   *upstream* connections to the Monero/Tari/P2Pool networks — **your rigs don't need Tor**.
+
+### Firewall
+
+- Port **3333** must be reachable from each miner to the stack machine. If the stack host has a
+  firewall, allow inbound `3333` from your LAN.
+- By default the stack publishes `3333` on **all** of the host's interfaces (`0.0.0.0`) so any rig
+  on your LAN can connect with no extra setup. **On a host with a public IP, that port is reachable
+  from the internet** — keep it firewalled to your LAN, and/or narrow the bind: set
+  [`p2pool.stratum_bind`](configuration.md#configuration-reference) to a specific LAN IP (e.g.
+  `192.168.1.10`) or to `127.0.0.1` to disable LAN access entirely. The stratum protocol is
+  unauthenticated, so it should never be exposed to the public internet.
 
 If a worker doesn't show up, see
 [Operations › Troubleshooting](operations.md#troubleshooting).
