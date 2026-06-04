@@ -4,7 +4,10 @@
 // classes — it does no number formatting or business logic of its own.
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
-import { WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis } from './logic.mjs';
+import {
+    WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis,
+    computeEarnings, formatXmr, formatTimeToShare, parseHashrate,
+} from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => 'c-' + v;
@@ -34,6 +37,16 @@ const Badges = ({ badges }) => html`
         ${badges.map((b) => html`
             <span class=${'badge badge-' + b.variant} title=${b.title || ''}>${b.text}</span>`)}
     </div>`;
+
+// Build-version badge (Issue #58). Muted badge-outline so it reads as informative, not loud;
+// shown on every screen (the Header renders on both sync and main). The server resolves a clean
+// release to `vX.Y.Z` and any other build to `dev · branch @ hash`, so a dev build is
+// unmistakable. `dev` adds a marker class purely as a class hook (text already distinguishes it).
+const VersionBadge = ({ version }) =>
+    version && version.text
+        ? html`<span class=${'badge badge-outline version-badge ml-2' + (version.dev ? ' version-dev' : '')}
+                     title=${version.title || ''}>${version.text}</span>`
+        : null;
 
 const HighUsage = ({ level }) =>
     level === 'high' ? html`<span class="badge badge-bad mx-1">High Usage</span>` : null;
@@ -82,8 +95,9 @@ function Header({ state }) {
                     <div class="flex items-center">
                         <h1 class="brand-name">Pithead</h1>
                         <${Badges} badges=${state.badges} />
+                        <${VersionBadge} version=${state.version} />
                     </div>
-                    <div class="brand-host font-mono text-muted">${state.host_ip}</div>
+                    <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
                 </div>
             </div>
             <div class="text-small mt-2">
@@ -277,6 +291,56 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
+// P2Pool earnings calculator (Issue #12). A power-user card (Advanced view) over the metrics
+// layer that estimates XMR from *P2Pool mining only* — explicitly not XvB or Tari. The server
+// sends the daily XMR rate per H/s; this card scales it to a what-if hashrate. Stateful because
+// the what-if input is local UI: `input` is null until the user edits it, so the field tracks the
+// live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header / Overview show, which
+// already excludes the XvB-donated slice) until they take control, then holds their raw text.
+class EarningsCard extends Component {
+    constructor(props) {
+        super(props);
+        this.state = { input: null };
+        this.onInput = (e) => this.setState({ input: e.target.value });
+    }
+
+    render() {
+        const e = this.props.earnings;
+        if (!e || !e.available) {
+            return html`
+            <div class="card card-advanced" id="card-earnings">
+                <h3>P2Pool Earnings (estimated)</h3>
+                <p class="text-muted text-small">Network stats unavailable — the estimate can't be computed right now.</p>
+            </div>`;
+        }
+        const { input } = this.state;
+        const useDefault = input === null;
+        // Default to your P2Pool 1h-average hashrate (the figure shown in the header / Overview,
+        // already excluding the XvB-donated slice); once edited, use the parsed what-if value.
+        const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
+        const est = computeEarnings(hr, e);
+        return html`
+        <div class="card card-advanced" id="card-earnings">
+            <h3>P2Pool Earnings (estimated)</h3>
+            <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining only — excludes XvB donations and Tari merge-mining.</p>
+            <div class="earnings-input">
+                <label for="whatif-hr">Your P2Pool Hashrate</label>
+                <input id="whatif-hr" type="text" inputmode="decimal" spellcheck="false"
+                       autocomplete="off" value=${useDefault ? e.p2pool_hr_str : input}
+                       onInput=${this.onInput} />
+            </div>
+            <div class="stat-grid">
+                <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
+                <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
+                <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
+                <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
+            </div>
+            <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
+        </div>`;
+    }
+}
+
 function TariCard({ tari }) {
     return html`
     <div class="card card-advanced" id="card-tari">
@@ -366,6 +430,7 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
             <${GlobalStats} state=${state} />
             <${XvBStats} state=${state} />
             <${NetworkCard} state=${state} />
+            <${EarningsCard} earnings=${state.earnings} />
             <${TariCard} tari=${state.tari} />
         </div>
         <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />

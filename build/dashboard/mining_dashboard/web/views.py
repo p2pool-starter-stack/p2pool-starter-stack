@@ -16,8 +16,12 @@ import bisect
 import logging
 
 from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL
-from mining_dashboard.helper.utils import format_hashrate, format_duration, format_time_abs
+from mining_dashboard.helper.utils import (
+    format_hashrate, format_duration, format_time_abs, is_ip_address, detect_host_ipv4,
+)
 from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
 
@@ -561,8 +565,72 @@ def build_badges(data, metrics, mode_variant):
 
 
 # --------------------------------------------------------------------------------------
+# Earnings calculator (Issue #12): expected-XMR inputs for the Advanced view.
+# --------------------------------------------------------------------------------------
+
+_EARNINGS_DISCLAIMER = (
+    "Estimated XMR from P2Pool mining only — excludes XvB donations (donated hashrate earns no "
+    "P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so "
+    "real payouts swing well above and below these figures. Estimates, not guarantees."
+)
+
+
+def build_earnings(data, metrics):
+    """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
+
+    This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
+    actually mining on your P2Pool node — *not* the rig's total output. The what-if default is
+    ``p2pool_1h`` — the **same P2Pool 1h-average hashrate shown in the header / Overview / My Node
+    cards** (a time-weighted average of the recorded P2Pool hashrate), so the figure here matches
+    those exactly. That recorded average already excludes any XvB-donated slice (XvB hashrate is a
+    separate series), which is why an active XvB split doesn't inflate the estimate. Tari
+    merge-mining earnings are a separate thing entirely (deferred, #117).
+
+    Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus that
+    P2Pool hashrate and the P2Pool share difficulty. The client scales the rate to the entered
+    *what-if* hashrate and formats the day/month/year figures + expected time-to-share — sending
+    a rate (not pre-formatted earnings) keeps the live recompute a single source of truth with no
+    duplicated math (see ``web/static/logic.mjs``).
+
+    ``available`` is False when the network figures needed for the rate are missing; the client
+    then shows ``—`` instead of a bogus estimate (graceful degradation)."""
+    reward_atomic = (data.get('network', {}) or {}).get('reward', 0) or 0
+    coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
+    # Reuse the displayed P2Pool 1h average (header / Overview / My Node) so the calculator's
+    # hashrate is consistent with the rest of the dashboard — and because that recorded average
+    # already excludes the XvB-donated portion, it's the honest basis for a P2Pool estimate.
+    p2pool_hr = metrics.p2pool_1h
+    return {
+        "available": coeff_day > 0,
+        "p2pool_hr": p2pool_hr,                             # raw H/s — the what-if default
+        "p2pool_hr_str": format_hashrate(p2pool_hr),
+        "coeff_day": coeff_day,                              # XMR per H/s per day
+        "pool_difficulty": metrics.pool_difficulty,         # for expected time-to-share (diff/hr)
+        "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
+        "disclaimer": _EARNINGS_DISCLAIMER,
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Assembly.
 # --------------------------------------------------------------------------------------
+
+def host_display_addr(host):
+    """The numeric IP to show *beside* the configured host in the header, or ``None`` (Issue #119).
+
+    The configured ``dashboard.host`` is often a hostname that won't resolve from another machine
+    on the LAN (flaky mDNS/``.local``, no DNS entry), so we surface the host's primary IP next to
+    it as a fallback way in. Returns ``None`` — meaning "show the host alone" — when there's
+    nothing useful to add: the host is already an IP, the address can't be determined, or it just
+    duplicates the host.
+    """
+    if is_ip_address(host):
+        return None
+    addr = detect_host_ipv4()
+    if not addr or addr == host:
+        return None
+    return addr
+
 
 def build_state(data, state_mgr, range_arg, window=None):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
@@ -582,6 +650,8 @@ def build_state(data, state_mgr, range_arg, window=None):
         "syncing": metrics.global_syncing,
         "page_title": "Mining Dashboard - Syncing" if metrics.global_syncing else "Mining Dashboard",
         "host_ip": HOST_IP,
+        "host_addr": host_display_addr(HOST_IP),
+        "version": resolve_version(),
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,
@@ -595,6 +665,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "monero": pool_net["monero"],
         "shares_window": pool_net["shares_window"],
         "proxy_workers": metrics.workers_online,
+        "earnings": build_earnings(data, metrics),
         "tari": build_tari(data),
         "workers": build_workers(data.get('workers', [])),
         "proxy_summary": build_proxy_summary(data),

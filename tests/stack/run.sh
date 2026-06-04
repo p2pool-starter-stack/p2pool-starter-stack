@@ -91,6 +91,20 @@ assert_eq "env_get_file value with ="     "$(run_sourced "$SANDBOX" env_get_file
 changed="$(run_sourced "$SANDBOX" env_changed_keys "$SANDBOX/old.env" "$SANDBOX/new.env" | sort | tr '\n' ' ')"
 assert_eq "env_changed_keys finds B and C" "$changed" "B C "
 
+echo "== unit: export_build_provenance (Issue #58) =="
+# Exports the stack version (from the top-level VERSION file, whitespace-trimmed) plus git
+# branch/commit for the dashboard build args — deliberately NOT written into .env, since the
+# volatile commit would otherwise churn `apply`. The sandbox isn't a git repo, so branch/commit
+# come back empty here; the release/dev split is unit-tested in build/dashboard/tests/test_version.py.
+PROV="$SANDBOX/prov"; mkdir -p "$PROV"; printf '  9.9.9 \n' > "$PROV/VERSION"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+ver="$(cd "$PROV" && source "$STACK" && set +e && export_build_provenance && printf '%s' "$PITHEAD_VERSION")"
+assert_eq "export_build_provenance reads VERSION (trimmed)" "$ver" "9.9.9"
+NOVER="$SANDBOX/nover"; mkdir -p "$NOVER"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+ver="$(cd "$NOVER" && source "$STACK" && set +e && export_build_provenance && printf '%s' "$PITHEAD_VERSION")"
+assert_eq "export_build_provenance empty when no VERSION" "$ver" ""
+
 echo "== unit: node credential helpers =="
 assert_eq "default username is admin" "$(run_sourced "$SANDBOX" default_node_username)" "admin"
 PW="$(run_sourced "$SANDBOX" generate_node_password)"
@@ -213,7 +227,21 @@ assert_eq "stratum_bind default"  "$(run_sourced "$V" env_get_file "$V/.env" STR
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
+# Build provenance is exported for the build args, not persisted to .env (Issue #58) — so a git pull
+# never shows up as a config change. Assert it stays out of the rendered .env.
+assert_eq "provenance not written to .env" "$(run_sourced "$V" env_get_file "$V/.env" PITHEAD_VERSION)" ""
 assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
+
+# Regression (Issue #58): a second apply with nothing changed must report no changes and exit 0
+# cleanly — never tripping the ERR trap. (Provenance keys briefly leaked into this diff; when they
+# were the only delta the filter emptied the pipeline and `set -o pipefail` aborted apply.)
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "no-op apply exits 0" "$rc" "0"
+assert_contains "no-op apply reports no changes" "$out" "No configuration changes detected"
+case "$out" in
+    *"aborted unexpectedly"*) bad "no-op apply does not trip the error trap" "got: $out" ;;
+    *) ok "no-op apply does not trip the error trap" ;;
+esac
 # tari.mem_limit absent => "auto" is a safety ceiling: host RAM minus a >=2 GB reserve, floored at
 # 2048m. Assert it ends in 'm', is >= the 2048m floor, and never exceeds physical RAM.
 mem="$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)"

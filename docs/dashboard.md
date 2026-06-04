@@ -75,6 +75,16 @@ HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** fo
 XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
 **`XMR Full`** badge shows the Monero node's blockchain mode at a glance.
 
+When the dashboard host is a name (not already an IP), the machine's **IP address** is shown
+beside it as `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`) — a reliable way back in when
+the hostname doesn't resolve from your phone or another machine on the LAN.
+
+A small **version badge** sits beside the hostname so you always know which build is running. A
+released build shows the version (e.g. **`v1.3.0`**); a development or working-tree build shows a
+dashed **`dev · branch @ commit`** marker instead, so it's never mistaken for a release. It appears
+on every screen — including Sync Mode — which makes it easy to confirm what you're on when sharing a
+screenshot in a bug report.
+
 ### Node status & failover
 
 If a local node becomes unreachable, a red **`monerod DOWN`** or **`Tari DOWN`** badge appears in
@@ -139,6 +149,43 @@ Below the table, a **Proxy totals** line sums the whole stack's share health as 
 xmrig-proxy: total accepted / rejected (with the aggregate reject %) / invalid shares submitted
 upstream, plus the **best difficulty** any of your shares has hit. It's hidden until the proxy has
 submitted its first shares.
+
+### Simple vs. Advanced view
+
+A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) keeps the page to
+the essentials — the chart, the Overview summary, and the worker table. **Advanced** swaps the
+Overview for a set of power-user cards that break out the same data in more detail: **My P2Pool
+Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**, **Tari Merge
+Mining**, and the **P2Pool Earnings (estimated)** calculator below. Your choice is remembered
+across reloads.
+
+### P2Pool Earnings (estimated)
+
+A **P2Pool** mining calculator (Advanced view): it estimates the **XMR earned from P2Pool mining
+only**, turning your P2Pool hashrate and the live Monero network figures into a rough payout
+estimate. It is deliberately scoped to P2Pool — it is **not** an XvB or a Tari calculator:
+
+- **XvB donations are excluded.** Hashrate you route to XvB earns no P2Pool payout, so it isn't
+  counted. The default is your **P2Pool 1h-average hashrate** — the *same* `P2Pool (1h)` figure
+  shown in the header and the Overview / My Node cards — which already excludes any XvB-donated
+  slice. So if you're running an **XvB split**, the estimate reflects your real P2Pool earnings,
+  not an inflated total, and it stays consistent with the hashrate shown elsewhere on the page.
+  (When that average is 0 — a fresh start with no history yet, or donating everything to XvB —
+  the estimate is 0 until you enter a what-if value.)
+- **Tari merge-mining is excluded.** Tari is earned alongside Monero but is a separate payout
+  (its own calculator is planned).
+
+| Field | Meaning |
+|---|---|
+| **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
+| **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty` — the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
+| **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
+| **XMR Block Reward** | The current Monero block reward, for context. |
+
+> **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
+> above and below these figures — the calculator says so in a disclaimer on the card. If the
+> network figures aren't available yet, the card shows `—` rather than a bogus number. **Tari**
+> earnings and an **XvB tier** projection aren't included yet.
 
 ---
 

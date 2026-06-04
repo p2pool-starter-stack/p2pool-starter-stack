@@ -60,7 +60,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand-logo { width: 40px; height: 40px; flex: none; }
 .brand-name { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
-.brand-host { font-size: 0.8rem; margin-top: 2px; overflow-wrap: anywhere; }
+.brand-host { font-size: 0.8rem; margin-top: 3px; line-height: 1.35; overflow-wrap: anywhere; }
+/* Host subtitle is "hostname @ ip" (Issue #119): the @ is a faint connector, not a value, so
+   dim it and give it even breathing room. Hostname and ip stay at the one muted subtitle weight. */
+.brand-host-at { margin: 0 0.4em; opacity: 0.5; }
 
 /* Hero KPI band (Issue #81): a prominent strip of the headline numbers under the header. A
  * responsive auto-fit grid so the cards sit in one row on a wide screen and reflow when narrow;
@@ -89,6 +92,14 @@ h3 { margin: 0 0 15px 0; font-size: 0.85rem; text-transform: uppercase; color: v
 .stat-card h5 { margin: 0 0 4px 0; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
 .stat-card p { margin: 0; font-weight: 600; font-size: 0.95rem; overflow-wrap: anywhere; }
 .col-span-2 { grid-column: span 2; }
+
+/* Earnings calculator what-if input (Issue #12) */
+.earnings-subtitle { margin: -4px 0 12px 0; line-height: 1.4; }
+.earnings-input { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.earnings-input label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+.earnings-input input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 10px; font-family: inherit; font-size: 0.9rem; }
+.earnings-input input:focus { outline: none; border-color: var(--accent); }
+.earnings-disclaimer { line-height: 1.4; }
 
 /* Table */
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
@@ -125,6 +136,10 @@ tr:last-child td { border-bottom: none; }
 .badge-warn { background: var(--warn); color: white; }
 /* Header status badges sit in a gapped row, so individual badges need no margins. */
 .badge-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: 10px; }
+/* Build-version badge (Issue #58): monospace for the version/hash; a dev build keeps the muted
+   palette but swaps to a dashed border so it's quietly, unmistakably not a release. */
+.version-badge { font-family: monospace; font-weight: 500; }
+.version-badge.version-dev { border-style: dashed; }
 
 .wallet-text { font-size: 0.7rem; color: var(--text-muted); margin-top: auto; padding-top: 15px; word-break: break-all; font-family: monospace; }
 

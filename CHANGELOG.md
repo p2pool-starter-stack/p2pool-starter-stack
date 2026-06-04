@@ -38,17 +38,29 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     a 22/22 green run against a real synced, mining box, which calibrated the harness to trust
     monerod's own sync flag (a synced local node's dashboard sync panel reads "loading") and
     `proxy_workers` for mining liveness (`stratum.conns` can read 0 while mining).
+  - A developer testing guide (`docs/testing-guide.md`): per-change recipes, conventions, and
+    the calibration gotchas learned on real hardware.
   - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
-
-### Fixed
-
-- Dashboard pruned/full label (#32) always showed **Full** on local nodes: the dashboard parsed
-  `MONERO_PRUNE` with `== "true"`, but pithead writes it as `1`/`0`, so a pruned node read as
-  Full. Now accepts `1`/`true`/`yes`/`on`. Found by the live integration harness on a real box.
-- Dashboard DB upgrade path: opening a database created by an early (pre-`timestamp`) schema
-  threw `no such column: timestamp` and aborted the migration, leaving the DB half-upgraded —
-  `_create_tables` built the `idx_ts` index on a column `_migrate_db` hadn't added yet. Indexes
-  are now created after migrations. Found by a new schema-migration intent test.
+- Dashboard header shows the host's **IP address** next to the hostname when the configured
+  `dashboard.host` is a name, as `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), so you can still reach the
+  dashboard when the hostname doesn't resolve from your phone or another machine on the LAN. The
+  address is detected on the host (the dashboard runs `network_mode: host`), and is omitted when
+  the host is already an IP or can't be determined (#119).
+- **P2Pool Earnings (estimated) card** on the dashboard's Advanced view: expected XMR
+  per day / month / year from **P2Pool mining only**, computed from your P2Pool hashrate
+  and the live Monero block reward + network difficulty, plus an expected time-to-share.
+  Explicitly scoped to P2Pool — XvB donations are excluded (the what-if hashrate defaults
+  to your P2Pool 1h average, the same figure shown in the header / Overview, which already
+  excludes any XvB-donated slice, so an active XvB split doesn't inflate the estimate and
+  the number stays consistent with the rest of the dashboard) and Tari merge-mining is
+  excluded. Includes a what-if hashrate input and a clear "estimates, not guarantees"
+  disclaimer. Tari (#117) and the XvB tier estimate (#118) are deferred (#12).
+- Dashboard header now shows which build is running, as a muted badge on both the
+  syncing and main screens: a clean release shows `vX.Y.Z` (from the top-level
+  `VERSION` file), while any dev/working-tree build shows `dev · branch @ hash` so
+  it's never mistaken for a release. The version is baked into the dashboard image at
+  build time (build-arg → env + OCI labels), so the running container is
+  self-describing.
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy
@@ -78,6 +90,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   writes its SQLite history into a host-user-owned volume as root. Caddy and the two Docker
   socket proxies additionally run with a read-only root filesystem (ephemeral `tmpfs` for
   scratch; Caddy's certs persist in `caddy_data`).
+
+### Fixed
+
+- Dashboard pruned/full label (#32) always showed **Full** on local nodes: the dashboard parsed
+  `MONERO_PRUNE` with `== "true"`, but pithead writes it as `1`/`0`, so a pruned node read as
+  Full. Now accepts `1`/`true`/`yes`/`on`. Found by the live integration harness on a real box.
+- Dashboard DB upgrade path: opening a database created by an early (pre-`timestamp`) schema
+  threw `no such column: timestamp` and aborted the migration, leaving the DB half-upgraded —
+  `_create_tables` built the `idx_ts` index on a column `_migrate_db` hadn't added yet. Indexes
+  are now created after migrations. Found by a new schema-migration intent test.
 
 ### Security
 
