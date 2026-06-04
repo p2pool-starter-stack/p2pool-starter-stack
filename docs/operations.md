@@ -15,6 +15,9 @@ the full list.
 | `./pithead upgrade` | Rebuild and restart the containers (run after a `git pull`). |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
+| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
+| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. |
 | `./pithead help` | Show all commands. |
 
@@ -77,10 +80,54 @@ pointed each `*.data_dir` — see [Configuration › Data directories](configura
   addresses across a rebuild.
 - **`data/monero/`**, **`data/tari/`** — the blockchains. Large, but backing them up saves a
   re-sync; they can also be re-downloaded from the network if lost.
-- **`data/dashboard/`** — the dashboard's historical stats database.
+- **`data/dashboard/`** — the dashboard's database: your **hashrate history and settings**.
+  Small but irreplaceable (it doesn't re-sync), so it's part of the default `backup`.
 
 Stop the stack (`./pithead down`) before copying data directories so files are in a consistent
 state.
+
+### `backup` / `restore`
+
+Rather than copying files by hand, let `pithead` do it for you:
+
+```bash
+./pithead backup
+```
+
+That's it. This saves the things you can't get back — your `config.json`, your secrets
+(`.env`), your `Caddyfile` (if you have one), the **Tor onion address keys**, and the
+**dashboard's database** (your hashrate history and settings) — into a small, timestamped file
+under `backups/`.
+It's quick and small because your blockchains are **not** included (they just re-sync). The
+archive is locked down to `chmod 600`, and `pithead` prints its path when it's done. Before it
+writes anything, it checks there's room — if free space looks tight, it asks before going ahead
+so a backup can't quietly fill your disk.
+
+If the stack is running, `backup` offers to briefly stop it for a clean copy and start it again
+when it's done. Pass `-y` / `--yes` to skip the prompts (the low-space warning and the
+stop-the-stack question) and just back up.
+
+**Optional extras** (you usually don't need these):
+
+```bash
+./pithead backup --with-chains   # also include the blockchain data — much bigger and slower
+```
+
+To recover — on a new machine, or after a wipe — copy the archive back and run:
+
+```bash
+./pithead down                       # stop the stack first so files restore cleanly
+./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz
+./pithead up
+```
+
+`restore` always **asks before it overwrites anything**, so you can change your mind (pass
+`-y` / `--yes` to skip that prompt). It puts the files back where they belong and sorts out the
+Tor key ownership for you, so your onion address comes back exactly as it was — and your
+hashrate history and dashboard settings come back too.
+
+> **Note:** After a restore, the dashboard's HTTPS certificate is regenerated, so your browser
+> may show its "not trusted" warning once — that's expected; accept it as you did on first setup.
 
 ---
 
