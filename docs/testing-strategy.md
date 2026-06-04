@@ -172,11 +172,13 @@ fast with artifacts.
 
 These are deliberately **not** yet covered and are the road to full production confidence:
 
-- **First green run on real hardware.** ✅ The live harness has had its first green run against
-  a real synced + mining box (`run.sh --check`, 22/22) — which calibrated three over-strict
-  assertions and surfaced a real dashboard bug (the pruned/full label, now fixed). The full
-  *destructive* matrix and the docker mini-stack are still pending their first green end-to-end
-  run (the matrix on the box, the mini-stack in CI).
+- **First green run on real hardware.** ✅ Two of the three real-environment tiers are green:
+  the live harness `--check` (tier 4 read path — 22/22 against a synced, mining box) and the
+  fake-daemon mini-stack (tier 3 — 11/11 on a real Docker host). Between them they surfaced and
+  fixed four bugs: the dashboard pruned/full label (#32); the harness's three over-strict
+  assertions (monero-synced, conns, prune display); the fake Tari binding gRPC to loopback; and
+  the mini-stack's container-name/port isolation. Still pending: the full **destructive** config
+  matrix run on the box (its read path is already proven via `--check`).
 - **CLI breadth in automation.** `backup`/`restore`, `reset-dashboard`, and `upgrade` are
   documented and partly unit-covered, but not yet asserted end-to-end in the integration tiers.
 - **Soak / longevity.** No multi-hour run asserting no leaks, no log/DB growth runaway, and that

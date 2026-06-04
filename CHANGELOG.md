@@ -25,8 +25,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
     that points the real dashboard clients at the fakes and asserts they parse every state —
     docker-free, runs on every PR. `make test-fakes`.
   - **Fake-daemon docker mini-stack** (`tests/integration/mini-stack/`, tier 3) running the real
-    dashboard + docker-control proxy against the fakes, asserting sync hold/release and
-    node-down reject/readmit end-to-end with real containers. `make test-mini-stack`.
+    dashboard + docker-control proxy against the fakes, asserting sync hold/release and Tari
+    reject/readmit end-to-end with real containers (`make test-mini-stack`). Validated green
+    (11/11) on a real Docker host, and isolated (namespaced container names + non-colliding
+    ports) so it can run safely beside a live deployment.
   - New dashboard unit tests for the required-Tari sync gate, the #35-latch × #31-failover
     interaction, and simultaneous double outages.
   - A generated **test inventory** (`docs/test-inventory.md`, `make test-inventory`) listing
