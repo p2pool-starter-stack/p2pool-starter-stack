@@ -66,6 +66,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `docker-proxy`, and `docker-control` previously fell back to Docker's uncapped default, so
   their logs could grow without bound and fill the disk on a long-running host (#123).
 
+### Fixed
+
+- `pithead backup` no longer aborts when `du`/`df` exit non-zero on an unreadable file or a
+  transient FS error — the disk-space pre-check now degrades gracefully (its "proceeding without
+  a space check" fallback was previously unreachable under `set -e`) (#127).
+- `pithead doctor` now exits non-zero when a critical check FAILS, so it can be used as a
+  cron/CI/monitoring health gate (it previously always exited 0); warnings alone still exit 0 (#127).
+
 ### Security
 
 - The monerod RPC credentials are no longer interpolated into the compose healthcheck command
