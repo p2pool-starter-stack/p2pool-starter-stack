@@ -1,4 +1,5 @@
-FROM ubuntu:24.04
+# Pinned by digest (#135) so the ubuntu:24.04 tag can't be silently re-pointed.
+FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
 
 ARG P2POOL_VERSION=v4.15.1
 ARG P2POOL_HASH=efd8b23579774711a5b86743da980e0936b7c220894063296719116d7f9ba254

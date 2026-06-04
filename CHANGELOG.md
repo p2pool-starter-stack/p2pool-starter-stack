@@ -62,6 +62,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   writes its SQLite history into a host-user-owned volume as root. Caddy and the two Docker
   socket proxies additionally run with a read-only root filesystem (ephemeral `tmpfs` for
   scratch; Caddy's certs persist in `caddy_data`).
+- Log rotation (`json-file`, 10 MB × 3) now applies to **every** service — `caddy`,
+  `docker-proxy`, and `docker-control` previously fell back to Docker's uncapped default, so
+  their logs could grow without bound and fill the disk on a long-running host (#123).
 
 ### Fixed
 
@@ -78,3 +81,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   environment via a script.
 - Documented that the stratum port defaults to all interfaces and should be firewalled to the
   LAN — see [Connecting Miners › Firewall](docs/workers.md#firewall).
+- All externally-pulled base/runtime images are now pinned by immutable `@sha256` digest
+  (caddy, docker-socket-proxy, the Tari node, and the `ubuntu`/`python`/`alpine` build bases),
+  so a re-pushed tag or a registry MITM can't silently change the running image (#135).
