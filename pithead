@@ -495,8 +495,16 @@ stack_backup() {
 }
 
 stack_restore() {
-    local archive="${1:-}"
-    [ -n "$archive" ] || error "Usage: $0 restore <archive.tar.gz>"
+    local assume_yes=0 archive="" arg
+    for arg in "$@"; do
+        case "$arg" in
+            -y|--yes) assume_yes=1 ;;
+            -*) error "Unknown option for restore: $arg. Run '$0 help'." ;;
+            *) [ -n "$archive" ] || archive="$arg" ;;
+        esac
+    done
+
+    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz>"
     [ -f "$archive" ] || error "Archive not found: $archive"
     # Resolve to an absolute path now, since we extract from "/" below.
     archive=$(cd "$(dirname "$archive")" && printf '%s/%s' "$PWD" "$(basename "$archive")")
@@ -506,10 +514,12 @@ stack_restore() {
 
     warn "Restore will OVERWRITE config.json, .env, Caddyfile, and the Tor data dir from the archive."
     warn "Stop the stack first with '$0 down' so files are restored in a consistent state."
-    read -r -p "Continue and overwrite these files? (y/N): " CONFIRM || true
-    if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
-        log "Restore cancelled."
-        return
+    if [ "$assume_yes" -eq 0 ]; then
+        read -r -p "Continue and overwrite these files? (y/N): " CONFIRM || true
+        if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+            log "Restore cancelled."
+            return
+        fi
     fi
 
     log "Restoring from $archive ..."
@@ -566,8 +576,10 @@ Maintenance:
                             dir (onion keys). Blockchains are excluded unless --with-chains.
                               --with-chains    also include the blockchain data (large).
                               --force, -f      skip the free-space pre-check.
-  restore <archive>         Restore config.json, .env, Caddyfile, and the Tor data dir from a
+  restore [-y|--yes] <archive>
+                            Restore config.json, .env, Caddyfile, and the Tor data dir from a
                             backup archive (prompts before overwriting; fixes Tor ownership).
+                              -y, --yes        restore without the confirmation prompt.
 
   help, -h, --help          Show this message.
 

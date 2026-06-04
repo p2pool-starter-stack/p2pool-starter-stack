@@ -17,7 +17,7 @@ the full list.
 | `./pithead status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, and the Tor onion keys to a timestamped `tar.gz` under `backups/` (checks free space first). `--with-chains` also includes the blockchain data; `--force` skips the space check. |
-| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). |
+| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE** — wipes and recreates the dashboard and P2Pool data. |
 | `./pithead help` | Show all commands. |
 
@@ -114,9 +114,9 @@ To recover — on a new machine, or after a wipe — copy the archive back and r
 ./pithead up
 ```
 
-`restore` always **asks before it overwrites anything**, so you can change your mind. It puts
-the files back where they belong and sorts out the Tor key ownership for you, so your onion
-address comes back exactly as it was.
+`restore` always **asks before it overwrites anything**, so you can change your mind (pass
+`-y` / `--yes` to skip that prompt). It puts the files back where they belong and sorts out the
+Tor key ownership for you, so your onion address comes back exactly as it was.
 
 ---
 
