@@ -35,6 +35,16 @@ const Badges = ({ badges }) => html`
             <span class=${'badge badge-' + b.variant} title=${b.title || ''}>${b.text}</span>`)}
     </div>`;
 
+// Build-version badge (Issue #58). Muted badge-outline so it reads as informative, not loud;
+// shown on every screen (the Header renders on both sync and main). The server resolves a clean
+// release to `vX.Y.Z` and any other build to `dev · branch @ hash`, so a dev build is
+// unmistakable. `dev` adds a marker class purely as a class hook (text already distinguishes it).
+const VersionBadge = ({ version }) =>
+    version && version.text
+        ? html`<span class=${'badge badge-outline version-badge ml-2' + (version.dev ? ' version-dev' : '')}
+                     title=${version.title || ''}>${version.text}</span>`
+        : null;
+
 const HighUsage = ({ level }) =>
     level === 'high' ? html`<span class="badge badge-bad mx-1">High Usage</span>` : null;
 
@@ -82,6 +92,7 @@ function Header({ state }) {
                     <div class="flex items-center">
                         <h1 class="brand-name">Pithead</h1>
                         <${Badges} badges=${state.badges} />
+                        <${VersionBadge} version=${state.version} />
                     </div>
                     <div class="brand-host font-mono text-muted">${state.host_ip}</div>
                 </div>

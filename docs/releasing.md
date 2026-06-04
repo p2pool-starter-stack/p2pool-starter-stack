@@ -76,7 +76,10 @@ promoted or published until every gate is green.**
    [Pre-release gate](#pre-release-gate-54).
 3. **Build** — build the first-party images with the pinned upstream versions baked in and
    OCI labels stamped (`org.opencontainers.image.version` = the `VERSION` value, source
-   revision, etc.).
+   revision, etc.). The dashboard already reads `PITHEAD_VERSION` / git build-args for its
+   header badge ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)); a release
+   build must pass `PITHEAD_RELEASE=1` (and `PITHEAD_VERSION` from `VERSION`) so the badge shows
+   the clean `vX.Y.Z` rather than the `dev · branch @ hash` it shows for working-tree builds.
 4. **Push to staging** — push to a **staging tag** on GHCR (e.g. `:vX.Y.Z-rc.N`) and
    capture the immutable digests. Nothing user-facing points here yet.
 5. **Staging smoke test (gate)** — on a *clean host*, pull the **staged images from GHCR**
@@ -133,6 +136,9 @@ What exists today:
 - ✅ Top-level `VERSION` file (single source of truth).
 - ✅ `CHANGELOG.md` (Keep a Changelog + SemVer, with an `Unreleased` section).
 - ✅ This document.
+- ✅ The dashboard version badge ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)) —
+  `VERSION` + git build-args baked into the dashboard image (env + OCI labels); shows `vX.Y.Z` on
+  releases and `dev · branch @ hash` otherwise.
 
 **TODO — not yet implemented:**
 
@@ -141,6 +147,6 @@ What exists today:
 - ⬜ The GHCR single-tag publishing workflow and CI integration.
 - ⬜ Wiring `${STACK_VERSION}` through `docker-compose.yml` and the OCI image labels.
 - ⬜ The ingredients-manifest generation and release-asset attachment.
-- ⬜ The dashboard version badge ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58))
-  and update warning ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59)),
-  tracked separately.
+- ⬜ The dashboard "new version available" update warning
+  ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59)), which builds on the
+  version badge — tracked separately.

@@ -13,6 +13,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- Dashboard header now shows which build is running, as a muted badge on both the
+  syncing and main screens: a clean release shows `vX.Y.Z` (from the top-level
+  `VERSION` file), while any dev/working-tree build shows `dev · branch @ hash` so
+  it's never mistaken for a release. The version is baked into the dashboard image at
+  build time (build-arg → env + OCI labels), so the running container is
+  self-describing.
 - Per-worker share stats in the dashboard's Workers table: accepted / rejected (with invalid
   folded in) counts per rig, a **⚠** flag on a high reject rate, and a **Proxy totals** footer
   (pool-wide accepted / rejected / invalid + best difficulty) collected from the xmrig-proxy

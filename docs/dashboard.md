@@ -75,6 +75,12 @@ HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** fo
 XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
 **`XMR Full`** badge shows the Monero node's blockchain mode at a glance.
 
+A small **version badge** sits beside the hostname so you always know which build is running. A
+released build shows the version (e.g. **`v1.3.0`**); a development or working-tree build shows a
+dashed **`dev · branch @ commit`** marker instead, so it's never mistaken for a release. It appears
+on every screen — including Sync Mode — which makes it easy to confirm what you're on when sharing a
+screenshot in a bug report.
+
 ### Node status & failover
 
 If a local node becomes unreachable, a red **`monerod DOWN`** or **`Tari DOWN`** badge appears in

@@ -585,10 +585,18 @@ def _data(**over):
 class TestBuildState:
     def test_has_all_sections(self):
         st = build_state(_data(), _state_mgr(), "all")
-        for key in ("syncing", "page_title", "host_ip", "last_update", "range", "window", "badges",
-                    "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
+        for key in ("syncing", "page_title", "host_ip", "version", "last_update", "range", "window",
+                    "badges", "hashrate", "system", "sync", "stratum", "pool", "network", "monero",
                     "shares_window", "proxy_workers", "tari", "workers", "proxy_summary", "chart"):
             assert key in st, f"missing section: {key}"
+
+    def test_version_section_shape(self):
+        # The header version badge (Issue #58) is part of the shared payload, so it rides on both
+        # the syncing and main screens. Shape only — resolution rules live in tests/test_version.py.
+        v = build_state(_data(), _state_mgr(), "all")["version"]
+        assert set(v) == {"text", "title", "dev"}
+        assert isinstance(v["text"], str) and v["text"]
+        assert isinstance(v["dev"], bool)
 
     def test_is_json_serializable(self):
         json.dumps(build_state(_data(), _state_mgr(), "all"))

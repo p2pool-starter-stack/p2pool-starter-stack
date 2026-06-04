@@ -225,7 +225,17 @@ services:
 
   # --- Monitoring Dashboard ---
   dashboard:
-      build: ./build/dashboard
+      build:
+        context: ./build/dashboard
+        # Stack version baked into the image so the dashboard header can show it (Issue #58).
+        # pithead exports these for the build (PITHEAD_VERSION from the top-level VERSION file;
+        # git branch/commit for dev builds — see export_build_provenance); empty defaults keep a
+        # bare `docker compose build` working (the badge then falls back to a generic dev indicator).
+        args:
+          PITHEAD_VERSION: ${PITHEAD_VERSION:-}
+          PITHEAD_GIT_COMMIT: ${PITHEAD_GIT_COMMIT:-}
+          PITHEAD_GIT_BRANCH: ${PITHEAD_GIT_BRANCH:-}
+          PITHEAD_RELEASE: ${PITHEAD_RELEASE:-}
       container_name: dashboard
       restart: unless-stopped
       logging: *default-logging
