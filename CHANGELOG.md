@@ -56,6 +56,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 - `pithead doctor` now checks that Docker is enabled to start at boot (systemd) and warns if not —
   `restart: unless-stopped` only brings the stack back after a reboot when the daemon does too,
   which matters for an unattended miner (#137).
+- Low-disk warning badge in the dashboard header (#138): a heads-up at 85% used of the data
+  filesystem and a prominent critical alert at 95%, on both the sync and main screens — the disk
+  bar alone is easy to miss, and a full data disk corrupts the Monero database mid-write.
 
 ### Changed
 

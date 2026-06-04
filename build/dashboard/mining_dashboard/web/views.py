@@ -15,7 +15,7 @@ import time
 import bisect
 import logging
 
-from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL
+from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL, DISK_WARN_PERCENT, DISK_CRITICAL_PERCENT
 from mining_dashboard.helper.utils import (
     format_hashrate, format_duration, format_time_abs, is_ip_address, detect_host_ipv4,
 )
@@ -566,6 +566,17 @@ def build_badges(data, metrics, mode_variant):
         badges.append({"text": "XMR Pruned", "variant": "outline", "title": "Monero blockchain is pruned"})
     elif metrics.monero_mode == "Full":
         badges.append({"text": "XMR Full", "variant": "outline", "title": "Monero blockchain is full (not pruned)"})
+
+    # Low-disk badge (Issue #138). The data filesystem fills as the chains grow and logs accumulate;
+    # a full disk corrupts monerod's DB mid-write. The disk *bar* shows the percentage, but it's easy
+    # to miss — surface a prominent top-bar badge near full, on both the sync and main screens.
+    disk_percent = (data.get('system', {}).get('disk', {}) or {}).get('percent', 0) or 0
+    if disk_percent >= DISK_CRITICAL_PERCENT:
+        badges.append({"text": f"⚠ Disk {disk_percent:.0f}% full", "variant": "bad",
+                       "title": "The data disk is almost full — free space now; a full disk can corrupt the Monero database."})
+    elif disk_percent >= DISK_WARN_PERCENT:
+        badges.append({"text": f"Disk {disk_percent:.0f}% full", "variant": "warn",
+                       "title": "The data disk is filling up — free space or move a data_dir before it runs out."})
 
     return badges
 
