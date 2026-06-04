@@ -77,8 +77,13 @@ expect_absent() { # <label> <pattern>
     if printf '%s\n' "$RENDERED" | grep -q -- "$2"; then echo "  ✗ $1: found [$2]"; fails=$((fails + 1)); else echo "  ✓ $1"; fi
 }
 
-# All 5 leaf services drop privileges + capabilities.
+# no-new-privileges on all 5 leaf services.
 expect_min "no-new-privileges on leaf services" "no-new-privileges:true" 5
+# cap_drop: [ALL] on exactly 4 of them — caddy, xmrig-proxy, and the two socket proxies. The
+# dashboard is intentionally exempt (it writes its history DB as root into a user-owned volume,
+# which needs CAP_DAC_OVERRIDE); pin the count so re-adding cap_drop there fails CI.
+caps=$(printf '%s\n' "$RENDERED" | grep -c -- "- ALL")
+if [ "$caps" -eq 4 ]; then echo "  ✓ cap_drop: [ALL] on 4 leaves, dashboard exempt ($caps)"; else echo "  ✗ cap_drop: [ALL]: expected 4 (dashboard exempt), got $caps"; fails=$((fails + 1)); fi
 # Anchor to the 4-space service-level indent so read-only :ro *bind mounts* (rendered with the
 # same key, deeper-indented) don't inflate the count — we want exactly the 3 read-only roots.
 expect_min "read-only roots (caddy + 2 socket proxies)" "^    read_only: true" 3

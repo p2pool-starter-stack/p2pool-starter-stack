@@ -25,9 +25,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 ### Changed
 
 - Hardened the leaf containers (caddy, xmrig-proxy, dashboard, docker-proxy, docker-control)
-  with `no-new-privileges` and `cap_drop: [ALL]` (caddy keeps `NET_BIND_SERVICE` for
-  `:80`/`:443`). Caddy and the two Docker socket proxies additionally run with a read-only
-  root filesystem (ephemeral `tmpfs` for scratch; Caddy's certs persist in `caddy_data`).
+  with `no-new-privileges`. All except the dashboard also `cap_drop: [ALL]` (caddy keeps
+  `NET_BIND_SERVICE` for `:80`/`:443`); the dashboard keeps its default capabilities because it
+  writes its SQLite history into a host-user-owned volume as root. Caddy and the two Docker
+  socket proxies additionally run with a read-only root filesystem (ephemeral `tmpfs` for
+  scratch; Caddy's certs persist in `caddy_data`).
 
 ### Security
 

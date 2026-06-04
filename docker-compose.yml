@@ -230,12 +230,13 @@ services:
       restart: unless-stopped
       logging: *default-logging
       network_mode: "host"
-      # Read-only metrics UI: binds :8000 (unprivileged) and reads RPC/proxy APIs — no extra
-      # privileges or capabilities required (#90).
+      # Hardened with no-new-privileges (#90). Deliberately NOT cap_drop: [ALL] like the other
+      # leaf services: the dashboard runs as root and persists its SQLite history into the
+      # ${DASHBOARD_DATA_DIR} bind mount, which pithead creates owned by the host user. Dropping
+      # all capabilities strips CAP_DAC_OVERRIDE, so root could no longer create the SQLite
+      # WAL/journal files in that user-owned directory and history writes would fail.
       security_opt:
         - no-new-privileges:true
-      cap_drop:
-        - ALL
       volumes:
         - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
         - ${DASHBOARD_DATA_DIR}:/data
