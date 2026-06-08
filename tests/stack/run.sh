@@ -155,6 +155,39 @@ case "$bp" in
     *) ok "THP param is singular (no plural transparent_hugepages= typo)" ;;
 esac
 
+echo "== unit: grub heal + boot-param insert (#176) =="
+# A passthrough sudo so the helpers' `sudo cp` / `sudo sed -i` actually edit a sandbox grub file
+# (the global stub sudo is a no-op). The helpers select GNU vs BSD sed via OS_TYPE, so this exercises
+# the real transformation on both Linux CI and a macOS dev box.
+GR="$SANDBOX/grub"; mkdir -p "$GR/bin"
+printf '#!/usr/bin/env bash\nexec "$@"\n' > "$GR/bin/sudo"
+chmod +x "$GR/bin/sudo"
+run_grub() { PATH="$GR/bin:$PATH" run_sourced "$SANDBOX" "$@"; }
+
+# heal: rewrites an existing plural typo to the singular param, then is an idempotent no-op.
+g="$GR/healed"
+printf 'GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never quiet"\n' > "$g"
+run_grub heal_grub_thp_typo "$g"; assert_rc "heal: rewrites plural typo (rc 0)" "$?" "0"
+assert_contains "heal: file now uses singular param" "$(cat "$g")" "transparent_hugepage=never"
+case "$(cat "$g")" in *transparent_hugepages=*) bad "heal: plural typo removed" "$(cat "$g")" ;; *) ok "heal: plural typo removed" ;; esac
+run_grub heal_grub_thp_typo "$g"; assert_rc "heal: idempotent no-op when already singular (rc 1)" "$?" "1"
+
+# insert: appends the params to the active line, preserving what's already there.
+g="$GR/fresh"
+printf 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n' > "$g"
+run_grub append_grub_boot_params "$g"; assert_rc "insert: edits the active line (rc 0)" "$?" "0"
+out="$(cat "$g")"
+assert_contains "insert: keeps existing params"      "$out" "quiet splash"
+assert_contains "insert: adds hugepages reservation" "$out" "hugepages=3072"
+assert_contains "insert: adds singular THP param"    "$out" "transparent_hugepage=never"
+
+# insert: a commented-out line is not the active form -> rc 1, file untouched (no silent reboot).
+g="$GR/commented"
+printf '# GRUB_CMDLINE_LINUX_DEFAULT="quiet"\nGRUB_TIMEOUT=5\n' > "$g"
+before="$(cat "$g")"
+run_grub append_grub_boot_params "$g"; assert_rc "insert: no active line -> rc 1" "$?" "1"
+assert_eq "insert: leaves file unchanged when no active line" "$(cat "$g")" "$before"
+
 echo "== unit: disk_component_gib =="
 assert_eq "monero pruned -> 95"  "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "95"
 assert_eq "monero full -> 230"   "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "230"
