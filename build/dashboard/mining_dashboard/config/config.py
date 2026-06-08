@@ -127,7 +127,10 @@ MONERO_NODE_PASSWORD = os.environ.get("MONERO_NODE_PASSWORD", "")
 # Whether the bundled monerod is configured to prune the blockchain (config.json
 # monero.prune → MONERO_PRUNE). Used to label the node Pruned/Full in the UI (Issue #32);
 # only meaningful for a local node (we don't control a remote node's pruning).
-MONERO_PRUNE = os.environ.get("MONERO_PRUNE", "true").strip().lower() == "true"
+# pithead renders this as 1/0 (the form monerod's CLI wants), so accept the numeric/boolean
+# truthy forms — not just "true", which silently read pruned nodes as Full before (the
+# pruned/full label is purely display, #32).
+MONERO_PRUNE = os.environ.get("MONERO_PRUNE", "true").strip().lower() in ("true", "1", "yes", "on")
 
 # --- Tari Configuration ---
 # Connection details for the Tari Base Node and Block Explorer
