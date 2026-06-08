@@ -142,6 +142,19 @@ run_sourced "$SANDBOX" cred_needs_generating "" "PLACE";      assert_rc "empty n
 run_sourced "$SANDBOX" cred_needs_generating "PLACE" "PLACE"; assert_rc "placeholder needs generating" "$?" "0"
 run_sourced "$SANDBOX" cred_needs_generating "real" "PLACE";  assert_rc "real value kept"              "$?" "1"
 
+echo "== unit: randomx_boot_params (#176) =="
+# The kernel boot params pithead writes into GRUB_CMDLINE_LINUX_DEFAULT for RandomX. Guards the
+# regression where the THP-disable param was PLURAL (transparent_hugepages=never) — an unrecognized
+# param the kernel silently ignores, so THP was never actually disabled. The valid param is singular.
+bp="$(run_sourced "$SANDBOX" randomx_boot_params)"
+assert_contains "reserves 2M huge page size" "$bp" "hugepagesz=2M"
+assert_contains "reserves 3072 huge pages"   "$bp" "hugepages=3072"
+assert_contains "disables THP (singular param)" "$bp" "transparent_hugepage=never"
+case "$bp" in
+    *transparent_hugepages=*) bad "THP param must be singular, not the kernel-ignored plural" "got [$bp]" ;;
+    *) ok "THP param is singular (no plural transparent_hugepages= typo)" ;;
+esac
+
 echo "== unit: disk_component_gib =="
 assert_eq "monero pruned -> 95"  "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "95"
 assert_eq "monero full -> 230"   "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "230"

@@ -1411,6 +1411,15 @@ EOF
     fi
 }
 
+# Kernel boot params pithead appends to GRUB_CMDLINE_LINUX_DEFAULT for RandomX: reserve 6 GiB of
+# 2 MiB HugePages and disable Transparent HugePages. NOTE the THP param is SINGULAR
+# (transparent_hugepage) — the plural form is an unrecognized param the kernel silently ignores,
+# so THP would never actually be disabled (#176). Kept as a function so it has one definition and
+# can be unit-tested for valid kernel param names.
+randomx_boot_params() {
+    echo "hugepagesz=2M hugepages=3072 transparent_hugepage=never"
+}
+
 optimize_kernel() {
     if [ "$SKIP_OPTIMIZE" == "1" ]; then
         log "Skipping kernel/HugePages optimization (--skip-optimize)."
@@ -1430,7 +1439,9 @@ optimize_kernel() {
                 fi
                 log "Updating GRUB configuration for persistent HugePages..."
                 sudo cp /etc/default/grub /etc/default/grub.bak
-                sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never /' /etc/default/grub
+                local boot_params
+                boot_params="$(randomx_boot_params)"
+                sudo sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"/GRUB_CMDLINE_LINUX_DEFAULT=\"${boot_params} /" /etc/default/grub
                 if command -v update-grub >/dev/null; then
                     sudo update-grub
                     REBOOT_REQUIRED=true
