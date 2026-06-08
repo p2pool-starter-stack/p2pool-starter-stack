@@ -27,6 +27,18 @@ class TestConfig:
             cfg = _reload_config()
             assert cfg.XVB_DONATION_LEVEL == "auto"  # normalized to lowercase
 
+    def test_monero_prune_accepts_truthy_forms(self):
+        # pithead writes MONERO_PRUNE=1, so "1" (and friends) must read as pruned — not just
+        # the literal "true". Regression for the Pruned/Full label always showing Full (#32).
+        for v in ("true", "1", "yes", "On", " 1 ", "TRUE"):
+            with patch.dict(os.environ, {"MONERO_PRUNE": v}):
+                assert _reload_config().MONERO_PRUNE is True, f"{v!r} should be pruned"
+
+    def test_monero_prune_accepts_falsy_forms(self):
+        for v in ("false", "0", "no", "off", ""):
+            with patch.dict(os.environ, {"MONERO_PRUNE": v}):
+                assert _reload_config().MONERO_PRUNE is False, f"{v!r} should be full"
+
     def test_tier_config_env_override_valid(self):
         custom = {"donor_ultra": 5_000_000, "donor_basic": 500}
         # deploy injects the JSON wrapped in single quotes
