@@ -1430,7 +1430,7 @@ optimize_kernel() {
                 fi
                 log "Updating GRUB configuration for persistent HugePages..."
                 sudo cp /etc/default/grub /etc/default/grub.bak
-                sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepages=never /' /etc/default/grub
+                sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="hugepagesz=2M hugepages=3072 transparent_hugepage=never /' /etc/default/grub
                 if command -v update-grub >/dev/null; then
                     sudo update-grub
                     REBOOT_REQUIRED=true
