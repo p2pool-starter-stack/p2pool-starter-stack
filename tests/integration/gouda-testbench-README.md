@@ -16,10 +16,11 @@ constraints that matter:
 1. **Never lose the synced chains.** They are the only slow-to-acquire asset (days to re-sync) —
    reuse them. They live at `/srv/code/pithead-data/`, decoupled from the checkout, so you can
    refresh/redeploy the stack freely without touching them.
-2. **Storage is the bottleneck (no NVMe yet).** `sdb` (the SATA "SSD") benchmarks at ~37–98 MB/s —
-   HDD-class — so monerod, builds, and especially LMDB compaction are slow. Chains live on it at
-   `/srv/code/pithead-data` (still better than the `/home` HDD for random I/O, which stays cold
-   storage). A real **m.2 PCIe NVMe is the #1 upgrade** — see `docs/test-server-architecture.md`.
+2. **Storage: chains on NVMe, OS on SATA.** A **4 TB WD SN850X m.2 PCIe NVMe** (`/dev/nvme0n1`) holds
+   the chains at `/srv/code/pithead-data` (`/dev/nvme0n1p1`, ext4, `noatime`, fstab by UUID with
+   `nofail`) — monerod opens the ~266 GB LMDB in seconds. The original SATA "SSD" (`sdb`, ~37–98 MB/s,
+   HDD-class) now carries only the OS + Docker; the `/home`/`/mnt/chains` HDD stays cold storage. See
+   `docs/test-server-architecture.md` for the migration notes + the disk-bus caveat.
 3. **Least privilege.** `sudo` is password-protected and interactive-only — don't expect or leave
    passwordless grants. Almost everything here needs **no sudo** (your user is in the `docker` group).
 4. **Secrets stay put.** `.env` (RPC creds) and `config.json` (wallet addresses) are owner-only.
@@ -29,7 +30,7 @@ constraints that matter:
 
 | Path | What |
 |---|---|
-| `~/code/pithead/` (`/srv/code/pithead`, NVMe) | the stack checkout: `docker-compose.yml`, the `pithead` CLI, your `config.json`/`.env` |
+| `~/code/pithead/` (`/srv/code/pithead`, SATA SSD) | the stack checkout: `docker-compose.yml`, the `pithead` CLI, your `config.json`/`.env` |
 | `/srv/code/pithead-data/{monero,tari,p2pool,dashboard,tor}/` | the chains — **the asset**, on the NVMe, decoupled from the checkout |
 | `~/pithead-testbench/` | **this dir** — build-server docs + tools |
 | `~/pithead-testbench/bin/monero-blockchain-prune` | verified offline Monero tool (version matches monerod) |
