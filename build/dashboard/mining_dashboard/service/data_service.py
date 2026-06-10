@@ -8,6 +8,7 @@ from mining_dashboard.config.config import (
     TARI_REQUIRED,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
+    ENABLE_XVB,
 )
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.tari.tari_client import TariClient
@@ -491,8 +492,9 @@ class DataService:
                     snapshot_data.pop("shares", None)
                     await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
 
-                    # 7. External API Sync (Throttled to every 10th iteration)
-                    if iteration_count % 10 == 0:
+                    # 7. External XvB stats sync over Tor (#163), throttled to every 10th iteration,
+                    # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.
+                    if ENABLE_XVB and iteration_count % 10 == 0:
                         real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
                         if real_xvb_stats:
                             await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)

@@ -2,17 +2,21 @@ import requests
 import logging
 import re
 from mining_dashboard.helper.utils import parse_hashrate
+from mining_dashboard.config.config import XVB_TOR_PROXY
 
 class XvbClient:
-    def __init__(self, wallet_address):
+    def __init__(self, wallet_address, tor_proxy=None):
         """
         Initialize the XvB Client.
-        
+
         :param wallet_address: The Monero wallet address to query stats for.
+        :param tor_proxy: SOCKS proxy URL to route the stats fetch through (defaults to the bridge
+            Tor SOCKS, so the request can't correlate the operator's IP with the wallet, #163).
         """
         self.logger = logging.getLogger("XvbClient")
         self.wallet_address = wallet_address
         self.url = "https://xmrvsbeast.com/cgi-bin/p2pool_bonus_history.cgi"
+        self.tor_proxy = tor_proxy if tor_proxy is not None else XVB_TOR_PROXY
         
         # Pre-compile regex patterns
         self.REGEX_FAIL_COUNT = re.compile(r"Fail Count:\s*(\d+)", re.IGNORECASE)
@@ -33,8 +37,11 @@ class XvbClient:
 
         params = {"address": self.wallet_address}
 
+        # Route through Tor (socks5h) so xmrvsbeast sees a Tor exit, not the operator's home IP —
+        # the request carries the wallet, so a clearnet fetch would correlate IP <-> wallet (#163).
+        proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            response = requests.get(self.url, params=params, timeout=10)
+            response = requests.get(self.url, params=params, timeout=20, proxies=proxies)
             if response.status_code == 200:
                 return self._parse_html(response.text)
             else:

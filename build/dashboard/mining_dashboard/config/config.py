@@ -54,6 +54,11 @@ XVB_DONOR_ID = os.environ.get("XVB_DONOR_ID", "")
 # Feature Flag: Toggles the XvB algorithmic switching logic
 ENABLE_XVB = os.environ.get("XVB_ENABLED", "true").lower() == "true"
 
+# XvB stats are fetched over Tor so the operator's home IP isn't correlated with the wallet the
+# query carries (#163). socks5h resolves xmrvsbeast.com via Tor too (no local DNS leak). The
+# host-networked dashboard reaches the bridge container's Tor SOCKS at 172.28.0.25:9050.
+XVB_TOR_PROXY = os.environ.get("XVB_TOR_PROXY", "socks5h://172.28.0.25:9050")
+
 # Donation tier to target (config.json: xvb.donation_level). The XvB raffle picks
 # winners at random, so donating above a tier's threshold buys nothing — we aim to
 # just clear it and send the rest to p2pool.
@@ -140,7 +145,6 @@ MONERO_PRUNE = os.environ.get("MONERO_PRUNE", "true").strip().lower() in ("true"
 # --- Tari Configuration ---
 # Connection details for the Tari Base Node and Block Explorer
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
-TARI_EXPLORER_URL = "https://textexplore.tari.com/?json"
 
 # --- XvB Donation Controller (Issues #9, #70) ---
 # Closed-loop controller. The raffle pays nothing above a tier threshold, so the

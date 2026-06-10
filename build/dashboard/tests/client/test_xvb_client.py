@@ -23,6 +23,26 @@ def test_get_stats_success_parses_html():
     assert mock_get.call_args.kwargs["params"] == {"address": "49abc"}
 
 
+def test_get_stats_routes_through_tor_proxy():
+    # #163: the fetch must go through the Tor SOCKS proxy so xmrvsbeast sees a Tor exit, not the
+    # operator's home IP — the request carries the wallet, so a clearnet fetch would correlate them.
+    client = XvbClient("49abc")
+    resp = MagicMock(status_code=200, text=SAMPLE_HTML)
+    with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
+        client.get_stats()
+    proxies = mock_get.call_args.kwargs["proxies"]
+    assert proxies["https"].startswith("socks5h://")   # socks5h resolves the host via Tor too
+    assert proxies["http"] == proxies["https"]
+
+
+def test_get_stats_honours_explicit_proxy():
+    client = XvbClient("49abc", tor_proxy="socks5h://127.0.0.1:9999")
+    resp = MagicMock(status_code=200, text=SAMPLE_HTML)
+    with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
+        client.get_stats()
+    assert mock_get.call_args.kwargs["proxies"]["https"] == "socks5h://127.0.0.1:9999"
+
+
 def test_get_stats_non_200_returns_none():
     client = XvbClient("49abc")
     with patch.object(xvb_mod.requests, "get", return_value=MagicMock(status_code=503)):
