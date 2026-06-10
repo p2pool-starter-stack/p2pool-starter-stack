@@ -13,6 +13,53 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- A four-tier test strategy for simulating every runtime situation (#54), documented in
+  `docs/testing-strategy.md` with a full scenario catalog:
+  - **Live config-matrix suite** (`tests/integration/`, tier 4) that drives a real, synced
+    server through the config matrix and asserts the stack behaves — containers healthy, nodes
+    synced, miners mining, dashboard reading correct live state, `status` exit codes, secrets
+    preserved. Runs over SSH or `--local`; the blocking pre-release gate. A `--fault-injection`
+    phase deliberately breaks monerod (stop / SIGSTOP / remove) to assert `pithead status`'
+    down/unhealthy/missing verdicts and the failover→recovery cycle. `make test-integration`.
+  - **Controllable fake monerod/Tari + a contract test** (`tests/integration/fakes/`, tier 2)
+    that points the real dashboard clients at the fakes and asserts they parse every state —
+    docker-free, runs on every PR. `make test-fakes`.
+  - **Fake-daemon docker mini-stack** (`tests/integration/mini-stack/`, tier 3) running the real
+    dashboard + docker-control proxy against the fakes, asserting sync hold/release and Tari
+    reject/readmit end-to-end with real containers (`make test-mini-stack`). Validated green
+    (11/11) on a real Docker host, and isolated (namespaced container names + non-colliding
+    ports) so it can run safely beside a live deployment.
+  - New dashboard unit tests for the required-Tari sync gate, the #35-latch × #31-failover
+    interaction, and simultaneous double outages.
+  - A generated **test inventory** (`docs/test-inventory.md`, `make test-inventory`) listing
+    every test/scenario across all suites, kept honest by a CI drift check.
+  - A non-destructive **`--check`** mode for the live harness (assert the box's current state —
+    no config change/apply/restore); the safe first run / ongoing health check. Validated with
+    a 22/22 green run against a real synced, mining box, which calibrated the harness to trust
+    monerod's own sync flag (a synced local node's dashboard sync panel reads "loading") and
+    `proxy_workers` for mining liveness (`stratum.conns` can read 0 while mining).
+  - A developer testing guide (`docs/testing-guide.md`): per-change recipes, conventions, and
+    the calibration gotchas learned on real hardware.
+  - Regression guards for past bugs/security fixes: extended the #90 hardening section of
+    `tests/stack/test_compose.sh` with per-service least-privilege checks for the Docker socket
+    proxies (the read proxy can't POST; the control proxy is start/stop-only; both mount the
+    socket read-only) and the Tari `[m]inotari` self-match guard — alongside the existing
+    no-new-privileges / cap_drop / credential-free-healthcheck assertions. Plus a
+    `dashboard.host` "auto"-revert test and the schema-migration test that caught the DB upgrade
+    bug above.
+  - Release/validation-server tooling: a `--readiness` mode for the live harness (non-destructive
+    assessment that a box is fit to be a release server — synced chains reusable, snapshot-capable
+    filesystem, disk headroom, secrets owner-only, dashboard localhost-only), a
+    `docs/release-server.md` guide (why end-to-end validation needs a dedicated server vs. what
+    GitHub Actions runs free on every PR, the hardening checklist, and the **safe** self-hosted-
+    runner setup), and a `release-gate.yml` workflow that runs the tier-4 matrix on a self-hosted
+    runner only on trusted code (manual dispatch / push to main — never on a fork PR).
+  - A `--safety-backup` rollback net for the live harness: takes a real `pithead backup` before
+    the destructive scenarios and automatically rolls the box back (down → restore → up) if
+    anything fails, removing the archive on success — so the destructive matrix can run on a
+    precious box. The `--lifecycle` phase also does a `backup` → `restore` round-trip (assert the
+    pool reverts and secrets survive), exercising both verbs end-to-end.
+  - `UPDATE_INTERVAL` is now env-configurable (lets the mini-stack loop fast in CI).
 - Dashboard header shows the host's **IP address** next to the hostname when the configured
   `dashboard.host` is a name, as `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), so you can still reach the
   dashboard when the hostname doesn't resolve from your phone or another machine on the LAN. The
@@ -62,6 +109,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
+- The Compose **project name is now pinned to `pithead`** (`name:` in `docker-compose.yml`), so
+  the stack's images, network and volumes are prefixed `pithead*` regardless of the checkout
+  directory — instead of inheriting the directory's name (which left older checkouts named after
+  the repo's previous name). `pithead up`/`apply`/`upgrade` detect a stack still running under
+  the old, directory-derived project name and migrate it automatically (only that project's
+  containers are removed so the renamed project can take over — bind-mounted chain data and the
+  Tor onion keys are untouched). One-time after the rename, Caddy re-issues its local TLS cert
+  under the new project, so re-trust the dashboard cert if you'd installed the old one.
 - Hardened the leaf containers (caddy, xmrig-proxy, dashboard, docker-proxy, docker-control)
   with `no-new-privileges`. All except the dashboard also `cap_drop: [ALL]` (caddy keeps
   `NET_BIND_SERVICE` for `:80`/`:443`); the dashboard keeps its default capabilities because it
@@ -92,6 +147,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   (the form monerod's CLI wants), so a correctly **pruned** node read as Full. The label is purely
   cosmetic (the node is pruned either way); the parser now accepts `1`/`true`/`yes`/`on`. Surfaced
   on a live pruned deployment whose badge read "XMR Full".
+
+### Fixed
+
+- Dashboard pruned/full label (#32) always showed **Full** on local nodes: the dashboard parsed
+  `MONERO_PRUNE` with `== "true"`, but pithead writes it as `1`/`0`, so a pruned node read as
+  Full. Now accepts `1`/`true`/`yes`/`on`. Found by the live integration harness on a real box.
+- Dashboard DB upgrade path: opening a database created by an early (pre-`timestamp`) schema
+  threw `no such column: timestamp` and aborted the migration, leaving the DB half-upgraded —
+  `_create_tables` built the `idx_ts` index on a column `_migrate_db` hadn't added yet. Indexes
+  are now created after migrations. Found by a new schema-migration intent test.
 
 ### Security
 

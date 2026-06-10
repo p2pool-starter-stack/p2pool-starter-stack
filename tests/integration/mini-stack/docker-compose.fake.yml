@@ -1,0 +1,110 @@
+# Integration mini-stack (issue #54, tier 3).
+#
+# Runs the REAL dashboard + the REAL docker-control/-proxy socket proxies against CONTROLLABLE
+# fake monerod/Tari, with lightweight p2pool/xmrig-proxy containers the dashboard can actually
+# stop/start. This reproduces the runtime control plane end-to-end — sync-hold/release (#35) and
+# node-down → reject → readmit (#31) — deterministically, in CI, with no real chain or test box.
+#
+# Driven by run-mini-stack.sh. The dashboard and the fakes share one image (the dashboard's,
+# which already has mining_dashboard + grpc installed, so fake_tari can use the vendored stubs).
+name: pithead-itest
+
+x-fake-image: &fake_image pithead-dashboard:itest
+
+networks:
+  itestnet:
+    driver: bridge
+
+volumes:
+  dashboard_data:
+  dashboard_stats:
+
+services:
+  # The real dashboard, pointed at the fakes and the socket proxies. Fast loop + short debounce
+  # so scenarios converge in seconds. Binds 127.0.0.1:8000 inside the container; the runner
+  # reads /api/state via `compose exec`, so no published port is needed.
+  dashboard:
+    build: ../../../build/dashboard
+    image: *fake_image
+    container_name: itest-dashboard
+    networks: [itestnet]
+    volumes:
+      - dashboard_data:/data
+      - dashboard_stats:/app/stats:ro
+    environment:
+      HOST_IP: "127.0.0.1"
+      TZ: "Etc/UTC"
+      MONERO_RPC_URL: "http://fake-monerod:18081"
+      MONERO_NODE_USERNAME: ""
+      MONERO_NODE_PASSWORD: ""
+      MONERO_NODE_HOST: "fake-monerod"
+      MONERO_PRUNE: "true"
+      TARI_GRPC_ADDRESS: "fake-tari:18142"
+      DOCKER_PROXY_URL: "tcp://docker-proxy:2375"
+      DOCKER_CONTROL_URL: "tcp://docker-control:2375"
+      # Namespaced container names so the mini-stack never collides with — or controls — a real
+      # deployment's p2pool/xmrig-proxy on the same host.
+      SYNC_GATE_CONTAINERS: "itest-p2pool,itest-xmrig-proxy"
+      REJECT_WORKERS_CONTAINER: "itest-xmrig-proxy"
+      TARI_REQUIRED: "true"
+      XVB_ENABLED: "false"
+      XVB_POOL_URL: ""
+      XVB_DONOR_ID: ""
+      P2POOL_URL: "itest-p2pool:3333"
+      MONERO_WALLET_ADDRESS: "49iTestWalletPlaceholderXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      PROXY_HOST: "xmrig-proxy"
+      PROXY_API_PORT: "3344"
+      PROXY_AUTH_TOKEN: "itest"
+      UPDATE_INTERVAL: "2"
+      NODE_DOWN_AFTER_SEC: "4"
+      NODE_RECOVERY_AFTER_SEC: "3"
+    depends_on: [fake-monerod, fake-tari, docker-control, docker-proxy, p2pool, xmrig-proxy]
+
+  fake-monerod:
+    image: *fake_image
+    container_name: itest-fake-monerod
+    networks: [itestnet]
+    entrypoint: []
+    # Boot mid-sync so the dashboard holds the miner; the runner flips it to synced/down.
+    command: ["python3", "/fakes/fake_monerod.py", "--port", "18081", "--mode", "syncing"]
+    ports: ["28081:18081"]   # 28081 on the host (avoids a real monerod's 18081), → 18081 inside
+    volumes: ["../fakes:/fakes:ro"]
+
+  fake-tari:
+    image: *fake_image
+    container_name: itest-fake-tari
+    networks: [itestnet]
+    entrypoint: []
+    command: ["python3", "/fakes/fake_tari.py", "--grpc-port", "18142", "--control-port", "18152", "--mode", "syncing"]
+    ports: ["28152:18152"]   # HTTP control side-channel on host 28152
+    volumes: ["../fakes:/fakes:ro"]
+
+  # Stand-ins for the miner containers: real, named containers the dashboard genuinely
+  # stops/starts via docker-control. They just idle.
+  p2pool:
+    image: busybox:1.36
+    container_name: itest-p2pool
+    networks: [itestnet]
+    command: ["sh", "-c", "while true; do sleep 30; done"]
+
+  xmrig-proxy:
+    image: busybox:1.36
+    container_name: itest-xmrig-proxy
+    networks: [itestnet]
+    command: ["sh", "-c", "while true; do sleep 30; done"]
+
+  # Read-only socket proxy (stats/logs) — mirrors the production docker-proxy.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: itest-docker-proxy
+    networks: [itestnet]
+    environment: ["CONTAINERS=1", "LOGS=1"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+
+  # Write proxy scoped to start/stop only — mirrors the production docker-control.
+  docker-control:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: itest-docker-control
+    networks: [itestnet]
+    environment: ["POST=1", "ALLOW_START=1", "ALLOW_STOP=1"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]

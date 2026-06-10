@@ -73,6 +73,16 @@ run_sourced "$SANDBOX" is_ipv4 "192.168.1.0/24" >/dev/null 2>&1; assert_rc "reje
 run_sourced "$SANDBOX" is_ipv4 "example.com"  >/dev/null 2>&1; assert_rc "rejects hostname"    "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 ""             >/dev/null 2>&1; assert_rc "rejects empty"       "$?" "1"
 
+echo "== unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0) =="
+# A configured dashboard.host is used verbatim.
+# shellcheck disable=SC1090,SC2034  # $STACK path is dynamic; DASHBOARD_HOST is read by the sourced function
+got="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e; DASHBOARD_HOST='my.box.lan'; resolve_dashboard_host >/dev/null 2>&1; printf '%s' "$HOST_IP" )"
+assert_eq "configured dashboard.host is used" "$got" "my.box.lan"
+# 'auto' (no dashboard.host) on a non-interactive run must REVERT HOST_IP to the machine
+# hostname, not keep a stale prior value — the regression fixed in 247c5a0.
+# shellcheck disable=SC1090,SC2034
+got="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e; DASHBOARD_HOST=''; HOST_IP='STALE'; resolve_dashboard_host >/dev/null 2>&1; printf '%s' "$HOST_IP" )"
+assert_eq "dashboard.host 'auto' reverts to hostname" "$got" "$(hostname)"
 echo "== unit: docker_boot_enabled (#137) =="
 # A systemctl stub on PATH; FAKE_BOOT picks which unit reports "enabled". Docker counts as
 # boot-enabled if EITHER docker.service or docker.socket is enabled.

@@ -1,9 +1,10 @@
+import sqlite3
 import time
 
 import pytest
 
 from mining_dashboard.service.storage_service import StateManager
-from mining_dashboard.config.config import TIER_DEFAULTS
+from mining_dashboard.config.config import TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
 
 
 class TestDefaults:
@@ -153,3 +154,81 @@ class TestPersistenceAndMigration:
         sm.load()  # must not raise
         assert sm.get_xvb_stats()["avg_1h"] == 0.0  # falls back to default
         sm.close()
+
+
+class TestSchemaMigration:
+    """The upgrade path: opening a DB created by an older version must migrate in place
+    without losing data. These exercise branches a fresh DB never hits."""
+
+    def test_history_timestamp_backfilled_from_iso_on_upgrade(self, tmp_path):
+        # Intent: a pre-timestamp history table (only the original t/v columns) must gain the
+        # v_p2pool/v_xvb/timestamp columns AND have timestamp backfilled from the ISO `t`
+        # string — otherwise old points become undatable and drop out of the chart/retention.
+        db = str(tmp_path / "old_schema.db")
+        # Recent UTC ISO strings (SQLite's strftime('%s', t) treats t as UTC) so the migrated
+        # rows fall inside load()'s 30-day retention window and aren't filtered out.
+        now = time.time()
+        t1 = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now - 7200))  # 2h ago
+        t2 = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now - 3600))  # 1h ago
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE history (t TEXT, v REAL)")  # the original schema
+        conn.execute("INSERT INTO history (t, v) VALUES (?, ?)", (t1, 1000.0))
+        conn.execute("INSERT INTO history (t, v) VALUES (?, ?)", (t2, 1100.0))
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)  # __init__ runs _create_tables (no-op) + _migrate_db
+        try:
+            hist = sm.get_history()
+            assert len(hist) == 2
+            assert all(h["timestamp"] > 0 for h in hist), "timestamp backfilled from ISO t"
+            # ordering preserved: the earlier ISO time sorts first (load() orders by timestamp)
+            assert hist[0]["timestamp"] < hist[1]["timestamp"]
+            # the new split-rate columns default to 0, not NULL
+            assert hist[0]["v_p2pool"] == 0 and hist[0]["v_xvb"] == 0
+        finally:
+            sm.close()
+
+
+class TestRetention:
+    """Long-running behavior: history/workers must not grow unbounded. Tests are white-box
+    (they backdate timestamps) so they don't need to actually wait days."""
+
+    def test_history_older_than_retention_pruned_from_memory(self, state_manager):
+        # Intent: appending a fresh sample drops in-memory points older than the 30-day window
+        # (the popleft loop), so the deque can't grow without bound on a long-running dashboard.
+        state_manager.state["hashrate_history"].append({
+            "t": "old", "v": 1.0, "v_p2pool": 0, "v_xvb": 0,
+            "timestamp": time.time() - HISTORY_RETENTION_SEC - 3600,  # 30d + 1h ago
+        })
+        assert len(state_manager.get_history()) == 1
+        state_manager.update_history(2000.0)  # a fresh sample at "now"
+        hist = state_manager.get_history()
+        assert len(hist) == 1 and hist[0]["v"] == 2000.0  # the ancient point was pruned
+
+    def test_old_history_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        # Intent: the probabilistic DB cleanup actually deletes expired rows when it fires, so
+        # the on-disk DB stays bounded. We force the 5% path deterministically.
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO history (t, v, v_p2pool, v_xvb, timestamp) VALUES (?,?,?,?,?)",
+                ("old", 1.0, 0, 0, old_ts))
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.update_history(2000.0)
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM history WHERE timestamp < ?",
+                (time.time() - HISTORY_RETENTION_SEC,)).fetchone()[0]
+        assert remaining == 0, "expired DB rows are pruned"
+
+    def test_stale_workers_pruned_after_retention_window(self, state_manager):
+        # Intent: a worker not seen within WORKER_RETENTION_SEC (7d) is dropped when any worker
+        # next checks in — so stale name→IP mappings don't linger and leak memory.
+        state_manager.update_known_workers([{"name": "rig1", "ip": "10.0.0.1"}])
+        # Backdate rig1 so it's now older than the retention window.
+        state_manager.state["known_workers"]["rig1"]["last_seen"] = time.time() - WORKER_RETENTION_SEC - 3600
+        state_manager.update_known_workers([{"name": "rig2", "ip": "10.0.0.2"}])  # a fresh check-in
+        names = {w["name"] for w in state_manager.get_known_workers()}
+        assert "rig2" in names and "rig1" not in names

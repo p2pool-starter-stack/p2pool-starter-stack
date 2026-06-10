@@ -21,5 +21,8 @@ htmlcov/
 *.egg-info/
 .eggs/
 
+# Integration test artifacts (manifest, per-scenario logs, captured state)
+/tests/integration/results/
+
 # OS
 .DS_Store
