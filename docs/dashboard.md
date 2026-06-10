@@ -92,6 +92,11 @@ the top bar (after a short debounce, so a momentary blip doesn't flap). Sync sta
 monerod's `get_info` RPC and Tari's gRPC, so "down" means the node itself is unreachable — not just
 that a log line changed.
 
+A red **`⚠ DB write failing`** badge appears if the dashboard can't write to its own SQLite database
+(a full or read-only disk, a permissions problem). The dashboard keeps serving live data, but
+hashrate history, shares, and stats won't survive a restart until it's fixed — so it's surfaced
+rather than lost silently.
+
 While a node is down, the dashboard also **rejects workers** so they fail over to the backup pools
 you've configured, instead of sitting idle on a stack that can't mine for them — a sustained outage
 stops the `xmrig-proxy` container (a **`Workers rejected`** badge shows) and a confirmed recovery

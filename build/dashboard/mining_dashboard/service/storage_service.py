@@ -46,9 +46,13 @@ class StateManager:
         # Initialize persistent DB connection
         # check_same_thread=False allows the connection to be used by multiple threads
         # (serialized via self._db_lock)
+        # Persistence-health flag (#131): flipped False on any init/write failure so /api/state can
+        # surface "history isn't being saved" instead of silently losing everything on the next restart.
+        self.db_healthy = True
+
         self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        
+
         self._init_db()
         self.load()
 
@@ -69,7 +73,16 @@ class StateManager:
                     # and abort the whole migration, leaving the DB half-upgraded.
                     self._create_indexes()
         except sqlite3.Error as e:
-            self.logger.error(f"DB Init Error: {e}")
+            self._db_error("DB Init Error", e)
+
+    def _db_error(self, where: str, e: Exception):
+        """Record a DB failure and flag persistence as unhealthy so /api/state can surface it (#131)."""
+        self.db_healthy = False
+        self.logger.error(f"{where}: {e}")
+
+    def is_db_healthy(self) -> bool:
+        """True unless a DB init or write has failed — drives the dashboard persistence badge (#131)."""
+        return self.db_healthy
 
     def _create_tables(self):
         """Creates necessary tables if they don't exist."""
@@ -227,7 +240,7 @@ class StateManager:
                     if random.random() < 0.05:
                         self._conn.execute("DELETE FROM history WHERE timestamp < ?", (ts - HISTORY_RETENTION_SEC,))
         except sqlite3.Error as e:
-            self.logger.error(f"History Update Error: {e}")
+            self._db_error("History Update Error", e)
 
     def add_share(self, ts: float, difficulty: float):
         """Appends a new share to history and persists it to the DB."""
@@ -250,7 +263,19 @@ class StateManager:
                     if random.random() < 0.05:
                         self._conn.execute("DELETE FROM shares WHERE ts < ?", (time.time() - HISTORY_RETENTION_SEC,))
         except sqlite3.Error as e:
-            self.logger.error(f"Share Insert Error: {e}")
+            self._db_error("Share Insert Error", e)
+
+    def add_shares(self, count: int, latest_ts: float, difficulty: float):
+        """Record `count` shares ending at `latest_ts`. P2Pool's stratum exposes a CUMULATIVE
+        shares_found counter; the dashboard polls every UPDATE_INTERVAL (30s), so a burst of shares
+        between polls advances last_share_found_time only once. Spread the count across distinct
+        timestamps (the shares table is keyed by ts) so a higher-hashrate / nano-sidechain node's
+        extra shares in one window aren't dropped (#129)."""
+        if count <= 0:
+            return
+        for i in range(count):
+            # Distinct timestamps ending at latest_ts (1 ms steps back) so the ts PRIMARY KEY keeps all.
+            self.add_share(round(latest_ts - 0.001 * (count - 1 - i), 3), difficulty)
 
     def get_shares(self) -> List[Dict[str, Any]]:
         """Returns a copy of the shares history."""
@@ -333,7 +358,7 @@ class StateManager:
                         self._conn.executemany("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", 
                                          [(k, str(v)) for k, v in updates.items()])
             except sqlite3.Error as e:
-                self.logger.error(f"XVB Update Error: {e}")
+                self._db_error("XVB Update Error", e)
 
     def update_known_workers(self, workers_list: List[Dict[str, str]]):
         """
@@ -374,7 +399,7 @@ class StateManager:
                         # Prune old workers from DB
                         self._conn.execute("DELETE FROM workers WHERE last_seen < ?", (ts - WORKER_RETENTION_SEC,))
             except sqlite3.Error as e:
-                self.logger.error(f"Worker Update Error: {e}")
+                self._db_error("Worker Update Error", e)
 
     def save_snapshot(self, data: Dict[str, Any]):
         """Persists the full application state snapshot to the KV store."""
@@ -388,8 +413,10 @@ class StateManager:
                 with self._conn:
                     self._conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", 
                                      ("snapshot_latest_data", json_str))
-        except (TypeError, sqlite3.Error) as e:
-            self.logger.error(f"Snapshot Save Error: {e}")
+        except sqlite3.Error as e:
+            self._db_error("Snapshot Save Error", e)
+        except TypeError as e:
+            self.logger.error(f"Snapshot serialization error: {e}")
 
     def load_snapshot(self) -> Optional[Dict[str, Any]]:
         """Loads the last persisted application state snapshot."""

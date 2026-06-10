@@ -5,7 +5,7 @@ import pytest
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
-    _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary,
+    _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary, _shares_to_record,
 )
 
 
@@ -31,6 +31,25 @@ def _make_service():
     svc.docker_control.stop = AsyncMock(return_value=True)
     svc.docker_control.start = AsyncMock(return_value=True)
     return svc, state_manager, proxy_client
+
+
+class TestSharesToRecord:
+    """#129: how many P2Pool shares to record from the cumulative shares_found counter, + the new baseline."""
+
+    def test_first_poll_baselines_without_backfill(self):
+        # last_known None -> baseline to current, record nothing (don't backfill the historical count).
+        assert _shares_to_record(None, 1000) == (0, 1000)
+
+    def test_delta_records_the_difference(self):
+        # A burst of 3 shares since the last poll -> record 3, advance the baseline.
+        assert _shares_to_record(1000, 1003) == (3, 1003)
+
+    def test_no_change_records_nothing(self):
+        assert _shares_to_record(1000, 1000) == (0, 1000)
+
+    def test_counter_reset_rebaselines(self):
+        # p2pool restarted (counter went backwards) -> re-baseline to the lower value, record nothing.
+        assert _shares_to_record(1000, 5) == (0, 5)
 
 
 class TestProxyWorkerParsers:

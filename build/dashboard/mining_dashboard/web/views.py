@@ -530,10 +530,15 @@ def build_sync(metrics, monero_db_size):
     }
 
 
-def build_badges(data, metrics, mode_variant):
-    """Top-bar status badges as data: ``{text, variant, title?}`` (Issues #27/#31/#35/#51/#32).
+def build_badges(data, metrics, mode_variant, db_healthy=True):
+    """Top-bar status badges as data: ``{text, variant, title?}`` (Issues #27/#31/#35/#51/#32/#131).
     The client renders them (variant -> ``badge-<variant>``)."""
     badges = []
+    # Persistence health (#131): the dashboard keeps serving live data even if its SQLite DB can't
+    # be written, but history/shares/stats would silently vanish on restart — surface it loudly.
+    if not db_healthy:
+        badges.append({"text": "⚠ DB write failing", "variant": "bad",
+                       "title": "The dashboard can't persist to its database — hashrate history, shares, and stats will be lost on restart. Check disk space and permissions on the dashboard data directory."})
     if metrics.global_syncing:
         badges.append({"text": "Syncing...", "variant": "warn"})
     else:
@@ -659,6 +664,7 @@ def build_state(data, state_mgr, range_arg, window=None):
     data = data or {}
     history = state_mgr.get_history()
     metrics = build_metrics(data, state_mgr, history)
+    db_healthy = state_mgr.is_db_healthy()
 
     mode_tok, p2p_tok, xvb_tok = _mode_palette(metrics.mode)
     pool_net = build_pool_network(data, metrics)
@@ -672,7 +678,8 @@ def build_state(data, state_mgr, range_arg, window=None):
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,
-        "badges": build_badges(data, metrics, mode_tok),
+        "badges": build_badges(data, metrics, mode_tok, db_healthy),
+        "db_healthy": db_healthy,
         "hashrate": build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok),
         "system": build_system(data),
         "sync": build_sync(metrics, pool_net["monero"]["db_size"]),

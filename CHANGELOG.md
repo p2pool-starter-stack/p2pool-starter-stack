@@ -129,6 +129,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- Dashboard now records **every** P2Pool share instead of at most one per 30 s poll: it tracks the
+  cumulative `shares_found` counter and records the per-poll delta as N distinct shares. A
+  higher-hashrate or nano-sidechain node finding 2+ shares within one poll window no longer
+  undercounts the PPLNS window or skews the XvB controller's share gate (#129).
+- Dashboard now surfaces broken persistence: a `db_healthy` field in `/api/state` and a loud
+  "DB write failing" badge when the SQLite DB can't be initialized or written, instead of appearing
+  healthy while silently losing history/shares/stats on the next restart (#131).
 - `pithead up` and `pithead doctor` now warn when a data directory named in `.env` doesn't exist —
   the tell-tale of a relocated/copied install or a second checkout, which would otherwise silently
   start a fresh sync and orphan the dashboard history (data dirs are absolute paths in `.env`) (#126).
