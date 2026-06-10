@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 418 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 21 `pithead` shell sections · 11 harness self-test sections ·
+tests · 21 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -21,7 +21,7 @@ tests · 21 `pithead` shell sections · 11 harness self-test sections ·
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
 | 4 — Live matrix | config scenarios | 8 (15 axis values) |
-| 4 — Live matrix | harness self-test | 11 sections |
+| 4 — Live matrix | harness self-test | 15 sections |
 
 ---
 
@@ -648,7 +648,7 @@ tests · 21 `pithead` shell sections · 11 harness self-test sections ·
 - workers online (>= $EXPECTED_WORKERS)
 - xmrig-proxy stopped for failover
 
-### Harness self-test (tests/integration/selftest.sh) — 11 sections
+### Harness self-test (tests/integration/selftest.sh) — 15 sections
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
@@ -658,10 +658,14 @@ tests · 21 `pithead` shell sections · 11 harness self-test sections ·
 - scenarios: lookup helpers
 - rx: local exec runs in the stack dir
 - api_state + jq_get: parse a fixture
+- _pred_tari_synced: gates on .sync.tari.state
+- _pred_pool_ready: gates on .pool.type matching expected
+- _pred_hashes_flowing: gates on stratum.total_hashes > 0
+- dispatch loop: a stdin-draining child must not skip iterations
 - service_state parsing (fault-injection predicates)
 - assertion helpers: counters behave
 
 ---
 
-_Grand total: **501** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **505** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
