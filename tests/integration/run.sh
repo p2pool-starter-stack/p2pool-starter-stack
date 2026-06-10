@@ -535,6 +535,8 @@ run_lifecycle() {
     pithead apply -y >/dev/null 2>&1
     wait_status_ok 180 || true
     assert_eq "secrets preserved across pool change" "$(secret_fingerprint)" "$fp_before"
+    # .pool.type lags a sidechain switch until peers on the new chain connect — wait, don't assert cold (#54).
+    wait_pool_ready 180 "$(pool_label "$other")" || true
     assert_eq "pool actually changed" "$(jq_get "$(api_state)" '.pool.type')" "$(pool_label "$other")"
 
     # Node-down failover (#31): stop monerod -> status non-zero (node down), dashboard rejects
@@ -568,6 +570,8 @@ run_lifecycle() {
             pithead restore -y "$arch" >/dev/null 2>&1
             pithead up >/dev/null 2>&1
             wait_status_ok 240 || true
+            # pool.type lags peer reconnect after restore+up — wait for classification before asserting (#54).
+            wait_pool_ready 180 "$backed_pool" || true
             assert_eq "restore reverts the pool to the backed-up value" "$(jq_get "$(api_state)" '.pool.type')" "$backed_pool"
             assert_eq "restore preserves secrets" "$(secret_fingerprint)" "$fp_b"
             rx "rm -f $(quote_arg "$arch")" >/dev/null 2>&1 || true
