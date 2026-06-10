@@ -451,6 +451,42 @@ assert_rc "re-apply retries and succeeds (rc 0)"          "$rc" "0"
 assert_contains "re-apply re-attempts the recreate"      "$out" "retrying"
 if [ -f "$A/.env.apply-incomplete" ]; then mk=present; else mk=absent; fi; assert_eq "marker cleared after a successful retry" "$mk" "absent"
 
+echo "== black-box: up warns about missing (relocated) data dirs (#126) =="
+RL="$SANDBOX/reloc"; mkdir -p "$RL/bin"; cp "$STACK" "$RL/pithead"; make_stubs "$RL/bin"
+# Deployed, but .env names data dirs that don't exist — as if the install was moved/copied or a
+# second checkout is being run. The stack would silently re-sync; `up` must warn first.
+cat > "$RL/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+HOST_IP=box.lan
+MONERO_DATA_DIR=/no/such/data/monero
+TARI_DATA_DIR=/no/such/data/tari
+P2POOL_DATA_DIR=/no/such/data/p2pool
+DASHBOARD_DATA_DIR=/no/such/data/dashboard
+TOR_DATA_DIR=/no/such/data/tor
+EOF
+out="$(cd "$RL" && PATH="$RL/bin:$PATH" ./pithead up 2>&1)"; rc=$?
+assert_rc "up still starts (rc 0)"               "$rc" "0"
+assert_contains "up warns about a fresh re-sync" "$out" "start a FRESH sync"
+assert_contains "up names the missing monero dir" "$out" "MONERO_DATA_DIR → /no/such/data/monero"
+# A healthy deployment (dirs present) must NOT warn.
+mkdir -p "$RL/d/monero" "$RL/d/tari" "$RL/d/p2pool" "$RL/d/dashboard" "$RL/d/tor"
+cat > "$RL/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+HOST_IP=box.lan
+MONERO_DATA_DIR=$RL/d/monero
+TARI_DATA_DIR=$RL/d/tari
+P2POOL_DATA_DIR=$RL/d/p2pool
+DASHBOARD_DATA_DIR=$RL/d/dashboard
+TOR_DATA_DIR=$RL/d/tor
+EOF
+out="$(cd "$RL" && PATH="$RL/bin:$PATH" ./pithead up 2>&1)"
+case "$out" in *"FRESH sync"*) bad "no false warning when data dirs exist" "got: $out" ;; *) ok "no false warning when data dirs exist" ;; esac
+# Gating: before the first deploy (no DEPLOYMENT_COMPLETED) the dirs are legitimately absent -> silent.
+printf 'MONERO_DATA_DIR=/no/such/monero\n' > "$RL/.env"
+assert_eq "missing_data_dirs silent before first deploy" "$(run_sourced "$RL" missing_data_dirs)" ""
+
 echo "== black-box: status health check =="
 # A docker stub driven by FAKE_STATES ("svc=state:health ..."; state "missing" = no container)
 # so we can script each service's state and assert how `status` reports it.

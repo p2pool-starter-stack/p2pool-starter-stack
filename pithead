@@ -102,6 +102,7 @@ migrate_compose_project() {
 
 stack_up() {
     log "Starting stack..."
+    warn_missing_data_dirs
     migrate_compose_project
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     docker compose up -d
@@ -392,6 +393,18 @@ doctor() {
     fi
     check_disk_grouped doctor "$doctor_prune" \
         "$mono_dir" "$tari_dir" "$p2pool_dir" "$dash_dir" "$tor_dir"
+
+    # Data dirs named in .env that don't exist => a relocated/copied install (or a second checkout)
+    # will re-sync from scratch and orphan the dashboard history (#126).
+    local _stale _l
+    _stale=$(missing_data_dirs)
+    if [ -n "$_stale" ]; then
+        while IFS= read -r _l; do
+            dr_warn "Data dir from .env not found: ${_l%%=*}=${_l#*=} — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'."
+        done <<< "$_stale"
+    elif [ "$(env_get DEPLOYMENT_COMPLETED 2>/dev/null)" = "true" ]; then
+        dr_ok "Data directories named in .env are present."
+    fi
 
     # --- .env / deployment state ---
     echo ""
@@ -1223,6 +1236,31 @@ prepare_directories() {
     sudo chown -R "$REAL_USER":"$REAL_USER" "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR"
     mkdir -p "$P2POOL_DIR/stats"
     sudo chmod -R 755 "$P2POOL_DIR/stats"
+}
+
+# List "*_DATA_DIR=path" lines from .env whose directory is MISSING — the signature of a relocated
+# or copied install, or a second checkout, where the stack would silently start a FRESH sync and
+# orphan the dashboard SQLite history (#126). Data dirs are stored as absolute paths in .env, so a
+# moved install leaves .env naming the old path; Docker then auto-creates an empty dir and re-syncs.
+# Empty unless the stack has been deployed (on first setup the dirs legitimately don't exist yet).
+missing_data_dirs() {
+    [ "$(env_get DEPLOYMENT_COMPLETED 2>/dev/null)" = "true" ] || return 0
+    local var dir
+    for var in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR TOR_DATA_DIR; do
+        dir=$(env_get "$var" 2>/dev/null)
+        [ -n "$dir" ] && [ ! -d "$dir" ] && printf '%s=%s\n' "$var" "$dir"
+    done
+    return 0
+}
+
+# Loud warning (on `up`) when .env names data dirs that don't exist — see missing_data_dirs (#126).
+warn_missing_data_dirs() {
+    local stale line; stale=$(missing_data_dirs)
+    [ -n "$stale" ] || return 0
+    warn "Data directories named in .env are MISSING — did you relocate, copy, or run a different checkout of this install?"
+    while IFS= read -r line; do warn "  ${line%%=*} → ${line#*=} (not found)"; done <<< "$stale"
+    warn "The stack will start a FRESH sync and the dashboard history will be orphaned. To keep your synced chains,"
+    warn "move the data to these paths, or set the data_dir(s) in config.json (absolute) and run './pithead apply'."
 }
 
 # Lightweight directory check for `apply`: create any missing data dir and chown only the

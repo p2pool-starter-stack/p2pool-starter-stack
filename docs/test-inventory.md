@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 418 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 25 `pithead` shell sections · 15 harness self-test sections ·
+tests · 26 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 25 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 418 |
 | 1 — Unit | frontend (node --test) | 25 |
-| 1 — Unit | `pithead` shell suite | 25 sections |
+| 1 — Unit | `pithead` shell suite | 26 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -518,7 +518,7 @@ tests · 25 `pithead` shell sections · 15 harness self-test sections ·
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 
-### `pithead` shell suite (tests/stack/run.sh) — 25 sections
+### `pithead` shell suite (tests/stack/run.sh) — 26 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_ipv4
@@ -540,6 +540,7 @@ tests · 25 `pithead` shell sections · 15 harness self-test sections ·
 - black-box: local node creds auto-generated + persisted (#50)
 - black-box: upgrade re-renders generated config (#128)
 - black-box: apply recovers from a failed 'compose up' (#125)
+- black-box: up warns about missing (relocated) data dirs (#126)
 - black-box: status health check
 - black-box: doctor exit code (#127)
 - black-box: reset-dashboard targets .env dirs, not config.json (#139)
@@ -671,5 +672,5 @@ tests · 25 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **509** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **510** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
