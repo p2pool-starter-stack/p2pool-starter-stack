@@ -390,6 +390,67 @@ out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -
 assert_eq "remote username left blank" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_USERNAME)" ""
 assert_eq "remote creds not persisted" "$(jq -r '.monero.node_username' "$V/config.json")" ""
 
+echo "== black-box: upgrade re-renders generated config (#128) =="
+# `upgrade` used to be just `up --build`, leaving the generated .env/Caddyfile/Tari config stale
+# after a git pull. It must now re-render them while preserving secrets.
+U="$SANDBOX/upgrade"; mkdir -p "$U/build/tari" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"
+cp "$STACK" "$U/pithead"; make_stubs "$U/bin"; cp "$ROOT/build/tari/config.toml.template" "$U/build/tari/"
+# Stale .env: secrets present, but STRATUM_BIND (a rendered var) is missing — the upgrade must fill it.
+cat > "$U/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$U/config.json"
+UL="$U/docker.log"; : > "$UL"
+out="$(cd "$U" && DOCKER_LOG="$UL" PATH="$U/bin:$PATH" ./pithead upgrade 2>&1)"; rc=$?
+assert_rc "upgrade exits 0" "$rc" "0"
+assert_eq "upgrade re-renders a missing var (STRATUM_BIND)" "$(run_sourced "$U" env_get_file "$U/.env" STRATUM_BIND)" "0.0.0.0"
+assert_eq "upgrade preserves the proxy token"               "$(run_sourced "$U" env_get_file "$U/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
+assert_contains "upgrade still rebuilds images"             "$(cat "$UL")" "compose up -d --build"
+
+echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
+# A docker stub that fails `compose up -d --remove-orphans` only when FAIL_UP=1 (else succeeds).
+A="$SANDBOX/applyfail"; mkdir -p "$A/build/tari" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
+cp "$STACK" "$A/pithead"; cp "$ROOT/build/tari/config.toml.template" "$A/build/tari/"
+cat > "$A/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >> "${DOCKER_LOG:-/dev/null}"
+case "$*" in
+  "compose version"|"info") exit 0 ;;
+  "exec tor cat /var/lib/tor/monero/hostname") echo "mona.onion"; exit 0 ;;
+  "exec tor cat /var/lib/tor/tari/hostname")   echo "taria.onion"; exit 0 ;;
+  "exec tor cat /var/lib/tor/p2pool/hostname") echo "p2pa.onion"; exit 0 ;;
+  "compose up -d --remove-orphans") [ "${FAIL_UP:-0}" = "1" ] && exit 1 || exit 0 ;;
+esac
+exit 0
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > "$A/bin/sudo"; chmod +x "$A/bin/docker" "$A/bin/sudo"
+cat > "$A/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$A/config.json"
+# First apply: real config delta committed, but `compose up` FAILS -> marker left, rc 1, guidance.
+out="$(cd "$A" && FAIL_UP=1 PATH="$A/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "apply fails (rc 1) when compose up fails" "$rc" "1"
+assert_contains "apply prints recovery guidance"     "$out" "were NOT recreated"
+if [ -f "$A/.env.apply-incomplete" ]; then mk=present; else mk=absent; fi; assert_eq "apply leaves the incomplete marker" "$mk" "present"
+# Second apply: config already committed (no delta), but the marker forces a retry, not a silent no-op.
+out="$(cd "$A" && FAIL_UP=0 PATH="$A/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "re-apply retries and succeeds (rc 0)"          "$rc" "0"
+assert_contains "re-apply re-attempts the recreate"      "$out" "retrying"
+if [ -f "$A/.env.apply-incomplete" ]; then mk=present; else mk=absent; fi; assert_eq "marker cleared after a successful retry" "$mk" "absent"
+
 echo "== black-box: status health check =="
 # A docker stub driven by FAKE_STATES ("svc=state:health ..."; state "missing" = no container)
 # so we can script each service's state and assert how `status` reports it.

@@ -1,6 +1,7 @@
 # Secrets and Env
 .env
 .env.new
+.env.apply-incomplete
 config.json
 /data/
 /build/monero/bitmonero.conf
