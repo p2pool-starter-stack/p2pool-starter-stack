@@ -1603,7 +1603,7 @@ check_disk_grouped() {
     # Group by mount point: accumulate required GiB and the component list per mount, and remember
     # one representative path per mount so we can read its free space once. Parallel arrays keyed by
     # a positional index (portable to Bash 3.2 on macOS — no associative arrays).
-    local mounts=() req_gib=() comp_list=() rep_path=()
+    local mounts=() req_gib=() comp_list=()
     local i mount comp gib idx
     for i in "${!components[@]}"; do
         comp="${components[$i]}"
@@ -1620,7 +1620,7 @@ check_disk_grouped() {
             if [ "${mounts[$j]}" = "$mount" ]; then idx="$j"; break; fi
         done
         if [ "$idx" -lt 0 ]; then
-            mounts+=("$mount"); req_gib+=("$gib"); comp_list+=("$comp"); rep_path+=("$dir")
+            mounts+=("$mount"); req_gib+=("$gib"); comp_list+=("$comp")
         else
             req_gib[idx]=$(( req_gib[idx] + gib ))
             comp_list[idx]="${comp_list[idx]}, $comp"
@@ -1638,8 +1638,10 @@ check_disk_grouped() {
         mount="${mounts[$i]}"
         comps="${comp_list[$i]}"
         need_kb=$(( req_gib[i] * 1048576 ))          # GiB -> KiB (df -P is 1K-blocks)
-        avail_kb=$(df -P "${rep_path[$i]}" 2>/dev/null | awk 'NR==2{print $4}')
-        avail_h=$(df -Ph "${rep_path[$i]}" 2>/dev/null | awk 'NR==2{print $4}')
+        # df the resolved MOUNT POINT (always exists), not the data dir — on first run the dir isn't
+        # created yet and `df` on a missing path fails the pipe, tripping `set -Eeuo pipefail` (#179).
+        avail_kb=$(df -P "$mount" 2>/dev/null | awk 'NR==2{print $4}')
+        avail_h=$(df -Ph "$mount" 2>/dev/null | awk 'NR==2{print $4}')
         if [ "$mode" = "doctor" ]; then
             if [ -n "$avail_kb" ] && [ "$avail_kb" -ge "$need_kb" ] 2>/dev/null; then
                 dr_ok "Data on $mount ($comps): ${avail_h:-?} free — needs ~${req_gib[i]} GB."

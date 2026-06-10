@@ -205,9 +205,11 @@ assert_eq "tari -> 50"           "$(run_sourced "$SANDBOX" disk_component_gib ta
 assert_eq "tor -> 1"             "$(run_sourced "$SANDBOX" disk_component_gib tor)"      "1"
 
 echo "== unit: check_disk_grouped (mocked df) =="
-# A df stub on PATH so check_disk_grouped sees a scripted filesystem layout. DF_MAP maps each data
-# dir to a mount point ("path=mount" space-separated); DF_AVAIL_KB / DF_AVAIL_H give the (single)
-# free figure every mount reports. Real temp dirs make disk_fs_mount resolve without walking up.
+# A df stub on PATH so check_disk_grouped sees a scripted filesystem layout. DF_MAP maps each path
+# df is queried for to a mount point ("path=mount" space-separated): the data dirs (disk_fs_mount
+# resolves the mount from these) AND the mount points themselves (check_disk_grouped reads free
+# space via the mount, not the possibly-missing dir — #179). DF_AVAIL_KB / DF_AVAIL_H give the
+# (single) free figure every mount reports. Real temp dirs make disk_fs_mount resolve without walking up.
 DISK="$SANDBOX/disk"; mkdir -p "$DISK/bin"
 cat > "$DISK/bin/df" <<'EOF'
 #!/usr/bin/env bash
@@ -225,7 +227,7 @@ md="$DM/monero" td="$DM/tari" pd="$DM/p2pool" dd="$DM/dashboard" rd="$DM/tor"
 
 # All five dirs on ONE filesystem with plenty of space -> a SINGLE grouped OK line naming every
 # component, with the combined pruned requirement (95+50+5+2+1 = 153 GB).
-one_map="$md=/data $td=/data $pd=/data $dd=/data $rd=/data"
+one_map="$md=/data $td=/data $pd=/data $dd=/data $rd=/data /data=/data"
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
        run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "one fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
@@ -240,7 +242,7 @@ assert_eq "one small fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data 
 assert_contains "small fs warns below need" "$out" "below the ~153 GB"
 
 # Two filesystems: monero+tari on /big, the rest on /small -> ONE line per filesystem.
-two_map="$md=/big $td=/big $pd=/small $dd=/small $rd=/small"
+two_map="$md=/big $td=/big $pd=/small $dd=/small $rd=/small /big=/big /small=/small"
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$two_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
        run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "two fs -> two lines" "$(printf '%s\n' "$out" | grep -c 'Data on')" "2"
@@ -254,6 +256,16 @@ assert_eq "preflight silent when ample" "$out" ""
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=104857600 DF_AVAIL_H=100G \
        run_sourced "$SANDBOX" check_disk_grouped preflight 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_contains "preflight warns once when low" "$out" "Low disk on /data (hosts monero, tari, p2pool, dashboard, tor)"
+
+# Regression #179: on first run the data dirs don't exist yet; check_disk_grouped must resolve to the
+# nearest existing ancestor's mount and read free space THERE, not df the missing dir (which fails the
+# pipe and trips pithead's `set -Eeuo pipefail`). Run under strict mode — NOT run_sourced, which does
+# `set +e` and would mask the crash — so a re-introduced df-on-missing-dir would actually abort here.
+fresh_map="$DM=/data /data=/data"
+PATH="$DISK/bin:$PATH" DF_MAP="$fresh_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
+  bash -c 'source "$1" 2>/dev/null; check_disk_grouped preflight 1 "$2/fresh/monero" "$2/fresh/tari" "$2/fresh/p2pool" "$2/fresh/dashboard" "$2/fresh/tor"' \
+  _ "$STACK" "$DM" >/dev/null 2>&1
+assert_rc "check_disk_grouped survives not-yet-created data dirs under set -e (#179)" "$?" "0"
 
 # ---------------------------------------------------------------------------
 echo "== black-box: CLI dispatch =="
