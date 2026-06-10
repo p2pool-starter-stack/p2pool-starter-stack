@@ -142,6 +142,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   deployment) instead of re-reading `config.json` — editing a `*.data_dir` in `config.json`
   before resetting (without an `apply`) can no longer wipe a directory the stack never used. It
   also refuses to run rather than guess if `.env` doesn't name them (#139).
+- Dashboard pruned/full label (#32) always showed **Full** for a local node: the dashboard parsed
+  `MONERO_PRUNE` with `== "true"`, but pithead renders `config.json`'s `monero.prune` as `1`/`0`
+  (the form monerod's CLI wants), so a correctly **pruned** node read as Full. The label is purely
+  cosmetic (the node is pruned either way); the parser now accepts `1`/`true`/`yes`/`on`. Surfaced
+  on a live pruned deployment whose badge read "XMR Full".
 
 ### Fixed
 
