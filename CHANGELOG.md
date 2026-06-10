@@ -177,6 +177,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- The dashboard's XvB stats fetch (`xmrvsbeast.com`, with the wallet as a query param) now routes
+  over **Tor** (`socks5h`, so the hostname resolves via Tor too) instead of clearnet from the
+  host-networked container — closing a real-IP ↔ wallet correlation leak. It's also gated behind
+  `XVB_ENABLED`, so disabling XvB stops the egress entirely. Dead `TARI_EXPLORER_URL` removed (#163).
 - The monerod RPC credentials are no longer interpolated into the compose healthcheck command
   (they were readable via `docker inspect`); the healthcheck now reads them from the container
   environment via a script.
