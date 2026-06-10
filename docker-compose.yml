@@ -91,12 +91,16 @@ services:
     # value for a 16 GB host with HugePages on, until the next `pithead apply`).
     mem_limit: ${TARI_MEM_LIMIT:-7680m}
     memswap_limit: ${TARI_MEM_LIMIT:-7680m}
+    # Tari needs NO clearnet DNS: dns_seeds = [] (config.toml), onion peer_seeds resolve via Tor, and
+    # the Tor SOCKS is reached by IP (this container already overrode Docker's 127.0.0.11, so nothing
+    # here depends on service discovery). The one OS-resolver lookup left is the Tari Pulse service's
+    # checkpoints.tari.com TXT (~every 120 s) — an ADVISORY deep-reorg check, no in-binary off-switch,
+    # that TOLERATES a DNS failure (returns "passed", verified in tari_pulse_service/mod.rs). Point the
+    # resolver at a dead local address so that lookup fails WITHOUT a packet leaving the host — zero
+    # clearnet DNS, no functional impact (#162; #160 decision-4). Trade-off: lose the Pulse deep-reorg
+    # advisory, the same class as monerod's disable-dns-checkpoints (#161).
     dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    dns_search: .
-    dns_opt:
-      - use-vc
+      - 127.0.0.1
     environment:
       - WAIT_FOR_TOR=1
     volumes:

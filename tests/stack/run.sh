@@ -291,6 +291,16 @@ case "$(grep -E 'check_for_updates' "$TARC" || true)" in
     "") ok "tari: check_for_updates dropped from gRPC allow-list (#162)" ;;
     *)  bad "tari: check_for_updates dropped from gRPC allow-list (#162)" "still present" ;;
 esac
+# The Pulse (checkpoints.tari.com TXT, ~120s) is the last clearnet DNS path: the tari container's
+# resolver is pointed at a dead local address so the lookup fails without a packet leaving the host
+# (Tari tolerates it — returns "passed"). The container already overrode Docker's 127.0.0.11, so no
+# service-discovery dependency is broken. Assert no clearnet resolvers remain on the tari service.
+TARI_SVC="$(awk '/^  tari:/{f=1;print;next} f&&/^  [a-z]/{f=0} f' "$ROOT/docker-compose.yml")"
+case "$TARI_SVC" in
+    *1.1.1.1*|*8.8.8.8*) bad "tari: clearnet DNS resolvers removed from compose (#162)" "1.1.1.1/8.8.8.8 present" ;;
+    *)                   ok "tari: clearnet DNS resolvers removed from compose (#162)" ;;
+esac
+assert_contains "tari: resolver pointed at dead local sinkhole (#162)" "$TARI_SVC" "127.0.0.1"
 
 # ---------------------------------------------------------------------------
 echo "== black-box: CLI dispatch =="
