@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 430 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 26 `pithead` shell sections · 15 harness self-test sections ·
+tests · 27 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 26 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 430 |
 | 1 — Unit | frontend (node --test) | 25 |
-| 1 — Unit | `pithead` shell suite | 26 sections |
+| 1 — Unit | `pithead` shell suite | 27 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -530,7 +530,7 @@ tests · 26 `pithead` shell sections · 15 harness self-test sections ·
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 
-### `pithead` shell suite (tests/stack/run.sh) — 26 sections
+### `pithead` shell suite (tests/stack/run.sh) — 27 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_ipv4
@@ -545,6 +545,7 @@ tests · 26 `pithead` shell sections · 15 harness self-test sections ·
 - unit: grub heal + boot-param insert (#176)
 - unit: disk_component_gib
 - unit: check_disk_grouped (mocked df)
+- node configs: no clearnet DNS egress (#161 monerod, #162 tari)
 - black-box: CLI dispatch
 - black-box: guards
 - black-box: config validation
@@ -684,5 +685,5 @@ tests · 26 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **522** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **523** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

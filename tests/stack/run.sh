@@ -267,6 +267,31 @@ PATH="$DISK/bin:$PATH" DF_MAP="$fresh_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G
   _ "$STACK" "$DM" >/dev/null 2>&1
 assert_rc "check_disk_grouped survives not-yet-created data dirs under set -e (#179)" "$?" "0"
 
+echo "== node configs: no clearnet DNS egress (#161 monerod, #162 tari) =="
+MONC="$ROOT/build/monero/bitmonero.conf.template"
+TARC="$ROOT/build/tari/config.toml.template"
+# monerod (#161): hostname priority-nodes dropped; DNS checkpoints + update check off.
+case "$(cat "$MONC")" in
+    *xmrvsbeast.com:18080*|*nodes.hashvault.pro*) bad "monerod: priority-node hostnames dropped (#161)" "still present" ;;
+    *) ok "monerod: priority-node hostnames dropped (#161)" ;;
+esac
+case "$(grep -E '^enforce-dns-checkpointing' "$MONC" || true)" in
+    "") ok "monerod: enforce-dns-checkpointing removed (#161)" ;;
+    *)  bad "monerod: enforce-dns-checkpointing removed (#161)" "still present" ;;
+esac
+assert_contains "monerod: DNS checkpoints disabled (#161)" "$(cat "$MONC")" "disable-dns-checkpoints=1"
+assert_contains "monerod: update check disabled (#161)"    "$(cat "$MONC")" "check-updates=disabled"
+# tari (#162): no DNS seeds; peer_seeds onion-only; the inert check_for_updates gRPC method dropped.
+assert_contains "tari: DNS seeds disabled (#162)" "$(cat "$TARC")" "dns_seeds = []"
+case "$(grep -E '::/ip4/|::/ip6/' "$TARC" || true)" in
+    "") ok "tari: peer_seeds are onion-only (#162)" ;;
+    *)  bad "tari: peer_seeds are onion-only (#162)" "clearnet /ip4//ip6/ peer seeds present" ;;
+esac
+case "$(grep -E 'check_for_updates' "$TARC" || true)" in
+    "") ok "tari: check_for_updates dropped from gRPC allow-list (#162)" ;;
+    *)  bad "tari: check_for_updates dropped from gRPC allow-list (#162)" "still present" ;;
+esac
+
 # ---------------------------------------------------------------------------
 echo "== black-box: CLI dispatch =="
 "$STACK" help >/dev/null 2>&1; assert_rc "help exits 0" "$?" "0"

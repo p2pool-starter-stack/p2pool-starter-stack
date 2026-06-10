@@ -177,6 +177,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- Closed clearnet DNS leaks in the node configs (#161, #162). **monerod** drops its priority-node
+  HOSTNAMES (resolved by the local resolver *before* `--proxy`), disables DNS checkpoints
+  (`disable-dns-checkpoints`, since removing `enforce-dns-checkpointing` alone doesn't stop the
+  `checkpoints.moneropulse.*` lookups) and the update check (`check-updates=disabled`), and adds
+  Tor-node anonymity hygiene (`pad-transactions`, `hide-my-port`). **Tari** disables DNS seeds
+  (`dns_seeds = []`, bootstrapping from onion `peer_seeds` over Tor), prunes the clearnet
+  `/ip4//ip6/` peer seeds, corrects a comment that implied DNS-over-TLS (it was plaintext UDP/53),
+  and drops the inert `check_for_updates` gRPC method. *(Tari's ~120 s `checkpoints.tari.com` Pulse
+  lookup is the remaining leak — it needs the #160 decision-4 DNS sinkhole, tracked separately.)*
 - The dashboard's XvB stats fetch (`xmrvsbeast.com`, with the wallet as a query param) now routes
   over **Tor** (`socks5h`, so the hostname resolves via Tor too) instead of clearnet from the
   host-networked container — closing a real-IP ↔ wallet correlation leak. It's also gated behind
