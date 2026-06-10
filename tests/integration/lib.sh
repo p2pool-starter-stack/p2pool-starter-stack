@@ -171,7 +171,10 @@ rx() {
     else
         local remote
         remote="cd $(quote_arg "$IT_REMOTE_DIR") && { $snippet; }"
-        ssh "${IT_SSH_OPTS[@]}" "$IT_SSH_DEST" "$remote"
+        # -n: never read OUR stdin. rx runs inside `while read … done < <(scenario_matrix)` loops;
+        # an ssh that inherits stdin drains the loop's remaining input, silently running only the
+        # first scenario. rx never needs stdin (push_config has its own piped ssh), so -n is safe.
+        ssh -n "${IT_SSH_OPTS[@]}" "$IT_SSH_DEST" "$remote"
     fi
 }
 
@@ -243,9 +246,42 @@ _pred_miner_running() {
     [ -n "$w" ] && [ "$w" -ge 1 ] 2>/dev/null
 }
 
+# Predicate: Tari has caught up. Unlike Monero — whose dashboard sync field reads "loading" even
+# for a synced local node (no target height; see monero_caught_up) — Tari's .sync.tari.state DOES
+# reach "done" once it has a reliable target, so the dashboard field is authoritative here. After
+# a restart Tari needs a moment to re-establish peers and close its offline gap, so we poll this
+# rather than asserting cold (issue #54: a real readiness signal, not "sleep and hope").
+_pred_tari_synced() {
+    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+    [ "$(jq_get "$st" '.sync.tari.state')" = "done" ]
+}
+
+# Predicate: p2pool has joined the expected sidechain and the dashboard can classify it. The pool
+# type is inferred from connected peers' ports (detect_pool_type: 37889 Main / 37888 Mini / 37890
+# Nano), so right after a sidechain switch it reads "Unknown" until enough peers on the NEW chain
+# connect — poll until it matches the expected label rather than asserting cold (issue #54).
+_pred_pool_ready() {  # _pred_pool_ready <expected-label>
+    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+    [ "$(jq_get "$st" '.pool.type')" = "$1" ]
+}
+
+# Predicate: hashes are flowing end-to-end (miner → proxy → p2pool stratum). stratum.total_hashes is
+# a per-session counter that RESETS to 0 on a p2pool restart, then climbs once the proxy's upstream
+# reconnects and the first share lands — so right after an apply (especially a pool switch, where
+# p2pool re-syncs its sidechain before serving) it reads 0. It's monotonic within a session, so
+# polling until >0 is robust where the instantaneous stratum.conns is not (issue #54).
+_pred_hashes_flowing() {
+    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+    local h; h="$(jq_get "$st" '.stratum.total_hashes')"
+    [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null
+}
+
 wait_status_ok()     { wait_for "${1:-180}" 5 "pithead status OK"     _pred_status_ok; }
 wait_monero_synced() { wait_for "${1:-300}" 10 "Monero sync complete" _pred_monero_synced; }
 wait_miner_running() { wait_for "${1:-180}" 5 "miner released"        _pred_miner_running; }
+wait_tari_synced()   { wait_for "${1:-300}" 10 "Tari sync complete"   _pred_tari_synced; }
+wait_pool_ready()    { wait_for "${1:-180}" 5 "pool type determinate (${2})" _pred_pool_ready "$2"; }
+wait_hashes_flowing() { wait_for "${1:-300}" 5 "stratum hashes flowing" _pred_hashes_flowing; }
 
 # --- Artifact capture -------------------------------------------------------
 # On a scenario failure, collect everything needed to debug it — redacted. Writes into

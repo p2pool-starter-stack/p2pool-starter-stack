@@ -132,6 +132,42 @@ assert_eq "parse pool type"         "$(jq_get "$ST" '.pool.type')" "Main"
 assert_eq "parse worker count"      "$(jq_get "$ST" '.proxy_workers')" "2"
 assert_eq "missing key -> empty"    "$(jq_get "$ST" '.nope.nope')" ""
 
+echo "== _pred_tari_synced: gates on .sync.tari.state =="
+# rx is still stubbed to FIXTURE above (sync.tari.state == "done").
+if _pred_tari_synced; then it_pass "_pred_tari_synced true when tari done"; else it_fail "_pred_tari_synced true when tari done" "returned non-zero on done"; fi
+# A still-loading Tari must hold the gate (this is the gouda regression: asserting cold caught it here).
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"loading"}}}'
+if _pred_tari_synced; then it_fail "_pred_tari_synced false when tari loading" "passed on loading"; else it_pass "_pred_tari_synced false when tari loading"; fi
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
+
+echo "== _pred_pool_ready: gates on .pool.type matching expected =="
+if _pred_pool_ready "Main"; then it_pass "_pred_pool_ready true when pool matches"; else it_fail "_pred_pool_ready true when pool matches" "returned non-zero on Main==Main"; fi
+if _pred_pool_ready "Mini"; then it_fail "_pred_pool_ready false when pool differs" "passed on Main!=Mini"; else it_pass "_pred_pool_ready false when pool differs"; fi
+# "Unknown" right after a pool switch must hold the gate (the gouda regression caught here).
+FIXTURE='{"pool":{"type":"Unknown"}}'
+if _pred_pool_ready "Main"; then it_fail "_pred_pool_ready false when pool Unknown" "passed on Unknown"; else it_pass "_pred_pool_ready false when pool Unknown"; fi
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
+
+echo "== _pred_hashes_flowing: gates on stratum.total_hashes > 0 =="
+if _pred_hashes_flowing; then it_pass "_pred_hashes_flowing true when hashes>0"; else it_fail "_pred_hashes_flowing true when hashes>0" "returned non-zero on 12345"; fi
+# total_hashes resets to 0 on a p2pool restart; the gate must hold there (the gouda regression).
+FIXTURE='{"stratum":{"conns":0,"total_hashes":0}}'
+if _pred_hashes_flowing; then it_fail "_pred_hashes_flowing false when hashes==0" "passed on 0"; else it_pass "_pred_hashes_flowing false when hashes==0"; fi
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
+
+echo "== dispatch loop: a stdin-draining child must not skip iterations =="
+# Reproduces the matrix bug class: an ssh inside `while read … done < <(…)` that inherits stdin
+# drains the loop and silently runs only the first scenario. The guard is `</dev/null` on the
+# child (plus `ssh -n` in rx). Verify the technique keeps every iteration alive.
+_seen=0
+_drainer() { cat >/dev/null 2>&1 || true; }   # stands in for ssh inheriting + draining stdin
+while IFS= read -r _l; do
+    [ -z "$_l" ] && continue
+    _seen=$((_seen + 1))
+    _drainer </dev/null
+done < <(printf 'one\ntwo\nthree\n')
+assert_eq "loop visits every line with </dev/null guard" "$_seen" "3"
+
 echo "== service_state parsing (fault-injection predicates) =="
 assert_eq "state of 'running healthy'"  "$(svc_state_of 'running healthy')"  "running"
 assert_eq "health of 'running healthy'" "$(svc_health_of 'running healthy')" "healthy"

@@ -281,6 +281,18 @@ run_scenario() {
     wait_status_ok 240    || true
     wait_monero_synced 120 || true
     wait_miner_running 180 || true
+    # p2pool infers its sidechain from connected peers, so after a pool switch it reads "Unknown"
+    # until peers on the new chain connect — wait for the dashboard to classify it (issue #54).
+    local _pool; _pool="$(jq_get "$config" '.p2pool.pool')"; _pool="${_pool:-main}"
+    wait_pool_ready 180 "$(pool_label "$_pool")" || true
+    # End-to-end mining: p2pool's stratum hash counter resets on restart and climbs only once the
+    # proxy's upstream reconnects and a share lands — wait for it before asserting hashes>0 (issue #54).
+    wait_hashes_flowing 300 || true
+    # When Tari is a required sync gate, give it the same treatment as Monero: after a restart it
+    # must close its offline gap before the .sync.tari.state assertion, or we'd catch it mid-"loading".
+    if [ "$(jq_get "$config" '.dashboard.tari_required')" = "true" ]; then
+        wait_tari_synced 300 || true
+    fi
 
     local fails_before="$IT_FAIL"
     assert_scenario "$name" "$config"
@@ -754,7 +766,9 @@ main() {
     else
         while IFS=$'\t' read -r name rest; do
             [ -z "$name" ] && continue
-            run_scenario "$name" "$rest"
+            # </dev/null: never let a child (ssh inside run_scenario) drain the loop's stdin and
+            # silently skip the remaining scenarios. rx already uses `ssh -n`; this is belt-and-suspenders.
+            run_scenario "$name" "$rest" </dev/null
         done < <(scenario_matrix)
     fi
 
