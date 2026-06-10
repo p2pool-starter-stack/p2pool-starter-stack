@@ -129,6 +129,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- `pithead up` and `pithead doctor` now warn when a data directory named in `.env` doesn't exist —
+  the tell-tale of a relocated/copied install or a second checkout, which would otherwise silently
+  start a fresh sync and orphan the dashboard history (data dirs are absolute paths in `.env`) (#126).
 - `pithead upgrade` now re-renders the generated config (`.env`, Caddyfile, Tari config) before
   rebuilding, so a release that changes a config template, restructures the Caddyfile, or adds an
   `.env` var takes effect — `upgrade` was previously just `up --build`, running new images against

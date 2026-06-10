@@ -77,6 +77,12 @@ changes a config template or adds an `.env` var takes effect, not just the new i
 directories and `config.json` are untouched, so your blockchain sync and settings are preserved
 across upgrades.
 
+> **Moving the install?** Data directories are stored as absolute paths in `.env`, so relocating or
+> copying the stack to a different path (or running a second checkout) points it at a *different,
+> empty* `data/` — a full re-sync, and the dashboard history is orphaned. If you move the install,
+> move its `data/` with it, or set absolute `data_dir` paths in `config.json` and run `./pithead
+> apply`. `pithead up` and `pithead doctor` now warn when a data directory named in `.env` is missing.
+
 ---
 
 ## Backups
