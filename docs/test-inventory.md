@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 418 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 21 `pithead` shell sections · 15 harness self-test sections ·
+tests · 23 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 21 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 418 |
 | 1 — Unit | frontend (node --test) | 25 |
-| 1 — Unit | `pithead` shell suite | 21 sections |
+| 1 — Unit | `pithead` shell suite | 23 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -518,7 +518,7 @@ tests · 21 `pithead` shell sections · 15 harness self-test sections ·
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 
-### `pithead` shell suite (tests/stack/run.sh) — 21 sections
+### `pithead` shell suite (tests/stack/run.sh) — 23 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_ipv4
@@ -529,6 +529,8 @@ tests · 21 `pithead` shell sections · 15 harness self-test sections ·
 - unit: env helpers
 - unit: export_build_provenance (Issue #58)
 - unit: node credential helpers
+- unit: randomx_boot_params (#176)
+- unit: grub heal + boot-param insert (#176)
 - unit: disk_component_gib
 - unit: check_disk_grouped (mocked df)
 - black-box: CLI dispatch
@@ -667,5 +669,5 @@ tests · 21 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **505** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **507** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
