@@ -123,6 +123,21 @@ stack_restart() {
 
 stack_upgrade() {
     log "Upgrading stack (rebuilding containers)..."
+    # A release (git pull) may change config templates, add/rename .env vars, or restructure the
+    # Caddyfile / Tari config — all GENERATED files mounted into containers. Re-render them before
+    # rebuilding so new images don't run against the stale generated config from the last
+    # setup/apply (#128). Mirrors apply's render preamble; renders to a temp + swaps so preserved
+    # secrets (Tor onions, RPC creds, proxy token) survive.
+    require_env
+    parse_and_validate_config
+    load_preserved_state
+    ensure_directories
+    resolve_dashboard_host        # non-interactive; sets HOST_IP for the render
+    render_env "${ENV_FILE}.new"
+    mv "${ENV_FILE}.new" "$ENV_FILE"
+    inject_service_configs
+    generate_caddyfile
+    log "Re-rendered generated config for the current release."
     migrate_compose_project
     docker compose up -d --build
     log "Stack upgraded."
@@ -1818,54 +1833,73 @@ apply() {
         [ -n "$key" ] && changed+=("$key")
     done < <(env_changed_keys "$ENV_FILE" "$newenv")
 
-    if [ "${#changed[@]}" -eq 0 ]; then
-        rm -f "$newenv"
-        log "No configuration changes detected. Nothing to apply."
-        return 0
-    fi
+    # A marker left by a previous apply whose `docker compose up` failed AFTER the new config was
+    # committed (#125): the stack then runs OLD containers against NEW config files, and because a
+    # re-apply diffs the (already-committed) .env it would see no change and silently no-op. While
+    # the marker is present, re-apply re-attempts the recreate even when the rendered config matches.
+    local apply_marker="${ENV_FILE}.apply-incomplete" incomplete=0
+    [ -f "$apply_marker" ] && incomplete=1
 
     local destructive=0 caddy_changed=0 line flag msg old new
-    echo ""
-    log "The following changes will be applied:"
-    for key in "${changed[@]}"; do
-        old=$(env_get_file "$ENV_FILE" "$key")
-        new=$(env_get_file "$newenv" "$key")
-        case "$key" in HOST_IP|DASHBOARD_SECURE) caddy_changed=1 ;; esac
-        line=$(describe_change "$key" "$old" "$new")
-        flag=${line%%$'\t'*}
-        msg=${line#*$'\t'}
-        if [ "$flag" == "DEST" ]; then
-            echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
-            destructive=1
-        else
-            echo "  • ${msg}"
-        fi
-    done
-    echo ""
+    if [ "${#changed[@]}" -gt 0 ]; then
+        echo ""
+        log "The following changes will be applied:"
+        for key in "${changed[@]}"; do
+            old=$(env_get_file "$ENV_FILE" "$key")
+            new=$(env_get_file "$newenv" "$key")
+            case "$key" in HOST_IP|DASHBOARD_SECURE) caddy_changed=1 ;; esac
+            line=$(describe_change "$key" "$old" "$new")
+            flag=${line%%$'\t'*}
+            msg=${line#*$'\t'}
+            if [ "$flag" == "DEST" ]; then
+                echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
+                destructive=1
+            else
+                echo "  • ${msg}"
+            fi
+        done
+        echo ""
 
-    if [ "$destructive" -eq 1 ] && [ "$assume_yes" -eq 0 ]; then
-        warn "Some of the changes above (⚠) are disruptive."
-        read -r -p "Proceed with applying these changes? (y/N): " CONFIRM || true
-        if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
-            rm -f "$newenv"
-            log "Apply cancelled. No changes were made."
+        if [ "$destructive" -eq 1 ] && [ "$assume_yes" -eq 0 ]; then
+            warn "Some of the changes above (⚠) are disruptive."
+            read -r -p "Proceed with applying these changes? (y/N): " CONFIRM || true
+            if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+                rm -f "$newenv"
+                log "Apply cancelled. No changes were made."
+                return 0
+            fi
+        fi
+
+        mv "$newenv" "$ENV_FILE"
+        inject_service_configs
+        generate_caddyfile
+    else
+        rm -f "$newenv"
+        if [ "$incomplete" -eq 0 ]; then
+            log "No configuration changes detected. Nothing to apply."
             return 0
         fi
+        warn "A previous apply updated the config but did not finish recreating containers — retrying."
     fi
-
-    mv "$newenv" "$ENV_FILE"
-    inject_service_configs
-    generate_caddyfile
 
     log "Updating containers..."
     migrate_compose_project
+    # Mark the recreate in-flight: cleared only after a SUCCESSFUL `up`, so a failure here (image
+    # build error, a port already bound, a failed health/dependency gate, daemon hiccup) leaves the
+    # marker for the next apply to retry instead of no-opping on the already-committed config (#125).
+    : > "$apply_marker"
     # Compose recreates only the services whose resolved config changed; --remove-orphans
     # drops monerod when a local→remote switch deactivates the local_node profile.
-    docker compose up -d --remove-orphans
+    if ! docker compose up -d --remove-orphans; then
+        warn "Config files were updated but containers were NOT recreated ('docker compose up' failed)."
+        warn "Fix the cause shown above, then re-run '$0 apply' (it will retry the recreate) — or '$0 up'."
+        exit 1   # leave $apply_marker in place so the retry re-attempts the recreate
+    fi
     # Caddy mounts the Caddyfile read-only, so a content change alone won't recreate it.
     if [ "$caddy_changed" -eq 1 ]; then
         docker compose restart caddy
     fi
+    rm -f "$apply_marker"
     log "Configuration applied."
     announce_dashboard_url
 }

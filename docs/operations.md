@@ -12,7 +12,7 @@ the full list.
 | `./pithead up` | Start the stack. |
 | `./pithead down` | Stop the stack. |
 | `./pithead restart` | Restart the stack. |
-| `./pithead upgrade` | Rebuild and restart the containers (run after a `git pull`). |
+| `./pithead upgrade` | Re-render the generated config, then rebuild and restart the containers (run after a `git pull`). |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
@@ -71,8 +71,11 @@ git pull
 ./pithead upgrade
 ```
 
-`upgrade` rebuilds the container images and restarts the stack. Your data directories and
-`config.json` are untouched, so your blockchain sync and settings are preserved across upgrades.
+`upgrade` re-renders the generated config (`.env`, the Caddyfile, and the Tari config) for the
+current release, then rebuilds the container images and restarts the stack — so a release that
+changes a config template or adds an `.env` var takes effect, not just the new image. Your data
+directories and `config.json` are untouched, so your blockchain sync and settings are preserved
+across upgrades.
 
 ---
 

@@ -129,6 +129,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- `pithead upgrade` now re-renders the generated config (`.env`, Caddyfile, Tari config) before
+  rebuilding, so a release that changes a config template, restructures the Caddyfile, or adds an
+  `.env` var takes effect — `upgrade` was previously just `up --build`, running new images against
+  the stale generated config from the last setup/apply (#128).
+- `pithead apply` no longer silently strands the stack after a failed `docker compose up`: it leaves
+  an "apply incomplete" marker so a re-run re-attempts the recreate (instead of no-opping on the
+  already-committed `.env`) and prints explicit recovery guidance on failure (#125).
 - `pithead backup` no longer aborts when `du`/`df` exit non-zero on an unreadable file or a
   transient FS error — the disk-space pre-check now degrades gracefully (its "proceeding without
   a space check" fallback was previously unreachable under `set -e`) (#127).
