@@ -106,6 +106,25 @@ expect_present "tecnativa socket-proxy pinned by digest" "tecnativa/docker-socke
 expect_present "caddy pinned by digest" "caddy:2.11@sha256:"
 expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:"
 
+# Per-service precision checks via the JSON render (cleaner than grepping the flat YAML): the
+# Docker socket proxies must stay least-privilege, and the Tari probe must self-match safely.
+JSON="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+jq_assert() { # <label> <filter>
+    if printf '%s' "$JSON" | jq -e "$2" >/dev/null 2>&1; then echo "  ✓ $1"; else echo "  ✗ $1: failed [$2]"; fails=$((fails + 1)); fi
+}
+# The read proxy must never gain write (POST) access; the control proxy is start/stop ONLY.
+jq_assert "docker-proxy cannot POST (read-only API)" '(.services["docker-proxy"].environment.POST // "0") != "1"'
+jq_assert "docker-control is start/stop only (no exec/image ops)" \
+    '.services["docker-control"].environment | (.POST=="1" and .ALLOW_START=="1" and .ALLOW_STOP=="1" and ((.EXEC // "0") != "1") and ((.IMAGES // "0") != "1"))'
+# Both proxies mount the Docker socket read-only.
+jq_assert "docker socket mounted read-only in both proxies" \
+    '[.services["docker-proxy"], .services["docker-control"]] | all((.volumes // []) | any((.source == "/var/run/docker.sock") and (.read_only == true)))'
+# The Tari probe uses the [m] bracket so grep can't match its own argv (a false-healthy bug).
+jq_assert "tari healthcheck uses the [m]inotari self-match guard" \
+    '(.services.tari.healthcheck.test | tostring) | contains("[m]inotari")'
+# The Compose project name is pinned to "pithead" (not derived from the checkout directory).
+jq_assert "compose project name is pinned to pithead" '.name == "pithead"'
+
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"
     exit 1

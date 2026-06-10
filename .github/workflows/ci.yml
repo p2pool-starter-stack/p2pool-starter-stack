@@ -19,6 +19,10 @@ jobs:
       - name: Run pytest with coverage gate
         working-directory: build/dashboard
         run: python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
+      - name: Fake-daemon contract test (real clients vs controllable fakes)
+        # Points the real Monero/Tari clients at the integration fakes and asserts they parse
+        # every state (synced/syncing/down). Docker-free, so it runs on every PR (issue #54).
+        run: PYTHONPATH=build/dashboard python -m pytest tests/integration/fakes -q
 
   frontend:
     name: Frontend logic tests (node --test)
@@ -53,14 +57,23 @@ jobs:
       # the job when one is briefly out of sync — see issue #64.
       - name: Lint pithead and test scripts
         # Gate on warnings+errors (real issues); info-level style nits vary by shellcheck version.
-        run: shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh
+        run: shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
       - name: Run pithead test suite
         run: bash tests/stack/run.sh
+      - name: Run integration harness self-test
+        # Pure-logic checks for the tests/integration/ harness (config rendering, matrix
+        # coverage, redaction). The LIVE matrix (tests/integration/run.sh) needs a real test
+        # server and runs as a gated/manual release gate (#54), not on every PR.
+        run: bash tests/integration/selftest.sh
+      - name: Check the test inventory is up to date
+        # docs/test-inventory.md is generated from the suites; fail if a test was added/removed
+        # without regenerating it (run `make test-inventory`).
+        run: make test-inventory-check
 
   compose:
-    name: Compose config validation
+    name: Compose config + security hardening
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate docker-compose.yml interpolation
+      - name: Validate docker-compose.yml interpolation + hardening invariants (#90)
         run: bash tests/stack/test_compose.sh

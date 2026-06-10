@@ -64,6 +64,10 @@ nodes (the integration-test environment from
 point — `make release` (or `pithead release`) — runs the whole pipeline. **Nothing is
 promoted or published until every gate is green.**
 
+> How to provision and **harden** that server, why end-to-end validation can't run on
+> GitHub-hosted runners (and what does run free on every PR), and the safe self-hosted-runner
+> setup are covered in **[Release / Validation Server](release-server.md)**.
+
 ### Pipeline: stage → smoke-test → promote
 
 1. **Preflight** — clean working tree; read the product version from the top-level
@@ -136,6 +140,10 @@ What exists today:
 - ✅ Top-level `VERSION` file (single source of truth).
 - ✅ `CHANGELOG.md` (Keep a Changelog + SemVer, with an `Unreleased` section).
 - ✅ This document.
+- ✅ The [#54](https://github.com/p2pool-starter-stack/pithead/issues/54) integration test
+  suite — the live config-matrix gate against real nodes (`tests/integration/`, `make
+  test-integration`). See [Integration Testing](integration-testing.md). Still to wire: making
+  it a *blocking step* inside the (not-yet-built) `make release` pipeline.
 - ✅ The dashboard version badge ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)) —
   `VERSION` + git build-args baked into the dashboard image (env + OCI labels); shows `vX.Y.Z` on
   releases and `dev · branch @ hash` otherwise.

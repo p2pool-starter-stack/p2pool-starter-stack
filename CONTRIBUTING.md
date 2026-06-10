@@ -21,17 +21,26 @@ whole new feature, contributions are very welcome. This guide covers the workflo
    make test
    ```
 
-   This runs everything CI does:
+   This runs everything CI does without a server or Docker:
 
-   - **lint** — `shellcheck` over `pithead` and the test scripts. Keep `pithead`
-     shellcheck-clean (no new warnings).
-   - **test-dashboard** — the dashboard `pytest` suite, which must stay at or above the
-     **80% coverage gate**.
+   - **lint** — `shellcheck` over `pithead` and the test scripts (keep them
+     `--severity=warning` clean).
+   - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% coverage gate**).
    - **test-stack** — the `pithead` shell test suite.
    - **test-compose** — `docker-compose.yml` interpolation validation.
+   - **test-integration-selftest** — the integration harness's own pure logic.
+   - **test-fakes** — the tier-2 contract test (real dashboard clients vs controllable fakes).
+   - the **test-inventory drift check** — fails if a test was added/removed without
+     regenerating [`docs/test-inventory.md`](docs/test-inventory.md) (`make test-inventory`).
 
-4. Update the docs in [`docs/`](docs/) (and the README, if relevant) for any
-   user-facing change.
+   Bigger, infra-dependent suites run separately: `make test-mini-stack` (tier-3 docker) and
+   `make test-integration` (tier-4 live, against a real box — start with `--check`).
+
+4. **Add or update tests** for your change — cover the *intent* (a behavior/contract), not just
+   the line. The [Testing Guide](docs/testing-guide.md) has per-change recipes; the
+   [Testing Strategy](docs/testing-strategy.md) explains the tiers.
+5. Update the docs in [`docs/`](docs/) (and the README, if relevant) for any
+   user-facing change, and run `make test-inventory` if you touched the test suites.
 
 ## Opening a pull request
 

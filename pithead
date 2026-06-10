@@ -60,8 +60,49 @@ fi
 
 # --- Lifecycle Helpers ---
 
+# The Compose project name is pinned to "pithead" (docker-compose.yml `name:`). A stack first
+# deployed under the old directory-derived project name still has containers holding our
+# container_names (tor, monerod, …) under that old project — they'd block `up` with a name
+# clash. Remove ONLY those — the containers belonging to the exact project THIS directory used
+# to create — so the renamed project can take over. We never touch a container that merely
+# shares a service name with us (e.g. someone else's `caddy` from an unrelated project). Chain
+# data lives in the bind-mounted data dirs and the Tor onion keys in a bind mount too, so
+# nothing is lost; Caddy re-issues its local TLS cert once under the new name.
+migrate_compose_project() {
+    local cfg our_project dir_project names name cid proj
+    # Best-effort and must never abort pithead, so every substitution is guarded (a bare
+    # `var=$(failing)` would trip `set -e`).
+    cfg=$(docker compose config --format json 2>/dev/null) || return 0
+    [ -n "$cfg" ] || return 0
+    our_project=$(printf '%s' "$cfg" | jq -r '.name // "pithead"' 2>/dev/null) || our_project="pithead"
+    [ -n "$our_project" ] || our_project="pithead"
+    # The old project name is the one Compose derived from this directory's basename (lowercased,
+    # sanitised to [a-z0-9_-]). Matching it exactly is what keeps us from removing an unrelated
+    # container. If it already equals our pinned name there's nothing to migrate.
+    dir_project=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+    { [ -n "$dir_project" ] && [ "$dir_project" != "$our_project" ]; } || return 0
+    names=$(printf '%s' "$cfg" | jq -r '.services[].container_name // empty' 2>/dev/null) || return 0
+    [ -n "$names" ] || return 0
+
+    local stale=()
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        cid=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null | head -n1) || cid=""
+        [ -n "$cid" ] || continue
+        proj=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$cid" 2>/dev/null) || proj=""
+        [ "$proj" = "$dir_project" ] && stale+=("$name")
+    done <<< "$names"
+
+    [ "${#stale[@]}" -gt 0 ] || return 0
+    warn "Migrating this stack from the old Compose project '$dir_project' to '$our_project'."
+    log "Removing the old-named containers so the renamed project can take over. Chain data dirs"
+    log "and Tor onion keys are bind-mounted (untouched); Caddy re-issues its local TLS cert."
+    docker rm -f "${stale[@]}" >/dev/null 2>&1 || true
+}
+
 stack_up() {
     log "Starting stack..."
+    migrate_compose_project
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     docker compose up -d
     log "Stack started successfully!"
@@ -82,6 +123,7 @@ stack_restart() {
 
 stack_upgrade() {
     log "Upgrading stack (rebuilding containers)..."
+    migrate_compose_project
     docker compose up -d --build
     log "Stack upgraded."
 }
@@ -1754,6 +1796,7 @@ apply() {
     generate_caddyfile
 
     log "Updating containers..."
+    migrate_compose_project
     # Compose recreates only the services whose resolved config changed; --remove-orphans
     # drops monerod when a local→remote switch deactivates the local_node profile.
     docker compose up -d --remove-orphans
