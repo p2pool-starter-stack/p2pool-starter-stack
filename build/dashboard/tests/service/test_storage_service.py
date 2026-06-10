@@ -51,6 +51,23 @@ class TestSharesAndHistory:
         assert len(shares) == 1
         assert shares[0]["difficulty"] == 500
 
+    def test_add_shares_records_count_distinct(self, state_manager):
+        # A burst of shares between polls (cumulative counter jumped by 3) must record 3 DISTINCT
+        # shares, not collapse onto one timestamp (the shares table is keyed by ts) (#129).
+        ts = time.time()
+        state_manager.add_shares(3, ts, 500)
+        shares = state_manager.get_shares()
+        assert len(shares) == 3
+        assert len({s["ts"] for s in shares}) == 3            # all distinct timestamps
+        assert max(s["ts"] for s in shares) == pytest.approx(ts)  # most recent stamped at latest_ts
+
+    def test_add_shares_count_zero_or_one(self, state_manager):
+        ts = time.time()
+        state_manager.add_shares(0, ts, 500)
+        assert state_manager.get_shares() == []
+        state_manager.add_shares(1, ts, 500)
+        assert len(state_manager.get_shares()) == 1
+
     def test_old_shares_pruned_from_memory(self, state_manager):
         state_manager.add_share(1.0, 1)  # ancient ts -> pruned
         assert all(s["ts"] >= time.time() - 31 * 24 * 3600 for s in state_manager.get_shares())
@@ -65,6 +82,23 @@ class TestSharesAndHistory:
     def test_history_bad_values_default_zero(self, state_manager):
         state_manager.update_history("bad", "bad", "bad")
         assert state_manager.get_history()[-1]["v"] == 0.0
+
+
+class TestDbHealth:
+    def test_healthy_by_default(self, state_manager):
+        assert state_manager.is_db_healthy() is True
+
+    def test_unhealthy_after_write_error(self):
+        # A fresh in-memory DB so the deliberate break stays isolated. Dropping the shares table
+        # makes the next add_share INSERT raise a sqlite3.Error: the dashboard catches it (it keeps
+        # serving live data), but must now also flag persistence unhealthy so /api/state can warn
+        # instead of silently losing history on the next restart (#131).
+        sm = StateManager(":memory:")
+        assert sm.is_db_healthy() is True
+        sm._conn.execute("DROP TABLE shares")
+        sm.add_share(time.time(), 500)          # INSERT fails -> caught -> flag flips
+        assert sm.is_db_healthy() is False
+        sm.close()
 
 
 class TestWorkers:

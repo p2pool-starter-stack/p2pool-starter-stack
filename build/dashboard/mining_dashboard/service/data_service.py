@@ -172,6 +172,19 @@ def _aggregate_hashrate(workers):
     return total_hr, total_h10
 
 
+def _shares_to_record(last_known_total, current_total):
+    """How many P2Pool shares to record this poll, plus the new baseline, from the previous and
+    current cumulative ``shares_found`` counters. P2Pool's stratum reports a CUMULATIVE counter and
+    the dashboard polls every UPDATE_INTERVAL, so a burst between polls would otherwise be collapsed
+    to one. Re-baselines WITHOUT backfilling on the first poll (``last_known`` is None) or a p2pool
+    restart (the counter went backwards). Returns ``(count, new_baseline)`` (#129)."""
+    if last_known_total is None or current_total < last_known_total:
+        return 0, current_total
+    if current_total > last_known_total:
+        return current_total - last_known_total, current_total
+    return 0, last_known_total
+
+
 class DataService:
     """
     Core service responsible for aggregating mining statistics from various sources
@@ -321,13 +334,10 @@ class DataService:
             worker_client = XMRigWorkerClient(session)
             tari_client = TariClient(session)
             
-            # Initialize share tracking
-            last_known_share_ts = 0
-            
-            # Get latest share timestamp from DB if available
-            db_shares = self.state_manager.get_shares()
-            if db_shares:
-                last_known_share_ts = db_shares[-1].get("ts", 0)
+            # P2Pool shares are recorded from the cumulative shares_found counter (#129); None until
+            # the first poll baselines it, so we never backfill the whole historical count on startup
+            # or re-record what the DB already loaded.
+            last_known_shares_total = None
 
             while True:
                 try:
@@ -369,13 +379,16 @@ class DataService:
                     tari_stats = get_tari_stats()
                     p2pool_stats = get_p2pool_stats()
 
-                    # Track P2Pool Shares in DB
+                    # Record P2Pool shares from the CUMULATIVE shares_found counter, not just
+                    # last_share_time: at 30s polls a burst of shares advances the timestamp only
+                    # once, dropping the extras. Record the delta as N distinct shares (#129).
                     current_share_ts = p2pool_stats["pool"].get("last_share_time", 0)
-                    if current_share_ts > last_known_share_ts:
-                        if current_share_ts > 0:
-                            difficulty = p2pool_stats["pool"].get("difficulty", 0)
-                            await asyncio.to_thread(self.state_manager.add_share, current_share_ts, difficulty)
-                        last_known_share_ts = current_share_ts
+                    current_shares_total = p2pool_stats["pool"].get("shares_found", 0)
+                    new_shares, last_known_shares_total = _shares_to_record(
+                        last_known_shares_total, current_shares_total)
+                    if new_shares > 0 and current_share_ts > 0:
+                        difficulty = p2pool_stats["pool"].get("difficulty", 0)
+                        await asyncio.to_thread(self.state_manager.add_shares, new_shares, current_share_ts, difficulty)
 
                     monero_sync = await get_monero_sync_status()
                     tari_sync = await tari_client.get_sync_status()

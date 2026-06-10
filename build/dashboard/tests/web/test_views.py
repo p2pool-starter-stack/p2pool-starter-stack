@@ -667,6 +667,7 @@ def _state_mgr(history=None, mode="P2POOL"):
     sm.get_history.return_value = history or []
     sm.get_xvb_stats.return_value = {"current_mode": mode}
     sm.get_tiers.return_value = {}
+    sm.is_db_healthy.return_value = True
     return sm
 
 
@@ -699,6 +700,19 @@ class TestBuildState:
 
     def test_is_json_serializable(self):
         json.dumps(build_state(_data(), _state_mgr(), "all"))
+
+    def test_db_unhealthy_surfaces_field_and_badge(self):
+        # When persistence is broken, /api/state must carry db_healthy=False and a loud badge (#131).
+        sm = _state_mgr()
+        sm.is_db_healthy.return_value = False
+        st = build_state(_data(), sm, "all")
+        assert st["db_healthy"] is False
+        assert any("DB write failing" in b["text"] for b in st["badges"])
+
+    def test_db_healthy_no_badge(self):
+        st = build_state(_data(), _state_mgr(), "all")
+        assert st["db_healthy"] is True
+        assert not any("DB write failing" in b["text"] for b in st["badges"])
 
     def test_range_echoed(self):
         assert build_state(_data(), _state_mgr(), "24h")["range"] == "24h"
