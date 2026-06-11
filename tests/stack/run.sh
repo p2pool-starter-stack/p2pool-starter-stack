@@ -232,6 +232,40 @@ printf '#!/usr/bin/env bash\n[ "$*" = "compose version" ] && exit 1\nexit 0\n' >
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 ( cd "$SANDBOX" && PATH="$DEPS/bin:$PATH" && source "$STACK" 2>/dev/null; set +e; deps_satisfied ); assert_rc "deps_satisfied false without compose v2" "$?" "1"
 
+echo "== unit: release.sh pure logic (#44) =="
+# The release pipeline's side-effect-free helpers (no docker needed). Sourced from the repo root with
+# the positional args cleared (`set --`) so release.sh's own arg-parser doesn't see the test's args;
+# release.sh guards its main() behind a BASH_SOURCE check, so sourcing only defines the functions.
+REL="$ROOT/scripts/release.sh"
+# shellcheck disable=SC1090
+( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; is_semver "0.1.0" );      assert_rc "is_semver accepts 0.1.0"        "$?" "0"
+# shellcheck disable=SC1090
+( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; is_semver "1.2.3-rc.1" ); assert_rc "is_semver accepts a prerelease" "$?" "0"
+# shellcheck disable=SC1090
+( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; is_semver "1.2" );        assert_rc "is_semver rejects a partial"    "$?" "1"
+# shellcheck disable=SC1090
+( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; is_semver "v1.2.3" );     assert_rc "is_semver rejects a leading v"  "$?" "1"
+# shellcheck disable=SC1090
+assert_eq "image_for builds the GHCR image name" \
+    "$( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; image_for dashboard )" \
+    "ghcr.io/p2pool-starter-stack/pithead-dashboard"
+# The ingredients manifest's component pins must resolve to a real value present in each Dockerfile —
+# a drift guard so a renamed ARG can't silently emit an empty pin in the release notes.
+for svc in p2pool monero xmrig-proxy; do
+    # shellcheck disable=SC1090
+    pv="$( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; pin "$svc" )"
+    if [ -n "$pv" ] && grep -q -- "$pv" "$ROOT/build/$svc/Dockerfile"; then
+        ok "pin $svc resolves to a value in its Dockerfile"
+    else
+        bad "pin $svc resolves to a value in its Dockerfile" "got '$pv'"
+    fi
+done
+# The top-level VERSION file is the single source of truth (#44); the dashboard's Python package
+# metadata must stay in lockstep so a release can't ship two different "stack versions".
+ver_file="$(tr -d ' \t\r\n' < "$ROOT/VERSION")"
+ver_pyproject="$(grep -oE '^version = "[^"]+"' "$ROOT/build/dashboard/pyproject.toml" | head -1 | cut -d'"' -f2)"
+assert_eq "pyproject.toml version matches VERSION (#44)" "$ver_pyproject" "$ver_file"
+
 echo "== unit: explain_subnet_collision (#180) =="
 ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"
 assert_contains "subnet overlap -> network.subnet hint"  "$ov" "network"

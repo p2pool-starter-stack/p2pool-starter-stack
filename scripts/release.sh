@@ -1,0 +1,421 @@
+#!/usr/bin/env bash
+#
+# Pithead release pipeline (#44) — run from the private build/test server (e.g. gouda).
+#
+# Implements the documented stage -> smoke-test -> promote-by-digest flow (docs/releasing.md):
+#
+#   1. Preflight      clean tree, read VERSION, ensure the tag isn't already released, resolve pins
+#   2. Test gate      `make test` (+ the #54 integration matrix, unless skipped) — blocking
+#   3. Build          build the 5 first-party images with OCI labels + the release version baked in
+#   4. Stage          push to a staging tag (:vX.Y.Z-rc.N) on GHCR and capture immutable digests
+#   5. Smoke          pull the STAGED images back and verify they resolve to the right version
+#   6. Promote        re-tag the smoke-tested digests to :vX.Y.Z + :latest (no rebuild) and push
+#   7. Publish        git tag, GitHub Release from CHANGELOG, attach the ingredients manifest + bundle
+#
+# Nothing user-facing is published until every gate is green. Promotion is by digest, so the released
+# bundle is bit-for-bit what was smoke-tested. The script NEVER starts the live stack on this host and
+# never prints a registry token.
+#
+# Usage:
+#   scripts/release.sh [options]              (or: make release ARGS="...")
+#
+# Options:
+#   --dry-run            Preflight + print the full plan (images, tags, manifest). No build/push/publish.
+#   --rc N               Staging release-candidate number (default: 1) -> :vX.Y.Z-rc.N.
+#   --skip-tests         Skip `make test` (NOT recommended; the gate is what makes a release trustworthy).
+#   --skip-integration   Skip the #54 live integration matrix (still runs `make test`).
+#   --skip-smoke         Skip the staged-image smoke verification.
+#   --resume-promote     Skip build/stage; promote the already-staged digests (retry after a smoke pass).
+#   --allow-dirty        Don't require a clean git working tree (for local experimentation only).
+#   -y, --yes            Don't prompt before the irreversible steps (push, tag, publish).
+#   -h, --help           Show this help.
+#
+# Environment:
+#   PITHEAD_REGISTRY        Registry namespace (default: ghcr.io/p2pool-starter-stack).
+#   PITHEAD_IMAGE_PREFIX    Image-name prefix (default: pithead-) -> ghcr.io/.../pithead-dashboard.
+#   GHCR_USER / GHCR_TOKEN  Registry login. Token falls back to GITHUB_TOKEN, then `gh auth token`.
+#   RELEASE_INTEGRATION_ARGS  Extra args passed to `make test-integration ARGS=...` (the #54 gate).
+#   RELEASE_SMOKE_CMD       Optional command run during the smoke stage for a fuller functional check.
+#
+set -euo pipefail
+
+# --- Configuration -------------------------------------------------------------------------------
+
+REGISTRY="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}"
+IMAGE_PREFIX="${PITHEAD_IMAGE_PREFIX:-pithead-}"
+
+# The 5 first-party images, by build-dir / image-name suffix (build context = "build/<suffix>",
+# published image = "$REGISTRY/${IMAGE_PREFIX}<suffix>"). The compose service for "monero" is "monerod".
+IMAGES=(tor monero p2pool xmrig-proxy dashboard)
+
+SOURCE_URL="https://github.com/p2pool-starter-stack/pithead"
+
+# --- Small utilities -----------------------------------------------------------------------------
+
+C_RESET=$'\033[0m'; C_BLUE=$'\033[1;34m'; C_GREEN=$'\033[1;32m'; C_YELLOW=$'\033[1;33m'; C_RED=$'\033[1;31m'
+
+log()   { printf '%s==>%s %s\n' "$C_BLUE"   "$C_RESET" "$*"; }
+ok()    { printf '%s ✓%s %s\n'  "$C_GREEN"  "$C_RESET" "$*"; }
+warn()  { printf '%s !%s %s\n'  "$C_YELLOW" "$C_RESET" "$*" >&2; }
+die()   { printf '%s ✗%s %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; exit 1; }
+stage() { printf '\n%s━━ %s %s\n' "$C_BLUE" "$*" "$C_RESET"; }
+
+# In --dry-run, side-effecting commands are printed, not run. Read-only steps always run.
+run() {
+    if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; return 0; fi
+    "$@"
+}
+
+confirm() {
+    [ "$ASSUME_YES" -eq 1 ] && return 0
+    [ "$DRY_RUN" -eq 1 ] && return 0
+    local reply
+    read -r -p "$1 (y/N): " reply || true
+    [[ "$reply" =~ ^[Yy] ]]
+}
+
+image_for() { printf '%s/%s%s' "$REGISTRY" "$IMAGE_PREFIX" "$1"; }
+
+# SemVer X.Y.Z with an optional -prerelease / .build suffix (e.g. 0.1.0, 1.2.3-rc.1). No leading 'v'.
+is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]]; }
+
+# --- Argument parsing ----------------------------------------------------------------------------
+
+DRY_RUN=0; RC=1; SKIP_TESTS=0; SKIP_INTEGRATION=0; SKIP_SMOKE=0
+RESUME_PROMOTE=0; ALLOW_DIRTY=0; ASSUME_YES=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run)          DRY_RUN=1 ;;
+        --rc)               RC="${2:?--rc needs a number}"; shift ;;
+        --rc=*)             RC="${1#*=}" ;;
+        --skip-tests)       SKIP_TESTS=1 ;;
+        --skip-integration) SKIP_INTEGRATION=1 ;;
+        --skip-smoke)       SKIP_SMOKE=1 ;;
+        --resume-promote)   RESUME_PROMOTE=1 ;;
+        --allow-dirty)      ALLOW_DIRTY=1 ;;
+        -y|--yes)           ASSUME_YES=1 ;;
+        -h|--help)          sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)                  die "Unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
+
+[[ "$RC" =~ ^[0-9]+$ ]] || die "--rc must be a number (got '$RC')."
+
+# --- State (filled by the stages) ----------------------------------------------------------------
+
+REPO_ROOT="" STACK_VERSION="" TAG="" STAGING_TAG="" GIT_COMMIT="" GIT_BRANCH="" BUILD_DATE=""
+WORKDIR=""   # scratch dir for digests, the manifest and the bundle (created in main, after preflight)
+
+# Staged image digests are kept as files ($WORKDIR/digest.<suffix>), not an associative array, so this
+# runs on the stock macOS bash 3.2 too and the digests survive across stages.
+set_digest() { printf '%s' "$2" > "$WORKDIR/digest.$1"; }
+get_digest() { cat "$WORKDIR/digest.$1" 2>/dev/null || true; }
+
+# Resolve a single upstream component pin on demand (the "ingredients" each release bundles).
+pin() {
+    case "$1" in
+        p2pool)       grep -oE '^ARG P2POOL_VERSION=.*'      build/p2pool/Dockerfile      | cut -d= -f2 ;;
+        monero)       grep -oE '^ARG MONERO_VERSION=.*'       build/monero/Dockerfile       | cut -d= -f2 ;;
+        xmrig-proxy)  grep -oE '^ARG XMRIG_PROXY_VERSION=.*'  build/xmrig-proxy/Dockerfile  | cut -d= -f2 ;;
+        tor-base)     grep -oE '^FROM [^ ]+' build/tor/Dockerfile | head -1 | awk '{print $2}' ;;
+        tari)         grep -oE 'quay.io/tarilabs/minotari_node:[^ ]+' docker-compose.yml | head -1 ;;
+        caddy)        grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1 ;;
+        socket-proxy) grep -oE 'tecnativa/docker-socket-proxy:[^ ]+' docker-compose.yml | head -1 ;;
+    esac
+}
+
+# --- Stage 1: preflight --------------------------------------------------------------------------
+
+preflight() {
+    stage "1/7  Preflight"
+
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not inside a git repository."
+    cd "$REPO_ROOT"
+    [ -f VERSION ] && [ -f docker-compose.yml ] || die "VERSION / docker-compose.yml not found at the repo root."
+    command -v docker >/dev/null 2>&1 || die "docker is required."
+    docker buildx version >/dev/null 2>&1 || die "docker buildx is required (for digest-level promotion)."
+
+    STACK_VERSION="$(tr -d ' \t\r\n' < VERSION)"
+    is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
+    TAG="v$STACK_VERSION"
+    STAGING_TAG="${TAG}-rc.${RC}"
+    GIT_COMMIT="$(git rev-parse HEAD)"
+    GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    if [ "$ALLOW_DIRTY" -eq 0 ] && [ -n "$(git status --porcelain)" ]; then
+        die "Working tree is dirty. Commit/stash first, or pass --allow-dirty."
+    fi
+    [ "$GIT_BRANCH" = "main" ] || warn "Releasing from '$GIT_BRANCH', not main."
+
+    if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+        die "Git tag $TAG already exists — bump VERSION before cutting a new release."
+    fi
+    # Best-effort: warn if the promoted tag already exists in the registry (needs auth; non-fatal).
+    if docker buildx imagetools inspect "$(image_for dashboard):$TAG" >/dev/null 2>&1; then
+        warn "$(image_for dashboard):$TAG already exists in the registry — promotion would overwrite it."
+    fi
+
+    log "Version:   $STACK_VERSION  (tag $TAG, staging $STAGING_TAG)"
+    log "Commit:    $GIT_COMMIT ($GIT_BRANCH)"
+    log "Registry:  $REGISTRY  prefix '$IMAGE_PREFIX'"
+    log "Pins:      p2pool $(pin p2pool) · monerod $(pin monero) · xmrig-proxy $(pin xmrig-proxy)"
+    ok "Preflight passed."
+}
+
+# --- Stage 2: test gate ---------------------------------------------------------------------------
+
+test_gate() {
+    stage "2/7  Test gate (blocking)"
+    if [ "$SKIP_TESTS" -eq 1 ]; then
+        warn "Skipping 'make test' (--skip-tests). A skipped gate means an unvalidated release."
+    else
+        log "Running 'make test' (lint + dashboard pytest + shell suite + compose)..."
+        run make test
+        ok "make test passed."
+    fi
+    if [ "$SKIP_INTEGRATION" -eq 1 ]; then
+        warn "Skipping the #54 integration matrix (--skip-integration) — the live-node gate did NOT run."
+    else
+        log "Running the #54 integration matrix against the real nodes..."
+        # shellcheck disable=SC2086  # RELEASE_INTEGRATION_ARGS is an intentional word-split arg list
+        run make test-integration ARGS="${RELEASE_INTEGRATION_ARGS:-}"
+        ok "Integration matrix passed."
+    fi
+}
+
+# --- Stage 3: build --------------------------------------------------------------------------------
+
+build_images() {
+    stage "3/7  Build images (staging tag $STAGING_TAG)"
+    local suffix context repo
+    for suffix in "${IMAGES[@]}"; do
+        context="build/$suffix"
+        repo="$(image_for "$suffix")"
+        log "Building $repo:$STAGING_TAG  (from $context)"
+        local args=(
+            docker build "$context"
+            -t "$repo:$STAGING_TAG"
+            --label "org.opencontainers.image.title=Pithead ($suffix)"
+            --label "org.opencontainers.image.version=$STACK_VERSION"
+            --label "org.opencontainers.image.revision=$GIT_COMMIT"
+            --label "org.opencontainers.image.source=$SOURCE_URL"
+            --label "org.opencontainers.image.created=$BUILD_DATE"
+        )
+        # The dashboard bakes the version badge from build args; a release build flags PITHEAD_RELEASE=1
+        # so the badge shows the clean vX.Y.Z instead of "dev · branch @ hash" (#58).
+        if [ "$suffix" = "dashboard" ]; then
+            args+=(
+                --build-arg "PITHEAD_VERSION=$STACK_VERSION"
+                --build-arg "PITHEAD_RELEASE=1"
+                --build-arg "PITHEAD_GIT_COMMIT=$GIT_COMMIT"
+                --build-arg "PITHEAD_GIT_BRANCH=$GIT_BRANCH"
+            )
+        fi
+        run "${args[@]}"
+    done
+    ok "All 5 images built."
+}
+
+# --- Stage 4: stage (push to the RC tag, capture digests) -----------------------------------------
+
+stage_push() {
+    stage "4/7  Push to staging + capture digests"
+    ghcr_login
+    local suffix repo digest
+    for suffix in "${IMAGES[@]}"; do
+        repo="$(image_for "$suffix")"
+        log "Pushing $repo:$STAGING_TAG"
+        run docker push "$repo:$STAGING_TAG"
+        if [ "$DRY_RUN" -eq 1 ]; then
+            digest="$repo@sha256:<dry-run>"
+        else
+            digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
+            [ -n "$digest" ] || die "Could not read the pushed digest for $repo:$STAGING_TAG."
+        fi
+        set_digest "$suffix" "$digest"
+        log "  digest: $digest"
+    done
+    ok "Staged $STAGING_TAG for all 5 images."
+}
+
+ghcr_login() {
+    local registry_host="${REGISTRY%%/*}" user token
+    user="${GHCR_USER:-}"
+    token="${GHCR_TOKEN:-${GITHUB_TOKEN:-}}"
+    [ -n "$token" ] || token="$(gh auth token 2>/dev/null || true)"
+    [ -n "$user" ]  || user="$(gh api user --jq .login 2>/dev/null || true)"
+    if [ -z "$token" ]; then
+        warn "No registry token (GHCR_TOKEN / GITHUB_TOKEN / gh auth) — assuming docker is already logged in to $registry_host."
+        return 0
+    fi
+    # IMPORTANT: never route the token through run()/any echo. Pipe it straight to docker via stdin.
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '   %s[dry-run]%s docker login %s -u %s --password-stdin  (token not shown)\n' \
+            "$C_YELLOW" "$C_RESET" "$registry_host" "${user:-<token-user>}"
+        return 0
+    fi
+    log "Logging in to $registry_host as ${user:-<token-user>} (token not shown)..."
+    printf '%s' "$token" | docker login "$registry_host" -u "${user:-x}" --password-stdin >/dev/null \
+        || die "docker login to $registry_host failed."
+    ok "Registry login OK."
+}
+
+# --- Stage 5: smoke test (validate the PUSHED artifacts) ------------------------------------------
+
+smoke_test() {
+    stage "5/7  Staging smoke test"
+    if [ "$SKIP_SMOKE" -eq 1 ]; then
+        warn "Skipping smoke test (--skip-smoke) — the pushed artifacts were NOT re-validated from the registry."
+        return 0
+    fi
+    # Pull each STAGED image back from the registry (not the local build) and confirm it resolves and
+    # carries the right version label. This validates the bytes that were actually pushed. It does NOT
+    # start a stack — that would collide with this host's live deployment; use RELEASE_SMOKE_CMD or the
+    # #54 harness against the staged tag for a full functional run.
+    local suffix repo got
+    for suffix in "${IMAGES[@]}"; do
+        repo="$(image_for "$suffix")"
+        log "Verifying $repo:$STAGING_TAG from the registry..."
+        run docker pull --quiet "$repo:$STAGING_TAG"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            got="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
+            [ "$got" = "$STACK_VERSION" ] \
+                || die "Smoke: $repo:$STAGING_TAG reports version '$got', expected '$STACK_VERSION'."
+        fi
+    done
+    if [ -n "${RELEASE_SMOKE_CMD:-}" ]; then
+        log "Running RELEASE_SMOKE_CMD..."
+        run bash -c "$RELEASE_SMOKE_CMD"
+    fi
+    ok "Staged images pull cleanly and report version $STACK_VERSION."
+}
+
+# --- Stage 6: promote by digest -------------------------------------------------------------------
+
+promote() {
+    stage "6/7  Promote by digest -> $TAG + latest"
+    confirm "Promote the smoke-tested digests to $TAG and :latest (publishes user-facing tags)?" \
+        || die "Promotion cancelled — nothing user-facing was published."
+    ghcr_login
+    local suffix repo digest
+    for suffix in "${IMAGES[@]}"; do
+        repo="$(image_for "$suffix")"
+        digest="$(get_digest "$suffix")"
+        [ -n "$digest" ] || die "No staged digest for $suffix — run without --resume-promote, or stage first."
+        log "Promoting $digest -> :$TAG, :latest"
+        # imagetools re-tags at the manifest level (server-side, no pull/rebuild), so the released tag
+        # is the exact digest that was smoke-tested.
+        run docker buildx imagetools create --tag "$repo:$TAG" --tag "$repo:latest" "$digest"
+    done
+    ok "Promoted all 5 images to $TAG + latest."
+}
+
+# --- Stage 7: publish (git tag, GitHub Release, manifest, bundle) ---------------------------------
+
+publish() {
+    stage "7/7  Publish GitHub Release $TAG"
+    local manifest="$WORKDIR/ingredients-$TAG.md"
+    write_manifest "$manifest"
+    local bundle="$WORKDIR/pithead-$TAG.tar.gz"
+    make_bundle "$bundle"
+
+    confirm "Create git tag $TAG, push it, and publish the GitHub Release?" \
+        || { warn "Publish cancelled. Images are promoted; re-run --resume-promote-less to finish, or publish by hand."; return 0; }
+
+    run git tag -a "$TAG" -m "Pithead $TAG"
+    run git push origin "$TAG"
+
+    local notes="$WORKDIR/notes.md"
+    changelog_notes > "$notes"
+    cat "$manifest" >> "$notes"
+
+    if command -v gh >/dev/null 2>&1; then
+        run gh release create "$TAG" --title "Pithead $TAG" --notes-file "$notes" "$bundle" "$manifest"
+        ok "GitHub Release $TAG published."
+    else
+        warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $manifest"
+    fi
+}
+
+# Ingredients manifest — exactly what's inside this release: the promoted image digests + upstream pins.
+write_manifest() {
+    local out="$1" suffix repo dg
+    {
+        printf '## Ingredients — Pithead %s\n\n' "$TAG"
+        printf '- **Version:** %s\n- **Commit:** `%s`\n- **Built:** %s\n\n' "$STACK_VERSION" "$GIT_COMMIT" "$BUILD_DATE"
+        printf '### Published images (`%s`, tags `%s` + `latest`)\n\n' "$REGISTRY" "$TAG"
+        for suffix in "${IMAGES[@]}"; do
+            repo="$(image_for "$suffix")"
+            dg="$(get_digest "$suffix")"
+            printf -- '- `%s`\n  - digest: `%s`\n' "$repo:$TAG" "${dg:-<not staged>}"
+        done
+        printf '\n### Upstream component pins\n\n'
+        printf -- '- p2pool: `%s`\n'              "$(pin p2pool)"
+        printf -- '- monerod: `%s`\n'             "$(pin monero)"
+        printf -- '- xmrig-proxy: `%s`\n'         "$(pin xmrig-proxy)"
+        printf -- '- tor base: `%s`\n'            "$(pin tor-base)"
+        printf -- '- tari: `%s`\n'                "$(pin tari)"
+        printf -- '- caddy: `%s`\n'               "$(pin caddy)"
+        printf -- '- docker-socket-proxy: `%s`\n' "$(pin socket-proxy)"
+    } > "$out"
+    log "Wrote ingredients manifest: $out"
+}
+
+# A pinned install bundle: compose + example config + the manifest, with the resolved STACK_VERSION.
+make_bundle() {
+    local out="$1" d="$WORKDIR/pithead-$TAG"
+    mkdir -p "$d"
+    cp docker-compose.yml config.advanced.example.json "$d/" 2>/dev/null || true
+    printf 'STACK_VERSION=%s\n' "$TAG" > "$d/.env.release"
+    printf 'Pithead %s — pinned install bundle.\n\nQuick start:\n  1. cp config.advanced.example.json config.json  (set your wallet addresses)\n  2. export STACK_VERSION=%s\n  3. docker compose pull && ./pithead setup\n\nImages are pulled from %s (no local build).\n' \
+        "$TAG" "$TAG" "$REGISTRY" > "$d/README.txt"
+    if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"; return 0; fi
+    tar -czf "$out" -C "$WORKDIR" "pithead-$TAG"
+    log "Wrote install bundle: $out"
+}
+
+# Release notes = the top (newest) section of CHANGELOG.md — the curated, user-facing summary.
+changelog_notes() {
+    if [ ! -f CHANGELOG.md ]; then printf 'Pithead %s\n' "$TAG"; return; fi
+    # Print from the first "## [" heading up to (but not including) the next one.
+    awk '/^## \[/{ if (seen) exit; seen=1 } seen' CHANGELOG.md
+}
+
+# --- Main -----------------------------------------------------------------------------------------
+
+main() {
+    log "Pithead release pipeline (#44)$([ "$DRY_RUN" -eq 1 ] && echo '  [DRY RUN]')"
+    preflight
+    WORKDIR="$(mktemp -d)"   # holds the captured digests, the ingredients manifest and the bundle
+    if [ "$RESUME_PROMOTE" -eq 1 ]; then
+        warn "--resume-promote: skipping build/stage. Re-staging to recover digests..."
+        ghcr_login
+        local suffix repo digest
+        for suffix in "${IMAGES[@]}"; do
+            repo="$(image_for "$suffix")"
+            digest="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+            [ -n "$digest" ] || die "Cannot resolve a staged digest for $repo:$STAGING_TAG — stage first."
+            set_digest "$suffix" "$repo@$digest"
+        done
+    else
+        test_gate
+        build_images
+        stage_push
+        smoke_test
+    fi
+    promote
+    publish
+
+    printf '\n'
+    ok "Release $TAG complete."
+    [ "$DRY_RUN" -eq 1 ] && warn "(dry run — nothing was actually built, pushed, tagged, or published.)"
+    [ -n "$WORKDIR" ] && log "Artifacts left in: $WORKDIR"
+}
+
+# Run the pipeline only when executed directly; allow sourcing for unit tests (functions only).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

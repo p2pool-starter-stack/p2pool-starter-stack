@@ -13,6 +13,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Release pipeline — `scripts/release.sh` (`make release`)** (#44). A single entry point, run from
+  the private build/test server, that cuts a versioned release end to end: preflight (clean tree,
+  SemVer from `VERSION`, tag-not-already-released, resolve the component pins) → **blocking test gate**
+  (`make test` + the #54 live integration matrix) → build the 5 first-party images with OCI labels +
+  `PITHEAD_RELEASE=1` → push to a staging `:vX.Y.Z-rc.N` tag and capture digests → **smoke-verify the
+  pushed images** from the registry → **promote by digest** to `:vX.Y.Z` + `:latest` (no rebuild, so
+  the release is bit-for-bit what was tested) → publish the GitHub Release with an **ingredients
+  manifest** (promoted digests + upstream pins) and a pinned install bundle. Safe by construction:
+  `--dry-run` previews the whole plan, it never starts the live stack on the build host, and it never
+  prints the registry token. Images publish to `ghcr.io/p2pool-starter-stack/pithead-*`
+  (override via `PITHEAD_REGISTRY` / `PITHEAD_IMAGE_PREFIX`). The remaining hop for one-command
+  pull-based installs — wiring `${STACK_VERSION}` into `docker-compose.yml` — is tracked in
+  `docs/releasing.md`.
+
 - **Chart hashrate-averaging-window toggle (#168).** A new **Avg** control on the dashboard chart
   plots any of xmrig-proxy's five native averaging windows — **1m / 10m / 1h / 12h / 24h**. It's
   separate from the existing time-**Range** buttons: Range sets how much time the x-axis spans, Avg
