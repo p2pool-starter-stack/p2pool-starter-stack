@@ -381,6 +381,27 @@ assert_running_state() {
     assert_eq "DASHBOARD_SECURE matches config" "$(env_on_box DASHBOARD_SECURE)" "${secure:-true}"
     assert_eq "XVB_ENABLED matches config" "$(env_on_box XVB_ENABLED)" "${xvb:-true}"
 
+    # 8b. Resource + privacy posture (LOCAL only). These regress silently and would otherwise only
+    # be caught at tier 1 (compose/config), never live: a dropped mem_limit (#132) lets a leak
+    # OOM-kill monerod instead of the offender; a reverted node-DNS setting (#161/#162) leaks
+    # "this IP runs Monero/Tari" to the clearnet.
+    if [ "$mode" = "local" ]; then
+        local svc memlim
+        for svc in monerod tari p2pool dashboard; do
+            memlim="$(rx "docker inspect $svc --format '{{.HostConfig.Memory}}' 2>/dev/null")"
+            assert_num_gt "memory ceiling live on $svc (#132)" "${memlim:-0}" 0
+        done
+        assert_num_ge "monerod DNS checkpoints disabled (#161)" \
+            "$(rx "docker exec monerod grep -c '^disable-dns-checkpoints=1' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+        assert_eq "monerod has no clearnet priority-node hostnames (#161)" \
+            "$(rx "docker exec monerod grep -cE 'xmrvsbeast.com|hashvault.pro' /root/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
+        case "$(rx "docker inspect tari --format '{{.HostConfig.Dns}}' 2>/dev/null")" in
+            *1.1.1.1*|*8.8.8.8*) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "clearnet nameserver present" ;;
+            *127.0.0.1*)         it_pass "tari DNS sinkholed — no clearnet resolver (#162)" ;;
+            *)                   it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "unexpected HostConfig.Dns" ;;
+        esac
+    fi
+
     # 9. Caddy scheme matches dashboard.secure.
     local scheme; [ "$secure" = "false" ] && scheme="http://" || scheme="https://"
     assert_contains "Caddyfile uses correct scheme" "$(rx 'head -n1 Caddyfile 2>/dev/null')" "$scheme"

@@ -13,6 +13,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- The live integration harness now asserts the **runtime privacy + resource posture**, closing the
+  gap where these could regress silently past the tier-1 config checks: each service's `mem_limit` is
+  actually in effect (#132), monerod makes no clearnet DNS (checkpoints off, no priority-node
+  hostnames; #161), and Tari's resolver is the dead-address sinkhole rather than a clearnet
+  nameserver (#162). Heavier live-coverage follow-ups filed as #201 (deploy on a non-default subnet),
+  #202 (fault-inject a DB-write failure → `db_healthy`), and #203 (empty proxy token → fail closed).
+
 - **Memory ceilings on every service** (#132). Only Tari was bounded before; now monerod, P2Pool, the
   dashboard, Tor, xmrig-proxy, and both Docker socket proxies each carry a `mem_limit` (with
   `memswap_limit == mem_limit` for a clean, swap-free OOM-kill). A leak or spike now OOM-restarts the

@@ -640,9 +640,12 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 - dashboard /api/state reachable
 - dashboard bound to localhost only (Caddy fronts it)
 - disk headroom on the live chain FS (${avail} GiB free)
+- memory ceiling live on $svc (#132)
 - monero display mode determinate ($dmode)
 - monero display mode present ($dmode)
+- monerod DNS checkpoints disabled (#161)
 - monerod absent in remote mode
+- monerod has no clearnet priority-node hostnames (#161)
 - monerod reported missing
 - monerod reports synced (RPC)
 - monerod running-but-unhealthy
@@ -666,6 +669,7 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 - status non-zero when monerod unhealthy
 - status non-zero when node down
 - stratum total hashes > 0
+- tari DNS sinkholed — no clearnet resolver (#162)
 - tari synced (required)
 - workers online (>= $EXPECTED_WORKERS)
 - xmrig-proxy stopped for failover
