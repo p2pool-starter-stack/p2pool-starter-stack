@@ -133,6 +133,10 @@ NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")
+# The local monerod's bridge IP — used to tell a local node from a remote one (that split drives
+# log-scraping vs. RPC probing). Tracks the configurable subnet prefix (#180), set by the compose
+# dashboard env; MONERO_NODE_HOST equals this exactly when monero.mode is local.
+LOCAL_MONERO_HOST = os.environ.get("LOCAL_MONERO_HOST", "172.28.0.26")
 
 # monerod's get_info RPC, used to read sync height/target directly instead of scraping
 # docker logs (Issue #29). Reachable because the dashboard runs network_mode: host and

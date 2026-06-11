@@ -154,6 +154,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Install no longer fails on hosts whose LAN already uses `172.28.0.0/24`** (#180). The Docker
+  bridge subnet is now configurable via **`network.subnet`** (default `172.28.0.0/24`); set a free
+  `X.Y.Z.0/24` and `pithead` rebases the whole stack onto it. Previously the hardcoded subnet/IPs
+  made `docker compose up` fail outright with `Pool overlaps with other one on this address space`.
+  The structured fixed-IP layout is preserved (services keep their `.25`–`.31` octets), so the
+  host-networked dashboard's bridge addressing and the #122 worker-SSRF CIDR guard still hold — only
+  the `/24` base moves. A single `NETWORK_PREFIX` flows through every config path: compose
+  interpolation, monerod/Tor container `envsubst`/`sed` at start, and the Tari config render.
 - Dashboard now records **every** P2Pool share instead of at most one per 30 s poll: it tracks the
   cumulative `shares_found` counter and records the per-poll delta as N distinct shares. A
   higher-hashrate or nano-sidechain node finding 2+ shares within one poll window no longer

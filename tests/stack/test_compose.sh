@@ -143,6 +143,20 @@ else
     echo "  ✓ empty PROXY_AUTH_TOKEN makes the stack refuse to start (#153)"
 fi
 
+# Configurable bridge subnet (#180): a custom network.subnet must rebase every static IP, the bridge
+# CIDR, and the dashboard's derived bridge endpoints — the host address-space-collision install fix.
+CUSTOM_ENV="$(mktemp)"; { cat "$ENV_FILE"; printf 'NETWORK_SUBNET=10.84.0.0/24\nNETWORK_PREFIX=10.84.0\n'; } > "$CUSTOM_ENV"
+CUSTOM="$(docker compose --env-file "$CUSTOM_ENV" -f "$ROOT/docker-compose.yml" config 2>/dev/null)"
+rm -f "$CUSTOM_ENV"
+sub_check() { # <label> <pattern> <min-count>
+    local n; n=$(printf '%s\n' "$CUSTOM" | grep -c -- "$2")
+    if [ "$n" -ge "$3" ]; then echo "  ✓ $1 ($n)"; else echo "  ✗ $1: expected >= $3, got $n"; fails=$((fails + 1)); fi
+}
+sub_check "custom subnet rebases the bridge network (#180)"            "subnet: 10.84.0.0/24" 1
+sub_check "custom subnet rebases all static service IPs (#180)"        "ipv4_address: 10.84.0." 7
+sub_check "custom subnet rebases the dashboard SSRF CIDR (#180)"       "MINING_NET_CIDR: 10.84.0.0/24" 1
+sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "XVB_TOR_PROXY: socks5h://10.84.0.25:9050" 1
+
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"
     exit 1

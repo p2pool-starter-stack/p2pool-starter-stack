@@ -21,11 +21,14 @@ services:
     memswap_limit: 512m
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      # Subnet prefix (#180): the entrypoint envsubst's it into the rendered torrc's bridge IPs.
+      - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     networks:
       mining_net:
-        ipv4_address: 172.28.0.25
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.25
     # Healthy only once Tor has finished bootstrapping (circuits built), not merely
     # when the SOCKS port is open — so tari/monerod don't start against a Tor that
     # can't route yet. start_period covers a cold bootstrap without counting failures.
@@ -60,6 +63,8 @@ services:
       - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
       - MONERO_PRUNE=${MONERO_PRUNE}
       - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
+      # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
+      - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     volumes:
       - ${MONERO_DATA_DIR}:/root/.bitmonero
       - /dev/hugepages:/dev/hugepages
@@ -71,7 +76,7 @@ services:
       - "${MONERO_RPC_BIND:-127.0.0.1}:18081:18081"
     networks:
       mining_net:
-        ipv4_address: 172.28.0.26
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.26
     depends_on:
       tor:
         condition: service_healthy
@@ -124,7 +129,7 @@ services:
       - --non-interactive
     networks:
       mining_net:
-        ipv4_address: 172.28.0.27
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.27
     depends_on:
       tor:
         condition: service_healthy
@@ -174,7 +179,7 @@ services:
       - --wallet
       - ${MONERO_WALLET_ADDRESS} 
       - --merge-mine
-      - tari://172.28.0.27:18142
+      - tari://${NETWORK_PREFIX:-172.28.0}.27:18142
       - ${TARI_WALLET_ADDRESS}
       - --onion-address
       - ${P2POOL_ONION_ADDRESS} 
@@ -188,7 +193,7 @@ services:
       - ${P2POOL_FLAGS}
     networks:
       mining_net:
-        ipv4_address: 172.28.0.28
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.28
     depends_on:
       # monerod dependency removed to allow remote node operation
       tari:
@@ -255,7 +260,7 @@ services:
       - --http-no-restricted
     networks:
       mining_net:
-        ipv4_address: 172.28.0.29
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.29
     depends_on:
       - p2pool
 
@@ -310,12 +315,17 @@ services:
       - XVB_POOL_URL=${XVB_POOL_URL}
       - XVB_DONOR_ID=${XVB_DONOR_ID}
       - XVB_DONATION_LEVEL=${XVB_DONATION_LEVEL:-auto}
-      - PROXY_HOST=172.28.0.29
+      - PROXY_HOST=${NETWORK_PREFIX:-172.28.0}.29
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
-      - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
-      - DOCKER_CONTROL_URL=tcp://172.28.0.31:2375
-      - TARI_GRPC_ADDRESS=172.28.0.27:18142
+      - DOCKER_PROXY_URL=tcp://${NETWORK_PREFIX:-172.28.0}.30:2375
+      - DOCKER_CONTROL_URL=tcp://${NETWORK_PREFIX:-172.28.0}.31:2375
+      - TARI_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
+      # Local monerod bridge IP (local-vs-remote detection), the internal SSRF-guard CIDR, and the
+      # Tor SOCKS endpoint all track the configured subnet prefix (#180).
+      - LOCAL_MONERO_HOST=${NETWORK_PREFIX:-172.28.0}.26
+      - MINING_NET_CIDR=${NETWORK_SUBNET:-172.28.0.0/24}
+      - XVB_TOR_PROXY=socks5h://${NETWORK_PREFIX:-172.28.0}.25:9050
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
       # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
       # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the
@@ -352,7 +362,7 @@ services:
       - LOGS=1
     networks:
       mining_net:
-        ipv4_address: 172.28.0.30
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.30
 
   # --- Docker Control Proxy (start/stop only) ---
   # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
@@ -387,7 +397,7 @@ services:
       - ALLOW_STOP=1
     networks:
       mining_net:
-        ipv4_address: 172.28.0.31
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.31
 
   # --- Caddy Reverse Proxy ---
   # Bridges the local 127.0.0.1 application binding to the LAN
@@ -431,4 +441,4 @@ networks:
     name: mining_net
     ipam:
       config:
-        - subnet: 172.28.0.0/24
+        - subnet: ${NETWORK_SUBNET:-172.28.0.0/24}

@@ -60,9 +60,9 @@ no-igd=1
 
 # --- Tor Anonymity Network ---
 # Proxy transaction traffic through the Tor container
-# Note: IP 172.28.0.25 corresponds to the static IP assigned to the Tor service in docker-compose
-proxy=172.28.0.25:9050
-tx-proxy=tor,172.28.0.25:9050,disable_noise
+# Note: ${NETWORK_PREFIX}.25 is the Tor service's static bridge IP (configurable subnet base, #180).
+proxy=${NETWORK_PREFIX}.25:9050
+tx-proxy=tor,${NETWORK_PREFIX}.25:9050,disable_noise
 
 # Advertise Tor hidden service for inbound connections
 anonymous-inbound=${MONERO_ONION_ADDRESS}:18080,127.0.0.1:18084

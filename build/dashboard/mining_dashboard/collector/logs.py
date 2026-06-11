@@ -6,7 +6,7 @@ import struct
 import json
 import aiofiles
 
-from mining_dashboard.config.config import DOCKER_PROXY_URL, LOG_TAIL_LINES, DOCKER_TIMEOUT, NETWORK_STATS_PATH, MONERO_NODE_HOST
+from mining_dashboard.config.config import DOCKER_PROXY_URL, LOG_TAIL_LINES, DOCKER_TIMEOUT, NETWORK_STATS_PATH, MONERO_NODE_HOST, LOCAL_MONERO_HOST
 from mining_dashboard.client.monero.monero_client import MoneroClient
 
 logger = logging.getLogger("LogCollector")
@@ -188,7 +188,7 @@ async def get_monero_sync_status():
     Determines whether to check local docker logs or P2Pool's network stats
     based on the configured MONERO_NODE_HOST.
     """
-    if MONERO_NODE_HOST == "172.28.0.26":
+    if MONERO_NODE_HOST == LOCAL_MONERO_HOST:
         return await _get_local_monero_sync_status()
     # Remote node: we don't probe its RPC, so report it reachable — the reject-workers
     # feature (Issue #31) deliberately no-ops for remote nodes (p2pool manages those).

@@ -1214,6 +1214,19 @@ parse_and_validate_config() {
         local|remote) ;;
         *) error "monero.mode must be \"local\" or \"remote\" (got \"$MONERO_MODE\")." ;;
     esac
+
+    # Bridge network subnet (#180): configurable so the stack can avoid colliding with a 172.28.0.0/24
+    # already in use on the host (Docker else errors "Pool overlaps with other one on this address
+    # space" and the install fails). The structured fixed-IP layout is preserved — services keep their
+    # .25–.31 host octets, the host-networked dashboard reaches them by IP, and the #122 SSRF guard
+    # keys off the CIDR — only the /24 base moves. Everything derives from NETWORK_PREFIX (the first
+    # three octets). Must be an X.Y.Z.0/24 block.
+    NETWORK_SUBNET=$(jq -r '.network.subnet // "172.28.0.0/24"' "$CONFIG_FILE")
+    case "$NETWORK_SUBNET" in
+        *.0/24) NETWORK_PREFIX="${NETWORK_SUBNET%.0/24}" ;;
+        *) error "network.subnet must be an X.Y.Z.0/24 block (got \"$NETWORK_SUBNET\")." ;;
+    esac
+    is_ipv4 "${NETWORK_PREFIX}.0" || error "network.subnet is not a valid IPv4 /24 (got \"$NETWORK_SUBNET\")."
     if [ "$MONERO_MODE" == "remote" ]; then
         local remote_host
         remote_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
@@ -1416,7 +1429,7 @@ render_env() {
     # Mode → host / ports / compose profile
     local mono_host rpc_port zmq_port profiles
     if [ "$MONERO_MODE" == "local" ]; then
-        mono_host="172.28.0.26"
+        mono_host="${NETWORK_PREFIX}.26"
         rpc_port="18081"
         zmq_port="18083"
         profiles="local_node"
@@ -1556,7 +1569,9 @@ XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
 TARI_MEM_LIMIT=$tari_mem_limit
 MONERO_MEM_LIMIT=$monero_mem_limit
-P2POOL_URL=172.28.0.28:3333
+P2POOL_URL=${NETWORK_PREFIX}.28:3333
+NETWORK_SUBNET=$NETWORK_SUBNET
+NETWORK_PREFIX=$NETWORK_PREFIX
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 MONERO_PRUNE=$prune
@@ -1581,6 +1596,9 @@ inject_service_configs() {
     local tari_onion_short
     tari_onion_short=$(echo "$TARI_ONION" | cut -d'.' -f1)
     safe_sed "s/<your_tari_onion_address_no_extension>/$tari_onion_short/g" build/tari/config.toml
+    # Rebase the Tor control/SOCKS IPs onto the configured subnet prefix (#180): a no-op at the
+    # default 172.28.0, rewrites the .25 Tor IP when network.subnet has been moved.
+    safe_sed "s/172\.28\.0/$NETWORK_PREFIX/g" build/tari/config.toml
 }
 
 generate_caddyfile() {
