@@ -116,6 +116,26 @@ mining through Tor and pins `--donate-level 0`.
 
 ---
 
+## Local trust boundary & known limitations
+
+Everything above is about **network** egress — what leaves the host. On the **host itself**, the
+stack assumes the local machine and the private Docker bridge are trusted, which is the right model
+for a single-purpose appliance. One consequence is worth recording explicitly:
+
+- **The monerod RPC credential appears in the p2pool container's process arguments (#57).** p2pool
+  accepts the monerod RPC login (`--rpc-login`) **only** as a command-line argument — it has no
+  environment-variable or config-file equivalent — so the username/password are visible in the
+  p2pool process's argv to any local process that can read it (`ps`, `/proc/<pid>/cmdline`). This is
+  **local-only** (never remotely reachable) and the credential is an **auto-generated random secret**
+  guarding a `restricted-rpc` (read-only, public-safe) endpoint that by default is bound to localhost
+  plus the Docker bridge — **not** the LAN (set `monero.rpc_lan_access: true` to expose it, in which
+  case the credential matters more). Moving it off argv isn't possible without removing RPC
+  authentication (a worse trade-off — it's defense-in-depth on the internal path) or an upstream
+  p2pool change, so it's **accepted as a known limitation** rather than fixed. Practical guidance: on
+  a single-user appliance this is a non-issue; if you **co-host** the stack on a machine shared with
+  other local users, treat the monerod RPC credential as visible to them and prefer a single-purpose
+  host for stronger isolation.
+
 ## Maximum-privacy checklist
 
 - [ ] Keep `:3333` off the public internet — firewall it to your LAN, set `p2pool.stratum_bind`,
