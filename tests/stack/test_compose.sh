@@ -14,7 +14,8 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 ENV_FILE="$(mktemp)"
-trap 'rm -f "$ENV_FILE"' EXIT
+EMPTY_TOKEN_ENV="$(mktemp)"
+trap 'rm -f "$ENV_FILE" "$EMPTY_TOKEN_ENV"' EXIT
 
 # A representative, fully-populated environment (mirrors what pithead renders).
 cat > "$ENV_FILE" <<'EOF'
@@ -124,6 +125,19 @@ jq_assert "tari healthcheck uses the [m]inotari self-match guard" \
     '(.services.tari.healthcheck.test | tostring) | contains("[m]inotari")'
 # The Compose project name is pinned to "pithead" (not derived from the checkout directory).
 jq_assert "compose project name is pinned to pithead" '.name == "pithead"'
+
+# Fail closed on the xmrig-proxy control-API token (#153). The HTTP API is writable
+# (--http-no-restricted, required for XvB pool-switching) and reachable on the bridge + host, so it
+# must ALWAYS be authenticated. The command requires a non-empty token; an empty/stale .env value
+# must make the stack refuse to start rather than expose an unauthenticated API.
+jq_assert "xmrig-proxy API carries a non-empty access token (#153)" \
+    '.services["xmrig-proxy"].command as $c | ($c | index("--http-access-token")) as $i | ($i != null) and (($c[($i + 1)] // "") | length > 0)'
+grep -v '^PROXY_AUTH_TOKEN=' "$ENV_FILE" > "$EMPTY_TOKEN_ENV"; echo 'PROXY_AUTH_TOKEN=' >> "$EMPTY_TOKEN_ENV"
+if docker compose --env-file "$EMPTY_TOKEN_ENV" -f "$ROOT/docker-compose.yml" config -q >/dev/null 2>&1; then
+    echo "  ✗ empty PROXY_AUTH_TOKEN still rendered (would start an UNAUTHENTICATED API)"; fails=$((fails + 1))
+else
+    echo "  ✓ empty PROXY_AUTH_TOKEN makes the stack refuse to start (#153)"
+fi
 
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"

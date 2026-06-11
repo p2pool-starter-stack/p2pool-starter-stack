@@ -224,9 +224,14 @@ services:
       - --http-host
       - 0.0.0.0
       - --http-port
-      - ${PROXY_API_PORT}
+      - "${PROXY_API_PORT:?PROXY_API_PORT is empty; run 'pithead apply' (#153)}"
+      # Fail closed (#153): this control API is writable (--http-no-restricted, required for XvB
+      # pool-switching) and reachable on the mining_net bridge + the host, so it must NEVER run
+      # unauthenticated. ':?' makes the stack REFUSE TO START — instead of exposing an open API —
+      # if a hand-edited or pre-token stale .env left PROXY_AUTH_TOKEN empty (note 'pithead up'
+      # does not re-render .env, only setup/apply do). pithead auto-generates the token on apply.
       - --http-access-token
-      - ${PROXY_AUTH_TOKEN}
+      - "${PROXY_AUTH_TOKEN:?PROXY_AUTH_TOKEN is empty; refusing to start an unauthenticated xmrig-proxy control API. Run 'pithead apply' to generate one (#153)}"
       - --http-no-restricted
     networks:
       mining_net:
