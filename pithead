@@ -100,12 +100,38 @@ migrate_compose_project() {
     docker rm -f "${stale[@]}" >/dev/null 2>&1 || true
 }
 
+# Turn Docker's cryptic bridge-subnet overlap error into an actionable fix (#180). $1 = compose
+# output. A no-op unless Docker rejected the subnet ("Pool overlaps with other one on this address
+# space"), which happens when the host already uses the stack's /24.
+explain_subnet_collision() {
+    case "$1" in
+        *"overlaps with other one"*|*"Pool overlaps"*)
+            local sub; sub="$(env_get NETWORK_SUBNET 2>/dev/null || true)"; [ -n "$sub" ] || sub="172.28.0.0/24"
+            warn "Docker refused the stack's bridge subnet ($sub): it overlaps a network already on this host."
+            warn "Pick a free /24 and set it in ${CONFIG_FILE:-config.json} — e.g.  \"network\": { \"subnet\": \"172.30.0.0/24\" }  — then re-run '$0 apply' && '$0 up' (see docs/configuration.md, network.subnet)." ;;
+    esac
+}
+
+# Run `docker compose up` with live output; on failure, explain a bridge-subnet collision (#180) if
+# that's what Docker rejected. Returns compose's own exit code.
+compose_up_checked() {
+    local tmp out rc
+    tmp="$(mktemp)"
+    docker compose up "$@" 2>&1 | tee "$tmp"
+    rc=${PIPESTATUS[0]}
+    out="$(cat "$tmp")"; rm -f "$tmp"
+    [ "$rc" -ne 0 ] && explain_subnet_collision "$out"
+    return "$rc"
+}
+
 stack_up() {
     log "Starting stack..."
     warn_missing_data_dirs
     migrate_compose_project
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
-    docker compose up -d
+    if ! compose_up_checked -d; then
+        error "Stack failed to start — see the error above."
+    fi
     log "Stack started successfully!"
     announce_dashboard_url
 }
@@ -140,7 +166,9 @@ stack_upgrade() {
     generate_caddyfile
     log "Re-rendered generated config for the current release."
     migrate_compose_project
-    docker compose up -d --build
+    if ! compose_up_checked -d --build; then
+        error "Upgrade failed during 'docker compose up' — see the error above."
+    fi
     log "Stack upgraded."
 }
 
@@ -2035,7 +2063,7 @@ apply() {
     : > "$apply_marker"
     # Compose recreates only the services whose resolved config changed; --remove-orphans
     # drops monerod when a local→remote switch deactivates the local_node profile.
-    if ! docker compose up -d --remove-orphans; then
+    if ! compose_up_checked -d --remove-orphans; then
         warn "Config files were updated but containers were NOT recreated ('docker compose up' failed)."
         warn "Fix the cause shown above, then re-run '$0 apply' (it will retry the recreate) — or '$0 up'."
         exit 1   # leave $apply_marker in place so the retry re-attempts the recreate

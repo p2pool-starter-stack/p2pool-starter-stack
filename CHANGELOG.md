@@ -161,7 +161,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   The structured fixed-IP layout is preserved (services keep their `.25`–`.31` octets), so the
   host-networked dashboard's bridge addressing and the #122 worker-SSRF CIDR guard still hold — only
   the `/24` base moves. A single `NETWORK_PREFIX` flows through every config path: compose
-  interpolation, monerod/Tor container `envsubst`/`sed` at start, and the Tari config render.
+  interpolation, monerod/Tor container `envsubst`/`sed` at start, and the Tari config render. And if
+  a host *does* collide, `pithead up`/`apply` now catch Docker's overlap error and print the exact
+  `network.subnet` fix (with an example) instead of a raw Docker stack trace.
 - Dashboard now records **every** P2Pool share instead of at most one per 30 s poll: it tracks the
   cumulative `shares_found` counter and records the per-poll delta as N distinct shares. A
   higher-hashrate or nano-sidechain node finding 2+ shares within one poll window no longer
