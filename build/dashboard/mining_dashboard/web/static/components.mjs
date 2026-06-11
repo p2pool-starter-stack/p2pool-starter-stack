@@ -187,23 +187,25 @@ function SyncView({ sync }) {
 
 function Overview({ state }) {
     const hr = state.hashrate, st = state.stratum, t = state.tari;
+    // Stat order (#159): fleet headline (total / mode / workers) → raffle status (tier / VIP /
+    // shares / target) → routed split → reference (last share / Tari / wallets).
     return html`
     <div class="card card-simple" id="card-overview">
         <h3>Overview</h3>
         <div class="stat-grid">
-            <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
             <${StatCard} label="Total Hashrate" value=${hr.total} cls="text-accent" />
+            <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
+            <${StatCard} label="Workers Alive" value=${state.proxy_workers} />
+            <${StatCard} label="Current Tier" value=${hr.tier} />
+            <${StatCard} label="VIP (win eligible)" value=${state.vip.label} cls=${state.vip.is_vip ? 'status-ok' : 'status-bad'} />
             <${SharesStat} sw=${state.shares_window} />
-            <${StatCard} label="Last Share" value=${st.last_share} />
+            <${StatCard} label="Target Tier" value=${hr.target_tier} />
             <${StatCard} label="P2Pool 1h (routed)" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
             <${StatCard} label="P2Pool 24h (routed)" value=${hr.p2p_24h} cls=${cVar(hr.p2p_variant)} />
             <${StatCard} label="XvB 1h (routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="Current Tier" value=${hr.tier} />
-            <${StatCard} label="VIP (win eligible)" value=${state.vip.label} cls=${state.vip.is_vip ? 'status-ok' : 'status-bad'} />
-            <${StatCard} label="Target Tier" value=${hr.target_tier} />
+            <${StatCard} label="Last Share" value=${st.last_share} />
             <div class="stat-card"><h5>Tari Mining</h5><${TariStatus} tari=${t} /></div>
-            <${StatCard} label="Workers Alive" value=${state.proxy_workers} />
             <${StatCard} label="Wallet XMR" value=${st.wallet_short} cls="font-mono text-xs" />
             <${StatCard} label="Wallet TARI" value=${t.wallet_short} cls="font-mono text-xs" />
         </div>
@@ -415,6 +417,9 @@ function WorkersTable({ workers, summary, ui, onSort }) {
 
 function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom, onToggleSeries }) {
     const advanced = ui.view === 'advanced';
+    // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
+    // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
+    // context as reference at the bottom — "mine" first, "the world" last.
     return html`
     <div id="dashboard-view" class=${advanced ? 'mode-advanced' : ''}>
         <div class="view-controls">
@@ -427,15 +432,17 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
             <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
                           onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom}
                           onToggleSeries=${onToggleSeries} />
-            <${Overview} state=${state} />
-            <${NodeStats} state=${state} />
-            <${GlobalStats} state=${state} />
-            <${XvBStats} state=${state} />
-            <${NetworkCard} state=${state} />
-            <${EarningsCard} earnings=${state.earnings} />
-            <${TariCard} tari=${state.tari} />
         </div>
         <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
+        <div class="grid">
+            <${Overview} state=${state} />
+            <${NodeStats} state=${state} />
+            <${XvBStats} state=${state} />
+            <${EarningsCard} earnings=${state.earnings} />
+            <${TariCard} tari=${state.tari} />
+            <${GlobalStats} state=${state} />
+            <${NetworkCard} state=${state} />
+        </div>
     </div>`;
 }
 
