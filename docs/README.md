@@ -16,6 +16,7 @@ deeper on individual topics once you're up and running.
 | [The Dashboard](dashboard.md) | **Sync Mode**, the live operational view, and how to read every panel. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
+| [Privacy & Network Egress](privacy.md) | Every connection the stack makes off-box — what's Tor-routed, what's clearnet today, and how to harden each path. |
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
 | [Testing Strategy](testing-strategy.md) | The four test tiers (unit → contract → fake-daemon mini-stack → live matrix), the full scenario catalog, and which tier proves each situation. |
 | [Testing Guide](testing-guide.md) | For developers: how to write and run tests, per-change recipes, conventions, and real-hardware gotchas. |
@@ -31,4 +32,5 @@ deeper on individual topics once you're up and running.
 - **Will my machine handle it?** → [Hardware Requirements](hardware.md)
 - **Change a setting?** → [Configuration › Changing settings later](configuration.md#changing-settings-later)
 - **Already have a synced Monero node?** → [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node)
+- **Worried about your IP / what leaves the box?** → [Privacy & Network Egress](privacy.md)
 - **Something's not working?** → [Operations › Troubleshooting](operations.md#troubleshooting)

@@ -13,6 +13,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **`docs/privacy.md`** — a single source-of-truth network-egress reference (#164, the v1.0 close-out
+  of the #160 privacy epic). It maps every off-box connection: whether it's Tor-routed, its default,
+  and how to harden it — runtime egress (monerod/Tari over Tor with their clearnet DNS leaks closed;
+  the XvB stats fetch now over Tor) plus the two clearnet yield paths still open in v1.0 (P2Pool
+  outbound peers #165, XvB donation mining #166 — both Tor-by-default in v1.1) and the one-time
+  build/install IP exposure. The absolute "your home IP isn't exposed" claims in the README,
+  architecture, and FAQ are corrected to the honest **Tor-first, not yet Tor-only** reality, and all
+  three cross-link the new guide.
 - `pithead setup` and `doctor` now **warn when the host has a public IP** and stratum `:3333` is
   bound to all interfaces (#113). The stratum port is plain, unauthenticated stratum and must never
   face the public internet: a NAT'd home host has no public IP on its interfaces and stays silent,
