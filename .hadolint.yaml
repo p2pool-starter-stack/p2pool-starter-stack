@@ -1,0 +1,15 @@
+# hadolint config (#124). CI lints every build/* Dockerfile for structure + best practices, but
+# ignores a handful of rules that conflict with this project's deliberate, documented choices:
+ignored:
+  - DL3008  # "pin apt package versions" — we pin the BASE image by @sha256 digest (#135) for
+            # reproducibility; pinning individual apt package versions is brittle (distro repos
+            # prune old versions, which would break the build with no security benefit here).
+  - DL3018  # same as DL3008 but for apk (the Alpine-based Tor image).
+  - DL3015  # "apt-get install --no-install-recommends" — left off deliberately so a needed
+            # recommended dependency isn't silently dropped from a node/proxy image.
+  - DL3047  # "wget without --progress" — purely cosmetic (build-log verbosity).
+  - DL4006  # "SHELL -o pipefail before a piped RUN" — the piped binary downloads are SHA256-verified
+            # immediately after, so a truncated download fails the hash check; pipefail would only be
+            # belt-and-suspenders. (Tracked as possible follow-up hardening.)
+
+failure-threshold: warning

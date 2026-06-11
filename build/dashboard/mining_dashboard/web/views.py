@@ -515,9 +515,10 @@ def build_tari(data):
 
 def build_sync(metrics, monero_db_size):
     """Sync-screen state for both chains, mapping each SyncMetric to the client's 3-state
-    gauge: 'loading' (no target yet), 'done' (fully synced), else 'syncing'."""
+    gauge: 'done' (caught up — checked first, since a synced node may have no target height),
+    'loading' (no target/data yet), else 'syncing'."""
     def section(sm, extra=None):
-        state = "loading" if not sm.has_target else ("done" if sm.done else "syncing")
+        state = "done" if sm.done else ("loading" if not sm.has_target else "syncing")
         out = {"state": state, "percent": sm.percent, "current": sm.current,
                "target": sm.target, "remaining": sm.remaining}
         if extra:

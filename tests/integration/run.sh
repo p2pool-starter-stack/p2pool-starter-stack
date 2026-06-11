@@ -347,6 +347,13 @@ assert_running_state() {
 
     # 4. Monero caught up — per monerod's own get_info, not the dashboard UI field.
     if monero_caught_up; then it_pass "monerod reports synced (RPC)"; else it_fail "monerod reports synced (RPC)" "get_info not synchronized"; fi
+    # The dashboard's sync panel must also read "done" for a synced node — not stay stuck at
+    # "loading". A synced monerod reports target_height 0, so the panel has to trust the caught-up
+    # flag, not percent-vs-target; getting that wrong left a synced node "loading" forever (the real
+    # bug found in the #180 gouda validation). Local only: we control + know the node is synced.
+    if [ "$mode" = "local" ]; then
+        assert_eq "monero sync panel reads done (dashboard)" "$(jq_get "$st" '.sync.monero.state')" "done"
+    fi
     # Pruned/full panel (#32): determinate (Pruned|Full) for a local node; remote is often Unknown.
     local dmode; dmode="$(jq_get "$st" '.monero.mode')"
     if [ "$mode" = "remote" ]; then
