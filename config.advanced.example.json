@@ -11,6 +11,7 @@
         "prep_blocks_threads": "auto",
         "rpc_lan_access": false,
         "data_dir": "auto",
+        "mem_limit": "auto",
 
         "remote": {
             "host": "node.remote-monero-host.com",

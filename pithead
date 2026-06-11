@@ -1495,10 +1495,13 @@ render_env() {
     #     so we subtract it up front — otherwise Tari's cap + HugePages + the rest of the stack can
     #     exceed physical RAM and the host OOMs before Tari's own limit ever fires.
     #   - a ~25% reserve (>=2 GB) of what's left, for monerod/p2pool/Tor/the dashboard/the OS/page
-    #     cache. Tari gets the remainder, floored at 2 GB.
+    #     cache. Tari gets the remainder, floored at 2 GB. Those other services now also carry their
+    #     own mem_limit CEILINGS in docker-compose.yml (#132) — runaway protection, not reservations,
+    #     so actual steady-state still fits this reserve while a leak in any one of them OOM-restarts
+    #     just that container instead of letting the host OOM-killer reach monerod.
     # Net: with HugePages on, ~7.5 GB on a 16 GB host, ~19 GB on 32 GB; with HugePages off
     # (--skip-optimize) it's ~75% of RAM. Override with tari.mem_limit (any Docker value, e.g. "8g").
-    local tari_mem_limit ram_mb huge_mb avail_mb reserve_mb
+    local tari_mem_limit ram_mb huge_mb avail_mb reserve_mb monero_mem_limit
     tari_mem_limit=$(jq -r '.tari.mem_limit // "auto"' "$CONFIG_FILE")
     case "$tari_mem_limit" in
         ""|auto)
@@ -1521,6 +1524,12 @@ render_env() {
             tari_mem_limit="${tari_mem_limit}m"
             ;;
     esac
+
+    # monerod memory ceiling (#132): a generous default so heavy initial-sync verification never trips
+    # it (monerod's LMDB is reclaimable page cache, so its capped RSS stays low). Tunable for low-RAM
+    # hosts that OOM during IBD, or to give a big host more LMDB-cache headroom.
+    monero_mem_limit=$(jq -r '.monero.mem_limit // "auto"' "$CONFIG_FILE")
+    case "$monero_mem_limit" in ""|auto) monero_mem_limit="4g" ;; esac
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
@@ -1546,6 +1555,7 @@ XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
 TARI_MEM_LIMIT=$tari_mem_limit
+MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
@@ -1906,6 +1916,8 @@ describe_change() {
             fi ;;
         TARI_MEM_LIMIT)
             msg="Tari memory cap: $old → $new — the tari container is recreated (brief restart; on-disk chain data is preserved)." ;;
+        MONERO_MEM_LIMIT)
+            msg="Monero memory cap: $old → $new — the monerod container is recreated (brief restart; the blockchain on disk is preserved)." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
         HOST_IP)

@@ -31,6 +31,7 @@ TARI_WALLET_ADDRESS=TWallet
 MONERO_ONION_ADDRESS=a.onion
 TARI_ONION_ADDRESS=b.onion
 TARI_MEM_LIMIT=2048m
+MONERO_MEM_LIMIT=3g
 P2POOL_ONION_ADDRESS=c.onion
 P2POOL_FLAGS=
 P2POOL_PORT=37889
@@ -125,6 +126,9 @@ jq_assert "tari healthcheck uses the [m]inotari self-match guard" \
     '(.services.tari.healthcheck.test | tostring) | contains("[m]inotari")'
 # The Compose project name is pinned to "pithead" (not derived from the checkout directory).
 jq_assert "compose project name is pinned to pithead" '.name == "pithead"'
+# Memory ceilings (#132): every service carries a mem_limit so a leak/runaway OOM-restarts the
+# offender in its own cgroup instead of the host OOM-killer reaching monerod (the revenue service).
+jq_assert "memory ceiling (mem_limit) on every service (#132)" '[.services[] | select(.mem_limit != null)] | length >= 9'
 
 # Fail closed on the xmrig-proxy control-API token (#153). The HTTP API is writable
 # (--http-no-restricted, required for XvB pool-switching) and reachable on the bridge + host, so it

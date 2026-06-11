@@ -13,6 +13,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Memory ceilings on every service** (#132). Only Tari was bounded before; now monerod, P2Pool, the
+  dashboard, Tor, xmrig-proxy, and both Docker socket proxies each carry a `mem_limit` (with
+  `memswap_limit == mem_limit` for a clean, swap-free OOM-kill). A leak or spike now OOM-restarts the
+  offending container in its own cgroup instead of letting the host OOM-killer pick a victim — which
+  could be monerod, the revenue service. The ceilings are generous (observed steady-state is far
+  lower — monerod ~0.3 GiB RSS since its DB is reclaimable page cache, dashboard ~0.06, p2pool ~0.35);
+  monerod's is tunable via the new **`monero.mem_limit`** config (default a generous 4 GB so heavy
+  initial-sync verification never trips it), and the rest are overridable via `*_MEM_LIMIT` env vars.
 - **`docs/privacy.md`** — a single source-of-truth network-egress reference (#164, the v1.0 close-out
   of the #160 privacy epic). It maps every off-box connection: whether it's Tor-routed, its default,
   and how to harden it — runtime egress (monerod/Tari over Tor with their clearnet DNS leaks closed;
