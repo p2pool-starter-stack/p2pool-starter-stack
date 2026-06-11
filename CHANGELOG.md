@@ -204,6 +204,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   all-P2Pool window looked blue-purple, implying a split that wasn't there. Each band's border is now
   suppressed per-segment wherever the band has zero height, so a single-pool window reads as one solid
   color (the truthful picture) without having to manually hide the empty series.
+- **"Workers Alive" table now tells the truth about offline workers** (#169 / #182). Two related
+  bugs: (1) a disconnected worker's **Uptime kept climbing** — it was computed as seconds-since-last-share,
+  so the longer a rig was down the bigger its "uptime" read (it was really *downtime*); offline rows
+  now show **`DOWN`**. (2) Dead rows **never left** the table — it's titled "Workers Alive" but a rig
+  that connected once (e.g. under a typo'd name) lingered forever. A new dashboard-side
+  `WorkerLifecycle` tracks each worker's `connected_since` (giving online rigs a true,
+  monotonically-increasing uptime even when their direct API is unreachable — replacing the
+  misleading last-share estimate) and `last_active` (so an offline worker **falls off** after
+  `WORKER_FALLOFF_SEC`, default 1h, operating on the live proxy list — not the dead `known_workers`
+  path #144). A reconnect re-adds the worker and restarts its uptime. Raw `uptime` stays on the row
+  for client-side column sorting.
 - **A fully-synced monerod no longer shows as "loading" in the dashboard's Monero panel.** A synced
   node reports `target_height: 0` (no target), so the panel's `done` check — which compared
   `percent >= 100` against a target, and derived the state string from `has_target` first — never

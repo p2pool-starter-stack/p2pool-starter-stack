@@ -6,7 +6,7 @@ import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
     _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary,
-    _merge_proxy_summary, _shares_to_record,
+    _merge_proxy_summary, _shares_to_record, WorkerLifecycle,
 )
 
 
@@ -75,7 +75,9 @@ class TestProxyWorkerParsers:
         row = ["rig", "10.0.0.1", 0, 0, 0, 0, 0, 1_000, 1.0, 2.0, 0, 0, 0]
         w = _parse_proxy_list_worker(row)
         assert w["status"] == "offline"
-        assert w["uptime"] > 0  # derived from the last-share timestamp
+        # The parser no longer estimates uptime from the last-share timestamp (#169); it starts at 0
+        # and WorkerLifecycle / the direct API supply the real value.
+        assert w["uptime"] == 0
 
     def test_parse_legacy_dict_row(self):
         w = _parse_legacy_dict_worker({"id": "old", "ip": "1.2.3.4",
@@ -110,12 +112,12 @@ class TestNormalizeProxyWorkers:
         [w] = _normalize_proxy_workers({"workers": [row]})
         assert w["status"] == "offline"
 
-    def test_list_format_uptime_estimate_from_last_share(self):
-        # idx7 = last share timestamp (ms) -> a non-negative "seconds since last share".
+    def test_list_format_uptime_starts_at_zero(self):
+        # The normalizer no longer derives uptime from the last-share timestamp (#169) — it starts at
+        # 0; WorkerLifecycle (or the direct miner API) supplies the real value downstream.
         row = ["rig1", "10.0.0.1", 1, 0, 0, 0, 0, 1_000, 1.0, 2.0, 0, 0, 0]
         [w] = _normalize_proxy_workers({"workers": [row]})
-        assert isinstance(w["uptime"], int)
-        assert w["uptime"] > 0
+        assert w["uptime"] == 0
 
     def test_short_list_row_is_skipped(self):
         # Fewer than 13 fields isn't the 6.x shape -> ignored rather than mis-parsed.
@@ -186,6 +188,51 @@ class TestMergeProxySummary:
         # adopt it, don't keep stale. Only a non-dict body is "malformed" per #141.
         zeros = {"accepted": 0, "rejected": 0, "invalid": 0, "expired": 0, "best": 0}
         assert _merge_proxy_summary(self._LAST, {"version": "6.x"}) == zeros
+
+
+class TestWorkerLifecycle:
+    """Per-worker connection tracking: true uptime (#169) + stale-row fall-off (#182)."""
+
+    @staticmethod
+    def _w(name, status, uptime=0):
+        return {"name": name, "status": status, "uptime": uptime}
+
+    def test_online_uptime_counts_from_first_seen(self):
+        lc = WorkerLifecycle(falloff_sec=3600)
+        [w] = lc.update([self._w("rig", "online")], now=1000.0)
+        assert w["uptime"] == 0                       # just connected
+        [w] = lc.update([self._w("rig", "online")], now=1075.0)
+        assert w["uptime"] == 75                      # now - connected_since, monotonic
+
+    def test_real_api_uptime_is_not_overwritten(self):
+        # A worker whose direct API is reachable already carries a real (>0) uptime — keep it.
+        lc = WorkerLifecycle(falloff_sec=3600)
+        [w] = lc.update([self._w("rig", "online", uptime=999)], now=1000.0)
+        assert w["uptime"] == 999
+
+    def test_offline_worker_shown_until_falloff_then_dropped(self):
+        lc = WorkerLifecycle(falloff_sec=3600)
+        lc.update([self._w("rig", "online")], now=1000.0)           # active at t=1000
+        kept = lc.update([self._w("rig", "offline")], now=4000.0)   # 3000s later: within 1h window
+        assert [w["name"] for w in kept] == ["rig"]                 # still shown (as DOWN)
+        gone = lc.update([self._w("rig", "offline")], now=5000.0)   # 4000s since active: > falloff
+        assert gone == []                                           # fell off the table
+
+    def test_reconnect_restarts_uptime_and_readds(self):
+        lc = WorkerLifecycle(falloff_sec=10)
+        lc.update([self._w("rig", "online")], now=1000.0)
+        lc.update([], now=2000.0)                                   # proxy drops it entirely (fell off)
+        [w] = lc.update([self._w("rig", "online")], now=3000.0)     # reconnects fresh
+        assert w["uptime"] == 0                                     # uptime restarts, not inherited
+        [w] = lc.update([self._w("rig", "online")], now=3050.0)
+        assert w["uptime"] == 50
+
+    def test_offline_then_online_resets_connected_since(self):
+        lc = WorkerLifecycle(falloff_sec=3600)
+        lc.update([self._w("rig", "online")], now=1000.0)
+        lc.update([self._w("rig", "offline")], now=1100.0)          # disconnect resets connected_since
+        [w] = lc.update([self._w("rig", "online")], now=1200.0)     # back online — counts from here
+        assert w["uptime"] == 0
 
 
 class TestMergeDirectStats:

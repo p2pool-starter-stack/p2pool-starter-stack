@@ -17,7 +17,7 @@ import {
     heroKpis,
     parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
-    bandBorderWidth,
+    bandBorderWidth, uptimeCell,
 } from '../../mining_dashboard/web/static/logic.mjs';
 
 const col = (key) => WORKER_COLUMNS.findIndex((c) => c.key === key);
@@ -258,4 +258,10 @@ test('bandBorderWidth: zero-height segments get no border, real ones keep full w
     // ...and drops it only where the band is genuinely flat-zero (one endpoint zero is enough to keep
     // the rising edge visible).
     assert.equal(bandBorderWidth(p2p, { p0DataIndex: 0, p1DataIndex: 1 }, 3.5), 3.5);
+});
+
+// #169: the Uptime cell must read DOWN for an offline worker, not a climbing duration.
+test('uptimeCell: online shows uptime, offline shows DOWN', () => {
+    assert.equal(uptimeCell({ status: 'online', uptime_str: '3h 20m' }), '3h 20m');
+    assert.equal(uptimeCell({ status: 'offline', uptime_str: '99h 9m' }), 'DOWN');
 });

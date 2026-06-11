@@ -9,6 +9,7 @@ from mining_dashboard.config.config import (
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     ENABLE_XVB,
+    WORKER_FALLOFF_SEC,
 )
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.tari.tari_client import TariClient
@@ -45,10 +46,11 @@ def _parse_proxy_list_worker(w):
     so a stopped miner would otherwise stay green and inflate the total. The proxy lacks a
     10s window, so the 1-minute rate backs both h10 and h60; the 10-minute rate is h15.
     """
-    # Last-share timestamp gives a fallback "seconds since last share" for uptime when the
-    # direct worker API isn't reachable.
-    last_share_ms = w[_PX_LAST_SHARE_MS] or 0
-    uptime_estimate = int(time.time() - last_share_ms / 1000) if last_share_ms > 0 else 0
+    # Uptime starts at 0 here: WorkerLifecycle fills it with the real connection uptime
+    # (now - connected_since) for online workers, and the direct miner API overrides it when
+    # reachable. The old "seconds since last share" fallback was misleading both ways — it climbed
+    # forever for a disconnected worker (read like uptime, was downtime) and read near-zero for a
+    # healthy rig whose direct API was just unreachable (#169).
     return {
         "name": w[_PX_NAME],
         "ip": w[_PX_IP],
@@ -56,7 +58,7 @@ def _parse_proxy_list_worker(w):
         "h10": w[_PX_HR_1M] * _KHS_TO_HS,
         "h60": w[_PX_HR_1M] * _KHS_TO_HS,
         "h15": w[_PX_HR_10M] * _KHS_TO_HS,
-        "uptime": uptime_estimate,
+        "uptime": 0,
         # Per-worker share health (Issue #82) — collected here, surfaced in the Workers table.
         "accepted": w[_PX_ACCEPTED] or 0,
         "rejected": w[_PX_REJECTED] or 0,
@@ -201,6 +203,60 @@ def _shares_to_record(last_known_total, current_total):
     return 0, last_known_total
 
 
+class WorkerLifecycle:
+    """Dashboard-side per-worker connection tracking for the "Workers Alive" table (#169 / #182).
+
+    The xmrig-proxy ``/workers`` row has no connect-time field, and the proxy keeps a disconnected
+    worker around with a decaying hashrate — so the proxy alone can neither report true uptime nor
+    make a dead row leave. This keeps, per worker name:
+
+    - ``connected_since`` — when it last transitioned to online; reset on disconnect. An online
+      worker with no real (direct-API) uptime gets ``now - connected_since``, a true,
+      monotonically-increasing uptime instead of the misleading seconds-since-last-share (#169).
+      A reconnect restarts it. Workers whose direct API IS reachable keep their real miner uptime
+      (any positive value is left untouched).
+    - ``last_active`` — the last time it was seen online. An offline worker falls off the table once
+      it's been inactive longer than ``falloff_sec`` (#182); a reconnect re-adds it. Operates purely
+      on the live proxy-sourced list, never the dead ``known_workers`` path (#144).
+
+    Pure given (workers, now) plus its accumulated state, so it unit-tests without the data loop.
+    Mutates each surviving online worker's ``uptime`` in place and returns the filtered list.
+    """
+
+    def __init__(self, falloff_sec):
+        self.falloff_sec = falloff_sec
+        self._state = {}   # name -> {"connected_since": float | None, "last_active": float}
+
+    def update(self, workers, now):
+        live = []
+        seen = set()
+        for w in workers:
+            name = w.get("name")
+            seen.add(name)
+            st = self._state.setdefault(name, {"connected_since": None, "last_active": 0.0})
+            if w.get("status") == "online":
+                if st["connected_since"] is None:        # new connection or a reconnect
+                    st["connected_since"] = now
+                st["last_active"] = now
+                if not w.get("uptime"):                  # no real (direct-API) uptime → track it
+                    w["uptime"] = int(now - st["connected_since"])
+                live.append(w)
+            else:
+                st["connected_since"] = None             # disconnected — uptime restarts on reconnect
+                if st["last_active"] == 0.0:
+                    st["last_active"] = now              # first seen already offline
+                if now - st["last_active"] <= self.falloff_sec:
+                    live.append(w)                       # recently-offline rows stay (shown as DOWN)
+                # else: fall off — drop the ghost row
+        # Forget workers the proxy no longer reports at all, and any that have fallen off, so a later
+        # reconnect starts fresh rather than inheriting a stale connected_since.
+        self._state = {
+            n: s for n, s in self._state.items()
+            if n in seen and (s["connected_since"] is not None or now - s["last_active"] <= self.falloff_sec)
+        }
+        return live
+
+
 class DataService:
     """
     Core service responsible for aggregating mining statistics from various sources
@@ -210,7 +266,9 @@ class DataService:
         self.state_manager = state_manager
         self.proxy_client = proxy_client
         self.xvb_client = xvb_client
-        
+        # Per-worker connection tracking for true uptime (#169) + stale-row fall-off (#182).
+        self._lifecycle = WorkerLifecycle(WORKER_FALLOFF_SEC)
+
         self.latest_data = {
             "workers": [],
             "proxy_summary": {},
@@ -387,6 +445,9 @@ class DataService:
                     # Determine active pool port for UI badges based on current Algo mode
                     active_pool_port = "3344" if "XVB" in current_mode else "3333"
                     final_workers = _merge_direct_stats(proxy_workers, worker_results, active_pool_port)
+                    # 3b. Track per-worker connection lifecycle: fill true uptime for online workers
+                    # (#169) and drop stale offline rows past the fall-off window (#182).
+                    final_workers = self._lifecycle.update(final_workers, time.time())
 
                     # 4. Calculate Aggregates (Priority: 15m > 60s > 10s)
                     total_hr, total_h10 = _aggregate_hashrate(final_workers)

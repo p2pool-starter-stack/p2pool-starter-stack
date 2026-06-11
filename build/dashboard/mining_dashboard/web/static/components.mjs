@@ -6,7 +6,7 @@ import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
 import {
     WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis,
-    computeEarnings, formatXmr, formatTimeToShare, parseHashrate,
+    computeEarnings, formatXmr, formatTimeToShare, parseHashrate, uptimeCell,
 } from './logic.mjs';
 
 // Palette token -> text-colour class (defined in dashboard.css).
@@ -393,7 +393,7 @@ function WorkersTable({ workers, summary, ui, onSort }) {
                         <tr class=${w.status === 'online' ? 'status-ok' : 'status-bad'}>
                             <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
                             <td>${w.ip}</td>
-                            <td>${w.uptime_str}</td>
+                            <td>${uptimeCell(w)}</td>
                             <td>${w.h10_str}</td>
                             <td>${w.h60_str}</td>
                             <td>${w.h15_str}</td>

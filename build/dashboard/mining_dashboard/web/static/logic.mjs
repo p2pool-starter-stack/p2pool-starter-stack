@@ -181,3 +181,11 @@ export function bandBorderWidth(series, ctx, fullWidth) {
     const y1 = series[ctx.p1DataIndex]?.y;
     return (y0 === 0 && y1 === 0) ? 0 : fullWidth;
 }
+
+// What to show in a worker's "Uptime" cell. For an online worker it's the real uptime; for an
+// offline one it's "DOWN" — never the raw duration, which for a disconnected worker kept climbing
+// and read like uptime when it was really downtime (#169). The raw numeric `uptime` is left on the
+// row for client-side column sorting; only the displayed string changes.
+export function uptimeCell(worker) {
+    return worker.status === 'online' ? worker.uptime_str : 'DOWN';
+}
