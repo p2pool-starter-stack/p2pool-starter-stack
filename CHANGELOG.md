@@ -21,6 +21,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   gained the seven `build/*/*.sh` entrypoints + healthchecks; and a `hadolint` job lints the
   Dockerfiles (with a documented `.hadolint.yaml` ignore list for rules that conflict with the
   digest-pinning approach). CI shellcheck now runs via `make lint` so the file list can't drift.
+- The live integration harness now asserts the **runtime privacy + resource posture**, closing the
+  gap where these could regress silently past the tier-1 config checks: each service's `mem_limit` is
+  actually in effect (#132), monerod makes no clearnet DNS (checkpoints off, no priority-node
+  hostnames; #161), and Tari's resolver is the dead-address sinkhole rather than a clearnet
+  nameserver (#162). Heavier live-coverage follow-ups filed as #201 (deploy on a non-default subnet),
+  #202 (fault-inject a DB-write failure → `db_healthy`), and #203 (empty proxy token → fail closed).
 
 - **Memory ceilings on every service** (#132). Only Tari was bounded before; now monerod, P2Pool, the
   dashboard, Tor, xmrig-proxy, and both Docker socket proxies each carry a `mem_limit` (with
