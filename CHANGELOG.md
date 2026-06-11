@@ -170,6 +170,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
+- **Dashboard cards reordered by operator relevance** (#159, completing the #156→#159 chain). Cards
+  rendered in the order they were added, so pool-wide and network-wide context (Global P2Pool Stats,
+  XMR Network) sat *above and between* the things that matter for running *this* stack. The board now
+  leads with the fleet at-a-glance — the hashrate **chart** and the **Workers** table go full-width up
+  top (this stack may drive many machines) — then this stack's own detail cards (my P2Pool node, my
+  XvB tier/VIP/routed, my earnings, my Tari), with **Global P2Pool Stats and XMR Network demoted to
+  reference position at the bottom**. The Simple Overview's stats are likewise reordered to lead with
+  the decision-relevant numbers (total hashrate, mode, workers, tier, VIP, shares) before the routed
+  split and reference fields. "Mine" first, "the world" last — and a cleaner hero shot for launch.
 - **Dashboard now shows *routed* hashrate everywhere for display, *credited* only where XvB's verdict
   matters** (#156). Two different XvB numbers were being conflated: **routed** = what the xmrig-proxy
   actually sent to a pool (`v_xvb`/`v_p2pool`, a common basis for both pools that sums to your total),
