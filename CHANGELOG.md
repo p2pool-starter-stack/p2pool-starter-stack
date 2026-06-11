@@ -177,6 +177,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- Closed clearnet DNS leaks in the node configs (#161, #162). **monerod** drops its priority-node
+  HOSTNAMES (resolved by the local resolver *before* `--proxy`), disables DNS checkpoints
+  (`disable-dns-checkpoints`, since removing `enforce-dns-checkpointing` alone doesn't stop the
+  `checkpoints.moneropulse.*` lookups) and the update check (`check-updates=disabled`), and adds
+  Tor-node anonymity hygiene (`pad-transactions`, `hide-my-port`). **Tari** disables DNS seeds
+  (`dns_seeds = []`, bootstrapping from onion `peer_seeds` over Tor), prunes the clearnet
+  `/ip4//ip6/` peer seeds, corrects a comment that implied DNS-over-TLS (it was plaintext UDP/53),
+  and drops the inert `check_for_updates` gRPC method. The last clearnet DNS path — the Tari Pulse
+  service's ~120 s `checkpoints.tari.com` TXT lookup (an advisory deep-reorg check with no in-binary
+  off-switch) — is closed by pointing the container's resolver at a dead local address (`dns:
+  127.0.0.1`); the lookup fails without a packet leaving the host and Tari tolerates it (returns
+  "passed", verified in `tari_pulse_service`), so zero clearnet DNS and no functional impact. The
+  container already overrode Docker's `127.0.0.11`, so no service discovery is broken. Trade-off:
+  loses the Pulse deep-reorg advisory, the same class as monerod's `disable-dns-checkpoints`.
 - The dashboard's XvB stats fetch (`xmrvsbeast.com`, with the wallet as a query param) now routes
   over **Tor** (`socks5h`, so the hostname resolves via Tor too) instead of clearnet from the
   host-networked container — closing a real-IP ↔ wallet correlation leak. It's also gated behind

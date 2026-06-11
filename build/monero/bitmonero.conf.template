@@ -35,13 +35,22 @@ in-peers=64
 # verification on multi-core hosts while leaving headroom for the system and p2pool.
 prep-blocks-threads=${MONERO_PREP_THREADS}
 
-# Priority Nodes (High uptime public nodes for faster initial sync)
-add-priority-node=p2pmd.xmrvsbeast.com:18080
-add-priority-node=nodes.hashvault.pro:18080
+# Priority-node HOSTNAMES were resolved by the local resolver BEFORE --proxy, leaking a clearnet
+# DNS lookup tied to this host's IP (#161). Dropped — monerod still bootstraps from its compiled-in
+# IP seed nodes, dialed over Tor. Re-add only as IP:port or .onion if you want specific peers.
 
-# Checkpointing & DNS Security
-enforce-dns-checkpointing=true
-enable-dns-blocklist=true
+# Privacy: close the remaining clearnet DNS paths (#161).
+# - disable-dns-checkpoints: stops the hourly checkpoints.moneropulse.* TXT lookups (removing
+#   `enforce-dns-checkpointing` alone does NOT). Trades MoneroPulse deep-reorg defense for zero
+#   DNS; the compiled-in checkpoints still apply — acceptable for a Tor node.
+# - check-updates=disabled: the default `notify` does an updates.moneropulse.* TXT lookup.
+# - enable-dns-blocklist=0: the DNS blocklist (already auto-disabled by --proxy) made explicit.
+disable-dns-checkpoints=1
+check-updates=disabled
+enable-dns-blocklist=0
+# Anonymity hygiene for a Tor-only node.
+pad-transactions=1
+hide-my-port=1
 
 # --- RPC Security ---
 # Restrict RPC access and enforce authentication
