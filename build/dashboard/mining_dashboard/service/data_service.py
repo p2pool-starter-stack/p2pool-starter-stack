@@ -107,7 +107,8 @@ def _parse_proxy_summary(summary_data):
     The ``results`` block carries the proxy's cumulative accepted/rejected/invalid/expired share
     counts to the upstream pool, plus ``best`` (a list of best difficulties found, highest first).
     Returns a flat dict of just the fields the dashboard surfaces, and ``{}`` for a missing or
-    malformed payload — so one bad poll leaves the last good value in place rather than erroring.
+    malformed payload. ``{}`` is the "no usable data" signal — callers must route through
+    ``_merge_proxy_summary`` to keep the last-good totals rather than blanking the panel (#141).
     """
     if not isinstance(summary_data, dict):
         return {}
@@ -120,6 +121,20 @@ def _parse_proxy_summary(summary_data):
         "expired": results.get("expired", 0) or 0,
         "best": best[0] if best else 0,
     }
+
+
+def _merge_proxy_summary(last_good, summary_data):
+    """Parse a proxy ``/summary`` payload but KEEP the last-good totals on a malformed one (#141).
+
+    The share-health panel is designed so a bad poll leaves the last good value in place — but that
+    only holds if we refuse to overwrite with an empty parse. ``_parse_proxy_summary`` returns ``{}``
+    for any non-dict / garbage body (which doesn't *raise*, so the caller's ``try/except`` can't
+    catch it); adopting that ``{}`` is exactly what blanked the accepted/rejected/invalid/best panel.
+    A *valid* summary that genuinely reports zeros is a non-empty (truthy) dict and is adopted
+    normally — only an unusable ``{}`` parse falls back to ``last_good``.
+    """
+    parsed = _parse_proxy_summary(summary_data)
+    return parsed if parsed else last_good
 
 
 def _merge_direct_stats(workers, results, active_pool_port):
@@ -354,12 +369,13 @@ class DataService:
                         logger.error(f"Proxy Data Fetch Error: {e}")
 
                     # 2b. Fetch the proxy /summary for pool-wide share totals (Issue #82). Kept
-                    # separate from the workers fetch so one failing doesn't blank the other; a
-                    # bad poll leaves the last good summary in latest_data.
+                    # separate from the workers fetch so one failing doesn't blank the other; a bad
+                    # poll leaves the last good summary in latest_data — including a malformed body
+                    # that returns (not raises), which _merge_proxy_summary guards against (#141).
                     proxy_summary = self.latest_data.get("proxy_summary", {})
                     try:
                         summary_data = await asyncio.to_thread(self.proxy_client.get_summary)
-                        proxy_summary = _parse_proxy_summary(summary_data)
+                        proxy_summary = _merge_proxy_summary(proxy_summary, summary_data)
                     except Exception as e:
                         logger.error(f"Proxy Summary Fetch Error: {e}")
 

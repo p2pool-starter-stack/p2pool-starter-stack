@@ -306,22 +306,28 @@ class StateManager:
                 self.state["xvb"]["current_mode"] = mode
                 updates["xvb_current_mode"] = mode
 
-            stats_updated = False
+            # `last_update` is the "Stats fetched from xmrvsbeast.com (Updated: …)" timestamp, so it
+            # must bump ONLY on a real fetch — never on the per-cycle local writes the algo controller
+            # makes (mode, donation_fraction, fail_count). Otherwise the UI's "Updated" time ticks
+            # fresh every cycle even while xmrvsbeast.com is unreachable, hiding stale data (#136). A
+            # successful xvb_client.get_stats is the only source of avg_1h / avg_24h, so those — and
+            # only those — mark a genuine fetch.
+            fetched = False
             if avg_24h is not None:
                 self.state["xvb"]["avg_24h"] = avg_24h
                 updates["xvb_avg_24h"] = avg_24h
-                stats_updated = True
-                
+                fetched = True
+
             if avg_1h is not None:
                 self.state["xvb"]["avg_1h"] = avg_1h
                 updates["xvb_avg_1h"] = avg_1h
-                stats_updated = True
+                fetched = True
             if fail_count is not None:
                 self.state["xvb"]["fail_count"] = fail_count
                 updates["xvb_fail_count"] = fail_count
-                stats_updated = True
-            
-            # Handle additional fields passed via kwargs (e.g., total_donated_time)
+
+            # Handle additional fields passed via kwargs (e.g., total_donated_time, donation_fraction).
+            # These are local/derived writes, NOT a fetch, so they must not bump `last_update`.
             for k, v in kwargs.items():
                 if k in self.state["xvb"] and k != "current_mode":
                     # Skip None values to prevent type corruption in DB (persisted as "None" string)
@@ -340,10 +346,9 @@ class StateManager:
 
                     self.state["xvb"][k] = v
                     updates[f"xvb_{k}"] = v
-                    stats_updated = True
-                
-            # Update timestamp only if statistical data changed
-            if stats_updated:
+
+            # Bump the freshness timestamp only on a genuine xmrvsbeast.com fetch (#136).
+            if fetched:
                 ts = time.time()
                 self.state["xvb"]["last_update"] = ts
                 updates["xvb_last_update"] = ts
