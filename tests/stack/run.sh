@@ -666,6 +666,10 @@ out="$(cd "$U" && DOCKER_LOG="$UL" PATH="$U/bin:$PATH" ./pithead upgrade 2>&1)";
 assert_rc "upgrade exits 0" "$rc" "0"
 assert_eq "upgrade re-renders a missing var (STRATUM_BIND)" "$(run_sourced "$U" env_get_file "$U/.env" STRATUM_BIND)" "0.0.0.0"
 assert_eq "upgrade preserves the proxy token"               "$(run_sourced "$U" env_get_file "$U/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
+# render_env writes DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false} and load_preserved_state
+# doesn't carry it, so upgrade must re-assert it — else the flag flips to false and the NEXT
+# require_deployed command (up/apply/upgrade) errors "run setup" on an already-deployed box.
+assert_eq "upgrade preserves DEPLOYMENT_COMPLETED (require_deployed survives)" "$(run_sourced "$U" env_get_file "$U/.env" DEPLOYMENT_COMPLETED)" "true"
 assert_contains "upgrade still rebuilds images"             "$(cat "$UL")" "compose up -d --build"
 
 echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
