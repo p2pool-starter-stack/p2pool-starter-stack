@@ -56,10 +56,10 @@ it connects through a proxy). Any reasonably recent **XMRig (5.0+, which introdu
   firewall, allow inbound `3333` from your LAN.
 - By default the stack publishes `3333` on **all** of the host's interfaces (`0.0.0.0`) so any rig
   on your LAN can connect with no extra setup. **On a host with a public IP, that port is reachable
-  from the internet** — the stratum protocol is unauthenticated, so it should never be exposed
-  there. Lock it down two ways, which complement each other: narrow the **bind address** with
-  [`p2pool.stratum_bind`](configuration.md#configuration-reference), and/or restrict the **source
-  range** with a host firewall.
+  from the internet** — plain stratum is unauthenticated by default, so it should never be exposed
+  there. Lock it down with controls that complement each other: narrow the **bind address** with
+  [`p2pool.stratum_bind`](configuration.md#configuration-reference), restrict the **source range**
+  with a host firewall, and/or require a **password** with [`p2pool.stratum_password`](#authentication).
 - **`pithead setup` and `doctor` flag this for you**: when the host has a public IP and stratum is
   bound to all interfaces, they print a warning pointing back here. A NAT'd home host — no public IP
   on its own interfaces — sees nothing, so this only nudges the hosts that are actually exposed.
@@ -102,6 +102,43 @@ firewall the subnet — is the belt-and-suspenders setup for a host that also ha
 
 If a worker doesn't show up, see
 [Operations › Troubleshooting](operations.md#troubleshooting).
+
+### Authentication
+
+By default `3333` accepts **any** rig that can reach it — the stratum `pass` is ignored. To require a
+shared secret, set [`p2pool.stratum_password`](configuration.md#configuration-reference); the proxy
+then rejects any rig whose stratum `pass` doesn't match, so only devices you've configured can mine.
+That also means only they can register a worker name, which shrinks the worker-name **SSRF** surface
+(a malicious worker name is how an untrusted device could otherwise probe the dashboard's internals).
+
+```jsonc
+// config.json — "auto" generates a stable random secret; or set your own string
+"p2pool": { "stratum_password": "auto" }
+```
+
+After `pithead apply`, the stack prints the password (it's also saved in `.env` as
+`PROXY_STRATUM_PASSWORD`). Add it as the `pass` field on **every** rig — rigs without it are rejected:
+
+```json
+{
+    "pools": [
+        {
+            "url": "YOUR_STACK_IP:3333",
+            "user": "my-rig-01",
+            "pass": "the-stratum-password"
+        }
+    ]
+}
+```
+
+Using **[RigForge](https://github.com/p2pool-starter-stack/rigforge)** (below)? It's the same
+`pools[].pass` field — set it in the rig's `config.json` and run `rigforge apply`. See
+[RigForge › Pithead Integration › Stratum authentication](https://github.com/p2pool-starter-stack/rigforge/blob/main/docs/pithead-integration.md#stratum-authentication-optional).
+
+**Caveat:** the password travels in **cleartext** over the LAN (plain stratum has no TLS), so this is
+access control — *who may mine* — not eavesdropping protection. On a trusted LAN it's enough; if you
+must expose `3333` more widely, combine it with `stratum_bind` and a firewall (above). Leaving it
+unset (`""`, the default) keeps the open, no-password behavior.
 
 ---
 

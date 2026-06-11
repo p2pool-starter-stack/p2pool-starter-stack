@@ -407,6 +407,20 @@ assert_running_state() {
             *127.0.0.1*)         it_pass "tari DNS sinkholed — no clearnet resolver (#162)" ;;
             *)                   it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "unexpected HostConfig.Dns" ;;
         esac
+        # The xmrig-proxy config knobs must reach the RUNNING proxy's argv, not just the compose
+        # render. donate-level is rendered explicitly so it's always visible (#173). The matrix
+        # deploys the default config (no p2pool.stratum_password) → stratum auth OFF, which must
+        # render NO --access-password flag at all: a literal empty '--access-password=' would demand
+        # an empty password and reject every rig (the bug verified + guarded for #152).
+        local proxy_args; proxy_args="$(rx "docker inspect xmrig-proxy --format '{{json .Args}}' 2>/dev/null")"
+        case "$proxy_args" in
+            *'--donate-level='*) it_pass "xmrig-proxy dev-fee donate-level is explicit + live (#173)" ;;
+            *)                   it_fail "xmrig-proxy dev-fee donate-level is explicit + live (#173)" "no --donate-level in proxy argv" ;;
+        esac
+        case "$proxy_args" in
+            *'--access-password='*) it_fail "default-off stratum: no --access-password live (#152)" "found --access-password with no stratum_password set — would reject rigs" ;;
+            *)                      it_pass "default-off stratum: no --access-password live (#152)" ;;
+        esac
     fi
 
     # 9. Caddy scheme matches dashboard.secure.

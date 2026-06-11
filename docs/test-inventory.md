@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 434 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 29 `pithead` shell sections · 15 harness self-test sections ·
+tests · 30 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 434 |
 | 1 — Unit | frontend (node --test) | 25 |
-| 1 — Unit | `pithead` shell suite | 29 sections |
+| 1 — Unit | `pithead` shell suite | 30 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -534,7 +534,7 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 
-### `pithead` shell suite (tests/stack/run.sh) — 29 sections
+### `pithead` shell suite (tests/stack/run.sh) — 30 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -556,6 +556,7 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 - black-box: guards
 - black-box: config validation
 - black-box: apply preserves secrets + propagates
+- black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level)
 - black-box: local node creds auto-generated + persisted (#50)
 - black-box: upgrade re-renders generated config (#128)
 - black-box: apply recovers from a failed 'compose up' (#125)
@@ -641,6 +642,7 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 - container up: $svc
 - dashboard /api/state reachable
 - dashboard bound to localhost only (Caddy fronts it)
+- default-off stratum: no --access-password live (#152)
 - disk headroom on the live chain FS (${avail} GiB free)
 - memory ceiling live on $svc (#132)
 - monero display mode determinate ($dmode)
@@ -675,6 +677,7 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 - tari DNS sinkholed — no clearnet resolver (#162)
 - tari synced (required)
 - workers online (>= $EXPECTED_WORKERS)
+- xmrig-proxy dev-fee donate-level is explicit + live (#173)
 - xmrig-proxy stopped for failover
 
 ### Harness self-test (tests/integration/selftest.sh) — 15 sections
@@ -696,5 +699,5 @@ tests · 29 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **529** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **530** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

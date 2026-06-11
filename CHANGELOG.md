@@ -13,6 +13,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Two xmrig-proxy config knobs: optional stratum authentication (#152) and dev-fee transparency
+  (#173).** `p2pool.stratum_password` (default off) turns the open `:3333` stratum port into
+  *authenticated* stratum — only rigs that send the matching `pass` may mine, which also shrinks the
+  #122 worker-name SSRF surface. `"auto"` generates and persists a stable secret (surfaced after
+  `apply` and stored in `.env`), or set your own string; the password is cleartext over stratum, so
+  it's access control, not encryption — pair it with `stratum_bind`/a firewall. `proxy.donate_level`
+  exposes xmrig-proxy's built-in dev-fee donation (compiled-in default **0% — no fee**), now rendered
+  **explicitly** so it's visible and operator-controllable — **default `0`** (off), or `1`–`99` to
+  donate to the xmrig developers; this is **not** the XvB donation (`xvb.*`, steered by the optimizer).
+  Both render to
+  xmrig-proxy CLI flags (`--access-password` / `--donate-level`), are validated before render, and
+  are documented in `docs/configuration.md` + `docs/workers.md#authentication`.
 - **CI now builds every container image, shellchecks all container scripts, and runs hadolint**
   (#124). Previously only the dashboard's *test* stage was built, so a broken Dockerfile / `COPY`
   path / entrypoint in monerod, P2Pool, Tor, or xmrig-proxy would only surface at deploy time — e.g.

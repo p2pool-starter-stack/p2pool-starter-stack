@@ -29,7 +29,12 @@
     "p2pool": {
         "pool": "main",
         "stratum_bind": "0.0.0.0",
+        "stratum_password": "",
         "data_dir": "auto"
+    },
+
+    "proxy": {
+        "donate_level": 0
     },
 
     "xvb": {
