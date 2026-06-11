@@ -61,8 +61,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   - A non-destructive **`--check`** mode for the live harness (assert the box's current state —
     no config change/apply/restore); the safe first run / ongoing health check. Validated with
     a 22/22 green run against a real synced, mining box, which calibrated the harness to trust
-    monerod's own sync flag (a synced local node's dashboard sync panel reads "loading") and
-    `proxy_workers` for mining liveness (`stratum.conns` can read 0 while mining).
+    monerod's own sync flag as the readiness gate, and `proxy_workers` for mining liveness
+    (`stratum.conns` can read 0 while mining).
   - A developer testing guide (`docs/testing-guide.md`): per-change recipes, conventions, and
     the calibration gotchas learned on real hardware.
   - Regression guards for past bugs/security fixes: extended the #90 hardening section of
@@ -154,6 +154,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **A fully-synced monerod no longer shows as "loading" in the dashboard's Monero panel.** A synced
+  node reports `target_height: 0` (no target), so the panel's `done` check — which compared
+  `percent >= 100` against a target, and derived the state string from `has_target` first — never
+  fired, leaving the *normal steady state* stuck at "loading" indefinitely (surfaced in the #180
+  gouda validation; mining and worker-gating were unaffected — those use monerod's RPC flag
+  directly). The sync state now trusts monerod's authoritative caught-up signal (`reachable &&
+  not is_syncing`), and the live integration harness asserts the panel reads "done" — closing the
+  test gap that let this escape both the unit suite and the e2e matrix.
 - **Install no longer fails on hosts whose LAN already uses `172.28.0.0/24`** (#180). The Docker
   bridge subnet is now configurable via **`network.subnet`** (default `172.28.0.0/24`); set a free
   `X.Y.Z.0/24` and `pithead` rebases the whole stack onto it. Previously the hardcoded subnet/IPs
