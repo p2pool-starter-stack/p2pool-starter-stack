@@ -201,8 +201,9 @@ jq_get() { printf '%s' "$1" | jq -r "($2)? | values" 2>/dev/null; }
 
 # Authoritative "is Monero caught up?" — query monerod's own get_info on the box (creds stay
 # on the box) and trust its `synchronized` flag / target_height 0, exactly like the sync gate.
-# We do NOT use the dashboard's `.sync.monero.state`: a synced LOCAL node has no target height,
-# so that field reads "loading", not "done" (a real-hardware gotcha). Returns 0 when synced.
+# This is the readiness GATE (the source of truth, and it avoids waiting on a dashboard poll cycle).
+# The dashboard's `.sync.monero.state` now also reaches "done" for a synced node — run.sh asserts
+# that display separately. Returns 0 when synced.
 monero_caught_up() {
     rx 'u=$(grep -E "^MONERO_NODE_USERNAME=" .env 2>/dev/null | cut -d= -f2-);
         p=$(grep -E "^MONERO_NODE_PASSWORD=" .env 2>/dev/null | cut -d= -f2-);
@@ -246,9 +247,9 @@ _pred_miner_running() {
     [ -n "$w" ] && [ "$w" -ge 1 ] 2>/dev/null
 }
 
-# Predicate: Tari has caught up. Unlike Monero — whose dashboard sync field reads "loading" even
-# for a synced local node (no target height; see monero_caught_up) — Tari's .sync.tari.state DOES
-# reach "done" once it has a reliable target, so the dashboard field is authoritative here. After
+# Predicate: Tari has caught up — its .sync.tari.state reaches "done" once it has a reliable target,
+# so the dashboard field is authoritative here (Monero's panel now reaches "done" for a synced node
+# too). After
 # a restart Tari needs a moment to re-establish peers and close its offline gap, so we poll this
 # rather than asserting cold (issue #54: a real readiness signal, not "sleep and hope").
 _pred_tari_synced() {

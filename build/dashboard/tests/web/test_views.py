@@ -19,7 +19,7 @@ from mining_dashboard.web.views import (
     _mode_palette, parse_window, _target_points, _chart_tension,
     build_proxy_summary, _reject_flag, host_display_addr,
 )
-from mining_dashboard.service.metrics import Metrics, SyncMetric
+from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
@@ -316,6 +316,23 @@ class TestSync:
     def test_done_state(self):
         sync = build_sync(_metrics(), "1.0 GB")
         assert sync["monero"]["state"] == "done"
+
+    def test_synced_node_with_no_target_shows_done(self):
+        # Regression for the bug found in the #180 gouda validation: a fully-synced monerod reports
+        # target_height: 0 (so has_target is False) and is_syncing: False. Through the real
+        # _sync_metric + build_sync it must read "done" — previously it stuck at "loading" forever,
+        # because _sync_metric derived `done` purely from percent>=100 (which needs a target) and
+        # build_sync gated on has_target first.
+        m = _metrics(monero=_sync_metric({"is_syncing": False, "reachable": True}))
+        assert build_sync(m, "1.0 GB")["monero"]["state"] == "done"
+
+    def test_no_target_but_not_caught_up_is_not_done(self):
+        # The same no-target shape, but NOT caught up, must not read "done".
+        m_loading = _metrics(monero=_sync_metric({}))  # no status yet
+        m_syncing = _metrics(monero=_sync_metric({"is_syncing": True, "reachable": True,
+                                                  "current": 5, "target": 10, "percent": 50}))
+        assert build_sync(m_loading, "1.0 GB")["monero"]["state"] == "loading"
+        assert build_sync(m_syncing, "1.0 GB")["monero"]["state"] == "syncing"
 
     def test_monero_mode_and_db_passthrough(self):
         sync = build_sync(_metrics(monero_mode="Pruned"), "85.0 GB")

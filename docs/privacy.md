@@ -36,6 +36,7 @@ What the running stack sends to the internet, connection by connection.
 |---|---|---|---|---|---|
 | **monerod** P2P + tx broadcast | Monero network | — | ✅ Tor (`proxy=` / `tx-proxy=`) | on | always Tor |
 | **monerod** DNS (checkpoints, blocklist, update check, priority-node hostnames) | DNS resolvers | "this IP runs Monero" | ✅ **closed** — `disable-dns-checkpoints`, `check-updates=disabled`, `enable-dns-blocklist=0`, hostname priority-nodes dropped (#161) | n/a | — |
+| **monerod RPC to a remote node** (only if `monero.mode: remote`) | the node you configured | **your real home IP**, to that node's operator | ❌ clearnet | **off** — the bundled local node is the default and has no remote-RPC egress | use a node you run/trust, or one reachable as a `.onion` over Tor |
 | **Tari** P2P | Tari network | — | ✅ Tor (`transport = "tor"`) | on | always Tor |
 | **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | — |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
