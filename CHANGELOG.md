@@ -256,6 +256,21 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **`pithead upgrade` no longer marks an already-deployed stack as "not set up."** Each upgrade
+  re-renders `.env`, and `render_env` writes `DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}`.
+  Because `load_preserved_state` doesn't carry that flag (unlike the Tor onions / RPC creds / proxy
+  token it preserves), the shell variable was unset and every `upgrade` silently rewrote it to
+  `false`. The next `require_deployed` command (`up`, `apply`, or another `upgrade`) then aborted with
+  "The stack isn't fully set up yet — run setup first," and a bare `pithead` dropped into setup
+  instead of help — forcing a needless, heavyweight `setup` (Tor re-provision, GRUB edit) before every
+  upgrade. `upgrade` now re-asserts `DEPLOYMENT_COMPLETED=true` before the render, mirroring `apply`;
+  it's only ever reached past `require_deployed`, so the stack is deployed by definition. A new
+  black-box test pins the behavior (it fails on the old code).
+- **Dashboard "Workers Alive" panel now has the standard gap beneath it.** Every dashboard section is
+  a `.card` wrapped in a `.grid`, and `.grid` supplies the consistent 20px bottom margin between
+  sections. The Workers Alive table was the one section rendered as a bare `.card` with no `.grid`
+  wrapper, so the space between it and the cards below collapsed to zero — out of step with the rest
+  of the layout. It's now wrapped in `.grid` like the chart above it, restoring even spacing.
 - **Dashboard "Current Tier" no longer overstates your XvB tier on a hashrate drop** (#157). The XvB
   raffle qualifies a tier on **both** the 1h and 24h credited average (and terminates a win if the 1h
   drops below the round minimum), but the dashboard resolved Current Tier from the 24h average alone.

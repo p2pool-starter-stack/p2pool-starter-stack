@@ -434,7 +434,9 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
                           onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom}
                           onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
-        <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
+        <div class="grid">
+            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
+        </div>
         <div class="grid">
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
