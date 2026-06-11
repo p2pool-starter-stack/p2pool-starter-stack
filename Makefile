@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint
+.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint release
 
 test: lint test-dashboard test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -37,6 +37,13 @@ test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: ## shellcheck the CLI, the build/* container scripts, and the test scripts
-	shellcheck --severity=warning pithead build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
+lint: ## shellcheck the CLI, the build/* container scripts, the release script, and the test scripts
+	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
+
+# Cut a release from the private build/test server (gouda) — GHCR publish, gated on the test suite +
+# the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:
+#   make release ARGS="--dry-run"
+# See docs/releasing.md.
+release: ## Cut a versioned release (build -> stage -> smoke -> promote -> publish). Pass ARGS=...
+	bash scripts/release.sh $(ARGS)

@@ -1,10 +1,11 @@
 # Releasing
 
 How Pithead is versioned and released. This page documents the **agreed process**
-([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)). The publishing
-automation it describes — the `make release` / `pithead release` pipeline and the GHCR
-workflow — is **not yet implemented**; see [Status](#status) below. The
-version source of truth (`VERSION`) and the changelog exist today.
+([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)). The pipeline it describes
+is implemented as **[`scripts/release.sh`](../scripts/release.sh)** — run it from the build/test
+server with `make release` (preview a run safely with `make release ARGS="--dry-run"`). The one
+remaining piece is wiring `${STACK_VERSION}` into `docker-compose.yml` so installs *pull* the
+published images rather than building; see [Status](#status) below.
 
 ## One product, one version
 
@@ -134,7 +135,6 @@ The goal is professional and one-command:
 
 ## Status
 
-This page is the **scaffold** for [#44](https://github.com/p2pool-starter-stack/pithead/issues/44).
 What exists today:
 
 - ✅ Top-level `VERSION` file (single source of truth).
@@ -142,19 +142,28 @@ What exists today:
 - ✅ This document.
 - ✅ The [#54](https://github.com/p2pool-starter-stack/pithead/issues/54) integration test
   suite — the live config-matrix gate against real nodes (`tests/integration/`, `make
-  test-integration`). See [Integration Testing](integration-testing.md). Still to wire: making
-  it a *blocking step* inside the (not-yet-built) `make release` pipeline.
+  test-integration`). See [Integration Testing](integration-testing.md).
 - ✅ The dashboard version badge ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)) —
   `VERSION` + git build-args baked into the dashboard image (env + OCI labels); shows `vX.Y.Z` on
   releases and `dev · branch @ hash` otherwise.
+- ✅ **The release pipeline — [`scripts/release.sh`](../scripts/release.sh) (`make release`).**
+  Implements the full preflight → test gate (`make test` + the #54 matrix, blocking) → build (OCI
+  labels + `PITHEAD_RELEASE=1`) → stage to `:vX.Y.Z-rc.N` → smoke-verify the pushed images →
+  promote-by-digest to `:vX.Y.Z` + `:latest` → publish the GitHub Release. It generates the
+  **ingredients manifest** (promoted digests + upstream pins) and a pinned install bundle as release
+  assets, never starts the live stack on the build host, and never prints the registry token.
+  Preview any run with `make release ARGS="--dry-run"`.
 
-**TODO — not yet implemented:**
+**Remaining:**
 
-- ⬜ The `make release` / `pithead release` pipeline (preflight → test gate → build →
-  stage → smoke-test → promote-by-digest → publish).
-- ⬜ The GHCR single-tag publishing workflow and CI integration.
-- ⬜ Wiring `${STACK_VERSION}` through `docker-compose.yml` and the OCI image labels.
-- ⬜ The ingredients-manifest generation and release-asset attachment.
+- ⬜ Wiring `${STACK_VERSION}` through `docker-compose.yml` so a release install *pulls* the
+  published images instead of building them (the script publishes the images and a bundle today; the
+  compose `image:` refs are the last hop for the one-command pull UX).
 - ⬜ The dashboard "new version available" update warning
   ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59)), which builds on the
   version badge — tracked separately.
+
+> **Before the first real release:** reconcile `VERSION` (`0.1.0`) with
+> `build/dashboard/pyproject.toml` (`0.2.0`) and choose the first published version, and confirm the
+> GHCR image namespace (`scripts/release.sh` defaults to `ghcr.io/p2pool-starter-stack/pithead-*`;
+> override with `PITHEAD_REGISTRY` / `PITHEAD_IMAGE_PREFIX`). Both are maintainer decisions.
