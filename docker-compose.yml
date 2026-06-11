@@ -17,8 +17,8 @@ services:
     container_name: tor
     # Memory ceiling (#132 — see monerod). Generous so an OOM-restart, which would blip every onion
     # service, stays very unlikely (~0.07 GiB observed).
-    mem_limit: ${TOR_MEM_LIMIT:-512m}
-    memswap_limit: ${TOR_MEM_LIMIT:-512m}
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     logging: *default-logging
     volumes:
@@ -145,8 +145,8 @@ services:
     container_name: p2pool
     # Memory ceiling (#132 — see monerod). RandomX HugePages are separate; this caps p2pool's own
     # heap (~0.35 GiB observed).
-    mem_limit: ${P2POOL_MEM_LIMIT:-1g}
-    memswap_limit: ${P2POOL_MEM_LIMIT:-1g}
+    mem_limit: 1g
+    memswap_limit: 1g
     restart: unless-stopped
     logging: *default-logging
     # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the
@@ -210,8 +210,8 @@ services:
     build: ./build/xmrig-proxy
     container_name: xmrig-proxy
     # Memory ceiling (#132 — see monerod). Tiny in practice (~2 MiB observed).
-    mem_limit: ${XMRIG_PROXY_MEM_LIMIT:-512m}
-    memswap_limit: ${XMRIG_PROXY_MEM_LIMIT:-512m}
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     logging: *default-logging
     # Defense-in-depth: this leaf service never needs extra privileges or Linux capabilities
@@ -275,8 +275,8 @@ services:
       container_name: dashboard
       # Memory ceiling (#132 — see monerod). A small Flask + SQLite app (~0.06 GiB observed); a tight
       # cap is pure upside — a memory regression OOM-restarts the dashboard, not the revenue services.
-      mem_limit: ${DASHBOARD_MEM_LIMIT:-512m}
-      memswap_limit: ${DASHBOARD_MEM_LIMIT:-512m}
+      mem_limit: 512m
+      memswap_limit: 512m
       restart: unless-stopped
       logging: *default-logging
       network_mode: "host"
@@ -331,8 +331,8 @@ services:
     image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     container_name: docker-proxy
     # Memory ceiling (#132 — see monerod). A tiny socket proxy (~13 MiB observed).
-    mem_limit: ${DOCKER_PROXY_MEM_LIMIT:-128m}
-    memswap_limit: ${DOCKER_PROXY_MEM_LIMIT:-128m}
+    mem_limit: 128m
+    memswap_limit: 128m
     restart: unless-stopped
     logging: *default-logging
     security_opt:
@@ -365,8 +365,8 @@ services:
     image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     container_name: docker-control
     # Memory ceiling (#132 — see monerod). A tiny socket proxy (~13 MiB observed).
-    mem_limit: ${DOCKER_CONTROL_MEM_LIMIT:-128m}
-    memswap_limit: ${DOCKER_CONTROL_MEM_LIMIT:-128m}
+    mem_limit: 128m
+    memswap_limit: 128m
     restart: unless-stopped
     logging: *default-logging
     security_opt:
@@ -396,8 +396,8 @@ services:
     image: caddy:2.11@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13
     container_name: caddy
     # Memory ceiling (#132 — see monerod). Reverse proxy + local TLS only (~13 MiB observed).
-    mem_limit: ${CADDY_MEM_LIMIT:-128m}
-    memswap_limit: ${CADDY_MEM_LIMIT:-128m}
+    mem_limit: 128m
+    memswap_limit: 128m
     restart: unless-stopped
     logging: *default-logging
     network_mode: "host"

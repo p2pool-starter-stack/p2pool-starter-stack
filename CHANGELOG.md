@@ -21,8 +21,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   lower — monerod ~0.3 GiB RSS since its DB is reclaimable page cache, dashboard ~0.06, p2pool ~0.35);
   monerod's is tunable via the new **`monero.mem_limit`** config (default a generous 6 GB; its
   OOM-triggering memory is small — ~0.1 GiB at rest, ~1–3 GiB during sync — while its multi-GB DB is
-  reclaimable mmap'd page cache, so initial-sync verification never trips it), and the rest are
-  overridable via `*_MEM_LIMIT` env vars.
+  reclaimable mmap'd page cache, so initial-sync verification never trips it). The other (small)
+  services carry fixed conservative ceilings.
 - **`docs/privacy.md`** — a single source-of-truth network-egress reference (#164, the v1.0 close-out
   of the #160 privacy epic). It maps every off-box connection: whether it's Tor-routed, its default,
   and how to harden it — runtime egress (monerod/Tari over Tor with their clearnet DNS leaks closed;
