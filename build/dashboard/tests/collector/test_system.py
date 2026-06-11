@@ -70,7 +70,9 @@ class TestHugepages:
 
     def test_allocated_when_unused(self):
         with patch("builtins.open", _fake_open("HugePages_Total: 3072\nHugePages_Free: 3072\n")):
-            assert system.get_hugepages_status()[0] == "Allocated"
+            label, css, _ = system.get_hugepages_status()
+        # Reserved but not yet consumed (boot / sync-hold) is the normal state — green, not red (#175).
+        assert (label, css) == ("Allocated", "status-ok")
 
     def test_unknown_when_missing(self):
         with patch("builtins.open", _fake_open("SomethingElse: 1\n")):
