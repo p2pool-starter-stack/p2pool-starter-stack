@@ -87,6 +87,22 @@ _TOKEN_MUTED = "muted"    # inactive pool
 _LOW_HR_TITLE = ("Your hashrate can't sustain the selected XvB donation tier; "
                  "donation will fall short of it.")
 
+_NOT_VIP_TITLE = ("You have no share in the P2Pool PPLNS window, so you are NOT a VIP. If you win an "
+                  "XvB raffle round you're skipped and take a fail (removed from the raffle after the "
+                  "3rd) — regardless of your donation tier. Keep enough hashrate on P2Pool to keep "
+                  "landing shares.")
+
+
+def build_vip(metrics):
+    """Explicit VIP (win-eligibility) status — a P2Pool PPLNS share, the universal raffle gate (#158).
+
+    VIP is independent of donation tier: a Mega donor pushing 1 MH/s with no PPLNS share is still
+    skipped on a win and takes a fail. It's a third axis, neither routed nor credited hashrate —
+    derived purely from whether we have a share in the PPLNS window.
+    """
+    is_vip = metrics.shares_in_window > 0
+    return {"is_vip": is_vip, "label": "Yes" if is_vip else "No"}
+
 
 # --------------------------------------------------------------------------------------
 # Chart series (Issue #65: positioned by real time, with outage gaps as breaks).
@@ -550,6 +566,10 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
         badges.append({"text": f"P2Pool {metrics.pool_type}", "variant": "outline"})
         if metrics.low_hr_warning:
             badges.append({"text": "⚠ Hashrate low for tier", "variant": "warn", "title": _LOW_HR_TITLE})
+        # Not VIP while donating (#158): no PPLNS share → XvB wins are skipped + accrue a fail,
+        # regardless of tier. A make-or-break gate worth surfacing loudly so donations aren't wasted.
+        if metrics.xvb_enabled and metrics.shares_in_window == 0:
+            badges.append({"text": "⚠ Not VIP — wins skipped", "variant": "warn", "title": _NOT_VIP_TITLE})
 
     # Node-down badges (Issue #31) — shown whenever a node is unreachable, regardless of sync.
     if metrics.monero.down:
@@ -692,6 +712,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "network": pool_net["network"],
         "monero": pool_net["monero"],
         "shares_window": pool_net["shares_window"],
+        "vip": build_vip(metrics),
         "proxy_workers": metrics.workers_online,
         "earnings": build_earnings(data, metrics),
         "tari": build_tari(data),

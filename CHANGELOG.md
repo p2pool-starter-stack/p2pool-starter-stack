@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Explicit "VIP" win-eligibility indicator on the dashboard** (#158). To *collect* an XvB raffle
+  win you must be a **VIP** — have a share in the P2Pool PPLNS window. This is universal across **all**
+  tiers and independent of donation amount: a Mega donor pushing 1 MH/s with **no** PPLNS share is
+  still skipped on a win, takes a fail, and is dropped from the raffle after the 3rd. The signal
+  existed only implicitly (the "Shares in Window" stat turning red), so it was easy to miss what it
+  meant. The Hero band and Simple Overview now show an explicit **VIP: Yes/No** (green/red), and a
+  **"⚠ Not VIP — wins skipped"** badge appears while XvB is enabled with no share — so a high-tier
+  donor can't silently waste donations on wins that won't count. Display/observability only — the
+  donation controller already *protects* VIP eligibility; this surfaces it.
 - **Two xmrig-proxy config knobs: optional stratum authentication (#152) and dev-fee transparency
   (#173).** `p2pool.stratum_password` (default off) turns the open `:3333` stratum port into
   *authenticated* stratum — only rigs that send the matching `pass` may mine, which also shrinks the

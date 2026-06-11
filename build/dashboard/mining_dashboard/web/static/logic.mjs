@@ -37,10 +37,12 @@ export function sortWorkers(workers, idx, asc) {
 // labelling is kept here so the wiring (which state field feeds which KPI, and the mode/shares
 // colouring) is unit-tested; <HeroBand> in components.mjs only renders the returned list.
 export function heroKpis(state) {
-    const hr = state.hashrate, sw = state.shares_window, p = state.pool;
+    const hr = state.hashrate, sw = state.shares_window, p = state.pool, vip = state.vip || {};
     return [
         { label: 'Total Hashrate', value: hr.total, cls: 'text-accent' },
         { label: 'Shares in Window', value: sw.count, cls: sw.ok ? 'status-ok' : 'status-bad' },
+        // VIP (#158): a PPLNS share = win eligibility, across ALL tiers. Red "No" = wins won't count.
+        { label: 'VIP', value: vip.label, cls: vip.is_vip ? 'status-ok' : 'status-bad' },
         { label: 'Blocks Found', value: p.blocks, cls: '' },
         { label: 'XvB Tier', value: hr.tier, cls: '' },
         { label: 'Mining Mode', value: hr.mode_name, cls: 'c-' + hr.mode_variant },

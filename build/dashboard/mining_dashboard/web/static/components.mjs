@@ -200,6 +200,7 @@ function Overview({ state }) {
             <${StatCard} label="XvB 1h (routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="Current Tier" value=${hr.tier} />
+            <${StatCard} label="VIP (win eligible)" value=${state.vip.label} cls=${state.vip.is_vip ? 'status-ok' : 'status-bad'} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
             <div class="stat-card"><h5>Tari Mining</h5><${TariStatus} tari=${t} /></div>
             <${StatCard} label="Workers Alive" value=${state.proxy_workers} />

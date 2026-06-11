@@ -15,7 +15,7 @@ import pytest
 import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
-    build_system, build_sync, build_badges, build_earnings, build_state, get_shell_html,
+    build_system, build_sync, build_badges, build_earnings, build_state, build_vip, get_shell_html,
     _mode_palette, parse_window, _target_points, _chart_tension,
     build_proxy_summary, _reject_flag, host_display_addr,
 )
@@ -359,6 +359,18 @@ class TestBadges:
     def test_low_hr_badge(self):
         out = build_badges({}, _metrics(low_hr_warning=True), "ok")
         assert any(b["variant"] == "warn" and "low for tier" in b["text"] for b in out)
+
+    def test_not_vip_badge_when_donating_without_a_share(self):
+        # XvB enabled + no PPLNS share => wins are skipped + a fail, regardless of tier (#158).
+        out = build_badges({}, _metrics(xvb_enabled=True, shares_in_window=0), "ok")
+        assert any("Not VIP" in b["text"] for b in out)
+
+    def test_no_vip_badge_when_vip_or_xvb_off(self):
+        # Has a share => VIP, no badge; XvB off => raffle moot, no badge.
+        assert not any("Not VIP" in t for t in self._texts(
+            build_badges({}, _metrics(xvb_enabled=True, shares_in_window=3), "ok")))
+        assert not any("Not VIP" in t for t in self._texts(
+            build_badges({}, _metrics(xvb_enabled=False, shares_in_window=0), "ok")))
 
     def test_node_down_and_rejected(self):
         m = _metrics(monero=_sync(down=True), tari=_sync(down=True))
@@ -798,3 +810,13 @@ class TestShell:
         monkeypatch.setattr(views.os.path, "getmtime",
                             lambda p: (_ for _ in ()).throw(OSError()))
         assert get_shell_html() == "<h1>Dashboard shell error</h1>"
+
+
+class TestVip:
+    """Explicit VIP (win-eligibility) status from a PPLNS share (#158)."""
+
+    def test_vip_yes_with_a_share(self):
+        assert build_vip(_metrics(shares_in_window=5)) == {"is_vip": True, "label": "Yes"}
+
+    def test_vip_no_without_a_share(self):
+        assert build_vip(_metrics(shares_in_window=0)) == {"is_vip": False, "label": "No"}
