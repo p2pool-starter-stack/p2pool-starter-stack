@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from mining_dashboard.config.config import (
     ENABLE_XVB, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
-    MONERO_PRUNE, MONERO_NODE_HOST,
+    MONERO_PRUNE, MONERO_NODE_HOST, LOCAL_MONERO_HOST,
 )
 from mining_dashboard.helper.utils import get_tier_info, resolve_target_threshold
 
@@ -23,8 +23,9 @@ from mining_dashboard.helper.utils import get_tier_info, resolve_target_threshol
 _BLOCK_TIME_NANO = 30
 _BLOCK_TIME_DEFAULT = 10
 
-# Only a local monerod's pruning state is knowable to us; a remote node isn't probed.
-_LOCAL_MONERO_HOST = "172.28.0.26"
+# Only a local monerod's pruning state is knowable to us; a remote node isn't probed. The local
+# bridge IP tracks the configurable subnet prefix (#180).
+_LOCAL_MONERO_HOST = LOCAL_MONERO_HOST
 
 
 @dataclass(frozen=True)

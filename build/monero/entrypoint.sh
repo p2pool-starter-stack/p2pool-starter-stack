@@ -12,7 +12,7 @@ echo "Initializing Monero configuration from template..."
 
 # Inject environment variables into the configuration template
 # We explicitly list variables to avoid accidental substitution of system environment variables
-envsubst '${MONERO_NODE_USERNAME}${MONERO_NODE_PASSWORD}${MONERO_ONION_ADDRESS}${MONERO_PRUNE}${MONERO_PREP_THREADS}' < "$TEMPLATE_PATH" > "$CONFIG_PATH"
+envsubst '${MONERO_NODE_USERNAME}${MONERO_NODE_PASSWORD}${MONERO_ONION_ADDRESS}${MONERO_PRUNE}${MONERO_PREP_THREADS}${NETWORK_PREFIX}' < "$TEMPLATE_PATH" > "$CONFIG_PATH"
 
 echo "Starting Monero Daemon (monerod)..."
 # Execute the daemon process, replacing the current shell to ensure correct signal handling (SIGTERM)

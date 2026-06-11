@@ -132,6 +132,12 @@ assert_contains "tari mem is INFO"   "$(run_sourced "$SANDBOX" describe_change T
 assert_contains "monero mem is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)"  "INFO"
 assert_contains "monero mem recreate note" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "monerod container is recreated"
 
+echo "== unit: explain_subnet_collision (#180) =="
+ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"
+assert_contains "subnet overlap -> network.subnet hint"  "$ov" "network"
+assert_contains "subnet overlap -> suggests a free /24"  "$ov" "/24"
+assert_eq "non-overlap failure stays silent" "$(run_sourced "$SANDBOX" explain_subnet_collision "some other failure" 2>&1)" ""
+
 echo "== unit: env helpers =="
 printf 'A=1\nB=two\nPROXY_AUTH_TOKEN=keep=me\n' > "$SANDBOX/old.env"
 printf 'A=1\nB=three\nC=4\nPROXY_AUTH_TOKEN=keep=me\n' > "$SANDBOX/new.env"
