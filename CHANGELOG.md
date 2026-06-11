@@ -161,6 +161,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
+- **Dashboard now shows *routed* hashrate everywhere for display, *credited* only where XvB's verdict
+  matters** (#156). Two different XvB numbers were being conflated: **routed** = what the xmrig-proxy
+  actually sent to a pool (`v_xvb`/`v_p2pool`, a common basis for both pools that sums to your total),
+  and **credited** = what XvB's API reports back (`avg_1h`/`avg_24h`, XvB-only, on its own "credit
+  factor" basis). The header, Simple Overview, and chart previously showed *credited* XvB next to
+  *routed* P2Pool — two incomparable bases side by side. They now show **routed** for both pools
+  (explicitly labelled "(routed)"), derived from `v_xvb` the same way P2Pool's averages already were
+  (new `_avg_xvb_over_window`). **Credited** now appears in exactly two places: the swap-algorithm
+  decision logic (unchanged — it must steer off credited per #9/#70) and the Advanced "XvB Donation
+  Stats" card, where routed and credited 1h/24h are now juxtaposed so the live **credit factor** is
+  visible. The Current Tier label stays credited-derived everywhere (the raffle assigns tiers off
+  credited — an intentional exception). No schema change; reads sensibly (routed = 0) when XvB is off.
 - The Compose **project name is now pinned to `pithead`** (`name:` in `docker-compose.yml`), so
   the stack's images, network and volumes are prefixed `pithead*` regardless of the checkout
   directory — instead of inheriting the directory's name (which left older checkouts named after

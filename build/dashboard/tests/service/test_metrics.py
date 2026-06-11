@@ -10,7 +10,7 @@ import time
 from unittest.mock import MagicMock
 
 import mining_dashboard.service.metrics as metrics
-from mining_dashboard.service.metrics import build_metrics, _avg_p2pool_over_window
+from mining_dashboard.service.metrics import build_metrics, _avg_p2pool_over_window, _avg_xvb_over_window
 from mining_dashboard.config.config import TIER_DEFAULTS
 
 
@@ -70,6 +70,45 @@ class TestAvgP2poolOverWindow:
         assert _avg_p2pool_over_window(history, 3600) == 500.0
 
 
+class TestAvgXvbOverWindow:
+    """Routed XvB averaging from v_xvb history — mirrors P2Pool so the two sum to total (#156)."""
+
+    def test_empty_history_returns_zero(self):
+        assert _avg_xvb_over_window([], 3600) == 0.0
+
+    def test_averages_v_xvb_in_window(self):
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+            {"timestamp": now - 60, "v": 500, "v_p2pool": 0, "v_xvb": 500},
+        ]
+        assert _avg_xvb_over_window(history, 3600) == 750.0
+
+    def test_excludes_samples_outside_window(self):
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+            {"timestamp": now - 7200, "v": 200, "v_p2pool": 0, "v_xvb": 200},
+        ]
+        assert _avg_xvb_over_window(history, 3600) == 1000.0
+
+    def test_legacy_rows_read_xvb_zero(self):
+        # Pre-split rows (v>0 but v_p2pool==v_xvb==0) count as P2Pool, so XvB-routed reads 0 there.
+        now = time.time()
+        history = [{"timestamp": now - 30, "v": 800, "v_p2pool": 0, "v_xvb": 0}]
+        assert _avg_xvb_over_window(history, 3600) == 0.0
+
+    def test_complements_p2pool_to_total(self):
+        # Routed XvB + routed P2Pool average over the SAME samples, so they sum to the total avg.
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 1000, "v_xvb": 0},
+            {"timestamp": now - 60, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+        ]
+        assert _avg_xvb_over_window(history, 3600) == 500.0
+        assert _avg_p2pool_over_window(history, 3600) == 500.0   # 500 + 500 == 1000 total
+
+
 class TestHashrate:
     def test_total_and_stratum_passthrough(self):
         data = _data(total_live_h15=12345,
@@ -85,22 +124,26 @@ class TestHashrate:
         assert m.p2pool_1h == 900.0
         assert m.p2pool_24h == 900.0
 
-    def test_xvb_averages_from_stats(self):
+    def test_xvb_credited_averages_from_stats(self):
+        # Credited (XvB API avg_1h/24h) is kept independent — controller input + Advanced card (#156).
         m = build_metrics(_data(), _mgr(xvb={"avg_1h": 2100, "avg_24h": 2300}))
         assert m.xvb_1h == 2100
         assert m.xvb_24h == 2300
 
-    def test_xvb_routed_is_fraction_of_hashrate(self):
-        # Routed = controller's donation fraction * our hashrate (what we send),
-        # distinct from the credited averages XvB reports.
-        m = build_metrics(_data(total_live_h15=40_000),
-                          _mgr(xvb={"avg_1h": 30_000, "donation_fraction": 0.25}))
-        assert m.xvb_routed == 10_000  # 0.25 * 40k
-        assert m.xvb_1h == 30_000      # credited stays independent
+    def test_xvb_routed_averages_from_history(self):
+        # Routed = what the proxy ACTUALLY sent to XvB (v_xvb), time-weighted from DB history — not
+        # the controller's donation_fraction. Credited (avg_1h/24h) stays independent (#156).
+        now = time.time()
+        history = [{"timestamp": now - 30, "v": 1000, "v_p2pool": 600, "v_xvb": 400}]
+        m = build_metrics(_data(), _mgr(history=history, xvb={"avg_1h": 30_000, "avg_24h": 30_000}))
+        assert m.xvb_routed_1h == 400.0
+        assert m.xvb_routed_24h == 400.0
+        assert m.xvb_1h == 30_000      # credited, independent of routed
 
-    def test_xvb_routed_zero_without_fraction(self):
+    def test_xvb_routed_zero_without_history(self):
         m = build_metrics(_data(total_live_h15=40_000), _mgr())
-        assert m.xvb_routed == 0
+        assert m.xvb_routed_1h == 0.0
+        assert m.xvb_routed_24h == 0.0
 
 
 class TestModeAndTiers:

@@ -29,7 +29,7 @@ _SYNC_DONE = SyncMetric(percent=100, current=10, target=10, remaining=0,
 
 _BASE = Metrics(
     total_h15=10500.0, p2pool_1h=8000.0, p2pool_24h=8100.0, xvb_1h=2100.0, xvb_24h=2300.0,
-    xvb_routed=2000.0,
+    xvb_routed_1h=2000.0, xvb_routed_24h=2050.0,
     stratum_h15=10300.0, stratum_h1h=10400.0, stratum_h24h=10200.0,
     mode="P2POOL", xvb_enabled=True, current_tier="Donor (1.00 kH/s+)",
     target_tier="Donor (1.00 kH/s+)", target_threshold=1000.0, target_sustainable=True,
@@ -266,10 +266,10 @@ class TestHashrate:
         assert hr["xvb_1h"] == "2.10 kH/s"
 
     def test_routed_distinct_from_credited(self):
-        # Routed (what we send) is shown alongside the credited averages so the
-        # live credit factor is visible.
-        hr = _hashrate(_metrics(xvb_routed=2000, xvb_1h=6000))
-        assert hr["xvb_routed"] == "2.00 kH/s"
+        # Routed (proxy v_xvb) is shown in the header/Simple and alongside credited in the Advanced
+        # card so the live credit factor is visible — distinct from credited avg_1h/24h (#156).
+        hr = _hashrate(_metrics(xvb_routed_1h=2000, xvb_24h=6500, xvb_1h=6000))
+        assert hr["xvb_routed_1h"] == "2.00 kH/s"
         assert hr["xvb_1h"] == "6.00 kH/s"
 
     def test_p2pool_mode_grays_xvb(self):
@@ -648,7 +648,7 @@ class TestEarnings:
         # header / Overview (metrics.p2pool_1h) — not the total, and not a bespoke total-minus-routed
         # figure. That recorded average already excludes the XvB-donated slice, so the value here
         # (and its display string) matches build_hashrate's "p2p_1h" exactly.
-        m = _metrics(total_h15=46_300, xvb_routed=10_000, p2pool_1h=35_000)
+        m = _metrics(total_h15=46_300, xvb_routed_1h=10_000, p2pool_1h=35_000)
         e = build_earnings(self._NET, m)
         assert e["p2pool_hr"] == 35_000                       # p2pool_1h, independent of total/routed
         assert e["p2pool_hr_str"] == _hashrate(m)["p2p_1h"]   # identical display string to the header

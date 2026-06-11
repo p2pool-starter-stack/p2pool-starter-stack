@@ -23,8 +23,8 @@ const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']
 // Series the user can show/hide (Issue #47): dataset index, label and swatch colour class.
 // Visibility lives in dashboard.js ui.series (persisted); applied to the chart in applyVisibility.
 const SERIES = [
-    { key: 'p2pool', label: 'P2Pool', idx: 0, dot: 'dot-p2pool' },
-    { key: 'xvb', label: 'XvB', idx: 1, dot: 'dot-xvb' },
+    { key: 'p2pool', label: 'P2Pool (routed)', idx: 0, dot: 'dot-p2pool' },
+    { key: 'xvb', label: 'XvB (routed)', idx: 1, dot: 'dot-xvb' },
     { key: 'shares', label: 'Shares', idx: 2, dot: 'dot-shares' },
 ];
 
@@ -137,11 +137,11 @@ export class ChartCard extends Component {
                     // segment.borderWidth hides each band's top border-line where the band is flat-zero,
                     // so an all-to-one-pool window reads as a single solid color instead of the empty
                     // series painting its edge line over the other's (#184).
-                    { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, borderWidth: AREA_BORDER_WIDTH,
+                    { label: 'P2Pool (routed)', data: d.p2pool, borderColor: c.accent, borderWidth: AREA_BORDER_WIDTH,
                       segment: { borderWidth: (ctx) => bandBorderWidth(d.p2pool, ctx, AREA_BORDER_WIDTH) },
                       tension, fill: true, hidden: vis.p2pool === false,
                       stack: 'hr', backgroundColor: areaFill(c.accent), pointRadius: 0, pointHitRadius: 20 },
-                    { label: 'XvB', data: d.xvb, borderColor: c.purple, borderWidth: AREA_BORDER_WIDTH,
+                    { label: 'XvB (routed)', data: d.xvb, borderColor: c.purple, borderWidth: AREA_BORDER_WIDTH,
                       segment: { borderWidth: (ctx) => bandBorderWidth(d.xvb, ctx, AREA_BORDER_WIDTH) },
                       tension, fill: true, hidden: vis.xvb === false,
                       stack: 'hr', backgroundColor: areaFill(c.purple), pointRadius: 0, pointHitRadius: 20 },

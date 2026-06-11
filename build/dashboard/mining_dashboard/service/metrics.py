@@ -47,9 +47,10 @@ class Metrics:
     total_h15: float
     p2pool_1h: float
     p2pool_24h: float
-    xvb_1h: float
-    xvb_24h: float
-    xvb_routed: float          # what we currently route to XvB (fraction * total_h15)
+    xvb_1h: float              # credited (XvB API avg_1h) — controller input + Advanced card only
+    xvb_24h: float             # credited (XvB API avg_24h)
+    xvb_routed_1h: float       # routed (proxy v_xvb, time-weighted 1h) — header / Simple / chart (#156)
+    xvb_routed_24h: float      # routed (proxy v_xvb, time-weighted 24h)
     stratum_h15: float
     stratum_h1h: float
     stratum_h24h: float
@@ -102,12 +103,15 @@ def build_metrics(latest_data, state_mgr, history=None):
         mode = "P2POOL (XvB Disabled)"
 
     total_h15 = data.get('total_live_h15', 0) or 0
+    # Credited — XvB's own verdict (avg_1h/24h). The controller steers off this (#9/#70) and the
+    # Advanced card shows it next to routed so the credit factor is visible; nowhere else (#156).
     xvb_1h = xvb_stats.get('avg_1h', 0) or 0
     xvb_24h = xvb_stats.get('avg_24h', 0) or 0
-    # What we currently route to XvB (controller's per-cycle donation fraction *
-    # our hashrate). Shown next to the credited averages so the gap — the live
-    # credit factor — is visible: routed is our input, avg_1h/24h is XvB's output.
-    xvb_routed = (xvb_stats.get('donation_fraction', 0) or 0) * total_h15
+    # Routed — what the proxy ACTUALLY sent to XvB, time-weighted from our own DB history (v_xvb),
+    # mirroring P2Pool's v_p2pool averaging so the two sum to total. This is the at-a-glance display
+    # figure (header / Simple / chart), NOT the controller's intended donation_fraction (#156).
+    xvb_routed_1h = _avg_xvb_over_window(history, 3600)
+    xvb_routed_24h = _avg_xvb_over_window(history, 86400)
 
     # P2Pool 1h/24h from our own DB history (time-weighted v_p2pool), not p2pool's noisy
     # stratum estimate or a total-minus-XvB subtraction (Issue #27).
@@ -154,7 +158,8 @@ def build_metrics(latest_data, state_mgr, history=None):
         p2pool_24h=p2pool_24h,
         xvb_1h=xvb_1h,
         xvb_24h=xvb_24h,
-        xvb_routed=xvb_routed,
+        xvb_routed_1h=xvb_routed_1h,
+        xvb_routed_24h=xvb_routed_24h,
         stratum_h15=stratum.get('hashrate_15m', 0) or 0,
         stratum_h1h=stratum.get('hashrate_1h', 0) or 0,
         stratum_h24h=stratum.get('hashrate_24h', 0) or 0,
@@ -208,6 +213,29 @@ def _avg_p2pool_over_window(history, window_seconds):
         if vp == 0 and vx == 0 and v > 0:
             vp = v
         total += vp
+        count += 1
+
+    return total / count if count else 0.0
+
+
+def _avg_xvb_over_window(history, window_seconds):
+    """Time-weighted XvB *routed* hashrate over the trailing window, from DB history (#156).
+
+    Mirrors :func:`_avg_p2pool_over_window` but sums ``v_xvb`` — what the proxy actually routed to
+    XvB per sample — over the same in-window samples, so XvB-routed + P2Pool-routed average to the
+    total. No legacy fallback: rows predating the p2pool/xvb split count as P2Pool (their ``v_xvb``
+    is 0), which correctly reads XvB-routed as 0 for that old data.
+    """
+    if not history:
+        return 0.0
+
+    cutoff = time.time() - window_seconds
+    total = 0.0
+    count = 0
+    for x in history:
+        if x.get('timestamp', 0) < cutoff:
+            continue
+        total += x.get('v_xvb', 0) or 0
         count += 1
 
     return total / count if count else 0.0
