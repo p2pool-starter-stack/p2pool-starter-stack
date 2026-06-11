@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **CI now builds every container image, shellchecks all container scripts, and runs hadolint**
+  (#124). Previously only the dashboard's *test* stage was built, so a broken Dockerfile / `COPY`
+  path / entrypoint in monerod, P2Pool, Tor, or xmrig-proxy would only surface at deploy time — e.g.
+  the Tor image's #180 entrypoint restructure shipped with no CI safety net. A `build-images` matrix
+  now `docker build`s all five `build/*` images on every PR; `make lint` (the CI shellcheck step)
+  gained the seven `build/*/*.sh` entrypoints + healthchecks; and a `hadolint` job lints the
+  Dockerfiles (with a documented `.hadolint.yaml` ignore list for rules that conflict with the
+  digest-pinning approach). CI shellcheck now runs via `make lint` so the file list can't drift.
+
 - **Memory ceilings on every service** (#132). Only Tari was bounded before; now monerod, P2Pool, the
   dashboard, Tor, xmrig-proxy, and both Docker socket proxies each carry a `mem_limit` (with
   `memswap_limit == mem_limit` for a clean, swap-free OOM-kill). A leak or spike now OOM-restarts the

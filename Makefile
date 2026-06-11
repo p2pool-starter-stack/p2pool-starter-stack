@@ -37,6 +37,6 @@ test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: ## shellcheck the stack scripts
-	shellcheck --severity=warning pithead tests/stack/run.sh tests/stack/test_compose.sh \
+lint: ## shellcheck the CLI, the build/* container scripts, and the test scripts
+	shellcheck --severity=warning pithead build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
