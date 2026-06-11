@@ -32,6 +32,9 @@ _PX_INVALID = 5         # invalid shares (cumulative)
 _PX_LAST_SHARE_MS = 7   # epoch ms of the last accepted share
 _PX_HR_1M = 8           # 1-minute hashrate, kH/s
 _PX_HR_10M = 9          # 10-minute hashrate, kH/s
+_PX_HR_1H = 10          # 1-hour hashrate, kH/s   (#168)
+_PX_HR_12H = 11         # 12-hour hashrate, kH/s  (#168)
+_PX_HR_24H = 12         # 24-hour hashrate, kH/s  (#168)
 _PX_MIN_FIELDS = 13
 
 # xmrig-proxy reports hashrate in kH/s; the dashboard works in H/s.
@@ -58,6 +61,11 @@ def _parse_proxy_list_worker(w):
         "h10": w[_PX_HR_1M] * _KHS_TO_HS,
         "h60": w[_PX_HR_1M] * _KHS_TO_HS,
         "h15": w[_PX_HR_10M] * _KHS_TO_HS,
+        # All five native proxy windows for the chart's averaging-window toggle (#168). 1m/10m back
+        # the existing h10/h60/h15 keys above; 1h/12h/24h are new and read straight from the row.
+        "h1h": w[_PX_HR_1H] * _KHS_TO_HS,
+        "h12h": w[_PX_HR_12H] * _KHS_TO_HS,
+        "h24h": w[_PX_HR_24H] * _KHS_TO_HS,
         "uptime": 0,
         # Per-worker share health (Issue #82) — collected here, surfaced in the Workers table.
         "accepted": w[_PX_ACCEPTED] or 0,
@@ -76,6 +84,11 @@ def _parse_legacy_dict_worker(w):
         "h10": hr[0] if len(hr) > 0 else 0,
         "h60": hr[1] if len(hr) > 1 else 0,
         "h15": hr[2] if len(hr) > 2 else 0,
+        # The legacy dict shape carries only 10s/60s/15m, so the longer windows fall back to its
+        # longest available average (#168) rather than reading zero; this format is a rare fallback.
+        "h1h": hr[2] if len(hr) > 2 else (hr[-1] if hr else 0),
+        "h12h": hr[2] if len(hr) > 2 else (hr[-1] if hr else 0),
+        "h24h": hr[2] if len(hr) > 2 else (hr[-1] if hr else 0),
         "uptime": w.get("uptime", 0),
         # Share health (Issue #82); the legacy shape rarely carries these, so default to 0.
         "accepted": w.get("accepted", 0),
@@ -188,6 +201,26 @@ def _aggregate_hashrate(workers):
             total_hr += w_hr
             total_h10 += w.get('h10', 0)
     return total_hr, total_h10
+
+
+# Averaging window -> the per-worker key that holds that window's rate. 10m is the headline series
+# (total_hr above), so it isn't recomputed here; the other four feed the chart's window toggle (#168).
+_WINDOW_WORKER_KEYS = {"1m": "h10", "1h": "h1h", "12h": "h12h", "24h": "h24h"}
+
+
+def _aggregate_window_hashrates(workers):
+    """Total live hashrate per averaging window across online workers (#168), keyed by window.
+
+    Unlike the headline ``_aggregate_hashrate``, this does NOT fall back between windows — each
+    window is its own honest sum, so a window that hasn't accumulated yet (notably 12h/24h on a
+    freshly started rig) reads low until it fills. Offline workers contribute nothing.
+    """
+    totals = {win: 0 for win in _WINDOW_WORKER_KEYS}
+    for w in workers:
+        if w.get('status') == 'online':
+            for win, src in _WINDOW_WORKER_KEYS.items():
+                totals[win] += w.get(src, 0) or 0
+    return totals
 
 
 def _shares_to_record(last_known_total, current_total):
@@ -559,10 +592,22 @@ class DataService:
                     })
                     
                     # 6. Persist Historical Data
-                    p2pool_hr = 0 if "XVB" in current_mode else total_hr
-                    xvb_hr = total_hr if "XVB" in current_mode else 0
-                    
-                    await asyncio.to_thread(self.state_manager.update_history, total_hr, p2pool_hr, xvb_hr)
+                    is_xvb = "XVB" in current_mode
+                    p2pool_hr = 0 if is_xvb else total_hr
+                    xvb_hr = total_hr if is_xvb else 0
+
+                    # Per-window splits for the chart's averaging-window toggle (#168). At any poll the
+                    # algo routes the whole total to one pool, so each window's total goes entirely to
+                    # the same band as the headline (10m is persisted as the base total_hr above).
+                    window_totals = _aggregate_window_hashrates(final_workers)
+                    window_splits = {
+                        win: ((0, total) if is_xvb else (total, 0))
+                        for win, total in window_totals.items()
+                    }
+
+                    await asyncio.to_thread(
+                        self.state_manager.update_history, total_hr, p2pool_hr, xvb_hr, window_splits
+                    )
                     
                     # Create a lightweight snapshot (exclude shares entirely as they are safely in DB)
                     snapshot_data = self.latest_data.copy()

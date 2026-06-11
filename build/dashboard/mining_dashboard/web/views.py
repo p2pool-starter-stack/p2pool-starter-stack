@@ -15,7 +15,10 @@ import time
 import bisect
 import logging
 
-from mining_dashboard.config.config import HOST_IP, UPDATE_INTERVAL, DISK_WARN_PERCENT, DISK_CRITICAL_PERCENT
+from mining_dashboard.config.config import (
+    HOST_IP, UPDATE_INTERVAL, DISK_WARN_PERCENT, DISK_CRITICAL_PERCENT,
+    HASHRATE_WINDOWS, DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOW_COLUMNS,
+)
 from mining_dashboard.helper.utils import (
     format_hashrate, format_duration, format_time_abs, is_ip_address, detect_host_ipv4,
 )
@@ -108,14 +111,15 @@ def build_vip(metrics):
 # Chart series (Issue #65: positioned by real time, with outage gaps as breaks).
 # --------------------------------------------------------------------------------------
 
-def build_chart(history, shares, range_arg, window=None):
+def build_chart(history, shares, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
     """Build the Chart.js datasets from history. Each point carries its real timestamp as the
     x value (epoch ms) so a linear time axis spaces points to scale; runs of missing samples
     (outages) are split by a ``null`` break so the line doesn't connect across the gap.
 
     ``window`` is an optional ``(from, to)`` epoch-second pair (a manual zoom) that bounds both
     ends and overrides ``range_arg``. Point density and ``tension`` adapt to the visible window
-    duration (Issue #47).
+    duration (Issue #47). ``avg_window`` (#168) selects which hashrate-averaging window's columns
+    to plot (1m / 10m / 1h / 12h / 24h); 10m is the default headline series.
 
     Returns ``{"p2pool": [{x, y}], "xvb": [{x, y}], "shares": [{x, y, r, c}], "tension": float}``
     — the P2Pool/XvB series are stacked on the client (they sum to the total hashrate) and may
@@ -131,7 +135,7 @@ def build_chart(history, shares, range_arg, window=None):
     p2pool = []
     xvb = []
     for i, x in enumerate(filtered_history):
-        vp, vx = _split_values(x)
+        vp, vx = _split_values(x, avg_window)
         x_ms = int(timestamps[i] * 1000)
         p2pool.append({"x": x_ms, "y": vp})
         xvb.append({"x": x_ms, "y": vx})
@@ -176,14 +180,27 @@ def _window_duration(filtered_history, range_arg, window):
     return 0
 
 
-def _split_values(x):
-    """(p2pool, xvb) hashrate for a history row, with the legacy-data P2Pool fallback."""
-    v = x.get('v', 0)
-    vp = x.get('v_p2pool', 0)
-    vx = x.get('v_xvb', 0)
-    if vp == 0 and vx == 0 and v > 0:
-        vp = v
+def _split_values(x, avg_window=DEFAULT_HASHRATE_WINDOW):
+    """(p2pool, xvb) hashrate for a history row at the selected averaging window (#168).
+
+    Defaults to 10m — the original headline series — which also keeps the legacy-data fallback
+    (older rows stored only the un-split total ``v``). The other windows read their own columns,
+    which are 0 on pre-#168 rows (per-window capture is forward-only)."""
+    p_col, x_col = HASHRATE_WINDOW_COLUMNS.get(avg_window, HASHRATE_WINDOW_COLUMNS[DEFAULT_HASHRATE_WINDOW])
+    vp = x.get(p_col, 0) or 0
+    vx = x.get(x_col, 0) or 0
+    # The fallback only makes sense for the default window, where ``v`` is that window's total.
+    if avg_window == DEFAULT_HASHRATE_WINDOW and vp == 0 and vx == 0:
+        v = x.get('v', 0)
+        if v > 0:
+            vp = v
     return vp, vx
+
+
+def canonical_window(avg_arg):
+    """Validate an ``avg`` query param against the known windows (#168), falling back to the default
+    for anything unknown or missing — a stale bookmark or bad input can't break the chart."""
+    return avg_arg if avg_arg in HASHRATE_WINDOWS else DEFAULT_HASHRATE_WINDOW
 
 
 def _gap_after_indices(timestamps):
@@ -678,11 +695,12 @@ def host_display_addr(host):
     return addr
 
 
-def build_state(data, state_mgr, range_arg, window=None):
+def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
     ``window`` is an optional ``(from, to)`` epoch-second manual-zoom window (Issue #47) that
-    overrides ``range_arg`` for the chart. Computes domain values once (``build_metrics``), then
+    overrides ``range_arg`` for the chart. ``avg_window`` (#168) picks which hashrate-averaging
+    window the chart plots. Computes domain values once (``build_metrics``), then
     formats each section. Every value is a JSON-serializable primitive, list or dict. May raise
     (e.g. ``state_mgr.get_history`` failing); the caller turns that into a sanitized 500."""
     data = data or {}
@@ -702,6 +720,8 @@ def build_state(data, state_mgr, range_arg, window=None):
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,
+        "avg_window": avg_window,
+        "avg_windows": HASHRATE_WINDOWS,
         "badges": build_badges(data, metrics, mode_tok, db_healthy),
         "db_healthy": db_healthy,
         "hashrate": build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok),
@@ -718,7 +738,7 @@ def build_state(data, state_mgr, range_arg, window=None):
         "tari": build_tari(data),
         "workers": build_workers(data.get('workers', [])),
         "proxy_summary": build_proxy_summary(data),
-        "chart": build_chart(history, data.get('shares', []), range_arg, window),
+        "chart": build_chart(history, data.get('shares', []), range_arg, window, avg_window),
     }
 
 

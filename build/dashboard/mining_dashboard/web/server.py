@@ -3,7 +3,7 @@ import logging
 import mimetypes
 from aiohttp import web
 
-from mining_dashboard.web.views import build_state, get_shell_html, parse_window
+from mining_dashboard.web.views import build_state, get_shell_html, parse_window, canonical_window
 
 logger = logging.getLogger("WebServer")
 
@@ -30,9 +30,11 @@ async def handle_state(request):
     range_arg = request.query.get('range', 'all')
     # Optional manual-zoom window (Issue #47); malformed from/to falls back to the preset range.
     window = parse_window(request.query.get('from'), request.query.get('to'))
+    # Hashrate-averaging window for the chart (#168); unknown/missing falls back to the default.
+    avg_window = canonical_window(request.query.get('avg'))
 
     try:
-        return web.json_response(build_state(data, state_mgr, range_arg, window))
+        return web.json_response(build_state(data, state_mgr, range_arg, window, avg_window))
     except Exception:
         # Log the full error server-side; never leak exception details to the browser.
         logger.exception("Error building dashboard state")

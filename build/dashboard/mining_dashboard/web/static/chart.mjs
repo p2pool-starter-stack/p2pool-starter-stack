@@ -20,6 +20,16 @@ import { fmtTimestamp, clampZoomWindow, bandBorderWidth } from './logic.mjs';
 
 const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']];
 
+// Hashrate-averaging windows for the chart toggle (#168): [param key, button label]. The keys match
+// the server's `avg` param; labels are spelled out so the "1m" window (1 MINUTE) isn't mistaken for
+// the "1 Mo" RANGE above. Persisted in dashboard.js ui.avg (localStorage), default 10m. 12h/24h read
+// low until a rig has been online that long — flagged via the button title so it doesn't look broken.
+const WINDOWS = [['1m', '1 Min'], ['10m', '10 Min'], ['1h', '1 Hr'], ['12h', '12 Hr'], ['24h', '24 Hr']];
+const WINDOW_HINT = {
+    '12h': 'Average over the last 12 hours — needs ~12h of rig uptime to fully fill',
+    '24h': 'Average over the last 24 hours — needs ~24h of rig uptime to fully fill',
+};
+
 // Series the user can show/hide (Issue #47): dataset index, label and swatch colour class.
 // Visibility lives in dashboard.js ui.series (persisted); applied to the chart in applyVisibility.
 const SERIES = [
@@ -245,6 +255,14 @@ export class ChartCard extends Component {
                 ${zoomed
                     ? html`<button class="btn-range btn-reset" onClick=${() => props.onResetZoom()}>↺ Reset zoom</button>`
                     : html`<span class="text-muted text-xs ml-2">Drag to zoom · Shift-drag to pan · Scroll to zoom</span>`}
+            </div>
+            <div class="chart-controls" role="group" aria-label="Hashrate averaging window">
+                <span class="text-muted text-small mr-1" title="Which hashrate-averaging window the chart plots (#168)">Avg:</span>
+                ${WINDOWS.map(([w, label]) => html`<button type="button"
+                    class=${'btn-range' + (props.avgWindow === w ? ' active' : '')}
+                    aria-pressed=${props.avgWindow === w}
+                    title=${WINDOW_HINT[w] || (label + ' average')}
+                    onClick=${() => props.onAvgWindow && props.onAvgWindow(w)}>${label}</button>`)}
             </div>
             <div class="chart-legend" role="group" aria-label="Toggle series">
                 ${SERIES.map((s) => {

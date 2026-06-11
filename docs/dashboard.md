@@ -112,9 +112,23 @@ progress until it catches up and merge mining resumes.
 
 ### Hashrate chart
 
-A time-series chart of your hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch
+A time-series chart of your hashrate with selectable **ranges** (1h / 24h / 1w / 1mo) that switch
 instantly without reloading the page. The shaded bands show how hashrate was split between
 **P2Pool** and **XvB** over time, so you can see the switching engine at work.
+
+An **Avg** control picks the hashrate-**averaging window** the chart plots — `1 Min` / `10 Min` /
+`1 Hr` / `12 Hr` / `24 Hr` (the native windows xmrig-proxy reports). This is independent of the
+Range control: the **range** sets how much *time* the x-axis spans, while the **averaging window**
+sets how *smooth* each plotted point is. Short windows (1–10 min) react quickly — a rig dropping or
+joining shows up within a poll or two — while long windows (12–24 h) ride out the noise to show the
+underlying trend. Your choice is remembered across reloads. Two things to know:
+
+- **`10 Min` is the default** and matches the dashboard's headline hashrate, so the chart looks the
+  same as before unless you change it.
+- The longer windows **need that much rig uptime to fill** — right after a (re)start, `12 Hr`/`24 Hr`
+  read low and climb until enough history exists. Per-window history is also kept only *going
+  forward* from the version that introduced this control, so those lines are flat at the far-left
+  edge of a long range until new data accumulates. That's expected, not a fault.
 
 ### Overview
 

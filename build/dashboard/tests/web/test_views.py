@@ -17,8 +17,9 @@ from mining_dashboard.web.views import (
     build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
     build_system, build_sync, build_badges, build_earnings, build_state, build_vip, get_shell_html,
     _mode_palette, parse_window, _target_points, _chart_tension,
-    build_proxy_summary, _reject_flag, host_display_addr,
+    build_proxy_summary, _reject_flag, host_display_addr, canonical_window,
 )
+from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 
 
@@ -254,6 +255,54 @@ class TestChart:
         dense = self._line(5000, now - 14 * 86400, step=int(14 * 86400 / 5000))
         real = [p for p in build_chart(dense, [], "all")["p2pool"] if p["y"] is not None]
         assert len(real) <= 700 and len(real) < 5000
+
+
+class TestChartWindow:
+    """The averaging-window toggle (#168): build_chart plots the selected window's columns, and the
+    `avg` param is validated. 10m (default) keeps the legacy un-split fallback; the others don't."""
+
+    def _row(self):
+        # One row carrying both the original 10m split and the per-window columns.
+        return {"timestamp": 1000, "t": "a", "v": 1000, "v_p2pool": 1000, "v_xvb": 0,
+                "v_p2pool_1m": 900, "v_xvb_1m": 0, "v_p2pool_1h": 1100, "v_xvb_1h": 0,
+                "v_p2pool_12h": 50, "v_xvb_12h": 0, "v_p2pool_24h": 10, "v_xvb_24h": 0}
+
+    def test_default_window_is_10m(self):
+        # No avg_window arg -> the original v_p2pool/v_xvb pair (today's headline series).
+        chart = build_chart([self._row()], [], "all")
+        assert chart["p2pool"][0]["y"] == 1000
+
+    @pytest.mark.parametrize("win,expected", [
+        ("1m", 900), ("10m", 1000), ("1h", 1100), ("12h", 50), ("24h", 10),
+    ])
+    def test_each_window_selects_its_columns(self, win, expected):
+        chart = build_chart([self._row()], [], "all", None, win)
+        assert chart["p2pool"][0]["y"] == expected
+
+    def test_legacy_fallback_only_on_default_window(self):
+        # A pre-#168 row has only v/v_p2pool/v_xvb. On 10m the un-split total falls back to p2pool;
+        # on another window there's no per-window data, so it reads 0 (forward-only) — NOT the total.
+        legacy = {"timestamp": 1, "t": "a", "v": 800, "v_p2pool": 0, "v_xvb": 0}
+        assert build_chart([legacy], [], "all", None, "10m")["p2pool"][0]["y"] == 800
+        assert build_chart([legacy], [], "all", None, "1h")["p2pool"][0]["y"] == 0
+
+    def test_canonical_window_validates(self):
+        for w in HASHRATE_WINDOWS:
+            assert canonical_window(w) == w
+        assert canonical_window("bogus") == DEFAULT_HASHRATE_WINDOW
+        assert canonical_window(None) == DEFAULT_HASHRATE_WINDOW
+        assert canonical_window("") == DEFAULT_HASHRATE_WINDOW
+
+    def test_build_state_echoes_selected_window(self):
+        state = build_state(_data(), _state_mgr(history=[self._row()]), "all", None, "1h")
+        assert state["avg_window"] == "1h"
+        assert state["avg_windows"] == HASHRATE_WINDOWS
+        assert state["chart"]["p2pool"][0]["y"] == 1100   # the 1h column, end to end
+
+    def test_build_state_defaults_to_10m(self):
+        state = build_state(_data(), _state_mgr(history=[self._row()]), "all")
+        assert state["avg_window"] == DEFAULT_HASHRATE_WINDOW
+        assert state["chart"]["p2pool"][0]["y"] == 1000   # the original 10m series
 
 
 # --- Hashrate / mode / tier formatting ------------------------------------------------

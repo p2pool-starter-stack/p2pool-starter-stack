@@ -13,6 +13,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Chart hashrate-averaging-window toggle (#168).** A new **Avg** control on the dashboard chart
+  plots any of xmrig-proxy's five native averaging windows — **1m / 10m / 1h / 12h / 24h**. It's
+  separate from the existing time-**Range** buttons: Range sets how much time the x-axis spans, Avg
+  sets how smooth each point is (short windows react to a rig dropping/joining within a poll or two;
+  long windows show the underlying trend). **10m is the default**, so the chart is unchanged unless
+  you switch — and the choice persists across reloads. Every option plots a *true* average for its
+  window (the old headline "15m" was really the proxy's 10m relabeled; that's gone). All five windows
+  are now captured per poll and persisted in their own history columns (additive migration, so
+  existing databases upgrade in place); per-window history is **forward-only**, and the 12h/24h
+  averages need that much rig uptime to fill — both are signposted in the UI. Display/observability
+  only; the switching algorithm is untouched.
 - **Optional dashboard login (#8).** A new `dashboard.auth` block puts a Caddy HTTP basic-auth prompt
   in front of the dashboard. It's **opt-in and off by default** — an empty `dashboard.auth.password`
   keeps today's behavior (no login), which is right for a private LAN appliance; set a password when

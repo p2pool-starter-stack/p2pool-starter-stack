@@ -204,6 +204,27 @@ WORKER_RETENTION_SEC = 7 * 24 * 3600    # 7 Days
 # re-adds the worker. 1h keeps a just-disconnected rig visible (shown as DOWN) but clears ghosts.
 WORKER_FALLOFF_SEC = 3600               # 1 Hour
 
+# --- Hashrate averaging windows (#168) ---
+# xmrig-proxy's /workers rows expose five native per-worker averaging windows. The chart lets the
+# operator pick which one to plot; these keys are the canonical identifiers shared by the collector,
+# the storage schema, and the /api/state `avg` query param. Shorter windows show responsiveness (a
+# rig dropping/joining spikes within a poll or two); longer windows show the smoothed trend.
+HASHRATE_WINDOWS = ["1m", "10m", "1h", "12h", "24h"]
+# Default plotted window. 10m is today's headline series, so the default chart is unchanged AND keeps
+# its full history (it reuses the original v_p2pool/v_xvb columns below). The other four are captured
+# and persisted going FORWARD only — pre-#168 history has no per-window data and reads 0 there, and
+# the 12h/24h averages also need that much rig uptime to fill (signposted in the UI).
+DEFAULT_HASHRATE_WINDOW = "10m"
+# window -> (p2pool column, xvb column) in the history table. 10m maps to the original pair so the
+# default view and all existing rows stay intact; the rest are additive columns (see _migrate_db).
+HASHRATE_WINDOW_COLUMNS = {
+    "1m":  ("v_p2pool_1m",  "v_xvb_1m"),
+    "10m": ("v_p2pool",     "v_xvb"),
+    "1h":  ("v_p2pool_1h",  "v_xvb_1h"),
+    "12h": ("v_p2pool_12h", "v_xvb_12h"),
+    "24h": ("v_p2pool_24h", "v_xvb_24h"),
+}
+
 # --- Donation Tier Configuration ---
 # Hashrate thresholds (H/s) for XMRvsBeast donation tiers.
 # Reference: Official XvB rules (Mega=1M, Whale=100k, VIP=10k, Donor=1k)

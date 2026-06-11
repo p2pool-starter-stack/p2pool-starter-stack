@@ -102,6 +102,31 @@ class TestSharesAndHistory:
         state_manager.update_history("bad", "bad", "bad")
         assert state_manager.get_history()[-1]["v"] == 0.0
 
+    def test_per_window_splits_persisted(self, state_manager):
+        # The chart's window toggle (#168): each window's (p2pool, xvb) split is stored in its own
+        # column and read back; an omitted window defaults to 0.
+        state_manager.update_history(
+            1000, p2pool_hr=1000, xvb_hr=0,
+            windows={"1m": (900, 0), "1h": (1100, 0), "12h": (50, 0)},  # 24h intentionally omitted
+        )
+        row = state_manager.get_history()[-1]
+        assert (row["v_p2pool_1m"], row["v_xvb_1m"]) == (900, 0)
+        assert (row["v_p2pool_1h"], row["v_xvb_1h"]) == (1100, 0)
+        assert (row["v_p2pool_12h"], row["v_xvb_12h"]) == (50, 0)
+        assert (row["v_p2pool_24h"], row["v_xvb_24h"]) == (0, 0)   # omitted -> default 0
+
+    def test_per_window_splits_survive_reload(self, tmp_path):
+        # Persisted to disk and re-read on a fresh StateManager (load() path), not just in-memory.
+        db = str(tmp_path / "windows.db")
+        sm = StateManager(db_path=db)
+        sm.update_history(1000, p2pool_hr=0, xvb_hr=1000, windows={"24h": (0, 777)})
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            assert sm2.get_history()[-1]["v_xvb_24h"] == 777
+        finally:
+            sm2.close()
+
 
 class TestDbHealth:
     def test_healthy_by_default(self, state_manager):
@@ -239,6 +264,36 @@ class TestSchemaMigration:
             assert hist[0]["timestamp"] < hist[1]["timestamp"]
             # the new split-rate columns default to 0, not NULL
             assert hist[0]["v_p2pool"] == 0 and hist[0]["v_xvb"] == 0
+            # and the #168 per-window columns are present + default 0 on migrated rows
+            assert hist[0]["v_p2pool_1h"] == 0 and hist[0]["v_xvb_24h"] == 0
+        finally:
+            sm.close()
+
+    def test_per_window_columns_added_on_upgrade(self, tmp_path):
+        # Intent (#168): a DB at the previous schema (t/v/v_p2pool/v_xvb/timestamp, no per-window
+        # columns) gains the per-window columns in place; existing rows read 0 there (capture is
+        # forward-only) while their original 10m split is preserved untouched.
+        db = str(tmp_path / "pre_168.db")
+        now = time.time()
+        t1 = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now - 3600))
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)")
+        conn.execute("INSERT INTO history VALUES (?, ?, ?, ?, ?)", (t1, 800.0, 800.0, 0.0, now - 3600))
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)
+        try:
+            cols = {info[1] for info in sm._conn.execute("PRAGMA table_info(history)").fetchall()}
+            for c in ("v_p2pool_1m", "v_xvb_1m", "v_p2pool_1h", "v_xvb_1h",
+                      "v_p2pool_12h", "v_xvb_12h", "v_p2pool_24h", "v_xvb_24h"):
+                assert c in cols, f"migration missing {c}"
+            old = sm.get_history()[-1]
+            assert old["v_p2pool"] == 800.0          # original 10m split preserved
+            assert old["v_p2pool_1h"] == 0           # forward-only: no per-window data pre-#168
+            # a new write after the upgrade fills the per-window columns
+            sm.update_history(900, p2pool_hr=900, xvb_hr=0, windows={"1h": (950, 0)})
+            assert sm.get_history()[-1]["v_p2pool_1h"] == 950
         finally:
             sm.close()
 
