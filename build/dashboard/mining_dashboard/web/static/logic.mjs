@@ -122,6 +122,19 @@ export function normalizeTheme(t) {
     return THEMES.includes(t) ? t : 'auto';
 }
 
+// Hashrate-averaging windows for the chart toggle (#168). The valid set + default live here (pure,
+// no DOM) so they're unit-tested; the localStorage wiring is in dashboard.js and the segmented
+// control (spelled-out labels) in chart.mjs. Keys match the server's `avg` param and
+// config.HASHRATE_WINDOWS.
+export const AVG_WINDOWS = ['1m', '10m', '1h', '12h', '24h'];
+export const DEFAULT_AVG_WINDOW = '10m';
+
+// Clamp any value (incl. a stale/garbage localStorage entry) to a valid window; default 10m — the
+// original headline series, so a bad or missing preference reproduces today's chart exactly.
+export function normalizeAvgWindow(w) {
+    return AVG_WINDOWS.includes(w) ? w : DEFAULT_AVG_WINDOW;
+}
+
 // Expected-earnings what-if (Issue #12). The server publishes the per-H/s daily XMR *rate*
 // (earnings.coeff_day — authoritative, computed once in service/earnings.py) and the P2Pool
 // share difficulty. Earnings are linear in hashrate, so the client only scales that one rate to

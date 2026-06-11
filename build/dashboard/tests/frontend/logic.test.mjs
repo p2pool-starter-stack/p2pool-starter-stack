@@ -14,6 +14,7 @@ import {
     THEMES, THEME_ORDER, normalizeTheme,
     clampZoomWindow, fmtWindowDuration,
     SERIES_KEYS, normalizeSeries,
+    AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis,
     parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
@@ -101,6 +102,21 @@ test('THEME_ORDER: the control renders every theme exactly once', () => {
     // The segmented control maps over THEME_ORDER, so it must cover the same set as THEMES with
     // no dupes/strays — otherwise a mode would be unreachable or rendered twice.
     assert.deepEqual([...THEME_ORDER].sort(), [...THEMES].sort());
+});
+
+test('normalizeAvgWindow: passes valid windows through, defaults the rest to 10m (#168)', () => {
+    for (const w of AVG_WINDOWS) assert.equal(normalizeAvgWindow(w), w);
+    assert.equal(normalizeAvgWindow(null), '10m');     // nothing saved yet
+    assert.equal(normalizeAvgWindow('7d'), '10m');     // garbage in localStorage
+    assert.equal(normalizeAvgWindow(undefined), '10m');
+    assert.equal(DEFAULT_AVG_WINDOW, '10m');           // the default is today's headline series
+});
+
+test('AVG_WINDOWS: the client window set matches the server contract (#168)', () => {
+    // The buttons (chart.mjs WINDOWS) and the server (config.HASHRATE_WINDOWS) must agree on the
+    // same five keys in the same order, or a button would request a window the server canonicalizes
+    // away (silently snapping back to 10m).
+    assert.deepEqual(AVG_WINDOWS, ['1m', '10m', '1h', '12h', '24h']);
 });
 
 // --- Issue #47: zoom window helpers --------------------------------------------------

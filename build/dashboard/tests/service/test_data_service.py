@@ -5,8 +5,8 @@ import pytest
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
-    _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary,
-    _merge_proxy_summary, _shares_to_record, WorkerLifecycle,
+    _aggregate_window_hashrates, _parse_proxy_list_worker, _parse_legacy_dict_worker,
+    _parse_proxy_summary, _merge_proxy_summary, _shares_to_record, WorkerLifecycle,
 )
 
 
@@ -57,12 +57,13 @@ class TestProxyWorkerParsers:
     """The per-shape row parsers used by _normalize_proxy_workers (Issue #39)."""
 
     def test_parse_list_row_named_fields(self):
-        # idx2=connections, idx3/4/5=accepted/rejected/invalid, idx8=1m kH/s, idx9=10m kH/s,
-        # idx7=last share ms.
-        row = ["rig", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
+        # idx2=connections, idx3/4/5=accepted/rejected/invalid, idx7=last share ms, and the five
+        # native hashrate windows at idx8..12 = 1m/10m/1h/12h/24h kH/s (the 1h/12h/24h ones are #168).
+        row = ["rig", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 3.0, 4.0, 5.0]
         w = _parse_proxy_list_worker(row)
         assert w == {"name": "rig", "ip": "10.0.0.1", "status": "online",
-                     "h10": 1000, "h60": 1000, "h15": 2000, "uptime": 0,
+                     "h10": 1000, "h60": 1000, "h15": 2000,
+                     "h1h": 3000, "h12h": 4000, "h24h": 5000, "uptime": 0,
                      "accepted": 0, "rejected": 0, "invalid": 0}
 
     def test_parse_list_row_share_counts(self):
@@ -82,8 +83,11 @@ class TestProxyWorkerParsers:
     def test_parse_legacy_dict_row(self):
         w = _parse_legacy_dict_worker({"id": "old", "ip": "1.2.3.4",
                                        "hashrate": [10, 20, 30], "uptime": 5})
+        # The legacy shape has only 10s/60s/15m, so the #168 long windows fall back to its longest
+        # available average (hr[2]=30) rather than reading zero.
         assert w == {"name": "old", "ip": "1.2.3.4", "status": "online",
-                     "h10": 10, "h60": 20, "h15": 30, "uptime": 5,
+                     "h10": 10, "h60": 20, "h15": 30,
+                     "h1h": 30, "h12h": 30, "h24h": 30, "uptime": 5,
                      "accepted": 0, "rejected": 0, "invalid": 0}
 
     def test_parse_legacy_dict_share_counts(self):
@@ -296,6 +300,37 @@ class TestAggregateHashrate:
 
     def test_empty(self):
         assert _aggregate_hashrate([]) == (0, 0)
+
+
+class TestAggregateWindowHashrates:
+    """Per-averaging-window totals for the chart toggle (#168). Each window is its own honest sum —
+    no fallback between windows — and offline workers contribute nothing."""
+
+    def test_sums_each_window_independently(self):
+        workers = [
+            {"status": "online", "h10": 100, "h1h": 300, "h12h": 1200, "h24h": 2400},
+            {"status": "online", "h10": 50,  "h1h": 150, "h12h": 600,  "h24h": 1200},
+        ]
+        assert _aggregate_window_hashrates(workers) == {
+            "1m": 150, "1h": 450, "12h": 1800, "24h": 3600,
+        }
+
+    def test_no_fallback_between_windows(self):
+        # Unlike the headline aggregate, a not-yet-filled long window stays low rather than borrowing
+        # a shorter window's value — a fresh rig reads ~0 on 24h even with a healthy 1m.
+        workers = [{"status": "online", "h10": 1000, "h1h": 0, "h12h": 0, "h24h": 0}]
+        totals = _aggregate_window_hashrates(workers)
+        assert totals == {"1m": 1000, "1h": 0, "12h": 0, "24h": 0}
+
+    def test_offline_excluded_and_missing_keys_zero(self):
+        workers = [
+            {"status": "online", "h10": 100},                              # missing long windows -> 0
+            {"status": "offline", "h10": 9999, "h1h": 9999, "h24h": 9999}, # excluded entirely
+        ]
+        assert _aggregate_window_hashrates(workers) == {"1m": 100, "1h": 0, "12h": 0, "24h": 0}
+
+    def test_empty(self):
+        assert _aggregate_window_hashrates([]) == {"1m": 0, "1h": 0, "12h": 0, "24h": 0}
 
 
 class TestInit:

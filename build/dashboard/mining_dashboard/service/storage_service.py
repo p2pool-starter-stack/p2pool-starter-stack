@@ -7,7 +7,22 @@ import time
 import random
 from collections import deque
 from typing import Dict, List, Optional, Any
-from mining_dashboard.config.config import DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
+from mining_dashboard.config.config import (
+    DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC,
+    HASHRATE_WINDOW_COLUMNS,
+)
+
+# The 10m window reuses the original v_p2pool/v_xvb pair; every other window in
+# HASHRATE_WINDOW_COLUMNS gets its own additive history column (#168). This flat, insertion-ordered
+# list drives the CREATE, the migration, the INSERT, and the SELECT so they can never drift apart.
+_BASE_HISTORY_COLS = {"v_p2pool", "v_xvb"}
+_WINDOW_EXTRA_COLUMNS = [
+    col
+    for pair in HASHRATE_WINDOW_COLUMNS.values()
+    for col in pair
+    if col not in _BASE_HISTORY_COLS
+]
+
 
 class StateManager:
     """
@@ -86,7 +101,10 @@ class StateManager:
 
     def _create_tables(self):
         """Creates necessary tables if they don't exist."""
-        self._conn.execute("CREATE TABLE IF NOT EXISTS history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)")
+        # Per-window hashrate columns (#168) are appended so a fresh DB starts with them; existing
+        # DBs get them via _migrate_db. Same source list (_WINDOW_EXTRA_COLUMNS) for both paths.
+        extra = "".join(f", {c} REAL DEFAULT 0" for c in _WINDOW_EXTRA_COLUMNS)
+        self._conn.execute(f"CREATE TABLE IF NOT EXISTS history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL{extra})")
         self._conn.execute("CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)")
@@ -118,7 +136,14 @@ class StateManager:
             self._conn.execute("ALTER TABLE history ADD COLUMN timestamp REAL")
             self._conn.execute("UPDATE history SET timestamp = CAST(strftime('%s', t) AS REAL) WHERE timestamp IS NULL")
             self._conn.execute("UPDATE history SET timestamp = 0 WHERE timestamp IS NULL")
-        
+
+        # Per-window hashrate columns (#168) — additive, forward-only. Pre-existing rows keep DEFAULT
+        # 0 (no per-window data was captured before this version); the chart signposts that.
+        for col in _WINDOW_EXTRA_COLUMNS:
+            if col not in columns:
+                self.logger.info(f"Migrating DB: Adding {col} column to history")
+                self._conn.execute(f"ALTER TABLE history ADD COLUMN {col} REAL DEFAULT 0")
+
         # Workers Table Migrations
         cursor.execute("PRAGMA table_info(workers)")
         w_columns = {info[1] for info in cursor.fetchall()}
@@ -140,13 +165,17 @@ class StateManager:
                     # 1. Load History
                     # Limit to retention period to prevent memory bloat
                     history_cutoff = time.time() - HISTORY_RETENTION_SEC
-                    cursor.execute("SELECT t, v, v_p2pool, v_xvb, timestamp FROM history WHERE timestamp > ? ORDER BY timestamp ASC", (history_cutoff,))
+                    hist_cols = ", ".join(["t", "v", "v_p2pool", "v_xvb", "timestamp"] + _WINDOW_EXTRA_COLUMNS)
+                    cursor.execute(f"SELECT {hist_cols} FROM history WHERE timestamp > ? ORDER BY timestamp ASC", (history_cutoff,))
                     history = []
                     for row in cursor.fetchall():
                         item = dict(row)
-                        # Sanitize NULLs to ensure chart stability
+                        # Sanitize NULLs to ensure chart stability (the per-window columns are NULL on
+                        # pre-#168 rows and 0 thereafter — both read as 0 for the chart).
                         item["v_p2pool"] = item.get("v_p2pool") or 0.0
                         item["v_xvb"] = item.get("v_xvb") or 0.0
+                        for col in _WINDOW_EXTRA_COLUMNS:
+                            item[col] = item.get(col) or 0.0
                         history.append(item)
                     self.state["hashrate_history"] = deque(history)
 
@@ -199,17 +228,39 @@ class StateManager:
         except sqlite3.Error as e:
             self.logger.error(f"DB Load Error: {e}")
 
-    def update_history(self, hashrate: float, p2pool_hr: float = 0, xvb_hr: float = 0):
-        """Appends a new hashrate data point to the history buffer."""
+    def update_history(self, hashrate: float, p2pool_hr: float = 0, xvb_hr: float = 0, windows=None):
+        """Appends a new hashrate data point to the history buffer.
+
+        ``windows`` (Issue #168) is an optional ``{window: (p2pool_hr, xvb_hr)}`` mapping of the
+        per-averaging-window splits (1m / 1h / 12h / 24h — the 10m window is the base
+        ``p2pool_hr``/``xvb_hr`` pair above). Each is stored in its own column so the chart's window
+        toggle can plot a true average per window; an omitted/unknown window defaults to 0.
+        """
         t_str = time.strftime('%Y-%m-%d %H:%M:%S')
         ts = time.time()
-        
+
         try:
             v_val = round(float(hashrate), 2)
             v_p2p = round(float(p2pool_hr), 2)
             v_xvb = round(float(xvb_hr), 2)
         except (ValueError, TypeError):
             v_val, v_p2p, v_xvb = 0.0, 0.0, 0.0
+
+        # Per-window splits -> their columns (#168). Default every extra column to 0, then fill the
+        # windows we were handed; a bad value falls back to 0 rather than aborting the whole write.
+        extra = {col: 0.0 for col in _WINDOW_EXTRA_COLUMNS}
+        for win, split in (windows or {}).items():
+            cols = HASHRATE_WINDOW_COLUMNS.get(win)
+            if not cols:
+                continue
+            p_col, x_col = cols
+            try:
+                if p_col in extra:
+                    extra[p_col] = round(float(split[0]), 2)
+                if x_col in extra:
+                    extra[x_col] = round(float(split[1]), 2)
+            except (ValueError, TypeError, IndexError):
+                pass
 
         with self._lock:
             # 1. Update In-Memory State
@@ -218,7 +269,8 @@ class StateManager:
                 "v": v_val,
                 "v_p2pool": v_p2p,
                 "v_xvb": v_xvb,
-                "timestamp": ts
+                "timestamp": ts,
+                **extra,
             })
 
             # Prune in-memory history to enforce retention policy
@@ -232,9 +284,12 @@ class StateManager:
                 if not self._conn:
                     return
                 with self._conn:
+                    cols = ["t", "v", "v_p2pool", "v_xvb", "timestamp"] + _WINDOW_EXTRA_COLUMNS
+                    placeholders = ", ".join("?" * len(cols))
+                    values = (t_str, v_val, v_p2p, v_xvb, ts) + tuple(extra[c] for c in _WINDOW_EXTRA_COLUMNS)
                     self._conn.execute(
-                        "INSERT INTO history (t, v, v_p2pool, v_xvb, timestamp) VALUES (?, ?, ?, ?, ?)",
-                        (t_str, v_val, v_p2p, v_xvb, ts)
+                        f"INSERT INTO history ({', '.join(cols)}) VALUES ({placeholders})",
+                        values
                     )
                     # Prune old history from DB to prevent unbounded growth (Probabilistic pruning to save I/O)
                     if random.random() < 0.05:

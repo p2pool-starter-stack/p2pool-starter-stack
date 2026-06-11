@@ -415,7 +415,7 @@ function WorkersTable({ workers, summary, ui, onSort }) {
 
 // --- Operational view ----------------------------------------------------------------
 
-function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom, onToggleSeries }) {
+function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom, onToggleSeries, onAvgWindow }) {
     const advanced = ui.view === 'advanced';
     // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
     // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
@@ -430,8 +430,9 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
         </div>
         <div class="grid">
             <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
+                          avgWindow=${ui.avg}
                           onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                          onToggleSeries=${onToggleSeries} />
+                          onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
         <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
         <div class="grid">
@@ -448,7 +449,7 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
 
 // --- Root ----------------------------------------------------------------------------
 
-export function App({ state, connected, ui, onRange, onSort, onView, onTheme, onZoom, onResetZoom, onToggleSeries }) {
+export function App({ state, connected, ui, onRange, onSort, onView, onTheme, onZoom, onResetZoom, onToggleSeries, onAvgWindow }) {
     // The theme toggle is fixed-position and always available, even before the first data load.
     const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
     if (!state) {
@@ -466,7 +467,7 @@ export function App({ state, connected, ui, onRange, onSort, onView, onTheme, on
                 <${HeroBand} state=${state} />
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                                  onToggleSeries=${onToggleSeries} />
+                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
               <//>`}
         ${switcher}
     <//>`;
