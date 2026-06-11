@@ -160,6 +160,11 @@ stack_upgrade() {
     load_preserved_state
     ensure_directories
     resolve_dashboard_host        # non-interactive; sets HOST_IP for the render
+    # render_env writes DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}; load_preserved_state
+    # doesn't carry it, so re-assert it here (as apply does) — otherwise every upgrade rewrites the
+    # flag to false and the next require_deployed command (up/apply/upgrade) errors "run setup". We
+    # only reach here past require_deployed, so the stack IS deployed and the flag must stay true.
+    DEPLOYMENT_COMPLETED=true
     render_env "${ENV_FILE}.new"
     mv "${ENV_FILE}.new" "$ENV_FILE"
     inject_service_configs
