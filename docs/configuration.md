@@ -89,6 +89,8 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `tor.data_dir` | `auto` | Where Tor's state (including onion keys) lives. `auto` = `./data/tor`. |
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
+| `dashboard.auth.username` | `admin` | Login name for the dashboard when a password is set (see below). Letters, digits, and `. _ @ -`, 1–64 chars. Ignored while `dashboard.auth.password` is empty. |
+| `dashboard.auth.password` | `""` _(off)_ | Optional **password to open the dashboard** — turns on a Caddy [HTTP basic-auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth) prompt in front of every page. `""` (default) = **no login**, anyone who can reach the dashboard sees it (fine for a private LAN appliance). Any 8–128-character string (no double-quotes) turns the prompt on. The plaintext lives **only in your owner-only `config.json`**; pithead bcrypt-hashes it with the pinned Caddy image and stores **only the hash** in `.env`, so the password itself is never persisted in rendered state. Basic-auth credentials travel in cleartext over HTTP, so keep `dashboard.secure: true` (the default) — pithead warns if you set a password with `secure: false`. See [Exposing the dashboard safely](#exposing-the-dashboard-safely). |
 | `dashboard.timezone` | `auto` | Timezone for the dashboard's timestamps and charts. `auto` = **the host machine's timezone** (auto-detected, falling back to `Etc/UTC`); set an IANA name (e.g. `America/Chicago`) to override. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
 | `dashboard.tari_required` | `true` | How much a Tari problem holds up the rest of the stack. Monero is **required** to mine, so its behavior isn't configurable: a monerod outage always rejects workers (stops `xmrig-proxy` so miners **fail over to their backup pools**), and the miner is always held until monerod finishes syncing. Tari is **only needed for merge mining**, so this one flag decides how much it blocks. **`true` (default):** a Tari outage also rejects workers, the miner waits for Tari's initial sync too, and a Tari-only (re)sync shows the full-screen Sync view. **`false` (non-blocking):** keep mining Monero through a Tari outage, start mining as soon as Monero is synced (Tari finishes in the background), and keep the normal dashboard — with a `Tari syncing` indicator — instead of the takeover screen. |
@@ -129,6 +131,53 @@ and sets ownership automatically (Monero/Tari/P2Pool to your user, Tor to the co
 > **Note:** `apply` does **not** copy your existing data into a new location — it only points the
 > container at the new path. If you're relocating data you already have, move the files yourself
 > first (with the stack stopped), then update `data_dir` and run `apply`.
+
+---
+
+## Exposing the dashboard safely
+
+The dashboard is designed for a **trusted private network** — the home or office LAN the appliance
+sits on. By default it has no login: anyone who can reach the host can open it. That's the right
+trade-off for a single-user box behind your router, and it stays the default.
+
+You should add a login (and keep HTTPS on) whenever the dashboard is reachable by anyone you don't
+fully trust — for example:
+
+- the machine is **shared** (a co-hosted home server other people use), or
+- you've **port-forwarded / reverse-proxied** the dashboard so it's reachable from outside the LAN, or
+- you simply want a second layer in front of it.
+
+Turn it on by setting a password in `config.json` and running `./pithead apply`:
+
+```json
+{
+    "dashboard": {
+        "secure": true,
+        "auth": { "username": "admin", "password": "a-long-passphrase" }
+    }
+}
+```
+
+How it works and what to keep in mind:
+
+- **The password is bcrypt-hashed, never stored in cleartext.** pithead hashes it with the **same
+  pinned Caddy image** the stack already runs (`caddy hash-password`) and writes **only the hash** to
+  `.env`. The plaintext exists only in your owner-only `config.json` — treat that file like any other
+  secret (it's already git-ignored). The hash is stable across `apply` runs and only re-computed when
+  you actually change the password, so the Caddyfile doesn't churn.
+- **Keep `dashboard.secure: true`.** Basic-auth sends the credentials with every request; over plain
+  HTTP (`secure: false`) they'd travel in cleartext. pithead **warns** if you set a password without
+  HTTPS, but won't stop you. With the default `tls internal`, Caddy serves a locally-trusted
+  certificate — your browser will warn the first time unless you trust Caddy's local CA.
+- **A login is access control for the *dashboard*, not the miner.** It gates the web UI only. The
+  stratum port miners connect to is a separate surface — gate that with
+  [`p2pool.stratum_password`](#configuration-reference) and `p2pool.stratum_bind`.
+- **Exposing to the public internet is still discouraged.** A password plus HTTPS is the right
+  baseline, but the safest remote-access path remains a VPN / SSH tunnel / Tailscale back to the LAN
+  rather than a forwarded port. Basic-auth has no rate-limiting or lockout on its own.
+
+To remove the login again, clear the password (`"password": ""`) and `apply` — pithead drops the
+`basic_auth` block and the dashboard is open on the LAN as before.
 
 ---
 

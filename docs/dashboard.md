@@ -202,6 +202,10 @@ estimate. It is deliberately scoped to P2Pool — it is **not** an XvB or a Tari
   `./pithead apply`.
 - **Reaching it from another machine.** Use the hostname/IP of the stack server. If your hostname
   doesn't resolve on your LAN, set `dashboard.host` in `config.json` to an address that does.
+- **Adding a login.** By default the dashboard has no password — fine for a private LAN appliance.
+  If the box is shared or reachable beyond your LAN, set `dashboard.auth.password` (keep
+  `dashboard.secure: true`) and run `./pithead apply` to put a login prompt in front of it. See
+  [Configuration › Exposing the dashboard safely](configuration.md#exposing-the-dashboard-safely).
 - **On your phone.** The dashboard is responsive — open the same URL on a phone and the layout
   reflows to a single column with a stacked header, so you can check on the stack from the couch.
 - **Stuck on Sync Mode?** That usually just means the chain is still downloading. Check

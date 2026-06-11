@@ -13,6 +13,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Optional dashboard login (#8).** A new `dashboard.auth` block puts a Caddy HTTP basic-auth prompt
+  in front of the dashboard. It's **opt-in and off by default** — an empty `dashboard.auth.password`
+  keeps today's behavior (no login), which is right for a private LAN appliance; set a password when
+  the box is **shared or reachable beyond the LAN**. pithead bcrypt-hashes the password with the
+  **already-pinned Caddy image** (`caddy hash-password`) and persists **only the hash** in `.env`
+  (base64-encoded so bcrypt's `$` doesn't spam compose interpolation warnings) — the plaintext lives
+  solely in your owner-only `config.json`. A sha256 fingerprint of the plaintext keeps the hash
+  **stable across `apply` runs** (re-hashed only when the password actually changes, so the Caddyfile
+  doesn't churn). The username/password are validated before render, the secret is **never echoed**
+  in the change preview, and `apply` **warns** if a password is set without `dashboard.secure: true`
+  (basic-auth is cleartext over plain HTTP). Documented in
+  `docs/configuration.md#exposing-the-dashboard-safely`.
 - **Explicit "VIP" win-eligibility indicator on the dashboard** (#158). To *collect* an XvB raffle
   win you must be a **VIP** — have a share in the P2Pool PPLNS window. This is universal across **all**
   tiers and independent of donation amount: a Mega donor pushing 1 MH/s with **no** PPLNS share is

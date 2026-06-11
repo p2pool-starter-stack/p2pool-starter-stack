@@ -43,6 +43,12 @@ case "$*" in
   "exec tor cat /var/lib/tor/monero/hostname") echo "mona.onion" ;;
   "exec tor cat /var/lib/tor/tari/hostname")   echo "taria.onion" ;;
   "exec tor cat /var/lib/tor/p2pool/hostname") echo "p2pa.onion" ;;
+  *hash-password*)
+    # Fake `caddy hash-password` (#8): a per-password digest so enable/change paths differ, and it
+    # never echoes the plaintext back (real bcrypt doesn't either) — keeps the leak checks honest.
+    _pw="${*##*--plaintext }"
+    _d="$(printf '%s' "$_pw" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-22)"
+    printf '$2y$14$%s\n' "$_d" ;;
 esac
 exit 0
 EOF
@@ -143,6 +149,42 @@ assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change M
 assert_contains "tari mem is INFO"   "$(run_sourced "$SANDBOX" describe_change TARI_MEM_LIMIT 2048m 4g)" "INFO"
 assert_contains "monero mem is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)"  "INFO"
 assert_contains "monero mem recreate note" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "monerod container is recreated"
+
+echo "== unit: dashboard auth (#8) =="
+# Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
+# hash is a secret and must never surface in the change preview; the internal fingerprint stays silent.
+assert_contains "dash login enable is DEST"  "$(run_sourced "$SANDBOX" describe_change DASHBOARD_AUTH_HASH_B64 '' aGFzaA==)" "DEST"
+assert_contains "dash login disable is INFO" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_AUTH_HASH_B64 aGFzaA== '')" "INFO"
+case "$(run_sourced "$SANDBOX" describe_change DASHBOARD_AUTH_HASH_B64 b2xkSA== bmV3SA==)" in
+    *b2xkSA==*|*bmV3SA==*) bad "dash login change hides the hash" "hash value leaked into the change preview" ;;
+    *DEST*)                ok  "dash login change hides the hash (DEST, no value shown)" ;;
+    *)                     bad "dash login change hides the hash" "expected DEST" ;;
+esac
+assert_contains "dash login username change is shown" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_AUTH_USER admin bob)" "admin → bob"
+case "$(run_sourced "$SANDBOX" describe_change DASHBOARD_AUTH_PW_FP aaa bbb)" in
+    *PW_FP*|*updated*|*fingerprint*) bad "dash login fingerprint stays silent" "internal fingerprint surfaced in the preview" ;;
+    INFO*)                           ok  "dash login fingerprint stays silent (no preview line)" ;;
+    *)                               bad "dash login fingerprint stays silent" "unexpected message emitted" ;;
+esac
+
+# generate_caddyfile renders a basic_auth block ONLY when a hash is configured, carrying the username
+# and the *decoded* bcrypt string Caddy expects; with no hash the dashboard stays open (no basic_auth).
+auth_hb64="$(printf '%s' '$2y$14$UNITTESTbcrypthashvalue000000000000000000000000000000' | openssl base64 -A)"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_on="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        generate_caddyfile >/dev/null 2>&1; cat Caddyfile )"
+assert_contains "caddy renders basic_auth when login set" "$caddy_on" "basic_auth"
+assert_contains "caddy basic_auth carries the username"   "$caddy_on" "admin"
+assert_contains "caddy basic_auth carries decoded hash"   "$caddy_on" '$2y$14$UNITTESTbcrypthashvalue'
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_off="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="" \
+        generate_caddyfile >/dev/null 2>&1; cat Caddyfile )"
+case "$caddy_off" in
+    *basic_auth*) bad "caddy stays open when no login set" "basic_auth rendered without a password" ;;
+    *)            ok  "caddy stays open when no login set (no basic_auth)" ;;
+esac
 
 echo "== unit: explain_subnet_collision (#180) =="
 ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"
@@ -402,6 +444,71 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
 assert_rc "unsafe stratum_password rejected" "$rc" "1"
 assert_contains "stratum_password message" "$out" "p2pool.stratum_password"
+
+# Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
+# hashing; the password is validated for length/charset too. Both fail fast on apply.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"bad user","password":"longenough1"}} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "invalid dashboard.auth.username rejected" "$rc" "1"
+assert_contains "dashboard.auth.username message" "$out" "dashboard.auth.username"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"short"}} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
+assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.password"
+
+echo "== black-box: dashboard auth lifecycle (#8) =="
+# The hashing reads the pinned Caddy image out of docker-compose.yml and shells out to the stubbed
+# `caddy hash-password`, so the whole enable → reuse → change → disable path runs offline.
+cp "$ROOT/docker-compose.yml" "$V/docker-compose.yml"
+AUTH_LOG="$V/auth-docker.log"
+
+# (1) ENABLE: a password turns on basic_auth — hash + fingerprint persisted, plaintext never stored.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":0}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"hunter2hunter2"}} }\n' "$WALLET" > "$V/config.json"
+: > "$AUTH_LOG"
+out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "auth enable applies cleanly" "$rc" "0"
+assert_eq "auth username persisted" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_USER)" "admin"
+hash1="$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_HASH_B64)"
+fp1="$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_PW_FP)"
+[ -n "$hash1" ] && ok "auth hash persisted (base64)" || bad "auth hash persisted (base64)" "empty"
+[ -n "$fp1" ]   && ok "auth fingerprint persisted"   || bad "auth fingerprint persisted"   "empty"
+assert_contains "auth hashed via the pinned caddy image" "$(cat "$AUTH_LOG")" "hash-password"
+assert_contains "Caddyfile gains basic_auth"             "$(cat "$V/Caddyfile")" "basic_auth"
+case "$(cat "$V/.env" "$V/Caddyfile")" in
+    *hunter2hunter2*) bad "auth plaintext never persisted" "password leaked into .env/Caddyfile" ;;
+    *)                ok  "auth plaintext never persisted" ;;
+esac
+
+# (2) REUSE: re-applying (here nudging an unrelated knob) keeps the SAME hash and does NOT re-hash —
+# bcrypt is salted, so a stable fingerprint is what keeps the Caddyfile from churning every apply.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"hunter2hunter2"}} }\n' "$WALLET" > "$V/config.json"
+: > "$AUTH_LOG"
+out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "unchanged password keeps the same hash" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_HASH_B64)" "$hash1"
+case "$(cat "$AUTH_LOG")" in
+    *hash-password*) bad "unchanged password is not re-hashed" "caddy hash-password was called again" ;;
+    *)               ok  "unchanged password is not re-hashed (stable hash)" ;;
+esac
+
+# (3) CHANGE: a new password re-hashes (fingerprint changes) and recreates the caddy container.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"freshpass99"}} }\n' "$WALLET" > "$V/config.json"
+: > "$AUTH_LOG"
+out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "changed password re-hashes"     "$(cat "$AUTH_LOG")" "hash-password"
+assert_eq "changed password updates fingerprint" "$([ "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_PW_FP)" != "$fp1" ] && echo changed)" "changed"
+assert_contains "auth change recreates caddy"     "$(cat "$AUTH_LOG")" "restart caddy"
+
+# (4) DISABLE: clearing the password drops basic_auth — hash cleared, dashboard reachable again.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "auth disable clears the hash" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_HASH_B64)" ""
+case "$(cat "$V/Caddyfile")" in
+    *basic_auth*) bad "auth disable drops basic_auth" "basic_auth still present in the Caddyfile" ;;
+    *)            ok  "auth disable drops basic_auth" ;;
+esac
 
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env

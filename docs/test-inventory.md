@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 454 dashboard unit tests · 12 contract tests · 28 frontend
-tests · 30 `pithead` shell sections · 15 harness self-test sections ·
+tests · 32 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 30 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 454 |
 | 1 — Unit | frontend (node --test) | 28 |
-| 1 — Unit | `pithead` shell suite | 30 sections |
+| 1 — Unit | `pithead` shell suite | 32 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -557,7 +557,7 @@ tests · 30 `pithead` shell sections · 15 harness self-test sections ·
 - bandBorderWidth: zero-height segments get no border, real ones keep full width
 - uptimeCell: online shows uptime, offline shows DOWN
 
-### `pithead` shell suite (tests/stack/run.sh) — 30 sections
+### `pithead` shell suite (tests/stack/run.sh) — 32 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -566,6 +566,7 @@ tests · 30 `pithead` shell sections · 15 harness self-test sections ·
 - unit: docker_boot_enabled (#137)
 - unit: is_valid_host (#130)
 - unit: describe_change
+- unit: dashboard auth (#8)
 - unit: explain_subnet_collision (#180)
 - unit: env helpers
 - unit: export_build_provenance (Issue #58)
@@ -578,6 +579,7 @@ tests · 30 `pithead` shell sections · 15 harness self-test sections ·
 - black-box: CLI dispatch
 - black-box: guards
 - black-box: config validation
+- black-box: dashboard auth lifecycle (#8)
 - black-box: apply preserves secrets + propagates
 - black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level)
 - black-box: local node creds auto-generated + persisted (#50)
@@ -722,5 +724,5 @@ tests · 30 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **553** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **555** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
