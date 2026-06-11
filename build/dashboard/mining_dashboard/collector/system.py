@@ -137,9 +137,12 @@ def get_hugepages_status():
             elif hp_used > 0:
                 return "Enabled", "status-ok", val_str
             
-            # 3. Total > 0 but Used == 0: Enabled but miner not using it yet.
+            # 3. Total > 0 but Used == 0: reserved but the miner isn't consuming them yet — the
+            # normal startup / sync-hold state, NOT an error, so render it green (#175). Keep the
+            # "Allocated" label (distinct from actively-"Enabled") but with the ok class. (The
+            # genuinely-bad case is hp_total == 0 / "Disabled"; "Unknown" below stays warn.)
             else:
-                return "Allocated", "status-warn", val_str
+                return "Allocated", "status-ok", val_str
                 
     except (FileNotFoundError, ValueError, IndexError):
         # Gracefully handle non-Linux systems or parsing errors

@@ -169,3 +169,15 @@ export function formatTimeToShare(sec) {
     if (sec === null || sec === undefined || !Number.isFinite(sec) || sec <= 0) return '—';
     return fmtWindowDuration(sec * 1000);
 }
+
+// Width of a stacked hashrate band's top border-line for one chart segment. Returns 0 when the band
+// has zero height across the segment (both endpoints y === 0), so a flat-zero series doesn't paint
+// its colored border-line over the other series' edge — the "blue-purple at 100% P2Pool" artifact,
+// and the symmetric stray-blue-line in XvB-only mode (#184). `series` is the [{x, y}] data; `ctx` is
+// the Chart.js line-segment context (p0DataIndex / p1DataIndex). Partial-zero spans are handled
+// per-segment, so a window that's only briefly all-one-pool still hides just the zero stretch.
+export function bandBorderWidth(series, ctx, fullWidth) {
+    const y0 = series[ctx.p0DataIndex]?.y;
+    const y1 = series[ctx.p1DataIndex]?.y;
+    return (y0 === 0 && y1 === 0) ? 0 : fullWidth;
+}

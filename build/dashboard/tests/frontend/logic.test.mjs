@@ -17,6 +17,7 @@ import {
     heroKpis,
     parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
+    bandBorderWidth,
 } from '../../mining_dashboard/web/static/logic.mjs';
 
 const col = (key) => WORKER_COLUMNS.findIndex((c) => c.key === key);
@@ -243,4 +244,18 @@ test('heroKpis: total is accent-coloured; blocks and tier carry no colour class'
     assert.equal(k['Total Hashrate'].cls, 'text-accent');
     assert.equal(k['Blocks Found'].cls, '');
     assert.equal(k['XvB Tier'].cls, '');
+});
+
+// #184: a flat-zero band must not paint its top border-line over the other series' edge.
+test('bandBorderWidth: zero-height segments get no border, real ones keep full width', () => {
+    // XvB off all window: every XvB sample is 0 → no purple line anywhere.
+    const xvb = [{ x: 1, y: 0 }, { x: 2, y: 0 }, { x: 3, y: 0 }];
+    assert.equal(bandBorderWidth(xvb, { p0DataIndex: 0, p1DataIndex: 1 }, 3.5), 0);
+    assert.equal(bandBorderWidth(xvb, { p0DataIndex: 1, p1DataIndex: 2 }, 3.5), 0);
+    // A series with real hashrate keeps its border on non-zero segments...
+    const p2p = [{ x: 1, y: 0 }, { x: 2, y: 50 }, { x: 3, y: 80 }];
+    assert.equal(bandBorderWidth(p2p, { p0DataIndex: 1, p1DataIndex: 2 }, 3.5), 3.5);
+    // ...and drops it only where the band is genuinely flat-zero (one endpoint zero is enough to keep
+    // the rising edge visible).
+    assert.equal(bandBorderWidth(p2p, { p0DataIndex: 0, p1DataIndex: 1 }, 3.5), 3.5);
 });

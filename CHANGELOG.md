@@ -193,6 +193,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   time ticked fresh (~every 30s) even while the site was unreachable for hours, hiding stale data. The
   `last_update` timestamp now bumps only on a genuine fetch (when `avg_1h`/`avg_24h` arrive), not on
   the per-cycle local writes (`mode`, `donation_fraction`, `fail_count`).
+- **HugePages header badge no longer reads red when reserved-but-not-yet-used** (#175). Right after
+  boot, or while Monero syncs and the miner is held, HugePages are correctly allocated but `0` are in
+  use yet — the badge showed **"Allocated (0 / N)" in red**, implying an error. The reserved-but-unused
+  state now renders **green** (it's the normal startup state); red is reserved for the genuinely-bad
+  `HugePages_Total == 0` ("Disabled") case. The "Unknown" (meminfo unreadable) state is unchanged.
+- **Hashrate chart no longer reads blue-purple when mining 100% to P2Pool** (#184). The chart is a
+  stacked area where each band draws a colored top border-line; when a series is flat-zero (XvB off,
+  or P2Pool zero in XvB-only mode) its border was painted along the *other* series' edge — so an
+  all-P2Pool window looked blue-purple, implying a split that wasn't there. Each band's border is now
+  suppressed per-segment wherever the band has zero height, so a single-pool window reads as one solid
+  color (the truthful picture) without having to manually hide the empty series.
 - **A fully-synced monerod no longer shows as "loading" in the dashboard's Monero panel.** A synced
   node reports `target_height: 0` (no target), so the panel's `done` check — which compared
   `percent >= 100` against a target, and derived the state string from `has_target` first — never

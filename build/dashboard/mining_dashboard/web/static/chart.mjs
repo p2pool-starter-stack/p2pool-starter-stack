@@ -16,7 +16,7 @@
 // gestures hand the visible window up via onZoom, which refetches that window from the server at
 // duration-adaptive resolution — so zooming in reveals finer data.
 import { Component, createRef, html } from './preact.mjs';
-import { fmtTimestamp, clampZoomWindow } from './logic.mjs';
+import { fmtTimestamp, clampZoomWindow, bandBorderWidth } from './logic.mjs';
 
 const RANGES = [['1h', '1 Hr'], ['24h', '24 Hr'], ['1w', '1 Wk'], ['1m', '1 Mo']];
 
@@ -134,10 +134,15 @@ export class ChartCard extends Component {
             type: 'line',
             data: {
                 datasets: [
+                    // segment.borderWidth hides each band's top border-line where the band is flat-zero,
+                    // so an all-to-one-pool window reads as a single solid color instead of the empty
+                    // series painting its edge line over the other's (#184).
                     { label: 'P2Pool', data: d.p2pool, borderColor: c.accent, borderWidth: AREA_BORDER_WIDTH,
+                      segment: { borderWidth: (ctx) => bandBorderWidth(d.p2pool, ctx, AREA_BORDER_WIDTH) },
                       tension, fill: true, hidden: vis.p2pool === false,
                       stack: 'hr', backgroundColor: areaFill(c.accent), pointRadius: 0, pointHitRadius: 20 },
                     { label: 'XvB', data: d.xvb, borderColor: c.purple, borderWidth: AREA_BORDER_WIDTH,
+                      segment: { borderWidth: (ctx) => bandBorderWidth(d.xvb, ctx, AREA_BORDER_WIDTH) },
                       tension, fill: true, hidden: vis.xvb === false,
                       stack: 'hr', backgroundColor: areaFill(c.purple), pointRadius: 0, pointHitRadius: 20 },
                     // On its own hidden 0–1 axis (yAxisID) so the markers ride near the top edge and
