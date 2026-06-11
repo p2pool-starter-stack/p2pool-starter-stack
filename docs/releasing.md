@@ -31,10 +31,11 @@ one line, [SemVer](https://semver.org/spec/v2.0.0.html). Nothing else hardcodes 
 - `pithead` reads it for tagging and upgrade.
 - The dashboard bakes it in for display ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)).
 - Released images carry it in the `org.opencontainers.image.version` OCI label.
+- The dashboard's `pyproject.toml` is kept in lockstep (packaging metadata only) — a shell test fails
+  if it drifts from `VERSION`.
 
-> **Note for the first real release.** `VERSION` is currently `0.1.0`, while
-> `build/dashboard/pyproject.toml` reads `0.2.0`. Reconciling the two and choosing the
-> first published version is a maintainer decision to make before the first `make release`.
+> **Note for the first real release.** `VERSION` is `0.1.0`. Bump it to the version you want to
+> publish first (the `pyproject.toml` metadata will need to match — the drift-guard test enforces it).
 
 ## Component pins = an ingredients manifest
 
@@ -163,7 +164,7 @@ What exists today:
   ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59)), which builds on the
   version badge — tracked separately.
 
-> **Before the first real release:** reconcile `VERSION` (`0.1.0`) with
-> `build/dashboard/pyproject.toml` (`0.2.0`) and choose the first published version, and confirm the
-> GHCR image namespace (`scripts/release.sh` defaults to `ghcr.io/p2pool-starter-stack/pithead-*`;
-> override with `PITHEAD_REGISTRY` / `PITHEAD_IMAGE_PREFIX`). Both are maintainer decisions.
+> **Before the first real release:** choose the first published version — set `VERSION` (the
+> `pyproject.toml` metadata follows it, enforced by the drift-guard test) — and confirm the GHCR image
+> namespace (`scripts/release.sh` defaults to `ghcr.io/p2pool-starter-stack/pithead-*`; override with
+> `PITHEAD_REGISTRY` / `PITHEAD_IMAGE_PREFIX`).

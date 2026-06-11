@@ -260,6 +260,11 @@ for svc in p2pool monero xmrig-proxy; do
         bad "pin $svc resolves to a value in its Dockerfile" "got '$pv'"
     fi
 done
+# The top-level VERSION file is the single source of truth (#44); the dashboard's Python package
+# metadata must stay in lockstep so a release can't ship two different "stack versions".
+ver_file="$(tr -d ' \t\r\n' < "$ROOT/VERSION")"
+ver_pyproject="$(grep -oE '^version = "[^"]+"' "$ROOT/build/dashboard/pyproject.toml" | head -1 | cut -d'"' -f2)"
+assert_eq "pyproject.toml version matches VERSION (#44)" "$ver_pyproject" "$ver_file"
 
 echo "== unit: explain_subnet_collision (#180) =="
 ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"
