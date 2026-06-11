@@ -368,6 +368,11 @@ doctor() {
         fi
     fi
 
+    # --- Network: public-IP exposure of the unauthenticated stratum port (#113) ---
+    echo ""
+    echo "Network:"
+    check_stratum_exposure doctor
+
     # --- Disk: free space per underlying filesystem ---
     echo ""
     echo "Disk:"
@@ -854,6 +859,77 @@ is_ipv4() {
     for o in "${BASH_REMATCH[@]:1}"; do
         [ "$o" -le 255 ] || return 1
     done
+    return 0
+}
+
+# True if $1 is a globally-routable (public) IP literal — i.e. NOT loopback/private/link-local/
+# CGNAT/ULA. Pure + testable (#113): the stratum port is unauthenticated, so setup/doctor warn when
+# the host is publicly addressable. IPv4 excluded ranges: 0/8, 10/8, 127/8, 169.254/16, 172.16/12,
+# 192.168/16, 100.64/10 (CGNAT). IPv6: only 2000::/3 (global unicast) is treated as public.
+is_public_ip() {
+    local addr="$1" a b h
+    case "$addr" in
+        *:*)  # IPv6 — public only within 2000::/3 (first hextet 0x2000-0x3fff).
+            h="${addr%%:*}"
+            case "$h" in ""|*[!0-9a-fA-F]*) return 1 ;; esac
+            h=$(( 16#$h ))
+            [ "$h" -ge 8192 ] && [ "$h" -le 16383 ]
+            ;;
+        *.*)  # IPv4 dotted-quad.
+            is_ipv4 "$addr" || return 1
+            IFS=. read -r a b _ _ <<<"$addr"
+            case "$a" in
+                0|10|127) return 1 ;;
+                169) [ "$b" = 254 ] && return 1 ;;
+                172) { [ "$b" -ge 16 ] && [ "$b" -le 31 ]; } && return 1 ;;
+                192) [ "$b" = 168 ] && return 1 ;;
+                100) { [ "$b" -ge 64 ] && [ "$b" -le 127 ]; } && return 1 ;;
+            esac
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# Echo the host's globally-routable IP addresses, one per line (empty if none, or if `ip` is absent
+# — it's Linux-only). Parses `ip -o addr show`; used by check_stratum_exposure (#113).
+host_public_ips() {
+    command -v ip >/dev/null 2>&1 || return 0
+    local fam addr
+    while read -r _ _ fam addr _; do
+        case "$fam" in inet|inet6) ;; *) continue ;; esac
+        addr="${addr%%/*}"
+        if is_public_ip "$addr"; then printf '%s\n' "$addr"; fi
+    done < <(ip -o addr show 2>/dev/null)
+}
+
+# Non-fatal heads-up that the unauthenticated stratum port :3333 may face the public internet (#113):
+# warn only when the host has a public IP AND stratum listens on all interfaces (the default bind).
+# Home/NAT hosts (no public IP on an interface) and hosts that narrowed p2pool.stratum_bind stay
+# quiet in setup. $1 = "setup" (emit via warn, only on exposure) or "doctor" (emit OK/WARN/skip).
+check_stratum_exposure() {
+    local mode="$1" bind pub msg
+    bind="${STRATUM_BIND:-}"
+    if [ -z "$bind" ] && [ -f "${ENV_FILE:-.env}" ]; then bind="$(env_get STRATUM_BIND 2>/dev/null || true)"; fi
+    [ -n "$bind" ] || bind="0.0.0.0"
+
+    if ! command -v ip >/dev/null 2>&1; then
+        [ "$mode" = doctor ] && dr_info "Skipped public-IP exposure check (no 'ip' command; Linux-only)."
+        return 0
+    fi
+    case "$bind" in
+        0.0.0.0|"") ;;   # all interfaces — the exposed case
+        *) [ "$mode" = doctor ] && dr_ok "Stratum :3333 bound to $bind (not all interfaces) — not publicly exposed."
+           return 0 ;;
+    esac
+
+    pub="$(host_public_ips)"; pub="${pub//$'\n'/, }"
+    if [ -n "$pub" ]; then
+        msg="This host appears to have a public IP ($pub). The stratum port 3333 is unauthenticated — firewall it to your LAN, or set p2pool.stratum_bind to a LAN IP / 127.0.0.1. See docs/workers.md#firewall."
+        if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
+    else
+        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :3333 isn't directly internet-exposed."
+    fi
     return 0
 }
 
@@ -1760,6 +1836,7 @@ setup() {
     ensure_config_exists
     parse_and_validate_config
     preflight_resources   # WARN-only: low disk/RAM heads-up before committing to a sync (#87)
+    check_stratum_exposure setup  # WARN-only: public-IP host => unauthenticated stratum :3333 exposed (#113)
     load_preserved_state
     resolve_dashboard_host "interactive"
     prepare_directories

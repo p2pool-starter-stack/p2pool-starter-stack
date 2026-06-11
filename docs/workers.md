@@ -60,6 +60,9 @@ it connects through a proxy). Any reasonably recent **XMRig (5.0+, which introdu
   there. Lock it down two ways, which complement each other: narrow the **bind address** with
   [`p2pool.stratum_bind`](configuration.md#configuration-reference), and/or restrict the **source
   range** with a host firewall.
+- **`pithead setup` and `doctor` flag this for you**: when the host has a public IP and stratum is
+  bound to all interfaces, they print a warning pointing back here. A NAT'd home host — no public IP
+  on its own interfaces — sees nothing, so this only nudges the hosts that are actually exposed.
 
 #### `p2pool.stratum_bind` — which interface to listen on
 

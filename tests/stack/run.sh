@@ -63,6 +63,17 @@ run_sourced "$SANDBOX" assert_safe_dir "/home"   >/dev/null 2>&1; assert_rc "rej
 run_sourced "$SANDBOX" assert_safe_dir ""        >/dev/null 2>&1; assert_rc "rejects empty"    "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/srv/p2pool/data" >/dev/null 2>&1; assert_rc "allows real dir" "$?" "0"
 
+echo "== unit: is_public_ip classifier (#113) =="
+# Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
+for ip in 8.8.8.8 1.1.1.1 172.15.0.1 172.32.0.1 100.128.0.1 169.1.1.1 2606:4700:4700::1111 2001:db8::1; do
+    run_sourced "$SANDBOX" is_public_ip "$ip" >/dev/null 2>&1; assert_rc "public: $ip" "$?" "0"
+done
+# Private / loopback / link-local / CGNAT / ULA / multicast / unspecified / garbage -> rc 1.
+for ip in 10.0.0.5 172.16.0.1 172.31.255.1 192.168.1.50 127.0.0.1 169.254.1.1 100.64.0.1 0.0.0.0 \
+          ::1 fe80::1 fc00::1 fd12:3456::1 ff02::1 999.1.1.1 not-an-ip ""; do
+    run_sourced "$SANDBOX" is_public_ip "$ip" >/dev/null 2>&1; assert_rc "non-public: ${ip:-<empty>}" "$?" "1"
+done
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0"      >/dev/null 2>&1; assert_rc "accepts 0.0.0.0"     "$?" "0"
 run_sourced "$SANDBOX" is_ipv4 "127.0.0.1"    >/dev/null 2>&1; assert_rc "accepts 127.0.0.1"   "$?" "0"
