@@ -177,6 +177,21 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- Hardened the dashboard against an **SSRF** primitive (#122). A connecting miner fully controls its
+  stratum worker name/IP, yet the `network_mode: host` dashboard fetched per-worker stats at a host
+  taken *verbatim* from that input — so a miner could steer outbound GETs at `127.0.0.1`, the
+  internal docker bridge (the socket proxies on `172.28.0.30/.31`), or a cloud-metadata IP. The
+  worker probe now targets only a **validated real miner IP** (rejecting loopback, link-local,
+  multicast, unspecified, reserved, and the `172.28.0.0/16` bridge), **never** uses the
+  miner-controlled *name* as a request host, and caps the name before echoing it back as a Bearer
+  token.
+- The xmrig-proxy HTTP control API now **fails closed** on a missing token (#153). The API is
+  writable (`--http-no-restricted`, required for XvB pool-switching) and reachable on the bridge +
+  host, so it must always be authenticated. Compose now interpolates `--http-access-token` (and
+  `--http-port`) with `:?`, so a hand-edited or pre-token stale `.env` with an empty
+  `PROXY_AUTH_TOKEN` makes the stack **refuse to start** — instead of exposing an unauthenticated
+  control API. pithead still auto-generates the token on `apply`; a `test_compose.sh` assertion
+  guards both the token-present and empty-token paths.
 - Closed clearnet DNS leaks in the node configs (#161, #162). **monerod** drops its priority-node
   HOSTNAMES (resolved by the local resolver *before* `--proxy`), disables DNS checkpoints
   (`disable-dns-checkpoints`, since removing `enforce-dns-checkpointing` alone doesn't stop the

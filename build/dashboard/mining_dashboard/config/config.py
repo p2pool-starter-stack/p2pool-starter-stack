@@ -31,6 +31,14 @@ HOST_IP = os.environ.get("HOST_IP", "Unknown Host")
 # XMRig Worker API Configuration
 XMRIG_API_PORT = 8080
 API_TIMEOUT = 1         # Connection timeout (seconds) for worker API calls
+
+# The stack's internal docker bridge subnet. The dashboard runs network_mode: host and a connecting
+# miner fully controls its worker name/ip via stratum, yet per-worker stats are fetched at a host
+# derived from that input. A worker "ip" inside this range is the stack's OWN infrastructure (the
+# socket proxies 172.28.0.30/.31, Tor, monerod) — never a real miner — so probing it would be the
+# SSRF primitive in #122. Worker probes are therefore restricted to real external miner addresses;
+# this range (plus loopback, link-local, etc.) is rejected. Override only if you changed the subnet.
+MINING_NET_CIDR = os.environ.get("MINING_NET_CIDR", "172.28.0.0/16")
 try:
     # main data-loop period (s); lowered in integration tests. Tolerate a malformed override
     # rather than crashing the dashboard at import.
