@@ -87,11 +87,18 @@ node instead.
 
 ## Privacy by design
 
-Privacy isn't bolted on — it's the default. A dedicated Tor daemon provides hidden services
-(onion addresses) for Monero, Tari, and P2Pool, so the stack participates in each network without
-exposing your home IP and **without any public IPv4 port forwarding**. Monero broadcasts
-transactions over Tor, and the node's RPC is bound to localhost by default (opt into LAN access
-explicitly via `monero.rpc_lan_access`).
+Privacy is a primary design goal, not an afterthought — the stack is **Tor-first**. A dedicated Tor
+daemon provides hidden services (onion addresses) for Monero, Tari, and P2Pool, so **inbound**
+connectivity needs **no public IPv4 port forwarding**. Monero and Tari route their P2P and
+transaction traffic over Tor, and the clearnet DNS lookups those nodes used to leak are closed
+(monerod checkpoints/blocklist/update-check, Tari DNS seeds + Pulse). The node's RPC is bound to
+localhost by default (opt into LAN access explicitly via `monero.rpc_lan_access`).
+
+It is **Tor-first, not yet Tor-only.** Two *outbound* yield paths still use clearnet in v1.0 and so
+**can reveal your home IP** — P2Pool's outbound sidechain peers and XvB donation mining — both slated
+to move to Tor-by-default (with a documented opt-out) in v1.1, and both hardenable today. Install and
+image pulls also reveal your IP once. See **[Privacy & network egress](privacy.md)** for the complete
+connection-by-connection map and how to lock down the rest.
 
 ## Security posture
 

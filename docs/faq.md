@@ -16,7 +16,7 @@ the underlying projects ([monerod](https://www.getmonero.org/), [P2Pool](https:/
 maintaining each piece and the wiring between them:
 
 - A Monero full node with restricted RPC, ZMQ, and Tor transaction broadcasting.
-- P2Pool pointed at that node, with onion connectivity so you're not exposing your home IP.
+- P2Pool pointed at that node, with an onion address for inbound peers.
 - Tari (Minotari) merge-mining alongside Monero.
 - Each rig configured for the pool, plus a plan for what happens when the node goes down.
 - Some way to actually *see* hashrate, sync progress, and your PPLNS window.
@@ -24,9 +24,10 @@ maintaining each piece and the wiring between them:
 Pithead automates that whole stack in one command and adds the parts that are tedious to build
 yourself:
 
-- **Tor by default.** A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion)
-  addresses — no public port forwarding, and your home IP isn't exposed. See
-  [Architecture › Privacy by design](architecture.md#privacy-by-design).
+- **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service
+  (onion) addresses — no public port forwarding, and Monero/Tari traffic runs over Tor. A couple of
+  outbound yield paths still use clearnet today; see [Privacy & network egress](privacy.md) for the
+  full map and how to harden them.
 - **One endpoint for every rig.** All workers point at a single `xmrig-proxy` endpoint on `:3333`.
   There's nothing per-rig to configure — no wallet address, no pool URL juggling. See
   [Connecting Miners](workers.md).
@@ -66,10 +67,21 @@ yourself. Different tools for different goals.
 
 ### Is my home IP exposed?
 
-No. A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so the
-stack participates in each network without exposing your home IP. Monero also broadcasts
-transactions over Tor, and the node's RPC is bound to localhost by default. See
-[Architecture › Privacy by design](architecture.md#privacy-by-design).
+**Mostly not — with two clearnet exceptions today, plus a one-time exposure at install.** A built-in
+Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so **inbound** connections
+need no port forwarding and don't reveal your IP. Monero and Tari route P2P and transaction traffic
+over Tor, and their old clearnet DNS lookups are closed.
+
+What still touches clearnet (and so can reveal your IP):
+
+- **P2Pool's outbound sidechain peers** — clearnet today; Tor-by-default is planned for v1.1 (#165),
+  and you can route it through Tor now (see the privacy guide).
+- **XvB donation mining** — only if XvB is enabled; clearnet to `xmrvsbeast.com`. Disable XvB to stop
+  it, or wait for the v1.1 Tor routing (#166). (The XvB *stats* fetch is already Tor-routed.)
+- **Install / build** fetches code and container images from GitHub, getmonero.org, and the image
+  registries once — inherent and integrity-pinned, but it reveals your IP at that moment.
+
+See **[Privacy & network egress](privacy.md)** for every connection and how to harden each one.
 
 ### Do I need to port-forward?
 

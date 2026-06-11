@@ -24,8 +24,10 @@ coffee gets cold**.
 
 ## ✨ Why this stack?
 
-- 🧅 **Private by default.** A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service
-  (onion) addresses. No public port forwarding, no exposing your home IP.
+- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service
+  (onion) addresses — **no public port forwarding**, and Monero/Tari run over Tor. A couple of
+  outbound yield paths still touch clearnet today; the [privacy guide](docs/privacy.md) maps every
+  connection and how to harden it.
 - ⛏️ **Monero + Tari, merge-mined.** Earn on both chains at once — Tari is mined alongside Monero
   through P2Pool with zero extra effort.
 - 🧠 **Smart yield optimization.** An algorithmic engine continuously splits your hashrate between
@@ -84,6 +86,7 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode and a tour of the live operational view. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
 | **[Architecture](docs/architecture.md)** | The nine services, the privacy model, and the algorithmic XvB switching engine. |
+| **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection — what's Tor-routed, what's clearnet today, and how to harden it. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
 Browse the full index at **[docs/](docs/README.md)**.
