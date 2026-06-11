@@ -186,6 +186,52 @@ case "$caddy_off" in
     *)            ok  "caddy stays open when no login set (no basic_auth)" ;;
 esac
 
+echo "== unit: generate_caddyfile scheme (#140) =="
+# The HTTPS-vs-HTTP choice is security-relevant: secure -> https:// + `tls internal`; insecure ->
+# plain http:// and no TLS directive. (Auth on/off is covered in the dashboard-auth block above.)
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_https="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1; cat Caddyfile )"
+assert_contains "caddyfile secure uses https"  "$caddy_https" "https://box.lan"
+assert_contains "caddyfile secure enables TLS" "$caddy_https" "tls internal"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_http="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e
+    DASHBOARD_SECURE=false HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1; cat Caddyfile )"
+assert_contains "caddyfile insecure uses http" "$caddy_http" "http://box.lan"
+case "$caddy_http" in
+    *"tls internal"*) bad "caddyfile insecure has no TLS" "'tls internal' present on a plain-HTTP site" ;;
+    *)                ok  "caddyfile insecure has no TLS" ;;
+esac
+
+echo "== unit: host detection (#140) =="
+# detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
+# 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).
+osr="$SANDBOX/os-release"
+printf 'ID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04.1 LTS"\n' > "$osr"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+os_out="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e; OS_RELEASE_FILE="$osr" detect_os; printf '%s|%s|%s' "$OS_ID" "$OS_VERSION" "$OS_PRETTY" )"
+assert_eq "detect_os parses os-release" "$os_out" "ubuntu|24.04|Ubuntu 24.04.1 LTS"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+os_missing="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e; OS_RELEASE_FILE="$SANDBOX/nope" detect_os; printf '%s' "$OS_ID" )"
+assert_eq "detect_os tolerates a missing file" "$os_missing" ""
+
+# detect_host_timezone: an explicit IANA-shaped TZ wins; garbage falls back to Etc/UTC.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+tz_good="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e; TZ="America/Chicago" detect_host_timezone )"
+assert_eq "detect_host_timezone honors a valid TZ" "$tz_good" "America/Chicago"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+tz_bad="$( cd "$SANDBOX" && source "$STACK" 2>/dev/null; set +e; TZ="not a zone!" detect_host_timezone )"
+assert_eq "detect_host_timezone rejects garbage -> Etc/UTC" "$tz_bad" "Etc/UTC"
+
+# deps_satisfied is true only when jq/openssl/docker are present AND `docker compose version` works
+# (the v2-plugin gate). A docker whose `compose version` fails makes it false.
+DEPS="$SANDBOX/deps"; make_stubs "$DEPS/bin"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+( cd "$SANDBOX" && PATH="$DEPS/bin:$PATH" && source "$STACK" 2>/dev/null; set +e; deps_satisfied ); assert_rc "deps_satisfied true with all deps" "$?" "0"
+printf '#!/usr/bin/env bash\n[ "$*" = "compose version" ] && exit 1\nexit 0\n' > "$DEPS/bin/docker"; chmod +x "$DEPS/bin/docker"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+( cd "$SANDBOX" && PATH="$DEPS/bin:$PATH" && source "$STACK" 2>/dev/null; set +e; deps_satisfied ); assert_rc "deps_satisfied false without compose v2" "$?" "1"
+
 echo "== unit: explain_subnet_collision (#180) =="
 ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"
 assert_contains "subnet overlap -> network.subnet hint"  "$ov" "network"
@@ -775,6 +821,96 @@ out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"; rc=$?
 assert_contains "doctor runs to the summary"          "$out" "Diagnostics summary"
 assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
 assert_rc       "doctor exits 1 on a critical FAIL"   "$rc" "1"
+
+echo "== black-box: backup -> restore round-trip (#140) =="
+# backup/restore touch irreplaceable state (onion keys, the dashboard DB) and have fiddly logic
+# (leading-'/' strip, the disk pre-check, stop->backup->start). They shell out only to tar/du/df/
+# docker/sudo, so a full round-trip is stubbable: the docker stub reports the stack NOT running, and
+# a smart sudo runs tar/du/df for real (so the archive is genuinely created/extracted) but no-ops
+# chown (we can't chown to 100:101 unprivileged). The archive stores paths relative to '/', and every
+# path is under the sandbox, so `restore`'s `tar -C /` can only write back inside it (asserted below).
+# Use the sandbox's PHYSICAL path (pwd -P): `restore` extracts at '/', and on macOS the /var ->
+# /private/var symlink would otherwise make BSD tar refuse to "extract through symlink" (Linux /tmp
+# isn't symlinked, so this is a no-op there).
+BK="$(cd "$SANDBOX" && pwd -P)/backup"; mkdir -p "$BK/build/tari" "$BK/data/tor" "$BK/data/dashboard" "$BK/bin"
+cp "$STACK" "$BK/pithead"; cp "$ROOT/build/tari/config.toml.template" "$BK/build/tari/"
+cat > "$BK/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "compose ps --status running -q") exit 0 ;;   # empty output -> stack treated as not running
+esac
+exit 0
+EOF
+cat > "$BK/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+# Run backup/restore's privileged commands as the test user, except chown (can't set 100:101
+# unprivileged) which is accepted as a no-op so restore doesn't abort.
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+EOF
+chmod +x "$BK/bin/docker" "$BK/bin/sudo"
+cat > "$BK/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=BKTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$BK/config.json"
+printf 'CADDY-ORIG\n'    > "$BK/Caddyfile"
+printf 'ONIONKEY-ORIG\n' > "$BK/data/tor/hs_ed25519_secret_key"
+printf 'DBDATA-ORIG\n'    > "$BK/data/dashboard/dashboard.db"
+
+# 1) Backup creates a timestamped archive.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"; rc=$?
+assert_rc "backup exits 0" "$rc" "0"
+archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+{ [ -n "$archive" ] && [ -f "$archive" ]; } && ok "backup archive created" || bad "backup archive created" "no archive under backups/"
+
+# 2) Archive layout: the irreplaceable bits are in it; blockchains are NOT (no --with-chains).
+listing="$(tar -tzf "$archive" 2>/dev/null)"
+assert_contains "archive has config.json"      "$listing" "config.json"
+assert_contains "archive has .env"             "$listing" ".env"
+assert_contains "archive has Caddyfile"        "$listing" "Caddyfile"
+assert_contains "archive has the tor onion key" "$listing" "hs_ed25519_secret_key"
+assert_contains "archive has the dashboard db" "$listing" "dashboard.db"
+case "$listing" in
+    *data/monero*|*data/p2pool/*|*data/tari*) bad "archive excludes blockchains by default" "chain data present without --with-chains" ;;
+    *)                                        ok  "archive excludes blockchains by default" ;;
+esac
+# Safety tripwire: every archived path is under the sandbox, so restore's `tar -C /` can't escape it.
+sandbox_rel="${BK#/}"
+escaped="$(printf '%s\n' "$listing" | grep -v '^$' | grep -v "^$sandbox_rel" || true)"
+assert_eq "archive paths stay inside the sandbox" "$escaped" ""
+
+# 3) Round-trip: corrupt/delete the live files, restore, assert the originals come back in place.
+printf 'CORRUPTED\n' > "$BK/Caddyfile"
+printf 'CORRUPTED\n' > "$BK/data/dashboard/dashboard.db"
+rm -f "$BK/data/tor/hs_ed25519_secret_key"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$archive" 2>&1)"; rc=$?
+assert_rc "restore exits 0" "$rc" "0"
+assert_eq "restore brings back the Caddyfile"     "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
+assert_eq "restore brings back the dashboard db"  "$(cat "$BK/data/dashboard/dashboard.db")" "DBDATA-ORIG"
+assert_eq "restore brings back the onion key"     "$(cat "$BK/data/tor/hs_ed25519_secret_key" 2>/dev/null)" "ONIONKEY-ORIG"
+
+# 4) Low-space pre-check (#127): a df reporting almost no free space makes backup prompt; answering
+# "no" cancels and writes nothing, while --yes proceeds with a warning. The check runs BEFORE the
+# stack is touched, so a cancel leaves everything as it was.
+cat > "$BK/bin/df" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' '/dev/fake 100 99 1 99% /'
+EOF
+chmod +x "$BK/bin/df"
+rm -f "$BK"/backups/pithead-backup-*.tar.gz
+out="$(cd "$BK" && printf 'n\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+assert_contains "low-space prompt, then cancel" "$out" "ancelled"
+leftover="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+assert_eq "cancelled backup writes no archive" "$leftover" ""
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"; rc=$?
+assert_rc       "low-space backup proceeds with --yes" "$rc" "0"
+assert_contains "low-space backup warns first"         "$out" "Low free space"
 
 echo "== black-box: reset-dashboard targets .env dirs, not config.json (#139) =="
 # reset-dashboard must wipe the LIVE deployment's data dirs (from .env), not a path the user may

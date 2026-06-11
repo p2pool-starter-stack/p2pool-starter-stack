@@ -57,6 +57,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   Both render to
   xmrig-proxy CLI flags (`--access-password` / `--donate-level`), are validated before render, and
   are documented in `docs/configuration.md` + `docs/workers.md#authentication`.
+- **Expanded the `pithead` shell test suite over data-safety / security-relevant paths** (#140). The
+  `backup`/`restore` round-trip is now covered end to end (stubbed `tar`/`du`/`df`/`docker`/`sudo`):
+  archive layout (the irreplaceable bits in, blockchains out), the leading-`/` strip, a true
+  restore-in-place round-trip, and the low-free-space pre-check (cancel + `--yes` proceed). Added
+  `generate_caddyfile` HTTPS-vs-HTTP (`tls internal`) branch tests and unit tests for the previously
+  uncovered `detect_os` / `detect_host_timezone` / `deps_satisfied` host-detection helpers. Test-only
+  — would have caught the #127 `backup` errexit bug. (`upgrade` #128 and `doctor` #127 were already
+  covered.)
 - **CI now builds every container image, shellchecks all container scripts, and runs hadolint**
   (#124). Previously only the dashboard's *test* stage was built, so a broken Dockerfile / `COPY`
   path / entrypoint in monerod, P2Pool, Tor, or xmrig-proxy would only surface at deploy time — e.g.
