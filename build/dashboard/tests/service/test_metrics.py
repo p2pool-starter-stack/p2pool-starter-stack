@@ -116,11 +116,20 @@ class TestModeAndTiers:
         assert m.target_tier == "Disabled"
         assert m.low_hr_warning is False
 
-    def test_current_tier_from_xvb_24h(self):
-        # 24h XvB average qualifies the *current* tier.
-        m = build_metrics(_data(), _mgr(xvb={"avg_24h": 50_000_000}))
-        assert m.current_tier != "None"   # some tier qualifies at 50 MH/s
+    def test_current_tier_from_min_1h_24h(self):
+        # Current tier qualifies on the lower of the 1h/24h credited averages (#157) — set both.
+        m = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000_000, "avg_24h": 50_000_000}))
+        assert m.current_tier != "None"   # some tier qualifies at 50 MH/s on both windows
         assert isinstance(m.target_threshold, float)
+
+    def test_current_tier_uses_lower_of_1h_24h_on_drop(self):
+        # The raffle qualifies on BOTH 1h and 24h; on a hashrate drop the 1h falls first while the
+        # laggy 24h still reads the old (now-lost) tier. Current Tier must follow the LOWER avg (#157).
+        high = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000_000, "avg_24h": 50_000_000}))
+        dropped = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000, "avg_24h": 50_000_000}))
+        only_1h = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000, "avg_24h": 50_000}))
+        assert dropped.current_tier != high.current_tier      # the 1h drop lowered the tier
+        assert dropped.current_tier == only_1h.current_tier   # tier follows the LOWER (1h) average
 
     def test_low_hr_warning_for_unsustainable_explicit_tier(self, monkeypatch):
         monkeypatch.setattr(metrics, "ENABLE_XVB", True)
