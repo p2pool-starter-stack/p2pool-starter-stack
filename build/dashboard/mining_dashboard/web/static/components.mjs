@@ -123,8 +123,8 @@ function Header({ state }) {
         </div>
         <div class="text-right">
             <div class="text-muted text-xs">Last Update: ${state.last_update}</div>
-            <div class=${'text-xs mt-1 ' + cVar(hr.p2p_variant)}>P2Pool: ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
-            <div class=${'text-xs mt-xs ' + cVar(hr.xvb_variant)}>XvB: ${hr.xvb_1h} (1h) / ${hr.xvb_24h} (24h)</div>
+            <div class=${'text-xs mt-1 ' + cVar(hr.p2p_variant)}>P2Pool (routed): ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
+            <div class=${'text-xs mt-xs ' + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>
         </div>
     </div>`;
 }
@@ -195,10 +195,10 @@ function Overview({ state }) {
             <${StatCard} label="Total Hashrate" value=${hr.total} cls="text-accent" />
             <${SharesStat} sw=${state.shares_window} />
             <${StatCard} label="Last Share" value=${st.last_share} />
-            <${StatCard} label="P2Pool 1h Avg" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
-            <${StatCard} label="P2Pool 24h Avg" value=${hr.p2p_24h} cls=${cVar(hr.p2p_variant)} />
-            <${StatCard} label="XvB 1h Avg" value=${hr.xvb_1h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="XvB 24h Avg" value=${hr.xvb_24h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="P2Pool 1h (routed)" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
+            <${StatCard} label="P2Pool 24h (routed)" value=${hr.p2p_24h} cls=${cVar(hr.p2p_variant)} />
+            <${StatCard} label="XvB 1h (routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="Current Tier" value=${hr.tier} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
             <div class="stat-card"><h5>Tari Mining</h5><${TariStatus} tari=${t} /></div>
@@ -265,8 +265,9 @@ function XvBStats({ state }) {
         <div class="stat-grid">
             <${StatCard} label="Current Tier" value=${hr.tier} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
-            <${StatCard} label="Donating (routed)" value=${hr.xvb_routed} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="1h Avg (Routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="1h Avg (Credited)" value=${hr.xvb_1h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="24h Avg (Routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="24h Avg (Credited)" value=${hr.xvb_24h} cls=${cVar(hr.xvb_variant)} />
             <${StatCard} label="Fail Count" value=${hr.xvb_fail_count} />
         </div>
