@@ -5,7 +5,8 @@ import pytest
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
-    _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary, _shares_to_record,
+    _parse_proxy_list_worker, _parse_legacy_dict_worker, _parse_proxy_summary,
+    _merge_proxy_summary, _shares_to_record,
 )
 
 
@@ -162,6 +163,29 @@ class TestParseProxySummary:
         assert _parse_proxy_summary(None) == {}
         assert _parse_proxy_summary([1, 2, 3]) == {}
         assert _parse_proxy_summary("nope") == {}
+
+
+class TestMergeProxySummary:
+    """A malformed (non-raising) /summary must keep the last-good totals, not blank them (#141)."""
+
+    _GOOD = {"accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1, "best": 987654}
+    _LAST = {"accepted": 999, "rejected": 9, "invalid": 1, "expired": 0, "best": 42}
+
+    def test_valid_summary_is_adopted(self):
+        summary = {"results": {"accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1,
+                               "best": [987654]}}
+        assert _merge_proxy_summary(self._LAST, summary) == self._GOOD
+
+    def test_malformed_payload_keeps_last_good(self):
+        # A non-dict body (None / list / str) parses to {} without raising — must fall back, not wipe.
+        for bad in (None, [1, 2, 3], "nope"):
+            assert _merge_proxy_summary(self._LAST, bad) == self._LAST
+
+    def test_valid_zero_summary_is_adopted_not_treated_as_malformed(self):
+        # A real dict summary (even one reporting all-zeros / no results) is non-empty after parse —
+        # adopt it, don't keep stale. Only a non-dict body is "malformed" per #141.
+        zeros = {"accepted": 0, "rejected": 0, "invalid": 0, "expired": 0, "best": 0}
+        assert _merge_proxy_summary(self._LAST, {"version": "6.x"}) == zeros
 
 
 class TestMergeDirectStats:

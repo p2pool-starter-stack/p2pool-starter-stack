@@ -41,6 +41,25 @@ class TestXvbStats:
         state_manager.update_xvb_stats(not_a_real_field=1)
         assert "not_a_real_field" not in state_manager.get_xvb_stats()
 
+    def test_real_fetch_sets_last_update(self, state_manager):
+        # avg_1h / avg_24h only come from a successful xvb_client.get_stats — a real fetch (#136).
+        assert state_manager.get_xvb_stats()["last_update"] == 0.0
+        state_manager.update_xvb_stats(avg_1h=100.0, avg_24h=200.0)
+        assert state_manager.get_xvb_stats()["last_update"] > 0.0
+
+    def test_local_only_writes_do_not_set_last_update(self, state_manager):
+        # The algo controller writes mode / donation_fraction / fail_count every cycle; none is an
+        # xmrvsbeast.com fetch, so the "Updated" freshness timestamp must NOT bump on them (#136) —
+        # otherwise it ticks fresh even while the site is unreachable.
+        state_manager.update_xvb_stats(mode="XVB", donation_fraction=0.5, fail_count=3)
+        assert state_manager.get_xvb_stats()["last_update"] == 0.0
+        # Once a real fetch sets it, a later local-only write must leave it untouched.
+        state_manager.update_xvb_stats(avg_1h=100.0)
+        fetched_at = state_manager.get_xvb_stats()["last_update"]
+        assert fetched_at > 0.0
+        state_manager.update_xvb_stats(donation_fraction=0.9)
+        assert state_manager.get_xvb_stats()["last_update"] == fetched_at
+
 
 class TestSharesAndHistory:
     def test_add_share_and_dedup(self, state_manager):

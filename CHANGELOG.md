@@ -181,6 +181,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Dashboard share-health panel no longer flickers to empty on a malformed proxy `/summary`** (#141).
+  The pool-wide accepted/rejected/invalid/best totals are designed so a bad poll keeps the last-good
+  value — but that only held when the fetch *raised*. A non-raising malformed body (a non-dict: `null`,
+  a list, a string) parsed to `{}` and overwrote the last-good, blanking the panel. The parse now
+  routes through `_merge_proxy_summary`, which keeps the prior totals unless the new parse is usable
+  (a valid summary reporting genuine zeros is still adopted).
+- **Dashboard "Stats fetched from xmrvsbeast.com (Updated: …)" timestamp now reflects the real fetch**
+  (#136). It was bumped on *every* algo cycle because the controller writes `donation_fraction` each
+  loop, even though the actual xmrvsbeast.com fetch only runs every 10th iteration — so the "Updated"
+  time ticked fresh (~every 30s) even while the site was unreachable for hours, hiding stale data. The
+  `last_update` timestamp now bumps only on a genuine fetch (when `avg_1h`/`avg_24h` arrive), not on
+  the per-cycle local writes (`mode`, `donation_fraction`, `fail_count`).
 - **A fully-synced monerod no longer shows as "loading" in the dashboard's Monero panel.** A synced
   node reports `target_height: 0` (no target), so the panel's `done` check — which compared
   `percent >= 100` against a target, and derived the state string from `has_target` first — never
