@@ -114,7 +114,12 @@ def build_metrics(latest_data, state_mgr, history=None):
     p2pool_1h = _avg_p2pool_over_window(history, 3600)
     p2pool_24h = _avg_p2pool_over_window(history, 86400)
 
-    current_tier, _ = get_tier_info(xvb_24h, tiers)
+    # The XvB raffle qualifies a tier on BOTH the 1h and 24h credited average, and terminates a win
+    # if the 1h average drops below the round minimum — so Current Tier is the one cleared by the
+    # LOWER of the two (#157). On a hashrate drop the 1h falls first, so this surfaces the tier the
+    # miner has effectively already lost (and whose win would terminate) right when it matters; on
+    # ramp-up min == 24h, the conservative read, so behavior there is unchanged.
+    current_tier, _ = get_tier_info(min(xvb_1h, xvb_24h), tiers)
     target_threshold, sustainable = resolve_target_threshold(
         tiers, total_h15, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION
     )

@@ -181,6 +181,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Dashboard "Current Tier" no longer overstates your XvB tier on a hashrate drop** (#157). The XvB
+  raffle qualifies a tier on **both** the 1h and 24h credited average (and terminates a win if the 1h
+  drops below the round minimum), but the dashboard resolved Current Tier from the 24h average alone.
+  On a hashrate drop the 1h falls first while the laggy 24h still reads the old tier — so the dashboard
+  showed a tier the miner had effectively already lost, exactly when an accurate signal matters most.
+  Current Tier now reflects `min(1h, 24h)`; ramp-up (where 24h is the lower, conservative read) is
+  unchanged. Display-only — the donation controller still steers off the credited 1h average (#9/#70).
 - **Dashboard share-health panel no longer flickers to empty on a malformed proxy `/summary`** (#141).
   The pool-wide accepted/rejected/invalid/best totals are designed so a bad poll keeps the last-good
   value — but that only held when the fetch *raised*. A non-raising malformed body (a non-dict: `null`,
