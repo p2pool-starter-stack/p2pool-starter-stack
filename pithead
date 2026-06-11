@@ -511,6 +511,17 @@ announce_dashboard_url() {
     else
         log "Dashboard available at: http://$display_host"
     fi
+    announce_stratum_auth
+}
+
+# Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
+# Only prints when authentication is enabled; the value is the operator's own shared secret (the
+# same secret already lives in .env), shown here so it can be copied to each rig once.
+announce_stratum_auth() {
+    local sp
+    sp=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
+    [ -n "$sp" ] || return 0
+    log "Stratum authentication is ON (#152): every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See docs/workers.md#authentication."
 }
 
 reset_dashboard() {
@@ -953,7 +964,7 @@ check_stratum_exposure() {
 
     pub="$(host_public_ips)"; pub="${pub//$'\n'/, }"
     if [ -n "$pub" ]; then
-        msg="This host appears to have a public IP ($pub). The stratum port 3333 is unauthenticated — firewall it to your LAN, or set p2pool.stratum_bind to a LAN IP / 127.0.0.1. See docs/workers.md#firewall."
+        msg="This host appears to have a public IP ($pub). The stratum port 3333 is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
         if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
     else
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :3333 isn't directly internet-exposed."
@@ -1276,6 +1287,38 @@ parse_and_validate_config() {
         error "p2pool.stratum_bind must be an IPv4 address like \"0.0.0.0\", \"127.0.0.1\", or your LAN IP (got \"$STRATUM_BIND\")."
     fi
 
+    # Optional miner authentication on the stratum port (#152). xmrig-proxy's --access-password
+    # rejects rigs whose stratum 'pass' doesn't match, so only devices that know the secret can
+    # mine through the proxy (this also shrinks the #122 SSRF surface). Three modes:
+    #   ""/absent → disabled (default): any rig that can reach :3333 may mine; 'pass' is ignored.
+    #   "auto"    → generate a secret once and PERSIST it in .env (reused across apply, exactly like
+    #               PROXY_AUTH_TOKEN); set the same value as every rig's stratum 'pass'.
+    #   <literal> → use exactly this password.
+    # Rendered to PROXY_STRATUM_PASSWORD. The password travels CLEARTEXT over stratum, so this is
+    # access control ("who may mine"), not encryption — pair it with a LAN-only bind / firewall.
+    STRATUM_PASSWORD=$(jq -r '.p2pool.stratum_password // ""' "$CONFIG_FILE")
+    if [ "$STRATUM_PASSWORD" = "auto" ]; then
+        STRATUM_PASSWORD=$(env_get PROXY_STRATUM_PASSWORD)            # reuse a previously generated one
+        [ -n "$STRATUM_PASSWORD" ] || STRATUM_PASSWORD=$(openssl rand -hex 12)
+    fi
+    # A non-empty password is written to .env and substituted into the proxy's CLI args, so restrict
+    # it to a shell/.env-safe charset — a space, quote, or '$' could break .env parsing or the
+    # compose command. (The auto-generated hex always passes.)
+    if [ -n "$STRATUM_PASSWORD" ] && ! printf '%s' "$STRATUM_PASSWORD" | grep -qE '^[A-Za-z0-9._:@-]{1,128}$'; then
+        error "p2pool.stratum_password must be \"auto\", empty, or 1–128 chars of letters, digits, and . _ : @ - (no spaces or quotes)."
+    fi
+
+    # xmrig-proxy dev-fee donation level (#173). xmrig-proxy's own compiled default is 0% (no
+    # donation) — which the stack inherited silently; expose it so operators can both SEE it and
+    # opt in. Default 0 (off); set N to donate N% of submitted hashrate to the xmrig developers
+    # (integer 0–99). Rendered to PROXY_DONATE_LEVEL and passed verbatim as --donate-level so the
+    # effective level is always visible. NOTE: this is NOT the XvB donation — that is xvb.* steered
+    # by the decision engine, never the proxy dev fee.
+    DONATE_LEVEL=$(jq -r '.proxy.donate_level // 0' "$CONFIG_FILE")
+    if ! printf '%s' "$DONATE_LEVEL" | grep -qE '^[0-9]+$' || [ "$DONATE_LEVEL" -gt 99 ]; then
+        error "proxy.donate_level must be an integer 0–99 (percent); default 0 (got \"$DONATE_LEVEL\")."
+    fi
+
     MONERO_USER=$(jq -r '.monero.node_username // empty' "$CONFIG_FILE")
     MONERO_PASS=$(jq -r '.monero.node_password // empty' "$CONFIG_FILE")
 
@@ -1590,6 +1633,7 @@ P2POOL_ONION_ADDRESS=$P2POOL_ONION
 P2POOL_FLAGS=$p2pool_flags
 P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
+PROXY_STRATUM_PASSWORD=$STRATUM_PASSWORD
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
@@ -1602,6 +1646,7 @@ NETWORK_SUBNET=$NETWORK_SUBNET
 NETWORK_PREFIX=$NETWORK_PREFIX
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
+PROXY_DONATE_LEVEL=$DONATE_LEVEL
 MONERO_PRUNE=$prune
 MONERO_PREP_THREADS=$prep_threads
 MONERO_RPC_BIND=$rpc_bind
@@ -1944,6 +1989,17 @@ describe_change() {
             else
                 msg="Stratum (:3333) bind address: $old → $new (workers must reach this address)."
             fi ;;
+        PROXY_STRATUM_PASSWORD)
+            # Secret — never echo the value into the change preview / logs.
+            if [ -z "$new" ]; then
+                msg="Stratum access-password DISABLED (#152) — any rig that can reach :3333 may mine again."
+            elif [ -z "$old" ]; then
+                flag=DEST; msg="Stratum access-password ENABLED (#152) — rigs must now send the matching 'pass' (find it in .env / 'pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            else
+                flag=DEST; msg="Stratum access-password CHANGED (#152) — update every rig's 'pass' to match or they're rejected; the xmrig-proxy container is recreated."
+            fi ;;
+        PROXY_DONATE_LEVEL)
+            msg="xmrig-proxy dev-fee donation level: ${old:-0}% → ${new}% (#173) — the xmrig-proxy container is recreated (brief restart)." ;;
         *_DATA_DIR)
             flag=DEST; msg="$key: $old → $new — the service will use the new (empty) directory and re-sync; old data is left in place." ;;
         P2POOL_FLAGS|P2POOL_PORT)

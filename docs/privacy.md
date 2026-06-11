@@ -22,9 +22,10 @@ address)**: monerod, Tari, and P2Pool each get one from the built-in Tor daemon.
 
 - **No public IPv4 port forwarding is required**, and your IP is not advertised to inbound peers.
 - The **only** LAN-facing port is the stratum endpoint **`:3333`** that your own rigs connect to. It
-  is plain, **unauthenticated** stratum and must never face the internet — `pithead setup`/`doctor`
-  warn if your host has a public IP, and you can narrow it with `p2pool.stratum_bind` or a firewall.
-  See [Connecting miners › Firewall](workers.md#firewall).
+  is plain stratum — **unauthenticated by default** — and must never face the internet:
+  `pithead setup`/`doctor` warn if your host has a public IP. Lock it down with `p2pool.stratum_bind`,
+  a firewall, and/or an optional `p2pool.stratum_password` that requires each rig to authenticate.
+  See [Connecting miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
 
 ---
 
@@ -117,8 +118,8 @@ mining through Tor and pins `--donate-level 0`.
 
 ## Maximum-privacy checklist
 
-- [ ] Keep `:3333` off the public internet — firewall it to your LAN or set `p2pool.stratum_bind`
-  (`pithead doctor` flags this).
+- [ ] Keep `:3333` off the public internet — firewall it to your LAN, set `p2pool.stratum_bind`,
+  and/or require a `p2pool.stratum_password` (`pithead doctor` flags public-IP exposure).
 - [ ] Route P2Pool outbound through Tor by editing its compose `command:` (above) if you accept the latency.
 - [ ] Set `xvb.enabled: false` if you don't want any XvB egress.
 - [ ] Run the initial install/build behind a VPN or `torsocks`.

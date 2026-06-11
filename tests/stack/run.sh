@@ -125,6 +125,18 @@ assert_contains "prune is DEST"      "$(run_sourced "$SANDBOX" describe_change M
 assert_contains "rpc lan is DEST"    "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum open is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum lan is INFO"  "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 0.0.0.0 127.0.0.1)" "INFO"
+# Stratum access-password (#152): enabling/changing is DEST (rigs need the new pass), disabling is
+# INFO — and the secret value must NEVER appear in the change preview.
+assert_contains "stratum pw enable is DEST"  "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "DEST"
+assert_contains "stratum pw disable is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD s3cr3t '')" "INFO"
+case "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD oldpw newpw)" in
+    *oldpw*|*newpw*) bad "stratum pw change hides the secret" "value leaked into the change preview" ;;
+    *DEST*)          ok  "stratum pw change hides the secret (DEST, no value shown)" ;;
+    *)               bad "stratum pw change hides the secret" "expected DEST" ;;
+esac
+# Dev-fee donate-level (#173): a brief restart (INFO), shown as a percentage.
+assert_contains "donate-level is INFO"      "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "INFO"
+assert_contains "donate-level shows pct"    "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "0% → 1%"
 assert_contains "wallet is DEST"     "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
 assert_contains "xvb url is INFO"    "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)"        "INFO"
 assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)"   "DEST"
@@ -372,6 +384,25 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
 assert_rc "invalid dashboard.host rejected" "$rc" "1"
 assert_contains "invalid dashboard.host message" "$out" "dashboard.host"
 
+# proxy.donate_level must be an integer 0-99 (default 0); an out-of-range value is rejected (#173).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":150}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "out-of-range donate_level rejected" "$rc" "1"
+assert_contains "donate_level message" "$out" "proxy.donate_level"
+# Non-numeric donate_level is rejected (the "auto" sentinel was removed — the value is a plain integer).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":"auto"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "non-numeric donate_level rejected" "$rc" "1"
+
+# A stratum_password with a shell/.env-unsafe character (a space) is rejected before render (#152).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_password":"bad pass"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
+assert_rc "unsafe stratum_password rejected" "$rc" "1"
+assert_contains "stratum_password message" "$out" "p2pool.stratum_password"
+
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
@@ -382,6 +413,9 @@ assert_eq "stratum_bind default"  "$(run_sourced "$V" env_get_file "$V/.env" STR
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
+# Both new xmrig-proxy knobs default to OFF/no-fee when absent from config (#152/#173).
+assert_eq "stratum auth off by default"        "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" ""
+assert_eq "donate-level 0 by default (no fee)"  "$(run_sourced "$V" env_get_file "$V/.env" PROXY_DONATE_LEVEL)" "0"
 # Build provenance is exported for the build args, not persisted to .env (Issue #58) — so a git pull
 # never shows up as a config change. Assert it stays out of the rendered .env.
 assert_eq "provenance not written to .env" "$(run_sourced "$V" env_get_file "$V/.env" PITHEAD_VERSION)" ""
@@ -420,6 +454,20 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
+
+echo "== black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level) =="
+# stratum_password "auto" generates + persists a stable secret and surfaces it for rigs; an explicit
+# proxy.donate_level propagates verbatim.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "proxy":{"donate_level":1}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+sp1="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+case "$sp1" in ?*) ok "stratum_password auto generated a secret" ;; *) bad "stratum_password auto generated a secret" "got empty" ;; esac
+assert_eq "donate-level explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_DONATE_LEVEL)" "1"
+assert_contains "stratum auth surfaced for rigs" "$(run_sourced "$V" announce_stratum_auth 2>&1)" "Stratum authentication is ON"
+# Re-apply: an "auto" password must be STABLE (reused, not rotated) — like the proxy token.
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "stratum_password auto stable across apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "$sp1"
 
 echo "== black-box: local node creds auto-generated + persisted (#50) =="
 # A local node with BLANK creds: apply must generate them, write them into .env AND back into

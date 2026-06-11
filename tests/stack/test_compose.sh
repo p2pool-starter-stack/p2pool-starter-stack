@@ -42,6 +42,8 @@ XVB_ENABLED=true
 P2POOL_URL=172.28.0.28:3333
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=token
+PROXY_STRATUM_PASSWORD=hunter2
+PROXY_DONATE_LEVEL=1
 MONERO_PRUNE=1
 MONERO_PREP_THREADS=4
 MONERO_RPC_BIND=127.0.0.1
@@ -141,6 +143,27 @@ if docker compose --env-file "$EMPTY_TOKEN_ENV" -f "$ROOT/docker-compose.yml" co
     echo "  ✗ empty PROXY_AUTH_TOKEN still rendered (would start an UNAUTHENTICATED API)"; fails=$((fails + 1))
 else
     echo "  ✓ empty PROXY_AUTH_TOKEN makes the stack refuse to start (#153)"
+fi
+
+# xmrig-proxy config knobs (#152 stratum access-password, #173 dev-fee donate-level): both flags
+# render as a single '=' token carrying the value from .env.
+jq_assert "xmrig-proxy stratum access-password rendered (#152)" \
+    '.services["xmrig-proxy"].command | any(. == "--access-password=hunter2")'
+jq_assert "xmrig-proxy dev-fee donate-level rendered (#173)" \
+    '.services["xmrig-proxy"].command | any(. == "--donate-level=1")'
+# Default-off path: an EMPTY PROXY_STRATUM_PASSWORD and a MISSING PROXY_DONATE_LEVEL (a stale .env
+# from before these keys) must render NO --access-password flag at all — the ':+' form drops it so
+# any rig may still mine (a literal empty '--access-password=' would demand an empty password and
+# reject every rig, the bug this guards). donate-level falls back to '0' (no dev fee).
+OFF_ENV="$(mktemp)"
+grep -vE '^PROXY_STRATUM_PASSWORD=|^PROXY_DONATE_LEVEL=' "$ENV_FILE" > "$OFF_ENV"
+echo 'PROXY_STRATUM_PASSWORD=' >> "$OFF_ENV"
+OFF_JSON="$(docker compose --env-file "$OFF_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+rm -f "$OFF_ENV"
+if printf '%s' "$OFF_JSON" | jq -e '.services["xmrig-proxy"].command | ((any(startswith("--access-password")) | not) and any(. == "--donate-level=0"))' >/dev/null 2>&1; then
+    echo "  ✓ default-off omits --access-password (any rig may mine) + --donate-level=0 (#152/#173)"
+else
+    echo "  ✗ default-off must omit --access-password and render --donate-level=0"; fails=$((fails + 1))
 fi
 
 # Configurable bridge subnet (#180): a custom network.subnet must rebase every static IP, the bridge
