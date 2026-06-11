@@ -1368,6 +1368,40 @@ parse_and_validate_config() {
     # (auto-detected; falls back to Etc/UTC). Set an IANA name (e.g. America/Chicago) to
     # override. Rendered into .env as DASHBOARD_TZ.
     DASHBOARD_TZ=$(resolve_default "$(jq -r '.dashboard.timezone // empty' "$CONFIG_FILE")" "$(detect_host_timezone)")
+
+    # Optional dashboard login (#8): Caddy basic_auth in front of the dashboard. OPT-IN — an empty
+    # password (the default) leaves it open, today's behavior, which is fine for the LAN appliance;
+    # turn it on before exposing/co-hosting the dashboard. The plaintext lives only in config.json
+    # (owner-only); pithead bcrypt-hashes it with the pinned Caddy image and stores the hash
+    # base64-encoded in .env (raw bcrypt's '$' spams compose interpolation warnings). A sha256
+    # fingerprint of the plaintext keeps the hash STABLE across applies — re-hash only when the
+    # password actually changes (bcrypt is salted, so re-hashing every apply would churn the Caddyfile).
+    DASHBOARD_AUTH_USER=$(jq -r '.dashboard.auth.username // "admin"' "$CONFIG_FILE")
+    DASHBOARD_AUTH_HASH_B64=""
+    DASHBOARD_AUTH_PW_FP=""
+    local dash_pw; dash_pw=$(jq -r '.dashboard.auth.password // ""' "$CONFIG_FILE")
+    if [ -n "$dash_pw" ]; then
+        if ! printf '%s' "$DASHBOARD_AUTH_USER" | grep -qE '^[A-Za-z0-9._@-]{1,64}$'; then
+            error "dashboard.auth.username must be 1–64 chars of letters, digits, and . _ @ - (got \"$DASHBOARD_AUTH_USER\")."
+        fi
+        if ! printf '%s' "$dash_pw" | grep -qE '^[[:print:]]{8,128}$' || printf '%s' "$dash_pw" | grep -q '"'; then
+            error "dashboard.auth.password must be 8–128 printable characters with no double-quotes."
+        fi
+        DASHBOARD_AUTH_PW_FP=$(printf '%s' "$dash_pw" | sha256_hex)
+        local prev_fp prev_hash
+        prev_fp=$(env_get DASHBOARD_AUTH_PW_FP)
+        prev_hash=$(env_get DASHBOARD_AUTH_HASH_B64)
+        if [ "$DASHBOARD_AUTH_PW_FP" = "$prev_fp" ] && [ -n "$prev_hash" ]; then
+            DASHBOARD_AUTH_HASH_B64="$prev_hash"          # password unchanged — keep the stable hash
+        else
+            DASHBOARD_AUTH_HASH_B64=$(caddy_hash_password_b64 "$dash_pw") \
+                || error "Could not hash dashboard.auth.password (is Docker running and the Caddy image pulled? Run '$0 setup' first)."
+        fi
+        # basic_auth credentials are only safe over TLS; warn (don't fail) on plain HTTP.
+        if [ "$DASHBOARD_SECURE" != "true" ]; then
+            warn "dashboard.auth is set but dashboard.secure is false — login credentials would travel over plain HTTP. Set dashboard.secure: true for HTTPS."
+        fi
+    fi
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
@@ -1656,6 +1690,9 @@ MONERO_ZMQ_PORT=$zmq_port
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
 DASHBOARD_TZ=$DASHBOARD_TZ
+DASHBOARD_AUTH_USER=$DASHBOARD_AUTH_USER
+DASHBOARD_AUTH_HASH_B64=$DASHBOARD_AUTH_HASH_B64
+DASHBOARD_AUTH_PW_FP=$DASHBOARD_AUTH_PW_FP
 HOST_IP=$HOST_IP
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
@@ -1674,19 +1711,47 @@ inject_service_configs() {
     safe_sed "s/172\.28\.0/$NETWORK_PREFIX/g" build/tari/config.toml
 }
 
+# sha256 of stdin as lowercase hex — portable across the sha256sum / shasum split.
+sha256_hex() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+    else shasum -a 256 | cut -d' ' -f1; fi
+}
+
+# bcrypt-hash a dashboard password with the PINNED Caddy image (read straight from docker-compose.yml
+# so it tracks the digest), returned base64-encoded so the raw bcrypt '$' never lands in .env (#8).
+# Returns non-zero if Docker / the image isn't available.
+caddy_hash_password_b64() {
+    local pw="$1" img hash
+    img=$(grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1)
+    [ -n "$img" ] || return 1
+    hash=$(docker run --rm "$img" caddy hash-password --plaintext "$pw" 2>/dev/null) || return 1
+    [ -n "$hash" ] || return 1
+    printf '%s' "$hash" | openssl base64 -A
+}
+
 generate_caddyfile() {
+    # Optional basic_auth block (#8), rendered only when a dashboard password is configured. The
+    # hash is decoded from its base64 .env form back to the raw bcrypt string Caddy expects; it
+    # protects every route, so the dashboard prompts for login before anything is served.
+    local auth=""
+    if [ -n "$DASHBOARD_AUTH_HASH_B64" ]; then
+        local hash; hash=$(printf '%s' "$DASHBOARD_AUTH_HASH_B64" | openssl base64 -d -A)
+        auth=$(printf '    basic_auth {\n        %s %s\n    }' "$DASHBOARD_AUTH_USER" "$hash")
+    fi
     if [ "$DASHBOARD_SECURE" == "true" ]; then
-        log "Generating Caddyfile for automatic HTTPS ($HOST_IP)..."
+        log "Generating Caddyfile for automatic HTTPS ($HOST_IP)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF > "Caddyfile"
 https://$HOST_IP {
     tls internal
+$auth
     reverse_proxy 127.0.0.1:8000
 }
 EOF
     else
-        log "Generating Caddyfile for HTTP ($HOST_IP)..."
+        log "Generating Caddyfile for HTTP ($HOST_IP)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF > "Caddyfile"
 http://$HOST_IP {
+$auth
     reverse_proxy 127.0.0.1:8000
 }
 EOF
@@ -2022,6 +2087,21 @@ describe_change() {
             msg="Monero memory cap: $old → $new — the monerod container is recreated (brief restart; the blockchain on disk is preserved)." ;;
         DASHBOARD_SECURE)
             msg="Dashboard scheme → $([ "$new" == "true" ] && echo HTTPS || echo HTTP) (secure=$new)." ;;
+        DASHBOARD_AUTH_HASH_B64)
+            # Secret — never echo the hash into the change preview / logs.
+            if [ -z "$new" ]; then
+                msg="Dashboard login DISABLED (#8) — the dashboard is reachable without a password again."
+            elif [ -z "$old" ]; then
+                flag=DEST; msg="Dashboard login ENABLED (#8) — Caddy now requires the configured username/password; the caddy container is recreated."
+            else
+                flag=DEST; msg="Dashboard login password CHANGED (#8) — use the new credentials; the caddy container is recreated."
+            fi ;;
+        DASHBOARD_AUTH_USER)
+            msg="Dashboard login username: $old → $new (#8)." ;;
+        DASHBOARD_AUTH_PW_FP)
+            # Internal fingerprint — always co-changes with DASHBOARD_AUTH_HASH_B64, which already
+            # carries the user-facing message. Emit no message so the preview shows one line, not two.
+            msg="" ;;
         HOST_IP)
             msg="Dashboard hostname: $old → $new." ;;
         MONERO_PREP_THREADS)
@@ -2076,10 +2156,11 @@ apply() {
         for key in "${changed[@]}"; do
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
-            case "$key" in HOST_IP|DASHBOARD_SECURE) caddy_changed=1 ;; esac
+            case "$key" in HOST_IP|DASHBOARD_SECURE|DASHBOARD_AUTH_USER|DASHBOARD_AUTH_HASH_B64) caddy_changed=1 ;; esac
             line=$(describe_change "$key" "$old" "$new")
             flag=${line%%$'\t'*}
             msg=${line#*$'\t'}
+            [ -z "$msg" ] && continue   # internal-only keys (e.g. the auth fingerprint) stay silent
             if [ "$flag" == "DEST" ]; then
                 echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
                 destructive=1

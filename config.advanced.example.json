@@ -53,7 +53,11 @@
         "host": "auto",
         "timezone": "auto",
         "data_dir": "auto",
-        "tari_required": true
+        "tari_required": true,
+        "auth": {
+            "username": "admin",
+            "password": ""
+        }
     },
 
     "network": {
