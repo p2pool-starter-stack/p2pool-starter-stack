@@ -13,6 +13,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- `pithead setup` and `doctor` now **warn when the host has a public IP** and stratum `:3333` is
+  bound to all interfaces (#113). The stratum port is plain, unauthenticated stratum and must never
+  face the public internet: a NAT'd home host has no public IP on its interfaces and stays silent,
+  while a VPS/cloud or publicly-addressed host gets a clear nudge to firewall `:3333` to the LAN or
+  narrow `p2pool.stratum_bind` (it also stays quiet if the bind is already narrowed). Warn-only,
+  never fatal; `doctor` prints a ✓ when not exposed. A pure, unit-tested `is_public_ip` classifier
+  handles the RFC1918 / CGNAT / ULA / link-local / loopback exclusions (IPv4 + IPv6).
 - A four-tier test strategy for simulating every runtime situation (#54), documented in
   `docs/testing-strategy.md` with a full scenario catalog:
   - **Live config-matrix suite** (`tests/integration/`, tier 4) that drives a real, synced

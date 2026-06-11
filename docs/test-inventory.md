@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 432 dashboard unit tests · 12 contract tests · 25 frontend
-tests · 27 `pithead` shell sections · 15 harness self-test sections ·
+tests · 28 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 27 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 432 |
 | 1 — Unit | frontend (node --test) | 25 |
-| 1 — Unit | `pithead` shell suite | 27 sections |
+| 1 — Unit | `pithead` shell suite | 28 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -532,9 +532,10 @@ tests · 27 `pithead` shell sections · 15 harness self-test sections ·
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 
-### `pithead` shell suite (tests/stack/run.sh) — 27 sections
+### `pithead` shell suite (tests/stack/run.sh) — 28 sections
 - unit: resolve_default
 - unit: assert_safe_dir
+- unit: is_public_ip classifier (#113)
 - unit: is_ipv4
 - unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0)
 - unit: docker_boot_enabled (#137)
@@ -687,5 +688,5 @@ tests · 27 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **525** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **526** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
