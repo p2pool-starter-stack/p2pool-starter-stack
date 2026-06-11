@@ -1529,7 +1529,7 @@ render_env() {
     # it (monerod's LMDB is reclaimable page cache, so its capped RSS stays low). Tunable for low-RAM
     # hosts that OOM during IBD, or to give a big host more LMDB-cache headroom.
     monero_mem_limit=$(jq -r '.monero.mem_limit // "auto"' "$CONFIG_FILE")
-    case "$monero_mem_limit" in ""|auto) monero_mem_limit="4g" ;; esac
+    case "$monero_mem_limit" in ""|auto) monero_mem_limit="6g" ;; esac
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 

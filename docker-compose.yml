@@ -49,8 +49,8 @@ services:
     # p2pool ~0.35). memswap_limit == mem_limit => zero swap => clean OOM-kill, no disk thrash (same as
     # Tari). monerod's ceiling is generous + tunable via monero.mem_limit so heavy initial-sync
     # verification never trips it — raise it if a low-RAM host OOMs monerod during IBD.
-    mem_limit: ${MONERO_MEM_LIMIT:-4g}
-    memswap_limit: ${MONERO_MEM_LIMIT:-4g}
+    mem_limit: ${MONERO_MEM_LIMIT:-6g}
+    memswap_limit: ${MONERO_MEM_LIMIT:-6g}
     restart: unless-stopped
     stop_grace_period: 1m
     logging: *default-logging
