@@ -364,14 +364,17 @@ write_manifest() {
     log "Wrote ingredients manifest: $out"
 }
 
-# A pinned install bundle: compose + example config + the manifest, with the resolved STACK_VERSION.
+# A pinned, pull-based install bundle: the runtime files needed to `./pithead setup` WITHOUT building.
+# Deliberately ships NO image Dockerfiles — so pithead detects release mode (is_source_checkout=false),
+# resolves STACK_VERSION from the bundled VERSION, and pulls the published `:vX.Y.Z` images. build/tari/'s
+# config template IS included because inject_service_configs renders it at setup.
 make_bundle() {
     local out="$1" d="$WORKDIR/pithead-$TAG"
-    mkdir -p "$d"
-    cp docker-compose.yml config.advanced.example.json "$d/" 2>/dev/null || true
-    printf 'STACK_VERSION=%s\n' "$TAG" > "$d/.env.release"
-    printf 'Pithead %s — pinned install bundle.\n\nQuick start:\n  1. cp config.advanced.example.json config.json  (set your wallet addresses)\n  2. export STACK_VERSION=%s\n  3. docker compose pull && ./pithead setup\n\nImages are pulled from %s (no local build).\n' \
-        "$TAG" "$TAG" "$REGISTRY" > "$d/README.txt"
+    mkdir -p "$d/build/tari"
+    cp pithead VERSION docker-compose.yml config.advanced.example.json "$d/" 2>/dev/null || true
+    cp build/tari/config.toml.template "$d/build/tari/" 2>/dev/null || true
+    printf 'Pithead %s — pinned install bundle (images pulled from %s, no local build).\n\nQuick start:\n  1. cp config.advanced.example.json config.json   # then set your wallet addresses\n  2. ./pithead setup\n\nThere are no build contexts here, so pithead pulls the published %s images instead of building.\n' \
+        "$TAG" "$REGISTRY" "$TAG" > "$d/README.txt"
     if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"; return 0; fi
     tar -czf "$out" -C "$WORKDIR" "pithead-$TAG"
     log "Wrote install bundle: $out"

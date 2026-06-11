@@ -112,12 +112,28 @@ explain_subnet_collision() {
     esac
 }
 
+# A source checkout has the image build CONTEXTS (Dockerfiles) and builds the first-party images
+# locally; a release install ships only the runtime bits (compose, pithead, and build/tari/'s config
+# template that inject_service_configs renders at setup) and pulls the published images. Key off a
+# Dockerfile, NOT `build/` — a release bundle still contains build/tari/, so `[ -d build ]` is true (#44).
+is_source_checkout() { [ -f build/dashboard/Dockerfile ]; }
+
+# `docker compose up` pull policy (#44): a source checkout builds the first-party images locally —
+# `never`, so up doesn't attempt (and warn about) a registry pull for an unpublished `:dev` tag —
+# while a release install pulls them: `missing`. Override with PITHEAD_PULL (e.g. `always` to force a
+# re-pull on upgrade).
+resolve_pull_policy() {
+    if [ -n "${PITHEAD_PULL:-}" ]; then printf '%s' "$PITHEAD_PULL"
+    elif is_source_checkout; then printf 'never'
+    else printf 'missing'; fi
+}
+
 # Run `docker compose up` with live output; on failure, explain a bridge-subnet collision (#180) if
 # that's what Docker rejected. Returns compose's own exit code.
 compose_up_checked() {
     local tmp out rc
     tmp="$(mktemp)"
-    docker compose up "$@" 2>&1 | tee "$tmp"
+    docker compose up --pull "$(resolve_pull_policy)" "$@" 2>&1 | tee "$tmp"
     rc=${PIPESTATUS[0]}
     out="$(cat "$tmp")"; rm -f "$tmp"
     [ "$rc" -ne 0 ] && explain_subnet_collision "$out"
@@ -171,8 +187,12 @@ stack_upgrade() {
     generate_caddyfile
     log "Re-rendered generated config for the current release."
     migrate_compose_project
-    if ! compose_up_checked -d --build; then
-        error "Upgrade failed during 'docker compose up' — see the error above."
+    # Source checkout: rebuild the images from build/. Release install: pull the new published images
+    # instead — force a re-pull so a moved tag is refreshed (#44).
+    if is_source_checkout; then
+        compose_up_checked -d --build || error "Upgrade failed during 'docker compose up' — see the error above."
+    else
+        PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
     fi
     log "Stack upgraded."
 }
@@ -576,7 +596,7 @@ reset_dashboard() {
     sudo chmod -R 755 "$p2pool_dir/stats"
 
     log "Bringing services back up..."
-    docker compose up -d dashboard p2pool
+    docker compose up --pull "$(resolve_pull_policy)" -d dashboard p2pool
 }
 
 # --- Backup / Restore ---
@@ -843,6 +863,19 @@ export_build_provenance() {
             commit="${commit}-dirty"
         fi
         PITHEAD_GIT_COMMIT="$commit"
+    fi
+
+    # Image coordinates for docker-compose's `image:` refs (#44). A source checkout (build/ present)
+    # builds the first-party images locally and tags them `:dev`; a release install (no build/, just
+    # the published bundle) pulls `:vX.Y.Z` from the registry. PITHEAD_REGISTRY honours an env override.
+    export PITHEAD_REGISTRY STACK_VERSION
+    PITHEAD_REGISTRY="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}"
+    if is_source_checkout; then
+        STACK_VERSION="dev"
+    elif [ -n "$PITHEAD_VERSION" ]; then
+        STACK_VERSION="v$PITHEAD_VERSION"
+    else
+        STACK_VERSION="dev"
     fi
 }
 
@@ -1509,7 +1542,7 @@ resolve_dashboard_host() {
 
 provision_tor() {
     log "Initializing Tor service to generate Onion addresses..."
-    docker compose up -d tor
+    docker compose up --pull "$(resolve_pull_policy)" -d tor
     # Poll for the three hidden-service hostname files instead of a fixed sleep — Tor can take
     # more or less than 15s to publish them, especially on first run.
     log "Waiting for Tor hidden services to be generated..."

@@ -13,6 +13,11 @@ x-logging: &default-logging
 services:
   # --- Tor Anonymity Service ---
   tor:
+    # A source checkout builds the 5 first-party images locally from build/; a release install pulls
+    # these published images instead. pithead chooses build-vs-pull via its `--pull` policy and sets
+    # PITHEAD_REGISTRY / STACK_VERSION (export_build_provenance, #44); the defaults below keep a bare
+    # `docker compose` working (tag `:dev`).
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-tor:${STACK_VERSION:-dev}
     build: ./build/tor
     container_name: tor
     # Memory ceiling (#132 — see monerod). Generous so an OOM-restart, which would blip every onion
@@ -43,6 +48,7 @@ services:
   # Only starts if "local_node" profile is active
   monerod:
     profiles: ["local_node"]
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-monero:${STACK_VERSION:-dev}
     build: ./build/monero
     container_name: monerod
     # Memory CEILINGS (#132): cap each service so a leak/spike OOM-restarts the offender in its own
@@ -146,6 +152,7 @@ services:
 
   # --- P2Pool Node ---
   p2pool:
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-p2pool:${STACK_VERSION:-dev}
     build: ./build/p2pool
     container_name: p2pool
     # Memory ceiling (#132 — see monerod). RandomX HugePages are separate; this caps p2pool's own
@@ -212,6 +219,7 @@ services:
 
   # --- XMRig Proxy ---
   xmrig-proxy:
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-xmrig-proxy:${STACK_VERSION:-dev}
     build: ./build/xmrig-proxy
     container_name: xmrig-proxy
     # Memory ceiling (#132 — see monerod). Tiny in practice (~2 MiB observed).
@@ -280,6 +288,7 @@ services:
 
   # --- Monitoring Dashboard ---
   dashboard:
+      image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION:-dev}
       build:
         context: ./build/dashboard
         # Stack version baked into the image so the dashboard header can show it (Issue #58).

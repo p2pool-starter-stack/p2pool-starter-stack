@@ -266,6 +266,27 @@ ver_file="$(tr -d ' \t\r\n' < "$ROOT/VERSION")"
 ver_pyproject="$(grep -oE '^version = "[^"]+"' "$ROOT/build/dashboard/pyproject.toml" | head -1 | cut -d'"' -f2)"
 assert_eq "pyproject.toml version matches VERSION (#44)" "$ver_pyproject" "$ver_file"
 
+echo "== unit: pull-vs-build mode (#44) =="
+# is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
+# (Dockerfiles) are present: a source checkout builds locally (:dev, --pull never); a release bundle
+# (only build/tari/ + VERSION) pulls (:vX.Y.Z, --pull missing). Two scratch dirs stand in for each.
+SRCM="$SANDBOX/srcmode"; mkdir -p "$SRCM/build/dashboard"; : > "$SRCM/build/dashboard/Dockerfile"; printf '0.1.0\n' > "$SRCM/VERSION"
+RELM="$SANDBOX/relmode"; mkdir -p "$RELM/build/tari"; printf '0.1.0\n' > "$RELM/VERSION"
+# shellcheck disable=SC1090
+( cd "$SRCM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; is_source_checkout ); assert_rc "is_source_checkout true with a Dockerfile" "$?" "0"
+# shellcheck disable=SC1090
+( cd "$RELM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; is_source_checkout ); assert_rc "is_source_checkout false without a Dockerfile" "$?" "1"
+# shellcheck disable=SC1090
+assert_eq "pull policy: source -> never"      "$( cd "$SRCM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; resolve_pull_policy )" "never"
+# shellcheck disable=SC1090
+assert_eq "pull policy: release -> missing"   "$( cd "$RELM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; resolve_pull_policy )" "missing"
+# shellcheck disable=SC1090
+assert_eq "pull policy: PITHEAD_PULL override" "$( cd "$SRCM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; PITHEAD_PULL=always resolve_pull_policy )" "always"
+# shellcheck disable=SC1090
+assert_eq "STACK_VERSION dev in a source checkout"   "$( cd "$SRCM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; export_build_provenance; printf '%s' "$STACK_VERSION" )" "dev"
+# shellcheck disable=SC1090
+assert_eq "STACK_VERSION v0.1.0 in a release bundle" "$( cd "$RELM" || exit; set --; source "$STACK" 2>/dev/null; set +eu; export_build_provenance; printf '%s' "$STACK_VERSION" )" "v0.1.0"
+
 echo "== unit: explain_subnet_collision (#180) =="
 ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"
 assert_contains "subnet overlap -> network.subnet hint"  "$ov" "network"
@@ -472,7 +493,7 @@ assert_rc "apply without .env fails" "$rc" "1"
 assert_contains "apply needs setup" "$out" "setup"
 
 echo "== black-box: config validation =="
-V="$SANDBOX/val"; mkdir -p "$V/build/tari"; cp "$STACK" "$V/pithead"; make_stubs "$V/bin"
+V="$SANDBOX/val"; mkdir -p "$V/build/tari" "$V/build/dashboard"; : > "$V/build/dashboard/Dockerfile"; cp "$STACK" "$V/pithead"; make_stubs "$V/bin"
 cp "$ROOT/build/tari/config.toml.template" "$V/build/tari/"
 mkdir -p "$V/data/monero" "$V/data/tari" "$V/data/p2pool" "$V/data/tor" "$V/data/dashboard" "$V/data/p2pool/stats"
 seed_env() { cat > "$V/.env" <<EOF
@@ -606,7 +627,7 @@ assert_eq "donate-level 0 by default (no fee)"  "$(run_sourced "$V" env_get_file
 # Build provenance is exported for the build args, not persisted to .env (Issue #58) — so a git pull
 # never shows up as a config change. Assert it stays out of the rendered .env.
 assert_eq "provenance not written to .env" "$(run_sourced "$V" env_get_file "$V/.env" PITHEAD_VERSION)" ""
-assert_contains "compose up called" "$(cat "$DOCKER_LOG")" "compose up -d --remove-orphans"
+assert_contains "compose up called (build mode)" "$(cat "$DOCKER_LOG")" "compose up --pull never -d --remove-orphans"
 
 # Regression (Issue #58): a second apply with nothing changed must report no changes and exit 0
 # cleanly — never tripping the ERR trap. (Provenance keys briefly leaked into this diff; when they
@@ -682,7 +703,7 @@ assert_eq "remote creds not persisted" "$(jq -r '.monero.node_username' "$V/conf
 echo "== black-box: upgrade re-renders generated config (#128) =="
 # `upgrade` used to be just `up --build`, leaving the generated .env/Caddyfile/Tari config stale
 # after a git pull. It must now re-render them while preserving secrets.
-U="$SANDBOX/upgrade"; mkdir -p "$U/build/tari" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"
+U="$SANDBOX/upgrade"; mkdir -p "$U/build/tari" "$U/build/dashboard" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"; : > "$U/build/dashboard/Dockerfile"
 cp "$STACK" "$U/pithead"; make_stubs "$U/bin"; cp "$ROOT/build/tari/config.toml.template" "$U/build/tari/"
 # Stale .env: secrets present, but STRATUM_BIND (a rendered var) is missing — the upgrade must fill it.
 cat > "$U/.env" <<EOF
@@ -704,11 +725,12 @@ assert_eq "upgrade preserves the proxy token"               "$(run_sourced "$U" 
 # doesn't carry it, so upgrade must re-assert it — else the flag flips to false and the NEXT
 # require_deployed command (up/apply/upgrade) errors "run setup" on an already-deployed box.
 assert_eq "upgrade preserves DEPLOYMENT_COMPLETED (require_deployed survives)" "$(run_sourced "$U" env_get_file "$U/.env" DEPLOYMENT_COMPLETED)" "true"
-assert_contains "upgrade still rebuilds images"             "$(cat "$UL")" "compose up -d --build"
+assert_contains "upgrade still rebuilds images (source mode)" "$(cat "$UL")" "compose up --pull never -d --build"
 
 echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
 # A docker stub that fails `compose up -d --remove-orphans` only when FAIL_UP=1 (else succeeds).
-A="$SANDBOX/applyfail"; mkdir -p "$A/build/tari" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
+A="$SANDBOX/applyfail"; mkdir -p "$A/build/tari" "$A/build/dashboard" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
+: > "$A/build/dashboard/Dockerfile"   # source-checkout marker → pithead builds (--pull never), #44
 cp "$STACK" "$A/pithead"; cp "$ROOT/build/tari/config.toml.template" "$A/build/tari/"
 cat > "$A/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -718,7 +740,7 @@ case "$*" in
   "exec tor cat /var/lib/tor/monero/hostname") echo "mona.onion"; exit 0 ;;
   "exec tor cat /var/lib/tor/tari/hostname")   echo "taria.onion"; exit 0 ;;
   "exec tor cat /var/lib/tor/p2pool/hostname") echo "p2pa.onion"; exit 0 ;;
-  "compose up -d --remove-orphans") [ "${FAIL_UP:-0}" = "1" ] && exit 1 || exit 0 ;;
+  "compose up --pull never -d --remove-orphans") [ "${FAIL_UP:-0}" = "1" ] && exit 1 || exit 0 ;;
 esac
 exit 0
 EOF

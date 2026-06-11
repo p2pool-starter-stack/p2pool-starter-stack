@@ -23,9 +23,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   manifest** (promoted digests + upstream pins) and a pinned install bundle. Safe by construction:
   `--dry-run` previews the whole plan, it never starts the live stack on the build host, and it never
   prints the registry token. Images publish to `ghcr.io/p2pool-starter-stack/pithead-*`
-  (override via `PITHEAD_REGISTRY` / `PITHEAD_IMAGE_PREFIX`). The remaining hop for one-command
-  pull-based installs — wiring `${STACK_VERSION}` into `docker-compose.yml` — is tracked in
-  `docs/releasing.md`.
+  (override via `PITHEAD_REGISTRY` / `PITHEAD_IMAGE_PREFIX`). **Release installs pull the published
+  images — no local build:** each compose service carries an `image: …/pithead-<svc>:${STACK_VERSION}`
+  ref alongside `build:`, and pithead auto-selects the mode — a source checkout (Dockerfiles present)
+  builds locally and tags `:dev` (`--pull never`); a release bundle (no Dockerfiles, just
+  `pithead`+`VERSION`+compose+`build/tari/`) resolves `STACK_VERSION` from `VERSION` and pulls
+  `:vX.Y.Z` (`--pull missing`). So a release is `./pithead setup` with no compile wait.
 
 - **Chart hashrate-averaging-window toggle (#168).** A new **Avg** control on the dashboard chart
   plots any of xmrig-proxy's five native averaging windows — **1m / 10m / 1h / 12h / 24h**. It's
