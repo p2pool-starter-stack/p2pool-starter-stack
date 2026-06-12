@@ -97,15 +97,24 @@ _NOT_ELIGIBLE_TITLE = ("You have no share in the P2Pool PPLNS window, so you're 
 
 
 def build_raffle_eligibility(metrics):
-    """Raffle-eligibility status — a P2Pool PPLNS share, the universal XvB raffle gate (#158).
+    """Raffle-eligibility status — are you set up to both WIN and COLLECT an XvB payout? (#158)
 
-    Eligibility is independent of donation tier: a Mega donor pushing 1 MH/s with no PPLNS share is
-    still skipped on a win and takes a fail. It's a third axis, neither routed nor credited hashrate
-    — derived purely from whether we have a share in the PPLNS window. (XvB calls this being a "VIP";
-    the dashboard says "Raffle Eligible" to avoid colliding with the `vip` donation tier.)
+    Green "Yes" requires XvB to be on plus BOTH gates:
+    - **In a donor tier** — your CREDITED donation (XvB's avg_1h *and* avg_24h, via ``current_tier``,
+      which clears on the lower of the two) has reached at least the lowest donor threshold, so you
+      qualify for a donor round; and
+    - **A P2Pool PPLNS share** — XvB calls this being a "VIP"; without it a win is skipped and you
+      take a fail, regardless of tier.
+
+    Shows "N/A (XvB off)" when XvB is disabled — there's no raffle to be eligible for. This is
+    intentionally stricter than XvB's bare "VIP = just a share" so a green Yes means a win is paid.
     """
-    eligible = metrics.shares_in_window > 0
-    return {"eligible": eligible, "label": "Yes" if eligible else "No"}
+    if not metrics.xvb_enabled:
+        return {"applies": False, "eligible": False, "label": "N/A (XvB off)"}
+    # current_tier is get_tier_info(min(credited_1h, credited_24h)); "None" => below the lowest tier.
+    in_tier = metrics.current_tier not in ("None", "Disabled")
+    eligible = in_tier and metrics.shares_in_window > 0
+    return {"applies": True, "eligible": eligible, "label": "Yes" if eligible else "No"}
 
 
 # --------------------------------------------------------------------------------------
@@ -584,10 +593,11 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
         badges.append({"text": f"P2Pool {metrics.pool_type}", "variant": "outline"})
         if metrics.low_hr_warning:
             badges.append({"text": "⚠ Hashrate low for tier", "variant": "warn", "title": _LOW_HR_TITLE})
-        # Not raffle-eligible while donating (#158): no PPLNS share → XvB wins are skipped + accrue a
-        # fail, regardless of tier. A make-or-break gate worth surfacing loudly so donations aren't wasted.
+        # No PPLNS share while donating (#158): XvB wins are skipped + accrue a fail, regardless of
+        # tier. A make-or-break gate worth surfacing loudly so donations aren't wasted. (This is the
+        # share half of Raffle Eligible; the tier half is shown by the XvB Tier field.)
         if metrics.xvb_enabled and metrics.shares_in_window == 0:
-            badges.append({"text": "⚠ Not eligible — XvB wins skipped", "variant": "warn", "title": _NOT_ELIGIBLE_TITLE})
+            badges.append({"text": "⚠ No PPLNS share — XvB wins skipped", "variant": "warn", "title": _NOT_ELIGIBLE_TITLE})
 
     # Node-down badges (Issue #31) — shown whenever a node is unreachable, regardless of sync.
     if metrics.monero.down:

@@ -145,7 +145,7 @@ The summary panel pulls the key numbers together:
 | **Mining Mode** | What the stack is routing hashrate to right now (e.g. P2Pool, XvB, or a split). |
 | **Total Hashrate** | Your combined hashrate across all workers. |
 | **Share in Window** | Your shares in the current P2Pool PPLNS window. |
-| **Raffle Eligible** | Whether you currently hold a P2Pool PPLNS share (**Yes/No**). Holding one is what lets an XvB raffle win actually pay out — without it a win is *skipped* and you take a fail, at **any** donation tier. (XvB's own rules call this being a "VIP"; the dashboard says "Raffle Eligible" to avoid confusion with the `vip` donation tier.) |
+| **Raffle Eligible** | **Yes** only when you're set up to both *win* and *collect* an XvB payout: you're donating at least the **donor tier** (1 kH/s on XvB's *credited* 1h **and** 24h averages — the same threshold as **Current Tier**) **and** you hold a P2Pool PPLNS share (XvB's "VIP" gate — without it a win is skipped and you take a fail). Reads **No** when donating but a gate is unmet, and **N/A (XvB off)** when XvB is disabled. Intentionally stricter than XvB's bare "VIP = just a share" so a green Yes means a win is paid. |
 | **Last Share** | Time since your last accepted share. |
 | **P2Pool 1h / 24h avg** | Time-weighted average hashrate routed to P2Pool. |
 | **XvB 1h / 24h avg** | Donation hashrate credited by the XMRvsBeast API (the definitive record). |

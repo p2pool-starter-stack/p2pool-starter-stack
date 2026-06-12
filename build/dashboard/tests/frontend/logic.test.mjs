@@ -15,7 +15,7 @@ import {
     clampZoomWindow, fmtWindowDuration,
     SERIES_KEYS, normalizeSeries,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
-    heroKpis,
+    heroKpis, raffleCls,
     parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
@@ -224,7 +224,7 @@ const _heroState = (over = {}) => ({
     hashrate: { total: '10.50 kH/s', tier: 'Donor (1.00 kH/s+)', mode_name: 'P2POOL',
                 mode_variant: 'ok', ...over.hashrate },
     shares_window: { count: 5, ok: true, ...over.shares_window },
-    raffle_eligible: { eligible: true, label: 'Yes', ...over.raffle_eligible },
+    raffle_eligible: { applies: true, eligible: true, label: 'Yes', ...over.raffle_eligible },
     pool: { blocks: 42, ...over.pool },
 });
 const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.label, k]));
@@ -252,8 +252,17 @@ test('heroKpis: shares colour reflects the ok flag', () => {
 });
 
 test('heroKpis: Raffle Eligible colour reflects win eligibility (#158)', () => {
-    assert.equal(_byLabel(_heroState({ raffle_eligible: { eligible: true, label: 'Yes' } }))['Raffle Eligible'].cls, 'status-ok');
-    assert.equal(_byLabel(_heroState({ raffle_eligible: { eligible: false, label: 'No' } }))['Raffle Eligible'].cls, 'status-bad');
+    assert.equal(_byLabel(_heroState({ raffle_eligible: { applies: true, eligible: true, label: 'Yes' } }))['Raffle Eligible'].cls, 'status-ok');
+    assert.equal(_byLabel(_heroState({ raffle_eligible: { applies: true, eligible: false, label: 'No' } }))['Raffle Eligible'].cls, 'status-bad');
+    // XvB off => N/A => muted (not red).
+    assert.equal(_byLabel(_heroState({ raffle_eligible: { applies: false, label: 'N/A (XvB off)' } }))['Raffle Eligible'].cls, '');
+});
+
+test('raffleCls: muted when XvB off (N/A), green when eligible, red otherwise (#158)', () => {
+    assert.equal(raffleCls({ applies: false, eligible: false }), '');   // N/A — XvB off
+    assert.equal(raffleCls({ applies: true, eligible: true }), 'status-ok');
+    assert.equal(raffleCls({ applies: true, eligible: false }), 'status-bad');
+    assert.equal(raffleCls(undefined), '');                              // defensive: no state yet
 });
 
 test('heroKpis: mode colour follows the server mode_variant token', () => {
