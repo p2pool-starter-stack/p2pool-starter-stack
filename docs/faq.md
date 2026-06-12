@@ -81,6 +81,9 @@ What still touches clearnet (and so can reveal your IP):
 - **Install / build** fetches code and container images from GitHub, getmonero.org, and the image
   registries once — inherent and integrity-pinned, but it reveals your IP at that moment.
 
+**Bottom line:** with XvB disabled, on a normal home connection behind NAT the only time your IP
+leaves the box is that one-time install.
+
 See **[Privacy & network egress](privacy.md)** for every connection and how to harden each one.
 
 ### Do I need to port-forward?

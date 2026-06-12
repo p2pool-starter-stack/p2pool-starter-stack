@@ -63,6 +63,9 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 
 ## Configuration reference
 
+> **Only `monero.wallet_address` and `tari.wallet_address` are required.** Everything below is
+> optional and has a sensible default — add a key only when you want to change its behavior.
+
 | Key | Default | Description |
 |---|---|---|
 | `monero.mode` | `local` | `local` runs the bundled Monero node; `remote` connects to an external node (see `monero.remote`). |
@@ -77,7 +80,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `tari.wallet_address` | _required_ | Your Tari (Minotari) payout address. |
 | `tari.data_dir` | `auto` | Where the Tari node data lives on the host. `auto` = `./data/tari`. |
 | `tari.mem_limit` | `auto` | Upper limit on the Tari container's memory, so a runaway Tari restarts cleanly on its own instead of dragging down the whole host. `auto` picks a safe size for your machine — leave it unless you want to give Tari less RAM (to free it for other apps) or more (if it ever restarts too often). Accepts any Docker memory value, e.g. `"8g"`. |
-| `p2pool.pool` | `main` | P2Pool sidechain: `main`, `mini`, or `nano`. |
+| `p2pool.pool` | `main` | Which P2Pool sidechain to mine: `main`, `mini`, or `nano`. **Lower hashrate? Pick `mini` (or `nano`).** They have a lower share difficulty, so you find shares far more often — smoother, more frequent PPLNS payouts instead of long dry spells. `main` suits high hashrate; `mini`/`nano` suit typical home rigs. |
 | `p2pool.stratum_bind` | `0.0.0.0` | Host **bind address** for the stratum port (`3333`) your rigs connect to — a single IPv4 address (maps to Docker's port-publish host IP), **not** a subnet/CIDR. Default `0.0.0.0` reaches the whole LAN out of the box; set a specific LAN IP (e.g. `192.168.1.10`) to limit it to one interface, or `127.0.0.1` to disable LAN access entirely. To restrict *which source subnet* may connect, use a firewall — see [Connecting Miners › Firewall](workers.md#firewall). |
 | `p2pool.stratum_password` | `""` _(off)_ | Optional **password every rig must send** to mine through the proxy — turns the otherwise-open `3333` port into authenticated stratum. `""` (default) = no password, any rig may connect. `"auto"` = generate a random secret once and keep it stable (shown after `setup`/`apply` and stored in `.env`); set it as each rig's stratum `pass`. Any literal string = use exactly that password. Only devices that know the secret can mine — which also shrinks the worker-name [SSRF](workers.md#authentication) surface. The password is sent **in cleartext** over stratum, so this is access control ("who may mine"), **not** encryption — pair it with `stratum_bind`/a firewall. See [Connecting Miners › Authentication](workers.md#authentication). |
 | `p2pool.data_dir` | `auto` | Where P2Pool data lives on the host. `auto` = `./data/p2pool`. |
