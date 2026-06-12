@@ -224,7 +224,7 @@ const _heroState = (over = {}) => ({
     hashrate: { total: '10.50 kH/s', tier: 'Donor (1.00 kH/s+)', mode_name: 'P2POOL',
                 mode_variant: 'ok', ...over.hashrate },
     shares_window: { count: 5, ok: true, ...over.shares_window },
-    vip: { is_vip: true, label: 'Yes', ...over.vip },
+    raffle_eligible: { eligible: true, label: 'Yes', ...over.raffle_eligible },
     pool: { blocks: 42, ...over.pool },
 });
 const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.label, k]));
@@ -232,7 +232,7 @@ const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.lab
 test('heroKpis: surfaces the six headline numbers under stable labels, in order', () => {
     assert.deepEqual(
         heroKpis(_heroState()).map((k) => k.label),
-        ['Total Hashrate', 'Shares in Window', 'VIP', 'Blocks Found', 'XvB Tier', 'Mining Mode'],
+        ['Total Hashrate', 'Shares in Window', 'Raffle Eligible', 'Blocks Found', 'XvB Tier', 'Mining Mode'],
     );
 });
 
@@ -240,7 +240,7 @@ test('heroKpis: wires each KPI to its build_state field', () => {
     const k = _byLabel(_heroState());
     assert.equal(k['Total Hashrate'].value, '10.50 kH/s');   // hashrate.total
     assert.equal(k['Shares in Window'].value, 5);            // shares_window.count
-    assert.equal(k['VIP'].value, 'Yes');                     // vip.label
+    assert.equal(k['Raffle Eligible'].value, 'Yes');         // raffle_eligible.label
     assert.equal(k['Blocks Found'].value, 42);               // pool.blocks
     assert.equal(k['XvB Tier'].value, 'Donor (1.00 kH/s+)'); // hashrate.tier
     assert.equal(k['Mining Mode'].value, 'P2POOL');          // hashrate.mode_name
@@ -251,9 +251,9 @@ test('heroKpis: shares colour reflects the ok flag', () => {
     assert.equal(_byLabel(_heroState({ shares_window: { count: 0, ok: false } }))['Shares in Window'].cls, 'status-bad');
 });
 
-test('heroKpis: VIP colour reflects win eligibility (#158)', () => {
-    assert.equal(_byLabel(_heroState({ vip: { is_vip: true, label: 'Yes' } }))['VIP'].cls, 'status-ok');
-    assert.equal(_byLabel(_heroState({ vip: { is_vip: false, label: 'No' } }))['VIP'].cls, 'status-bad');
+test('heroKpis: Raffle Eligible colour reflects win eligibility (#158)', () => {
+    assert.equal(_byLabel(_heroState({ raffle_eligible: { eligible: true, label: 'Yes' } }))['Raffle Eligible'].cls, 'status-ok');
+    assert.equal(_byLabel(_heroState({ raffle_eligible: { eligible: false, label: 'No' } }))['Raffle Eligible'].cls, 'status-bad');
 });
 
 test('heroKpis: mode colour follows the server mode_variant token', () => {

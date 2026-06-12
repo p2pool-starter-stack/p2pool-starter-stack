@@ -146,6 +146,23 @@ maximize your yield.
      your hashrate is too low to hold it**, in which case the dashboard shows a
      **⚠ Hashrate low for tier** badge.
 
+   The four tiers and the donation hashrate each requires — which you must sustain on **both** your
+   1-hour **and** 24-hour donation averages (as measured by XMRvsBeast) — are set by the XvB raffle:
+
+   | Tier | Donation hashrate to hold it |
+   |---|---|
+   | `donor` | **1 kH/s** (1,000 H/s) |
+   | `vip` | **10 kH/s** (10,000 H/s) |
+   | `whale` | **100 kH/s** (100,000 H/s) |
+   | `mega` | **1 MH/s** (1,000,000 H/s) |
+
+   > **Heads-up on the name "VIP".** The `vip` *tier* above is a **donation level** (10 kH/s) — don't
+   > confuse it with whether your raffle wins actually pay out. That separate status is the dashboard's
+   > **Raffle Eligible** indicator: it just means you currently hold a share in the P2Pool PPLNS window
+   > (it costs no donation, applies at any tier including none, and is what makes a raffle win pay out
+   > instead of being skipped — see the [Dashboard](dashboard.md) guide). XvB's own rules call that
+   > being a "VIP"; the dashboard says **Raffle Eligible** to keep it distinct from the `vip` tier.
+
    Because the XvB raffle picks winners at random, donating *above* a tier's threshold earns
    nothing extra — so the engine donates only enough to hold the target tier and routes the rest
    to P2Pool.

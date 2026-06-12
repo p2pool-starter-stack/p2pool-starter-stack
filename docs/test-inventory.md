@@ -488,8 +488,8 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - test_syncing_shows_syncing_only
 - test_operational_shows_mode_and_pool
 - test_low_hr_badge
-- test_not_vip_badge_when_donating_without_a_share
-- test_no_vip_badge_when_vip_or_xvb_off
+- test_not_eligible_badge_when_donating_without_a_share
+- test_no_eligibility_badge_when_eligible_or_xvb_off
 - test_node_down_and_rejected
 - test_miner_held
 - test_passive_tari_with_and_without_percent
@@ -556,8 +556,8 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - test_malformed_falls_back_to_none
 - test_returns_html_referencing_module
 - test_error_fallback
-- test_vip_yes_with_a_share
-- test_vip_no_without_a_share
+- test_eligible_yes_with_a_share
+- test_eligible_no_without_a_share
 
 ### Frontend logic (node --test) — 30 tests
 - sortWorkers: null index keeps the server-provided order
@@ -585,7 +585,7 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - heroKpis: surfaces the six headline numbers under stable labels, in order
 - heroKpis: wires each KPI to its build_state field
 - heroKpis: shares colour reflects the ok flag
-- heroKpis: VIP colour reflects win eligibility (#158)
+- heroKpis: Raffle Eligible colour reflects win eligibility (#158)
 - heroKpis: mode colour follows the server mode_variant token
 - heroKpis: total is accent-coloured; blocks and tier carry no colour class
 - bandBorderWidth: zero-height segments get no border, real ones keep full width

@@ -271,6 +271,20 @@ ver_file="$(tr -d ' \t\r\n' < "$ROOT/VERSION")"
 ver_pyproject="$(grep -oE '^version = "[^"]+"' "$ROOT/build/dashboard/pyproject.toml" | head -1 | cut -d'"' -f2)"
 assert_eq "pyproject.toml version matches VERSION (#44)" "$ver_pyproject" "$ver_file"
 
+# The XvB tier thresholds are hard-coded in config.py (TIER_DEFAULTS) and stated explicitly in
+# docs/architecture.md. Drift guard: each config value must match the doc's human form, so the
+# user-facing table can't silently fall out of sync if TIER_DEFAULTS ever changes.
+tier_cfg="$ROOT/build/dashboard/mining_dashboard/config/config.py"
+tier_doc="$ROOT/docs/architecture.md"
+for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "mega:1_000_000:1 MH/s"; do
+    t_name="${tier%%:*}"; t_rest="${tier#*:}"; t_val="${t_rest%%:*}"; t_human="${t_rest#*:}"
+    if grep -qE ": ${t_val}[ ,]" "$tier_cfg" && grep -qF "$t_human" "$tier_doc"; then
+        ok "XvB $t_name tier: config.py $t_val matches docs '$t_human'"
+    else
+        bad "XvB $t_name tier docs match TIER_DEFAULTS" "config $t_val / doc '$t_human' out of sync"
+    fi
+done
+
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
 # (Dockerfiles) are present: a source checkout builds locally (:dev, --pull never); a release bundle
