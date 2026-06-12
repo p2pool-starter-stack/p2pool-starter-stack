@@ -53,8 +53,8 @@ cd pithead
 chmod +x pithead
 ```
 
-You'll need your **Monero** payout address and your **Tari (Minotari)** payout address ready
-before you start setup.
+You'll need your **Monero** payout address and your **Tari** payout address ready before you start
+setup. (Tari wallets are sometimes labeled **Minotari** — same thing.)
 
 ---
 

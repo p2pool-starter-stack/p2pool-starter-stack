@@ -131,11 +131,13 @@ connection-by-connection map and how to lock down the rest.
 
 ## Algorithmic switching
 
-Rather than asking you to configure each rig for a different pool, the stack manages hashrate
-distribution **centrally**. All your workers connect to a single endpoint — the `xmrig-proxy`
-service on port `3333` — and the dashboard's decision engine continuously reallocates that
-hashrate between **P2Pool** (Monero + Tari mining) and **XMRvsBeast (XvB)** bonus rounds to
-maximize your yield.
+**Set it once and the stack plays the XvB raffle for you — no per-rig pool juggling, ever.** Rather
+than asking you to configure each rig for a different pool, it manages hashrate distribution
+**centrally**: all your workers connect to a single endpoint — the `xmrig-proxy` service on port
+`3333` — and the dashboard's decision engine continuously reallocates that hashrate between
+**P2Pool** (your own zero-fee Monero + Tari payouts) and **XMRvsBeast (XvB)** bonus rounds. It
+donates only the **minimum** needed to hold your target tier and hands every spare cycle back to
+P2Pool — maximizing yield with no manual tuning and no over-donating.
 
 ### How the engine decides
 
