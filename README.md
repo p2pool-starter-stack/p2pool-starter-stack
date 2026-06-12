@@ -59,9 +59,9 @@ chmod +x pithead
 ./pithead setup
 ```
 
-> **Prereqs:** Ubuntu Server **24.04 LTS**, **16 GB+ RAM**, an **SSD** (~150 GB pruned / ~300 GB
-> full), and your **Monero + Tari payout addresses** handy — full sizing in
-> [Hardware Requirements](docs/hardware.md).
+> **Prereqs:** Ubuntu Server **24.04 LTS**, **16 GB+ RAM**, an **SSD** (~300 GB pruned / ~500 GB
+> full minimum — the chains grow ~100+ GB/year, so 2–4 TB is the set-and-forget choice), and your
+> **Monero + Tari payout addresses** handy — full sizing in [Hardware Requirements](docs/hardware.md).
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
 addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the stack. Then:

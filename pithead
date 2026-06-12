@@ -1900,13 +1900,16 @@ prompt_start_stack() {
 
 # Per-component free-disk requirement in GiB — the single source of truth for the stack's disk
 # budget, shared by setup's preflight_resources and doctor's Disk check. Monero (the blockchain) is
-# pruning-aware: ~95 GiB pruned, ~230 GiB full. The rest are fixed. Summed, this is ~150 GiB pruned
-# / ~288 GiB full, matching the documented ~150 GB pruned / ~300 GB full headline (docs/hardware.md).
+# pruning-aware: ~120 GiB pruned, ~320 GiB full. Tari's chain is the other heavyweight — ~170 GiB and
+# growing fast. Summed, this is ~300 GiB pruned / ~500 GiB full, the documented minimum
+# (docs/hardware.md). These carry generous growth headroom over usage measured on live nodes
+# (Monero pruned ~100 GiB / full ~265 GiB, Tari ~135 GiB) because both chains grow ~100+ GiB/year
+# combined — for a set-and-forget host the docs recommend a 2–4 TB drive.
 # Args: <component> [<prune>] where prune (1 = on, 0 = off) only matters for "monero". Prints GiB.
 disk_component_gib() {
     case "$1" in
-        monero)    if [ "${2:-1}" -eq 1 ] 2>/dev/null; then echo 95; else echo 230; fi ;;
-        tari)      echo 50 ;;
+        monero)    if [ "${2:-1}" -eq 1 ] 2>/dev/null; then echo 120; else echo 320; fi ;;
+        tari)      echo 170 ;;
         p2pool)    echo 5 ;;
         dashboard) echo 2 ;;
         tor)       echo 1 ;;

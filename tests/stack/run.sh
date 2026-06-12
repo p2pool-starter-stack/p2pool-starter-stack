@@ -392,9 +392,9 @@ run_grub append_grub_boot_params "$g"; assert_rc "insert: no active line -> rc 1
 assert_eq "insert: leaves file unchanged when no active line" "$(cat "$g")" "$before"
 
 echo "== unit: disk_component_gib =="
-assert_eq "monero pruned -> 95"  "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "95"
-assert_eq "monero full -> 230"   "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "230"
-assert_eq "tari -> 50"           "$(run_sourced "$SANDBOX" disk_component_gib tari)"     "50"
+assert_eq "monero pruned -> 120" "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "120"
+assert_eq "monero full -> 320"   "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "320"
+assert_eq "tari -> 170"          "$(run_sourced "$SANDBOX" disk_component_gib tari)"     "170"
 assert_eq "tor -> 1"             "$(run_sourced "$SANDBOX" disk_component_gib tor)"      "1"
 
 echo "== unit: check_disk_grouped (mocked df) =="
@@ -419,27 +419,27 @@ DM="$DISK/data"; mkdir -p "$DM/monero" "$DM/tari" "$DM/p2pool" "$DM/dashboard" "
 md="$DM/monero" td="$DM/tari" pd="$DM/p2pool" dd="$DM/dashboard" rd="$DM/tor"
 
 # All five dirs on ONE filesystem with plenty of space -> a SINGLE grouped OK line naming every
-# component, with the combined pruned requirement (95+50+5+2+1 = 153 GB).
+# component, with the combined pruned requirement (120+170+5+2+1 = 298 GB).
 one_map="$md=/data $td=/data $pd=/data $dd=/data $rd=/data /data=/data"
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
        run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "one fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
 assert_contains "single line names all components" "$out" "(monero, tari, p2pool, dashboard, tor)"
-assert_contains "single line shows combined ~153 GB" "$out" "needs ~153 GB"
+assert_contains "single line shows combined ~298 GB" "$out" "needs ~298 GB"
 assert_contains "ample space -> OK" "$out" "OK"
 
-# Same single filesystem but too small (100 GiB < 153 GiB) -> ONE WARN line.
+# Same single filesystem but too small (100 GiB < 298 GiB) -> ONE WARN line.
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=104857600 DF_AVAIL_H=100G \
        run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "one small fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
-assert_contains "small fs warns below need" "$out" "below the ~153 GB"
+assert_contains "small fs warns below need" "$out" "below the ~298 GB"
 
 # Two filesystems: monero+tari on /big, the rest on /small -> ONE line per filesystem.
 two_map="$md=/big $td=/big $pd=/small $dd=/small $rd=/small /big=/big /small=/small"
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$two_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
        run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "two fs -> two lines" "$(printf '%s\n' "$out" | grep -c 'Data on')" "2"
-assert_contains "/big groups monero+tari (~145 GB)" "$out" "/big (monero, tari): 600G free — needs ~145 GB"
+assert_contains "/big groups monero+tari (~290 GB)" "$out" "/big (monero, tari): 600G free — needs ~290 GB"
 assert_contains "/small groups the small three (~8 GB)" "$out" "/small (p2pool, dashboard, tor): 600G free — needs ~8 GB"
 
 # Preflight mode is WARN-only and silent when there's enough room.
