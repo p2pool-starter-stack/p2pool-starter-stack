@@ -1638,11 +1638,12 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
-    # check_for_updates (#224, default FALSE): when true the dashboard checks GitHub for a newer
-    # release and shows a header badge linking to it (notify-only — no upgrade). Off by default so the
-    # appliance never contacts GitHub unbidden; the check is Tor-routed when on (see docs/privacy.md).
+    # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
+    # a header badge linking to it (notify-only — no upgrade). On by default because the check is
+    # Tor-routed (socks5h), so it leaks neither the host IP nor a DNS lookup to GitHub; set false to opt
+    # out entirely (see docs/privacy.md). Only an explicit `false` disables it.
     local check_for_updates
-    check_for_updates=$(jq -r 'if .dashboard.check_for_updates == true then "true" else "false" end' "$CONFIG_FILE")
+    check_for_updates=$(jq -r 'if .dashboard.check_for_updates == false then "false" else "true" end' "$CONFIG_FILE")
 
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying

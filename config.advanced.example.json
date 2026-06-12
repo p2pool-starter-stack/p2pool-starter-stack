@@ -54,7 +54,7 @@
         "timezone": "auto",
         "data_dir": "auto",
         "tari_required": true,
-        "check_for_updates": false,
+        "check_for_updates": true,
         "auth": {
             "username": "admin",
             "password": ""

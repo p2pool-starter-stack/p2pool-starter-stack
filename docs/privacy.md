@@ -44,7 +44,7 @@ What the running stack sends to the internet, connection by connection.
 | **P2Pool** outbound sidechain peers | clearnet P2Pool peers | **your real home IP** | ❌ **clearnet** | **on** | ⏳ Tor-by-default in v1.1 (#165). Harden now → [below](#hardening-the-clearnet-paths) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
 | **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` | **your real home IP** | ❌ **clearnet** | on while donating | ⏳ Tor-by-default in v1.1 (#166). Disable XvB to stop it |
-| Dashboard **update check** (#224) | `api.github.com` | "this IP runs Pithead" (+ which version) | ✅ Tor (`socks5h`) | **off** — opt-in `dashboard.check_for_updates` | enable per-config; routed via Tor, cached, fails silently offline |
+| Dashboard **update check** (#224) | `api.github.com` | nothing about you — GitHub sees a **Tor exit**, not your IP | ✅ Tor (`socks5h`) | **on** | `dashboard.check_for_updates: false` to opt out; cached, fails silently offline |
 | **Caddy** TLS (dashboard HTTPS) | local only | — | n/a — `tls internal`, **no ACME / no external CA** | on | clean (no egress) |
 | **Telegram** alerts (#121) | Telegram API | your IP | ❌ | **off** | opt-in only |
 | **Healthchecks** pings (#79) | external | your IP | ❌ | **off** | opt-in only |
@@ -63,9 +63,9 @@ network attacker can't substitute what you receive.
 
 | What | Destination | When |
 |---|---|---|
-| Source clone / release assets | `github.com` | install / update |
-| Monero binaries | `downloads.getmonero.org` | image build (verified against a published **SHA256**) |
-| Container images | `quay.io`, Docker Hub | image build / pull (pinned by **`@sha256:` digest**, #135) |
+| Source clone / release bundle | `github.com` | install / update (`git checkout vX.Y.Z` or downloading the release bundle) |
+| Component binaries (monerod / p2pool / xmrig-proxy) | `downloads.getmonero.org`, `github.com` | **image build only** — verified against a published **SHA256** / checksum. A release install *pulls* prebuilt images instead, so it never runs these. |
+| Container images | **`ghcr.io`** (the `pithead-*` images, #44), `quay.io` (Tari), Docker Hub (caddy, socket-proxy) | image **pull** on a release install / `pithead upgrade`, or build from source. All pinned by **`@sha256:` digest** (#135). |
 
 **Mitigation:** run the install/build behind a **VPN** or with `torsocks`, or pre-pull the images and
 clone on another machine and copy them over. The downloads are pinned (SHA256 + image digests), so
