@@ -72,6 +72,10 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
    [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a tuned worker in one
    command.
 
+<div align="center">
+  <img src="./images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">
+</div>
+
 📖 **Full walkthrough:** [docs/getting-started.md](docs/getting-started.md)
 
 > **Already have a synced Monero node?** Skip the wait by pointing the stack at your existing
