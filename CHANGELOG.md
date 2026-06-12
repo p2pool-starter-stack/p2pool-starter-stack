@@ -63,17 +63,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   in the change preview, and `apply` **warns** if a password is set without `dashboard.secure: true`
   (basic-auth is cleartext over plain HTTP). Documented in
   `docs/configuration.md#exposing-the-dashboard-safely`.
-- **Explicit "Raffle Eligible" win-eligibility indicator on the dashboard** (#158). To *collect* an
-  XvB raffle win you must hold a share in the P2Pool PPLNS window — XvB's rules call this being a
-  "VIP". This is universal across **all** tiers and independent of donation amount: a Mega donor
-  pushing 1 MH/s with **no** PPLNS share is still skipped on a win, takes a fail, and is dropped from
-  the raffle after the 3rd. The signal existed only implicitly (the "Shares in Window" stat turning
-  red), so it was easy to miss what it meant. The Hero band and Simple Overview now show an explicit
-  **Raffle Eligible: Yes/No** (green/red), and a **"⚠ Not eligible — XvB wins skipped"** badge appears
-  while XvB is enabled with no share — so a high-tier donor can't silently waste donations on wins that
-  won't count. The dashboard says **"Raffle Eligible"** rather than XvB's "VIP" to avoid colliding with
-  the `vip` *donation tier*. Display/observability only — the donation controller already *protects*
-  this eligibility; this surfaces it.
+- **"Raffle Eligible" indicator on the dashboard** (#158). A Hero-band + Simple-Overview box that
+  answers "am I set up to both *win* and *collect* an XvB raffle payout?". It reads **Yes** only when
+  XvB is on and **both** gates are met: you're donating at least the **donor tier** (XvB's *credited*
+  1h **and** 24h averages have cleared the lowest threshold — the same figure as **Current Tier**)
+  **and** you hold a P2Pool PPLNS share (XvB's "VIP" gate — without it a win is skipped, you take a
+  fail, and you're dropped after the 3rd, regardless of tier). It reads **No** when donating but a gate
+  is unmet, and **N/A (XvB off)** when XvB is disabled. A loud **"⚠ No PPLNS share — XvB wins skipped"**
+  badge fires for the make-or-break case (donating with no share) so donations aren't wasted.
+  Deliberately stricter than XvB's bare "VIP = just a share" so a green Yes is trustworthy; named
+  "Raffle Eligible" rather than XvB's "VIP" to avoid colliding with the `vip` *donation tier*.
+  Display/observability only — the donation controller already protects the share reserve; this
+  surfaces it.
 - **Two xmrig-proxy config knobs: optional stratum authentication (#152) and dev-fee transparency
   (#173).** `p2pool.stratum_password` (default off) turns the open `:3333` stratum port into
   *authenticated* stratum — only rigs that send the matching `pass` may mine, which also shrinks the

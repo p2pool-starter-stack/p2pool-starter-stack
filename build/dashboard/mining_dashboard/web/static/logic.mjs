@@ -36,13 +36,22 @@ export function sortWorkers(workers, idx, asc) {
 // and `cls` is the text-colour class applied to it ('' = default text colour). Pure selection +
 // labelling is kept here so the wiring (which state field feeds which KPI, and the mode/shares
 // colouring) is unit-tested; <HeroBand> in components.mjs only renders the returned list.
+// Tri-state colour for the Raffle Eligible indicator (#158): muted '' when XvB is off (N/A — no
+// raffle to be eligible for), green when fully eligible (donor tier on credited 1h+24h AND a PPLNS
+// share), red otherwise. Kept here (not inline) so both the Hero KPI and the Simple card share it.
+export function raffleCls(raffle) {
+    if (!raffle || !raffle.applies) return '';
+    return raffle.eligible ? 'status-ok' : 'status-bad';
+}
+
 export function heroKpis(state) {
     const hr = state.hashrate, sw = state.shares_window, p = state.pool, raffle = state.raffle_eligible || {};
     return [
         { label: 'Total Hashrate', value: hr.total, cls: 'text-accent' },
         { label: 'Shares in Window', value: sw.count, cls: sw.ok ? 'status-ok' : 'status-bad' },
-        // Raffle Eligible (#158): a PPLNS share = win eligibility, across ALL tiers. Red "No" = wins won't count.
-        { label: 'Raffle Eligible', value: raffle.label, cls: raffle.eligible ? 'status-ok' : 'status-bad' },
+        // Raffle Eligible (#158): Yes only when you'd WIN and COLLECT — in a donor tier AND holding a
+        // PPLNS share. Muted "N/A" when XvB is off; red "No" when donating but a gate is unmet.
+        { label: 'Raffle Eligible', value: raffle.label, cls: raffleCls(raffle) },
         { label: 'Blocks Found', value: p.blocks, cls: '' },
         { label: 'XvB Tier', value: hr.tier, cls: '' },
         { label: 'Mining Mode', value: hr.mode_name, cls: 'c-' + hr.mode_variant },

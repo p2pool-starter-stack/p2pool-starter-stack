@@ -409,16 +409,16 @@ class TestBadges:
         out = build_badges({}, _metrics(low_hr_warning=True), "ok")
         assert any(b["variant"] == "warn" and "low for tier" in b["text"] for b in out)
 
-    def test_not_eligible_badge_when_donating_without_a_share(self):
+    def test_no_share_badge_when_donating_without_a_share(self):
         # XvB enabled + no PPLNS share => wins are skipped + a fail, regardless of tier (#158).
         out = build_badges({}, _metrics(xvb_enabled=True, shares_in_window=0), "ok")
-        assert any("Not eligible" in b["text"] for b in out)
+        assert any("No PPLNS share" in b["text"] for b in out)
 
-    def test_no_eligibility_badge_when_eligible_or_xvb_off(self):
-        # Has a share => eligible, no badge; XvB off => raffle moot, no badge.
-        assert not any("Not eligible" in t for t in self._texts(
+    def test_no_share_badge_absent_when_has_share_or_xvb_off(self):
+        # Has a share => no badge; XvB off => raffle moot, no badge.
+        assert not any("No PPLNS share" in t for t in self._texts(
             build_badges({}, _metrics(xvb_enabled=True, shares_in_window=3), "ok")))
-        assert not any("Not eligible" in t for t in self._texts(
+        assert not any("No PPLNS share" in t for t in self._texts(
             build_badges({}, _metrics(xvb_enabled=False, shares_in_window=0), "ok")))
 
     def test_node_down_and_rejected(self):
@@ -869,10 +869,21 @@ class TestShell:
 
 
 class TestRaffleEligible:
-    """Raffle-eligibility status from a PPLNS share (#158)."""
+    """Raffle-eligibility (#158): Yes only with a donor-tier credited donation AND a PPLNS share."""
 
-    def test_eligible_yes_with_a_share(self):
-        assert build_raffle_eligibility(_metrics(shares_in_window=5)) == {"eligible": True, "label": "Yes"}
+    def test_yes_when_in_tier_and_has_share(self):
+        m = _metrics(xvb_enabled=True, current_tier="Donor (1.00 kH/s+)", shares_in_window=5)
+        assert build_raffle_eligibility(m) == {"applies": True, "eligible": True, "label": "Yes"}
 
-    def test_eligible_no_without_a_share(self):
-        assert build_raffle_eligibility(_metrics(shares_in_window=0)) == {"eligible": False, "label": "No"}
+    def test_no_when_below_tier_even_with_a_share(self):
+        # Has a PPLNS share but credited donation hasn't cleared the lowest tier (current_tier "None").
+        m = _metrics(xvb_enabled=True, current_tier="None", shares_in_window=5)
+        assert build_raffle_eligibility(m) == {"applies": True, "eligible": False, "label": "No"}
+
+    def test_no_when_in_tier_but_no_share(self):
+        m = _metrics(xvb_enabled=True, current_tier="Donor (1.00 kH/s+)", shares_in_window=0)
+        assert build_raffle_eligibility(m) == {"applies": True, "eligible": False, "label": "No"}
+
+    def test_na_when_xvb_off(self):
+        m = _metrics(xvb_enabled=False, current_tier="Donor (1.00 kH/s+)", shares_in_window=5)
+        assert build_raffle_eligibility(m) == {"applies": False, "eligible": False, "label": "N/A (XvB off)"}

@@ -5,7 +5,7 @@
 import { Component, Fragment, html } from './preact.mjs';
 import { ChartCard } from './chart.mjs';
 import {
-    WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis,
+    WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis, raffleCls,
     computeEarnings, formatXmr, formatTimeToShare, parseHashrate, uptimeCell,
 } from './logic.mjs';
 
@@ -209,7 +209,7 @@ function Overview({ state }) {
             <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
             <${StatCard} label="Workers Alive" value=${state.proxy_workers} />
             <${StatCard} label="Current Tier" value=${hr.tier} />
-            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${state.raffle_eligible.eligible ? 'status-ok' : 'status-bad'} />
+            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${raffleCls(state.raffle_eligible)} />
             <${SharesStat} sw=${state.shares_window} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
             <${StatCard} label="P2Pool 1h (routed)" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
