@@ -272,6 +272,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Chart Avg windows other than 10m no longer flat-line at 0 on wide ranges (#168 regression).** The
+  chart downsampler (used whenever a range has more points than the canvas tier — i.e. the **24h / 1w /
+  1mo** ranges) bucket-averaged only the legacy `v` / `v_p2pool` / `v_xvb` columns and silently dropped
+  the per-window columns added in #168. So selecting **1 Min / 1 Hr / 12 Hr / 24 Hr** as the **Avg**
+  window on those ranges plotted a flat zero line (the y-axis then auto-scaling to the Shares markers),
+  even though the underlying data was present — only the default **10 Min** window survived. The
+  downsampler now carries **every** per-window hashrate column through, derived from the window map so
+  future windows can't regress the same way. Display only.
+
 - **`pithead upgrade` no longer marks an already-deployed stack as "not set up."** Each upgrade
   re-renders `.env`, and `render_env` writes `DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}`.
   Because `load_preserved_state` doesn't carry that flag (unlike the Tor onions / RPC creds / proxy
