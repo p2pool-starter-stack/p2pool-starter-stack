@@ -18,7 +18,10 @@ the network — the dashboard shows **Sync Mode**. A **`Syncing…`** badge appe
 hostname, the headline reads *"System is currently synchronizing with the network,"* and no
 hashrate is routed yet.
 
-![Sync Mode](../images/syncing.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/sync.png">
+  <img alt="Sync Mode" src="../images/launch/sync-light.png">
+</picture>
 
 Sync Mode gives each chain its own progress card so you can see exactly where things stand:
 
@@ -62,7 +65,10 @@ You can also follow sync progress from the command line:
 
 Once both nodes are synced, the dashboard shows the full operational view.
 
-![Operational dashboard](../images/dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/simple.png">
+  <img alt="Operational dashboard — Simple view" src="../images/launch/simple-light.png">
+</picture>
 
 The page updates itself **live** every 30 seconds, refreshing each panel in place rather than
 reloading the whole page — so your scroll position, the column you've sorted the worker table by,
@@ -184,6 +190,11 @@ Overview for a set of power-user cards that break out the same data in more deta
 Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**, **Tari Merge
 Mining**, and the **P2Pool Earnings (estimated)** calculator below. Your choice is remembered
 across reloads.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
+  <img alt="Dashboard — Advanced view" src="../images/launch/advanced-light.png">
+</picture>
 
 ### P2Pool Earnings (estimated)
 

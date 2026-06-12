@@ -16,7 +16,10 @@ full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www
 mining — engineered for **privacy**, **performance**, and **a setup you can finish before your
 coffee gets cold**.
 
-![Dashboard](./images/dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
+  <img alt="Pithead — live mining dashboard" src="./images/launch/hero-light.png">
+</picture>
 
 </div>
 
@@ -68,6 +71,10 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
    `YOUR_STACK_IP:3333` (no wallet address needed). New to mining?
    [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a tuned worker in one
    command.
+
+<div align="center">
+  <img src="./images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">
+</div>
 
 📖 **Full walkthrough:** [docs/getting-started.md](docs/getting-started.md)
 
