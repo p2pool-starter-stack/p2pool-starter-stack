@@ -21,7 +21,7 @@ driven by a single script — `pithead` — and most of it is automated.
 | **Operating system** | Ubuntu Server **24.04 LTS** is the officially supported platform. Other Linux distributions and macOS may work but aren't officially supported. |
 | **CPU** | A processor with **AVX2** support is highly recommended for RandomX performance. |
 | **RAM** | **16 GB** minimum with HugePages enabled (~6 GB is reserved for RandomX); **32 GB** recommended for a full node or long uptimes. |
-| **Disk** | A **pruned** Monero node needs ~**80–100 GB** and a **full** one **200 GB+**, plus ~**50 GB** for the Tari node — so plan for ~**150 GB** (pruned) or ~**300 GB** (full) of **SSD**, with room to grow. |
+| **Disk** | A **pruned** Monero node needs ~**100 GB** and a **full** one ~**265 GB**, plus ~**135 GB** for the Tari node (its chain is the biggest single consumer) — so plan for **~300 GB** (pruned) or **~500 GB** (full) of **SSD** minimum. Both chains grow ~**100+ GB/year**, so a **2–4 TB** drive is the set-and-forget choice. |
 | **Software** | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
 > 📐 **Full sizing guidance** for the stack host — minimum vs. recommended specs, plus ways to run
@@ -29,8 +29,8 @@ driven by a single script — `pithead` — and most of it is automated.
 > [RigForge](https://github.com/p2pool-starter-stack/rigforge).
 
 > 🔎 **`setup` checks this for you.** Before it starts anything, `pithead setup` runs a best-effort
-> pre-flight on free disk and total RAM. If either is below the recommended minimums (~150 GB
-> pruned / ~300 GB full disk, 16 GB RAM), it prints a **warning** — but it never blocks setup, so
+> pre-flight on free disk and total RAM. If either is below the recommended minimums (~300 GB
+> pruned / ~500 GB full disk, 16 GB RAM), it prints a **warning** — but it never blocks setup, so
 > you can proceed on a smaller host at your own risk. See **[Hardware Requirements](hardware.md)**.
 
 You don't have to install the software dependencies yourself. `setup` checks for them and, **on
