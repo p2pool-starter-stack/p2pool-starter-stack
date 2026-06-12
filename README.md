@@ -16,7 +16,7 @@ full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www
 mining — engineered for **privacy**, **performance**, and **a setup you can finish before your
 coffee gets cold**.
 
-![Dashboard](./images/dashboard.png)
+![Pithead — live mining dashboard](./images/launch/hero.png)
 
 </div>
 
