@@ -209,7 +209,7 @@ function Overview({ state }) {
             <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
             <${StatCard} label="Workers Alive" value=${state.proxy_workers} />
             <${StatCard} label="Current Tier" value=${hr.tier} />
-            <${StatCard} label="VIP (win eligible)" value=${state.vip.label} cls=${state.vip.is_vip ? 'status-ok' : 'status-bad'} />
+            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${state.raffle_eligible.eligible ? 'status-ok' : 'status-bad'} />
             <${SharesStat} sw=${state.shares_window} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
             <${StatCard} label="P2Pool 1h (routed)" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />

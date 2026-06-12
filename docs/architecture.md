@@ -156,11 +156,12 @@ maximize your yield.
    | `whale` | **100 kH/s** (100,000 H/s) |
    | `mega` | **1 MH/s** (1,000,000 H/s) |
 
-   > **Heads-up on the name "VIP".** The `vip` *tier* above means donating **10 kH/s**. It is **not**
-   > the dashboard's **VIP** status, which is separate: VIP there just means you currently hold a
-   > share in the P2Pool PPLNS window (it costs no donation and is what makes a raffle win actually
-   > pay out — see the [Dashboard](dashboard.md) guide). You can be VIP (have a PPLNS share) at any
-   > donation tier, including none.
+   > **Heads-up on the name "VIP".** The `vip` *tier* above is a **donation level** (10 kH/s) — don't
+   > confuse it with whether your raffle wins actually pay out. That separate status is the dashboard's
+   > **Raffle Eligible** indicator: it just means you currently hold a share in the P2Pool PPLNS window
+   > (it costs no donation, applies at any tier including none, and is what makes a raffle win pay out
+   > instead of being skipped — see the [Dashboard](dashboard.md) guide). XvB's own rules call that
+   > being a "VIP"; the dashboard says **Raffle Eligible** to keep it distinct from the `vip` tier.
 
    Because the XvB raffle picks winners at random, donating *above* a tier's threshold earns
    nothing extra — so the engine donates only enough to hold the target tier and routes the rest
