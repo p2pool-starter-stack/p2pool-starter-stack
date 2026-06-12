@@ -223,10 +223,21 @@ def _gap_after_indices(timestamps):
     return {i for i, d in enumerate(deltas) if d > threshold}
 
 
+# Value columns carried through downsampling: the legacy total ``v`` plus every per-window
+# p2pool/xvb column (#168), derived from the window map so a newly-added averaging window is
+# bucket-averaged automatically instead of being silently dropped. (Bug: the old downsampler kept
+# only v/v_p2pool/v_xvb, so the 1m/1h/12h/24h Avg series went flat at 0 on any range wide enough to
+# downsample — e.g. the 24h/1w/1mo ranges — while the default 10m window happened to survive.)
+_DOWNSAMPLE_VALUE_COLUMNS = tuple(dict.fromkeys(
+    ("v",) + tuple(col for cols in HASHRATE_WINDOW_COLUMNS.values() for col in cols)
+))
+
+
 def _downsample_history(filtered_history, duration_s):
     """Bucket-averages history down to the duration's target point count (Issue #47). A target
     of 0, or a series already at/under target, is returned untouched — so short/zoomed-in
-    windows keep their native 30s detail."""
+    windows keep their native 30s detail. Every per-window hashrate column (#168) is carried
+    through, so the selected Avg window plots correctly even on downsampled wide ranges."""
     target = _target_points(duration_s)
     if target <= 0 or len(filtered_history) <= target:
         return filtered_history
@@ -238,13 +249,10 @@ def _downsample_history(filtered_history, duration_s):
         if not chunk:
             continue
         mid = chunk[len(chunk) // 2]
-        downsampled.append({
-            't': mid['t'],
-            'timestamp': mid['timestamp'],
-            'v': round(sum(x.get('v', 0) for x in chunk) / len(chunk), 2),
-            'v_p2pool': round(sum(x.get('v_p2pool', 0) for x in chunk) / len(chunk), 2),
-            'v_xvb': round(sum(x.get('v_xvb', 0) for x in chunk) / len(chunk), 2),
-        })
+        row = {'t': mid['t'], 'timestamp': mid['timestamp']}
+        for col in _DOWNSAMPLE_VALUE_COLUMNS:
+            row[col] = round(sum(x.get(col, 0) or 0 for x in chunk) / len(chunk), 2)
+        downsampled.append(row)
     return downsampled
 
 

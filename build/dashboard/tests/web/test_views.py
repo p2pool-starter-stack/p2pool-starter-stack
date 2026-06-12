@@ -293,6 +293,26 @@ class TestChartWindow:
         assert canonical_window(None) == DEFAULT_HASHRATE_WINDOW
         assert canonical_window("") == DEFAULT_HASHRATE_WINDOW
 
+    def test_downsample_preserves_per_window_columns(self):
+        # Regression: bucket-averaged rows must keep EVERY per-window column (#168). The old
+        # downsampler dropped all but v/v_p2pool/v_xvb, so non-default Avg windows read 0 on any
+        # range wide enough to downsample (24h/1w/1mo).
+        base = self._row()
+        rows = [{**base, "timestamp": i} for i in range(600)]   # 600 > target(480) for a 24h span
+        out = views._downsample_history(rows, 86400)
+        assert len(out) < len(rows)                              # actually downsampled
+        assert out[0]["v_p2pool_1m"] == 900 and out[-1]["v_p2pool_1m"] == 900
+        assert out[0]["v_p2pool_1h"] == 1100 and out[0]["v_p2pool_24h"] == 10
+
+    def test_wide_range_keeps_nondefault_avg_nonzero(self):
+        # End to end: a 24h chart at the 1m Avg window must NOT collapse to a flat-zero line.
+        base = self._row()
+        history = [{**base, "timestamp": i * 30} for i in range(600)]
+        chart = build_chart(history, [], "24h", (0, 86400), "1m")
+        ys = [p["y"] for p in chart["p2pool"] if p["y"] is not None]
+        assert len(chart["p2pool"]) < 600        # downsampled
+        assert ys and all(y == 900 for y in ys)  # 1m series preserved (was 0 before the fix)
+
     def test_build_state_echoes_selected_window(self):
         state = build_state(_data(), _state_mgr(history=[self._row()]), "all", None, "1h")
         assert state["avg_window"] == "1h"
