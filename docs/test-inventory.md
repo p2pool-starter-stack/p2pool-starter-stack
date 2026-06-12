@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 467 dashboard unit tests · 12 contract tests · 30 frontend
-tests · 36 `pithead` shell sections · 15 harness self-test sections ·
+tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 36 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 467 |
 | 1 — Unit | frontend (node --test) | 30 |
-| 1 — Unit | `pithead` shell suite | 36 sections |
+| 1 — Unit | `pithead` shell suite | 37 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -572,7 +572,7 @@ tests · 36 `pithead` shell sections · 15 harness self-test sections ·
 - bandBorderWidth: zero-height segments get no border, real ones keep full width
 - uptimeCell: online shows uptime, offline shows DOWN
 
-### `pithead` shell suite (tests/stack/run.sh) — 36 sections
+### `pithead` shell suite (tests/stack/run.sh) — 37 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -585,6 +585,7 @@ tests · 36 `pithead` shell sections · 15 harness self-test sections ·
 - unit: generate_caddyfile scheme (#140)
 - unit: host detection (#140)
 - unit: release.sh pure logic (#44)
+- unit: pull-vs-build mode (#44)
 - unit: explain_subnet_collision (#180)
 - unit: env helpers
 - unit: export_build_provenance (Issue #58)
@@ -743,5 +744,5 @@ tests · 36 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **574** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **575** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
