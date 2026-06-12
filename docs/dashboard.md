@@ -85,6 +85,12 @@ dashed **`dev · branch @ commit`** marker instead, so it's never mistaken for a
 on every screen — including Sync Mode — which makes it easy to confirm what you're on when sharing a
 screenshot in a bug report.
 
+When a **newer Pithead release** is out, a clickable **`New release vX.Y.Z available ↗`** badge
+appears next to the version badge, linking to the GitHub release. It's a heads-up only — it never
+updates anything; you upgrade with `./pithead upgrade` when you're ready. The check is on by default
+and routed over Tor (so it can't reveal your IP); turn it off with `dashboard.check_for_updates: false`
+(see [Configuration](configuration.md#configuration-reference)).
+
 ### Node status & failover
 
 If a local node becomes unreachable, a red **`monerod DOWN`** or **`Tari DOWN`** badge appears in

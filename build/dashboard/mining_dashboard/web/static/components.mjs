@@ -48,6 +48,17 @@ const VersionBadge = ({ version }) =>
                      title=${version.title || ''}>${version.text}</span>`
         : null;
 
+// New-release callout (#224). Shown only when the server reports a newer GitHub release is available
+// (opt-in `dashboard.check_for_updates`, off by default). Notify-only — it's a link to the release,
+// not an upgrade button (#59). Accent so it's noticeable; opens the release page in a new tab.
+const UpdateBadge = ({ update }) =>
+    update && update.available && update.url
+        ? html`<a class="badge badge-accent version-badge ml-2" href=${update.url}
+                  target="_blank" rel="noopener noreferrer"
+                  title=${'A newer Pithead release is available: ' + update.latest}
+               >New release ${update.latest} available ↗</a>`
+        : null;
+
 const HighUsage = ({ level }) =>
     level === 'high' ? html`<span class="badge badge-bad mx-1">High Usage</span>` : null;
 
@@ -96,6 +107,7 @@ function Header({ state }) {
                         <h1 class="brand-name">Pithead</h1>
                         <${Badges} badges=${state.badges} />
                         <${VersionBadge} version=${state.version} />
+                        <${UpdateBadge} update=${state.update} />
                     </div>
                     <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
                 </div>

@@ -13,6 +13,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Dashboard "new release available" badge (#224).** The dashboard periodically checks GitHub for
+  the latest Pithead release and, if it's newer than the running version, shows a header badge next to
+  the version badge — **"New release vX.Y.Z available ↗"** — linking straight to the release page.
+  **Notify-only:** it never updates anything; you upgrade with `./pithead upgrade` on your own terms
+  (the one-click upgrade is the separate #59). **On by default** because the check is **routed over
+  Tor** (the same bridge SOCKS as the XvB fetch, `socks5h` so the DNS lookup goes through Tor too) —
+  GitHub sees a Tor exit, not your IP, so it leaks nothing about you; it's cached hourly and fails
+  silently offline. Set `dashboard.check_for_updates: false` to opt out. Documented in
+  `docs/configuration.md` + `docs/privacy.md`.
+
 - **Release pipeline — `scripts/release.sh` (`make release`)** (#44). A single entry point, run from
   the private build/test server, that cuts a versioned release end to end: preflight (clean tree,
   SemVer from `VERSION`, tag-not-already-released, resolve the component pins) → **blocking test gate**

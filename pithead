@@ -1638,6 +1638,13 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
+    # a header badge linking to it (notify-only — no upgrade). On by default because the check is
+    # Tor-routed (socks5h), so it leaks neither the host IP nor a DNS lookup to GitHub; set false to opt
+    # out entirely (see docs/privacy.md). Only an explicit `false` disables it.
+    local check_for_updates
+    check_for_updates=$(jq -r 'if .dashboard.check_for_updates == false then "false" else "true" end' "$CONFIG_FILE")
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -1711,6 +1718,7 @@ XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
+DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
@@ -2118,6 +2126,12 @@ describe_change() {
                 msg="Tari → required — a Tari outage rejects workers, the miner waits for Tari's sync, and a Tari-only sync takes over the dashboard."
             else
                 msg="Tari → non-blocking — keep mining Monero through a Tari outage, start as soon as Monero is synced, and keep the operational dashboard while Tari syncs."
+            fi ;;
+        DASHBOARD_CHECK_UPDATES)
+            if [ "$new" == "true" ]; then
+                msg="Dashboard update check ENABLED (#224) — the dashboard will check GitHub (over Tor) for a newer release and show a link badge; the dashboard container is recreated."
+            else
+                msg="Dashboard update check DISABLED (#224) — the dashboard no longer contacts GitHub; the dashboard container is recreated."
             fi ;;
         TARI_MEM_LIMIT)
             msg="Tari memory cap: $old → $new — the tari container is recreated (brief restart; on-disk chain data is preserved)." ;;

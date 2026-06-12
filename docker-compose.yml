@@ -349,6 +349,11 @@ services:
       - LOCAL_MONERO_HOST=${NETWORK_PREFIX:-172.28.0}.26
       - MINING_NET_CIDR=${NETWORK_SUBNET:-172.28.0.0/24}
       - XVB_TOR_PROXY=socks5h://${NETWORK_PREFIX:-172.28.0}.25:9050
+      # Notify-only new-release check (#224, config.json: dashboard.check_for_updates). Default ON;
+      # the dashboard checks GitHub for a newer release and shows a link badge — routed over the same
+      # bridge Tor SOCKS as XVB_TOR_PROXY so it leaks neither the host IP nor a DNS lookup (safe to
+      # default on). Set dashboard.check_for_updates:false to opt out. See docs/privacy.md.
+      - DASHBOARD_CHECK_UPDATES=${DASHBOARD_CHECK_UPDATES:-true}
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
       # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
       # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the
