@@ -67,6 +67,15 @@ ENABLE_XVB = os.environ.get("XVB_ENABLED", "true").lower() == "true"
 # host-networked dashboard reaches the bridge container's Tor SOCKS at 172.28.0.25:9050.
 XVB_TOR_PROXY = os.environ.get("XVB_TOR_PROXY", "socks5h://172.28.0.25:9050")
 
+# New-release check (#224, config.json: dashboard.check_for_updates). Default OFF — when enabled, the
+# dashboard asks GitHub for the latest release and shows a header badge linking to it if it's newer
+# than the running version. Notify-only (no upgrade — that's #59). Routed over the same bridge Tor
+# SOCKS as XvB so enabling it doesn't reveal the host IP to GitHub; the check fails silently offline.
+CHECK_FOR_UPDATES = os.environ.get("DASHBOARD_CHECK_UPDATES", "false").strip().lower() == "true"
+GITHUB_RELEASES_API = os.environ.get(
+    "GITHUB_RELEASES_API", "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest")
+UPDATE_CHECK_INTERVAL = int(float(os.environ.get("UPDATE_CHECK_INTERVAL", "3600")))
+
 # Donation tier to target (config.json: xvb.donation_level). The XvB raffle picks
 # winners at random, so donating above a tier's threshold buys nothing — we aim to
 # just clear it and send the rest to p2pool.

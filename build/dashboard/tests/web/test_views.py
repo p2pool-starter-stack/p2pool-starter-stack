@@ -776,6 +776,13 @@ class TestBuildState:
         assert isinstance(v["text"], str) and v["text"]
         assert isinstance(v["dev"], bool)
 
+    def test_update_section_surfaced_and_defaults_none(self):
+        # The new-release badge (#224) rides on the shared payload; the checker's result passes
+        # through verbatim, and absence defaults to None (no badge).
+        upd = {"available": True, "latest": "v9.9.9", "url": "https://x/releases/tag/v9.9.9"}
+        assert build_state(_data(update=upd), _state_mgr(), "all")["update"] == upd
+        assert build_state(_data(), _state_mgr(), "all")["update"] is None
+
     def test_is_json_serializable(self):
         json.dumps(build_state(_data(), _state_mgr(), "all"))
 

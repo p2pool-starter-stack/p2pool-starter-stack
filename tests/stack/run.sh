@@ -167,6 +167,11 @@ case "$(run_sourced "$SANDBOX" describe_change DASHBOARD_AUTH_PW_FP aaa bbb)" in
     *)                               bad "dash login fingerprint stays silent" "unexpected message emitted" ;;
 esac
 
+# New-release check toggle (#224): enabling/disabling is INFO, and the message names GitHub + Tor.
+assert_contains "update-check enable is INFO"   "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "INFO"
+assert_contains "update-check enable mentions GitHub/Tor" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "GitHub"
+assert_contains "update-check disable is INFO"  "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES true false)" "no longer contacts GitHub"
+
 # generate_caddyfile renders a basic_auth block ONLY when a hash is configured, carrying the username
 # and the *decoded* bcrypt string Caddy expects; with no hash the dashboard stays open (no basic_auth).
 auth_hb64="$(printf '%s' '$2y$14$UNITTESTbcrypthashvalue000000000000000000000000000000' | openssl base64 -A)"
@@ -621,6 +626,9 @@ assert_eq "stratum_bind default"  "$(run_sourced "$V" env_get_file "$V/.env" STR
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default"  "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
+# The new-release check (#224) defaults OFF when absent from config — the appliance never contacts
+# GitHub unless the operator opts in.
+assert_eq "check_for_updates default off" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_CHECK_UPDATES)" "false"
 # Both new xmrig-proxy knobs default to OFF/no-fee when absent from config (#152/#173).
 assert_eq "stratum auth off by default"        "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" ""
 assert_eq "donate-level 0 by default (no fee)"  "$(run_sourced "$V" env_get_file "$V/.env" PROXY_DONATE_LEVEL)" "0"
@@ -656,6 +664,12 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari_required propagated false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
+
+# Opting in (dashboard.check_for_updates:true) propagates as DASHBOARD_CHECK_UPDATES=true (#224).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","check_for_updates":true} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "check_for_updates propagated true" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_CHECK_UPDATES)" "true"
 
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env

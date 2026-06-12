@@ -717,6 +717,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
+        "update": data.get("update"),   # {available, latest, url} | None — new-release badge (#224)
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,

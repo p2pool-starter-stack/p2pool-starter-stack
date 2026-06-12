@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from aiohttp import ClientSession
 
@@ -10,7 +11,12 @@ from mining_dashboard.config.config import (
     SYNC_GATE_CONTAINERS,
     ENABLE_XVB,
     WORKER_FALLOFF_SEC,
+    CHECK_FOR_UPDATES,
+    GITHUB_RELEASES_API,
+    UPDATE_CHECK_INTERVAL,
+    XVB_TOR_PROXY,
 )
+from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.docker.docker_control import DockerControl
@@ -301,6 +307,14 @@ class DataService:
         self.xvb_client = xvb_client
         # Per-worker connection tracking for true uptime (#169) + stale-row fall-off (#182).
         self._lifecycle = WorkerLifecycle(WORKER_FALLOFF_SEC)
+        # New-release check (#224): off unless dashboard.check_for_updates is set. Routed over the
+        # bridge Tor SOCKS (reusing XVB_TOR_PROXY) so it can't reveal the host IP to GitHub.
+        self.update_checker = UpdateChecker(
+            GitHubReleaseClient(GITHUB_RELEASES_API, XVB_TOR_PROXY),
+            (os.environ.get("PITHEAD_VERSION") or "").strip(),
+            enabled=CHECK_FOR_UPDATES,
+            interval=UPDATE_CHECK_INTERVAL,
+        )
 
         self.latest_data = {
             "workers": [],
@@ -621,7 +635,14 @@ class DataService:
                         if real_xvb_stats:
                             await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
                             logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)")
-                    
+
+                    # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
+                    # so the appliance never phones GitHub unbidden). The checker self-throttles to
+                    # hourly and returns the cached result; surfaced as state.update for the header badge.
+                    if self.update_checker.enabled:
+                        self.latest_data["update"] = await asyncio.to_thread(
+                            self.update_checker.maybe_check, time.time())
+
                     iteration_count += 1
                 except Exception as e:
                     logger.error(f"Data Collection Error: {e}")

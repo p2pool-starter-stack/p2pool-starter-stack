@@ -44,6 +44,7 @@ What the running stack sends to the internet, connection by connection.
 | **P2Pool** outbound sidechain peers | clearnet P2Pool peers | **your real home IP** | ❌ **clearnet** | **on** | ⏳ Tor-by-default in v1.1 (#165). Harden now → [below](#hardening-the-clearnet-paths) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
 | **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` | **your real home IP** | ❌ **clearnet** | on while donating | ⏳ Tor-by-default in v1.1 (#166). Disable XvB to stop it |
+| Dashboard **update check** (#224) | `api.github.com` | "this IP runs Pithead" (+ which version) | ✅ Tor (`socks5h`) | **off** — opt-in `dashboard.check_for_updates` | enable per-config; routed via Tor, cached, fails silently offline |
 | **Caddy** TLS (dashboard HTTPS) | local only | — | n/a — `tls internal`, **no ACME / no external CA** | on | clean (no egress) |
 | **Telegram** alerts (#121) | Telegram API | your IP | ❌ | **off** | opt-in only |
 | **Healthchecks** pings (#79) | external | your IP | ❌ | **off** | opt-in only |
