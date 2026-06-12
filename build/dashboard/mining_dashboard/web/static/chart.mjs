@@ -146,14 +146,17 @@ export class ChartCard extends Component {
                 datasets: [
                     // segment.borderWidth hides each band's top border-line where the band is flat-zero,
                     // so an all-to-one-pool window reads as a single solid color instead of the empty
-                    // series painting its edge line over the other's (#184).
+                    // series painting its edge line over the other's (#184). The upper (XvB) band fills
+                    // down to the series below it (fill: '-1'), NOT to origin — otherwise its
+                    // semi-transparent purple is painted all the way to zero over the blue P2Pool fill,
+                    // tinting an all-P2Pool window (XvB ≈ 0) lavender instead of leaving it blue.
                     { label: 'P2Pool (routed)', data: d.p2pool, borderColor: c.accent, borderWidth: AREA_BORDER_WIDTH,
                       segment: { borderWidth: (ctx) => bandBorderWidth(d.p2pool, ctx, AREA_BORDER_WIDTH) },
                       tension, fill: true, hidden: vis.p2pool === false,
                       stack: 'hr', backgroundColor: areaFill(c.accent), pointRadius: 0, pointHitRadius: 20 },
                     { label: 'XvB (routed)', data: d.xvb, borderColor: c.purple, borderWidth: AREA_BORDER_WIDTH,
                       segment: { borderWidth: (ctx) => bandBorderWidth(d.xvb, ctx, AREA_BORDER_WIDTH) },
-                      tension, fill: true, hidden: vis.xvb === false,
+                      tension, fill: '-1', hidden: vis.xvb === false,
                       stack: 'hr', backgroundColor: areaFill(c.purple), pointRadius: 0, pointHitRadius: 20 },
                     // On its own hidden 0–1 axis (yAxisID) so the markers ride near the top edge and
                     // never inflate the hashrate y-range (Issue #145).
