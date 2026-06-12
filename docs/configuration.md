@@ -85,7 +85,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `xvb.enabled` | `true` | Enable XMRvsBeast bonus-round hashrate switching. |
 | `xvb.url` | `na.xmrvsbeast.com:4247` | XMRvsBeast pool endpoint. |
 | `xvb.donor_id` | `auto` | XvB donor id. `auto` = the first 8 characters of your Monero address. |
-| `xvb.donation_level` | `auto` | Donation tier to target: `auto` (the highest tier your hashrate can sustain) or a specific tier (`donor` / `vip` / `whale` / `mega`). A specific tier is honored even if your hashrate can't hold it — the dashboard shows a warning badge in that case. See [Architecture › Algorithmic switching](architecture.md#algorithmic-switching). |
+| `xvb.donation_level` | `auto` | Donation tier to target: `auto` (the highest tier your hashrate can sustain) or a specific tier — **`donor` (1 kH/s) / `vip` (10 kH/s) / `whale` (100 kH/s) / `mega` (1 MH/s)** — where the figure is the donation hashrate you must hold on both your 1h and 24h averages. A specific tier is honored even if your hashrate can't hold it — the dashboard shows a warning badge in that case. (The `vip` tier ≠ the dashboard's VIP win-eligibility status; see [Architecture › Algorithmic switching](architecture.md#algorithmic-switching).) |
 | `tor.data_dir` | `auto` | Where Tor's state (including onion keys) lives. `auto` = `./data/tor`. |
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
