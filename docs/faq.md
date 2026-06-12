@@ -81,6 +81,9 @@ What still touches clearnet (and so can reveal your IP):
 - **Install / build** fetches code and container images from GitHub, getmonero.org, and the image
   registries once — inherent and integrity-pinned, but it reveals your IP at that moment.
 
+**Bottom line:** with XvB disabled, on a normal home connection behind NAT the only time your IP
+leaves the box is that one-time install.
+
 See **[Privacy & network egress](privacy.md)** for every connection and how to harden each one.
 
 ### Do I need to port-forward?
@@ -117,8 +120,9 @@ connect to a node you run elsewhere (it must have ZMQ publishing enabled for P2P
 
 ### What hardware do I need?
 
-Plan for **16 GB+ RAM**, a CPU with **AVX2** for RandomX, and an **SSD** (~150 GB pruned /
-~300 GB full). Full minimum-vs-recommended sizing for the stack host is in
+Plan for **16 GB+ RAM**, a CPU with **AVX2** for RandomX, and an **SSD** (~300 GB pruned /
+~500 GB full minimum — Tari's chain alone is ~135 GB, and both chains grow ~100+ GB/year, so a
+**2–4 TB** drive is the set-and-forget choice). Full minimum-vs-recommended sizing for the stack host is in
 [Hardware Requirements](hardware.md). (Miner hardware is sized separately in
 [RigForge](https://github.com/p2pool-starter-stack/rigforge).)
 

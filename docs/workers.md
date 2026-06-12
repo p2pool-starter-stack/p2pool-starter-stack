@@ -37,6 +37,10 @@ table within a few seconds.
   nothing per-rig to configure beyond the label.
 - **`YOUR_STACK_IP`** is the stack host's IP or a DNS-resolvable hostname. For a stable address
   on a home LAN, set a DHCP reservation (or a static IP) for the stack host.
+- **Add a backup pool for automatic failover.** List a second entry in `pools` (a public pool, or
+  another stack). If your Monero node goes down or is still syncing, the stack briefly stops
+  accepting work so your rigs **fail over to the backup automatically** — and switch back the moment
+  it recovers. You never sit idle on a stalled node.
 
 ### Miner version & compatibility
 

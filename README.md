@@ -9,14 +9,17 @@
 [![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
-![Tor](https://img.shields.io/badge/Networking-Tor--only-7D4698?logo=torproject&logoColor=white)
+![Tor](https://img.shields.io/badge/Networking-Tor--first-7D4698?logo=torproject&logoColor=white)
 
 A professional-grade, containerized stack for running a private [Monero](https://www.getmonero.org/)
 full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge
 mining — engineered for **privacy**, **performance**, and **a setup you can finish before your
 coffee gets cold**.
 
-![Dashboard](./images/dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
+  <img alt="Pithead — live mining dashboard" src="./images/launch/hero-light.png">
+</picture>
 
 </div>
 
@@ -24,20 +27,23 @@ coffee gets cold**.
 
 ## ✨ Why this stack?
 
-- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service
-  (onion) addresses — **no public port forwarding**, and Monero/Tari run over Tor. A couple of
-  outbound yield paths still touch clearnet today; the [privacy guide](docs/privacy.md) maps every
-  connection and how to harden it.
-- ⛏️ **Monero + Tari, merge-mined.** Earn on both chains at once — Tari is mined alongside Monero
-  through P2Pool with zero extra effort.
-- 🧠 **Smart yield optimization.** An algorithmic engine continuously splits your hashrate between
-  P2Pool and XMRvsBeast bonus rounds to maximize your return — automatically.
-- 🔌 **One endpoint for every rig.** All your workers point at a single address. The stack routes
-  hashrate upstream; you never touch a worker config to change pools.
-- 📊 **A dashboard that actually tells you things.** Live hashrate, sync progress, PPLNS window,
-  per-worker stats, and your P2Pool/XvB split — served over HTTPS on your LAN.
-- 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and kernel
-  tuning, then starts everything for you.
+- ⛏️ **Zero-fee, decentralized payouts.** Mine Monero on [P2Pool](https://p2pool.io/) — no pool
+  operator, no fees, rewards paid straight to your own wallet — and every hash **merge-mines Tari
+  for free**: a second payout for zero extra power or config.
+- 🧠 **Set-and-forget yield optimizer.** An algorithmic engine watches the XMRvsBeast raffle and
+  automatically shifts hashrate to grab bonus rounds — donating only the **minimum** needed to hold
+  your tier, then handing every spare cycle back to your own P2Pool payouts. No manual tuning, no
+  over-donating.
+- 🧅 **Tor-first, no port forwarding.** A built-in Tor daemon gives Monero, Tari, and P2Pool
+  hidden-service (onion) addresses, so **your router stays closed and your home IP is never
+  advertised to an inbound peer**. (Two outbound yield paths still touch clearnet in v1.0 — the
+  [privacy guide](docs/privacy.md) maps every connection and how to harden it today.)
+- 🔌 **One endpoint for every rig.** Point all your workers at a single address — no wallet in the
+  miner, no per-rig pool config, ever. The stack routes the hashrate for you.
+- 📊 **A dashboard worth leaving open.** Watch live hashrate, your P2Pool/XvB split shading in real
+  time, the PPLNS window, and every worker update — served over HTTPS on your LAN.
+- 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and — on Linux —
+  RandomX kernel tuning (it asks before touching GRUB), then offers to start everything for you.
 - 🔒 **Hardened out of the box.** Least-privilege containers, SHA256-verified binaries, pinned
   versions, localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for
   stats, plus a separate start/stop-only one for node-down worker failover).
@@ -46,16 +52,16 @@ coffee gets cold**.
 
 ## 🚀 Quick Start
 
-> **Platform:** Ubuntu Server **24.04 LTS** is officially supported. Plan for **16 GB+ RAM** and an
-> **SSD** (~150 GB pruned / ~300 GB full) — full sizing is in
-> [Hardware Requirements](docs/hardware.md). You'll need your Monero and Tari payout addresses handy.
-
 ```bash
 git clone https://github.com/p2pool-starter-stack/pithead.git
 cd pithead
 chmod +x pithead
 ./pithead setup
 ```
+
+> **Prereqs:** Ubuntu Server **24.04 LTS**, **16 GB+ RAM**, an **SSD** (~300 GB pruned / ~500 GB
+> full minimum — the chains grow ~100+ GB/year, so 2–4 TB is the set-and-forget choice), and your
+> **Monero + Tari payout addresses** handy — full sizing in [Hardware Requirements](docs/hardware.md).
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
 addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the stack. Then:
@@ -68,6 +74,10 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
    `YOUR_STACK_IP:3333` (no wallet address needed). New to mining?
    [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a tuned worker in one
    command.
+
+<div align="center">
+  <img src="./images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">
+</div>
 
 📖 **Full walkthrough:** [docs/getting-started.md](docs/getting-started.md)
 

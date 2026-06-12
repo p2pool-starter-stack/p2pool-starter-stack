@@ -18,7 +18,10 @@ the network — the dashboard shows **Sync Mode**. A **`Syncing…`** badge appe
 hostname, the headline reads *"System is currently synchronizing with the network,"* and no
 hashrate is routed yet.
 
-![Sync Mode](../images/syncing.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/sync.png">
+  <img alt="Sync Mode" src="../images/launch/sync-light.png">
+</picture>
 
 Sync Mode gives each chain its own progress card so you can see exactly where things stand:
 
@@ -62,7 +65,10 @@ You can also follow sync progress from the command line:
 
 Once both nodes are synced, the dashboard shows the full operational view.
 
-![Operational dashboard](../images/dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/simple.png">
+  <img alt="Operational dashboard — Simple view" src="../images/launch/simple-light.png">
+</picture>
 
 The page updates itself **live** every 30 seconds, refreshing each panel in place rather than
 reloading the whole page — so your scroll position, the column you've sorted the worker table by,
@@ -71,8 +77,8 @@ and the chart all stay put between updates.
 ### Top bar
 
 A persistent status strip across the top shows the hostname, host telemetry (CPU, load, RAM,
-HugePages, disk), your **total hashrate**, and headline **1h / 24h averages** for both P2Pool and
-XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
+HugePages, disk), your **total hashrate**, and headline **1h / 24h routed averages** for both P2Pool
+and XvB so you can see your split at a glance. Next to the disk readout, an **`XMR Pruned`** /
 **`XMR Full`** badge shows the Monero node's blockchain mode at a glance.
 
 When the dashboard host is a name (not already an IP), the machine's **IP address** is shown
@@ -90,6 +96,20 @@ appears next to the version badge, linking to the GitHub release. It's a heads-u
 updates anything; you upgrade with `./pithead upgrade` when you're ready. The check is on by default
 and routed over Tor (so it can't reveal your IP); turn it off with `dashboard.check_for_updates: false`
 (see [Configuration](configuration.md#configuration-reference)).
+
+### Hero band
+
+A bold strip of headline KPIs sits just below the top bar, so the numbers that matter read at a
+glance the moment the page loads:
+
+| KPI | Meaning |
+|---|---|
+| **Total Hashrate** | Your combined hashrate across all workers. |
+| **Shares in Window** | Shares you currently hold in the P2Pool PPLNS window (green when above zero). |
+| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout — green **Yes**, red **No**, or muted **N/A** when XvB is off. (Full definition in [Overview](#overview).) |
+| **Blocks Found** | P2Pool sidechain blocks your node has found. |
+| **XvB Tier** | The donation tier you're currently holding. |
+| **Mining Mode** | What your hashrate is routed to right now — P2Pool, XvB, or a split. |
 
 ### Node status & failover
 
@@ -144,12 +164,13 @@ The summary panel pulls the key numbers together:
 |---|---|
 | **Mining Mode** | What the stack is routing hashrate to right now (e.g. P2Pool, XvB, or a split). |
 | **Total Hashrate** | Your combined hashrate across all workers. |
+| **Workers Alive** | How many rigs are connected and online right now. |
 | **Share in Window** | Your shares in the current P2Pool PPLNS window. |
 | **Raffle Eligible** | **Yes** only when you're set up to both *win* and *collect* an XvB payout: you're donating at least the **donor tier** (1 kH/s on XvB's *credited* 1h **and** 24h averages — the same threshold as **Current Tier**) **and** you hold a P2Pool PPLNS share (XvB's "VIP" gate — without it a win is skipped and you take a fail). Reads **No** when donating but a gate is unmet, and **N/A (XvB off)** when XvB is disabled. Intentionally stricter than XvB's bare "VIP = just a share" so a green Yes means a win is paid. |
 | **Last Share** | Time since your last accepted share. |
-| **P2Pool 1h / 24h avg** | Time-weighted average hashrate routed to P2Pool. |
-| **XvB 1h / 24h avg** | Donation hashrate credited by the XMRvsBeast API (the definitive record). |
-| **Current Tier** | The XvB tier you're currently holding. |
+| **P2Pool 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually routed to P2Pool. |
+| **XvB 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually **routed** to XvB. (The XvB-API *credited* figure — XvB's definitive record — appears in the **Advanced** view's *XvB Donation Stats* card.) |
+| **Current Tier** | The XvB tier you're currently holding — the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
 | **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
 | **Tari Mining** | Whether merge mining of Tari is active and healthy. |
 | **Wallets** | Your configured Monero and Tari payout addresses. |
@@ -184,6 +205,11 @@ Overview for a set of power-user cards that break out the same data in more deta
 Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**, **Tari Merge
 Mining**, and the **P2Pool Earnings (estimated)** calculator below. Your choice is remembered
 across reloads.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
+  <img alt="Dashboard — Advanced view" src="../images/launch/advanced-light.png">
+</picture>
 
 ### P2Pool Earnings (estimated)
 

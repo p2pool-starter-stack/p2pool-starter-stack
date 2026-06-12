@@ -17,8 +17,10 @@ are slated to move to Tor-by-default (with an opt-out) in v1.1.
 
 ## Inbound — no port forwarding
 
-Every service that accepts inbound connections does so through a **Tor hidden service (onion
-address)**: monerod, Tari, and P2Pool each get one from the built-in Tor daemon. So:
+**Your home IP is never advertised to a single inbound peer, and you never touch your router's
+port-forward settings.** Every service that accepts inbound connections does so through a **Tor
+hidden service (onion address)**: monerod, Tari, and P2Pool each get one from the built-in Tor
+daemon. So:
 
 - **No public IPv4 port forwarding is required**, and your IP is not advertised to inbound peers.
 - The **only** LAN-facing port is the stratum endpoint **`:3333`** that your own rigs connect to. It
@@ -38,7 +40,7 @@ What the running stack sends to the internet, connection by connection.
 | **monerod** P2P + tx broadcast | Monero network | — | ✅ Tor (`proxy=` / `tx-proxy=`) | on | always Tor |
 | **monerod** DNS (checkpoints, blocklist, update check, priority-node hostnames) | DNS resolvers | "this IP runs Monero" | ✅ **closed** — `disable-dns-checkpoints`, `check-updates=disabled`, `enable-dns-blocklist=0`, hostname priority-nodes dropped (#161) | n/a | — |
 | **monerod RPC to a remote node** (only if `monero.mode: remote`) | the node you configured | **your real home IP**, to that node's operator | ❌ clearnet | **off** — the bundled local node is the default and has no remote-RPC egress | use a node you run/trust, or one reachable as a `.onion` over Tor |
-| **Tari** P2P | Tari network | — | ✅ Tor (`transport = "tor"`) | on | always Tor |
+| **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | always Tor |
 | **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | — |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
 | **P2Pool** outbound sidechain peers | clearnet P2Pool peers | **your real home IP** | ❌ **clearnet** | **on** | ⏳ Tor-by-default in v1.1 (#165). Harden now → [below](#hardening-the-clearnet-paths) |
@@ -81,8 +83,8 @@ the Tor routing the default.
 ### P2Pool outbound peers (#165)
 
 P2Pool advertises its onion for *inbound* peers but dials *outbound* sidechain peers over clearnet,
-exposing your IP to the P2Pool network. **v1.0 has no config knob for this yet** (#165 adds a
-`p2pool.clearnet` toggle); to route those dials through Tor today, hand-edit P2Pool's `command:` in
+exposing your IP to the P2Pool network. **v1.0 has no config knob for this yet** (a Tor-by-default
+toggle is tracked in #165); to route those dials through Tor today, hand-edit P2Pool's `command:` in
 `docker-compose.yml`, adding the SOCKS flags just before `${P2POOL_FLAGS}`:
 
 ```yaml
