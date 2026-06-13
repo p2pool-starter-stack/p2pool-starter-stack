@@ -291,12 +291,14 @@ class WorkerLifecycle:
                 if now - st["last_active"] <= self.falloff_sec:
                     live.append(w)                       # recently-offline rows stay (shown as DOWN)
                 # else: fall off — drop the ghost row
-        # Forget workers the proxy no longer reports at all, and any that have fallen off, so a later
-        # reconnect starts fresh rather than inheriting a stale connected_since.
-        self._state = {
-            n: s for n, s in self._state.items()
-            if n in seen and (s["connected_since"] is not None or now - s["last_active"] <= self.falloff_sec)
-        }
+        # Forget ONLY workers the proxy no longer reports at all. A worker that has aged out of the
+        # live table but is STILL reported (offline) must be KEPT in state so its `last_active`
+        # (when it actually went offline) is preserved. Dropping it here was a falloff regression
+        # (#182): xmrig-proxy keeps a disconnected worker in /workers for hours, so the next poll
+        # re-created it with last_active=now, resetting the 1h clock — the ghost reappeared as DOWN
+        # forever, flickering off for a single cycle each hour instead of truly falling off. Keeping
+        # it does NOT block a fresh reconnect: going online resets connected_since/last_active anyway.
+        self._state = {n: s for n, s in self._state.items() if n in seen}
         return live
 
 

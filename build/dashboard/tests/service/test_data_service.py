@@ -222,6 +222,21 @@ class TestWorkerLifecycle:
         gone = lc.update([self._w("rig", "offline")], now=5000.0)   # 4000s since active: > falloff
         assert gone == []                                           # fell off the table
 
+    def test_fallen_off_worker_stays_gone_while_proxy_keeps_reporting_it(self):
+        # Regression (#182): xmrig-proxy keeps a disconnected worker in /workers for HOURS, so the
+        # lifecycle must not let a fallen-off ghost reappear. Previously, dropping the worker from
+        # internal state at falloff meant the next poll re-created it with last_active=now, resetting
+        # the 1h clock — the row flickered off for one cycle then came back as DOWN forever.
+        lc = WorkerLifecycle(falloff_sec=3600)
+        lc.update([self._w("rig", "online")], now=1000.0)               # active at t=1000
+        assert lc.update([self._w("rig", "offline")], now=4700.0) == []  # 3700s > falloff → dropped
+        # The proxy STILL reports it offline on every subsequent poll — it must stay gone, not flicker.
+        for t in (4730.0, 8400.0, 8430.0, 30000.0):
+            assert lc.update([self._w("rig", "offline")], now=t) == [], f"ghost reappeared at t={t}"
+        # A genuine reconnect still re-adds it, fresh.
+        [w] = lc.update([self._w("rig", "online")], now=30030.0)
+        assert w["uptime"] == 0
+
     def test_reconnect_restarts_uptime_and_readds(self):
         lc = WorkerLifecycle(falloff_sec=10)
         lc.update([self._w("rig", "online")], now=1000.0)
