@@ -179,7 +179,11 @@ case "$(grep -E '^proxy=' "$MONT" || true)" in
     *)  bad "monero clearnet: P2P proxy= line stripped (#183)" "still present" ;;
 esac
 assert_contains "monero clearnet: tx-proxy stays on Tor (#183)"   "$(cat "$MONT")" "tx-proxy=tor"
-assert_contains "monero clearnet: out-peers lowered to 16 (#183)"  "$(cat "$MONT")" "out-peers=16"
+# P2Pool v4.16 clearnet recommendation: out-peers 32 + the recommended priority nodes (added only in
+# the clearnet window; the Tor template has neither — the #161 check below guards that).
+assert_contains "monero clearnet: out-peers=32 (p2pool v4.16 rec)"  "$(cat "$MONT")" "out-peers=32"
+assert_contains "monero clearnet: xmrvsbeast priority node (v4.16)" "$(cat "$MONT")" "add-priority-node=p2pmd.xmrvsbeast.com:18080"
+assert_contains "monero clearnet: hashvault priority node (v4.16)"  "$(cat "$MONT")" "add-priority-node=nodes.hashvault.pro:18080"
 # The committed template (the Tor-only default) keeps the proxy line + the Tor-tuned out-peers.
 assert_contains "monero default: Tor P2P proxy present (#183)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" 'proxy=${NETWORK_PREFIX}.25:9050'
 assert_contains "monero default: out-peers 48 for Tor (#183)"  "$(cat "$ROOT/build/monero/bitmonero.conf.template")" "out-peers=48"
@@ -214,6 +218,14 @@ assert_contains "tari entrypoint never mutates the canonical config (#234)" "$(c
 # wrapper entrypoint that chains to the upstream start_tari_app.sh.
 assert_contains "compose mounts clearnet-state into monerod (#234)" "$(cat "$ROOT/docker-compose.yml")" ':/clearnet-state:ro'
 assert_contains "compose wires the tari wrapper entrypoint (#234)"  "$(cat "$ROOT/docker-compose.yml")" '/var/tari/config/entrypoint.sh'
+
+echo "== unit: clock_sync_status (mining is time-sensitive) =="
+# doctor's NTP check classifies timedatectl's NTPSynchronized: yes→synced, no→unsynced, else unknown.
+CLKBIN="$SANDBOX/clk-bin"; mkdir -p "$CLKBIN"
+mk_timedatectl() { printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\n' "$1" > "$CLKBIN/timedatectl"; chmod +x "$CLKBIN/timedatectl"; }
+mk_timedatectl "yes"; assert_eq "clock_sync_status: NTP yes => synced"   "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "synced"
+mk_timedatectl "no";  assert_eq "clock_sync_status: NTP no => unsynced"  "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "unsynced"
+mk_timedatectl "";    assert_eq "clock_sync_status: blank => unknown"     "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "unknown"
 
 echo "== unit: dashboard auth (#8) =="
 # Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
@@ -901,6 +913,10 @@ assert_eq "upgrade preserves the proxy token"               "$(run_sourced "$U" 
 # require_deployed command (up/apply/upgrade) errors "run setup" on an already-deployed box.
 assert_eq "upgrade preserves DEPLOYMENT_COMPLETED (require_deployed survives)" "$(run_sourced "$U" env_get_file "$U/.env" DEPLOYMENT_COMPLETED)" "true"
 assert_contains "upgrade still rebuilds images (source mode)" "$(cat "$UL")" "compose up --pull never -d --build"
+# Third-party images (caddy/tari/socket-proxies) are digest-pinned and can change between releases;
+# a source-mode upgrade pulls the non-buildable ones first so a bumped digest is fetched (not "No
+# such image" under --pull never). Best-effort, so it runs before the build.
+assert_contains "upgrade pulls non-buildable images first (digest bumps)" "$(cat "$UL")" "compose pull --ignore-buildable"
 
 echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
 # A docker stub that fails `compose up -d --remove-orphans` only when FAIL_UP=1 (else succeeds).

@@ -107,7 +107,7 @@ expect_min "log rotation on every service" "max-size:" 9
 # Image digest pinning (#135): the externally-pulled images must reference an immutable @sha256
 # digest, not just a mutable tag, so a re-pushed tag can't silently change the running image.
 expect_present "tecnativa socket-proxy pinned by digest" "tecnativa/docker-socket-proxy:v0.4.2@sha256:"
-expect_present "caddy pinned by digest" "caddy:2.11@sha256:"
+expect_present "caddy pinned by digest" "caddy:2.11.4@sha256:"
 expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:"
 
 # Per-service precision checks via the JSON render (cleaner than grepping the flat YAML): the

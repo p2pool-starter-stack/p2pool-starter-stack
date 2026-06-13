@@ -24,9 +24,12 @@ public-node=1
 # ZeroMQ publisher for block notifications (Required for P2Pool)
 zmq-pub=tcp://0.0.0.0:18083
 
-# Peer Management. out-peers raised for Tor: each peer is roughly one bandwidth-capped
-# Tor circuit, so more peers = more aggregate download bandwidth in parallel. This is
-# network tuning (not CPU) — it does NOT scale with cores, unlike prep-blocks-threads below.
+# Peer Management. P2Pool v4.16 recommends out-peers=32 / in-peers=64 for a clearnet node, where
+# in-peers=64 is the one that matters: it caps INBOUND connections so they can't grow past ~1000 and
+# hit Linux's open-files limit — we honor it exactly. out-peers is raised to 48 here because each
+# peer is roughly one bandwidth-capped Tor circuit, so more peers = more aggregate download bandwidth
+# over Tor (this is network tuning, not CPU — it doesn't scale with cores). The optional clearnet
+# initial sync (#183) drops out-peers back to the recommended 32 + adds P2Pool's priority nodes.
 out-peers=48
 in-peers=64
 

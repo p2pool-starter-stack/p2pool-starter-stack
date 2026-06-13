@@ -13,6 +13,19 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 First stable release.
 
+Bundled, SHA-pinned upstream components: **P2Pool v4.16**, **Monero v0.18.5.0**, **XMRig-proxy
+6.26.0**, **Tari/minotari_node v5.3.1-mainnet**, **Caddy 2.11.4**, **docker-socket-proxy v0.4.2**.
+The exact image digests for each release ship in the GitHub Release's ingredients manifest.
+
+monerod follows P2Pool v4.16's recommendations where they're compatible with the Tor-first model:
+`in-peers=64` (the inbound/open-files cap) is honored exactly, and the optional clearnet initial sync
+(#183) runs monerod as a clearnet node should — `out-peers=32` + P2Pool's recommended priority nodes
+(`p2pmd.xmrvsbeast.com`, `nodes.hashvault.pro`) for that window. The DNS-based recommendations
+(priority hostnames, DNS blocklist/checkpointing) stay off in Tor mode — they leak clearnet DNS
+(#161) — with monerod's compiled-in checkpoints as the substitute. `./pithead doctor` now also checks
+that the **system clock is NTP-synchronized** (clock skew gets shares/blocks rejected), per P2Pool's
+"synchronize your clock before mining" guidance.
+
 ### Fixed
 
 - **Disconnected workers never fell off the "Workers Alive" table (#182 regression).** A worker that
