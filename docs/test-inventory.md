@@ -5,8 +5,8 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 488 dashboard unit tests · 12 contract tests · 31 frontend
-tests · 37 `pithead` shell sections · 15 harness self-test sections ·
-8 live config scenarios (15 axis values) · 6 mini-stack scenarios.
+tests · 39 `pithead` shell sections · 16 harness self-test sections ·
+9 live config scenarios (17 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
 > run time — e.g. the dashboard suite collects ~381). Generated statically by grep, so it's
@@ -16,12 +16,12 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 488 |
 | 1 — Unit | frontend (node --test) | 31 |
-| 1 — Unit | `pithead` shell suite | 37 sections |
+| 1 — Unit | `pithead` shell suite | 39 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
-| 4 — Live matrix | config scenarios | 8 (15 axis values) |
-| 4 — Live matrix | harness self-test | 15 sections |
+| 4 — Live matrix | config scenarios | 9 (17 axis values) |
+| 4 — Live matrix | harness self-test | 16 sections |
 
 ---
 
@@ -596,7 +596,7 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - bandBorderWidth: zero-height segments get no border, real ones keep full width
 - uptimeCell: online shows uptime, offline shows DOWN
 
-### `pithead` shell suite (tests/stack/run.sh) — 37 sections
+### `pithead` shell suite (tests/stack/run.sh) — 39 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -605,6 +605,7 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - unit: docker_boot_enabled (#137)
 - unit: is_valid_host (#130)
 - unit: describe_change
+- unit: clearnet initial sync helpers (#183)
 - unit: dashboard auth (#8)
 - unit: generate_caddyfile scheme (#140)
 - unit: host detection (#140)
@@ -625,6 +626,7 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - black-box: dashboard auth lifecycle (#8)
 - black-box: apply preserves secrets + propagates
 - black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level)
+- black-box: clearnet initial sync render (#183)
 - black-box: local node creds auto-generated + persisted (#50)
 - black-box: upgrade re-renders generated config (#128)
 - black-box: apply recovers from a failed 'compose up' (#125)
@@ -668,7 +670,7 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 
 ## Tier 4 — Live config matrix (real synced server)
 
-### Config scenarios (tests/integration/scenarios.sh) — 8
+### Config scenarios (tests/integration/scenarios.sh) — 9
 - local-pruned-main-secure-tari
 - local-full-main-secure-tari
 - local-pruned-mini-secure-tari
@@ -676,9 +678,10 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - local-pruned-main-rpclan
 - local-pruned-main-xvb-off
 - local-pruned-main-tari-optional
+- local-pruned-main-clearnet-sync
 - remote-main-secure-tari
 
-### Axis coverage (every value exercised at least once) — 15
+### Axis coverage (every value exercised at least once) — 17
 - monero.mode=local
 - monero.mode=remote
 - monero.prune=true
@@ -694,13 +697,17 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - dashboard.secure=false
 - dashboard.tari_required=true
 - dashboard.tari_required=false
+- monero.clearnet_initial_sync=true
+- tari.clearnet_initial_sync=true
 
 ### Per-scenario assertions (tests/integration/run.sh)
 - .env is owner-only (mode $envmode)
 - Caddyfile uses correct scheme
 - DASHBOARD_SECURE matches config
+- MONERO_CLEARNET_SYNC matches config (#183)
 - MONERO_RPC_BIND matches rpc_lan_access
 - Monero is synced (chain reusable by the matrix)
+- TARI_CLEARNET_SYNC matches config (#183)
 - TARI_REQUIRED env matches config
 - XVB_ENABLED matches config
 - backup archive contains .env
@@ -718,11 +725,15 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - monero display mode present ($dmode)
 - monero sync panel reads done (dashboard)
 - monerod DNS checkpoints disabled (#161)
+- monerod P2P proxy present (Tor-only default) (#183)
+- monerod P2P proxy stripped for clearnet IBD (#183)
 - monerod absent in remote mode
 - monerod has no clearnet priority-node hostnames (#161)
+- monerod out-peers lowered to 16 for clearnet (#183)
 - monerod reported missing
 - monerod reports synced (RPC)
 - monerod running-but-unhealthy
+- monerod tx broadcast stays on Tor during clearnet IBD (#183)
 - pool actually changed
 - pool type
 - prune axis: live FS is snapshot-capable ($fstype) — the $opp_label variant can be built cheaply
@@ -743,16 +754,20 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 - status non-zero when monerod unhealthy
 - status non-zero when node down
 - stratum total hashes > 0
+- tari DNS seed re-enabled for clearnet (#183)
 - tari DNS sinkholed — no clearnet resolver (#162)
 - tari synced (required)
+- tari transport flipped to TCP for clearnet (#183)
+- tari transport is Tor (Tor-only default) (#183)
 - workers online (>= $EXPECTED_WORKERS)
 - xmrig-proxy dev-fee donate-level is explicit + live (#173)
 - xmrig-proxy stopped for failover
 
-### Harness self-test (tests/integration/selftest.sh) — 15 sections
+### Harness self-test (tests/integration/selftest.sh) — 16 sections
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
+- clearnet initial sync overrides + matrix (#183)
 - expected/absent services: profile gating
 - redact: secrets never leak into artifacts
 - matrix: every axis value is covered
@@ -768,5 +783,5 @@ tests · 37 `pithead` shell sections · 15 harness self-test sections ·
 
 ---
 
-_Grand total: **597** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **601** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

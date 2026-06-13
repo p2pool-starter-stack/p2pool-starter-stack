@@ -149,6 +149,45 @@ assert_contains "data_dir is DEST"   "$(run_sourced "$SANDBOX" describe_change M
 assert_contains "tari mem is INFO"   "$(run_sourced "$SANDBOX" describe_change TARI_MEM_LIMIT 2048m 4g)" "INFO"
 assert_contains "monero mem is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)"  "INFO"
 assert_contains "monero mem recreate note" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "monerod container is recreated"
+# Clearnet initial sync (#183): enabling OR disabling is DEST (the daemon is recreated), and enabling
+# must spell out the exposure so the apply confirmation is unambiguous.
+assert_contains "monero clearnet enable is DEST"  "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "DEST"
+assert_contains "monero clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "CLEARNET"
+assert_contains "monero clearnet keeps tx on Tor" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "Tor"
+assert_contains "monero clearnet disable is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC true false)" "DEST"
+assert_contains "tari clearnet enable is DEST"    "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "DEST"
+assert_contains "tari clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CLEARNET"
+
+echo "== unit: clearnet initial sync helpers (#183) =="
+# normalize_bool: 1/true/yes/on (any case) => true; everything else (incl. empty) => false, matching
+# the dashboard's MONERO_PRUNE truthiness so a config bool reads the same on both sides.
+for v in true 1 YES On TRUE; do
+    assert_eq "normalize_bool '$v' => true" "$(run_sourced "$SANDBOX" normalize_bool "$v")" "true"
+done
+for v in false 0 no off "" garbage; do
+    assert_eq "normalize_bool '${v:-<empty>}' => false" "$(run_sourced "$SANDBOX" normalize_bool "$v")" "false"
+done
+# Monero render transform (#183): exercise the REAL container entrypoint function. Sourced with
+# PITHEAD_TEST_SOURCE=1 it defines the helpers and stops before envsubst/exec. The transform must
+# strip the Tor P2P proxy + lower out-peers, while KEEPING tx-proxy on Tor.
+MONT="$SANDBOX/mon-clearnet.conf"
+cp "$ROOT/build/monero/bitmonero.conf.template" "$MONT"
+# shellcheck disable=SC1090
+( export PITHEAD_TEST_SOURCE=1; source "$ROOT/build/monero/entrypoint.sh"; apply_clearnet_initial_sync "$MONT" )
+case "$(grep -E '^proxy=' "$MONT" || true)" in
+    "") ok "monero clearnet: P2P proxy= line stripped (#183)" ;;
+    *)  bad "monero clearnet: P2P proxy= line stripped (#183)" "still present" ;;
+esac
+assert_contains "monero clearnet: tx-proxy stays on Tor (#183)"   "$(cat "$MONT")" "tx-proxy=tor"
+assert_contains "monero clearnet: out-peers lowered to 16 (#183)"  "$(cat "$MONT")" "out-peers=16"
+# The committed template (the Tor-only default) keeps the proxy line + the Tor-tuned out-peers.
+assert_contains "monero default: Tor P2P proxy present (#183)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" 'proxy=${NETWORK_PREFIX}.25:9050'
+assert_contains "monero default: out-peers 48 for Tor (#183)"  "$(cat "$ROOT/build/monero/bitmonero.conf.template")" "out-peers=48"
+# Compose wires both flags into container env: monerod reads MONERO_CLEARNET_SYNC in its entrypoint;
+# TARI_CLEARNET_SYNC is inert in the container but its presence makes a flag change recreate tari so
+# it re-reads the host-rendered config.toml (a bind-mount content change alone won't recreate it).
+assert_contains "compose passes MONERO_CLEARNET_SYNC to monerod (#183)" "$(cat "$ROOT/docker-compose.yml")" 'MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC'
+assert_contains "compose passes TARI_CLEARNET_SYNC to tari (#183)"      "$(cat "$ROOT/docker-compose.yml")" 'TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC'
 
 echo "== unit: dashboard auth (#8) =="
 # Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
@@ -705,6 +744,54 @@ assert_contains "stratum auth surfaced for rigs" "$(run_sourced "$V" announce_st
 # Re-apply: an "auto" password must be STABLE (reused, not rotated) — like the proxy token.
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum_password auto stable across apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "$sp1"
+
+echo "== black-box: clearnet initial sync render (#183) =="
+# Default (no flags): both daemons stay Tor-only — .env flags are false and the rendered Tari config
+# keeps the Tor transport, empty DNS seeds, and an onion public address.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "monero clearnet off by default" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_CLEARNET_SYNC)" "false"
+assert_eq "tari clearnet off by default"   "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "false"
+assert_contains "tari default: Tor transport"    "$(cat "$V/build/tari/config.toml")" 'type = "tor"'
+assert_contains "tari default: DNS seeds empty"   "$(cat "$V/build/tari/config.toml")" "dns_seeds = []"
+assert_contains "tari default: advertises onion"  "$(cat "$V/build/tari/config.toml")" "/onion3/"
+
+# Monero clearnet ON (Tari left off): only the Monero flag flips; Tari stays Tor. The apply preview
+# must spell out the clearnet exposure (it's a DEST change).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":true}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "monero clearnet flag propagated true" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_CLEARNET_SYNC)" "true"
+assert_eq "tari clearnet still false"            "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "false"
+assert_contains "tari stays Tor when only monero is clearnet" "$(cat "$V/build/tari/config.toml")" 'type = "tor"'
+assert_contains "apply preview warns clearnet exposure" "$out" "CLEARNET"
+
+# Tari clearnet ON: transport flips to TCP, the DNS seed is re-enabled, the onion is dropped.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","clearnet_initial_sync":true}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tari clearnet flag propagated true" "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "true"
+assert_contains "tari clearnet: TCP transport"        "$(cat "$V/build/tari/config.toml")" 'type = "tcp"'
+assert_contains "tari clearnet: DNS seed re-enabled"   "$(cat "$V/build/tari/config.toml")" 'dns_seeds = ["seeds.tari.com"]'
+assert_contains "tari clearnet: onion not advertised"  "$(cat "$V/build/tari/config.toml")" "public_addresses = []"
+case "$(grep -E '^public_addresses' "$V/build/tari/config.toml")" in
+    *onion3*) bad "tari clearnet: onion dropped from public_addresses" "still advertised" ;;
+    *)        ok "tari clearnet: onion dropped from public_addresses" ;;
+esac
+
+# Truthy parse consistency (#183): a JSON string "yes" reads as enabled, like normalize_bool/MONERO_PRUNE.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":"yes"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "monero clearnet truthy 'yes' => true" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_CLEARNET_SYNC)" "true"
+
+# doctor flags the active clearnet sync (read-only). Re-render Tor-only first so later sections see a
+# clean default, then assert doctor's WARN/OK both ways.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "doctor: OK when Tor-only (#183)" "$(cd "$V" && PATH="$V/bin:$PATH" ./pithead doctor 2>&1)" "Tor-only"
 
 echo "== black-box: local node creds auto-generated + persisted (#50) =="
 # A local node with BLANK creds: apply must generate them, write them into .env AND back into

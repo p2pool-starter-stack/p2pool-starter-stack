@@ -70,6 +70,19 @@ assert_eq "override: prune"  "$(jq_get "$RENDERED" '.monero.prune')" "false"
 assert_eq "override: pool"   "$(jq_get "$RENDERED" '.p2pool.pool')"  "mini"
 assert_eq "preserved: wallet" "$(jq_get "$RENDERED" '.monero.wallet_address')" "49keep"
 
+echo "== clearnet initial sync overrides + matrix (#183) =="
+# Per-component flags render as JSON booleans (overrides_to_jq types true/false), so pithead's
+# `// false` + normalize_bool read them correctly. Default baseline omits the key entirely.
+CN="$(render_scenario_config "$BASE" monero.clearnet_initial_sync=true tari.clearnet_initial_sync=true)"
+printf '%s' "$CN" | jq empty 2>/dev/null && it_pass "clearnet config is valid JSON" || it_fail "clearnet config is valid JSON" "jq rejected it"
+assert_eq "monero clearnet renders boolean true" "$(jq_get "$CN" '.monero.clearnet_initial_sync')" "true"
+assert_eq "tari clearnet renders boolean true"   "$(jq_get "$CN" '.tari.clearnet_initial_sync')" "true"
+assert_eq "clearnet absent in baseline (default off)" "$(jq_get "$BASE" '.monero.clearnet_initial_sync')" ""
+# The matrix carries a dedicated clearnet scenario so the live suite exercises the on-state on a box.
+assert_contains "matrix has a clearnet scenario" "$(scenario_names)" "local-pruned-main-clearnet-sync"
+assert_contains "clearnet scenario enables monero" "$(scenario_overrides local-pruned-main-clearnet-sync)" "monero.clearnet_initial_sync=true"
+assert_contains "clearnet scenario enables tari"   "$(scenario_overrides local-pruned-main-clearnet-sync)" "tari.clearnet_initial_sync=true"
+
 echo "== expected/absent services: profile gating =="
 LOCAL='{"monero":{"mode":"local"}}'
 REMOTE='{"monero":{"mode":"remote"}}'

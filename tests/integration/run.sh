@@ -308,13 +308,16 @@ run_scenario() {
 # local node) and proxy_workers for mining liveness (stratum.conns can read 0 while mining).
 assert_running_state() {
     local name="$1" config="$2"
-    local st mode pool secure tari_req xvb rpc_lan
+    local st mode pool secure tari_req xvb rpc_lan monero_clearnet tari_clearnet
     mode="$(jq_get "$config" '.monero.mode')";          mode="${mode:-local}"
     pool="$(jq_get "$config" '.p2pool.pool')";          pool="${pool:-main}"
     secure="$(jq_get "$config" '.dashboard.secure')"
     tari_req="$(jq_get "$config" '.dashboard.tari_required')"
     xvb="$(jq_get "$config" '.xvb.enabled')"
     rpc_lan="$(jq_get "$config" '.monero.rpc_lan_access')"
+    # Clearnet initial sync (#183): absent => default false.
+    monero_clearnet="$(jq_get "$config" '.monero.clearnet_initial_sync')"; [ "$monero_clearnet" = "true" ] || monero_clearnet="false"
+    tari_clearnet="$(jq_get "$config" '.tari.clearnet_initial_sync')";     [ "$tari_clearnet" = "true" ] || tari_clearnet="false"
 
     # 1. Expected containers up; unexpected ones absent.
     local running expected svc
@@ -402,6 +405,32 @@ assert_running_state() {
             "$(rx "docker exec monerod grep -c '^disable-dns-checkpoints=1' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
         assert_eq "monerod has no clearnet priority-node hostnames (#161)" \
             "$(rx "docker exec monerod grep -cE 'xmrvsbeast.com|hashvault.pro' /root/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
+        # Clearnet initial sync (#183): assert the RENDERED in-container configs, both states. The flag
+        # must propagate to .env, and the live config must match: off → monerod keeps the Tor P2P
+        # proxy (out-peers 48) and Tari stays `type = "tor"`; on → the proxy line is gone (out-peers
+        # 16) while tx-proxy stays on Tor, and Tari flips to `type = "tcp"` with the DNS seed back.
+        assert_eq "MONERO_CLEARNET_SYNC matches config (#183)" "$(env_on_box MONERO_CLEARNET_SYNC)" "$monero_clearnet"
+        assert_eq "TARI_CLEARNET_SYNC matches config (#183)"   "$(env_on_box TARI_CLEARNET_SYNC)"   "$tari_clearnet"
+        if [ "$monero_clearnet" = "true" ]; then
+            assert_eq "monerod P2P proxy stripped for clearnet IBD (#183)" \
+                "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
+            assert_num_ge "monerod out-peers lowered to 16 for clearnet (#183)" \
+                "$(rx "docker exec monerod grep -c '^out-peers=16' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+            assert_num_ge "monerod tx broadcast stays on Tor during clearnet IBD (#183)" \
+                "$(rx "docker exec monerod grep -c '^tx-proxy=tor' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+        else
+            assert_num_ge "monerod P2P proxy present (Tor-only default) (#183)" \
+                "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+        fi
+        if [ "$tari_clearnet" = "true" ]; then
+            assert_num_ge "tari transport flipped to TCP for clearnet (#183)" \
+                "$(rx "docker exec tari grep -c '^type = \"tcp\"' /var/tari/config/config.toml 2>/dev/null")" 1
+            assert_num_ge "tari DNS seed re-enabled for clearnet (#183)" \
+                "$(rx "docker exec tari grep -c 'seeds.tari.com' /var/tari/config/config.toml 2>/dev/null")" 1
+        else
+            assert_num_ge "tari transport is Tor (Tor-only default) (#183)" \
+                "$(rx "docker exec tari grep -c '^type = \"tor\"' /var/tari/config/config.toml 2>/dev/null")" 1
+        fi
         case "$(rx "docker inspect tari --format '{{.HostConfig.Dns}}' 2>/dev/null")" in
             *1.1.1.1*|*8.8.8.8*) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "clearnet nameserver present" ;;
             *127.0.0.1*)         it_pass "tari DNS sinkholed — no clearnet resolver (#162)" ;;

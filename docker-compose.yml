@@ -68,6 +68,9 @@ services:
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
       - MONERO_PRUNE=${MONERO_PRUNE}
+      # Optional clearnet initial sync (#183): default off. When true the entrypoint strips the Tor
+      # P2P proxy from the rendered config so IBD runs over clearnet (tx broadcast stays on Tor).
+      - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
       - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
       # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
@@ -127,6 +130,10 @@ services:
       - 127.0.0.1
     environment:
       - WAIT_FOR_TOR=1
+      # Optional clearnet initial sync (#183): rendered into config.toml host-side by pithead, not
+      # read by the container. Surfaced here so a flag change recreates tari → it re-reads the
+      # freshly-rendered config.toml (a bind-mount content change alone won't trigger a recreate).
+      - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
     volumes:
       - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config

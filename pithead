@@ -149,6 +149,8 @@ stack_up() {
         error "Stack failed to start — see the error above."
     fi
     log "Stack started successfully!"
+    # Remind the operator at start-time if a node is coming up on clearnet (#183).
+    print_clearnet_banner
     announce_dashboard_url
 }
 
@@ -195,6 +197,29 @@ stack_upgrade() {
         PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
     fi
     log "Stack upgraded."
+}
+
+# True when a clearnet_initial_sync flag is on in .env (#183) — i.e. a daemon is (or will be)
+# syncing over clearnet with its IP exposed. Read-only; safe to call from status/doctor/up.
+clearnet_sync_active() {
+    [ "$(env_get MONERO_CLEARNET_SYNC 2>/dev/null)" = "true" ] \
+        || [ "$(env_get TARI_CLEARNET_SYNC 2>/dev/null)" = "true" ]
+}
+
+# Loud, persistent CLEARNET-SYNC banner (#183). Names exactly which daemon(s) are on clearnet so
+# the operator can never forget a node is exposed. Prints nothing when both flags are off.
+print_clearnet_banner() {
+    local who=""
+    [ "$(env_get MONERO_CLEARNET_SYNC 2>/dev/null)" = "true" ] && who="Monero"
+    [ "$(env_get TARI_CLEARNET_SYNC 2>/dev/null)" = "true" ] && who="${who:+$who + }Tari"
+    [ -n "$who" ] || return 0
+    echo -e "${C_YELLOW}========================================================================${C_RESET}" >&2
+    echo -e "${C_YELLOW}[!] CLEARNET INITIAL SYNC ACTIVE — node IP exposed (#183)${C_RESET}" >&2
+    echo "    $who P2P is running over CLEARNET to sync faster, so this host's IP is" >&2
+    echo "    visible to that P2P network. Monero tx-broadcast stays on Tor; wallets are" >&2
+    echo "    never exposed. Once synced, set 'clearnet_initial_sync: false' (per daemon)" >&2
+    echo "    in config.json and run './pithead apply' to return to Tor-only." >&2
+    echo -e "${C_YELLOW}========================================================================${C_RESET}" >&2
 }
 
 # Show the compose table, then health-check every service we expect to be running and warn
@@ -282,6 +307,9 @@ stack_status() {
     done
 
     echo ""
+    # A clearnet initial sync (#183) is a privacy-relevant state, not a fault — surface it
+    # prominently every time the operator checks status, separate from the service verdict.
+    print_clearnet_banner
     if [ "$problems" -eq 0 ]; then
         log "All expected services are up."
     else
@@ -425,6 +453,16 @@ doctor() {
     echo ""
     echo "Network:"
     check_stratum_exposure doctor
+    # Clearnet initial sync (#183): a deliberate, privacy-relevant opt-in. Warn whenever it's on so
+    # an operator who forgot to switch back after syncing is reminded their node IP is exposed.
+    if [ -f "$ENV_FILE" ] && clearnet_sync_active; then
+        local _cn=""
+        [ "$(env_get MONERO_CLEARNET_SYNC)" = "true" ] && _cn="Monero"
+        [ "$(env_get TARI_CLEARNET_SYNC)" = "true" ] && _cn="${_cn:+$_cn + }Tari"
+        dr_warn "CLEARNET initial sync is ON for $_cn (#183) — P2P runs over clearnet and this host's IP is exposed to that network (Monero tx-broadcast still on Tor). Once synced, set clearnet_initial_sync=false and run 'pithead apply' to return to Tor-only."
+    else
+        dr_ok "No clearnet initial sync active — all node P2P is Tor-only (#183)."
+    fi
 
     # --- Disk: free space per underlying filesystem ---
     echo ""
@@ -836,6 +874,16 @@ env_get_file() {
 }
 
 env_get() { env_get_file "$ENV_FILE" "$1"; }
+
+# Normalize a config truthy value to the literal "true"/"false". Accepts 1/true/yes/on
+# (case-insensitive) as true; everything else (incl. empty/absent) is false. Matches the
+# dashboard's MONERO_PRUNE parsing so config booleans read the same on both sides (#183).
+normalize_bool() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        true|1|yes|on) printf 'true' ;;
+        *)             printf 'false' ;;
+    esac
+}
 
 # Keys whose value differs between two env files (added, removed, or changed), one per line.
 env_changed_keys() {
@@ -1589,6 +1637,16 @@ render_env() {
     prune_bool=$(jq -r 'if .monero.prune != null then .monero.prune else true end' "$CONFIG_FILE")
     if [ "$prune_bool" == "true" ]; then prune=1; else prune=0; fi
 
+    # Optional clearnet initial sync (#183). DEFAULT OFF (privacy-first). When on for a daemon, its
+    # initial blockchain download runs over CLEARNET (fast) instead of Tor — briefly exposing this
+    # host's IP to that P2P network. Per-component, since Monero and Tari sync independently. The
+    # `// false` is safe for a false-default bool (jq's // treats a literal false as the default,
+    # which is what we want); normalize_bool then accepts 1/true/yes/on. Monero keeps tx-proxy=tor
+    # the whole time. Flip back to false + `apply` once synced to return all P2P to Tor.
+    local monero_clearnet tari_clearnet
+    monero_clearnet=$(normalize_bool "$(jq -r '.monero.clearnet_initial_sync // false' "$CONFIG_FILE")")
+    tari_clearnet=$(normalize_bool "$(jq -r '.tari.clearnet_initial_sync // false' "$CONFIG_FILE")")
+
     # Block-verification threads — hardware-dependent, so derive from THIS host's core count
     # rather than hardcoding (more cores = faster initial-sync verification). Reserve 2 cores
     # and cap at 8 (diminishing returns past that). Override with monero.prep_blocks_threads.
@@ -1728,6 +1786,8 @@ PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 PROXY_DONATE_LEVEL=$DONATE_LEVEL
 MONERO_PRUNE=$prune
+MONERO_CLEARNET_SYNC=$monero_clearnet
+TARI_CLEARNET_SYNC=$tari_clearnet
 MONERO_PREP_THREADS=$prep_threads
 MONERO_RPC_BIND=$rpc_bind
 MONERO_NODE_HOST=$mono_host
@@ -1755,6 +1815,23 @@ inject_service_configs() {
     # Rebase the Tor control/SOCKS IPs onto the configured subnet prefix (#180): a no-op at the
     # default 172.28.0, rewrites the .25 Tor IP when network.subnet has been moved.
     safe_sed "s/172\.28\.0/$NETWORK_PREFIX/g" build/tari/config.toml
+
+    # Optional clearnet initial sync (#183). DEFAULT OFF. When tari.clearnet_initial_sync is on,
+    # render the base node to bootstrap over CLEARNET instead of Tor so its (large) chain syncs at
+    # full speed. Tari's transport is all-or-nothing, so this is a bigger swap than Monero's:
+    #   - transport type tor → tcp (use the [transport.tcp] listener already in the template).
+    #   - re-enable the DNS seed: the hardcoded peer_seeds are ONION-only and unreachable without
+    #     Tor, so a TCP node needs seeds.tari.com to discover clearnet peers (this is the one
+    #     clearnet DNS lookup we suppressed in #162 — expected only during the clearnet window).
+    #   - stop advertising the onion public_addresses (we're not reachable over Tor right now).
+    # Node IP is briefly visible to the Tari P2P network. Flip the flag back to false + `apply`
+    # once synced to return to Tor-only.
+    if [ "$(env_get TARI_CLEARNET_SYNC)" = "true" ]; then
+        warn "Tari: CLEARNET initial sync is ON (#183) — rendering TCP transport + DNS seed; node IP is exposed to the Tari P2P network until you disable it."
+        safe_sed 's/^type = "tor"/type = "tcp"/' build/tari/config.toml
+        safe_sed 's/^dns_seeds = \[\]/dns_seeds = ["seeds.tari.com"]/' build/tari/config.toml
+        safe_sed 's#^public_addresses = .*#public_addresses = []#' build/tari/config.toml
+    fi
 }
 
 # sha256 of stdin as lowercase hex — portable across the sha256sum / shasum split.
@@ -2161,6 +2238,20 @@ describe_change() {
             msg="Dashboard hostname: $old → $new." ;;
         MONERO_PREP_THREADS)
             msg="Monero block-prep threads: $old → $new." ;;
+        MONERO_CLEARNET_SYNC)
+            flag=DEST
+            if [ "$new" == "true" ]; then
+                msg="⚠ Monero CLEARNET initial sync ENABLED (#183) — monerod P2P will run over CLEARNET (this host's IP becomes visible to the Monero P2P network) so the chain syncs fast. Transaction broadcast STAYS on Tor; wallets are never exposed. Set monero.clearnet_initial_sync=false and re-apply once synced to return to Tor-only. monerod is recreated."
+            else
+                msg="Monero clearnet sync DISABLED (#183) — monerod P2P returns to Tor-only. monerod is recreated."
+            fi ;;
+        TARI_CLEARNET_SYNC)
+            flag=DEST
+            if [ "$new" == "true" ]; then
+                msg="⚠ Tari CLEARNET initial sync ENABLED (#183) — the Tari base node will sync over CLEARNET (TCP transport + seeds.tari.com DNS seed; this host's IP becomes visible to the Tari P2P network) so its large chain syncs fast. Set tari.clearnet_initial_sync=false and re-apply once synced to return to Tor-only. tari is recreated."
+            else
+                msg="Tari clearnet sync DISABLED (#183) — the Tari base node returns to Tor-only transport. tari is recreated."
+            fi ;;
         *)
             msg="$key: $old → $new." ;;
     esac
