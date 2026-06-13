@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 500 dashboard unit tests · 12 contract tests · 31 frontend
-tests · 39 `pithead` shell sections · 16 harness self-test sections ·
+tests · 40 `pithead` shell sections · 16 harness self-test sections ·
 9 live config scenarios (17 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 39 `pithead` shell sections · 16 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 500 |
 | 1 — Unit | frontend (node --test) | 31 |
-| 1 — Unit | `pithead` shell suite | 39 sections |
+| 1 — Unit | `pithead` shell suite | 40 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -610,7 +610,7 @@ tests · 39 `pithead` shell sections · 16 harness self-test sections ·
 - bandBorderWidth: zero-height segments get no border, real ones keep full width
 - uptimeCell: online shows uptime, offline shows DOWN
 
-### `pithead` shell suite (tests/stack/run.sh) — 39 sections
+### `pithead` shell suite (tests/stack/run.sh) — 40 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -620,6 +620,7 @@ tests · 39 `pithead` shell sections · 16 harness self-test sections ·
 - unit: is_valid_host (#130)
 - unit: describe_change
 - unit: clearnet initial sync helpers (#183)
+- unit: clock_sync_status (mining is time-sensitive)
 - unit: dashboard auth (#8)
 - unit: generate_caddyfile scheme (#140)
 - unit: host detection (#140)
@@ -794,5 +795,5 @@ tests · 39 `pithead` shell sections · 16 harness self-test sections ·
 
 ---
 
-_Grand total: **613** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **614** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

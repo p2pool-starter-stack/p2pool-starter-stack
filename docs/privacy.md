@@ -147,7 +147,7 @@ you can enable either, both, or neither.
 
 | | Tor-only (default) | Clearnet initial sync (opt-in) |
 |---|---|---|
-| **Monero** P2P | over Tor (`proxy=172.28.0.25:9050`) | **direct to clearnet seed nodes** (proxy line dropped), `out-peers` lowered 48 → 16 |
+| **Monero** P2P | over Tor (`proxy=172.28.0.25:9050`) | **direct to clearnet seed nodes** (proxy line dropped), `out-peers` 48 → **32** + P2Pool v4.16's recommended **priority nodes** (`p2pmd.xmrvsbeast.com`, `nodes.hashvault.pro`) for fast, reliable sync |
 | **Monero** tx broadcast | over Tor (`tx-proxy=`) | **still over Tor** — unchanged |
 | **Tari** transport | Tor (`type = "tor"`) | **TCP** (`type = "tcp"`) |
 | **Tari** seeds | onion `peer_seeds`, `dns_seeds = []` | **`dns_seeds = ["seeds.tari.com"]`** (onion seeds are unreachable without Tor), onion `public_addresses` dropped |
@@ -155,8 +155,11 @@ you can enable either, both, or neither.
 ### The privacy trade-off (threat model)
 
 **What is exposed while a flag is on:** your host's **IP address**, to the P2P network of the enabled
-chain — i.e. "this IP is running a Monero/Tari node." For Tari, one **DNS lookup** of `seeds.tari.com`
-also goes to the configured resolvers (`1.1.1.1` / `8.8.8.8` / `9.9.9.9`) to discover clearnet peers.
+chain — i.e. "this IP is running a Monero/Tari node." A few **DNS lookups** also happen over clearnet
+during the window: for Monero, the two P2Pool-recommended priority-node hostnames
+(`p2pmd.xmrvsbeast.com`, `nodes.hashvault.pro`); for Tari, `seeds.tari.com` (to the configured
+resolvers `1.1.1.1` / `8.8.8.8` / `9.9.9.9`) to discover clearnet peers. This is the same exposure as
+any ordinary clearnet node — which is exactly what this window temporarily is.
 
 **What is *not* exposed:**
 

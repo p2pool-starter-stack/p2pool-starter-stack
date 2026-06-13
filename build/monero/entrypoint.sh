@@ -9,20 +9,33 @@ CONFIG_PATH="${CONFIG_PATH:-/root/.bitmonero/bitmonero.conf}"
 # sync already completed — come up on Tor." Default matches the compose mount; overridable for tests.
 CLEARNET_MARKER="${CLEARNET_MARKER:-/clearnet-state/monero.synced}"
 
-# Optional clearnet initial sync (#183). DEFAULT OFF. Transforms an already-rendered config:
-#   - strip the single `proxy=` line that forces ALL P2P over Tor → monerod then dials its
-#     compiled-in clearnet seed nodes directly, so the initial block download runs at clearnet
-#     speed instead of crawling over bandwidth-capped Tor circuits.
-#   - lower out-peers from the Tor-tuned 48 to a clearnet-friendly 16 (48 was a circuit-bandwidth
-#     workaround; on clearnet it over-connects and can stress home routers).
-# `tx-proxy=tor,...` is intentionally LEFT IN PLACE, so transaction broadcast stays on Tor
-# (tx-origin privacy preserved) — and there is no tx broadcast during a sync anyway. The only
-# exposure is node-existence: this host's IP is briefly visible to the Monero P2P network.
-# Kept as a function (portable sed, no in-place -e) so the shell test suite can exercise it
-# directly without envsubst or a running monerod.
+# Optional clearnet initial sync (#183). DEFAULT OFF. For the fast clearnet sync window only, this
+# makes monerod match the connectivity P2Pool v4.16 recommends for a clearnet node:
+#   - strip the single `proxy=` line that forces ALL P2P over Tor → monerod dials its compiled-in
+#     clearnet seed nodes (and the priority nodes below) directly, at clearnet speed instead of
+#     crawling over bandwidth-capped Tor circuits.
+#   - out-peers → 32 (P2Pool v4.16's clearnet recommendation; the Tor render uses 48, a circuit-
+#     bandwidth workaround). in-peers stays 64 — the open-files cap, which is the rec we always honor.
+#   - add P2Pool's recommended priority nodes for guaranteed-good peers + block templates. These are
+#     CLEARNET hostnames, so they're added ONLY here: in Tor mode their resolution would leak a
+#     clearnet DNS lookup tied to this host's IP (#161). Connections still arrive over clearnet,
+#     which is exactly the exposure this opt-in window already accepts.
+# `tx-proxy=tor,...` is LEFT IN PLACE so transaction broadcast stays on Tor (tx-origin privacy
+# preserved) — and there's no tx broadcast during a sync anyway. The DNS blocklist / DNS
+# checkpointing the rec also lists are MINING-time protections (bad-node bans, selfish-mining
+# defense) that don't apply to a download-only sync; in Tor mining mode they'd leak DNS (#161), so
+# we keep them off and rely on monerod's compiled-in checkpoints. The Tor render (the untouched
+# template) restores every private default the moment the dashboard flips back.
+# Kept as a function (portable sed, no in-place -e) so the shell test suite can exercise it directly.
 apply_clearnet_initial_sync() {
     local cfg="$1" tmp="$1.tmp"
-    sed -e '/^proxy=/d' -e 's/^out-peers=.*/out-peers=16/' "$cfg" > "$tmp" && mv "$tmp" "$cfg"
+    sed -e '/^proxy=/d' -e 's/^out-peers=.*/out-peers=32/' "$cfg" > "$tmp" && mv "$tmp" "$cfg"
+    cat >> "$cfg" <<'PRIONODES'
+
+# P2Pool v4.16 recommended priority nodes (clearnet sync window only — removed when flipped to Tor).
+add-priority-node=p2pmd.xmrvsbeast.com:18080
+add-priority-node=nodes.hashvault.pro:18080
+PRIONODES
 }
 
 # True when monerod should sync over clearnet NOW: the flag is on AND the auto-transition marker is

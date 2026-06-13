@@ -351,6 +351,19 @@ dr_fail() { DR_FAIL=$((DR_FAIL + 1)); printf '  %b✗ FAIL%b %s\n'   "$C_RED"   
 # Neutral note for context lines that aren't pass/fail (e.g. a skipped Linux-only check).
 dr_info() { printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
 
+# Best-effort system-clock sync status. Mining is time-sensitive — P2Pool/Monero stamp shares and
+# blocks, so a skewed clock gets shares/blocks rejected ("strongly recommended to synchronize your
+# system clock before you start mining"). Prints: synced | unsynced | unknown. Pure given the
+# timedatectl output, so a stubbed timedatectl makes the classification unit-testable.
+clock_sync_status() {
+    command -v timedatectl >/dev/null 2>&1 || { echo unknown; return; }
+    case "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" in
+        yes) echo synced ;;
+        no)  echo unsynced ;;
+        *)   echo unknown ;;
+    esac
+}
+
 # True if Docker is set to start at boot (docker.service OR docker.socket enabled). systemd only —
 # the caller checks that systemctl exists. Checking docker.socket too covers socket-activated
 # installs where docker.service is "static" but Docker still comes up at boot.
@@ -429,6 +442,13 @@ doctor() {
     else
         dr_warn "AVX2 not detected — mining performance will be poor (performance only, not fatal)."
     fi
+
+    # --- Time sync (mining is time-sensitive; P2Pool strongly recommends NTP before mining) ---
+    case "$(clock_sync_status)" in
+        synced)   dr_ok "System clock is NTP-synchronized." ;;
+        unsynced) dr_warn "System clock is NOT NTP-synchronized — clock skew gets shares/blocks rejected. Enable time sync: 'sudo timedatectl set-ntp true' (or run chrony/systemd-timesyncd/ntpd)." ;;
+        *)        dr_info "Could not verify system-clock sync (no timedatectl) — make sure NTP is running; mining is time-sensitive." ;;
+    esac
 
     # --- Memory (Linux only) ---
     echo ""
