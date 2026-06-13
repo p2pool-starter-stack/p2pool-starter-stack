@@ -239,6 +239,17 @@ _pred_status_ok() { pithead status >/dev/null 2>&1; }
 # Predicate: monerod itself reports caught up (authoritative; see monero_caught_up).
 _pred_monero_synced() { monero_caught_up; }
 
+# Predicate: the dashboard's monero sync PANEL has settled to "done" — distinct from
+# _pred_monero_synced, which reads monerod's RPC directly. After a scenario's apply recreates the
+# dashboard, the panel starts at "loading" and only flips to "done" once the first monerod poll lands,
+# so we poll it rather than reading cold. A single-shot read raced that first poll and spuriously
+# failed one scenario during the v1.0.0 release gate; a genuinely stuck panel (the #180 regression)
+# never settles, so a bounded wait still catches it.
+_pred_monero_panel_done() {
+    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+    [ "$(jq_get "$st" '.sync.monero.state')" = "done" ]
+}
+
 # Predicate: the sync gate has released the miner — at least one worker is online on the proxy.
 # (proxy_workers is the reliable signal; stratum.conns can read 0 on a healthy, mining box.)
 _pred_miner_running() {

@@ -153,6 +153,15 @@ FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"loading"}}}'
 if _pred_tari_synced; then it_fail "_pred_tari_synced false when tari loading" "passed on loading"; else it_pass "_pred_tari_synced false when tari loading"; fi
 FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
 
+echo "== _pred_monero_panel_done: gates on .sync.monero.state =="
+# rx is stubbed to FIXTURE above (sync.monero.state == "done").
+if _pred_monero_panel_done; then it_pass "_pred_monero_panel_done true when monero done"; else it_fail "_pred_monero_panel_done true when monero done" "returned non-zero on done"; fi
+# A still-"loading" panel must hold the settle wait — the v1.0.0 release-gate flake: a cold single-shot
+# read raced the dashboard's first poll after a restart and spuriously failed a synced node.
+FIXTURE='{"sync":{"monero":{"state":"loading"},"tari":{"state":"done"}}}'
+if _pred_monero_panel_done; then it_fail "_pred_monero_panel_done false when monero loading" "passed on loading"; else it_pass "_pred_monero_panel_done false when monero loading"; fi
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
+
 echo "== _pred_pool_ready: gates on .pool.type matching expected =="
 if _pred_pool_ready "Main"; then it_pass "_pred_pool_ready true when pool matches"; else it_fail "_pred_pool_ready true when pool matches" "returned non-zero on Main==Main"; fi
 if _pred_pool_ready "Mini"; then it_fail "_pred_pool_ready false when pool differs" "passed on Main!=Mini"; else it_pass "_pred_pool_ready false when pool differs"; fi
