@@ -405,31 +405,32 @@ assert_running_state() {
             "$(rx "docker exec monerod grep -c '^disable-dns-checkpoints=1' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
         assert_eq "monerod has no clearnet priority-node hostnames (#161)" \
             "$(rx "docker exec monerod grep -cE 'xmrvsbeast.com|hashvault.pro' /root/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
-        # Clearnet initial sync (#183): assert the RENDERED in-container configs, both states. The flag
-        # must propagate to .env, and the live config must match: off → monerod keeps the Tor P2P
-        # proxy (out-peers 48) and Tari stays `type = "tor"`; on → the proxy line is gone (out-peers
-        # 16) while tx-proxy stays on Tor, and Tari flips to `type = "tcp"` with the DNS seed back.
+        # Clearnet initial sync (#183) + auto-transition (#234). The flag propagates to .env; pithead
+        # ALWAYS renders the canonical Tor config (the clearnet transform is applied per-start
+        # in-container, gated on the flag AND the dashboard's marker). The dashboard switches a
+        # clearnet node back to Tor once it's synced — so in the synced steady state asserted here,
+        # monerod always carries the Tor P2P proxy and Tari's canonical config stays `type = "tor"`.
         assert_eq "MONERO_CLEARNET_SYNC matches config (#183)" "$(env_on_box MONERO_CLEARNET_SYNC)" "$monero_clearnet"
         assert_eq "TARI_CLEARNET_SYNC matches config (#183)"   "$(env_on_box TARI_CLEARNET_SYNC)"   "$tari_clearnet"
-        if [ "$monero_clearnet" = "true" ]; then
-            assert_eq "monerod P2P proxy stripped for clearnet IBD (#183)" \
-                "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
-            assert_num_ge "monerod out-peers lowered to 16 for clearnet (#183)" \
-                "$(rx "docker exec monerod grep -c '^out-peers=16' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
-            assert_num_ge "monerod tx broadcast stays on Tor during clearnet IBD (#183)" \
-                "$(rx "docker exec monerod grep -c '^tx-proxy=tor' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
-        else
-            assert_num_ge "monerod P2P proxy present (Tor-only default) (#183)" \
-                "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
-        fi
-        if [ "$tari_clearnet" = "true" ]; then
-            assert_num_ge "tari transport flipped to TCP for clearnet (#183)" \
-                "$(rx "docker exec tari grep -c '^type = \"tcp\"' /var/tari/config/config.toml 2>/dev/null")" 1
-            assert_num_ge "tari DNS seed re-enabled for clearnet (#183)" \
-                "$(rx "docker exec tari grep -c 'seeds.tari.com' /var/tari/config/config.toml 2>/dev/null")" 1
-        else
-            assert_num_ge "tari transport is Tor (Tor-only default) (#183)" \
-                "$(rx "docker exec tari grep -c '^type = \"tor\"' /var/tari/config/config.toml 2>/dev/null")" 1
+        assert_num_ge "tari canonical config is always Tor (#234)" \
+            "$(rx "docker exec tari grep -c '^type = \"tor\"' /var/tari/config/config.toml 2>/dev/null")" 1
+        assert_num_ge "monerod runs Tor-only in steady state — proxy present (#183/#234)" \
+            "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+        # The clearnet scenario enables the flag on an already-synced box, so the supervisor must
+        # detect synced, drop the per-chain marker, and flip the node back to Tor. Poll for the marker
+        # as end-to-end proof the auto-transition fired.
+        if [ "$monero_clearnet" = "true" ] || [ "$tari_clearnet" = "true" ]; then
+            local csdir; csdir="$(env_on_box CLEARNET_STATE_DIR)"
+            if [ "$monero_clearnet" = "true" ]; then
+                if wait_for 150 10 "monero clearnet→Tor transition (#234)" rx "test -f '$csdir/monero.synced'"
+                then it_pass "monero auto-transitioned clearnet→Tor (#234)"
+                else it_fail "monero auto-transitioned clearnet→Tor (#234)" "marker not written within 150s"; fi
+            fi
+            if [ "$tari_clearnet" = "true" ]; then
+                if wait_for 150 10 "tari clearnet→Tor transition (#234)" rx "test -f '$csdir/tari.synced'"
+                then it_pass "tari auto-transitioned clearnet→Tor (#234)"
+                else it_fail "tari auto-transitioned clearnet→Tor (#234)" "marker not written within 150s"; fi
+            fi
         fi
         case "$(rx "docker inspect tari --format '{{.HostConfig.Dns}}' 2>/dev/null")" in
             *1.1.1.1*|*8.8.8.8*) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "clearnet nameserver present" ;;

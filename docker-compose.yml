@@ -78,6 +78,9 @@ services:
       - ${MONERO_DATA_DIR}:/root/.bitmonero
       - /dev/hugepages:/dev/hugepages
       - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
+      # Read-only view of the shared clearnet-state dir (#234): the entrypoint reads the
+      # dashboard-written "sync complete" marker to decide clearnet-vs-Tor at startup.
+      - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state:ro
     ports:
       # Default 127.0.0.1 = host-local only (no LAN exposure); p2pool reaches monerod over
       # the internal Docker network regardless. Set monero.rpc_lan_access:true in config.json
@@ -130,13 +133,20 @@ services:
       - 127.0.0.1
     environment:
       - WAIT_FOR_TOR=1
-      # Optional clearnet initial sync (#183): rendered into config.toml host-side by pithead, not
-      # read by the container. Surfaced here so a flag change recreates tari → it re-reads the
-      # freshly-rendered config.toml (a bind-mount content change alone won't trigger a recreate).
+      # Optional clearnet initial sync (#183/#234): the wrapper entrypoint reads this flag and the
+      # shared marker to decide clearnet-vs-Tor per start. Surfaced here so a flag change recreates
+      # tari (a bind-mount content change alone won't trigger a recreate).
       - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
     volumes:
       - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config
+      # Read-only view of the shared clearnet-state dir (#234): the wrapper entrypoint reads the
+      # dashboard-written "sync complete" marker to decide clearnet-vs-Tor at startup.
+      - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state:ro
+    # Pithead wrapper (#183/#234): renders the runtime config (clearnet-vs-Tor, marker-gated) from
+    # pithead's canonical Tor config, then chains to the upstream start_tari_app.sh unchanged.
+    entrypoint:
+      - /var/tari/config/entrypoint.sh
     command:
       - --disable-splash-screen
       - --non-interactive
@@ -325,6 +335,10 @@ services:
       volumes:
         - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
         - ${DASHBOARD_DATA_DIR}:/data
+        # Read-WRITE: the supervisor drops the per-chain "clearnet sync complete" marker here once a
+        # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
+        # the same dir read-only. Holds only non-secret state markers.
+        - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
       environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
@@ -339,6 +353,11 @@ services:
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       # Whether the local node prunes — shown as Pruned/Full in the Monero panel (Issue #32).
       - MONERO_PRUNE=${MONERO_PRUNE:-true}
+      # Clearnet initial sync (#183/#234): the supervisor watches these flags and, once a clearnet
+      # node is synced, drops a marker in /clearnet-state and restarts it back onto Tor.
+      - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
+      - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
+      - CLEARNET_STATE_DIR=/clearnet-state
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
       - XVB_ENABLED=${XVB_ENABLED}

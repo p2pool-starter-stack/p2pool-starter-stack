@@ -119,8 +119,9 @@ tour of both states.
 > [Reusing an existing node](configuration.md#reusing-an-existing-node).
 
 > **Sync is crawling over Tor?** The default routes the first sync over Tor for privacy, which is
-> slow. You can opt into a faster **clearnet initial sync** for Monero and/or Tari, then switch back
-> to Tor once synced — it's default-off and privacy-relevant, so read the trade-off first:
+> slow. You can opt into a faster **clearnet initial sync** for Monero and/or Tari; each node then
+> **switches back to Tor automatically once it's synced**. It's default-off and privacy-relevant, so
+> read the trade-off first:
 > [Optional clearnet initial sync](privacy.md#optional-clearnet-initial-sync-off-by-default).
 
 ---

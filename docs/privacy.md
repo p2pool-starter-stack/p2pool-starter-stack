@@ -169,25 +169,37 @@ That's the same exposure as running any ordinary (non-Tor) full node, scoped to 
 a privacy-first deployment it's still a real disclosure, which is why it is **off by default** and
 must be **explicitly opted into**.
 
+### It switches back to Tor automatically (#234)
+
+You don't have to babysit it. The dashboard already tracks each chain's sync state; the **first time
+a clearnet node reports fully synced, it switches that node back to Tor for you** — it writes a
+persistent "sync complete" marker and restarts the daemon, which comes back up Tor-only. From then
+on the node stays on Tor across restarts, `apply`, and reboots (the marker, not the flag, is the
+source of truth — so a restart can never silently re-expose a synced node). Monero and Tari transition
+independently, each as soon as *it* finishes.
+
+You can leave `clearnet_initial_sync: true` in `config.json`; it's effectively spent once the sync
+completes. (To deliberately re-sync over clearnet later — e.g. after wiping a chain — toggle the flag
+off and on again with `./pithead apply`, which re-arms it.)
+
 ### It is loud and always-visible
 
-You can't enable this by accident or forget it's on:
+You can't enable this by accident or miss that it's active:
 
 - **`./pithead apply`** prints a `⚠`-flagged, disruptive-change confirmation describing exactly what
   becomes exposed before it recreates the daemon.
 - **`./pithead status`** and **`./pithead up`** print a prominent **"CLEARNET INITIAL SYNC ACTIVE —
-  node IP exposed"** banner the whole time a flag is on.
-- **`./pithead doctor`** raises a `⚠ WARN` (and an `✓ OK "all node P2P is Tor-only"` when off).
-- The **monerod container logs** a matching warning on every start.
+  node IP exposed"** banner the whole time a node is actually on clearnet — and it **clears by itself**
+  once the auto-transition completes.
+- **`./pithead doctor`** raises a `⚠ WARN` while a node is exposed and flips back to a green
+  `✓ OK "all node P2P is Tor-only"` once it's switched back.
+- The **dashboard** shows the clearnet state live, and the **daemon container logs** a matching
+  warning on every start until the transition completes.
 
-### Switching back to Tor
-
-Once the chain reports fully synced (watch the dashboard or `./pithead logs monerod` / `logs tari`),
-**set the flag(s) back to `false` and run `./pithead apply`.** That re-renders the Tor configs and
-recreates the daemon — all P2P returns to Tor, and `doctor` flips back to the green "Tor-only" check.
-The switch is **manual and auditable by design** (a privacy-first project shouldn't silently manage
-your exposure); the persistent banners above exist precisely so a node is never quietly left on
-clearnet. (An automatic "synced → flip back" transition is tracked as a future enhancement.)
+If the automatic switch ever fails (e.g. the dashboard couldn't restart the container), it is
+**fail-safe**: the marker is written before the restart, so any later restart still comes up Tor-only,
+and the supervisor keeps retrying — a node is never silently stranded on clearnet. The banners and
+`doctor` warning stay up until it's genuinely back on Tor.
 
 ---
 
@@ -217,7 +229,7 @@ for a single-purpose appliance. One consequence is worth recording explicitly:
   and/or require a `p2pool.stratum_password` (`pithead doctor` flags public-IP exposure).
 - [ ] Route P2Pool outbound through Tor by editing its compose `command:` (above) if you accept the latency.
 - [ ] Set `xvb.enabled: false` if you don't want any XvB egress.
-- [ ] Leave `monero.clearnet_initial_sync` / `tari.clearnet_initial_sync` **off** (the default) to keep all node P2P on Tor — or, if you used a clearnet sync, switch them back to `false` and `apply` once synced (`pithead doctor` flags it while on).
+- [ ] Leave `monero.clearnet_initial_sync` / `tari.clearnet_initial_sync` **off** (the default) to keep all node P2P on Tor. If you do use a clearnet sync, the dashboard switches each node back to Tor automatically once it's synced — `pithead doctor` flags it while exposed and clears when done.
 - [ ] Run the initial install/build behind a VPN or `torsocks`.
 - [ ] Leave Telegram (#121) and Healthchecks (#79) **off** unless you accept the inherent IP exposure.
 - [ ] Run `pithead doctor` — it surfaces the public-IP exposure check among its diagnostics.

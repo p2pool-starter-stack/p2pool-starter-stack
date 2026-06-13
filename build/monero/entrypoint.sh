@@ -4,6 +4,10 @@ set -e
 # Define paths for configuration management (overridable for testing).
 TEMPLATE_PATH="${TEMPLATE_PATH:-/root/bitmonero.conf.template}"
 CONFIG_PATH="${CONFIG_PATH:-/root/.bitmonero/bitmonero.conf}"
+# Shared, dashboard-writable state dir (#234). The dashboard drops this marker once monerod has
+# finished its clearnet initial sync and restarts the container; seeing it here means "the clearnet
+# sync already completed — come up on Tor." Default matches the compose mount; overridable for tests.
+CLEARNET_MARKER="${CLEARNET_MARKER:-/clearnet-state/monero.synced}"
 
 # Optional clearnet initial sync (#183). DEFAULT OFF. Transforms an already-rendered config:
 #   - strip the single `proxy=` line that forces ALL P2P over Tor → monerod then dials its
@@ -19,6 +23,14 @@ CONFIG_PATH="${CONFIG_PATH:-/root/.bitmonero/bitmonero.conf}"
 apply_clearnet_initial_sync() {
     local cfg="$1" tmp="$1.tmp"
     sed -e '/^proxy=/d' -e 's/^out-peers=.*/out-peers=16/' "$cfg" > "$tmp" && mv "$tmp" "$cfg"
+}
+
+# True when monerod should sync over clearnet NOW: the flag is on AND the auto-transition marker is
+# absent (#234). Once the dashboard marks the clearnet sync complete, this is false and monerod
+# comes back up Tor-only — and stays there across restarts/`apply`, so a node is never silently
+# re-exposed. Kept as a function for direct unit testing.
+clearnet_sync_active() {
+    [ "${MONERO_CLEARNET_SYNC:-false}" = "true" ] && [ ! -f "$CLEARNET_MARKER" ]
 }
 
 # When sourced by the test harness (PITHEAD_TEST_SOURCE=1), expose the functions and stop —
@@ -37,16 +49,17 @@ echo "Initializing Monero configuration from template..."
 envsubst '${MONERO_NODE_USERNAME}${MONERO_NODE_PASSWORD}${MONERO_ONION_ADDRESS}${MONERO_PRUNE}${MONERO_PREP_THREADS}${NETWORK_PREFIX}' < "$TEMPLATE_PATH" > "$CONFIG_PATH"
 
 # Apply the optional clearnet initial-sync transform (#183) and warn loudly while it's active.
-if [ "${MONERO_CLEARNET_SYNC:-false}" = "true" ]; then
+if clearnet_sync_active; then
     echo "=========================================================================="
     echo "WARNING: MONERO CLEARNET INITIAL SYNC IS ACTIVE (#183)"
     echo "  monerod P2P is running over CLEARNET to sync faster — this host's IP is"
     echo "  visible to the Monero P2P network for the sync window. Transaction"
-    echo "  broadcast STAYS on Tor (tx-proxy), and wallets are never exposed."
-    echo "  Set monero.clearnet_initial_sync=false and re-run './pithead apply'"
-    echo "  once synced to return all P2P to Tor."
+    echo "  broadcast STAYS on Tor, and wallets are never exposed. The dashboard"
+    echo "  switches monerod back to Tor automatically once the chain is synced (#234)."
     echo "=========================================================================="
     apply_clearnet_initial_sync "$CONFIG_PATH"
+elif [ "${MONERO_CLEARNET_SYNC:-false}" = "true" ]; then
+    echo "Monero clearnet initial sync already completed (#234) — starting Tor-only."
 fi
 
 echo "Starting Monero Daemon (monerod)..."

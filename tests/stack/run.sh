@@ -189,6 +189,32 @@ assert_contains "monero default: out-peers 48 for Tor (#183)"  "$(cat "$ROOT/bui
 assert_contains "compose passes MONERO_CLEARNET_SYNC to monerod (#183)" "$(cat "$ROOT/docker-compose.yml")" 'MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC'
 assert_contains "compose passes TARI_CLEARNET_SYNC to tari (#183)"      "$(cat "$ROOT/docker-compose.yml")" 'TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC'
 
+# --- Auto-transition (#234): the entrypoints gate clearnet on flag AND the absence of the
+# dashboard-written marker, so a node returns to Tor on its own once synced. ---
+# Monero entrypoint marker gate.
+mono_active() { ( export PITHEAD_TEST_SOURCE=1 MONERO_CLEARNET_SYNC="$1" CLEARNET_MARKER="$2"; source "$ROOT/build/monero/entrypoint.sh"; clearnet_sync_active ); }
+if mono_active true "$SANDBOX/absent-marker"; then ok "monero clearnet ACTIVE when flag on + no marker (#234)"; else bad "monero clearnet active gate (#234)" "expected active"; fi
+: > "$SANDBOX/mono.marker"
+if mono_active true "$SANDBOX/mono.marker"; then bad "monero clearnet inactive once marker present (#234)" "still active"; else ok "monero clearnet INACTIVE once marker present → Tor (#234)"; fi
+if mono_active false "$SANDBOX/absent-marker"; then bad "monero clearnet off when flag off (#234)" "active with flag off"; else ok "monero clearnet OFF when flag off (#234)"; fi
+
+# Tari entrypoint renders a runtime config from the canonical Tor config; transform only when active.
+TARISRC="$SANDBOX/tari-src.toml"; cp "$ROOT/build/tari/config.toml.template" "$TARISRC"
+# shellcheck disable=SC1090
+( export PITHEAD_TEST_SOURCE=1 TARI_CLEARNET_SYNC=true CLEARNET_MARKER="$SANDBOX/absent-marker"; source "$ROOT/build/tari/entrypoint.sh"; render_tari_runtime_config "$TARISRC" "$SANDBOX/tari-rt.toml" )
+assert_contains "tari entrypoint clearnet: TCP transport (#234)"   "$(cat "$SANDBOX/tari-rt.toml")" 'type = "tcp"'
+assert_contains "tari entrypoint clearnet: DNS seed enabled (#234)" "$(cat "$SANDBOX/tari-rt.toml")" 'dns_seeds = ["seeds.tari.com"]'
+: > "$SANDBOX/tari.marker"
+# shellcheck disable=SC1090
+( export PITHEAD_TEST_SOURCE=1 TARI_CLEARNET_SYNC=true CLEARNET_MARKER="$SANDBOX/tari.marker"; source "$ROOT/build/tari/entrypoint.sh"; render_tari_runtime_config "$TARISRC" "$SANDBOX/tari-rt2.toml" )
+assert_contains "tari entrypoint marker→Tor: transport tor (#234)"  "$(cat "$SANDBOX/tari-rt2.toml")" 'type = "tor"'
+assert_contains "tari entrypoint marker→Tor: DNS seeds empty (#234)" "$(cat "$SANDBOX/tari-rt2.toml")" "dns_seeds = []"
+assert_contains "tari entrypoint never mutates the canonical config (#234)" "$(cat "$TARISRC")" 'type = "tor"'
+# Compose wires the shared marker dir into all three: dashboard rw, monerod + tari ro, + the tari
+# wrapper entrypoint that chains to the upstream start_tari_app.sh.
+assert_contains "compose mounts clearnet-state into monerod (#234)" "$(cat "$ROOT/docker-compose.yml")" ':/clearnet-state:ro'
+assert_contains "compose wires the tari wrapper entrypoint (#234)"  "$(cat "$ROOT/docker-compose.yml")" '/var/tari/config/entrypoint.sh'
+
 echo "== unit: dashboard auth (#8) =="
 # Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
 # hash is a secret and must never surface in the change preview; the internal fingerprint stays silent.
@@ -767,18 +793,17 @@ assert_eq "tari clearnet still false"            "$(run_sourced "$V" env_get_fil
 assert_contains "tari stays Tor when only monero is clearnet" "$(cat "$V/build/tari/config.toml")" 'type = "tor"'
 assert_contains "apply preview warns clearnet exposure" "$out" "CLEARNET"
 
-# Tari clearnet ON: transport flips to TCP, the DNS seed is re-enabled, the onion is dropped.
+# Tari clearnet ON: pithead always renders the CANONICAL Tor config — the clearnet transform is
+# applied per-start INSIDE the container (marker-gated, #234), so the host-rendered config.toml
+# stays Tor even with the flag on. That's what lets the node return to Tor on its own after sync
+# without pithead re-rendering clearnet over it.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","clearnet_initial_sync":true}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari clearnet flag propagated true" "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "true"
-assert_contains "tari clearnet: TCP transport"        "$(cat "$V/build/tari/config.toml")" 'type = "tcp"'
-assert_contains "tari clearnet: DNS seed re-enabled"   "$(cat "$V/build/tari/config.toml")" 'dns_seeds = ["seeds.tari.com"]'
-assert_contains "tari clearnet: onion not advertised"  "$(cat "$V/build/tari/config.toml")" "public_addresses = []"
-case "$(grep -E '^public_addresses' "$V/build/tari/config.toml")" in
-    *onion3*) bad "tari clearnet: onion dropped from public_addresses" "still advertised" ;;
-    *)        ok "tari clearnet: onion dropped from public_addresses" ;;
-esac
+assert_contains "tari host-render stays Tor even with flag on (#234)"  "$(cat "$V/build/tari/config.toml")" 'type = "tor"'
+assert_contains "tari host-render keeps DNS seeds empty (#234)"        "$(cat "$V/build/tari/config.toml")" "dns_seeds = []"
+assert_contains "tari host-render still advertises the onion (#234)"   "$(cat "$V/build/tari/config.toml")" "/onion3/"
 
 # Truthy parse consistency (#183): a JSON string "yes" reads as enabled, like normalize_bool/MONERO_PRUNE.
 seed_env

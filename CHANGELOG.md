@@ -24,10 +24,21 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   for the sync window. **Privacy-first by construction:** off by default, a `⚠` disruptive-change
   confirmation on `apply`, a persistent "CLEARNET INITIAL SYNC ACTIVE — node IP exposed" banner in
   `status`/`up`, a `doctor` warning (and a green "Tor-only" check when off), and a matching warning in
-  the monerod container logs — so a node is never silently left on clearnet. Switch back by setting the
-  flag(s) to `false` and running `./pithead apply`. Exposed in `config.advanced.example.json`;
-  documented with a full threat model in `docs/privacy.md`, plus `docs/configuration.md`,
-  `docs/getting-started.md`, and `docs/hardware.md`.
+  the monerod container logs — so a node is never silently left on clearnet. Exposed in
+  `config.advanced.example.json`; documented with a full threat model in `docs/privacy.md`, plus
+  `docs/configuration.md`, `docs/getting-started.md`, and `docs/hardware.md`.
+
+- **Automatic clearnet → Tor switch-back once synced (#234).** The clearnet initial sync (above) no
+  longer needs a manual flip back. The dashboard watches each chain's sync state and, the first time
+  a clearnet node reports fully synced, writes a persistent marker and restarts the daemon — which
+  comes back up **Tor-only** and stays there across restarts, `apply`, and reboots (the marker, not
+  the flag, is the source of truth, so a synced node can never be silently re-exposed). Monero and
+  Tari transition independently. Fail-safe: the marker is persisted before the restart and a failed
+  switch is retried, never leaving a node stranded on clearnet; the `status`/`up` banner and `doctor`
+  warning clear themselves once a node is genuinely back on Tor. Re-arm a fresh clearnet sync by
+  toggling the flag off and on. Mechanism: a shared `clearnet-state` dir (dashboard rw, monerod/tari
+  ro) drives the daemon entrypoints' Tor-vs-clearnet decision; pithead always renders the canonical
+  Tor config. Closes #234.
 
 - **Dashboard "new release available" badge (#224).** The dashboard periodically checks GitHub for
   the latest Pithead release and, if it's newer than the running version, shows a header badge next to

@@ -15,11 +15,15 @@ from mining_dashboard.config.config import (
     GITHUB_RELEASES_API,
     UPDATE_CHECK_INTERVAL,
     XVB_TOR_PROXY,
+    MONERO_CLEARNET_SYNC,
+    TARI_CLEARNET_SYNC,
+    CLEARNET_STATE_DIR,
 )
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.docker.docker_control import DockerControl
+from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.collector.pools import get_p2pool_stats, get_network_stats, get_stratum_stats, get_tari_stats
 from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.system import get_disk_usage, get_hugepages_status, get_memory_usage, get_load_average, get_cpu_usage
@@ -340,6 +344,15 @@ class DataService:
         self.docker_control = DockerControl()
         self.monero_health = NodeHealthMonitor()
         self.tari_health = NodeHealthMonitor()
+        # Auto-transition a clearnet initial-sync node back to Tor once it's synced (#234). Reuses
+        # the same docker control proxy as the #31 failover (start/stop only). on_transition surfaces
+        # the event into the snapshot so the UI/status can reflect "switched back to Tor".
+        self.clearnet_supervisor = ClearnetSyncSupervisor(
+            CLEARNET_STATE_DIR, self.docker_control,
+            on_transition=self._on_clearnet_transition,
+        )
+        # Per-chain "currently exposed on clearnet" flags, surfaced in the snapshot for the UI/banner.
+        self.clearnet_sync_state = {"monero": False, "tari": False, "active": False}
         # True while we've stopped the proxy to reject workers. Persisted in the snapshot so
         # a dashboard restart mid-outage still readmits workers once the node recovers.
         self.workers_rejected = False
@@ -442,6 +455,13 @@ class DataService:
                 f"until synced."
             )
 
+    def _on_clearnet_transition(self, name, ok):
+        """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
+        if ok:
+            logger.info("%s returned to Tor after its clearnet initial sync (#234).", name)
+        else:
+            logger.warning("%s clearnet→Tor switch did not complete this cycle — will retry (#234).", name)
+
     async def run(self):
         """
         Main execution loop: Aggregates statistics from local collectors and external APIs.
@@ -528,6 +548,20 @@ class DataService:
                     monero_synced = monero_sync.get('reachable', True) and not monero_sync.get('is_syncing', False)
                     tari_synced = tari_sync.get('reachable', True) and not tari_sync.get('is_syncing', False)
 
+                    # Auto-transition a clearnet initial-sync node back to Tor once it's synced
+                    # (#234). Reuses the synced signals above; the supervisor writes a persistent
+                    # marker + restarts the daemon (which then comes up Tor-only). Returns whether
+                    # each chain is still EXPOSED on clearnet, for the UI banner.
+                    monero_clearnet_exposed = await self.clearnet_supervisor.maybe_transition(
+                        "monero", "monerod", MONERO_CLEARNET_SYNC, monero_synced)
+                    tari_clearnet_exposed = await self.clearnet_supervisor.maybe_transition(
+                        "tari", "tari", TARI_CLEARNET_SYNC, tari_synced)
+                    self.clearnet_sync_state = {
+                        "monero": monero_clearnet_exposed,
+                        "tari": tari_clearnet_exposed,
+                        "active": monero_clearnet_exposed or tari_clearnet_exposed,
+                    }
+
                     # Determine effective Tari status for UI display
                     tari_active = tari_stats.get('active', False)
                     tari_status_str = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
@@ -594,6 +628,7 @@ class DataService:
                         "workers_rejected": self.workers_rejected,
                         "miner_released": self.miner_released,
                         "miner_held": self.miner_held,
+                        "clearnet_sync": self.clearnet_sync_state,
                         "system": {
                             "disk": get_disk_usage(),
                             "hugepages": get_hugepages_status(),
