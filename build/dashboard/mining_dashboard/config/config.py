@@ -164,6 +164,18 @@ MONERO_NODE_PASSWORD = os.environ.get("MONERO_NODE_PASSWORD", "")
 # pruned/full label is purely display, #32).
 MONERO_PRUNE = os.environ.get("MONERO_PRUNE", "true").strip().lower() in ("true", "1", "yes", "on")
 
+# --- Optional clearnet initial sync auto-transition (#183/#234) ---
+# When monero.clearnet_initial_sync / tari.clearnet_initial_sync is on, the daemon does its initial
+# block download over clearnet (fast) instead of Tor. The supervisor watches the per-chain "synced"
+# signal the data loop already computes and, the first time a clearnet node reports synced, drops a
+# persistent marker in CLEARNET_STATE_DIR and restarts the container — whose entrypoint, seeing the
+# marker, comes back up Tor-only. Default off. Truthy parsing matches MONERO_PRUNE.
+MONERO_CLEARNET_SYNC = os.environ.get("MONERO_CLEARNET_SYNC", "false").strip().lower() in ("true", "1", "yes", "on")
+TARI_CLEARNET_SYNC = os.environ.get("TARI_CLEARNET_SYNC", "false").strip().lower() in ("true", "1", "yes", "on")
+# Shared, dashboard-writable dir holding the per-chain "<name>.synced" transition markers. Mounted
+# read-only into monerod/tari at the same path. Container default matches the compose mount.
+CLEARNET_STATE_DIR = os.environ.get("CLEARNET_STATE_DIR", "/clearnet-state")
+
 # --- Tari Configuration ---
 # Connection details for the Tari Base Node and Block Explorer
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")

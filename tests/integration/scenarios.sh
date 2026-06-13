@@ -16,6 +16,11 @@
 #   xvb.enabled .............. true | false
 #   dashboard.secure ......... true (Caddy TLS) | false
 #   dashboard.tari_required .. true (blocking) | false (non-blocking)
+#   monero/tari.clearnet_initial_sync (#183) .. true (clearnet IBD) | false (Tor, the default)
+#
+# The clearnet_initial_sync `false` value is the default exercised by every other scenario (they
+# never set the key); only the `true` value needs a dedicated case, so axis_coverage lists just
+# the `true`s — run.sh asserts the rendered Tor-vs-clearnet config for both states on every run.
 #
 # Prerequisite-gated axes (skipped-with-a-loud-log, never silently, when the box can't host
 # them — see run.sh):
@@ -36,6 +41,7 @@ local-pruned-nano-insecure	monero.mode=local monero.prune=true p2pool.pool=nano 
 local-pruned-main-rpclan	monero.mode=local monero.prune=true monero.rpc_lan_access=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
 local-pruned-main-xvb-off	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=false dashboard.secure=true dashboard.tari_required=true
 local-pruned-main-tari-optional	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=false
+local-pruned-main-clearnet-sync	monero.mode=local monero.prune=true monero.clearnet_initial_sync=true tari.clearnet_initial_sync=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
 remote-main-secure-tari	monero.mode=remote p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
 EOF
 }
@@ -59,6 +65,8 @@ dashboard.secure=true
 dashboard.secure=false
 dashboard.tari_required=true
 dashboard.tari_required=false
+monero.clearnet_initial_sync=true
+tari.clearnet_initial_sync=true
 EOF
 }
 

@@ -136,7 +136,9 @@ You can put any service's data on a dedicated disk by pointing its `*.data_dir` 
 - **Initial sync is the heavy part.** The first run downloads and verifies both chains over Tor
   (slower than clearnet): ~100 GB pruned / ~265 GB full for Monero, plus ~135 GB for Tari. This can
   take anywhere from a few hours to a day or more. You can avoid it by
-  [reusing an existing synced node](configuration.md#reusing-an-existing-node).
+  [reusing an existing synced node](configuration.md#reusing-an-existing-node), or speed it up with
+  an [optional clearnet initial sync](privacy.md#optional-clearnet-initial-sync-off-by-default)
+  (default off, privacy-relevant) that downloads over clearnet and then returns to Tor.
 - **Steady state is light.** Once synced, bandwidth is modest.
 - **LAN reachability for workers.** Each worker rig connects to the host on **port 3333** over your
   local network (plain stratum, not Tor). If the host has a firewall, allow inbound `3333` from your

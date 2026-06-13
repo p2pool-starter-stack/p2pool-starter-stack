@@ -13,6 +13,33 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Optional clearnet initial sync (#183).** A default-off, per-component opt-in
+  (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`) that lets a node do its **one-time
+  initial block download over clearnet** — much faster than over bandwidth-capped Tor circuits, which
+  can crawl at near-zero blocks/sec — then return to Tor for all ongoing operation. When on, Monero
+  drops its Tor P2P `proxy=` (lowering `out-peers` 48 → 16) **but keeps `tx-proxy=tor`**, so
+  transaction-origin privacy is preserved and wallets are never exposed; Tari switches its transport
+  to TCP and re-enables the `seeds.tari.com` DNS seed (its onion `peer_seeds` are unreachable without
+  Tor). The only exposure is **node-existence** — your host IP is visible to that chain's P2P network
+  for the sync window. **Privacy-first by construction:** off by default, a `⚠` disruptive-change
+  confirmation on `apply`, a persistent "CLEARNET INITIAL SYNC ACTIVE — node IP exposed" banner in
+  `status`/`up`, a `doctor` warning (and a green "Tor-only" check when off), and a matching warning in
+  the monerod container logs — so a node is never silently left on clearnet. Exposed in
+  `config.advanced.example.json`; documented with a full threat model in `docs/privacy.md`, plus
+  `docs/configuration.md`, `docs/getting-started.md`, and `docs/hardware.md`.
+
+- **Automatic clearnet → Tor switch-back once synced (#234).** The clearnet initial sync (above) no
+  longer needs a manual flip back. The dashboard watches each chain's sync state and, the first time
+  a clearnet node reports fully synced, writes a persistent marker and restarts the daemon — which
+  comes back up **Tor-only** and stays there across restarts, `apply`, and reboots (the marker, not
+  the flag, is the source of truth, so a synced node can never be silently re-exposed). Monero and
+  Tari transition independently. Fail-safe: the marker is persisted before the restart and a failed
+  switch is retried, never leaving a node stranded on clearnet; the `status`/`up` banner and `doctor`
+  warning clear themselves once a node is genuinely back on Tor. Re-arm a fresh clearnet sync by
+  toggling the flag off and on. Mechanism: a shared `clearnet-state` dir (dashboard rw, monerod/tari
+  ro) drives the daemon entrypoints' Tor-vs-clearnet decision; pithead always renders the canonical
+  Tor config. Closes #234.
+
 - **Dashboard "new release available" badge (#224).** The dashboard periodically checks GitHub for
   the latest Pithead release and, if it's newer than the running version, shows a header badge next to
   the version badge — **"New release vX.Y.Z available ↗"** — linking straight to the release page.

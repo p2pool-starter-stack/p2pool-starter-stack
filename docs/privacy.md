@@ -13,6 +13,12 @@ use clearnet** (P2Pool's outbound peers and XvB donation mining), and **install/
 IP once**. Those are called out below with how to mitigate each today, and both clearnet yield paths
 are slated to move to Tor-by-default (with an opt-out) in v1.1.
 
+There is also one **opt-in** that deliberately moves a node onto clearnet: an
+[optional clearnet initial sync](#optional-clearnet-initial-sync-off-by-default) that lets Monero
+and/or Tari download their chains over clearnet (much faster than over Tor) for the **one-time
+initial sync**, then return to Tor. It is **off by default**, loudly warned, and covered in full
+below.
+
 ---
 
 ## Inbound — no port forwarding
@@ -37,11 +43,11 @@ What the running stack sends to the internet, connection by connection.
 
 | Connection | Destination | What it could reveal | Tor? | Default | How to control |
 |---|---|---|---|---|---|
-| **monerod** P2P + tx broadcast | Monero network | — | ✅ Tor (`proxy=` / `tx-proxy=`) | on | always Tor |
+| **monerod** P2P + tx broadcast | Monero network | — | ✅ Tor (`proxy=` / `tx-proxy=`) | on | Tor by default; **P2P** can opt into clearnet for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) — tx broadcast stays on Tor regardless |
 | **monerod** DNS (checkpoints, blocklist, update check, priority-node hostnames) | DNS resolvers | "this IP runs Monero" | ✅ **closed** — `disable-dns-checkpoints`, `check-updates=disabled`, `enable-dns-blocklist=0`, hostname priority-nodes dropped (#161) | n/a | — |
 | **monerod RPC to a remote node** (only if `monero.mode: remote`) | the node you configured | **your real home IP**, to that node's operator | ❌ clearnet | **off** — the bundled local node is the default and has no remote-RPC egress | use a node you run/trust, or one reachable as a `.onion` over Tor |
-| **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | always Tor |
-| **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | — |
+| **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | Tor by default; can opt into clearnet (TCP) for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) |
+| **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | clearnet sync ([#183](#optional-clearnet-initial-sync-off-by-default)) re-enables the `seeds.tari.com` DNS seed for the sync window |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
 | **P2Pool** outbound sidechain peers | clearnet P2Pool peers | **your real home IP** | ❌ **clearnet** | **on** | ⏳ Tor-by-default in v1.1 (#165). Harden now → [below](#hardening-the-clearnet-paths) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
@@ -119,6 +125,84 @@ mining through Tor and pins `--donate-level 0`.
 
 ---
 
+## Optional clearnet initial sync (off by default)
+
+Routing **everything** over Tor is correct for ongoing operation, but it makes the **one-time initial
+blockchain sync** (IBD) painfully slow: Tor circuits are bandwidth-capped and flaky, so a full Monero
+sync can crawl at near-zero blocks/sec and stall for long stretches, and Tari's large chain is no
+better. The standard pattern for Tor-based nodes is to **sync once over clearnet (fast), then lock
+back to Tor.** This stack supports that as an explicit, default-off opt-in (#183).
+
+**Per-component flags in `config.json`, both `false` by default:**
+
+```jsonc
+"monero": { "clearnet_initial_sync": false },
+"tari":   { "clearnet_initial_sync": false }
+```
+
+Set the one(s) you want to `true` and run `./pithead apply`. Monero and Tari sync independently, so
+you can enable either, both, or neither.
+
+### What it changes
+
+| | Tor-only (default) | Clearnet initial sync (opt-in) |
+|---|---|---|
+| **Monero** P2P | over Tor (`proxy=172.28.0.25:9050`) | **direct to clearnet seed nodes** (proxy line dropped), `out-peers` lowered 48 → 16 |
+| **Monero** tx broadcast | over Tor (`tx-proxy=`) | **still over Tor** — unchanged |
+| **Tari** transport | Tor (`type = "tor"`) | **TCP** (`type = "tcp"`) |
+| **Tari** seeds | onion `peer_seeds`, `dns_seeds = []` | **`dns_seeds = ["seeds.tari.com"]`** (onion seeds are unreachable without Tor), onion `public_addresses` dropped |
+
+### The privacy trade-off (threat model)
+
+**What is exposed while a flag is on:** your host's **IP address**, to the P2P network of the enabled
+chain — i.e. "this IP is running a Monero/Tari node." For Tari, one **DNS lookup** of `seeds.tari.com`
+also goes to the configured resolvers (`1.1.1.1` / `8.8.8.8` / `9.9.9.9`) to discover clearnet peers.
+
+**What is *not* exposed:**
+
+- **Your wallet addresses / payouts** — there is no wallet activity during a sync.
+- **Monero transaction origin** — `tx-proxy=tor` is left in place, so any tx broadcast still goes over
+  Tor. (And there's no broadcasting during IBD anyway.)
+- Nothing about *what* you mine — only that an IP runs a node.
+
+That's the same exposure as running any ordinary (non-Tor) full node, scoped to the sync window. For
+a privacy-first deployment it's still a real disclosure, which is why it is **off by default** and
+must be **explicitly opted into**.
+
+### It switches back to Tor automatically (#234)
+
+You don't have to babysit it. The dashboard already tracks each chain's sync state; the **first time
+a clearnet node reports fully synced, it switches that node back to Tor for you** — it writes a
+persistent "sync complete" marker and restarts the daemon, which comes back up Tor-only. From then
+on the node stays on Tor across restarts, `apply`, and reboots (the marker, not the flag, is the
+source of truth — so a restart can never silently re-expose a synced node). Monero and Tari transition
+independently, each as soon as *it* finishes.
+
+You can leave `clearnet_initial_sync: true` in `config.json`; it's effectively spent once the sync
+completes. (To deliberately re-sync over clearnet later — e.g. after wiping a chain — toggle the flag
+off and on again with `./pithead apply`, which re-arms it.)
+
+### It is loud and always-visible
+
+You can't enable this by accident or miss that it's active:
+
+- **`./pithead apply`** prints a `⚠`-flagged, disruptive-change confirmation describing exactly what
+  becomes exposed before it recreates the daemon.
+- **`./pithead status`** and **`./pithead up`** print a prominent **"CLEARNET INITIAL SYNC ACTIVE —
+  node IP exposed"** banner the whole time a node is actually on clearnet — and it **clears by itself**
+  once the auto-transition completes.
+- **`./pithead doctor`** raises a `⚠ WARN` while a node is exposed and flips back to a green
+  `✓ OK "all node P2P is Tor-only"` once it's switched back.
+- The **dashboard** shows the clearnet state live, and the **daemon container logs** a matching
+  warning on every start until the transition completes.
+
+If the automatic switch ever fails (e.g. the dashboard couldn't restart the container), it is
+**fail-safe**: the marker is written before the restart, so any later restart still comes up Tor-only,
+and the supervisor keeps retrying — a node is never silently stranded on clearnet. The banners and
+`doctor` warning stay up until it's genuinely back on Tor.
+
+---
+
 ## Local trust boundary & known limitations
 
 Everything above is about **network** egress — what leaves the host. On the **host itself**, the
@@ -145,6 +229,7 @@ for a single-purpose appliance. One consequence is worth recording explicitly:
   and/or require a `p2pool.stratum_password` (`pithead doctor` flags public-IP exposure).
 - [ ] Route P2Pool outbound through Tor by editing its compose `command:` (above) if you accept the latency.
 - [ ] Set `xvb.enabled: false` if you don't want any XvB egress.
+- [ ] Leave `monero.clearnet_initial_sync` / `tari.clearnet_initial_sync` **off** (the default) to keep all node P2P on Tor. If you do use a clearnet sync, the dashboard switches each node back to Tor automatically once it's synced — `pithead doctor` flags it while exposed and clears when done.
 - [ ] Run the initial install/build behind a VPN or `torsocks`.
 - [ ] Leave Telegram (#121) and Healthchecks (#79) **off** unless you accept the inherent IP exposure.
 - [ ] Run `pithead doctor` — it surfaces the public-IP exposure check among its diagnostics.
