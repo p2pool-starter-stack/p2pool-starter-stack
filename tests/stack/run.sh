@@ -901,6 +901,10 @@ assert_eq "upgrade preserves the proxy token"               "$(run_sourced "$U" 
 # require_deployed command (up/apply/upgrade) errors "run setup" on an already-deployed box.
 assert_eq "upgrade preserves DEPLOYMENT_COMPLETED (require_deployed survives)" "$(run_sourced "$U" env_get_file "$U/.env" DEPLOYMENT_COMPLETED)" "true"
 assert_contains "upgrade still rebuilds images (source mode)" "$(cat "$UL")" "compose up --pull never -d --build"
+# Third-party images (caddy/tari/socket-proxies) are digest-pinned and can change between releases;
+# a source-mode upgrade pulls the non-buildable ones first so a bumped digest is fetched (not "No
+# such image" under --pull never). Best-effort, so it runs before the build.
+assert_contains "upgrade pulls non-buildable images first (digest bumps)" "$(cat "$UL")" "compose pull --ignore-buildable"
 
 echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
 # A docker stub that fails `compose up -d --remove-orphans` only when FAIL_UP=1 (else succeeds).
