@@ -304,8 +304,9 @@ run_scenario() {
 # The read-only assertion battery (infrastructure-level). Asserts the live running state of
 # the stack for a given config WITHOUT changing anything — so it backs both a post-apply
 # scenario check and the non-destructive `--check` mode. Calibrated against real hardware:
-# it trusts monerod's own sync flag (the dashboard's UI state reads "loading" for a synced
-# local node) and proxy_workers for mining liveness (stratum.conns can read 0 while mining).
+# monerod's own RPC sync flag is authoritative for "caught up", and (for a local node) the
+# dashboard's sync panel is polled to "done" before snapshotting — it reads "loading" until its
+# first poll lands after a restart. proxy_workers signals mining liveness (stratum.conns can read 0).
 assert_running_state() {
     local name="$1" config="$2"
     local st mode pool secure tari_req xvb rpc_lan monero_clearnet tari_clearnet
@@ -364,7 +365,11 @@ assert_running_state() {
     # 2. pithead status is green for a healthy config.
     pithead status >/dev/null 2>&1; assert_rc "status exit code is 0 (healthy)" "$?" "0"
 
-    # 3. Dashboard reachable and reading live state.
+    # 3. Dashboard reachable and reading live state. In local mode, let the monero sync panel finish
+    #    its first poll after the scenario's apply/restart before snapshotting, so step 4 sees settled
+    #    state instead of a cold "loading" (a stuck panel never settles, so the assert still catches the
+    #    #180 regression). Poll, don't sleep (issue #54).
+    [ "$mode" = "local" ] && wait_for 60 3 "monero sync panel to settle (dashboard)" _pred_monero_panel_done || true
     st="$(api_state)"
     if [ -z "$st" ]; then
         it_fail "dashboard /api/state reachable" "empty response"

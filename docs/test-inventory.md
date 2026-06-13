@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 500 dashboard unit tests · 12 contract tests · 31 frontend
-tests · 40 `pithead` shell sections · 16 harness self-test sections ·
+tests · 40 `pithead` shell sections · 17 harness self-test sections ·
 9 live config scenarios (17 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -21,7 +21,7 @@ tests · 40 `pithead` shell sections · 16 harness self-test sections ·
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
 | 4 — Live matrix | config scenarios | 9 (17 axis values) |
-| 4 — Live matrix | harness self-test | 16 sections |
+| 4 — Live matrix | harness self-test | 17 sections |
 
 ---
 
@@ -775,7 +775,7 @@ tests · 40 `pithead` shell sections · 16 harness self-test sections ·
 - xmrig-proxy dev-fee donate-level is explicit + live (#173)
 - xmrig-proxy stopped for failover
 
-### Harness self-test (tests/integration/selftest.sh) — 16 sections
+### Harness self-test (tests/integration/selftest.sh) — 17 sections
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
@@ -787,6 +787,7 @@ tests · 40 `pithead` shell sections · 16 harness self-test sections ·
 - rx: local exec runs in the stack dir
 - api_state + jq_get: parse a fixture
 - _pred_tari_synced: gates on .sync.tari.state
+- _pred_monero_panel_done: gates on .sync.monero.state
 - _pred_pool_ready: gates on .pool.type matching expected
 - _pred_hashes_flowing: gates on stratum.total_hashes > 0
 - dispatch loop: a stdin-draining child must not skip iterations
@@ -795,5 +796,5 @@ tests · 40 `pithead` shell sections · 16 harness self-test sections ·
 
 ---
 
-_Grand total: **614** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **615** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
