@@ -38,8 +38,8 @@ class TestClearnetSyncSupervisor:
         exposed = await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
         assert exposed is False  # transitioned → no longer exposed
         assert os.path.exists(sup.marker_path("monero"))  # persistent marker written
-        dc.stop.assert_awaited_once_with("monerod")
-        dc.start.assert_awaited_once_with("monerod")
+        dc.stop.assert_awaited_once(); assert dc.stop.await_args.args[0] == "monerod"
+        dc.start.assert_awaited_once(); assert dc.start.await_args.args[0] == "monerod"
         assert events == [("monero", True)]
 
     async def test_marker_written_before_restart(self, tmp_path):
@@ -75,20 +75,38 @@ class TestClearnetSyncSupervisor:
         dc.start.assert_not_called()
 
     async def test_failed_restart_retries_next_cycle(self, tmp_path):
-        # Fail-safe: a failed restart must NOT be treated as done — it retries, never silently
-        # leaving the node on clearnet.
+        # Fail-safe: a failed START must NOT be treated as done — it retries, never silently leaving
+        # the node on clearnet. (Success is now the START result, since stop is best-effort.)
         events = []
-        sup, dc = make_supervisor(tmp_path, stop=False, events=events)
+        sup, dc = make_supervisor(tmp_path, start=False, events=events)
         exposed = await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
-        assert exposed is True  # still exposed — flip did not complete
+        assert exposed is True  # still exposed — start did not succeed
         assert os.path.exists(sup.marker_path("monero"))  # but the marker is persisted
         assert events == [("monero", False)]
-        # Next cycle, the restart succeeds → it completes.
-        dc.stop = AsyncMock(return_value=True)
+        # Next cycle, the start succeeds → it completes.
         dc.start = AsyncMock(return_value=True)
         exposed = await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
         assert exposed is False
-        dc.start.assert_awaited_once_with("monerod")
+
+    async def test_slow_stop_does_not_skip_start(self, tmp_path):
+        # Regression (#234): a slow-stopping daemon (Tari took >5s) made stop()'s HTTP call time out
+        # and report False; the old `stop and start` short-circuited and NEVER started it, leaving
+        # the daemon down. start must ALWAYS be attempted — a slow/failed stop can't strand it.
+        sup, dc = make_supervisor(tmp_path)
+        dc.stop = AsyncMock(return_value=False)   # stop "fails" (HTTP timed out before the slow stop)
+        dc.start = AsyncMock(return_value=True)   # the container does come back up
+        exposed = await sup.maybe_transition("tari", "tari", flag_on=True, synced=True)
+        assert exposed is False                   # transitioned despite the stop hiccup
+        dc.start.assert_awaited_once(); assert dc.start.await_args.args[0] == "tari"
+
+    async def test_restart_stop_timeout_outlasts_kill_deadline(self, tmp_path):
+        # The stop's HTTP timeout must exceed its SIGTERM→SIGKILL deadline, or a slow daemon's stop
+        # aborts before Docker reports it down (the root cause of the Tari hang).
+        sup, dc = make_supervisor(tmp_path)
+        await sup.maybe_transition("tari", "tari", flag_on=True, synced=True)
+        kw = dc.stop.await_args.kwargs
+        assert kw["request_timeout"] > kw["stop_timeout"]
+        assert dc.start.await_args.kwargs["request_timeout"] >= kw["request_timeout"]
 
     async def test_per_chain_independent(self, tmp_path):
         sup, dc = make_supervisor(tmp_path)
@@ -98,7 +116,7 @@ class TestClearnetSyncSupervisor:
         assert m is False and t is True
         assert os.path.exists(sup.marker_path("monero"))
         assert not os.path.exists(sup.marker_path("tari"))
-        dc.stop.assert_awaited_once_with("monerod")
+        dc.stop.assert_awaited_once(); assert dc.stop.await_args.args[0] == "monerod"
 
     async def test_marker_write_failure_does_not_restart(self, tmp_path):
         # If the marker can't be persisted (e.g. read-only dir), DON'T restart — a restart without

@@ -3,6 +3,13 @@ import os
 
 logger = logging.getLogger("ClearnetSync")
 
+# Restart timeouts for the clearnet→Tor flip (#234). A daemon can be slow to stop (Tari took >10s
+# and was SIGKILL'd), and Docker holds the stop request open until the container is down — so the
+# HTTP timeout MUST exceed the stop deadline, or the stop call aborts early, reports failure, and
+# (with the old `stop and start`) skipped the start entirely, leaving the daemon down.
+_RESTART_STOP_TIMEOUT = 30   # seconds Docker waits (SIGTERM → SIGKILL) for the daemon to stop
+_RESTART_HTTP_TIMEOUT = 60   # HTTP timeout for the stop/start calls; must exceed _RESTART_STOP_TIMEOUT
+
 
 class ClearnetSyncSupervisor:
     """Auto-transition a clearnet-syncing node back to Tor once it's synced (#183/#234).
@@ -79,7 +86,14 @@ class ClearnetSyncSupervisor:
             return True
         logger.warning("%s: CLEARNET initial sync complete — switching %s back to Tor (#234).",
                        name, container)
-        ok = await self.docker_control.stop(container) and await self.docker_control.start(container)
+        # Stop with a generous window + an HTTP timeout that OUTLASTS it, then ALWAYS start. The old
+        # `stop and start` left a slow-stopping daemon down: when stop's HTTP call timed out before
+        # the container finished stopping, `and` short-circuited and start was never called (#234:
+        # Tari took >5s to stop and never came back). `ok` is now the START result — the container
+        # must end up running; a stop hiccup can no longer skip the start.
+        await self.docker_control.stop(container, stop_timeout=_RESTART_STOP_TIMEOUT,
+                                       request_timeout=_RESTART_HTTP_TIMEOUT)
+        ok = await self.docker_control.start(container, request_timeout=_RESTART_HTTP_TIMEOUT)
         if ok:
             self._flipped.add(name)
             logger.info("%s: %s restarted — now Tor-only.", name, container)

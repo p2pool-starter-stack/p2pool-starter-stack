@@ -319,6 +319,21 @@ REL="$ROOT/scripts/release.sh"
 assert_eq "image_for builds the GHCR image name" \
     "$( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; image_for dashboard )" \
     "ghcr.io/p2pool-starter-stack/pithead-dashboard"
+# --draft (#44): documented in --help, and --help stops at the comment header (a too-wide sed range
+# used to leak the script body, e.g. `set -euo pipefail`, into the help output).
+assert_contains "release --help documents --draft"     "$(bash "$REL" --help 2>&1)" "--draft"
+case "$(bash "$REL" --help 2>&1)" in
+    *"set -euo pipefail"*) bad "release --help stops at the comment header" "leaked the script body into --help" ;;
+    *)                     ok  "release --help stops at the comment header" ;;
+esac
+# write_manifest's "- **Version:**" line starts with a dash; without `printf --` it died with
+# "printf: - : invalid option" and broke the whole publish stage. Render it and assert it survives.
+man_out="$SANDBOX/manifest.md"
+# shellcheck disable=SC1090,SC2034  # dynamic source; the globals are consumed inside write_manifest
+( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu
+  TAG="v9.9.9"; STACK_VERSION="9.9.9"; GIT_COMMIT="abc1234"; BUILD_DATE="now"; WORKDIR="$SANDBOX"
+  write_manifest "$man_out" ) 2>/dev/null
+assert_contains "manifest renders the leading-dash Version line (printf --)" "$(cat "$man_out" 2>/dev/null)" "- **Version:** 9.9.9"
 # The ingredients manifest's component pins must resolve to a real value present in each Dockerfile —
 # a drift guard so a renamed ARG can't silently emit an empty pin in the release notes.
 for svc in p2pool monero xmrig-proxy; do

@@ -319,6 +319,30 @@ assert_running_state() {
     monero_clearnet="$(jq_get "$config" '.monero.clearnet_initial_sync')"; [ "$monero_clearnet" = "true" ] || monero_clearnet="false"
     tari_clearnet="$(jq_get "$config" '.tari.clearnet_initial_sync')";     [ "$tari_clearnet" = "true" ] || tari_clearnet="false"
 
+    # 0. Clearnet auto-transition settle (#234). Enabling clearnet on an already-synced node makes the
+    # dashboard supervisor flip it back to Tor, which RESTARTS the daemon(s). Wait for that to fully
+    # COMPLETE before the steady-state battery below — otherwise we catch a daemon mid-restart and the
+    # health/sync/proxy assertions fail spuriously. The marker is written BEFORE the restart, so the
+    # marker alone isn't "settled": for Monero we also wait for the Tor `proxy=` to reappear in the
+    # running config (only true once the flip-back re-render + restart finished), then for the whole
+    # stack to report healthy. This block also IS the end-to-end proof the transition fired.
+    if [ "$monero_clearnet" = "true" ] || [ "$tari_clearnet" = "true" ]; then
+        local csdir; csdir="$(env_on_box CLEARNET_STATE_DIR)"
+        if [ "$monero_clearnet" = "true" ]; then
+            if wait_for 180 10 "monero clearnet→Tor transition marker (#234)" rx "test -f '$csdir/monero.synced'"
+            then it_pass "monero auto-transitioned clearnet→Tor (#234)"
+            else it_fail "monero auto-transitioned clearnet→Tor (#234)" "marker not written within 180s"; fi
+            wait_for 240 10 "monerod restarted back on Tor — proxy restored (#234)" \
+                rx "docker exec monerod grep -qE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null" || true
+        fi
+        if [ "$tari_clearnet" = "true" ]; then
+            if wait_for 180 10 "tari clearnet→Tor transition marker (#234)" rx "test -f '$csdir/tari.synced'"
+            then it_pass "tari auto-transitioned clearnet→Tor (#234)"
+            else it_fail "tari auto-transitioned clearnet→Tor (#234)" "marker not written within 180s"; fi
+        fi
+        wait_for 240 5 "stack healthy after clearnet→Tor transition (#234)" _pred_status_ok || true
+    fi
+
     # 1. Expected containers up; unexpected ones absent.
     local running expected svc
     running="$(running_services)"
@@ -416,22 +440,8 @@ assert_running_state() {
             "$(rx "docker exec tari grep -c '^type = \"tor\"' /var/tari/config/config.toml 2>/dev/null")" 1
         assert_num_ge "monerod runs Tor-only in steady state — proxy present (#183/#234)" \
             "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
-        # The clearnet scenario enables the flag on an already-synced box, so the supervisor must
-        # detect synced, drop the per-chain marker, and flip the node back to Tor. Poll for the marker
-        # as end-to-end proof the auto-transition fired.
-        if [ "$monero_clearnet" = "true" ] || [ "$tari_clearnet" = "true" ]; then
-            local csdir; csdir="$(env_on_box CLEARNET_STATE_DIR)"
-            if [ "$monero_clearnet" = "true" ]; then
-                if wait_for 150 10 "monero clearnet→Tor transition (#234)" rx "test -f '$csdir/monero.synced'"
-                then it_pass "monero auto-transitioned clearnet→Tor (#234)"
-                else it_fail "monero auto-transitioned clearnet→Tor (#234)" "marker not written within 150s"; fi
-            fi
-            if [ "$tari_clearnet" = "true" ]; then
-                if wait_for 150 10 "tari clearnet→Tor transition (#234)" rx "test -f '$csdir/tari.synced'"
-                then it_pass "tari auto-transitioned clearnet→Tor (#234)"
-                else it_fail "tari auto-transitioned clearnet→Tor (#234)" "marker not written within 150s"; fi
-            fi
-        fi
+        # (The clearnet→Tor auto-transition was already awaited + asserted at the top of this function,
+        # before the steady-state battery, so the assertions above see the settled post-flip state.)
         case "$(rx "docker inspect tari --format '{{.HostConfig.Dns}}' 2>/dev/null")" in
             *1.1.1.1*|*8.8.8.8*) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "clearnet nameserver present" ;;
             *127.0.0.1*)         it_pass "tari DNS sinkholed — no clearnet resolver (#162)" ;;
