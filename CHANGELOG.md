@@ -11,6 +11,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Disconnected workers never fell off the "Workers Alive" table (#182 regression).** A worker that
+  stopped mining was supposed to linger as **DOWN** for an hour and then drop off, but it never did:
+  xmrig-proxy keeps a disconnected rig in its `/workers` list (with a frozen hashrate) for hours, and
+  the dashboard's lifecycle dropped the aged-out worker from its internal state while the proxy still
+  reported it — so the next poll recreated it with a fresh `last_active`, resetting the 1-hour clock.
+  The ghost row flickered off for a single cycle each hour and came back as DOWN indefinitely. The
+  lifecycle now keeps an aged-out worker in state as long as the proxy still reports it (preserving
+  when it actually went offline), so it falls off once and **stays** off; a genuine reconnect still
+  re-adds it fresh. Found during a release-gate coverage audit; covered by a new regression test.
+
 ### Added
 
 - **Optional clearnet initial sync (#183).** A default-off, per-component opt-in

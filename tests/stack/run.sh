@@ -841,6 +841,25 @@ out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -
 assert_eq "remote username left blank" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_USERNAME)" ""
 assert_eq "remote creds not persisted" "$(jq -r '.monero.node_username' "$V/config.json")" ""
 
+# Custom remote rpc_port/zmq_port propagate to .env (the dashboard + p2pool read these to reach the
+# node); both default to 18081/18083 but an operator can point at a node on non-standard ports.
+seed_env
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","node_password":"","remote":{"host":"node.example.com","rpc_port":28081,"zmq_port":28083}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "remote rpc_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_PORT)" "28081"
+assert_eq "remote zmq_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_PORT)" "28083"
+# And the defaults apply when omitted (local node).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "zmq_port defaults to 18083" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_PORT)" "18083"
+
+# `logs` forwards its service argument to `docker compose logs -f` (read-only follow).
+seed_env
+: > "$DOCKER_LOG"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead logs monerod 2>&1)"
+assert_contains "logs follows (-f) the named service" "$(cat "$DOCKER_LOG")" "compose logs -f monerod"
+
 echo "== black-box: upgrade re-renders generated config (#128) =="
 # `upgrade` used to be just `up --build`, leaving the generated .env/Caddyfile/Tari config stale
 # after a git pull. It must now re-render them while preserving secrets.
