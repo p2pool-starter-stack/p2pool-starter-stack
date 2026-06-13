@@ -25,6 +25,7 @@
 #   --skip-tests         Skip `make test` (NOT recommended; the gate is what makes a release trustworthy).
 #   --skip-integration   Skip the #54 live integration matrix (still runs `make test`).
 #   --skip-smoke         Skip the staged-image smoke verification.
+#   --draft              Create the GitHub Release as a DRAFT (held for review; publish it by hand).
 #   --resume-promote     Skip build/stage; promote the already-staged digests (retry after a smoke pass).
 #   --allow-dirty        Don't require a clean git working tree (for local experimentation only).
 #   -y, --yes            Don't prompt before the irreversible steps (push, tag, publish).
@@ -82,7 +83,7 @@ is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]]; }
 # --- Argument parsing ----------------------------------------------------------------------------
 
 DRY_RUN=0; RC=1; SKIP_TESTS=0; SKIP_INTEGRATION=0; SKIP_SMOKE=0
-RESUME_PROMOTE=0; ALLOW_DIRTY=0; ASSUME_YES=0
+RESUME_PROMOTE=0; ALLOW_DIRTY=0; ASSUME_YES=0; DRAFT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -92,10 +93,11 @@ while [ $# -gt 0 ]; do
         --skip-tests)       SKIP_TESTS=1 ;;
         --skip-integration) SKIP_INTEGRATION=1 ;;
         --skip-smoke)       SKIP_SMOKE=1 ;;
+        --draft)            DRAFT=1 ;;
         --resume-promote)   RESUME_PROMOTE=1 ;;
         --allow-dirty)      ALLOW_DIRTY=1 ;;
         -y|--yes)           ASSUME_YES=1 ;;
-        -h|--help)          sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)          sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)                  die "Unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -333,8 +335,12 @@ publish() {
     cat "$manifest" >> "$notes"
 
     if command -v gh >/dev/null 2>&1; then
-        run gh release create "$TAG" --title "Pithead $TAG" --notes-file "$notes" "$bundle" "$manifest"
-        ok "GitHub Release $TAG published."
+        # --draft holds the GitHub Release for review (not visible/announced until published by hand).
+        # The images are already promoted, so the draft's install bundle works the moment it's published.
+        local gh_args=(release create "$TAG" --title "Pithead $TAG" --notes-file "$notes")
+        [ "$DRAFT" -eq 1 ] && gh_args+=(--draft)
+        run gh "${gh_args[@]}" "$bundle" "$manifest"
+        ok "GitHub Release $TAG $([ "$DRAFT" -eq 1 ] && echo 'created as a DRAFT (publish it from the Releases page when ready)' || echo published)."
     else
         warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $manifest"
     fi
@@ -345,7 +351,7 @@ write_manifest() {
     local out="$1" suffix repo dg
     {
         printf '## Ingredients — Pithead %s\n\n' "$TAG"
-        printf '- **Version:** %s\n- **Commit:** `%s`\n- **Built:** %s\n\n' "$STACK_VERSION" "$GIT_COMMIT" "$BUILD_DATE"
+        printf -- '- **Version:** %s\n- **Commit:** `%s`\n- **Built:** %s\n\n' "$STACK_VERSION" "$GIT_COMMIT" "$BUILD_DATE"
         printf '### Published images (`%s`, tags `%s` + `latest`)\n\n' "$REGISTRY" "$TAG"
         for suffix in "${IMAGES[@]}"; do
             repo="$(image_for "$suffix")"
