@@ -13,6 +13,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 First stable release.
 
+Bundled, SHA-pinned upstream components: **P2Pool v4.16**, **Monero v0.18.5.0**, **XMRig-proxy
+6.26.0**, **Tari/minotari_node v5.3.1-mainnet**, **Caddy 2.11.4**, **docker-socket-proxy v0.4.2**.
+The exact image digests for each release ship in the GitHub Release's ingredients manifest.
+
 ### Fixed
 
 - **Disconnected workers never fell off the "Workers Alive" table (#182 regression).** A worker that
