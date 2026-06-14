@@ -12,7 +12,7 @@ the full list.
 | `./pithead up` | Start the stack. |
 | `./pithead down` | Stop the stack. |
 | `./pithead restart` | Restart the stack. |
-| `./pithead upgrade` | Re-render the generated config, then rebuild and restart the containers (run after a `git pull`). |
+| `./pithead upgrade` | Re-render the generated config, then **pull** (release bundle) or **rebuild** (source checkout) the images and restart. Run after downloading a newer bundle or a `git pull`. |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status **and health-check every expected service** — warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — a paste-able health report. |
@@ -64,18 +64,27 @@ isn't boot-enabled; the fix is `sudo systemctl enable --now docker`.
 
 ## Updating the stack
 
-Pull the latest changes, then rebuild and restart:
+How you update depends on how you installed (see [Getting Started](getting-started.md#2-get-the-code)).
+
+**Release bundle (the default):** from your install directory, re-download the latest bundle over it,
+then upgrade — `upgrade` **pulls** the new published images:
+
+```bash
+curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz --strip-components=1
+./pithead upgrade
+```
+
+**Source checkout:** pull the latest code, then upgrade — `upgrade` **rebuilds** the images locally:
 
 ```bash
 git pull
 ./pithead upgrade
 ```
 
-`upgrade` re-renders the generated config (`.env`, the Caddyfile, and the Tari config) for the
-current release, then rebuilds the container images and restarts the stack — so a release that
-changes a config template or adds an `.env` var takes effect, not just the new image. Your data
-directories and `config.json` are untouched, so your blockchain sync and settings are preserved
-across upgrades.
+Either way, `upgrade` re-renders the generated config (`.env`, the Caddyfile, and the Tari config) for
+the new release *before* pulling/rebuilding — so a release that changes a config template or adds an
+`.env` var takes effect, not just the new image. Your data directories and `config.json` are untouched,
+so your blockchain sync and settings are preserved across upgrades.
 
 > **Moving the install?** Data directories are stored as absolute paths in `.env`, so relocating or
 > copying the stack to a different path (or running a second checkout) points it at a *different,

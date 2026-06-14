@@ -5,12 +5,12 @@ driven by a single script — `pithead` — and most of it is automated.
 
 > **TL;DR**
 > ```bash
-> git clone https://github.com/p2pool-starter-stack/pithead.git
+> curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 > cd pithead
-> chmod +x pithead
+> cp config.json.template config.json   # set your Monero + Tari payout addresses
 > ./pithead setup
 > ```
-> Answer a few prompts, let it run, and open the dashboard at `https://<your-hostname>`.
+> Let it run, then open the dashboard at `https://<your-hostname>`.
 
 ---
 
@@ -47,14 +47,31 @@ On an unsupported OS — or if dependency detection misfires on an unusual setup
 
 ## 2. Get the code
 
+Download the latest release — this pulls the **published, tested images** (no local build), so the
+dashboard shows the real version and the update-checker works:
+
 ```bash
-git clone https://github.com/p2pool-starter-stack/pithead.git
+curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 cd pithead
-chmod +x pithead
+cp config.json.template config.json   # then set your Monero + Tari payout addresses
 ```
 
-You'll need your **Monero** payout address and your **Tari** payout address ready before you start
-setup. (Tari wallets are sometimes labeled **Minotari** — same thing.)
+`config.json.template` is minimal — just your two payout addresses; `setup` fills in sensible defaults
+for everything else. Want the full set of knobs? Copy `config.advanced.example.json` instead. Have your
+**Monero** and **Tari** payout addresses ready (Tari wallets are sometimes labeled **Minotari** — same
+thing).
+
+### Alternative: build from source
+
+To build the images locally instead of pulling the published ones — e.g. to develop or modify the
+stack — clone the repo. pithead sees the `build/` context and builds locally, tagging the images `:dev`
+(the dashboard badge then reads `dev · <branch> @ <commit>` instead of the release version):
+
+```bash
+git clone https://github.com/p2pool-starter-stack/pithead.git
+cd pithead && chmod +x pithead
+cp config.json.template config.json   # then set your payout addresses
+```
 
 ---
 

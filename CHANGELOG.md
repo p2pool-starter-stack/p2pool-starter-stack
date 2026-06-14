@@ -32,18 +32,15 @@ that the **system clock is NTP-synchronized** (clock skew gets shares/blocks rej
 
 ### Install / Upgrade
 
-**New install** — clone the repo (or download the `pithead-v1.0.1.tar.gz` install bundle from the GitHub Release's assets) and follow the [quickstart](docs/getting-started.md) (`./pithead setup`).
-
-**Upgrade an existing (source) checkout:**
+**Install** — download the latest release bundle (pulls the published, tested images) and run setup; see the [quickstart](docs/getting-started.md):
 
 ```sh
-git pull
-./pithead upgrade
+curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
+cd pithead && cp config.json.template config.json   # set your Monero + Tari payout addresses
+./pithead setup
 ```
 
-`./pithead upgrade` **re-renders the generated config itself** — the P2Pool v4.16 monerod settings (`out-peers`, the clearnet-window priority nodes) and the new `doctor` clock check are picked up automatically — then rebuilds and recreates only the containers that changed. **No separate `./pithead apply` is needed for this release**, and your `config.json` plus preserved secrets (Tor onions, RPC credentials, proxy token) are kept untouched. Run `./pithead apply` only when *you* edit `config.json` — e.g. to opt into the new, default-off [clearnet initial sync](docs/privacy.md). Verify afterwards with `./pithead status` and `./pithead doctor`.
-
-See [`docs/operations.md`](docs/operations.md) for the full lifecycle reference.
+**Upgrade** — re-download the bundle over your install (or `git pull` for a source checkout), then `./pithead upgrade`. It **re-renders the generated config itself** — the P2Pool v4.16 monerod settings (`out-peers`, the clearnet-window priority nodes) and the new `doctor` clock check are picked up automatically — so **no separate `./pithead apply` is needed for this release**, and your `config.json` plus preserved secrets (Tor onions, RPC credentials, proxy token) are kept untouched. Run `./pithead apply` only when *you* edit `config.json` — e.g. to opt into the new, default-off [clearnet initial sync](docs/privacy.md). See [`docs/operations.md`](docs/operations.md) for the full lifecycle reference.
 
 ### Added
 
