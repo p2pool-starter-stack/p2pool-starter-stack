@@ -353,6 +353,17 @@ case "$BUILD_MOUNTS" in
     *Dockerfile*) bad "bundle build-mounts exclude Dockerfiles" "a Dockerfile would flip the bundle pull->build mode" ;;
     *)            ok  "bundle build-mounts exclude Dockerfiles" ;;
 esac
+# Multi-arch guard: the release MUST build linux/amd64 + linux/arm64. A plain host-arch `docker build` on
+# an arm64 dev box ships arm64-only images that won't run on x86_64 servers — the v1.0.0 defect. Assert
+# the pipeline builds via buildx, defaults to both platforms, and that smoke rejects a single-arch push.
+REL_SRC="$(cat "$REL")"
+assert_contains "release builds with buildx (multi-arch capable)" "$REL_SRC" "docker buildx build"
+PLAT_DEF="$(grep -E '^PLATFORMS=' "$REL" | head -1)"
+case "$PLAT_DEF" in
+    *linux/amd64*linux/arm64* | *linux/arm64*linux/amd64*) ok "release targets both amd64 + arm64 by default" ;;
+    *) bad "release targets both amd64 + arm64 by default" "PLATFORMS default: $PLAT_DEF" ;;
+esac
+assert_contains "smoke stage rejects a single-arch (non-multi-arch) push" "$REL_SRC" "is not multi-arch"
 # write_manifest's "- **Version:**" line starts with a dash; without `printf --` it died with
 # "printf: - : invalid option" and broke the whole publish stage. Render it and assert it survives.
 man_out="$SANDBOX/manifest.md"
