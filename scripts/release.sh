@@ -370,15 +370,33 @@ write_manifest() {
     log "Wrote ingredients manifest: $out"
 }
 
+# The host paths under ./build/ that docker-compose.yml MOUNTS at runtime (volumes:), as opposed to
+# build: contexts. A pull-based bundle builds nothing and the images do NOT bake these in — monerod, for
+# instance, reads /root/bitmonero.conf.template purely from this host mount — so every one MUST ship in
+# the bundle, or the container mounts an empty dir and fails to start (the v1.0.0 bundle missed monerod's
+# template this way). Matches the volume short-syntax source (between "- " and the first ":"); ignores
+# build:/context: lines so no Dockerfile lands in the bundle (which would flip is_source_checkout to true
+# and make pithead build instead of pull). Sourced + unit-tested.
+compose_build_mounts() {
+    grep -oE '^[[:space:]]*-[[:space:]]+\./build/[^:[:space:]]+:' "${1:-docker-compose.yml}" \
+        | sed -E 's/^[[:space:]]*-[[:space:]]+//; s/:$//' | sort -u
+}
+
 # A pinned, pull-based install bundle: the runtime files needed to `./pithead setup` WITHOUT building.
 # Deliberately ships NO image Dockerfiles — so pithead detects release mode (is_source_checkout=false),
-# resolves STACK_VERSION from the bundled VERSION, and pulls the published `:vX.Y.Z` images. build/tari/'s
-# config template IS included because inject_service_configs renders it at setup.
+# resolves STACK_VERSION from the bundled VERSION, and pulls the published `:vX.Y.Z` images. Every
+# ./build/* path the compose mounts at runtime (compose_build_mounts) IS shipped, so the pulled
+# containers find the config templates they render at setup.
 make_bundle() {
     local out="$1" d="$WORKDIR/pithead-$TAG"
-    mkdir -p "$d/build/tari"
+    mkdir -p "$d"
     cp pithead VERSION docker-compose.yml config.advanced.example.json "$d/" 2>/dev/null || true
-    cp build/tari/config.toml.template "$d/build/tari/" 2>/dev/null || true
+    local m
+    while IFS= read -r m; do
+        [ -e "$m" ] || { warn "bundle: compose mounts '$m' but it is missing from the tree — skipping"; continue; }
+        mkdir -p "$d/$(dirname "$m")"
+        cp -R "$m" "$d/$(dirname "$m")/"
+    done < <(compose_build_mounts docker-compose.yml)
     printf 'Pithead %s — pinned install bundle (images pulled from %s, no local build).\n\nQuick start:\n  1. cp config.advanced.example.json config.json   # then set your wallet addresses\n  2. ./pithead setup\n\nThere are no build contexts here, so pithead pulls the published %s images instead of building.\n' \
         "$TAG" "$REGISTRY" "$TAG" > "$d/README.txt"
     if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"; return 0; fi
