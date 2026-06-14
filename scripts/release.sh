@@ -49,6 +49,13 @@ IMAGE_PREFIX="${PITHEAD_IMAGE_PREFIX:-pithead-}"
 # published image = "$REGISTRY/${IMAGE_PREFIX}<suffix>"). The compose service for "monero" is "monerod".
 IMAGES=(tor monero p2pool xmrig-proxy dashboard)
 
+# Target platforms for the published images. MUST stay multi-arch: most self-hosted miners run x86_64,
+# but a plain `docker build` produces only the build host's arch — v1.0.0 shipped arm64-only from an
+# Apple-Silicon host and would not run on amd64 servers. Built with buildx; the smoke stage fails the
+# release if a pushed image isn't multi-arch.
+PLATFORMS="${PITHEAD_PLATFORMS:-linux/amd64,linux/arm64}"
+BUILDX_BUILDER="${PITHEAD_BUILDX_BUILDER:-pithead-release}"
+
 SOURCE_URL="https://github.com/p2pool-starter-stack/pithead"
 
 # --- Small utilities -----------------------------------------------------------------------------
@@ -190,15 +197,35 @@ test_gate() {
 
 # --- Stage 3: build --------------------------------------------------------------------------------
 
+# Multi-arch build+push needs a builder with the "docker-container" driver — the default "docker" driver
+# can only build for the host platform (and can't --push a manifest list). Create a dedicated one if it's
+# absent; --bootstrap also wires up QEMU so the non-native arch (e.g. amd64 on an Apple-Silicon host) can
+# be cross-built. Idempotent.
+ensure_buildx_builder() {
+    [ "$DRY_RUN" -eq 1 ] && return 0
+    if ! docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1; then
+        log "Creating multi-arch buildx builder '$BUILDX_BUILDER' (docker-container driver + QEMU)..."
+        run docker buildx create --name "$BUILDX_BUILDER" --driver docker-container --bootstrap >/dev/null
+    fi
+}
+
 build_images() {
-    stage "3/7  Build images (staging tag $STAGING_TAG)"
+    stage "3/7  Build + push multi-arch images ($PLATFORMS, staging $STAGING_TAG)"
+    # buildx builds ALL platforms and --push uploads the manifest list in one step — a multi-arch image
+    # can't be loaded into the local docker store, so there is no separate local-build + push. Auth and
+    # the builder must therefore be ready here, not in stage 4.
+    ghcr_login
+    ensure_buildx_builder
     local suffix context repo
     for suffix in "${IMAGES[@]}"; do
         context="build/$suffix"
         repo="$(image_for "$suffix")"
-        log "Building $repo:$STAGING_TAG  (from $context)"
+        log "Building $repo:$STAGING_TAG  ($PLATFORMS, from $context)"
         local args=(
-            docker build "$context"
+            docker buildx build "$context"
+            --builder "$BUILDX_BUILDER"
+            --platform "$PLATFORMS"
+            --push
             -t "$repo:$STAGING_TAG"
             --label "org.opencontainers.image.title=Pithead ($suffix)"
             --label "org.opencontainers.image.version=$STACK_VERSION"
@@ -218,29 +245,28 @@ build_images() {
         fi
         run "${args[@]}"
     done
-    ok "All 5 images built."
+    ok "Built + pushed all 5 images for $PLATFORMS."
 }
 
 # --- Stage 4: stage (push to the RC tag, capture digests) -----------------------------------------
 
 stage_push() {
-    stage "4/7  Push to staging + capture digests"
-    ghcr_login
+    stage "4/7  Capture pushed manifest digests"
+    # build_images already pushed each multi-arch image (buildx --push). Record the manifest-LIST digest
+    # (the index sha that spans every platform) — promote re-tags it by digest, so :vX.Y.Z and :latest
+    # stay multi-arch and point at the exact bytes the smoke stage validates.
     local suffix repo digest
     for suffix in "${IMAGES[@]}"; do
         repo="$(image_for "$suffix")"
-        log "Pushing $repo:$STAGING_TAG"
-        run docker push "$repo:$STAGING_TAG"
         if [ "$DRY_RUN" -eq 1 ]; then
-            digest="$repo@sha256:<dry-run>"
-        else
-            digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
-            [ -n "$digest" ] || die "Could not read the pushed digest for $repo:$STAGING_TAG."
+            set_digest "$suffix" "$repo@sha256:<dry-run>"; log "  digest: $repo@sha256:<dry-run>"; continue
         fi
-        set_digest "$suffix" "$digest"
-        log "  digest: $digest"
+        digest="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+        [ -n "$digest" ] || die "Could not read the pushed manifest digest for $repo:$STAGING_TAG."
+        set_digest "$suffix" "$repo@$digest"
+        log "  digest: $repo@$digest"
     done
-    ok "Staged $STAGING_TAG for all 5 images."
+    ok "Captured $STAGING_TAG digests for all 5 images."
 }
 
 ghcr_login() {
@@ -286,6 +312,15 @@ smoke_test() {
             got="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
             [ "$got" = "$STACK_VERSION" ] \
                 || die "Smoke: $repo:$STAGING_TAG reports version '$got', expected '$STACK_VERSION'."
+            # The pushed manifest MUST span every target platform — a single-arch image here means a
+            # host-arch build leaked through and the release would not run on other arches (the v1.0.0
+            # arm64-only defect). Read the raw manifest list and require each platform in $PLATFORMS.
+            local arches; arches="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --raw 2>/dev/null \
+                | python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(sorted({m.get("platform",{}).get("os","")+"/"+m["platform"]["architecture"] for m in d.get("manifests",[]) if m.get("platform",{}).get("architecture") not in (None,"unknown")})))' 2>/dev/null || true)"
+            local p; for p in ${PLATFORMS//,/ }; do
+                case " $arches " in *" $p "*) ;; *) die "Smoke: $repo:$STAGING_TAG is not multi-arch — missing $p (got: ${arches:-none}). A host-arch build leaked through (this is the v1.0.0 arm64-only bug).";; esac
+            done
+            log "  $repo:$STAGING_TAG OK ($arches)"
         fi
     done
     if [ -n "${RELEASE_SMOKE_CMD:-}" ]; then
