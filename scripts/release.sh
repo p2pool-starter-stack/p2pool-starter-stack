@@ -49,11 +49,14 @@ IMAGE_PREFIX="${PITHEAD_IMAGE_PREFIX:-pithead-}"
 # published image = "$REGISTRY/${IMAGE_PREFIX}<suffix>"). The compose service for "monero" is "monerod".
 IMAGES=(tor monero p2pool xmrig-proxy dashboard)
 
-# Target platforms for the published images. MUST stay multi-arch: most self-hosted miners run x86_64,
-# but a plain `docker build` produces only the build host's arch — v1.0.0 shipped arm64-only from an
-# Apple-Silicon host and would not run on amd64 servers. Built with buildx; the smoke stage fails the
-# release if a pushed image isn't multi-arch.
-PLATFORMS="${PITHEAD_PLATFORMS:-linux/amd64,linux/arm64}"
+# Target platform(s) for the published images. linux/amd64 ONLY: the bundled binaries are x86_64
+# (monero/p2pool/xmrig-proxy ship `linux-x64`, and xmrig-proxy has NO arm64 build at all — so an arm64
+# image can't be made to work), and self-hosted miners run x86_64. The point of buildx here is to FORCE
+# amd64 even on an arm64 release host — a plain `docker build` on Apple Silicon labels the image arm64
+# (the v1.0.0 bug), so it never ran on x86_64. The smoke stage fails the release if a pushed image
+# doesn't carry every platform listed here. (Overridable via PITHEAD_PLATFORMS, but the components must
+# actually ship binaries for any arch you add.)
+PLATFORMS="${PITHEAD_PLATFORMS:-linux/amd64}"
 BUILDX_BUILDER="${PITHEAD_BUILDX_BUILDER:-pithead-release}"
 
 SOURCE_URL="https://github.com/p2pool-starter-stack/pithead"
@@ -204,16 +207,16 @@ test_gate() {
 ensure_buildx_builder() {
     [ "$DRY_RUN" -eq 1 ] && return 0
     if ! docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1; then
-        log "Creating multi-arch buildx builder '$BUILDX_BUILDER' (docker-container driver + QEMU)..."
+        log "Creating cross-build buildx builder '$BUILDX_BUILDER' (docker-container driver + QEMU)..."
         run docker buildx create --name "$BUILDX_BUILDER" --driver docker-container --bootstrap >/dev/null
     fi
 }
 
 build_images() {
-    stage "3/7  Build + push multi-arch images ($PLATFORMS, staging $STAGING_TAG)"
-    # buildx builds ALL platforms and --push uploads the manifest list in one step — a multi-arch image
-    # can't be loaded into the local docker store, so there is no separate local-build + push. Auth and
-    # the builder must therefore be ready here, not in stage 4.
+    stage "3/7  Build + push images ($PLATFORMS, staging $STAGING_TAG)"
+    # buildx builds the target platform(s) and --push uploads the result in one step — a buildx --push
+    # image isn't loaded into the local docker store, so there is no separate local-build + push. Auth
+    # and the builder must therefore be ready here, not in stage 4.
     ghcr_login
     ensure_buildx_builder
     local suffix context repo
@@ -252,9 +255,9 @@ build_images() {
 
 stage_push() {
     stage "4/7  Capture pushed manifest digests"
-    # build_images already pushed each multi-arch image (buildx --push). Record the manifest-LIST digest
-    # (the index sha that spans every platform) — promote re-tags it by digest, so :vX.Y.Z and :latest
-    # stay multi-arch and point at the exact bytes the smoke stage validates.
+    # build_images already pushed each image (buildx --push). Record the manifest-LIST digest (the index
+    # sha that spans every built platform) — promote re-tags it by digest, so :vX.Y.Z and :latest point
+    # at the exact bytes the smoke stage validates.
     local suffix repo digest
     for suffix in "${IMAGES[@]}"; do
         repo="$(image_for "$suffix")"
@@ -312,13 +315,13 @@ smoke_test() {
             got="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
             [ "$got" = "$STACK_VERSION" ] \
                 || die "Smoke: $repo:$STAGING_TAG reports version '$got', expected '$STACK_VERSION'."
-            # The pushed manifest MUST span every target platform — a single-arch image here means a
-            # host-arch build leaked through and the release would not run on other arches (the v1.0.0
-            # arm64-only defect). Read the raw manifest list and require each platform in $PLATFORMS.
+            # The pushed manifest MUST carry every target platform — a wrong-arch image here means the
+            # build host's arch leaked through (the v1.0.0 bug: an arm64 host produced an arm64-labelled
+            # image that doesn't run on x86_64). Read the raw manifest list and require each $PLATFORMS.
             local arches; arches="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --raw 2>/dev/null \
                 | python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(sorted({m.get("platform",{}).get("os","")+"/"+m["platform"]["architecture"] for m in d.get("manifests",[]) if m.get("platform",{}).get("architecture") not in (None,"unknown")})))' 2>/dev/null || true)"
             local p; for p in ${PLATFORMS//,/ }; do
-                case " $arches " in *" $p "*) ;; *) die "Smoke: $repo:$STAGING_TAG is not multi-arch — missing $p (got: ${arches:-none}). A host-arch build leaked through (this is the v1.0.0 arm64-only bug).";; esac
+                case " $arches " in *" $p "*) ;; *) die "Smoke: $repo:$STAGING_TAG is missing target platform $p (got: ${arches:-none}). A wrong-arch build leaked through (the v1.0.0 arm64-only bug).";; esac
             done
             log "  $repo:$STAGING_TAG OK ($arches)"
         fi
