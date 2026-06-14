@@ -346,6 +346,15 @@ esac
 BUILD_MOUNTS="$( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; compose_build_mounts docker-compose.yml )"
 assert_contains "bundle ships monerod's config template" "$BUILD_MOUNTS" "./build/monero/bitmonero.conf.template"
 assert_contains "bundle ships the tari config dir"        "$BUILD_MOUNTS" "./build/tari"
+# The bundle must ship the BASIC config template (the documented quick-start config — `cp
+# config.json.template config.json`) and unpack to a versionless `pithead/` dir for the stable
+# /releases/latest/download/pithead.tar.gz URL. Build a real bundle and inspect it.
+# shellcheck disable=SC1090,SC2034  # dynamic source; TAG/REGISTRY/DRY_RUN are consumed inside make_bundle
+( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu
+  WORKDIR="$SANDBOX/bundle"; mkdir -p "$WORKDIR"; TAG=v9.9.9; REGISTRY=ghcr.io/test; DRY_RUN=0
+  make_bundle "$WORKDIR/pithead.tar.gz" >/dev/null 2>&1; tar tzf "$WORKDIR/pithead.tar.gz" 2>/dev/null ) > "$SANDBOX/bundle.list" 2>/dev/null
+grep -q '^pithead/config.json.template$' "$SANDBOX/bundle.list" && ok "bundle ships config.json.template (basic quick-start config)" || bad "bundle ships config.json.template" "absent from the bundle"
+grep -q '^pithead/$'                     "$SANDBOX/bundle.list" && ok "bundle unpacks to versionless pithead/"               || bad "bundle unpacks to pithead/" "top-level dir is not pithead/"
 _bm_missing=""
 for _m in $BUILD_MOUNTS; do [ -e "$ROOT/$_m" ] || _bm_missing="$_bm_missing $_m"; done
 assert_eq "every compose ./build runtime mount exists in the tree" "${_bm_missing:-none}" "none"

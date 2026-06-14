@@ -53,11 +53,15 @@ coffee gets cold**.
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/p2pool-starter-stack/pithead.git
+# Grab the latest release — pulls the published, tested images (no local build)
+curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 cd pithead
-chmod +x pithead
+cp config.json.template config.json   # then set your Monero + Tari payout addresses
 ./pithead setup
 ```
+
+> Want every tunable? Copy `config.advanced.example.json` instead. Prefer to build from source (a
+> `dev` build) — e.g. to contribute? See [Install from source](docs/getting-started.md#alternative-build-from-source).
 
 > **Prereqs:** Ubuntu Server **24.04 LTS**, **16 GB+ RAM**, an **SSD** (~300 GB pruned / ~500 GB
 > full minimum — the chains grow ~100+ GB/year, so 2–4 TB is the set-and-forget choice), and your
