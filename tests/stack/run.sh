@@ -353,17 +353,19 @@ case "$BUILD_MOUNTS" in
     *Dockerfile*) bad "bundle build-mounts exclude Dockerfiles" "a Dockerfile would flip the bundle pull->build mode" ;;
     *)            ok  "bundle build-mounts exclude Dockerfiles" ;;
 esac
-# Multi-arch guard: the release MUST build linux/amd64 + linux/arm64. A plain host-arch `docker build` on
-# an arm64 dev box ships arm64-only images that won't run on x86_64 servers — the v1.0.0 defect. Assert
-# the pipeline builds via buildx, defaults to both platforms, and that smoke rejects a single-arch push.
+# Target-arch guard: the release MUST build linux/amd64 (the bundled binaries are x86_64; xmrig-proxy
+# has no arm64 build, so the stack can't be arm64). A plain host-arch `docker build` on an arm64 dev box
+# shipped arm64-labelled images that don't run on x86_64 — the v1.0.0 defect. Assert the pipeline builds
+# via buildx (which forces the target arch even on an arm64 host), defaults to amd64, and that smoke
+# rejects a wrong-arch push.
 REL_SRC="$(cat "$REL")"
-assert_contains "release builds with buildx (multi-arch capable)" "$REL_SRC" "docker buildx build"
+assert_contains "release builds with buildx (forces the target arch)" "$REL_SRC" "docker buildx build"
 PLAT_DEF="$(grep -E '^PLATFORMS=' "$REL" | head -1)"
 case "$PLAT_DEF" in
-    *linux/amd64*linux/arm64* | *linux/arm64*linux/amd64*) ok "release targets both amd64 + arm64 by default" ;;
-    *) bad "release targets both amd64 + arm64 by default" "PLATFORMS default: $PLAT_DEF" ;;
+    *linux/amd64*) ok "release targets linux/amd64 (the x86_64 binaries' platform)" ;;
+    *) bad "release targets linux/amd64" "PLATFORMS default: $PLAT_DEF" ;;
 esac
-assert_contains "smoke stage rejects a single-arch (non-multi-arch) push" "$REL_SRC" "is not multi-arch"
+assert_contains "smoke stage verifies the pushed image's target platform" "$REL_SRC" "missing target platform"
 # write_manifest's "- **Version:**" line starts with a dash; without `printf --` it died with
 # "printf: - : invalid option" and broke the whole publish stage. Render it and assert it survives.
 man_out="$SANDBOX/manifest.md"
