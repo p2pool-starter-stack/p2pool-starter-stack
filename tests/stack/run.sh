@@ -338,6 +338,21 @@ case "$(bash "$REL" --help 2>&1)" in
     *"set -euo pipefail"*) bad "release --help stops at the comment header" "leaked the script body into --help" ;;
     *)                     ok  "release --help stops at the comment header" ;;
 esac
+# Bundle completeness: the pull-based bundle must ship every ./build/* path the compose MOUNTS at
+# runtime. A pull install builds nothing and the images don't bake these in, so a missing one mounts an
+# empty dir and breaks the container — the v1.0.0 bundle shipped without monerod's bitmonero.conf.template
+# exactly this way. compose_build_mounts derives the list make_bundle copies.
+# shellcheck disable=SC1090
+BUILD_MOUNTS="$( cd "$ROOT" || exit; set --; source "$REL" 2>/dev/null; set +eu; compose_build_mounts docker-compose.yml )"
+assert_contains "bundle ships monerod's config template" "$BUILD_MOUNTS" "./build/monero/bitmonero.conf.template"
+assert_contains "bundle ships the tari config dir"        "$BUILD_MOUNTS" "./build/tari"
+_bm_missing=""
+for _m in $BUILD_MOUNTS; do [ -e "$ROOT/$_m" ] || _bm_missing="$_bm_missing $_m"; done
+assert_eq "every compose ./build runtime mount exists in the tree" "${_bm_missing:-none}" "none"
+case "$BUILD_MOUNTS" in
+    *Dockerfile*) bad "bundle build-mounts exclude Dockerfiles" "a Dockerfile would flip the bundle pull->build mode" ;;
+    *)            ok  "bundle build-mounts exclude Dockerfiles" ;;
+esac
 # write_manifest's "- **Version:**" line starts with a dash; without `printf --` it died with
 # "printf: - : invalid option" and broke the whole publish stage. Render it and assert it survives.
 man_out="$SANDBOX/manifest.md"
