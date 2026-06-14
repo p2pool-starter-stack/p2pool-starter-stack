@@ -9,9 +9,12 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
-## [1.0.0] - 2026-06-13
+## [1.0.1] - 2026-06-13
 
-First stable release.
+First installable stable release. **Supersedes 1.0.0**, whose published images were `arm64`-only
+(built on an Apple-Silicon host) and whose install bundle was incomplete — it could not run on
+x86_64. **No feature changes** from 1.0.0; the fixes are entirely in the release pipeline (multi-arch
+image builds + a complete install bundle). 1.0.0 is kept as a superseded tombstone at the bottom.
 
 Bundled, SHA-pinned upstream components: **P2Pool v4.16**, **Monero v0.18.5.0**, **XMRig-proxy
 6.26.0**, **Tari/minotari_node v5.3.1-mainnet**, **Caddy 2.11.4**, **docker-socket-proxy v0.4.2**.
@@ -28,7 +31,7 @@ that the **system clock is NTP-synchronized** (clock skew gets shares/blocks rej
 
 ### Install / Upgrade
 
-**New install** — clone the repo (or download the `pithead-v1.0.0.tar.gz` install bundle from the GitHub Release's assets) and follow the [quickstart](docs/getting-started.md) (`./pithead setup`).
+**New install** — clone the repo (or download the `pithead-v1.0.1.tar.gz` install bundle from the GitHub Release's assets) and follow the [quickstart](docs/getting-started.md) (`./pithead setup`).
 
 **Upgrade an existing (source) checkout:**
 
@@ -329,6 +332,14 @@ See [`docs/operations.md`](docs/operations.md) for the full lifecycle reference.
 
 ### Fixed
 
+- **Release images are now built multi-arch (`linux/amd64` + `linux/arm64`).** 1.0.0 was built on an
+  Apple-Silicon host with a plain `docker build`, so its images were `arm64`-only and would not run on
+  x86_64 servers (`no matching manifest for linux/amd64`). The release pipeline now builds and pushes
+  with `buildx --platform`, and the smoke stage fails the release if any image isn't multi-arch (#243).
+- **The pinned install bundle now ships every config template the compose mounts.** 1.0.0's bundle was
+  missing `build/monero/bitmonero.conf.template` — the monero image doesn't bake it in, so a bundle
+  `./pithead setup` mounted an empty dir there and monerod couldn't start. `make_bundle` now derives the
+  shipped paths from the compose file so no runtime mount can be omitted (#242).
 - **Disconnected workers never fell off the "Workers Alive" table (#182 regression).** A worker that
   stopped mining was supposed to linger as **DOWN** for an hour and then drop off, but it never did:
   xmrig-proxy keeps a disconnected rig in its `/workers` list (with a frozen hashrate) for hours, and
@@ -512,3 +523,10 @@ See [`docs/operations.md`](docs/operations.md) for the full lifecycle reference.
 - `dashboard.host` is now validated (hostname/IP characters only) before it's rendered into the
   Caddyfile, so a value containing whitespace, a newline, or `{`/`}` can no longer break the
   Caddyfile or inject reverse-proxy directives — mirroring the `stratum_bind` validation (#130).
+
+## [1.0.0] - 2026-06-13 — superseded
+
+**Superseded by 1.0.1 — do not use.** The published images were `arm64`-only (built on an
+Apple-Silicon host) and the install bundle was incomplete, so 1.0.0 never ran on x86_64. Its feature
+set is unchanged and is documented under 1.0.1 above. The GitHub release is kept, flagged as
+superseded, for transparency.
