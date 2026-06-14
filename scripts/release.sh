@@ -125,6 +125,12 @@ WORKDIR=""   # scratch dir for digests, the manifest and the bundle (created in 
 set_digest() { printf '%s' "$2" > "$WORKDIR/digest.$1"; }
 get_digest() { cat "$WORKDIR/digest.$1" 2>/dev/null || true; }
 
+# The manifest-LIST (index) digest of a pushed tag — the sha that spans every built platform, which
+# promote re-tags by digest. NOTE: `imagetools inspect --format '{{.Manifest.Digest}}'` does NOT work
+# for a buildx OCI index (it renders the whole descriptor block, not the digest), so parse the human
+# `Digest:` line instead. Verified equal to `imagetools inspect --raw | shasum -a 256`.
+manifest_digest() { docker buildx imagetools inspect "$1" 2>/dev/null | awk '/^Digest:/{print $2; exit}'; }
+
 # Resolve a single upstream component pin on demand (the "ingredients" each release bundles).
 pin() {
     case "$1" in
@@ -264,7 +270,7 @@ stage_push() {
         if [ "$DRY_RUN" -eq 1 ]; then
             set_digest "$suffix" "$repo@sha256:<dry-run>"; log "  digest: $repo@sha256:<dry-run>"; continue
         fi
-        digest="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+        digest="$(manifest_digest "$repo:$STAGING_TAG")"
         [ -n "$digest" ] || die "Could not read the pushed manifest digest for $repo:$STAGING_TAG."
         set_digest "$suffix" "$repo@$digest"
         log "  digest: $repo@$digest"
@@ -310,7 +316,10 @@ smoke_test() {
     for suffix in "${IMAGES[@]}"; do
         repo="$(image_for "$suffix")"
         log "Verifying $repo:$STAGING_TAG from the registry..."
-        run docker pull --quiet "$repo:$STAGING_TAG"
+        # Pull the TARGET platform explicitly: a plain `docker pull` resolves the build HOST's arch, so
+        # on an arm64 release host an amd64-only image fails with "no matching manifest for linux/arm64".
+        # Docker can still pull (not run) a non-native arch image, which is all the label check needs.
+        run docker pull --quiet --platform "${PLATFORMS%%,*}" "$repo:$STAGING_TAG"
         if [ "$DRY_RUN" -eq 0 ]; then
             got="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
             [ "$got" = "$STACK_VERSION" ] \
@@ -461,7 +470,7 @@ main() {
         local suffix repo digest
         for suffix in "${IMAGES[@]}"; do
             repo="$(image_for "$suffix")"
-            digest="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+            digest="$(manifest_digest "$repo:$STAGING_TAG")"
             [ -n "$digest" ] || die "Cannot resolve a staged digest for $repo:$STAGING_TAG — stage first."
             set_digest "$suffix" "$repo@$digest"
         done
