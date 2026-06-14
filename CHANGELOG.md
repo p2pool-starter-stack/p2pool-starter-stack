@@ -26,17 +26,20 @@ monerod follows P2Pool v4.16's recommendations where they're compatible with the
 that the **system clock is NTP-synchronized** (clock skew gets shares/blocks rejected), per P2Pool's
 "synchronize your clock before mining" guidance.
 
-### Fixed
+### Install / Upgrade
 
-- **Disconnected workers never fell off the "Workers Alive" table (#182 regression).** A worker that
-  stopped mining was supposed to linger as **DOWN** for an hour and then drop off, but it never did:
-  xmrig-proxy keeps a disconnected rig in its `/workers` list (with a frozen hashrate) for hours, and
-  the dashboard's lifecycle dropped the aged-out worker from its internal state while the proxy still
-  reported it — so the next poll recreated it with a fresh `last_active`, resetting the 1-hour clock.
-  The ghost row flickered off for a single cycle each hour and came back as DOWN indefinitely. The
-  lifecycle now keeps an aged-out worker in state as long as the proxy still reports it (preserving
-  when it actually went offline), so it falls off once and **stays** off; a genuine reconnect still
-  re-adds it fresh. Found during a release-gate coverage audit; covered by a new regression test.
+**New install** — clone the repo (or download the `pithead-v1.0.0.tar.gz` install bundle from the GitHub Release's assets) and follow the [quickstart](docs/getting-started.md) (`./pithead setup`).
+
+**Upgrade an existing (source) checkout:**
+
+```sh
+git pull
+./pithead upgrade
+```
+
+`./pithead upgrade` **re-renders the generated config itself** — the P2Pool v4.16 monerod settings (`out-peers`, the clearnet-window priority nodes) and the new `doctor` clock check are picked up automatically — then rebuilds and recreates only the containers that changed. **No separate `./pithead apply` is needed for this release**, and your `config.json` plus preserved secrets (Tor onions, RPC credentials, proxy token) are kept untouched. Run `./pithead apply` only when *you* edit `config.json` — e.g. to opt into the new, default-off [clearnet initial sync](docs/privacy.md). Verify afterwards with `./pithead status` and `./pithead doctor`.
+
+See [`docs/operations.md`](docs/operations.md) for the full lifecycle reference.
 
 ### Added
 
@@ -326,6 +329,16 @@ that the **system clock is NTP-synchronized** (clock skew gets shares/blocks rej
 
 ### Fixed
 
+- **Disconnected workers never fell off the "Workers Alive" table (#182 regression).** A worker that
+  stopped mining was supposed to linger as **DOWN** for an hour and then drop off, but it never did:
+  xmrig-proxy keeps a disconnected rig in its `/workers` list (with a frozen hashrate) for hours, and
+  the dashboard's lifecycle dropped the aged-out worker from its internal state while the proxy still
+  reported it — so the next poll recreated it with a fresh `last_active`, resetting the 1-hour clock.
+  The ghost row flickered off for a single cycle each hour and came back as DOWN indefinitely. The
+  lifecycle now keeps an aged-out worker in state as long as the proxy still reports it (preserving
+  when it actually went offline), so it falls off once and **stays** off; a genuine reconnect still
+  re-adds it fresh. Found during a release-gate coverage audit; covered by a new regression test.
+
 - **Chart Avg windows other than 10m no longer flat-line at 0 on wide ranges (#168 regression).** The
   chart downsampler (used whenever a range has more points than the canvas tier — i.e. the **24h / 1w /
   1mo** ranges) bucket-averaged only the legacy `v` / `v_p2pool` / `v_xvb` columns and silently dropped
@@ -444,8 +457,6 @@ that the **system clock is NTP-synchronized** (clock skew gets shares/blocks rej
   (the form monerod's CLI wants), so a correctly **pruned** node read as Full. The label is purely
   cosmetic (the node is pruned either way); the parser now accepts `1`/`true`/`yes`/`on`. Surfaced
   on a live pruned deployment whose badge read "XMR Full".
-
-### Fixed
 
 - Dashboard pruned/full label (#32) always showed **Full** on local nodes: the dashboard parsed
   `MONERO_PRUNE` with `== "true"`, but pithead writes it as `1`/`0`, so a pruned node read as
