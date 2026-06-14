@@ -159,10 +159,10 @@ What exists today:
   service now carries an `image: ${PITHEAD_REGISTRY:-…}/pithead-<svc>:${STACK_VERSION:-dev}` ref
   alongside its `build:`. pithead picks build-vs-pull automatically: a **source checkout** (the image
   Dockerfiles are present) builds locally and tags `:dev` with `--pull never`; a **release install**
-  (the bundle ships no Dockerfiles, just `pithead` + `VERSION` + compose + `build/tari/`'s template)
-  resolves `STACK_VERSION` to `vX.Y.Z` and **pulls** the published images (`--pull missing`; `upgrade`
-  forces a re-pull). Override with `PITHEAD_REGISTRY` / `PITHEAD_PULL`. So a release is now
-  `cp config.advanced.example.json config.json && ./pithead setup` — no local build.
+  (the bundle ships no Dockerfiles, just `pithead` + `VERSION` + compose + the config templates + the
+  `./build` runtime mounts) resolves `STACK_VERSION` to `vX.Y.Z` and **pulls** the published images
+  (`--pull missing`; `upgrade` forces a re-pull). Override with `PITHEAD_REGISTRY` / `PITHEAD_PULL`. So
+  a release is now `cp config.json.template config.json && ./pithead setup` — no local build.
 
 **Remaining:**
 
