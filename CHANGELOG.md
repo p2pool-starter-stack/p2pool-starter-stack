@@ -9,6 +9,32 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.0.2] - 2026-06-14
+
+Packaging-only patch — the published images are **byte-identical to 1.0.1**; nothing in the running
+stack changed. It exists because releases are immutable, so 1.0.1's install bundle couldn't be corrected
+in place. See **[v1.0.1](https://github.com/p2pool-starter-stack/pithead/releases/tag/v1.0.1)** for the
+full feature set (P2Pool v4.16, optional clearnet initial sync, dashboard, …).
+
+### Fixed
+
+- **The install bundle is now complete and has a stable download URL.** It ships `config.json.template`
+  (the basic quick-start config — just the two payout addresses) alongside the advanced example, and is
+  attached as a versionless **`pithead.tar.gz`** so
+  `https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz` always
+  fetches the latest release. 1.0.1's bundle shipped only the advanced example under a versioned name,
+  and — because releases are immutable — could not be fixed in place (#247).
+
+### Install
+
+```sh
+curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
+cd pithead && cp config.json.template config.json   # set your Monero + Tari payout addresses
+./pithead setup
+```
+
+See [Getting Started](docs/getting-started.md) and [Updating the stack](docs/operations.md#updating-the-stack).
+
 ## [1.0.1] - 2026-06-13
 
 First installable stable release. **Supersedes 1.0.0**, whose published images were `arm64`-only
