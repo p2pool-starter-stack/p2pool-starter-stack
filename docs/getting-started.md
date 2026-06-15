@@ -73,6 +73,9 @@ cd pithead && chmod +x pithead
 cp config.json.template config.json   # then set your payout addresses
 ```
 
+> Changed your mind later? You can convert a clone to the published images in place — see
+> [Switching a source checkout to release images](operations.md#switching-a-source-checkout-to-release-images).
+
 ---
 
 ## 3. Run setup

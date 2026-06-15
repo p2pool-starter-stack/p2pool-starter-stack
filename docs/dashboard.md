@@ -89,7 +89,8 @@ A small **version badge** sits beside the hostname so you always know which buil
 released build shows the version (e.g. **`v1.3.0`**); a development or working-tree build shows a
 dashed **`dev · branch @ commit`** marker instead, so it's never mistaken for a release. It appears
 on every screen — including Sync Mode — which makes it easy to confirm what you're on when sharing a
-screenshot in a bug report.
+screenshot in a bug report. On a `dev` build but would rather run a published release? See
+[Switching a source checkout to release images](operations.md#switching-a-source-checkout-to-release-images).
 
 When a **newer Pithead release** is out, a clickable **`New release vX.Y.Z available ↗`** badge
 appears next to the version badge, linking to the GitHub release. It's a heads-up only — it never
