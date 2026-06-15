@@ -86,6 +86,28 @@ the new release *before* pulling/rebuilding — so a release that changes a conf
 `.env` var takes effect, not just the new image. Your data directories and `config.json` are untouched,
 so your blockchain sync and settings are preserved across upgrades.
 
+### Switching a source checkout to release images
+
+If you cloned the repo (so the dashboard badge reads `dev · branch @ commit`) and would rather run the
+**published, tested images** — a clean version badge, a working update-checker, and no local build —
+convert the install in place. Your `config.json`, `.env`, Tor onion keys, and data directories are all
+preserved:
+
+```bash
+./pithead backup -y          # safety snapshot: config.json, .env, onion keys, dashboard db (chains excluded)
+# overlay the published release files — leaves config.json, .env, .git, and your data dirs untouched:
+curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz --strip-components=1
+rm -f build/*/Dockerfile     # remove the image Dockerfiles → pithead switches from build to pull
+./pithead upgrade            # re-render config, pull :vX.Y.Z, recreate
+```
+
+`pithead` chooses build-vs-pull by whether the image Dockerfiles are present (`build/<svc>/Dockerfile`) —
+deleting them is what flips it from building `:dev` locally to pulling the published `:vX.Y.Z`. To go
+back to building from source, `git checkout vX.Y.Z` (or `git pull`) restores the Dockerfiles, then
+`./pithead upgrade` rebuilds locally again. The new validation in `upgrade` will refuse to start on a
+non-primary Monero payout address, so confirm yours is a `4…`/95-char address first (see
+[Configuration](configuration.md)).
+
 > **Moving the install?** Data directories are stored as absolute paths in `.env`, so relocating or
 > copying the stack to a different path (or running a second checkout) points it at a *different,
 > empty* `data/` — a full re-sync, and the dashboard history is orphaned. If you move the install,
