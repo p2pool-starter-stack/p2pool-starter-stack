@@ -227,6 +227,16 @@ mk_timedatectl "yes"; assert_eq "clock_sync_status: NTP yes => synced"   "$(PATH
 mk_timedatectl "no";  assert_eq "clock_sync_status: NTP no => unsynced"  "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "unsynced"
 mk_timedatectl "";    assert_eq "clock_sync_status: blank => unknown"     "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "unknown"
 
+echo "== unit: monero_address_type — p2pool needs a PRIMARY address (#250) =="
+# Classify by network-byte prefix + length: primary 4…/95 (the only payable kind), integrated 4…/106,
+# subaddress 8…/95. setup/apply hard-fail anything but primary so nobody mines to an unpayable address.
+_a94="$(printf 'a%.0s' $(seq 94))"; _a93="$(printf 'a%.0s' $(seq 93))"; _a105="$(printf 'a%.0s' $(seq 105))"
+assert_eq "monero_address_type: 4…/95  => primary"    "$(run_sourced "$SANDBOX" monero_address_type "4$_a94")"  "primary"
+assert_eq "monero_address_type: 8…/95  => subaddress" "$(run_sourced "$SANDBOX" monero_address_type "8$_a94")"  "subaddress"
+assert_eq "monero_address_type: 4…/106 => integrated" "$(run_sourced "$SANDBOX" monero_address_type "4$_a105")" "integrated"
+assert_eq "monero_address_type: 4…/94  => invalid"    "$(run_sourced "$SANDBOX" monero_address_type "4$_a93")"  "invalid"
+assert_eq "monero_address_type: other  => invalid"    "$(run_sourced "$SANDBOX" monero_address_type "1abc")"    "invalid"
+
 echo "== unit: dashboard auth (#8) =="
 # Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
 # hash is a secret and must never surface in the change preview; the internal fingerprint stays silent.
@@ -654,7 +664,7 @@ DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
 }
-WALLET="49AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+WALLET="4$(printf 'A%.0s' $(seq 94))"   # 95-char mainnet primary (starts with 4); #250 now hard-validates this
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"banana"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"; rc=$?
