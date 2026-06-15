@@ -9,6 +9,25 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.0.3] - 2026-06-14
+
+Hotfix — **validate the Monero payout address is a primary address**, so nobody silently mines to an
+address that can't be paid. The published images are unchanged from 1.0.1; the fix is in the `pithead`
+CLI (re-download the bundle / `pithead upgrade` to pick it up).
+
+### Fixed
+
+- **Reject non-primary Monero wallet addresses (#250).** p2pool pays out via coinbase, which **cannot**
+  send to a **subaddress** (`8…`) or an **integrated** address — it needs a **primary/standard** address
+  (`4…`, 95 chars), and XvB credits by the same address. Previously a subaddress passed validation, the
+  stack mined, and **rewards silently went nowhere**. Now `setup` re-prompts on a bad address, `apply`
+  hard-fails with a message that names the mistake (subaddress vs integrated vs malformed), and `doctor`
+  flags an existing install whose payout address can't be paid.
+
+**Already running an earlier version?** Run `./pithead doctor` — it tells you whether your Monero payout
+address is a subaddress (i.e. you've been mining unpaid). Install/upgrade: see
+[Getting Started](docs/getting-started.md) and [Updating the stack](docs/operations.md#updating-the-stack).
+
 ## [1.0.2] - 2026-06-14
 
 Packaging-only patch — the published images are **byte-identical to 1.0.1**; nothing in the running

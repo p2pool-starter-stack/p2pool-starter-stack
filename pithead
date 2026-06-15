@@ -450,6 +450,19 @@ doctor() {
         *)        dr_info "Could not verify system-clock sync (no timedatectl) — make sure NTP is running; mining is time-sensitive." ;;
     esac
 
+    # --- Monero payout address must be a PRIMARY address (p2pool can't pay subaddresses/integrated) (#250) ---
+    if [ -f "$CONFIG_FILE" ]; then
+        local _mw; _mw=$(jq -r '.monero.wallet_address // empty' "$CONFIG_FILE" 2>/dev/null)
+        if [ -n "$_mw" ] && [ "$_mw" != "your_monero_wallet_address" ]; then
+            case "$(monero_address_type "$_mw")" in
+                primary)    dr_ok   "Monero payout address is a primary address (p2pool/XvB can pay it)." ;;
+                subaddress) dr_fail "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run 'pithead apply'." ;;
+                integrated) dr_fail "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." ;;
+                *)          dr_warn "Monero payout address doesn't look like a primary address (expected 95 chars starting with 4)." ;;
+            esac
+        fi
+    fi
+
     # --- Memory (Linux only) ---
     echo ""
     echo "Memory:"
@@ -1264,7 +1277,15 @@ ensure_config_exists() {
     log "$CONFIG_FILE not found. Starting interactive setup..."
     echo "Please provide the following details to generate a minimal configuration:"
 
-    read -r -p "Enter Monero Wallet Address: " IN_MONERO_WALLET || true
+    while :; do
+        read -r -p "Enter Monero Wallet Address (primary — starts with 4): " IN_MONERO_WALLET || break
+        case "$(monero_address_type "$IN_MONERO_WALLET")" in
+            primary)    break ;;
+            subaddress) echo "  ✗ That's a subaddress (8…) — p2pool can't pay it. Use your PRIMARY address (starts with 4)." >&2 ;;
+            integrated) echo "  ✗ That's an integrated address — use your plain primary address." >&2 ;;
+            *)          echo "  ✗ Not a valid Monero primary address (95 chars, starts with 4). Try again." >&2 ;;
+        esac
+    done
     read -r -p "Enter Tari Wallet Address: " IN_TARI_WALLET || true
 
     if [ -z "$IN_MONERO_WALLET" ] || [ -z "$IN_TARI_WALLET" ]; then
@@ -1348,6 +1369,19 @@ EOF
     log "$CONFIG_FILE created successfully."
 }
 
+# Classify a Monero MAINNET address by its network byte (the base58 prefix) + length:
+#   primary/standard  "4…" 95   — the ONLY kind p2pool can pay (coinbase) and XvB credits by.
+#   integrated        "4…" 106  — embeds a payment id; p2pool rejects it.
+#   subaddress        "8…" 95   — p2pool cannot pay a subaddress.
+# Echoes: primary | integrated | subaddress | invalid  (#250)
+monero_address_type() {
+    case "$1" in
+        4*) case "${#1}" in 95) echo primary ;; 106) echo integrated ;; *) echo invalid ;; esac ;;
+        8*) case "${#1}" in 95) echo subaddress ;; *) echo invalid ;; esac ;;
+        *)  echo invalid ;;
+    esac
+}
+
 parse_and_validate_config() {
     log "Parsing configuration..."
     if ! jq -e . "$CONFIG_FILE" >/dev/null 2>&1; then
@@ -1360,14 +1394,18 @@ parse_and_validate_config() {
     if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
         error "Missing required wallet addresses in $CONFIG_FILE."
     fi
-    # Catch the most common fat-finger: a truncated/placeholder Monero address. Standard
-    # mainnet addresses are 95 chars; don't hard-fail (testnet/integrated differ), just warn.
     if [ "$MONERO_WALLET" == "your_monero_wallet_address" ] || [ "$TARI_WALLET" == "your_tari_wallet_address" ]; then
         error "Wallet addresses in $CONFIG_FILE are still the template placeholders. Set your real addresses."
     fi
-    if [ "${#MONERO_WALLET}" -lt 90 ]; then
-        warn "Monero wallet address looks short (${#MONERO_WALLET} chars) — double-check it's complete."
-    fi
+    # p2pool pays out via coinbase, which CANNOT go to a subaddress or integrated address — it requires a
+    # PRIMARY/standard address (XvB credits by the same address too). A wrong type mines but is NEVER
+    # paid, silently — so hard-fail here rather than let someone lose rewards (#250).
+    case "$(monero_address_type "$MONERO_WALLET")" in
+        primary)    ;;
+        subaddress) error "monero.wallet_address is a SUBADDRESS (starts with 8). p2pool cannot pay subaddresses — use your PRIMARY/standard Monero address (starts with 4)." ;;
+        integrated) error "monero.wallet_address is an INTEGRATED address. p2pool needs your plain PRIMARY address (95 chars, starts with 4)." ;;
+        *)          error "monero.wallet_address ('${MONERO_WALLET:0:6}…', ${#MONERO_WALLET} chars) is not a valid Monero primary address (expected 95 chars starting with 4)." ;;
+    esac
 
     MONERO_MODE=$(jq -r '.monero.mode // "local"' "$CONFIG_FILE")
     case "$MONERO_MODE" in
