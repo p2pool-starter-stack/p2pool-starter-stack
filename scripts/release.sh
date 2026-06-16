@@ -452,7 +452,19 @@ make_bundle() {
     printf 'Pithead %s — pinned install bundle (images pulled from %s, no local build).\n\nQuick start:\n  1. cp config.json.template config.json   # then set your Monero + Tari payout addresses\n     (more options: config.advanced.example.json)\n  2. ./pithead setup\n\nThere are no build contexts here, so pithead pulls the published %s images instead of building.\n' \
         "$TAG" "$REGISTRY" "$TAG" > "$d/README.txt"
     if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"; return 0; fi
-    tar -czf "$out" -C "$WORKDIR" "pithead"
+    # --no-xattrs: we cut releases on macOS, where tar is bsdtar and stores each file's extended
+    # attributes (incl. macOS's com.apple.provenance) as LIBARCHIVE.xattr.* pax headers. GNU tar on
+    # a user's Linux box doesn't know that keyword and warns once per file on extract (#252). Stripping
+    # xattrs makes the bundle clean; the flag is a portable no-op on GNU tar (xattrs aren't stored by
+    # default), so release.sh stays correct if a release is ever cut on Linux.
+    tar --no-xattrs -czf "$out" -C "$WORKDIR" "pithead"
+    # Guard the fix (#252): the bundle must carry no extended-attribute pax headers
+    # (LIBARCHIVE.xattr.* from bsdtar / SCHILY.xattr.* from GNU tar) — those make GNU tar warn once
+    # per file on a Linux extract. pax headers store the keyword as plain text in the tar stream, so
+    # grepping the decompressed bytes detects them regardless of which tar built the archive.
+    if gzip -dc "$out" 2>/dev/null | grep -qa -e 'LIBARCHIVE.xattr' -e 'SCHILY.xattr'; then
+        die "Bundle $out carries xattr pax headers (#252) — GNU tar will warn on extract. Does this tar honor --no-xattrs?"
+    fi
     log "Wrote install bundle: $out"
 }
 

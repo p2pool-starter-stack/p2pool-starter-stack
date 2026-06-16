@@ -135,12 +135,54 @@ Useful flags (full list in `run.sh --help`):
 | `--pruned-data-dir` / `--full-data-dir` | Synced alt DB to enable the opposite prune mode. |
 | `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
 | `--fault-injection` | Also break monerod (stop / SIGSTOP / remove) and assert `status`' down/unhealthy/missing verdicts and the failover→recovery cycle. Destructive-then-restored; local mode only; slow. |
+| `--auth-fail-closed` | Also empty `PROXY_AUTH_TOKEN` in `.env` and assert `pithead up` **refuses to start** (the live counterpart to the tier-1 compose-config check, [#153](https://github.com/p2pool-starter-stack/pithead/issues/153)/[#203](https://github.com/p2pool-starter-stack/pithead/issues/203)), then restore the exact token and recover. Destructive-then-restored; ssh **or** local mode. |
 | `--safety-backup` | Take a `pithead backup` before the destructive scenarios and **auto-roll-back** (down → restore → up) if anything fails; the archive is removed on success. Recommended for the destructive matrix on a precious box; also exercises backup/restore end-to-end. |
 | `--keep` | Don't restore the original config (leave the box on the last scenario). |
 | `--out <dir>` | Where to write the manifest and failure artifacts. |
 | `--list` | Print the matrix and axis coverage and exit. |
 
 The runner exits non-zero if any assertion failed.
+
+---
+
+## One-command branch e2e (`e2e.sh`)
+
+`run.sh` assumes a stack is already deployed on the box. [`tests/integration/e2e.sh`](../tests/integration/e2e.sh)
+is the wrapper that does the whole thing for a **branch** against the live `gouda` test bench — deploy,
+borrow a real miner, run the matrix, and **put everything back** — in one command:
+
+```bash
+tests/integration/e2e.sh <branch> [--mode targeted|check|matrix] [--workers N] [--miner HOST]
+tests/integration/e2e.sh claude/my-feature                 # default: LEAN — dashboard + sync logic
+tests/integration/e2e.sh claude/my-feature --mode check    # non-destructive smoke (pure reads)
+tests/integration/e2e.sh claude/my-feature --mode matrix   # full config sweep (opt-in, pre-release)
+```
+
+What it does, then reverses on exit (even on failure / Ctrl-C — an `EXIT` trap):
+
+1. **Dedicated checkout.** Provisions `/srv/code/pithead-e2e` (clone-once, then `git fetch`) and checks
+   out `<branch>` there. The canonical `/srv/code/pithead` is the **baseline** and is never git-touched.
+   Because the Compose project name is pinned to `pithead`, the two checkouts drive the **same**
+   containers + the **same shared chains** — they're two code copies of one stack, run one at a time, so
+   borrow→test→restore is a fast code/image swap, never a re-sync.
+2. **Seeds** the e2e checkout with the canonical `config.json`/`.env` (same wallet, secrets, onion keys,
+   and shared `monero/tari/p2pool` data dirs), so only the branch's *code* differs.
+3. **Safety backup** (`pithead backup`) as the rollback anchor.
+4. **Borrows a miner** (default `miner-0`): backs up its xmrig config and repoints it at gouda so the
+   matrix has a real worker mining through this stack (1 worker → run with `--workers 1`).
+5. **Deploys** the branch (`pithead apply` — builds the branch's images) and runs `run.sh` **detached**
+   on the box (survives an SSH drop on a long matrix), streaming a heartbeat and the full log at the end.
+6. **Restores** the miner's original pool config and the canonical baseline stack. The synced chains are
+   never touched (asserted post-restore).
+
+`--mode`: **`targeted`** (default, **lean**) validates the **dashboard + the sync logic against the
+already-synced node** — `check` + `--lifecycle` (one controlled restart exercises the sync gate /
+node-down failover) + `--auth-fail-closed`. No full config sweep, and **never a re-sync** — container
+restarts reload the existing chain and re-confirm the tip in seconds. `check` is pure reads only.
+`matrix` is the opt-in full destructive config sweep (lifecycle + fault-injection + auth-fail-closed,
+`--safety-backup` auto-rollback) for a pre-release tier-4 gate. `--keep` leaves it deployed for
+inspection (skips the restore). Requires SSH access to the gouda box and the miner; see the
+[gouda testbench README](../tests/integration/gouda-testbench-README.md).
 
 ---
 

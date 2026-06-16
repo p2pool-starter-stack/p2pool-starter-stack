@@ -37,6 +37,7 @@ CHECK_ONLY=0
 READINESS=0
 RUN_LIFECYCLE=0
 RUN_FAULTS=0
+RUN_AUTH_FAIL_CLOSED=0
 SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
@@ -92,6 +93,10 @@ MATRIX:
                          (down / unhealthy / missing) and the failover→recovery cycle.
                          DESTRUCTIVE-then-restored; local mode only. Slow (healthcheck +
                          node-health debounce).
+  --auth-fail-closed     also run the fail-closed auth phase (#153/#203): empty PROXY_AUTH_TOKEN
+                         in .env and assert `pithead up` REFUSES to start (the live counterpart
+                         to the tier-1 compose-config check), then restore the exact token and
+                         recover. DESTRUCTIVE-then-restored; works in both ssh and local mode.
   --keep                 do NOT restore the original config.json at the end (leaves the box
                          on the last scenario — useful for debugging)
 
@@ -125,6 +130,7 @@ parse_args() {
             --full-data-dir)      FULL_DATA_DIR="$2"; shift 2 ;;
             --lifecycle)  RUN_LIFECYCLE=1; shift ;;
             --fault-injection) RUN_FAULTS=1; shift ;;
+            --auth-fail-closed) RUN_AUTH_FAIL_CLOSED=1; shift ;;
             --safety-backup)   SAFETY_BACKUP=1; shift ;;
             --keep)       KEEP_STATE=1; shift ;;
             --out)        OUT_DIR="$2"; shift 2 ;;
@@ -749,6 +755,56 @@ run_fault_injection() {
     wait_status_ok 240 || true
 }
 
+# --- Fail-closed auth phase (--auth-fail-closed) ----------------------------
+# Live counterpart to the tier-1 compose-config assertion (tests/stack/test_compose.sh): prove the
+# DEPLOY path — not just `docker compose config` — refuses to start an unauthenticated xmrig-proxy
+# control API when PROXY_AUTH_TOKEN is empty (#153/#203). We empty the token in .env and run
+# `pithead up`, which does NOT re-render .env (only setup/apply do — and apply would self-heal by
+# regenerating the token), so the compose `:?` guard fires and the stack refuses to start. The
+# `:?` error aborts `docker compose up` before it touches any container, so a running stack is left
+# intact. We then restore the EXACT original token (a fresh one would break the run's end-of-run
+# secret-fingerprint check) and bring the stack back healthy. DESTRUCTIVE-then-restored.
+
+# Rewrite PROXY_AUTH_TOKEN in .env in place, preserving line order. quote_arg makes the value safe
+# for the remote shell; awk leaves every other line untouched.
+_set_env_token() {  # _set_env_token <value>
+    rx "awk -v t=$(quote_arg "$1") '/^PROXY_AUTH_TOKEN=/{print \"PROXY_AUTH_TOKEN=\" t; next} {print}' .env > .env.itest && mv .env.itest .env"
+}
+
+run_auth_fail_closed() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
+    IT_CURRENT_SCENARIO="auth-fail-closed"
+    echo ""
+    it_log "── fail-closed auth phase (#153/#203) ──────────────"
+
+    local orig; orig="$(env_on_box PROXY_AUTH_TOKEN)"
+    if [ -z "$orig" ]; then
+        it_warn "skipping: PROXY_AUTH_TOKEN already empty on the box (run 'pithead setup'/'apply' first)"
+        return 0
+    fi
+
+    local fails_before="$IT_FAIL"
+
+    # 1. Empty the token; `pithead up` must refuse to start AND name the documented fix.
+    it_step "emptying PROXY_AUTH_TOKEN in .env and running 'pithead up'…"
+    _set_env_token ""
+    local out rc
+    out="$(pithead up 2>&1)"; rc=$?
+    assert_ne "pithead up fails closed (non-zero exit) on an empty PROXY_AUTH_TOKEN" "$rc" "0"
+    assert_contains "compose guard refuses the unauthenticated proxy API (#153)" \
+        "$out" "refusing to start an unauthenticated xmrig-proxy control API"
+
+    # 2. Restore the EXACT original token (apply would mint a new one) and recover.
+    it_step "restoring the original PROXY_AUTH_TOKEN and recovering…"
+    _set_env_token "$orig"
+    assert_eq "original PROXY_AUTH_TOKEN restored verbatim" "$(env_on_box PROXY_AUTH_TOKEN)" "$orig"
+    pithead up >/dev/null 2>&1 || it_warn "recovery 'pithead up' returned non-zero; check the box."
+    wait_status_ok 240 || true
+    pithead status >/dev/null 2>&1; assert_rc "stack healthy again after token restore" "$?" "0"
+
+    [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "auth-fail-closed" "$OUT_DIR"
+}
+
 # --- Safety backup / rollback (--safety-backup) -----------------------------
 # Take a real `pithead backup` before the destructive scenarios so a failed run can be rolled
 # all the way back (config, .env, Caddyfile, Tor onion keys, dashboard DB). This both protects
@@ -865,6 +921,7 @@ main() {
 
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
     [ "$RUN_FAULTS" = "1" ] && run_fault_injection
+    [ "$RUN_AUTH_FAIL_CLOSED" = "1" ] && run_auth_fail_closed
 
     # Failure → roll the box back to the safety backup; success → leave it (restore_baseline
     # just puts config.json back to where we found it). Then drop the generated archive.

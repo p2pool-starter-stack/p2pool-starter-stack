@@ -4,7 +4,7 @@ import time
 import pytest
 
 from mining_dashboard.service.storage_service import StateManager
-from mining_dashboard.config.config import TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
+from mining_dashboard.config.config import TIER_DEFAULTS, HISTORY_RETENTION_SEC
 
 
 class TestDefaults:
@@ -145,21 +145,6 @@ class TestDbHealth:
         sm.close()
 
 
-class TestWorkers:
-    def test_update_and_get_known_workers(self, state_manager):
-        state_manager.update_known_workers([{"name": "rig1", "ip": "10.0.0.1"}])
-        workers = state_manager.get_known_workers()
-        assert workers == [{"name": "rig1", "ip": "10.0.0.1"}]
-
-    def test_worker_without_ip_skipped(self, state_manager):
-        state_manager.update_known_workers([{"name": "rig1"}, {"ip": "10.0.0.2"}])
-        assert state_manager.get_known_workers() == []
-
-    def test_none_list_is_noop(self, state_manager):
-        state_manager.update_known_workers(None)
-        assert state_manager.get_known_workers() == []
-
-
 class TestSnapshot:
     def test_roundtrip(self, state_manager):
         state_manager.save_snapshot({"a": 1, "b": [1, 2, 3]})
@@ -297,6 +282,29 @@ class TestSchemaMigration:
         finally:
             sm.close()
 
+    def test_orphaned_workers_table_dropped_on_upgrade(self, tmp_path):
+        # Intent (#144): the dead known_workers persistence layer was removed, so opening a DB
+        # that still has its orphaned `workers` table drops it in place — tidying old installs
+        # without touching history/shares/kv. The worker list is now sourced live from the
+        # xmrig-proxy, never from the DB. Also asserts the in-memory state key is gone.
+        db = str(tmp_path / "with_workers.db")
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)")
+        conn.execute("CREATE TABLE workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
+        conn.execute("INSERT INTO workers VALUES (?, ?, ?)", ("rig1", "10.0.0.1", 123.0))
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)  # __init__ runs _migrate_db -> DROP TABLE IF EXISTS workers
+        try:
+            tables = {r[0] for r in sm._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            assert "workers" not in tables, "orphaned workers table dropped (#144)"
+            assert "known_workers" not in sm.state, "dead known_workers state key removed (#144)"
+            assert {"history", "kv_store", "shares"} <= tables, "core tables left intact"
+        finally:
+            sm.close()
+
 
 class TestRetention:
     """Long-running behavior: history/workers must not grow unbounded. Tests are white-box
@@ -330,13 +338,3 @@ class TestRetention:
                 "SELECT COUNT(*) FROM history WHERE timestamp < ?",
                 (time.time() - HISTORY_RETENTION_SEC,)).fetchone()[0]
         assert remaining == 0, "expired DB rows are pruned"
-
-    def test_stale_workers_pruned_after_retention_window(self, state_manager):
-        # Intent: a worker not seen within WORKER_RETENTION_SEC (7d) is dropped when any worker
-        # next checks in — so stale name→IP mappings don't linger and leak memory.
-        state_manager.update_known_workers([{"name": "rig1", "ip": "10.0.0.1"}])
-        # Backdate rig1 so it's now older than the retention window.
-        state_manager.state["known_workers"]["rig1"]["last_seen"] = time.time() - WORKER_RETENTION_SEC - 3600
-        state_manager.update_known_workers([{"name": "rig2", "ip": "10.0.0.2"}])  # a fresh check-in
-        names = {w["name"] for w in state_manager.get_known_workers()}
-        assert "rig2" in names and "rig1" not in names
