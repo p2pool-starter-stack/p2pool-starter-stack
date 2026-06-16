@@ -8,7 +8,7 @@ import random
 from collections import deque
 from typing import Dict, List, Optional, Any
 from mining_dashboard.config.config import (
-    DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC,
+    DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC,
     HASHRATE_WINDOW_COLUMNS,
 )
 
@@ -40,7 +40,6 @@ class StateManager:
         self.state = {
             "hashrate_history": deque(),
             "shares": [],
-            "known_workers": {}, # Persist worker IPs by name to prevent loss during XvB switching
             "xvb": {
                 "total_donated_time": 0.0,
                 "current_mode": "P2POOL",
@@ -105,7 +104,6 @@ class StateManager:
         # DBs get them via _migrate_db. Same source list (_WINDOW_EXTRA_COLUMNS) for both paths.
         extra = "".join(f", {c} REAL DEFAULT 0" for c in _WINDOW_EXTRA_COLUMNS)
         self._conn.execute(f"CREATE TABLE IF NOT EXISTS history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL{extra})")
-        self._conn.execute("CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
         self._conn.execute("CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)")
 
@@ -144,13 +142,10 @@ class StateManager:
                 self.logger.info(f"Migrating DB: Adding {col} column to history")
                 self._conn.execute(f"ALTER TABLE history ADD COLUMN {col} REAL DEFAULT 0")
 
-        # Workers Table Migrations
-        cursor.execute("PRAGMA table_info(workers)")
-        w_columns = {info[1] for info in cursor.fetchall()}
-        if 'last_seen' not in w_columns:
-            self.logger.info("Migrating DB: Adding last_seen column to workers")
-            self._conn.execute("ALTER TABLE workers ADD COLUMN last_seen REAL")
-            self._conn.execute("UPDATE workers SET last_seen = ?", (time.time(),))
+        # Drop the orphaned `workers` table (#144). It backed the known_workers persistence layer,
+        # which was dead code — the worker list is sourced live from the xmrig-proxy. Tidies old
+        # DBs; harmless no-op on fresh ones.
+        self._conn.execute("DROP TABLE IF EXISTS workers")
 
     def load(self):
         """
@@ -179,18 +174,7 @@ class StateManager:
                         history.append(item)
                     self.state["hashrate_history"] = deque(history)
 
-                    # 2. Load Workers
-                    # Only load workers seen recently
-                    worker_cutoff = time.time() - WORKER_RETENTION_SEC
-                    cursor.execute("SELECT name, ip, last_seen FROM workers WHERE last_seen > ? OR last_seen IS NULL", (worker_cutoff,))
-                    self.state["known_workers"] = {}
-                    for row in cursor.fetchall():
-                        self.state["known_workers"][row["name"]] = {
-                            "ip": row["ip"],
-                            "last_seen": row["last_seen"] if row["last_seen"] is not None else time.time()
-                        }
-
-                    # 3. Load XVB Stats (KV Store)
+                    # 2. Load XVB Stats (KV Store)
                     cursor.execute("SELECT key, value FROM kv_store WHERE key LIKE 'xvb_%'")
                     for row in cursor.fetchall():
                         key = row["key"]
@@ -220,7 +204,7 @@ class StateManager:
                         except (ValueError, TypeError):
                             self.logger.warning(f"Skipping corrupted KV pair: {key}={val}")
 
-                    # 4. Load Shares
+                    # 3. Load Shares
                     cursor.execute("SELECT ts, difficulty FROM shares WHERE ts > ? ORDER BY ts ASC", (history_cutoff,))
                     self.state["shares"] = [dict(row) for row in cursor.fetchall()]
                     
@@ -420,47 +404,6 @@ class StateManager:
             except sqlite3.Error as e:
                 self._db_error("XVB Update Error", e)
 
-    def update_known_workers(self, workers_list: List[Dict[str, str]]):
-        """
-        Updates the list of known workers.
-        
-        Args:
-            workers_list (list): List of dicts [{'name': '...', 'ip': '...'}, ...]
-        """
-        if workers_list is None:
-            workers_list = []
-        ts = time.time()
-        to_upsert = []
-        
-        with self._lock:
-            for w in workers_list:
-                name = w.get('name')
-                ip = w.get('ip')
-                if name and ip:
-                    # Update memory
-                    self.state["known_workers"][name] = {"ip": ip, "last_seen": ts}
-                    
-                    # Always update DB timestamp for active workers
-                    to_upsert.append((name, ip, ts))
-            
-            # Prune old workers from memory
-            cutoff = ts - WORKER_RETENTION_SEC
-            to_remove = [k for k, v in self.state["known_workers"].items() if v["last_seen"] < cutoff]
-            for k in to_remove:
-                del self.state["known_workers"][k]
-        
-        if to_upsert:
-            try:
-                with self._db_lock:
-                    if not self._conn:
-                        return
-                    with self._conn:
-                        self._conn.executemany("INSERT OR REPLACE INTO workers (name, ip, last_seen) VALUES (?, ?, ?)", to_upsert)
-                        # Prune old workers from DB
-                        self._conn.execute("DELETE FROM workers WHERE last_seen < ?", (ts - WORKER_RETENTION_SEC,))
-            except sqlite3.Error as e:
-                self._db_error("Worker Update Error", e)
-
     def save_snapshot(self, data: Dict[str, Any]):
         """Persists the full application state snapshot to the KV store."""
         if not data:
@@ -492,11 +435,6 @@ class StateManager:
         except (json.JSONDecodeError, sqlite3.Error) as e:
             self.logger.error(f"Snapshot Load Error: {e}")
         return None
-
-    def get_known_workers(self) -> List[Dict[str, str]]:
-        """Returns a list of worker dicts for the collector."""
-        with self._lock:
-            return [{"name": k, "ip": v["ip"]} for k, v in self.state["known_workers"].items()]
 
     def get_history(self) -> List[Dict[str, Any]]:
         """Returns a copy of the hashrate history."""

@@ -220,10 +220,13 @@ XVB_SWITCH_OVERHEAD_MS = 5000
 
 # --- Data Retention Policies ---
 HISTORY_RETENTION_SEC = 30 * 24 * 3600  # 30 Days
+# Retention for the known_workers persistence layer removed in #144. No live consumer in the current
+# tree; kept for the deferred Telegram worker-presence monitor (#121), which reuses it as its
+# retention default — consult that work before removing.
 WORKER_RETENTION_SEC = 7 * 24 * 3600    # 7 Days
 # How long an offline worker lingers in the live "Workers Alive" table before it falls off (#182).
-# Operates on the live proxy-sourced list (NOT the dead known_workers path, #144). A reconnect
-# re-adds the worker. 1h keeps a just-disconnected rig visible (shown as DOWN) but clears ghosts.
+# Operates on the live proxy-sourced list. A reconnect re-adds the worker. 1h keeps a
+# just-disconnected rig visible (shown as DOWN) but clears ghosts.
 WORKER_FALLOFF_SEC = 3600               # 1 Hour
 
 # --- Hashrate averaging windows (#168) ---

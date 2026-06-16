@@ -260,7 +260,7 @@ class WorkerLifecycle:
       (any positive value is left untouched).
     - ``last_active`` — the last time it was seen online. An offline worker falls off the table once
       it's been inactive longer than ``falloff_sec`` (#182); a reconnect re-adds it. Operates purely
-      on the live proxy-sourced list, never the dead ``known_workers`` path (#144).
+      on the live proxy-sourced worker list.
 
     Pure given (workers, now) plus its accumulated state, so it unit-tests without the data loop.
     Mutates each surviving online worker's ``uptime`` in place and returns the filtered list.
@@ -485,7 +485,7 @@ class DataService:
             while True:
                 try:
                     # 1. Collect Local Statistics (High Frequency Polling)
-                    stratum_raw, worker_configs = get_stratum_stats()
+                    stratum_raw, _ = get_stratum_stats()
                     
                     # 2. Fetch Worker Statistics from XMRig Proxy + normalize the payload.
                     proxy_workers = []
