@@ -282,6 +282,29 @@ class TestSchemaMigration:
         finally:
             sm.close()
 
+    def test_orphaned_workers_table_dropped_on_upgrade(self, tmp_path):
+        # Intent (#144): the dead known_workers persistence layer was removed, so opening a DB
+        # that still has its orphaned `workers` table drops it in place — tidying old installs
+        # without touching history/shares/kv. The worker list is now sourced live from the
+        # xmrig-proxy, never from the DB. Also asserts the in-memory state key is gone.
+        db = str(tmp_path / "with_workers.db")
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)")
+        conn.execute("CREATE TABLE workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
+        conn.execute("INSERT INTO workers VALUES (?, ?, ?)", ("rig1", "10.0.0.1", 123.0))
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)  # __init__ runs _migrate_db -> DROP TABLE IF EXISTS workers
+        try:
+            tables = {r[0] for r in sm._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            assert "workers" not in tables, "orphaned workers table dropped (#144)"
+            assert "known_workers" not in sm.state, "dead known_workers state key removed (#144)"
+            assert {"history", "kv_store", "shares"} <= tables, "core tables left intact"
+        finally:
+            sm.close()
+
 
 class TestRetention:
     """Long-running behavior: history/workers must not grow unbounded. Tests are white-box

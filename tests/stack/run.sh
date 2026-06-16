@@ -1244,6 +1244,29 @@ out="$(cd "$R" && SUDO_LOG=/dev/null PATH="$R/bin:$PATH" ./pithead reset-dashboa
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
 
+echo "== release: install bundle is free of macOS xattr pax headers (#252) =="
+# Static guard: make_bundle must keep `--no-xattrs` AND the post-bundle xattr assertion, so the
+# fix can't be silently reverted in a future edit.
+REL="$ROOT/scripts/release.sh"
+assert_contains "release.sh tars the bundle with --no-xattrs" \
+    "$(grep -E '^[[:space:]]*tar .*--no-xattrs' "$REL" || true)" "--no-xattrs"
+assert_contains "release.sh guards the bundle against xattr pax headers" \
+    "$(cat "$REL")" "LIBARCHIVE.xattr"
+# Functional: this platform's tar must actually honour --no-xattrs (the guard's whole premise).
+# Tar a file that carries an xattr where we can set one (macOS: xattr -w / Linux: setfattr; a
+# no-op elsewhere), and assert no LIBARCHIVE.xattr/SCHILY.xattr pax header survives — the exact
+# check release.sh runs. Reproduces #252 on macOS; a clean no-op on GNU tar.
+RELTMP="$(mktemp -d)"; mkdir -p "$RELTMP/pithead"; echo hi > "$RELTMP/pithead/f"
+xattr -w com.test val "$RELTMP/pithead/f" 2>/dev/null \
+    || setfattr -n user.test -v val "$RELTMP/pithead/f" 2>/dev/null || true
+tar --no-xattrs -czf "$RELTMP/b.tar.gz" -C "$RELTMP" pithead 2>/dev/null
+if gzip -dc "$RELTMP/b.tar.gz" 2>/dev/null | grep -qa -e 'LIBARCHIVE.xattr' -e 'SCHILY.xattr'; then
+    bad "tar --no-xattrs yields an xattr-free bundle" "xattr pax headers present despite --no-xattrs"
+else
+    ok "tar --no-xattrs yields an xattr-free bundle"
+fi
+rm -rf "$RELTMP"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
