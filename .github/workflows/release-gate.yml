@@ -35,6 +35,12 @@ concurrency:
 jobs:
   release-gate:
     name: Tier-4 live matrix (real nodes)
+    # Only run automatically once a self-hosted runner is actually wired up — set the repo variable
+    # ENABLE_RELEASE_GATE=true when one is registered. Without this guard, every push to main queues
+    # a job no runner can claim, and GitHub auto-cancels it after a 24h timeout — a permanent red ✗
+    # on main. A skipped job is green/neutral instead. A manual workflow_dispatch ALWAYS runs, so a
+    # maintainer can still validate a reviewed ref on a registered runner on demand.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_RELEASE_GATE == 'true' }}
     # Register the server with these labels: `pithead-release` scopes the gate to the dedicated
     # box; prefer an ephemeral / just-in-time runner in its own runner group.
     runs-on: [self-hosted, pithead-release]
