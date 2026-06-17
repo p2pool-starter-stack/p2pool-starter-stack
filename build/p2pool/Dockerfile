@@ -4,9 +4,11 @@ FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae
 ARG P2POOL_VERSION=v4.16
 ARG P2POOL_HASH=1b03b2e4d4adfe488b2867eb85b57366fbaf8594a7f84cdbf13a3c8519159280
 
-# Install runtime dependencies
+# Install runtime dependencies. socat (#278): the entrypoint bridges 127.0.0.1 -> the real monerod so
+# p2pool's node RPC/ZMQ stay DIRECT while --socks5 routes only the sidechain over Tor (p2pool proxies
+# everything but loopback when --socks5 is set).
 RUN apt-get update && apt-get install -y \
-    wget ca-certificates libgomp1 \
+    wget ca-certificates libgomp1 socat \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget -O p2pool.tar.gz https://github.com/SChernykh/p2pool/releases/download/${P2POOL_VERSION}/p2pool-${P2POOL_VERSION}-linux-x64.tar.gz \
