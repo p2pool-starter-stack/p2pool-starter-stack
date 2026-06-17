@@ -24,7 +24,15 @@ jq -r '
 ' "$S" 2>/dev/null || cat "$S"
 
 echo "  ---"
-echo "  recent events:"
+# Stability line FIRST so old launch-time events below aren't alarming: if nothing has happened for
+# a while, the run is simply healthy and quiet (switches/leaks/recoveries would log a fresh event).
+last_ts="$(tail -n1 "$BENCH_DIR/events.log" 2>/dev/null | awk '{print $1}')"
+if [ -n "$last_ts" ]; then
+    age=$(( $(date -u +%s) - $(date -u -d "$last_ts" +%s 2>/dev/null || echo "$(date -u +%s)") ))
+    [ "$age" -lt 0 ] && age=0
+    printf '  stable: no new events for %dh %dm (a switch / leak / recovery would log one)\n' $((age/3600)) $(((age%3600)/60))
+fi
+echo "  recent events (oldest may be from launch):"
 tail -n 5 "$BENCH_DIR/events.log" 2>/dev/null | sed 's/^/    /' || true
 tcl() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
 echo "  collector lines: tor=$(tcl "$BENCH_DIR/tor.jsonl")  clearnet=$(tcl "$BENCH_DIR/clearnet.jsonl")"
