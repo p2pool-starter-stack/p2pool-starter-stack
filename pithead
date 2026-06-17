@@ -283,6 +283,7 @@ stack_upgrade() {
     else
         PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
     fi
+    apply_tor_egress_firewall   # reassert the Tor-only egress firewall (#270), consistent with up/apply
     log "Stack upgraded."
 }
 
