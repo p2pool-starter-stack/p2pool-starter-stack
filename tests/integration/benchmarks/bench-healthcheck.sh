@@ -63,8 +63,10 @@ arm=clearnet
 case "$(envv P2POOL_FLAGS)" in *--socks5*) arm=tor ;; esac
 egress=n/a; fw=n/a
 if [ "$arm" = tor ]; then
-    # quick 2-poll persistence snapshot (the rigorous multi-poll gate runs at switch time)
-    if bash "$HERE/bench-verify-egress.sh" tor --dir "$DIR" --polls 2 --interval 5 >/dev/null 2>&1; then
+    # 3-poll/30s persistence check — matches the switch-time gate's rigor so a brief Tari connection
+    # (Tari still attempts some direct dials that the firewall DROPs; the home IP is never exposed)
+    # doesn't false-flag BROKEN and trigger an unnecessary recovery. Only a SUSTAINED leak fails.
+    if bash "$HERE/bench-verify-egress.sh" tor --dir "$DIR" --polls 3 --interval 10 >/dev/null 2>&1; then
         egress=clean
     else
         egress=LEAK; problems="${problems}clearnet-leak "
