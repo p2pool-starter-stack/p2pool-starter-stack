@@ -158,6 +158,34 @@ assert_contains "monero clearnet disable is DEST" "$(run_sourced "$SANDBOX" desc
 assert_contains "tari clearnet enable is DEST"    "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "DEST"
 assert_contains "tari clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CLEARNET"
 
+echo "== unit: p2pool_outbound_flags — Tor-by-default for outbound P2P (#165) =="
+# Default (clearnet absent/false) routes outbound sidechain dials through the bundled Tor SOCKS proxy.
+assert_eq "default → Tor SOCKS flags"  "$(run_sourced "$SANDBOX" p2pool_outbound_flags false 172.28.0)" "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
+assert_eq "empty arg → Tor (default off)" "$(run_sourced "$SANDBOX" p2pool_outbound_flags '' 172.28.0)"   "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
+# clearnet opt-out → no SOCKS flags (p2pool dials peers directly, IP exposed).
+assert_eq "clearnet=true → no SOCKS flags" "$(run_sourced "$SANDBOX" p2pool_outbound_flags true 172.28.0)" ""
+assert_eq "clearnet=yes (any truthy) → no SOCKS flags" "$(run_sourced "$SANDBOX" p2pool_outbound_flags yes 172.28.0)" ""
+# Honours a custom bridge subnet (#180) — the Tor container is always .25 of the configured /24.
+assert_contains "custom NETWORK_PREFIX points at its Tor (.25)" "$(run_sourced "$SANDBOX" p2pool_outbound_flags false 172.30.5)" "172.30.5.25:9050"
+
+echo "== p2pool entrypoint word-splits P2POOL_FLAGS into separate args (#165) =="
+# Compose passes P2POOL_FLAGS as ONE env var (a `- ${VAR}` command item is a single arg, unsplit);
+# the entrypoint must word-split it so a multi-flag value reaches p2pool as distinct args. A stub
+# p2pool on PATH captures what it's exec'd with.
+PE="$SANDBOX/p2pool-ep/bin"; mkdir -p "$PE"
+cat > "$PE/p2pool" <<'STUB'
+#!/usr/bin/env bash
+printf 'ARGC=%s\n' "$#"; for a in "$@"; do printf 'ARG=[%s]\n' "$a"; done
+STUB
+chmod +x "$PE/p2pool"
+ep_out=$(PATH="$PE:$PATH" P2POOL_FLAGS="--mini --socks5 172.28.0.25:9050 --socks5-proxy-type tor" bash "$ROOT/build/p2pool/entrypoint.sh" --stratum 0.0.0.0:3333 2>&1)
+assert_contains "--socks5 is its own arg"           "$ep_out" "ARG=[--socks5]"
+assert_contains "socks address is its own arg"      "$ep_out" "ARG=[172.28.0.25:9050]"
+assert_contains "proxy-type value split out"        "$ep_out" "ARG=[tor]"
+assert_contains "2 fixed + 5 flag tokens = ARGC 7"  "$ep_out" "ARGC=7"
+ep_empty=$(PATH="$PE:$PATH" P2POOL_FLAGS="" bash "$ROOT/build/p2pool/entrypoint.sh" --stratum 0.0.0.0:3333 2>&1)
+assert_contains "empty P2POOL_FLAGS → no stray empty arg (ARGC=2)" "$ep_empty" "ARGC=2"
+
 echo "== unit: clearnet initial sync helpers (#183) =="
 # normalize_bool: 1/true/yes/on (any case) => true; everything else (incl. empty) => false, matching
 # the dashboard's MONERO_PRUNE truthiness so a config bool reads the same on both sides.
@@ -774,7 +802,10 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
 DOCKER_LOG="$V/docker.log"; : > "$DOCKER_LOG"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-assert_eq "pool flag propagated"  "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)"  "--mini"
+assert_contains "pool flag propagated"  "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)"  "--mini"
+# Default routes outbound sidechain P2P through Tor (#165): the rendered P2POOL_FLAGS carries the
+# pool flag AND the Tor SOCKS flags (no p2pool.clearnet set in this config).
+assert_contains "outbound P2P via Tor by default (#165)" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)" "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
 assert_eq "stratum_bind default"  "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_BIND)" "0.0.0.0"
 assert_eq "token preserved"       "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved"       "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"

@@ -933,6 +933,15 @@ normalize_bool() {
     esac
 }
 
+# p2pool outbound SOCKS flags (#165). p2pool's --onion-address only advertises an onion for INBOUND;
+# without --socks5 it dials outbound sidechain peers over clearnet, exposing the home IP. Returns the
+# Tor SOCKS flags by default; empty when the operator opts into clearnet (p2pool.clearnet=true) for
+# max yield. Pure (args only: <clearnet-bool> <network-prefix>) so it unit-tests in isolation.
+p2pool_outbound_flags() {
+    [ "$(normalize_bool "${1:-}")" = "true" ] && return 0
+    printf -- '--socks5 %s.25:9050 --socks5-proxy-type tor' "${2:-172.28.0}"
+}
+
 # Keys whose value differs between two env files (added, removed, or changed), one per line.
 env_changed_keys() {
     comm -3 <(sort "$1") <(sort "$2") 2>/dev/null \
@@ -1755,6 +1764,13 @@ render_env() {
     elif [ "$pool_type" == "nano" ]; then
         p2pool_flags="--nano"; p2pool_port="37890"
     fi
+
+    # Route outbound sidechain P2P through Tor by default (#165); p2pool.clearnet opts out for yield.
+    # See p2pool_outbound_flags + docs/privacy.md. Uses the configured subnet so a custom NETWORK_PREFIX
+    # (#180) still points at the Tor container (.25).
+    local p2pool_socks
+    p2pool_socks=$(p2pool_outbound_flags "$(jq -r '.p2pool.clearnet // false' "$CONFIG_FILE")" "$NETWORK_PREFIX")
+    [ -n "$p2pool_socks" ] && p2pool_flags="${p2pool_flags:+$p2pool_flags }$p2pool_socks"
 
     # XvB config (accepts legacy xmrig_proxy.* keys)
     local xvb_enabled xvb_url xvb_donor xvb_donation_level

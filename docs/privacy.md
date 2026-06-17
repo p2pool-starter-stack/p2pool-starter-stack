@@ -7,11 +7,11 @@ goes, whether it's routed over Tor, whether it's on by default, and how to lock 
 possible (or trades away yield), the connection must be **off or Tor-routed by default**, have a
 **documented toggle**, and be **listed here**.
 
-Honesty first: the stack is **Tor-first, not yet Tor-only**. Monero and Tari — including the DNS
-lookups they used to leak — are fully Tor-routed. But as of v1.0 **two outbound yield paths still
-use clearnet** (P2Pool's outbound peers and XvB donation mining), and **install/build reveals your
-IP once**. Those are called out below with how to mitigate each today, and both clearnet yield paths
-are slated to move to Tor-by-default (with an opt-out) in v1.1.
+Honesty first: the stack is **Tor-first**. Monero and Tari — including the DNS lookups they used to
+leak — are fully Tor-routed, and as of v1.1 **P2Pool's outbound sidechain peers route over Tor by
+default** too (#165, with a `p2pool.clearnet` opt-out). The remaining clearnet yield path is **XvB
+donation mining** (Tor-by-default tracked in #166), plus **install/build reveals your IP once**.
+Those are called out below with how to mitigate each.
 
 There is also one **opt-in** that deliberately moves a node onto clearnet: an
 [optional clearnet initial sync](#optional-clearnet-initial-sync-off-by-default) that lets Monero
@@ -49,7 +49,7 @@ What the running stack sends to the internet, connection by connection.
 | **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | Tor by default; can opt into clearnet (TCP) for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) |
 | **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | clearnet sync ([#183](#optional-clearnet-initial-sync-off-by-default)) re-enables the `seeds.tari.com` DNS seed for the sync window |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
-| **P2Pool** outbound sidechain peers | clearnet P2Pool peers | **your real home IP** | ❌ **clearnet** | **on** | ⏳ Tor-by-default in v1.1 (#165). Harden now → [below](#hardening-the-clearnet-paths) |
+| **P2Pool** outbound sidechain peers | P2Pool sidechain peers, via Tor | — | ✅ **Tor** (`--socks5`, proxy-type `tor`) by default (#165) | on | opt out with `p2pool.clearnet: true` (exposes your IP for max yield) → [below](#hardening-the-clearnet-paths) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
 | **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` | **your real home IP** | ❌ **clearnet** | on while donating | ⏳ Tor-by-default in v1.1 (#166). Disable XvB to stop it |
 | Dashboard **update check** (#224) | `api.github.com` | nothing about you — GitHub sees a **Tor exit**, not your IP | ✅ Tor (`socks5h`) | **on** | `dashboard.check_for_updates: false` to opt out; cached, fails silently offline |
@@ -83,25 +83,21 @@ the risk is the **one-time IP disclosure**, not tampering.
 
 ## Hardening the clearnet paths
 
-Two outbound yield paths use clearnet in v1.0. Here's how to close each one **today**; v1.1 will make
-the Tor routing the default.
+The **XvB donation** path still uses clearnet by default (Tor-by-default tracked in #166) — close it
+today by disabling XvB, or see below. **P2Pool's outbound peers now route over Tor by default** as of
+v1.1 (#165), documented here for completeness.
 
-### P2Pool outbound peers (#165)
+### P2Pool outbound peers (#165) — ✅ Tor by default
 
-P2Pool advertises its onion for *inbound* peers but dials *outbound* sidechain peers over clearnet,
-exposing your IP to the P2Pool network. **v1.0 has no config knob for this yet** (a Tor-by-default
-toggle is tracked in #165); to route those dials through Tor today, hand-edit P2Pool's `command:` in
-`docker-compose.yml`, adding the SOCKS flags just before `${P2POOL_FLAGS}`:
+P2Pool advertises its onion for *inbound* peers but, without a SOCKS proxy, would dial *outbound*
+sidechain peers over clearnet, exposing your IP to the P2Pool network. As of v1.1 `pithead` injects
+`--socks5 <tor-ip>:9050 --socks5-proxy-type tor` into P2Pool's `command:` **by default**, so outbound
+dials go through Tor — no action needed.
 
-```yaml
-# docker-compose.yml — the p2pool service `command:`
-      - --socks5
-      - 172.28.0.25:9050
-      - --socks5-proxy-type
-      - tor
-      # add '--no-clearnet-p2p' (its own line) to refuse clearnet peers entirely (onion-only)
-      - ${P2POOL_FLAGS}
-```
+**Opt out** for maximum yield (lower stale/uncle rate + a larger peer set, at the cost of exposing
+your IP — worse on `--mini`/`--nano`): set `p2pool.clearnet: true` in `config.json` and re-run
+`pithead apply`. For the strictest posture — refuse clearnet peers entirely (onion-only) — P2Pool
+also has a `--no-clearnet-p2p` flag, not yet wired to its own config knob.
 
 Then `docker compose up -d p2pool`. **Trade-off:** Tor adds latency to share propagation, which can
 raise your orphan/uncle rate (most noticeable on mini/nano), and `--no-clearnet-p2p` shrinks your
