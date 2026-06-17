@@ -44,7 +44,8 @@
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",
         "donor_id": "auto",
-        "donation_level": "auto"
+        "donation_level": "auto",
+        "tor": true
     },
 
     "tor": {

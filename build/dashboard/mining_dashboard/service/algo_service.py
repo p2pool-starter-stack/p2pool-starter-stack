@@ -8,6 +8,8 @@ from mining_dashboard.config.config import (
     XVB_DONOR_ID,
     P2POOL_URL,
     XVB_POOL_URL,
+    XVB_TOR_ENABLED,
+    XVB_TOR_SOCKS5,
     XVB_MIN_TIME_SEND_MS,
     ENABLE_XVB,
     XVB_DONATION_LEVEL,
@@ -44,16 +46,19 @@ class AlgoService:
         """
         Configures the upstream pool priority for the XMRig Proxy.
         """
+        # The local p2pool pool dials direct (it's on the bridge). The XvB pool routes through Tor by
+        # default (#166) — its per-pool `socks5` makes the proxy reach na.xmrvsbeast.com via Tor
+        # (DNS resolved proxy-side), so donation mining doesn't expose the home IP. `xvb.tor: false`
+        # opts out. Only the XvB pool gets `socks5`; the local pool never does.
+        p2pool_pool = {"url": P2POOL_URL, "user": MONERO_WALLET_ADDRESS, "pass": "x", "coin": "monero"}
+        xvb_pool = {"url": XVB_POOL_URL, "user": XVB_DONOR_ID, "pass": "x", "coin": "monero"}
+        if XVB_TOR_ENABLED:
+            xvb_pool["socks5"] = XVB_TOR_SOCKS5
+
         if mode == "P2POOL":
-            pools = [
-                {"url": P2POOL_URL, "user": MONERO_WALLET_ADDRESS, "pass": "x", "enabled": True, "coin": "monero"},
-                {"url": XVB_POOL_URL, "user": XVB_DONOR_ID, "pass": "x", "enabled": False, "coin": "monero"}
-            ]
+            pools = [{**p2pool_pool, "enabled": True}, {**xvb_pool, "enabled": False}]
         else:
-            pools = [
-                {"url": XVB_POOL_URL, "user": XVB_DONOR_ID, "pass": "x", "enabled": True, "coin": "monero"},
-                {"url": P2POOL_URL, "user": MONERO_WALLET_ADDRESS, "pass": "x", "enabled": False, "coin": "monero"}
-            ]
+            pools = [{**xvb_pool, "enabled": True}, {**p2pool_pool, "enabled": False}]
 
         try:
             # Fetch current full configuration to preserve other settings
