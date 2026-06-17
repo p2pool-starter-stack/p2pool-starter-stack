@@ -26,4 +26,5 @@ jq -r '
 echo "  ---"
 echo "  recent events:"
 tail -n 5 "$BENCH_DIR/events.log" 2>/dev/null | sed 's/^/    /' || true
-echo "  collector lines: tor=$(wc -l < "$BENCH_DIR/tor.jsonl" 2>/dev/null || echo 0)  clearnet=$(wc -l < "$BENCH_DIR/clearnet.jsonl" 2>/dev/null || echo 0)"
+tcl() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
+echo "  collector lines: tor=$(tcl "$BENCH_DIR/tor.jsonl")  clearnet=$(tcl "$BENCH_DIR/clearnet.jsonl")"

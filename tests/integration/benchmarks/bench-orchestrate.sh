@@ -55,7 +55,15 @@ gate_egress() {  # <arm> — Tor arm must pass the rigorous multi-poll leak chec
     ( cd "$DIR" && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || true
     sleep 20
     if bash "$HERE/bench-verify-egress.sh" tor --dir "$DIR" --polls 4 --interval 10 >>"$ORCH_LOG" 2>&1; then
-        event "arm=tor egress-gate=PASS(after-retry)"; return 0
+        event "arm=tor egress-gate=PASS(after-firewall-retry)"; return 0
+    fi
+    # Last resort: a grandfathered Tari clearnet connection (#271 residue, survives via ESTABLISHED).
+    # Restarting tari makes it re-dial under the firewall + proxy_bypass=false (SOCKS) → clean.
+    log "still leaking — restarting tari to clear grandfathered clearnet connections (#271 residue)"
+    ( cd "$DIR" && docker compose restart tari ) >>"$ORCH_LOG" 2>&1 || true
+    sleep 30
+    if bash "$HERE/bench-verify-egress.sh" tor --dir "$DIR" --polls 4 --interval 10 >>"$ORCH_LOG" 2>&1; then
+        event "arm=tor egress-gate=PASS(after-tari-restart)"; return 0
     fi
     event "arm=tor egress-gate=FAIL — window flagged invalid"; log "ERROR: tor arm still leaking; window flagged invalid"
     return 1
