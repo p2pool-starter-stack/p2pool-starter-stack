@@ -13,8 +13,9 @@
 #   3. Takes a `pithead backup` of the live stack (the rollback anchor).
 #   4. Borrows a miner (default miner-0): backs up its xmrig config and repoints it at gouda so
 #      the live matrix has a real worker mining through this stack.
-#   5. Deploys the branch (`pithead apply` — builds the branch's images) and runs the live harness
-#      (tests/integration/run.sh) DETACHED on the box so an SSH drop can't kill a long matrix.
+#   5. Deploys the branch (`pithead upgrade` — re-renders configs AND rebuilds the branch's first-party
+#      images from build/, so a Dockerfile/entrypoint change is actually tested #272) and runs the live
+#      harness (tests/integration/run.sh) DETACHED on the box so an SSH drop can't kill a long matrix.
 #   6. ALWAYS restores: the miner's original pool config, and the canonical baseline stack — even
 #      on failure or Ctrl-C (an EXIT trap). The synced chains are never touched.
 #
@@ -270,8 +271,14 @@ borrow_miner() {
 
 # --- Phase 4: deploy the branch ---------------------------------------------
 deploy_branch() {
-    log "Deploying the branch on $GOUDA_HOST (pithead apply — builds the branch's images)"
-    on_gouda "cd '$E2E_DIR' && ./pithead apply -y" || die "pithead apply failed in $E2E_DIR — branch did not deploy."
+    # #272: `pithead apply` runs `compose up --pull` (never --build), so it would test whatever images
+    # were last built on the box, not this branch. `pithead upgrade` re-renders the generated configs
+    # (inject_service_configs) AND rebuilds the first-party images from build/ (--build) before
+    # recreating — so a Dockerfile/entrypoint change in the branch is actually under test.
+    log "Deploying the branch on $GOUDA_HOST (pithead upgrade — re-render configs + rebuild first-party images)"
+    on_gouda "cd '$E2E_DIR' && ./pithead upgrade" || die "pithead upgrade failed in $E2E_DIR — branch did not deploy."
+    # Record what was actually built, so "what did we test" is unambiguous in the run log (#272).
+    on_gouda "cd '$E2E_DIR' && docker compose images --format '{{.Service}} {{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep -E 'p2pool|dashboard|monero|tor|xmrig' || true" | while IFS= read -r l; do step "image: $l"; done
     wait_gouda_healthy 300 || warn "stack applied but not yet healthy; the harness will wait on real readiness signals"
     wait_synced 300 || true   # let the recreated monerod/tari re-confirm their tip before the harness pre-check
     ok "branch deployed; stack reconciled"
