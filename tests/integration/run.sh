@@ -491,6 +491,27 @@ assert_scenario() {
     assert_contains "re-apply is a no-op" "$again" "No configuration changes detected"
 }
 
+# Runtime egress posture (#274) — the structural proof of #270, beyond config: poll each app
+# container's LIVE connections and FAIL if any holds a PERSISTENT direct public connection (i.e. it
+# isn't dialing through the Tor SOCKS). Config-level checks miss this — it's what caught the #165
+# stale-image p2pool leak and the #271 Tari direct-dial. Reuses bench-verify-egress.sh (the #256
+# verifier) in its persistent-only mode so post-restart startup transients don't false-positive.
+# Skipped when a clearnet initial sync is active (#183): a node is then intentionally on clearnet.
+assert_egress_posture() {
+    local mc tc prefix out
+    mc="$(env_on_box MONERO_CLEARNET_SYNC)"; tc="$(env_on_box TARI_CLEARNET_SYNC)"
+    if [ "$mc" = "true" ] || [ "$tc" = "true" ]; then
+        it_log "   egress: clearnet initial sync active (#183) — skipping the all-Tor egress gate"
+        return 0
+    fi
+    prefix="$(env_on_box NETWORK_PREFIX)"; [ -n "$prefix" ] || prefix="172.28.0"
+    out="$(rx "bash tests/integration/benchmarks/bench-verify-egress.sh tor --dir . --prefix '$prefix' --polls 3 --interval 8 2>&1")"
+    case "$out" in
+        *"[verify-egress] OK"*) it_pass "no clearnet egress — every app dials via Tor (#274/#270)" ;;
+        *) it_fail "no clearnet egress — every app dials via Tor (#274/#270)" "$(printf '%s' "$out" | grep -E 'LEAK|✗' | head -4)" ;;
+    esac
+}
+
 # Non-destructive --check: assert the box's CURRENT live state (its own config), no apply.
 assert_current_state() {
     IT_CURRENT_SCENARIO="check"
@@ -498,6 +519,7 @@ assert_current_state() {
     it_log "── read-only check against the live stack ──────────"
     local fails_before="$IT_FAIL"
     assert_running_state "check" "$BASELINE_CONFIG"
+    assert_egress_posture
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "check" "$OUT_DIR"
 }
 

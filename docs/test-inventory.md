@@ -754,6 +754,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - monerod reports synced (RPC)
 - monerod running-but-unhealthy
 - monerod runs Tor-only in steady state — proxy present (#183/#234)
+- no clearnet egress — every app dials via Tor (#274/#270)
 - original PROXY_AUTH_TOKEN restored verbatim
 - pithead up fails closed (non-zero exit) on an empty PROXY_AUTH_TOKEN
 - pool actually changed
