@@ -82,8 +82,13 @@ These explain *why* the yield moved (or confirm it didn't) and are all available
   5 days clearnet" layout would confound the arm with the calendar period.) **Discard the first ~6 h
   after each switch** while p2pool reconnects + the PPLNS window re-stabilises. Run until each arm has
   **≥ ~500–1000 of our shares** (≈ 10–12 calendar days at ~155/day).
-  - **Arm T (Tor):** `p2pool.clearnet=false` (`--socks5`), `xvb.tor=true` — the `develop` defaults.
-  - **Arm C (clearnet):** `p2pool.clearnet=true`, `xvb.tor=false`.
+  - **Arm T (Tor):** `p2pool.clearnet=false` (`--socks5`), `tor_egress_firewall=true`, `xvb.tor=true` —
+    the `develop` defaults (fail-closed, egress-gated).
+  - **Arm C (clearnet):** `p2pool.clearnet=true`, `tor_egress_firewall=false`, `xvb.tor=false`. The
+    **firewall must be off in this arm** — the #270 Tor-egress firewall DROPs direct clearnet dials, so
+    leaving it on would give p2pool 0 sidechain peers and the arm would silently collect garbage. The
+    arm switch toggles the two together. monerod + Tari keep their Tor app-config in both arms, so only
+    p2pool's transport differs; clearnet exposure here is the intended baseline on the test bench.
   - Only the **mining-path transport** flips. Held constant in *both* arms: monerod + Tari on Tor,
     **XvB disabled** (`xvb.enabled=false`, see below), the rig, hashrate, sidechain, and monerod tip.
   - **Why XvB is disabled for this run.** With `XVB_DONATION_LEVEL=auto` the optimizer dynamically

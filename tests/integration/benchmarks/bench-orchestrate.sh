@@ -36,15 +36,20 @@ now()   { date -u +%s; }
 pstat() { docker exec p2pool cat "/stats/$1" 2>/dev/null | jq -c . 2>/dev/null || true; }
 
 # --- config edits (only the two transport toggles; never touches wallets/tier/other secrets) -------
-set_arm() {  # <tor|clearnet>  — flip p2pool.clearnet + xvb.tor (XvB stays DISABLED), then apply (recreates p2pool+dashboard, reasserts firewall)
-    local arm="$1" cn xt
-    if [ "$arm" = tor ]; then cn=false; xt=true; else cn=true; xt=false; fi
-    log "switching to arm=$arm (p2pool.clearnet=$cn, xvb.tor=$xt, xvb.enabled=false) — pithead apply"
-    # XvB is disabled for the whole benchmark. With donation_level=auto the optimizer routes most of
-    # the fleet into XvB to climb tiers (observed: ~96 kH/s to XvB vs ~18 kH/s to p2pool, target=Whale),
-    # which starves p2pool and confounds reward_share — the exact metric we measure. Re-asserted on
-    # every apply so a switch/recovery can't let it drift back on.
-    ( cd "$DIR" && jq ".p2pool.clearnet=$cn | .xvb.tor=$xt | .xvb.enabled=false" config.json > config.json.bench && mv config.json.bench config.json )
+set_arm() {  # <tor|clearnet>  — flip p2pool.clearnet + the #270 egress firewall together (XvB stays DISABLED), then apply (recreates p2pool+dashboard)
+    local arm="$1" cn xt fw
+    if [ "$arm" = tor ]; then cn=false; xt=true; fw=true; else cn=true; xt=false; fw=false; fi
+    log "switching to arm=$arm (p2pool.clearnet=$cn, tor_egress_firewall=$fw, xvb.tor=$xt, xvb.enabled=false) — pithead apply"
+    # The #270 Tor-egress firewall MUST track the arm. With it ON it DROPs direct clearnet dials from
+    # the container subnet, so the clearnet arm would get 0 sidechain peers / 0 shares (silent garbage).
+    #   tor arm      → firewall ON  (fail-closed; the switch is egress-gated before data counts)
+    #   clearnet arm → firewall OFF so p2pool can actually peer over clearnet — the baseline we measure.
+    # monerod + Tari keep their own Tor app-config in BOTH arms (so only p2pool's transport differs);
+    # firewall-off can't make them dial clearnet except Tari's upstream direct-dial bug (tari#7883),
+    # which is immaterial to the p2pool reward_share metric and self-heals on the switch back to tor.
+    # XvB stays disabled both arms: with donation_level=auto the optimizer shoves the fleet into XvB to
+    # climb tiers (observed ~96 vs ~18 kH/s, target=Whale), starving p2pool and confounding reward_share.
+    ( cd "$DIR" && jq ".p2pool.clearnet=$cn | .network.tor_egress_firewall=$fw | .xvb.tor=$xt | .xvb.enabled=false" config.json > config.json.bench && mv config.json.bench config.json )
     ( cd "$DIR" && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || log "WARN: pithead apply returned non-zero"
 }
 
@@ -217,9 +222,11 @@ cmd_stop() {
     touch "$STOPF"; log "stop requested"
     pkill -f "bench-collect.sh " 2>/dev/null || true
     crontab -l 2>/dev/null | grep -v "bench-orchestrate.sh" | crontab - 2>/dev/null || true
-    # Restore the resting config: Tor default + XvB re-enabled (gouda's normal pre-benchmark state).
-    ( cd "$DIR" && jq '.p2pool.clearnet=false | .xvb.tor=true | .xvb.enabled=true' config.json > config.json.bench && mv config.json.bench config.json && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || true
-    log "stopped: collector killed, cron removed, restored Tor default + re-enabled XvB. Data kept in $BENCH_DIR."
+    # Restore the resting config: Tor default + firewall fail-closed + XvB re-enabled (gouda's normal
+    # pre-benchmark state). The firewall=true is load-bearing — if we stop mid-clearnet-block we must
+    # not leave gouda with the egress firewall off.
+    ( cd "$DIR" && jq '.p2pool.clearnet=false | .network.tor_egress_firewall=true | .xvb.tor=true | .xvb.enabled=true' config.json > config.json.bench && mv config.json.bench config.json && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || true
+    log "stopped: collector killed, cron removed, restored Tor default + firewall on + re-enabled XvB. Data kept in $BENCH_DIR."
 }
 
 cmd_install_cron() {
