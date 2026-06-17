@@ -74,13 +74,33 @@ Measured only during donation windows (when `algo_service` has routed the proxy 
   - **Arm T (Tor):** the defaults (`p2pool.clearnet: false` / `xvb.tor: true`).
   - The **control variable is the #165 `p2pool.clearnet` knob itself** — the benchmark dogfoods the
     very toggle it's validating. monerod + Tari stay on Tor in both arms.
-- **Collector:** a small poller (to land alongside this doc) snapshots the `/stats/*` fields +
-  `docker stats tor` every few minutes into a JSONL/CSV per arm, and tails the p2pool console for
-  `SHARE FOUND` / uncle lines. No new container — it reads what p2pool already writes.
+- **Collector:** [`tests/integration/benchmarks/bench-collect.sh`](../../tests/integration/benchmarks/bench-collect.sh)
+  — a read-only poller that snapshots the `/stats/*` fields + `docker stats tor` into one JSONL line
+  per interval (default 5 min), per arm. No new container; it reads what p2pool already writes.
 - **Confounders to control:** same pool/sidechain (`main` vs `mini`/`nano` measured separately — the
   Tor penalty is expected to be worse on the faster sidechains), same monerod tip, same rig, and
   windows long enough that pool-difficulty drift averages out. Network weather varies, so we report
   the **clearnet arm's own run-to-run variance** as the noise floor.
+
+### Running an arm
+
+On the gouda box, with the arm's config deployed (`p2pool.clearnet: true` for clearnet, default for
+Tor) and `miner-0` pointed at it:
+
+```bash
+# detached, survives logout — one JSONL line every 5 min into ~/pithead-bench/<arm>.jsonl
+nohup tests/integration/benchmarks/bench-collect.sh clearnet --interval 300 >/dev/null 2>&1 &
+# …let it run for days, then switch the toggle + run the other arm:
+nohup tests/integration/benchmarks/bench-collect.sh tor --interval 300 >/dev/null 2>&1 &
+```
+
+Summarise an arm (e.g. mean PPLNS reward share, mean effort, peer count):
+
+```bash
+jq -s '{reward: (map(.reward_share|numbers)|add/length),
+        effort: (map(.avg_effort|numbers)|add/length),
+        peers:  (map(.peers_out|numbers)|add/length)}' ~/pithead-bench/clearnet.jsonl
+```
 
 ## Decision rule
 
