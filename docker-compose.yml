@@ -214,7 +214,11 @@ services:
       - 0.0.0.0:${P2POOL_PORT}
       - --data-api
       - /stats
-      - ${P2POOL_FLAGS}
+    # P2POOL_FLAGS (pool type + the #165 Tor SOCKS routing) is passed via the environment, not as a
+    # `- ${P2POOL_FLAGS}` command item: Compose passes such an item as a SINGLE argument (no
+    # word-splitting), which mangles a multi-flag value. The entrypoint word-splits this env var.
+    environment:
+      - P2POOL_FLAGS=${P2POOL_FLAGS:-}
     networks:
       mining_net:
         ipv4_address: ${NETWORK_PREFIX:-172.28.0}.28
