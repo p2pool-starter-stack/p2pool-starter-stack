@@ -195,11 +195,18 @@ tor_egress_rules() {  # <subnet> <tor_ip>
 # Remove every rule we previously installed (matched by the comment tag) — idempotent, config-agnostic.
 remove_tor_egress_firewall() {
     command -v iptables >/dev/null 2>&1 || return 0
-    local saved; saved=$(sudo iptables-save 2>/dev/null) || return 0
-    printf '%s\n' "$saved" | grep -F -- "$TOR_EGRESS_TAG" | grep -- '^-A DOCKER-USER' | while IFS= read -r line; do
+    local saved match line
+    saved=$(sudo iptables-save 2>/dev/null) || return 0
+    # Our tagged DOCKER-USER rules (empty if none). `|| true` so a no-match grep (rc 1, under
+    # `set -e`/pipefail) doesn't abort — removal is best-effort + idempotent.
+    match=$(printf '%s\n' "$saved" | grep -- '^-A DOCKER-USER' | grep -F -- "$TOR_EGRESS_TAG") || true
+    [ -n "$match" ] || return 0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
         # shellcheck disable=SC2086  # intentional word-splitting of the saved rule spec
         sudo iptables -D DOCKER-USER ${line#-A DOCKER-USER } 2>/dev/null || true
-    done
+    done <<< "$match"
+    return 0
 }
 
 # Install (or re-install, idempotently) the fail-closed Tor-only egress rules. Reads the toggle +
