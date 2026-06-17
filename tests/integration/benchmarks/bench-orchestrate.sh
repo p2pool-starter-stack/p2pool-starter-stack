@@ -90,9 +90,11 @@ save_state() {
     cat > "$STATE" <<EOF
 POOL=$POOL
 BLOCK_HOURS=$BLOCK_HOURS
+BLOCK_SECS=$BLOCK_SECS
 BLOCKS=$BLOCKS
 INTERVAL=$INTERVAL
 SETTLE_HOURS=$SETTLE_HOURS
+SETTLE_SECS=$SETTLE_SECS
 MIN_KHS=$MIN_KHS
 ARM=$ARM
 BLOCK_IDX=$BLOCK_IDX
@@ -116,9 +118,12 @@ cmd_run() {
         *) shift ;;
     esac; done
 
+    # bash arithmetic is integer-only — convert hours to seconds up front (float-safe).
+    BLOCK_SECS=$(awk -v h="$BLOCK_HOURS" 'BEGIN{printf "%d", h*3600}')
+    SETTLE_SECS=$(awk -v h="$SETTLE_HOURS" 'BEGIN{printf "%d", h*3600}')
     rm -f "$STOPF"
     if [ "$fresh" = 1 ] || [ ! -f "$STATE" ]; then
-        ARM=tor; BLOCK_IDX=1; BLOCK_START=$(now); RUN_START=$(now); SETTLE_UNTIL=$(( $(now) + SETTLE_HOURS*3600 ))
+        ARM=tor; BLOCK_IDX=1; BLOCK_START=$(now); RUN_START=$(now); SETTLE_UNTIL=$(( $(now) + SETTLE_SECS ))
         save_state; event "RUN START pool=$POOL block-hours=$BLOCK_HOURS blocks=$BLOCKS settle-hours=$SETTLE_HOURS"
         ( cd "$DIR" && jq ".p2pool.pool=\"$POOL\"" config.json > config.json.bench && mv config.json.bench config.json )
         set_arm tor; gate_egress tor || true; start_collector tor
@@ -133,14 +138,14 @@ cmd_run() {
         [ -f "$STOPF" ] && { log "stop flag seen — exiting loop"; break; }
 
         # time to switch arms?
-        if [ $(( $(now) - BLOCK_START )) -ge $(( BLOCK_HOURS*3600 )) ]; then
+        if [ $(( $(now) - BLOCK_START )) -ge "$BLOCK_SECS" ]; then
             if [ "$BLOCK_IDX" -ge "$BLOCKS" ]; then
                 event "RUN COMPLETE — $BLOCKS blocks done"; log "all $BLOCKS blocks complete — stopping"
                 cmd_stop; break
             fi
             BLOCK_IDX=$(( BLOCK_IDX + 1 ))
             [ "$ARM" = tor ] && ARM=clearnet || ARM=tor
-            BLOCK_START=$(now); SETTLE_UNTIL=$(( $(now) + SETTLE_HOURS*3600 ))
+            BLOCK_START=$(now); SETTLE_UNTIL=$(( $(now) + SETTLE_SECS ))
             event "BLOCK $BLOCK_IDX/$BLOCKS arm=$ARM (settle ${SETTLE_HOURS}h)"
             save_state
             set_arm "$ARM"; gate_egress "$ARM" || true; start_collector "$ARM"
