@@ -149,6 +149,7 @@ stack_up() {
         error "Stack failed to start — see the error above."
     fi
     log "Stack started successfully!"
+    apply_tor_egress_firewall
     # Remind the operator at start-time if a node is coming up on clearnet (#183).
     print_clearnet_banner
     announce_dashboard_url
@@ -156,6 +157,7 @@ stack_up() {
 
 stack_down() {
     log "Stopping stack..."
+    remove_tor_egress_firewall
     docker compose down
     log "Stack stopped."
 }
@@ -164,6 +166,68 @@ stack_restart() {
     log "Restarting stack..."
     docker compose restart
     log "Stack restarted."
+}
+
+# --- Tor-only egress enforcement (#270) ---------------------------------------------------------
+# Fail-closed host firewall so a misconfigured/buggy bridge daemon (monerod/p2pool/tari/xmrig-proxy)
+# CAN'T leak the home IP: each may reach the LAN, the other containers and the Tor SOCKS, but any
+# DIRECT clearnet dial is DROPPED — only the `tor` container reaches the internet. Rules live in
+# Docker's DOCKER-USER chain (preserved across Docker restarts), installed at up/apply and removed at
+# down. Needs root (sudo), like the GRUB/HugePages steps; IPv4-only (mining_net is IPv4). Opt out with
+# network.tor_egress_firewall=false. Proven by tests/integration/benchmarks/bench-verify-egress.sh.
+# See docs/privacy.md.
+TOR_EGRESS_TAG="pithead-tor-egress"
+
+# Ordered iptables rule bodies (no chain/comment) for <subnet> <tor_ip>. Pure (args only) so it
+# unit-tests; ACCEPTs first, DROP last — the order is load-bearing.
+tor_egress_rules() {  # <subnet> <tor_ip>
+    local subnet="$1" tor_ip="$2"
+    printf '%s\n' \
+        "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" \
+        "-s $tor_ip -j ACCEPT" \
+        "-s $subnet -d 10.0.0.0/8 -j ACCEPT" \
+        "-s $subnet -d 172.16.0.0/12 -j ACCEPT" \
+        "-s $subnet -d 192.168.0.0/16 -j ACCEPT" \
+        "-s $subnet -d 100.64.0.0/10 -j ACCEPT" \
+        "-s $subnet -j DROP"
+}
+
+# Remove every rule we previously installed (matched by the comment tag) — idempotent, config-agnostic.
+remove_tor_egress_firewall() {
+    command -v iptables >/dev/null 2>&1 || return 0
+    local saved; saved=$(sudo iptables-save 2>/dev/null) || return 0
+    printf '%s\n' "$saved" | grep -F -- "$TOR_EGRESS_TAG" | grep -- '^-A DOCKER-USER' | while IFS= read -r line; do
+        # shellcheck disable=SC2086  # intentional word-splitting of the saved rule spec
+        sudo iptables -D DOCKER-USER ${line#-A DOCKER-USER } 2>/dev/null || true
+    done
+}
+
+# Install (or re-install, idempotently) the fail-closed Tor-only egress rules. Reads the toggle +
+# subnet from .env so it works in the `up` path (where config.json isn't re-parsed).
+apply_tor_egress_firewall() {
+    local enabled subnet tor_ip pos=1 rule
+    enabled=$(env_get TOR_EGRESS_FIREWALL 2>/dev/null); [ -n "$enabled" ] || enabled=true
+    remove_tor_egress_firewall   # clear stale rules so a re-apply is idempotent
+    if [ "$(normalize_bool "$enabled")" != "true" ]; then
+        warn "Tor-only egress firewall is OFF (network.tor_egress_firewall=false) — a misconfigured app could reach clearnet (#270)."
+        return 0
+    fi
+    if ! command -v iptables >/dev/null 2>&1; then
+        warn "iptables not found — cannot enforce Tor-only egress (#270). The stack runs, but clearnet egress is NOT fail-closed."
+        return 0
+    fi
+    subnet=$(env_get NETWORK_SUBNET 2>/dev/null); [ -n "$subnet" ] || subnet="172.28.0.0/24"
+    tor_ip=$(env_get NETWORK_PREFIX 2>/dev/null); [ -n "$tor_ip" ] || tor_ip="172.28.0"; tor_ip="${tor_ip}.25"
+    while IFS= read -r rule; do
+        # shellcheck disable=SC2086  # intentional word-splitting of the rule body
+        if ! sudo iptables -I DOCKER-USER "$pos" -m comment --comment "$TOR_EGRESS_TAG" $rule 2>/dev/null; then
+            warn "Could not install the Tor-egress firewall (needs root + iptables). Stack runs, but clearnet egress is NOT fail-closed (#270)."
+            remove_tor_egress_firewall
+            return 0
+        fi
+        pos=$((pos + 1))
+    done < <(tor_egress_rules "$subnet" "$tor_ip")
+    log "Tor-only egress enforced (#270): clearnet dials from $subnet dropped except via Tor ($tor_ip)."
 }
 
 stack_upgrade() {
@@ -1434,6 +1498,8 @@ parse_and_validate_config() {
         *) error "network.subnet must be an X.Y.Z.0/24 block (got \"$NETWORK_SUBNET\")." ;;
     esac
     is_ipv4 "${NETWORK_PREFIX}.0" || error "network.subnet is not a valid IPv4 /24 (got \"$NETWORK_SUBNET\")."
+    # Fail-closed Tor-only egress firewall (#270); default on. Renders to .env so `up` can read it.
+    TOR_EGRESS_FIREWALL=$(normalize_bool "$(jq -r '.network.tor_egress_firewall // true' "$CONFIG_FILE")")
     if [ "$MONERO_MODE" == "remote" ]; then
         local remote_host
         remote_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
@@ -1881,6 +1947,7 @@ MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
 NETWORK_PREFIX=$NETWORK_PREFIX
+TOR_EGRESS_FIREWALL=$TOR_EGRESS_FIREWALL
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 PROXY_DONATE_LEVEL=$DONATE_LEVEL
@@ -2454,6 +2521,7 @@ apply() {
         docker compose restart caddy
     fi
     rm -f "$apply_marker"
+    apply_tor_egress_firewall   # (re)install the fail-closed Tor-only egress rules (#270)
     log "Configuration applied."
     announce_dashboard_url
 }

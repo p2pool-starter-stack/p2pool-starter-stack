@@ -22,6 +22,24 @@ below.
 
 ---
 
+## Enforced fail-closed, not just configured (#270)
+
+Every per-app Tor setting below is **backed by a host firewall**, so "behind Tor" is a property the
+stack *enforces*, not one it merely *hopes* each daemon is configured for. At `up`/`apply`, `pithead`
+installs rules in Docker's `DOCKER-USER` chain: the mining bridge (monerod, p2pool, tari, xmrig-proxy)
+may reach the LAN, the other containers and the **Tor SOCKS** — but any **direct dial to the public
+internet is DROPPED**. Only the `tor` container reaches the internet. So if a daemon is misconfigured,
+buggy, or learns a clearnet peer address (as Tari's comms layer does), the connection **fails closed
+instead of leaking your IP**.
+
+- Needs root (the firewall rules), like the GRUB/HugePages steps; removed at `pithead down`.
+- Opt out with `network.tor_egress_firewall: false` (then routing falls back to per-app config only).
+- The host-networked **dashboard** and **caddy** aren't on the bridge; the dashboard's only external
+  calls already go over the Tor SOCKS (`socks5h`, [#163](#runtime-egress)/#224).
+- Verify it live with [`tests/integration/benchmarks/bench-verify-egress.sh`](../tests/integration/benchmarks/bench-verify-egress.sh) — it confirms 0 app-container public connections.
+
+---
+
 ## Inbound — no port forwarding
 
 **Your home IP is never advertised to a single inbound peer, and you never touch your router's

@@ -186,6 +186,32 @@ assert_contains "2 fixed + 5 flag tokens = ARGC 7"  "$ep_out" "ARGC=7"
 ep_empty=$(PATH="$PE:$PATH" P2POOL_FLAGS="" bash "$ROOT/build/p2pool/entrypoint.sh" --stratum 0.0.0.0:3333 2>&1)
 assert_contains "empty P2POOL_FLAGS → no stray empty arg (ARGC=2)" "$ep_empty" "ARGC=2"
 
+echo "== unit: tor_egress_rules — fail-closed Tor-only egress ruleset (#270) =="
+TER=$(run_sourced "$SANDBOX" tor_egress_rules 172.28.0.0/24 172.28.0.25)
+assert_contains "ESTABLISHED/RELATED accepted (published-port replies, ongoing flows)" "$TER" "conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+assert_contains "only Tor (.25) may egress to the internet"   "$TER" "-s 172.28.0.25 -j ACCEPT"
+assert_contains "inter-container + 172.16/12 LAN allowed"      "$TER" "-s 172.28.0.0/24 -d 172.16.0.0/12 -j ACCEPT"
+assert_contains "10/8 LAN allowed"                            "$TER" "-s 172.28.0.0/24 -d 10.0.0.0/8 -j ACCEPT"
+assert_contains "192.168/16 LAN allowed"                      "$TER" "-s 172.28.0.0/24 -d 192.168.0.0/16 -j ACCEPT"
+assert_eq "the clearnet DROP is the FINAL rule (fail-closed)" "$(printf '%s\n' "$TER" | tail -1)" "-s 172.28.0.0/24 -j DROP"
+assert_contains "honours a custom subnet/prefix (#180)"       "$(run_sourced "$SANDBOX" tor_egress_rules 172.30.5.0/24 172.30.5.25)" "-s 172.30.5.0/24 -j DROP"
+
+echo "== black-box: apply/remove_tor_egress_firewall via stubbed iptables (#270) =="
+FW="$SANDBOX/fw"; mkdir -p "$FW/bin"
+printf '#!/usr/bin/env bash\nexec "$@"\n' > "$FW/bin/sudo"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/ipt.log"\n' "$FW" > "$FW/bin/iptables"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$FW/bin/iptables-save"   # no pre-existing rules
+chmod +x "$FW/bin/sudo" "$FW/bin/iptables" "$FW/bin/iptables-save"
+printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' > "$FW/.env"
+: > "$FW/ipt.log"; PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
+iptlog="$(cat "$FW/ipt.log" 2>/dev/null)"
+assert_contains "installs the fail-closed clearnet DROP, tagged" "$iptlog" "-I DOCKER-USER 7 -m comment --comment pithead-tor-egress -s 172.28.0.0/24 -j DROP"
+assert_contains "exempts the Tor container"                      "$iptlog" "-m comment --comment pithead-tor-egress -s 172.28.0.25 -j ACCEPT"
+# opt-out: TOR_EGRESS_FIREWALL=false installs nothing
+printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=false\n' > "$FW/.env"
+: > "$FW/ipt.log"; PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
+assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
+
 echo "== unit: clearnet initial sync helpers (#183) =="
 # normalize_bool: 1/true/yes/on (any case) => true; everything else (incl. empty) => false, matching
 # the dashboard's MONERO_PRUNE truthiness so a config bool reads the same on both sides.
