@@ -36,11 +36,15 @@ now()   { date -u +%s; }
 pstat() { docker exec p2pool cat "/stats/$1" 2>/dev/null | jq -c . 2>/dev/null || true; }
 
 # --- config edits (only the two transport toggles; never touches wallets/tier/other secrets) -------
-set_arm() {  # <tor|clearnet>  — flip p2pool.clearnet + xvb.tor, then apply (recreates p2pool+dashboard, reasserts firewall)
+set_arm() {  # <tor|clearnet>  — flip p2pool.clearnet + xvb.tor (XvB stays DISABLED), then apply (recreates p2pool+dashboard, reasserts firewall)
     local arm="$1" cn xt
     if [ "$arm" = tor ]; then cn=false; xt=true; else cn=true; xt=false; fi
-    log "switching to arm=$arm (p2pool.clearnet=$cn, xvb.tor=$xt) — pithead apply"
-    ( cd "$DIR" && jq ".p2pool.clearnet=$cn | .xvb.tor=$xt" config.json > config.json.bench && mv config.json.bench config.json )
+    log "switching to arm=$arm (p2pool.clearnet=$cn, xvb.tor=$xt, xvb.enabled=false) — pithead apply"
+    # XvB is disabled for the whole benchmark. With donation_level=auto the optimizer routes most of
+    # the fleet into XvB to climb tiers (observed: ~96 kH/s to XvB vs ~18 kH/s to p2pool, target=Whale),
+    # which starves p2pool and confounds reward_share — the exact metric we measure. Re-asserted on
+    # every apply so a switch/recovery can't let it drift back on.
+    ( cd "$DIR" && jq ".p2pool.clearnet=$cn | .xvb.tor=$xt | .xvb.enabled=false" config.json > config.json.bench && mv config.json.bench config.json )
     ( cd "$DIR" && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || log "WARN: pithead apply returned non-zero"
 }
 
@@ -133,7 +137,7 @@ cmd_run() {
     if [ "$fresh" = 1 ] || [ ! -f "$STATE" ]; then
         ARM=tor; BLOCK_IDX=1; BLOCK_START=$(now); RUN_START=$(now); SETTLE_UNTIL=$(( $(now) + SETTLE_SECS ))
         save_state; event "RUN START pool=$POOL block-hours=$BLOCK_HOURS blocks=$BLOCKS settle-hours=$SETTLE_HOURS"
-        ( cd "$DIR" && jq ".p2pool.pool=\"$POOL\"" config.json > config.json.bench && mv config.json.bench config.json )
+        ( cd "$DIR" && jq ".p2pool.pool=\"$POOL\" | .xvb.enabled=false" config.json > config.json.bench && mv config.json.bench config.json )
         set_arm tor; gate_egress tor || true; start_collector tor
     else
         # shellcheck disable=SC1090
@@ -180,7 +184,7 @@ cmd_calibrate() {
     POOL=mini; local CH=6
     while [ $# -gt 0 ]; do case "$1" in --pool) POOL="$2"; shift 2 ;; --calibrate-hours) CH="$2"; shift 2 ;; *) shift ;; esac; done
     log "calibration: pool=$POOL window=${CH}h — setting Tor arm + sampling share rate"
-    ( cd "$DIR" && jq ".p2pool.pool=\"$POOL\" | .p2pool.clearnet=false | .xvb.tor=true" config.json > config.json.bench && mv config.json.bench config.json )
+    ( cd "$DIR" && jq ".p2pool.pool=\"$POOL\" | .p2pool.clearnet=false | .xvb.tor=true | .xvb.enabled=false" config.json > config.json.bench && mv config.json.bench config.json )
     set_arm tor; gate_egress tor || true; start_collector tor
     log "warming up 600s for p2pool to connect + start finding shares..."; sleep 600
     local s0 t0 s1 t1 secs spd frac poolhr ourhr
@@ -213,8 +217,9 @@ cmd_stop() {
     touch "$STOPF"; log "stop requested"
     pkill -f "bench-collect.sh " 2>/dev/null || true
     crontab -l 2>/dev/null | grep -v "bench-orchestrate.sh" | crontab - 2>/dev/null || true
-    ( cd "$DIR" && jq '.p2pool.clearnet=false | .xvb.tor=true' config.json > config.json.bench && mv config.json.bench config.json && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || true
-    log "stopped: collector killed, cron removed, restored Tor default. Data kept in $BENCH_DIR."
+    # Restore the resting config: Tor default + XvB re-enabled (gouda's normal pre-benchmark state).
+    ( cd "$DIR" && jq '.p2pool.clearnet=false | .xvb.tor=true | .xvb.enabled=true' config.json > config.json.bench && mv config.json.bench config.json && ./pithead apply -y ) >>"$ORCH_LOG" 2>&1 || true
+    log "stopped: collector killed, cron removed, restored Tor default + re-enabled XvB. Data kept in $BENCH_DIR."
 }
 
 cmd_install_cron() {

@@ -56,7 +56,10 @@ These explain *why* the yield moved (or confirm it didn't) and are all available
 
 ### XvB donation path (#166)
 
-Measured only during donation windows (when `algo_service` has routed the proxy to XvB).
+> **Not collected in the headline run** — XvB is disabled so the p2pool-yield comparison isn't
+> confounded (see *Method* below). These fields apply only to a separate, dedicated XvB-transport
+> measurement, where they'd be sampled during donation windows (when `algo_service` has routed the
+> proxy to XvB).
 
 | Metric | Source · field |
 |---|---|
@@ -82,7 +85,17 @@ Measured only during donation windows (when `algo_service` has routed the proxy 
   - **Arm T (Tor):** `p2pool.clearnet=false` (`--socks5`), `xvb.tor=true` — the `develop` defaults.
   - **Arm C (clearnet):** `p2pool.clearnet=true`, `xvb.tor=false`.
   - Only the **mining-path transport** flips. Held constant in *both* arms: monerod + Tari on Tor,
-    XvB at the **lowest tier**, the rig, hashrate, sidechain, and monerod tip.
+    **XvB disabled** (`xvb.enabled=false`, see below), the rig, hashrate, sidechain, and monerod tip.
+  - **Why XvB is disabled for this run.** With `XVB_DONATION_LEVEL=auto` the optimizer dynamically
+    splits the fleet between p2pool and XvB to climb raffle tiers — observed on gouda routing ~96 kH/s
+    to XvB vs only ~18 kH/s to p2pool while chasing the **Whale** tier. That (a) starves p2pool, so
+    `reward_share` — our **primary** metric — would be measured on a fraction of the fleet, and (b)
+    makes the split itself a function of Tor latency, i.e. the optimizer reacts to the very thing we're
+    trying to isolate. Disabling XvB sends the **full ~269 kH/s to p2pool in both arms**, so
+    `reward_share` is a clean readout of transport overhead (and ~155 shares/day, not a trickle). The
+    XvB **transport** overhead (#166) is a separate, smaller question — benchmarked on its own, not
+    folded into the p2pool-yield comparison. The harness re-asserts `xvb.enabled=false` on every
+    `pithead apply` so a switch or recovery can't let the optimizer drift back on.
   - Every switch is **egress-gated** by `bench-verify-egress.sh` — Arm T must be a clean all-Tor PASS
     before any data is collected, so a leak can never silently invalidate a window.
 - **Controlling natural variance:** (1) **interleave** (the dominant control); (2) compare the
