@@ -144,12 +144,17 @@ stack_up() {
     log "Starting stack..."
     warn_missing_data_dirs
     migrate_compose_project
+    # Install the Tor-only egress firewall BEFORE the containers start (#270). DOCKER-USER is a static
+    # chain whose rules reference the fixed subnet/Tor IP, so they can go in before the network exists;
+    # Docker preserves DOCKER-USER and (re)adds the FORWARD jump when it creates the network. Doing this
+    # first closes the startup window in which a clearnet app (e.g. Tari) could open a connection that
+    # the ESTABLISHED rule would then grandfather past the DROP.
+    apply_tor_egress_firewall
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     if ! compose_up_checked -d; then
         error "Stack failed to start — see the error above."
     fi
     log "Stack started successfully!"
-    apply_tor_egress_firewall
     # Remind the operator at start-time if a node is coming up on clearnet (#183).
     print_clearnet_banner
     announce_dashboard_url
@@ -172,8 +177,9 @@ stack_restart() {
 # Fail-closed host firewall so a misconfigured/buggy bridge daemon (monerod/p2pool/tari/xmrig-proxy)
 # CAN'T leak the home IP: each may reach the LAN, the other containers and the Tor SOCKS, but any
 # DIRECT clearnet dial is DROPPED — only the `tor` container reaches the internet. Rules live in
-# Docker's DOCKER-USER chain (preserved across Docker restarts), installed at up/apply and removed at
-# down. Needs root (sudo), like the GRUB/HugePages steps; IPv4-only (mining_net is IPv4). Opt out with
+# Docker's DOCKER-USER chain (preserved across Docker restarts), installed BEFORE containers start at
+# `up` (so there is no startup window to grandfather), re-asserted at `apply`, removed at `down`. Needs
+# root (sudo), like the GRUB/HugePages steps; IPv4-only (mining_net is IPv4). Opt out with
 # network.tor_egress_firewall=false. Proven by tests/integration/benchmarks/bench-verify-egress.sh.
 # See docs/privacy.md.
 TOR_EGRESS_TAG="pithead-tor-egress"
@@ -225,6 +231,10 @@ apply_tor_egress_firewall() {
     fi
     subnet=$(env_get NETWORK_SUBNET 2>/dev/null); [ -n "$subnet" ] || subnet="172.28.0.0/24"
     tor_ip=$(env_get NETWORK_PREFIX 2>/dev/null); [ -n "$tor_ip" ] || tor_ip="172.28.0"; tor_ip="${tor_ip}.25"
+    # DOCKER-USER may not exist yet on a first-ever `up` (Docker creates it with its first network).
+    # Pre-create it so installing here — before compose runs — succeeds; Docker adopts the existing
+    # chain and adds the FORWARD jump. Harmless (-N fails with rc 1) once the chain is already there.
+    sudo iptables -N DOCKER-USER 2>/dev/null || true
     while IFS= read -r rule; do
         # shellcheck disable=SC2086  # intentional word-splitting of the rule body
         if ! sudo iptables -I DOCKER-USER "$pos" -m comment --comment "$TOR_EGRESS_TAG" $rule 2>/dev/null; then
