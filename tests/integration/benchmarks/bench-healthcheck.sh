@@ -20,12 +20,13 @@
 
 set -uo pipefail
 
-DIR="/srv/code/pithead"; MIN_KHS=200; JSON=0
+DIR="/srv/code/pithead"; MIN_KHS=200; MIN_WORKERS=6; JSON=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --dir)     DIR="$2"; shift 2 ;;
-        --min-khs) MIN_KHS="$2"; shift 2 ;;
-        --json)    JSON=1; shift ;;
+        --dir)         DIR="$2"; shift 2 ;;
+        --min-khs)     MIN_KHS="$2"; shift 2 ;;        # accepted for compat; hashrate is display-only (see below)
+        --min-workers) MIN_WORKERS="$2"; shift 2 ;;
+        --json)        JSON=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -55,8 +56,15 @@ peers="$(printf '%s' "$p2p" | jq -r '(.connections // 0)')"; [ "$peers" = null ]
 [ "$strat" = null ] && problems="${problems}p2pool-no-stratum "
 [ "${peers:-0}" -gt 0 ] 2>/dev/null || warns="${warns}p2pool-0-peers "
 
-# 3. Our hashrate (miners connected). Below min => miners dropped.
-if [ "${hr_khs:-0}" -lt "$MIN_KHS" ] 2>/dev/null; then warns="${warns}low-hashrate(${hr_khs}<${MIN_KHS}kH/s) "; fi
+# 3. Miners connected — use proxy_workers (reliable). p2pool's hashrate_1h/15m is a SHARE-BASED
+# estimate, very jumpy on mini where shares are sparse, so it would false-WARN; it's display-only.
+# The dashboard is host-networked, so it's on 127.0.0.1:8000 of the box.
+workers="$(curl -fsS --max-time 5 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '.proxy_workers // empty' 2>/dev/null)"
+if [ -n "$workers" ]; then
+    [ "$workers" -ge "$MIN_WORKERS" ] 2>/dev/null || warns="${warns}miners(${workers}/${MIN_WORKERS}+expected) "
+else
+    workers="?"   # dashboard unreachable; don't WARN on the noisy hashrate estimate
+fi
 
 # 4 + 5. Arm-dependent: TOR arm must not leak and must have the firewall.
 arm=clearnet
@@ -83,13 +91,13 @@ else verdict=OK; rc=0; fi
 
 now="$(date -u +%FT%TZ)"
 if [ "$JSON" = 1 ]; then
-    jq -cn --arg v "$verdict" --arg arm "$arm" --argjson khs "${hr_khs:-0}" --argjson peers "${peers:-0}" \
+    jq -cn --arg v "$verdict" --arg arm "$arm" --arg workers "${workers:-?}" --argjson khs "${hr_khs:-0}" --argjson peers "${peers:-0}" \
         --arg egress "$egress" --arg fw "$fw" --arg t "$now" \
         --arg problems "${problems% }" --arg warns "${warns% }" \
-        '{ts:$t, verdict:$v, arm:$arm, hashrate_khs:$khs, peers:$peers, egress:$egress, firewall:$fw, problems:$problems, warns:$warns}'
+        '{ts:$t, verdict:$v, arm:$arm, workers:$workers, hashrate_khs:$khs, peers:$peers, egress:$egress, firewall:$fw, problems:$problems, warns:$warns}'
 else
-    printf '%s [%s] arm=%s hashrate=%skH/s peers=%s egress=%s%s%s\n' \
-        "$now" "$verdict" "$arm" "${hr_khs:-0}" "${peers:-0}" "$egress" \
+    printf '%s [%s] arm=%s workers=%s hashrate~%skH/s peers=%s egress=%s%s%s\n' \
+        "$now" "$verdict" "$arm" "${workers:-?}" "${hr_khs:-0}" "${peers:-0}" "$egress" \
         "${problems:+ problems=[${problems% }]}" "${warns:+ warns=[${warns% }]}"
 fi
 exit "$rc"

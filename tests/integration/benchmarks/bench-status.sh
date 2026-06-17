@@ -17,7 +17,7 @@ jq -r '
   "  arm:        \(.arm | ascii_upcase)\(if .settling then "   (SETTLING — excluded)" else "" end)",
   "  block:      \(.block)/\(.blocks)     day \(.day)",
   "  block shares: \(.block_shares)",
-  "  verdict:    \(.health.verdict // "?")   hashrate \(.health.hashrate_khs // "?")kH/s   peers \(.health.peers // "?")   egress \(.health.egress // "?")",
+  "  verdict:    \(.health.verdict // "?")   workers \(.health.workers // "?")/8   hashrate~\(.health.hashrate_khs // "?")kH/s (p2pool est)   peers \(.health.peers // "?")   egress \(.health.egress // "?")",
   (if (.health.problems // "") != "" then "  problems:   \(.health.problems)" else empty end),
   (if (.health.warns // "")    != "" then "  warns:      \(.health.warns)"    else empty end),
   "  updated:    \(.updated)\(if .stopped then "   [STOPPED]" else "" end)"
