@@ -207,6 +207,9 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 iptlog="$(cat "$FW/ipt.log" 2>/dev/null)"
 assert_contains "installs the fail-closed clearnet DROP, tagged" "$iptlog" "-I DOCKER-USER 7 -m comment --comment pithead-tor-egress -s 172.28.0.0/24 -j DROP"
 assert_contains "exempts the Tor container"                      "$iptlog" "-m comment --comment pithead-tor-egress -s 172.28.0.25 -j ACCEPT"
+# Pre-creates DOCKER-USER so the BEFORE-compose install at `up` can't miss on a first-ever start where
+# Docker hasn't created the chain yet — closes the startup window that grandfathered leaks (#276).
+assert_contains "pre-creates the DOCKER-USER chain (idempotently)"  "$iptlog" "-N DOCKER-USER"
 # opt-out: TOR_EGRESS_FIREWALL=false installs nothing
 printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=false\n' > "$FW/.env"
 : > "$FW/ipt.log"; PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
