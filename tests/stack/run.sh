@@ -216,6 +216,21 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 : > "$FW/ipt.log"; PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
 
+echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
+# Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
+# empty), which silently broke the #270 firewall opt-out (config false → .env stayed true) and
+# xvb.tor=false. config_bool null-checks instead. CONFIG_FILE is the relative "config.json", so a
+# fixture in the cwd is what the sourced helper reads.
+CB="$SANDBOX/cb"; mkdir -p "$CB"
+printf '{"network":{"tor_egress_firewall":false},"xvb":{"tor":false}}' > "$CB/config.json"
+assert_eq "explicit false honoured (firewall)" "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)" "false"
+assert_eq "explicit false honoured (xvb.tor)"  "$(run_sourced "$CB" config_bool '.xvb.tor' true)"                   "false"
+printf '{"network":{"tor_egress_firewall":true}}' > "$CB/config.json"
+assert_eq "explicit true honoured"             "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)" "true"
+printf '{}' > "$CB/config.json"
+assert_eq "absent -> default true"             "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)"  "true"
+assert_eq "absent -> default false"            "$(run_sourced "$CB" config_bool '.xvb.tor' false)"                     "false"
+
 echo "== unit: clearnet initial sync helpers (#183) =="
 # normalize_bool: 1/true/yes/on (any case) => true; everything else (incl. empty) => false, matching
 # the dashboard's MONERO_PRUNE truthiness so a config bool reads the same on both sides.
