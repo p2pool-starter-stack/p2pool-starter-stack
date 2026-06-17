@@ -47,7 +47,9 @@ done
 # 2. p2pool serving + peers + our hashrate.
 strat="$(pstat local/stratum)"; [ -n "$strat" ] || strat=null
 p2p="$(pstat local/p2p)";       [ -n "$p2p" ]   || p2p=null
-hr_hs="$(printf '%s' "$strat" | jq -r '(.hashrate_1h // 0)')"; [ "$hr_hs" = null ] && hr_hs=0
+# 15m average (not 1h) so the check reflects reality within ~15 min of a fleet connect / arm-switch
+# p2pool restart, instead of falsely flagging low-hashrate for ~an hour while a 1h average ramps.
+hr_hs="$(printf '%s' "$strat" | jq -r '(.hashrate_15m // 0)')"; [ "$hr_hs" = null ] && hr_hs=0
 hr_khs=$(awk -v h="${hr_hs:-0}" 'BEGIN{printf "%.0f", h/1000}')
 peers="$(printf '%s' "$p2p" | jq -r '(.connections // 0)')"; [ "$peers" = null ] && peers=0
 [ "$strat" = null ] && problems="${problems}p2pool-no-stratum "
