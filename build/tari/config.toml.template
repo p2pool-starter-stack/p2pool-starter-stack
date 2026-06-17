@@ -112,5 +112,13 @@ control_address = "/ip4/172.28.0.25/tcp/9051"
 socks_address_override = "/ip4/172.28.0.25/tcp/9050"
 control_auth = "auto"
 
+# Route EVERY outbound dial through the Tor SOCKS proxy — including peers learned via gossip that
+# advertise a bare /ip4 (clearnet) address. With this true (an upstream default that favours speed),
+# minotari direct-dials those clearnet peers and leaks the home IP (#271, observed as sustained
+# connections to public IPs). false = clearnet peers are reached via Tor exit nodes, so Tari stays
+# fully functional AND never touches clearnet directly. No per-address exemptions (no local wallet).
+proxy_bypass_for_outbound_tcp = false
+proxy_bypass_addresses = []
+
 # Port mapping for the hidden service
 onion_port = 18189

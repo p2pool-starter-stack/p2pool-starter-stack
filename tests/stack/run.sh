@@ -672,6 +672,10 @@ assert_contains "monerod: DNS checkpoints disabled (#161)" "$(cat "$MONC")" "dis
 assert_contains "monerod: update check disabled (#161)"    "$(cat "$MONC")" "check-updates=disabled"
 # tari (#162): no DNS seeds; peer_seeds onion-only; the inert check_for_updates gRPC method dropped.
 assert_contains "tari: DNS seeds disabled (#162)" "$(cat "$TARC")" "dns_seeds = []"
+# #271: minotari defaults proxy_bypass_for_outbound_tcp=true → it direct-dials peers advertising a bare
+# /ip4 (clearnet) address, bypassing Tor. false routes every dial through the SOCKS proxy (reach those
+# peers via Tor exits) — so Tari is functional AND never touches clearnet directly.
+assert_contains "tari: outbound TCP dials routed via Tor SOCKS, not direct (#271)" "$(cat "$TARC")" "proxy_bypass_for_outbound_tcp = false"
 case "$(grep -E '::/ip4/|::/ip6/' "$TARC" || true)" in
     "") ok "tari: peer_seeds are onion-only (#162)" ;;
     *)  bad "tari: peer_seeds are onion-only (#162)" "clearnet /ip4//ip6/ peer seeds present" ;;
