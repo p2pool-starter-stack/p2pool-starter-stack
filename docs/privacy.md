@@ -7,11 +7,12 @@ goes, whether it's routed over Tor, whether it's on by default, and how to lock 
 possible (or trades away yield), the connection must be **off or Tor-routed by default**, have a
 **documented toggle**, and be **listed here**.
 
-Honesty first: the stack is **Tor-first**. Monero and Tari — including the DNS lookups they used to
-leak — are fully Tor-routed, and as of v1.1 **P2Pool's outbound sidechain peers route over Tor by
-default** too (#165, with a `p2pool.clearnet` opt-out). The remaining clearnet yield path is **XvB
-donation mining** (Tor-by-default tracked in #166), plus **install/build reveals your IP once**.
-Those are called out below with how to mitigate each.
+Honesty first: as of v1.1 the stack is **Tor-by-default for all runtime egress**. Monero and Tari
+(including the DNS lookups they used to leak), **P2Pool's outbound sidechain peers** (#165), and
+**XvB donation mining** (#166) are all Tor-routed by default — each with a documented opt-out for
+operators who trade privacy for yield. What's left is **inherent**: the one-time **install/build
+reveals your IP** to the download host, and **remote-node mode** (`monero.mode: remote`, off by
+default) talks to the node you choose. Those are called out below.
 
 There is also one **opt-in** that deliberately moves a node onto clearnet: an
 [optional clearnet initial sync](#optional-clearnet-initial-sync-off-by-default) that lets Monero
@@ -49,9 +50,9 @@ What the running stack sends to the internet, connection by connection.
 | **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | Tor by default; can opt into clearnet (TCP) for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) |
 | **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | clearnet sync ([#183](#optional-clearnet-initial-sync-off-by-default)) re-enables the `seeds.tari.com` DNS seed for the sync window |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
-| **P2Pool** outbound sidechain peers | P2Pool sidechain peers, via Tor | — | ✅ **Tor** (`--socks5`, proxy-type `tor`) by default (#165) | on | opt out with `p2pool.clearnet: true` (exposes your IP for max yield) → [below](#hardening-the-clearnet-paths) |
+| **P2Pool** outbound sidechain peers | P2Pool sidechain peers, via Tor | — | ✅ **Tor** (`--socks5`, proxy-type `tor`) by default (#165) | on | opt out with `p2pool.clearnet: true` (exposes your IP for max yield) → [below](#p2pool-outbound-peers-165--tor-by-default) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
-| **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` | **your real home IP** | ❌ **clearnet** | on while donating | ⏳ Tor-by-default in v1.1 (#166). Disable XvB to stop it |
+| **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` via Tor | — | ✅ **Tor** (per-pool `socks5`, DNS proxy-side) by default (#166) | on while donating | opt out with `xvb.tor: false` (exposes IP for max yield); `xvb.enabled: false` stops it entirely |
 | Dashboard **update check** (#224) | `api.github.com` | nothing about you — GitHub sees a **Tor exit**, not your IP | ✅ Tor (`socks5h`) | **on** | `dashboard.check_for_updates: false` to opt out; cached, fails silently offline |
 | **Caddy** TLS (dashboard HTTPS) | local only | — | n/a — `tls internal`, **no ACME / no external CA** | on | clean (no egress) |
 | **Telegram** alerts (#121) | Telegram API | your IP | ❌ | **off** | opt-in only |
@@ -81,11 +82,12 @@ the risk is the **one-time IP disclosure**, not tampering.
 
 ---
 
-## Hardening the clearnet paths
+## The Tor-by-default yield paths (and their opt-outs)
 
-The **XvB donation** path still uses clearnet by default (Tor-by-default tracked in #166) — close it
-today by disabling XvB, or see below. **P2Pool's outbound peers now route over Tor by default** as of
-v1.1 (#165), documented here for completeness.
+As of v1.1 both former clearnet yield paths — **P2Pool outbound peers** (#165) and **XvB donation
+mining** (#166) — route over Tor **by default**. Each has an opt-out for operators who'd trade the IP
+exposure for maximum yield (Tor latency can raise stale/uncle shares and rejects). The two sections
+below document the routing and how to opt out.
 
 ### P2Pool outbound peers (#165) — ✅ Tor by default
 
@@ -105,19 +107,21 @@ peer set to onion-only. Measure the effect on your earnings before keeping it �
 the Tor-by-default flip is a benchmarked **v1.1** change (#165), not a v1.0 default. (This hand-edit
 lives in `docker-compose.yml`, so re-apply it after a stack update until #165 lands.)
 
-### XvB donation mining (#166)
+### XvB donation mining (#166) — ✅ Tor by default
 
-When the optimizer donates to XMRvsBeast (XvB), it points the proxy at `na.xmrvsbeast.com:4247`
-over clearnet, exposing your IP to XvB. Pool stratum over Tor is high-latency and hurts share
-acceptance, so there's no clean Tor fix yet. To stop the egress entirely, **disable XvB**:
+When the optimizer donates to XMRvsBeast (XvB), it points the proxy at `na.xmrvsbeast.com:4247`. As
+of v1.1 that connection routes through Tor **by default**: `algo_service` sets a per-pool `socks5` on
+the XvB pool object it pushes to xmrig-proxy (the pool's DNS is resolved proxy-side, like the stats
+fetch in #163), so donation mining no longer exposes your home IP. No action needed.
 
-```jsonc
-// config.json
-"xvb": { "enabled": false }
-```
+**Opt out** for maximum yield — stratum-over-Tor adds latency that can raise rejected shares (scales
+with hashrate) — set `xvb.tor: false` and re-run `pithead apply`; the donation connection then dials
+direct. To stop the egress entirely instead, **disable XvB** (`"xvb": { "enabled": false }`), which
+also stops the (already Tor-routed, #163) stats fetch.
 
-This also stops the (already Tor-routed) stats fetch. v1.1 adds an `xvb.tor` opt-in to route donation
-mining through Tor and pins `--donate-level 0`.
+> The xmrig-proxy **dev-fee** `--donate-level` is pinned to **`0`** by default (`proxy.donate_level`,
+> rendered explicitly per #173) and does **not** ride the XvB pool's `socks5` — so if you set it
+> above 0, that dev-fee traffic goes **clearnet**. Keep it at `0` for a fully Tor runtime.
 
 ---
 

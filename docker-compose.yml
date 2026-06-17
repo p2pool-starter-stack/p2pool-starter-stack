@@ -367,6 +367,8 @@ services:
       - XVB_ENABLED=${XVB_ENABLED}
       - XVB_POOL_URL=${XVB_POOL_URL}
       - XVB_DONOR_ID=${XVB_DONOR_ID}
+      # Route XvB donation mining over Tor by default (#166); xvb.tor:false opts out.
+      - XVB_TOR_ENABLED=${XVB_TOR_ENABLED:-true}
       - XVB_DONATION_LEVEL=${XVB_DONATION_LEVEL:-auto}
       - PROXY_HOST=${NETWORK_PREFIX:-172.28.0}.29
       - PROXY_API_PORT=${PROXY_API_PORT}

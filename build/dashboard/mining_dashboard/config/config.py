@@ -67,6 +67,15 @@ ENABLE_XVB = os.environ.get("XVB_ENABLED", "true").lower() == "true"
 # host-networked dashboard reaches the bridge container's Tor SOCKS at 172.28.0.25:9050.
 XVB_TOR_PROXY = os.environ.get("XVB_TOR_PROXY", "socks5h://172.28.0.25:9050")
 
+# Route XvB DONATION MINING through Tor by default too (#166), not just the stats fetch (#163): while
+# donating, the proxy connects to na.xmrvsbeast.com, which would otherwise expose the host IP. The
+# algo controller sets this host:port as the XvB pool's per-pool `socks5` field (xmrig-proxy resolves
+# that pool's DNS proxy-side). `xvb.tor: false` opts out (direct, for max yield). The host:port is
+# derived from XVB_TOR_PROXY (so a custom subnet, #180, carries through) with the scheme stripped —
+# xmrig wants a bare host:port.
+XVB_TOR_ENABLED = os.environ.get("XVB_TOR_ENABLED", "true").lower() == "true"
+XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
+
 # New-release check (#224, config.json: dashboard.check_for_updates). Default ON — the dashboard asks
 # GitHub for the latest release and shows a header badge linking to it if it's newer than the running
 # version. Notify-only (no upgrade — that's #59). The check is routed over the same bridge Tor SOCKS
