@@ -14,6 +14,7 @@ from .generated import base_node_pb2
 from .generated import base_node_pb2_grpc
 from google.protobuf import empty_pb2
 
+
 class TariClient:
     # When the base node is briefly overloaded mid-sync (it logs "BaseNodeService failed
     # to send reply ... ChainMetadata" and its own `status` command times out), gRPC calls
@@ -63,7 +64,10 @@ class TariClient:
 
         # gRPC unreachable this cycle. Serve the last good state briefly (node is likely
         # just busy), but stop once it's clearly stale so a down node isn't masked forever.
-        if self._last_sync_status and (time.monotonic() - self._last_sync_ts) <= self._MAX_STALE_SECONDS:
+        if (
+            self._last_sync_status
+            and (time.monotonic() - self._last_sync_ts) <= self._MAX_STALE_SECONDS
+        ):
             return {**self._last_sync_status, "reachable": False}
         return {"is_syncing": False, "reachable": False}
 
@@ -88,8 +92,12 @@ class TariClient:
 
         # The node reports initial sync complete — trust it over any height heuristic.
         if tip.initial_sync_achieved:
-            return {"is_syncing": False, "current": local_height,
-                    "target": local_height, "percent": 100}
+            return {
+                "is_syncing": False,
+                "current": local_height,
+                "target": local_height,
+                "percent": 100,
+            }
 
         # Still syncing: ask the node what height it is syncing toward.
         target = 0

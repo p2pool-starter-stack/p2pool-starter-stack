@@ -43,7 +43,7 @@ class TestShellRoute:
         body = await resp.text()
         # Static shell: no data, just the app mount point + the module entry.
         assert 'id="app"' in body
-        assert '/static/dashboard.js' in body
+        assert "/static/dashboard.js" in body
 
 
 class TestStateApi:
@@ -79,12 +79,17 @@ class TestStateApi:
         base = 1_000_000
         for i in range(20):
             sm.state["hashrate_history"].append(
-                {"t": "x", "v": 100, "v_p2pool": 100, "v_xvb": 0, "timestamp": base + i * 60})
-        data = {"shares": [], "workers": [], "global_sync": False,
-                "monero_sync": {"percent": 100, "current": 1, "target": 1},
-                "tari_sync": {"percent": 100, "current": 1, "target": 1}}
+                {"t": "x", "v": 100, "v_p2pool": 100, "v_xvb": 0, "timestamp": base + i * 60}
+            )
+        data = {
+            "shares": [],
+            "workers": [],
+            "global_sync": False,
+            "monero_sync": {"percent": 100, "current": 1, "target": 1},
+            "tari_sync": {"percent": 100, "current": 1, "target": 1},
+        }
         cli = await aiohttp_client(create_app(sm, data))
-        resp = await cli.get(f"/api/state?from={base + 300}&to={base + 540}")   # indices 5..9
+        resp = await cli.get(f"/api/state?from={base + 300}&to={base + 540}")  # indices 5..9
         body = await resp.json()
         sm.close()
         pts = [p for p in body["chart"]["p2pool"] if p["y"] is not None]
@@ -94,7 +99,9 @@ class TestStateApi:
     async def test_node_down_badges_in_state(self, aiohttp_client):
         # When a node is down / workers rejected, the state surfaces it (Issue #31).
         data = {
-            "shares": [], "workers": [], "global_sync": False,
+            "shares": [],
+            "workers": [],
+            "global_sync": False,
             "monero_sync": {"percent": 100, "current": 10, "target": 10, "down": True},
             "tari_sync": {"percent": 100, "current": 10, "target": 10, "down": False},
             "workers_rejected": True,
@@ -110,7 +117,9 @@ class TestStateApi:
     async def test_passive_tari_badge_in_state(self, aiohttp_client):
         # Non-blocking Tari (Issue #51): operational, with a top-bar "Tari syncing" badge.
         data = {
-            "shares": [], "workers": [], "global_sync": False,
+            "shares": [],
+            "workers": [],
+            "global_sync": False,
             "monero_sync": {"percent": 100, "current": 10, "target": 10},
             "tari_sync": {"percent": 42, "current": 42, "target": 100},
             "tari_syncing_passive": True,
@@ -130,8 +139,8 @@ class TestStateApi:
         assert resp.status == 500
         body = await resp.json()
         assert "error" in body
-        assert "SECRET internal detail" not in str(body)        # no leak
-        assert "X-Frame-Options" in resp.headers                 # headers still applied
+        assert "SECRET internal detail" not in str(body)  # no leak
+        assert "X-Frame-Options" in resp.headers  # headers still applied
 
 
 class TestSecurityHeaders:
@@ -169,6 +178,7 @@ class TestStaticAssets:
         # Importing server registers these so .mjs/.js always serve as JS, even on slim
         # images with no /etc/mime.types (browsers refuse non-JS MIME for modules).
         import mimetypes
+
         assert "javascript" in (mimetypes.guess_type("app.mjs")[0] or "")
         assert "javascript" in (mimetypes.guess_type("app.js")[0] or "")
 

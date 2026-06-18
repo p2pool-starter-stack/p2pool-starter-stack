@@ -27,7 +27,9 @@ class TestGetInfo:
     def test_success_returns_payload(self):
         client = MoneroClient(username="u", password="p")
         data = {"status": "OK", "height": 5, "target_height": 10}
-        with patch.object(monero_mod.requests, "get", return_value=_resp(json_data=data)) as mock_get:
+        with patch.object(
+            monero_mod.requests, "get", return_value=_resp(json_data=data)
+        ) as mock_get:
             assert client.get_info() == data
         # Digest auth and a bounded timeout are passed through on every call.
         assert mock_get.call_args.kwargs["timeout"] == client.timeout
@@ -35,8 +37,9 @@ class TestGetInfo:
 
     def test_network_error_returns_none(self):
         client = MoneroClient(username="u", password="p")
-        with patch.object(monero_mod.requests, "get",
-                          side_effect=requests.RequestException("refused")):
+        with patch.object(
+            monero_mod.requests, "get", side_effect=requests.RequestException("refused")
+        ):
             assert client.get_info() is None
 
     def test_non_200_returns_none(self):
@@ -51,8 +54,9 @@ class TestGetInfo:
 
     def test_busy_status_returns_none(self):
         client = MoneroClient(username="u", password="p")
-        with patch.object(monero_mod.requests, "get",
-                          return_value=_resp(json_data={"status": "BUSY"})):
+        with patch.object(
+            monero_mod.requests, "get", return_value=_resp(json_data={"status": "BUSY"})
+        ):
             assert client.get_info() is None
 
 
@@ -64,17 +68,27 @@ class TestGetSyncStatus:
 
     def test_syncing(self):
         client = self._client_with_info(
-            {"status": "OK", "height": 50, "target_height": 100, "database_size": 85_000_000_000})
+            {"status": "OK", "height": 50, "target_height": 100, "database_size": 85_000_000_000}
+        )
         assert client.get_sync_status() == {
-            "is_syncing": True, "current": 50, "target": 100, "percent": 50,
+            "is_syncing": True,
+            "current": 50,
+            "target": 100,
+            "percent": 50,
             "db_size": 85_000_000_000,
         }
 
     def test_synced_via_flag(self):
         # `synchronized` is authoritative even if heights look mid-sync.
         client = self._client_with_info(
-            {"status": "OK", "synchronized": True, "height": 90, "target_height": 100,
-             "database_size": 200_000_000_000})
+            {
+                "status": "OK",
+                "synchronized": True,
+                "height": 90,
+                "target_height": 100,
+                "database_size": 200_000_000_000,
+            }
+        )
         assert client.get_sync_status() == {"is_syncing": False, "db_size": 200_000_000_000}
 
     def test_synced_via_zero_target(self):

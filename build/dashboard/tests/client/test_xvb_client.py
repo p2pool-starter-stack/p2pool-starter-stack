@@ -31,7 +31,7 @@ def test_get_stats_routes_through_tor_proxy():
     with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
         client.get_stats()
     proxies = mock_get.call_args.kwargs["proxies"]
-    assert proxies["https"].startswith("socks5h://")   # socks5h resolves the host via Tor too
+    assert proxies["https"].startswith("socks5h://")  # socks5h resolves the host via Tor too
     assert proxies["http"] == proxies["https"]
 
 

@@ -16,7 +16,7 @@ from mining_dashboard.client.xvb_client import XvbClient
 from mining_dashboard.service.data_service import DataService
 from mining_dashboard.service.algo_service import AlgoService
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("Main")
 
 
@@ -27,26 +27,28 @@ def build_app() -> web.Application:
     side effects — nothing opens the database or a network client until the app is built.
     """
     state_manager = StateManager()
-    proxy_client = XMRigProxyClient(host=PROXY_HOST, port=PROXY_API_PORT, access_token=PROXY_AUTH_TOKEN)
+    proxy_client = XMRigProxyClient(
+        host=PROXY_HOST, port=PROXY_API_PORT, access_token=PROXY_AUTH_TOKEN
+    )
     xvb_client = XvbClient(wallet_address=MONERO_WALLET_ADDRESS)
     data_service = DataService(state_manager, proxy_client, xvb_client)
     algo_service = AlgoService(state_manager, proxy_client, data_service)
 
     async def start_background_tasks(app):
         """Initializes background services upon web application startup."""
-        app['data_task'] = asyncio.create_task(data_service.run())
-        app['algo_task'] = asyncio.create_task(algo_service.run())
+        app["data_task"] = asyncio.create_task(data_service.run())
+        app["algo_task"] = asyncio.create_task(algo_service.run())
 
     async def cleanup_background_tasks(app):
         """Stops background tasks and closes resources on shutdown."""
-        app['data_task'].cancel()
-        app['algo_task'].cancel()
-        await asyncio.gather(app['data_task'], app['algo_task'], return_exceptions=True)
-        if 'state_manager' in app:
-            app['state_manager'].close()
+        app["data_task"].cancel()
+        app["algo_task"].cancel()
+        await asyncio.gather(app["data_task"], app["algo_task"], return_exceptions=True)
+        if "state_manager" in app:
+            app["state_manager"].close()
 
     app = create_app(state_manager, data_service.latest_data)
-    app['state_manager'] = state_manager
+    app["state_manager"] = state_manager
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
     return app
@@ -57,7 +59,7 @@ def main() -> None:
     logger.info("Initializing Dashboard Web Server securely on 127.0.0.1:8000")
     # Bound to localhost (127.0.0.1) so it is inaccessible from the local network directly;
     # traffic is securely routed through the Caddy proxy.
-    web.run_app(app, host='127.0.0.1', port=8000, print=None)
+    web.run_app(app, host="127.0.0.1", port=8000, print=None)
 
 
 if __name__ == "__main__":

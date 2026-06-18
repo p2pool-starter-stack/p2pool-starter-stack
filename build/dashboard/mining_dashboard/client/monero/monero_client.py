@@ -25,8 +25,13 @@ class MoneroClient:
     via `asyncio.to_thread`, mirroring how XvbClient / proxy_client are used.
     """
 
-    def __init__(self, url=MONERO_RPC_URL, username=MONERO_NODE_USERNAME,
-                 password=MONERO_NODE_PASSWORD, timeout=5):
+    def __init__(
+        self,
+        url=MONERO_RPC_URL,
+        username=MONERO_NODE_USERNAME,
+        password=MONERO_NODE_PASSWORD,
+        timeout=5,
+    ):
         self.url = url.rstrip("/") + "/get_info"
         # No creds (e.g. a remote node deployment) → send unauthenticated; the request
         # will simply fail and the caller falls back to log scraping.
@@ -88,5 +93,10 @@ class MoneroClient:
             return {"is_syncing": False, "db_size": db_size}
 
         percent = int((height / target) * 100)
-        return {"is_syncing": True, "current": height, "target": target,
-                "percent": percent, "db_size": db_size}
+        return {
+            "is_syncing": True,
+            "current": height,
+            "target": target,
+            "percent": percent,
+            "db_size": db_size,
+        }

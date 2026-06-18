@@ -19,11 +19,12 @@ from mining_dashboard.config.config import (
     XVB_CONTROL_GAIN,
     XVB_P2POOL_RESERVE_FACTOR,
     XVB_SWITCH_OVERHEAD_MS,
-    UPDATE_INTERVAL
+    UPDATE_INTERVAL,
 )
 from mining_dashboard.helper.utils import resolve_target_threshold
 
 logger = logging.getLogger("AlgoService")
+
 
 class AlgoService:
     def __init__(self, state_manager, proxy_client, data_service):
@@ -50,7 +51,12 @@ class AlgoService:
         # default (#166) — its per-pool `socks5` makes the proxy reach na.xmrvsbeast.com via Tor
         # (DNS resolved proxy-side), so donation mining doesn't expose the home IP. `xvb.tor: false`
         # opts out. Only the XvB pool gets `socks5`; the local pool never does.
-        p2pool_pool = {"url": P2POOL_URL, "user": MONERO_WALLET_ADDRESS, "pass": "x", "coin": "monero"}
+        p2pool_pool = {
+            "url": P2POOL_URL,
+            "user": MONERO_WALLET_ADDRESS,
+            "pass": "x",
+            "coin": "monero",
+        }
         xvb_pool = {"url": XVB_POOL_URL, "user": XVB_DONOR_ID, "pass": "x", "coin": "monero"}
         if XVB_TOR_ENABLED:
             xvb_pool["socks5"] = XVB_TOR_SOCKS5
@@ -71,7 +77,7 @@ class AlgoService:
 
             # Execute update via Proxy Client with the full configuration
             await asyncio.to_thread(self.proxy_client.update_config, current_config)
-            
+
             # Update state manager with the new active mode
             final_label = state_label if state_label else mode
             await asyncio.to_thread(self.state_manager.update_xvb_stats, mode=final_label)
@@ -79,8 +85,9 @@ class AlgoService:
         except Exception as e:
             logger.error(f"Failed to switch proxy mode: {e}")
 
-    def get_decision(self, current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats,
-                     shares, advance=True):
+    def get_decision(
+        self, current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares, advance=True
+    ):
         """
         Evaluates the current mining state to determine the next operation mode.
 
@@ -108,8 +115,8 @@ class AlgoService:
 
         # Constraint: Enforce P2Pool mode if no shares have been found recently.
         # This uses the same logic as the dashboard UI to count shares within the PPLNS window.
-        pool_type = p2p_stats.get('type', 'Main')
-        pplns_window = p2pool_stats.get('pplns_window', 2160)
+        pool_type = p2p_stats.get("type", "Main")
+        pplns_window = p2pool_stats.get("pplns_window", 2160)
 
         block_time = 10  # Default for Main/Mini
         if pool_type == "Nano":
@@ -117,16 +124,20 @@ class AlgoService:
 
         window_duration = pplns_window * block_time
         cutoff = time.time() - window_duration
-        shares_in_window_count = sum(1 for s in shares if s.get('ts', 0) >= cutoff)
+        shares_in_window_count = sum(1 for s in shares if s.get("ts", 0) >= cutoff)
 
         if shares_in_window_count == 0:
-            logger.info(f"Decision Strategy: Force P2POOL (Zero shares in PPLNS window of {window_duration}s)")
+            logger.info(
+                f"Decision Strategy: Force P2POOL (Zero shares in PPLNS window of {window_duration}s)"
+            )
             return "P2POOL", 0
 
         # Constraint: Fallback to P2Pool if XvB endpoint failures exceed threshold.
-        fail_count = xvb_stats.get('fail_count', 0)
+        fail_count = xvb_stats.get("fail_count", 0)
         if fail_count >= 3:
-            logger.warning(f"Decision Strategy: Force P2POOL (Excessive XvB failures: {fail_count})")
+            logger.warning(
+                f"Decision Strategy: Force P2POOL (Excessive XvB failures: {fail_count})"
+            )
             return "P2POOL", 0
 
         # Highest tier we can sustain, capped by the configured donation level.
@@ -139,8 +150,8 @@ class AlgoService:
 
         # Cap the donated fraction so p2pool keeps finding shares (VIP status).
         max_fraction = self._max_donation_fraction(current_hr, window_duration, p2pool_stats)
-        avg_1h = xvb_stats.get('avg_1h', 0)
-        avg_24h = xvb_stats.get('avg_24h', 0)
+        avg_1h = xvb_stats.get("avg_1h", 0)
+        avg_24h = xvb_stats.get("avg_24h", 0)
 
         # Advance the calibration loop once per real cycle (not during _smart_sleep).
         if advance:
@@ -161,11 +172,15 @@ class AlgoService:
             needed_time_ms = XVB_TIME_ALGO_MS
 
         if needed_time_ms >= XVB_TIME_ALGO_MS:
-            logger.info(f"Decision: Full XVB cycle (target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})")
+            logger.info(
+                f"Decision: Full XVB cycle (target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})"
+            )
             return "XVB", XVB_TIME_ALGO_MS
 
-        logger.info(f"Decision: Split ({needed_time_ms}ms to XvB; frac {fraction:.3f}; "
-                    f"target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})")
+        logger.info(
+            f"Decision: Split ({needed_time_ms}ms to XvB; frac {fraction:.3f}; "
+            f"target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})"
+        )
         return "SPLIT", int(needed_time_ms)
 
     def _get_target_donation_hr(self, stable_hr):
@@ -199,7 +214,7 @@ class AlgoService:
         headroom against variance. When difficulty is unknown (stats not ready),
         fall back to the flat hard cap.
         """
-        difficulty = p2pool_stats.get('difficulty', 0) or 0
+        difficulty = p2pool_stats.get("difficulty", 0) or 0
         if current_hr <= 0 or difficulty <= 0 or window_duration <= 0:
             return self.max_donation_fraction
 
@@ -280,13 +295,20 @@ class AlgoService:
                 # XvB's 1h average has slipped below the tier and we need to catch
                 # up — so the next cycle reacts in seconds, not after the full dwell.
                 decision, _ = self.get_decision(
-                    current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares,
+                    current_hr,
+                    stable_hr,
+                    p2pool_stats,
+                    p2p_stats,
+                    xvb_stats,
+                    shares,
                     advance=False,
                 )
                 target_hr = self._get_target_donation_hr(stable_hr)
-                under_tier = target_hr > 0 and xvb_stats.get('avg_1h', 0) < target_hr
+                under_tier = target_hr > 0 and xvb_stats.get("avg_1h", 0) < target_hr
                 if decision in ("XVB", "SPLIT") or under_tier:
-                    logger.info("Smart-sleep: donation target needs attention — ending P2Pool dwell early.")
+                    logger.info(
+                        "Smart-sleep: donation target needs attention — ending P2Pool dwell early."
+                    )
                     return
             except Exception as e:
                 logger.debug(f"Smart-sleep check error: {e}")
@@ -297,8 +319,8 @@ class AlgoService:
         Determines the optimal mining mode and manages worker switching cycles.
         """
         logger.info("Service Started: Algorithm Control Loop")
-        await asyncio.sleep(5) 
-        
+        await asyncio.sleep(5)
+
         while True:
             try:
                 # While workers are rejected (a node is down, Issue #31) the proxy is
@@ -325,9 +347,11 @@ class AlgoService:
                 p2p_stats = p2pool_data.get("p2p", {})
                 xvb_stats = self.state_manager.get_xvb_stats()
                 shares = latest_data.get("shares", [])
-                
+
                 # Execute decision logic
-                decision, xvb_duration = self.get_decision(current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares)
+                decision, xvb_duration = self.get_decision(
+                    current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares
+                )
 
                 # Record the fraction of this cycle actually routed to XvB so the
                 # dashboard can show routed-vs-credited (the live credit factor).

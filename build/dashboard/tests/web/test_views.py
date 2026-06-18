@@ -5,6 +5,7 @@ snapshot) into the structured ``/api/state`` payload the Preact client renders. 
 tested in tests/service/test_metrics.py; here we test the *display* mapping (formatting +
 presentation tokens), the chart series (Issue #65), and the full ``build_state`` contract.
 """
+
 import json
 import time
 from dataclasses import replace
@@ -14,10 +15,26 @@ import pytest
 
 import mining_dashboard.web.views as views
 from mining_dashboard.web.views import (
-    build_chart, build_hashrate, build_pool_network, build_workers, build_tari,
-    build_system, build_sync, build_badges, build_earnings, build_state, build_raffle_eligibility, get_shell_html,
-    _mode_palette, parse_window, _target_points, _chart_tension,
-    build_proxy_summary, _reject_flag, host_display_addr, canonical_window,
+    build_chart,
+    build_hashrate,
+    build_pool_network,
+    build_workers,
+    build_tari,
+    build_system,
+    build_sync,
+    build_badges,
+    build_earnings,
+    build_state,
+    build_raffle_eligibility,
+    get_shell_html,
+    _mode_palette,
+    parse_window,
+    _target_points,
+    _chart_tension,
+    build_proxy_summary,
+    _reject_flag,
+    host_display_addr,
+    canonical_window,
 )
 from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
@@ -25,20 +42,44 @@ from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
 
-_SYNC_DONE = SyncMetric(percent=100, current=10, target=10, remaining=0,
-                        has_target=True, done=True, down=False)
+_SYNC_DONE = SyncMetric(
+    percent=100, current=10, target=10, remaining=0, has_target=True, done=True, down=False
+)
 
 _BASE = Metrics(
-    total_h15=10500.0, p2pool_1h=8000.0, p2pool_24h=8100.0, xvb_1h=2100.0, xvb_24h=2300.0,
-    xvb_routed_1h=2000.0, xvb_routed_24h=2050.0,
-    stratum_h15=10300.0, stratum_h1h=10400.0, stratum_h24h=10200.0,
-    mode="P2POOL", xvb_enabled=True, current_tier="Donor (1.00 kH/s+)",
-    target_tier="Donor (1.00 kH/s+)", target_threshold=1000.0, target_sustainable=True,
-    low_hr_warning=False, xvb_fail_count=0, xvb_last_update=0,
-    workers_online=2, workers_total=3, shares_in_window=5, pplns_window=2160, block_time=10,
-    pool_type="Mini", pool_hashrate=120_000_000.0, pool_difficulty=250_000_000.0,
-    network_difficulty=380_000_000_000.0, network_height=3210001,
-    global_syncing=False, monero=_SYNC_DONE, tari=_SYNC_DONE, monero_mode="Unknown",
+    total_h15=10500.0,
+    p2pool_1h=8000.0,
+    p2pool_24h=8100.0,
+    xvb_1h=2100.0,
+    xvb_24h=2300.0,
+    xvb_routed_1h=2000.0,
+    xvb_routed_24h=2050.0,
+    stratum_h15=10300.0,
+    stratum_h1h=10400.0,
+    stratum_h24h=10200.0,
+    mode="P2POOL",
+    xvb_enabled=True,
+    current_tier="Donor (1.00 kH/s+)",
+    target_tier="Donor (1.00 kH/s+)",
+    target_threshold=1000.0,
+    target_sustainable=True,
+    low_hr_warning=False,
+    xvb_fail_count=0,
+    xvb_last_update=0,
+    workers_online=2,
+    workers_total=3,
+    shares_in_window=5,
+    pplns_window=2160,
+    block_time=10,
+    pool_type="Mini",
+    pool_hashrate=120_000_000.0,
+    pool_difficulty=250_000_000.0,
+    network_difficulty=380_000_000_000.0,
+    network_height=3210001,
+    global_syncing=False,
+    monero=_SYNC_DONE,
+    tari=_SYNC_DONE,
+    monero_mode="Unknown",
     tari_mining=True,
 )
 
@@ -58,28 +99,42 @@ def _hashrate(metrics):
 
 # --- Chart (Issue #65: real-time x-axis, outage gaps as breaks) -----------------------
 
+
 class TestChart:
     def _line(self, n, start_ts, step=30):
-        return [{"timestamp": start_ts + i * step, "v": 100 + i, "v_p2pool": 100 + i,
-                 "v_xvb": 0, "t": "x"} for i in range(n)]
+        return [
+            {
+                "timestamp": start_ts + i * step,
+                "v": 100 + i,
+                "v_p2pool": 100 + i,
+                "v_xvb": 0,
+                "t": "x",
+            }
+            for i in range(n)
+        ]
 
     def test_point_shape_is_xy_with_epoch_ms(self):
-        chart = build_chart([{"timestamp": 1000, "v": 800, "v_p2pool": 500, "v_xvb": 300, "t": "a"}],
-                            [], "all")
+        chart = build_chart(
+            [{"timestamp": 1000, "v": 800, "v_p2pool": 500, "v_xvb": 300, "t": "a"}], [], "all"
+        )
         assert chart["p2pool"] == [{"x": 1_000_000, "y": 500}]
         assert chart["xvb"] == [{"x": 1_000_000, "y": 300}]
 
     def test_legacy_rows_attributed_to_p2pool(self):
-        chart = build_chart([{"timestamp": 1, "v": 800, "v_p2pool": 0, "v_xvb": 0, "t": "a"}], [], "all")
+        chart = build_chart(
+            [{"timestamp": 1, "v": 800, "v_p2pool": 0, "v_xvb": 0, "t": "a"}], [], "all"
+        )
         assert chart["p2pool"][0]["y"] == 800
         assert chart["xvb"][0]["y"] == 0
 
     def test_range_filtering(self):
         now = time.time()
-        history = [{"timestamp": now - 7200, "v": 1, "v_p2pool": 1, "v_xvb": 0, "t": "x"},
-                   {"timestamp": now - 60, "v": 2, "v_p2pool": 2, "v_xvb": 0, "t": "x"}]
+        history = [
+            {"timestamp": now - 7200, "v": 1, "v_p2pool": 1, "v_xvb": 0, "t": "x"},
+            {"timestamp": now - 60, "v": 2, "v_p2pool": 2, "v_xvb": 0, "t": "x"},
+        ]
         chart = build_chart(history, [], "1h")
-        assert len(chart["p2pool"]) == 1   # the 2h-old point is dropped
+        assert len(chart["p2pool"]) == 1  # the 2h-old point is dropped
 
     def test_downsampling_caps_points(self):
         now = time.time()
@@ -93,12 +148,15 @@ class TestChart:
         # 10 regular 30s samples, a 2-hour outage, then 5 more.
         hist = self._line(10, 1_000_000)
         t = hist[-1]["timestamp"] + 7200
-        hist += [{"timestamp": t + i * 30, "v": 200, "v_p2pool": 200, "v_xvb": 0, "t": "x"} for i in range(5)]
+        hist += [
+            {"timestamp": t + i * 30, "v": 200, "v_p2pool": 200, "v_xvb": 0, "t": "x"}
+            for i in range(5)
+        ]
         chart = build_chart(hist, [], "all")
         nulls = [p for p in chart["p2pool"] if p["y"] is None]
-        assert len(nulls) == 1                                  # exactly one break, in the gap
+        assert len(nulls) == 1  # exactly one break, in the gap
         xs = [p["x"] for p in chart["p2pool"]]
-        assert xs == sorted(xs)                                 # still chronological
+        assert xs == sorted(xs)  # still chronological
         # both series break at the same place
         assert sum(1 for p in chart["xvb"] if p["y"] is None) == 1
 
@@ -119,7 +177,10 @@ class TestChart:
         # the empty span, making the gap visible) — not at an endpoint.
         hist = self._line(5, 1_000_000)
         t = hist[-1]["timestamp"] + 7200
-        hist += [{"timestamp": t + i * 30, "v": 200, "v_p2pool": 200, "v_xvb": 0, "t": "x"} for i in range(5)]
+        hist += [
+            {"timestamp": t + i * 30, "v": 200, "v_p2pool": 200, "v_xvb": 0, "t": "x"}
+            for i in range(5)
+        ]
         pts = build_chart(hist, [], "all")["p2pool"]
         i = next(k for k, p in enumerate(pts) if p["y"] is None)
         assert pts[i - 1]["x"] < pts[i]["x"] < pts[i + 1]["x"]
@@ -135,14 +196,16 @@ class TestChart:
         # The real #65 scenario: a long range that gets downsampled, with an outage in it. The
         # break must survive downsampling (gap detected on the post-downsample timestamps).
         now = time.time()
-        hist = self._line(1000, now - 100000, step=30)            # dense, will downsample
-        gap_start = hist[-1]["timestamp"] + 6 * 3600              # 6h outage
+        hist = self._line(1000, now - 100000, step=30)  # dense, will downsample
+        gap_start = hist[-1]["timestamp"] + 6 * 3600  # 6h outage
         hist += self._line(1000, gap_start, step=30)
         chart = build_chart(hist, [], "all")
         assert any(p["y"] is None for p in chart["p2pool"])
 
     def test_single_point_no_break(self):
-        chart = build_chart([{"timestamp": 1, "v": 5, "v_p2pool": 5, "v_xvb": 0, "t": "a"}], [], "all")
+        chart = build_chart(
+            [{"timestamp": 1, "v": 5, "v_p2pool": 5, "v_xvb": 0, "t": "a"}], [], "all"
+        )
         assert len(chart["p2pool"]) == 1
 
     def test_share_points_sparse_and_top_pinned(self):
@@ -152,21 +215,29 @@ class TestChart:
             {"timestamp": 1000, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},
             {"timestamp": 1030, "v": 600, "v_p2pool": 600, "v_xvb": 0, "t": "b"},
         ]
-        shares = [{"ts": 1001}, {"ts": 1029}]   # one near each sample
+        shares = [{"ts": 1001}, {"ts": 1029}]  # one near each sample
         pts = build_chart(history, shares, "all")["shares"]
         assert pts == [
-            {"x": 1_000_000, "y": 0.93, "r": 9, "c": 1},   # fixed top position, radius 6+3
+            {"x": 1_000_000, "y": 0.93, "r": 9, "c": 1},  # fixed top position, radius 6+3
             {"x": 1_030_000, "y": 0.93, "r": 9, "c": 1},
         ]
 
     def test_share_marker_top_pinned_when_value_zero(self):
         # Same fixed position even at zero hashrate — the marker stays visible without a floor hack.
-        pts = build_chart([{"timestamp": 1000, "v": 0, "v_p2pool": 0, "v_xvb": 0, "t": "a"}],
-                          [{"ts": 1000}], "all")["shares"]
+        pts = build_chart(
+            [{"timestamp": 1000, "v": 0, "v_p2pool": 0, "v_xvb": 0, "t": "a"}],
+            [{"ts": 1000}],
+            "all",
+        )["shares"]
         assert pts == [{"x": 1_000_000, "y": 0.93, "r": 9, "c": 1}]
 
     def test_no_shares_no_points(self):
-        assert build_chart([{"timestamp": 1, "v": 5, "v_p2pool": 5, "v_xvb": 0, "t": "a"}], [], "all")["shares"] == []
+        assert (
+            build_chart([{"timestamp": 1, "v": 5, "v_p2pool": 5, "v_xvb": 0, "t": "a"}], [], "all")[
+                "shares"
+            ]
+            == []
+        )
 
     def test_unknown_range_keeps_everything(self):
         # An unrecognized range value falls through to "no filtering" (same as 'all').
@@ -181,10 +252,10 @@ class TestChart:
 
     def test_custom_window_filters_both_bounds(self):
         # A preset bounds only the lower end; a custom window clips BOTH ends.
-        hist = self._line(10, 1000)   # timestamps 1000..1270 (step 30)
+        hist = self._line(10, 1000)  # timestamps 1000..1270 (step 30)
         chart = build_chart(hist, [], "all", window=(1060, 1150))
         xs = [p["x"] for p in chart["p2pool"]]
-        assert xs == [1060_000, 1090_000, 1120_000, 1150_000]   # only ts in [1060, 1150]
+        assert xs == [1060_000, 1090_000, 1120_000, 1150_000]  # only ts in [1060, 1150]
 
     def test_window_overrides_range(self):
         # When both a window and a range are given, the window wins.
@@ -195,7 +266,7 @@ class TestChart:
     def test_short_window_kept_at_native_resolution(self):
         # A <=1h window is never downsampled — full 30s detail (the "more detail zoomed in" goal).
         now = time.time()
-        hist = self._line(120, now - 119 * 30, step=30)   # ~1h of 30s samples, ending now
+        hist = self._line(120, now - 119 * 30, step=30)  # ~1h of 30s samples, ending now
         chart = build_chart(hist, [], "1h")
         assert len([p for p in chart["p2pool"] if p["y"] is not None]) == 120
 
@@ -206,11 +277,11 @@ class TestChart:
         assert len([p for p in chart["p2pool"] if p["y"] is not None]) <= 600
 
     def test_target_points_tiers(self):
-        assert _target_points(3600) == 0          # <= 1h: native
-        assert _target_points(3601) == 360        # <= 6h
-        assert _target_points(86400) == 480       # <= 24h
-        assert _target_points(604800) == 600      # <= 1w
-        assert _target_points(604801) == 700      # > 1w
+        assert _target_points(3600) == 0  # <= 1h: native
+        assert _target_points(3601) == 360  # <= 6h
+        assert _target_points(86400) == 480  # <= 24h
+        assert _target_points(604800) == 600  # <= 1w
+        assert _target_points(604801) == 700  # > 1w
         assert _target_points(30 * 86400) == 700  # ceiling
 
     def test_chart_tension_tiers(self):
@@ -227,26 +298,28 @@ class TestChart:
         # Guard that invariant on the emitted points so a future data change can't silently
         # break the stack (Issue #47).
         hist = [
-            {"timestamp": 1000, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},   # P2Pool sample
-            {"timestamp": 1030, "v": 700, "v_p2pool": 0, "v_xvb": 700, "t": "b"},   # XvB sample
+            {"timestamp": 1000, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},  # P2Pool sample
+            {"timestamp": 1030, "v": 700, "v_p2pool": 0, "v_xvb": 700, "t": "b"},  # XvB sample
             {"timestamp": 1060, "v": 600, "v_p2pool": 600, "v_xvb": 0, "t": "c"},
         ]
         chart = build_chart(hist, [], "all")
         for p2p, xvb, row in zip(chart["p2pool"], chart["xvb"], hist):
-            assert p2p["y"] + xvb["y"] == row["v"]      # stack top == total at every point
+            assert p2p["y"] + xvb["y"] == row["v"]  # stack top == total at every point
 
     def test_zoom_reveals_more_detail(self):
         # Core intent (Issue #47): zooming into a sub-window shows finer data than the wide view
         # of the same history. 8h of dense 30s samples — a ~1h window stays native resolution
         # while the full 8h downsamples, so the narrow window has more points per hour.
         now = time.time()
-        dense = self._line(960, now - 8 * 3600, step=30)          # 8h @ 30s
+        dense = self._line(960, now - 8 * 3600, step=30)  # 8h @ 30s
         wide = build_chart(dense, [], "all", window=(dense[0]["timestamp"], dense[-1]["timestamp"]))
-        narrow = build_chart(dense, [], "all", window=(dense[-120]["timestamp"], dense[-1]["timestamp"]))
+        narrow = build_chart(
+            dense, [], "all", window=(dense[-120]["timestamp"], dense[-1]["timestamp"])
+        )
         wide_pts = len([p for p in wide["p2pool"] if p["y"] is not None])
         narrow_pts = len([p for p in narrow["p2pool"] if p["y"] is not None])
-        assert narrow_pts == 120                                  # 1h window: native, untouched
-        assert narrow_pts / 1 > wide_pts / 8                      # more points per hour zoomed in
+        assert narrow_pts == 120  # 1h window: native, untouched
+        assert narrow_pts / 1 > wide_pts / 8  # more points per hour zoomed in
 
     def test_all_range_adapts_density_to_data_extent(self):
         # With "all" (no preset length, no window) the adaptive density keys off the actual data
@@ -263,18 +336,37 @@ class TestChartWindow:
 
     def _row(self):
         # One row carrying both the original 10m split and the per-window columns.
-        return {"timestamp": 1000, "t": "a", "v": 1000, "v_p2pool": 1000, "v_xvb": 0,
-                "v_p2pool_1m": 900, "v_xvb_1m": 0, "v_p2pool_1h": 1100, "v_xvb_1h": 0,
-                "v_p2pool_12h": 50, "v_xvb_12h": 0, "v_p2pool_24h": 10, "v_xvb_24h": 0}
+        return {
+            "timestamp": 1000,
+            "t": "a",
+            "v": 1000,
+            "v_p2pool": 1000,
+            "v_xvb": 0,
+            "v_p2pool_1m": 900,
+            "v_xvb_1m": 0,
+            "v_p2pool_1h": 1100,
+            "v_xvb_1h": 0,
+            "v_p2pool_12h": 50,
+            "v_xvb_12h": 0,
+            "v_p2pool_24h": 10,
+            "v_xvb_24h": 0,
+        }
 
     def test_default_window_is_10m(self):
         # No avg_window arg -> the original v_p2pool/v_xvb pair (today's headline series).
         chart = build_chart([self._row()], [], "all")
         assert chart["p2pool"][0]["y"] == 1000
 
-    @pytest.mark.parametrize("win,expected", [
-        ("1m", 900), ("10m", 1000), ("1h", 1100), ("12h", 50), ("24h", 10),
-    ])
+    @pytest.mark.parametrize(
+        "win,expected",
+        [
+            ("1m", 900),
+            ("10m", 1000),
+            ("1h", 1100),
+            ("12h", 50),
+            ("24h", 10),
+        ],
+    )
     def test_each_window_selects_its_columns(self, win, expected):
         chart = build_chart([self._row()], [], "all", None, win)
         assert chart["p2pool"][0]["y"] == expected
@@ -298,9 +390,9 @@ class TestChartWindow:
         # downsampler dropped all but v/v_p2pool/v_xvb, so non-default Avg windows read 0 on any
         # range wide enough to downsample (24h/1w/1mo).
         base = self._row()
-        rows = [{**base, "timestamp": i} for i in range(600)]   # 600 > target(480) for a 24h span
+        rows = [{**base, "timestamp": i} for i in range(600)]  # 600 > target(480) for a 24h span
         out = views._downsample_history(rows, 86400)
-        assert len(out) < len(rows)                              # actually downsampled
+        assert len(out) < len(rows)  # actually downsampled
         assert out[0]["v_p2pool_1m"] == 900 and out[-1]["v_p2pool_1m"] == 900
         assert out[0]["v_p2pool_1h"] == 1100 and out[0]["v_p2pool_24h"] == 10
 
@@ -310,22 +402,23 @@ class TestChartWindow:
         history = [{**base, "timestamp": i * 30} for i in range(600)]
         chart = build_chart(history, [], "24h", (0, 86400), "1m")
         ys = [p["y"] for p in chart["p2pool"] if p["y"] is not None]
-        assert len(chart["p2pool"]) < 600        # downsampled
+        assert len(chart["p2pool"]) < 600  # downsampled
         assert ys and all(y == 900 for y in ys)  # 1m series preserved (was 0 before the fix)
 
     def test_build_state_echoes_selected_window(self):
         state = build_state(_data(), _state_mgr(history=[self._row()]), "all", None, "1h")
         assert state["avg_window"] == "1h"
         assert state["avg_windows"] == HASHRATE_WINDOWS
-        assert state["chart"]["p2pool"][0]["y"] == 1100   # the 1h column, end to end
+        assert state["chart"]["p2pool"][0]["y"] == 1100  # the 1h column, end to end
 
     def test_build_state_defaults_to_10m(self):
         state = build_state(_data(), _state_mgr(history=[self._row()]), "all")
         assert state["avg_window"] == DEFAULT_HASHRATE_WINDOW
-        assert state["chart"]["p2pool"][0]["y"] == 1000   # the original 10m series
+        assert state["chart"]["p2pool"][0]["y"] == 1000  # the original 10m series
 
 
 # --- Hashrate / mode / tier formatting ------------------------------------------------
+
 
 class TestHashrate:
     def test_formats_hashrates(self):
@@ -373,10 +466,15 @@ class TestHashrate:
 
 # --- Sync display state mapping -------------------------------------------------------
 
+
 class TestSync:
     def test_loading_done_syncing_states(self):
-        m = _metrics(monero=_sync(has_target=False, done=False),
-                     tari=_sync(has_target=True, done=False, percent=40, current=40, target=100, remaining=60))
+        m = _metrics(
+            monero=_sync(has_target=False, done=False),
+            tari=_sync(
+                has_target=True, done=False, percent=40, current=40, target=100, remaining=60
+            ),
+        )
         sync = build_sync(m, "85.0 GB")
         assert sync["monero"]["state"] == "loading"
         assert sync["tari"]["state"] == "syncing"
@@ -398,8 +496,11 @@ class TestSync:
     def test_no_target_but_not_caught_up_is_not_done(self):
         # The same no-target shape, but NOT caught up, must not read "done".
         m_loading = _metrics(monero=_sync_metric({}))  # no status yet
-        m_syncing = _metrics(monero=_sync_metric({"is_syncing": True, "reachable": True,
-                                                  "current": 5, "target": 10, "percent": 50}))
+        m_syncing = _metrics(
+            monero=_sync_metric(
+                {"is_syncing": True, "reachable": True, "current": 5, "target": 10, "percent": 50}
+            )
+        )
         assert build_sync(m_loading, "1.0 GB")["monero"]["state"] == "loading"
         assert build_sync(m_syncing, "1.0 GB")["monero"]["state"] == "syncing"
 
@@ -410,6 +511,7 @@ class TestSync:
 
 
 # --- Badges ---------------------------------------------------------------------------
+
 
 class TestBadges:
     def _texts(self, badges):
@@ -436,10 +538,18 @@ class TestBadges:
 
     def test_no_share_badge_absent_when_has_share_or_xvb_off(self):
         # Has a share => no badge; XvB off => raffle moot, no badge.
-        assert not any("No PPLNS share" in t for t in self._texts(
-            build_badges({}, _metrics(xvb_enabled=True, shares_in_window=3), "ok")))
-        assert not any("No PPLNS share" in t for t in self._texts(
-            build_badges({}, _metrics(xvb_enabled=False, shares_in_window=0), "ok")))
+        assert not any(
+            "No PPLNS share" in t
+            for t in self._texts(
+                build_badges({}, _metrics(xvb_enabled=True, shares_in_window=3), "ok")
+            )
+        )
+        assert not any(
+            "No PPLNS share" in t
+            for t in self._texts(
+                build_badges({}, _metrics(xvb_enabled=False, shares_in_window=0), "ok")
+            )
+        )
 
     def test_node_down_and_rejected(self):
         m = _metrics(monero=_sync(down=True), tari=_sync(down=True))
@@ -452,7 +562,9 @@ class TestBadges:
         assert "Miner held (sync)" in self._texts(out)
 
     def test_passive_tari_with_and_without_percent(self):
-        with_pct = build_badges({"tari_syncing_passive": True}, _metrics(tari=_sync(percent=42)), "ok")
+        with_pct = build_badges(
+            {"tari_syncing_passive": True}, _metrics(tari=_sync(percent=42)), "ok"
+        )
         assert "Tari syncing 42%" in self._texts(with_pct)
         no_pct = build_badges({"tari_syncing_passive": True}, _metrics(tari=_sync(percent=0)), "ok")
         assert "Tari syncing" in self._texts(no_pct)
@@ -489,14 +601,20 @@ class TestBadges:
 
 # --- System (presentation thresholds) -------------------------------------------------
 
+
 class TestSystem:
     def test_high_usage_levels_and_fill(self):
-        s = build_system({"system": {
-            "disk": {"percent": 95, "used_gb": 90, "total_gb": 100, "percent_str": "95%"},
-            "memory": {"percent": 85, "used_gb": 13, "total_gb": 16, "percent_str": "85%"},
-            "cpu_percent": "90.0%", "load": "0.5 0.4 0.3",
-            "hugepages": ["Enabled", "status-ok", "1555/3072"],
-        }})
+        s = build_system(
+            {
+                "system": {
+                    "disk": {"percent": 95, "used_gb": 90, "total_gb": 100, "percent_str": "95%"},
+                    "memory": {"percent": 85, "used_gb": 13, "total_gb": 16, "percent_str": "85%"},
+                    "cpu_percent": "90.0%",
+                    "load": "0.5 0.4 0.3",
+                    "hugepages": ["Enabled", "status-ok", "1555/3072"],
+                }
+            }
+        )
         assert s["disk"]["fill"] == "critical"
         assert s["disk"]["level"] == "high"
         assert s["mem"]["level"] == "high"
@@ -519,61 +637,137 @@ class TestSystem:
 
 # --- Workers --------------------------------------------------------------------------
 
+
 class TestWorkers:
     def test_pool_tokens(self):
-        assert build_workers([{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}])[0]["pool"] == "p2pool"
-        assert build_workers([{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": "3344"}])[0]["pool"] == "xvb"
-        assert build_workers([{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": ""}])[0]["pool"] == "unknown"
+        assert (
+            build_workers(
+                [{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}]
+            )[0]["pool"]
+            == "p2pool"
+        )
+        assert (
+            build_workers(
+                [{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": "3344"}]
+            )[0]["pool"]
+            == "xvb"
+        )
+        assert (
+            build_workers([{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": ""}])[
+                0
+            ]["pool"]
+            == "unknown"
+        )
 
     def test_formatted_and_raw_fields(self):
-        row = build_workers([{"name": "r", "ip": "10.0.0.1", "status": "online",
-                              "active_pool": "3333", "uptime": 3600, "h10": 5000, "h60": 5100, "h15": 5200}])[0]
+        row = build_workers(
+            [
+                {
+                    "name": "r",
+                    "ip": "10.0.0.1",
+                    "status": "online",
+                    "active_pool": "3333",
+                    "uptime": 3600,
+                    "h10": 5000,
+                    "h60": 5100,
+                    "h15": 5200,
+                }
+            ]
+        )[0]
         assert row["uptime"] == 3600 and row["uptime_str"]
         assert row["h10"] == 5000 and "kH/s" in row["h10_str"]
 
     def test_online_sorted_before_offline(self):
-        rows = build_workers([
-            {"name": "zzz", "ip": "10.0.0.9", "status": "offline", "active_pool": "3333"},
-            {"name": "aaa", "ip": "10.0.0.1", "status": "online", "active_pool": "3333"},
-        ])
+        rows = build_workers(
+            [
+                {"name": "zzz", "ip": "10.0.0.9", "status": "offline", "active_pool": "3333"},
+                {"name": "aaa", "ip": "10.0.0.1", "status": "online", "active_pool": "3333"},
+            ]
+        )
         assert [r["name"] for r in rows] == ["aaa", "zzz"]
 
     def test_malformed_worker_skipped(self):
-        rows = build_workers([
-            {"name": "good", "ip": "10.0.0.1", "status": "online", "active_pool": "3333"},
-            {"name": "skipme", "status": "online", "active_pool": "3333"},  # no 'ip'
-        ])
+        rows = build_workers(
+            [
+                {"name": "good", "ip": "10.0.0.1", "status": "online", "active_pool": "3333"},
+                {"name": "skipme", "status": "online", "active_pool": "3333"},  # no 'ip'
+            ]
+        )
         assert [r["name"] for r in rows] == ["good"]
 
     def test_bad_ip_sorts_to_zero(self):
-        assert build_workers([{"name": "r", "ip": "nope", "status": "online", "active_pool": "3333"}])[0]["ip_sort"] == 0
+        assert (
+            build_workers([{"name": "r", "ip": "nope", "status": "online", "active_pool": "3333"}])[
+                0
+            ]["ip_sort"]
+            == 0
+        )
 
     def test_name_passthrough(self):
         # Raw name as data; the client text-escapes it on render.
-        assert build_workers([{"name": "<rig>", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}])[0]["name"] == "<rig>"
+        assert (
+            build_workers(
+                [{"name": "<rig>", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}]
+            )[0]["name"]
+            == "<rig>"
+        )
 
     def test_share_counts_raw_and_formatted(self):
         # Per-worker accepted/rejected/invalid: raw counts (sort keys) + display strings (#82).
-        row = build_workers([{"name": "r", "ip": "10.0.0.1", "status": "online", "active_pool": "3333",
-                              "accepted": 1234, "rejected": 5, "invalid": 0}])[0]
+        row = build_workers(
+            [
+                {
+                    "name": "r",
+                    "ip": "10.0.0.1",
+                    "status": "online",
+                    "active_pool": "3333",
+                    "accepted": 1234,
+                    "rejected": 5,
+                    "invalid": 0,
+                }
+            ]
+        )[0]
         assert row["accepted"] == 1234 and row["accepted_str"] == "1,234"
         assert row["rejected"] == 5 and row["rejected_str"] == "5"
         assert row["invalid"] == 0
 
     def test_invalid_appended_to_rejected_string_only_when_nonzero(self):
-        with_inv = build_workers([{"name": "r", "ip": "1.1.1.1", "status": "online",
-                                   "active_pool": "3333", "rejected": 3, "invalid": 2}])[0]
+        with_inv = build_workers(
+            [
+                {
+                    "name": "r",
+                    "ip": "1.1.1.1",
+                    "status": "online",
+                    "active_pool": "3333",
+                    "rejected": 3,
+                    "invalid": 2,
+                }
+            ]
+        )[0]
         assert with_inv["rejected_str"] == "3 (+2 inv)"
 
     def test_missing_share_fields_default_to_zero(self):
         # Workers restored from an old snapshot (pre-#82) lack the share fields entirely.
-        row = build_workers([{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}])[0]
+        row = build_workers(
+            [{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}]
+        )[0]
         assert (row["accepted"], row["rejected"], row["invalid"]) == (0, 0, 0)
         assert row["reject_flag"] is None
 
     def test_reject_flag_set_on_high_reject_rate(self):
-        row = build_workers([{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333",
-                              "accepted": 90, "rejected": 10, "invalid": 0}])[0]
+        row = build_workers(
+            [
+                {
+                    "name": "r",
+                    "ip": "1.1.1.1",
+                    "status": "online",
+                    "active_pool": "3333",
+                    "accepted": 90,
+                    "rejected": 10,
+                    "invalid": 0,
+                }
+            ]
+        )[0]
         assert row["reject_flag"] and row["reject_flag"]["text"] == "⚠"
         assert "10.0%" in row["reject_flag"]["title"]
 
@@ -586,14 +780,14 @@ class TestRejectFlag:
 
     def test_none_below_noise_floor(self):
         # A couple of rejects out of a few shares is noise, even at a high rate.
-        assert _reject_flag(2, 1) is None     # 33% but only 1 reject
-        assert _reject_flag(0, 2) is None     # 100% but below the 3-reject floor
+        assert _reject_flag(2, 1) is None  # 33% but only 1 reject
+        assert _reject_flag(0, 2) is None  # 100% but below the 3-reject floor
 
     def test_none_when_rate_low(self):
         assert _reject_flag(1000, 5) is None  # 5 rejects but only 0.5%
 
     def test_flags_high_rate_above_floor(self):
-        flag = _reject_flag(90, 10)           # 10% with 10 rejects
+        flag = _reject_flag(90, 10)  # 10% with 10 rejects
         assert flag["text"] == "⚠"
         assert "10.0%" in flag["title"] and "10 rejected" in flag["title"]
 
@@ -604,10 +798,21 @@ class TestRejectFlag:
 
 # --- Tari -----------------------------------------------------------------------------
 
+
 class TestTari:
     def test_active(self):
-        t = build_tari({"tari": {"active": True, "status": "Mining", "reward": 12.5, "height": 42,
-                                 "difficulty": 1234567, "address": "addr"}})
+        t = build_tari(
+            {
+                "tari": {
+                    "active": True,
+                    "status": "Mining",
+                    "reward": 12.5,
+                    "height": 42,
+                    "difficulty": 1234567,
+                    "address": "addr",
+                }
+            }
+        )
         assert t["active"] is True
         assert t["status"] == "Mining"
         assert t["reward"] == "12.50 TARI"
@@ -624,10 +829,20 @@ class TestTari:
 
 # --- Proxy summary (Issue #82) --------------------------------------------------------
 
+
 class TestProxySummary:
     def test_formats_totals_and_best(self):
-        ps = build_proxy_summary({"proxy_summary": {
-            "accepted": 12345, "rejected": 67, "invalid": 2, "expired": 1, "best": 9876543}})
+        ps = build_proxy_summary(
+            {
+                "proxy_summary": {
+                    "accepted": 12345,
+                    "rejected": 67,
+                    "invalid": 2,
+                    "expired": 1,
+                    "best": 9876543,
+                }
+            }
+        )
         assert ps["accepted"] == "12,345"
         assert ps["rejected"] == "67"
         assert ps["invalid"] == "2"
@@ -655,17 +870,32 @@ class TestProxySummary:
 
 # --- pool/network passthrough ---------------------------------------------------------
 
+
 class TestPoolNetwork:
     def test_formats_from_metrics_and_data(self):
         data = {
-            "stratum": {"hashrate_15m": 0, "shares_found": 5, "shares_failed": 1, "wallet": "W" * 40},
+            "stratum": {
+                "hashrate_15m": 0,
+                "shares_found": 5,
+                "shares_failed": 1,
+                "wallet": "W" * 40,
+            },
             "pool": {"pool": {"sidechain_height": 100}},
             "network": {"reward": 600_000_000_000, "hash": "abc", "timestamp": 0},
             "monero_sync": {"db_size": 85_000_000_000},
         }
-        pn = build_pool_network(data, _metrics(pool_hashrate=120_000_000, pool_difficulty=250_000_000,
-                                               network_difficulty=380_000_000_000, network_height=42,
-                                               pplns_window=2160, block_time=10, monero_mode="Pruned"))
+        pn = build_pool_network(
+            data,
+            _metrics(
+                pool_hashrate=120_000_000,
+                pool_difficulty=250_000_000,
+                network_difficulty=380_000_000_000,
+                network_height=42,
+                pplns_window=2160,
+                block_time=10,
+                monero_mode="Pruned",
+            ),
+        )
         assert pn["pool"]["hr"] == "120.00 MH/s"
         assert pn["pool"]["diff"] == "250.00 M"
         assert pn["network"]["diff"] == "380.00 G"
@@ -673,7 +903,7 @@ class TestPoolNetwork:
         assert pn["stratum"]["shares"] == "5 / 1"
         assert pn["monero"]["mode"] == "Pruned"
         assert pn["monero"]["db_size"] == "85.0 GB"
-        assert pn["shares_window"]["count"] == 5      # from _BASE metrics
+        assert pn["shares_window"]["count"] == 5  # from _BASE metrics
         assert pn["shares_window"]["ok"] is True
 
     def test_db_size_dash_when_unknown(self):
@@ -682,6 +912,7 @@ class TestPoolNetwork:
 
 
 # --- Host address beside the hostname (Issue #119) ------------------------------------
+
 
 class TestHostDisplayAddr:
     def test_resolves_ip_for_a_hostname(self):
@@ -705,15 +936,19 @@ class TestHostDisplayAddr:
 
 # --- Earnings calculator (Issue #12) --------------------------------------------------
 
+
 class TestEarnings:
-    _NET = {"network": {"reward": 600_000_000_000}}   # 0.6 XMR block reward (atomic units)
+    _NET = {"network": {"reward": 600_000_000_000}}  # 0.6 XMR block reward (atomic units)
 
     def test_publishes_rate_and_inputs(self):
         # The server sends the daily XMR-per-H/s *rate* + the raw inputs the client scales/inverts
         # (the P2Pool hashrate, P2Pool share difficulty) — not pre-formatted earnings.
-        e = build_earnings(self._NET, _metrics(p2pool_1h=10500,
-                                               network_difficulty=400_000_000_000,
-                                               pool_difficulty=250_000_000))
+        e = build_earnings(
+            self._NET,
+            _metrics(
+                p2pool_1h=10500, network_difficulty=400_000_000_000, pool_difficulty=250_000_000
+            ),
+        )
         assert e["available"] is True
         assert e["p2pool_hr"] == 10500
         assert e["p2pool_hr_str"] == "10.50 kH/s"
@@ -731,8 +966,10 @@ class TestEarnings:
         # (and its display string) matches build_hashrate's "p2p_1h" exactly.
         m = _metrics(total_h15=46_300, xvb_routed_1h=10_000, p2pool_1h=35_000)
         e = build_earnings(self._NET, m)
-        assert e["p2pool_hr"] == 35_000                       # p2pool_1h, independent of total/routed
-        assert e["p2pool_hr_str"] == _hashrate(m)["p2p_1h"]   # identical display string to the header
+        assert e["p2pool_hr"] == 35_000  # p2pool_1h, independent of total/routed
+        assert (
+            e["p2pool_hr_str"] == _hashrate(m)["p2p_1h"]
+        )  # identical display string to the header
 
     def test_no_p2pool_hashrate_when_average_is_zero(self):
         # E.g. fresh start (no history) or full-XvB: p2pool_1h is 0 -> client shows 0 / "—" (honest).
@@ -760,6 +997,7 @@ class TestEarnings:
 
 # --- build_state integration ----------------------------------------------------------
 
+
 def _state_mgr(history=None, mode="P2POOL"):
     sm = MagicMock()
     sm.get_history.return_value = history or []
@@ -771,7 +1009,10 @@ def _state_mgr(history=None, mode="P2POOL"):
 
 def _data(**over):
     data = {
-        "shares": [], "workers": [], "global_sync": False, "total_live_h15": 0,
+        "shares": [],
+        "workers": [],
+        "global_sync": False,
+        "total_live_h15": 0,
         "monero_sync": {"percent": 100, "current": 10, "target": 10},
         "tari_sync": {"percent": 50, "current": 5, "target": 10},
     }
@@ -782,10 +1023,31 @@ def _data(**over):
 class TestBuildState:
     def test_has_all_sections(self):
         st = build_state(_data(), _state_mgr(), "all")
-        for key in ("syncing", "page_title", "host_ip", "host_addr", "version", "last_update",
-                    "range", "window", "badges", "hashrate", "system", "sync", "stratum", "pool",
-                    "network", "monero", "shares_window", "proxy_workers", "earnings", "tari",
-                    "workers", "proxy_summary", "chart"):
+        for key in (
+            "syncing",
+            "page_title",
+            "host_ip",
+            "host_addr",
+            "version",
+            "last_update",
+            "range",
+            "window",
+            "badges",
+            "hashrate",
+            "system",
+            "sync",
+            "stratum",
+            "pool",
+            "network",
+            "monero",
+            "shares_window",
+            "proxy_workers",
+            "earnings",
+            "tari",
+            "workers",
+            "proxy_summary",
+            "chart",
+        ):
             assert key in st, f"missing section: {key}"
 
     def test_version_section_shape(self):
@@ -836,13 +1098,19 @@ class TestBuildState:
         assert st["page_title"] == "Mining Dashboard - Syncing"
 
     def test_proxy_workers_from_metrics(self):
-        data = _data(workers=[{"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"},
-                              {"name": "b", "ip": "1.1.1.2", "status": "offline", "active_pool": "3333"}])
+        data = _data(
+            workers=[
+                {"name": "a", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"},
+                {"name": "b", "ip": "1.1.1.2", "status": "offline", "active_pool": "3333"},
+            ]
+        )
         assert build_state(data, _state_mgr(), "all")["proxy_workers"] == 1
 
     def test_chart_uses_timestamps(self):
-        history = [{"timestamp": 100, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},
-                   {"timestamp": 160, "v": 600, "v_p2pool": 300, "v_xvb": 300, "t": "b"}]
+        history = [
+            {"timestamp": 100, "v": 500, "v_p2pool": 500, "v_xvb": 0, "t": "a"},
+            {"timestamp": 160, "v": 600, "v_p2pool": 300, "v_xvb": 300, "t": "b"},
+        ]
         chart = build_state(_data(), _state_mgr(history=history), "all")["chart"]
         assert chart["p2pool"] == [{"x": 100_000, "y": 500}, {"x": 160_000, "y": 300}]
         assert chart["xvb"][1] == {"x": 160_000, "y": 300}
@@ -862,14 +1130,17 @@ class TestParseWindow:
         assert parse_window(None, None) is None
         assert parse_window("1000", None) is None
 
-    @pytest.mark.parametrize("frm,to", [
-        ("bad", "2000"),   # non-numeric
-        ("2000", "1000"),  # from >= to
-        ("1000", "1000"),  # zero-width
-        ("-5", "2000"),    # non-positive
-        ("nan", "2000"),   # not finite
-        ("inf", "2000"),
-    ])
+    @pytest.mark.parametrize(
+        "frm,to",
+        [
+            ("bad", "2000"),  # non-numeric
+            ("2000", "1000"),  # from >= to
+            ("1000", "1000"),  # zero-width
+            ("-5", "2000"),  # non-positive
+            ("nan", "2000"),  # not finite
+            ("inf", "2000"),
+        ],
+    )
     def test_malformed_falls_back_to_none(self, frm, to):
         assert parse_window(frm, to) is None
 
@@ -878,13 +1149,12 @@ class TestShell:
     def test_returns_html_referencing_module(self):
         shell = get_shell_html()
         assert "<!DOCTYPE html>" in shell
-        assert '/static/dashboard.js' in shell
+        assert "/static/dashboard.js" in shell
         assert 'id="app"' in shell
 
     def test_error_fallback(self, monkeypatch):
         views._SHELL_CACHE = None
-        monkeypatch.setattr(views.os.path, "getmtime",
-                            lambda p: (_ for _ in ()).throw(OSError()))
+        monkeypatch.setattr(views.os.path, "getmtime", lambda p: (_ for _ in ()).throw(OSError()))
         assert get_shell_html() == "<h1>Dashboard shell error</h1>"
 
 
@@ -906,4 +1176,8 @@ class TestRaffleEligible:
 
     def test_na_when_xvb_off(self):
         m = _metrics(xvb_enabled=False, current_tier="Donor (1.00 kH/s+)", shares_in_window=5)
-        assert build_raffle_eligibility(m) == {"applies": False, "eligible": False, "label": "N/A (XvB off)"}
+        assert build_raffle_eligibility(m) == {
+            "applies": False,
+            "eligible": False,
+            "label": "N/A (XvB off)",
+        }

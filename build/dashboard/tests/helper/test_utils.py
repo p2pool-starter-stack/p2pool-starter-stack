@@ -1,9 +1,14 @@
 import pytest
 from unittest.mock import patch
 from mining_dashboard.helper.utils import (
-    parse_hashrate, format_hashrate, format_duration,
-    format_time_abs, get_tier_info, resolve_target_threshold,
-    is_ip_address, detect_host_ipv4,
+    parse_hashrate,
+    format_hashrate,
+    format_duration,
+    format_time_abs,
+    get_tier_info,
+    resolve_target_threshold,
+    is_ip_address,
+    detect_host_ipv4,
 )
 
 
@@ -86,8 +91,7 @@ class TestGetTierInfo:
 
 
 class TestResolveTargetThreshold:
-    TIERS = {"donor_mega": 1_000_000, "donor_whale": 100_000,
-             "donor_vip": 10_000, "donor": 1_000}
+    TIERS = {"donor_mega": 1_000_000, "donor_whale": 100_000, "donor_vip": 10_000, "donor": 1_000}
 
     def test_auto_picks_highest_sustainable(self):
         # 15_000 * 0.85 = 12_750 -> VIP (10_000) is the highest we can hold.

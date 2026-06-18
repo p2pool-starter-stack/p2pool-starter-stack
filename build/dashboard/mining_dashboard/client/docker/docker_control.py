@@ -39,22 +39,33 @@ class DockerControl:
         daemon needs an HTTP timeout that OUTLASTS `stop_timeout` or the call gives up early and
         wrongly reports failure (#234: Tari took >5s to stop, so the default timeout aborted it).
         """
-        return await self._post(f"/containers/{container}/stop", params={"t": stop_timeout},
-                                action="stop", container=container, quiet=quiet,
-                                request_timeout=request_timeout)
+        return await self._post(
+            f"/containers/{container}/stop",
+            params={"t": stop_timeout},
+            action="stop",
+            container=container,
+            quiet=quiet,
+            request_timeout=request_timeout,
+        )
 
     async def start(self, container, quiet=False, request_timeout=None):
         """Start a container. Returns True on success (incl. already-running)."""
-        return await self._post(f"/containers/{container}/start", params=None,
-                                action="start", container=container, quiet=quiet,
-                                request_timeout=request_timeout)
+        return await self._post(
+            f"/containers/{container}/start",
+            params=None,
+            action="start",
+            container=container,
+            quiet=quiet,
+            request_timeout=request_timeout,
+        )
 
     async def _post(self, path, params, action, container, quiet=False, request_timeout=None):
         url = f"{self.base_url}{path}"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, params=params,
-                                        timeout=request_timeout or self.timeout) as resp:
+                async with session.post(
+                    url, params=params, timeout=request_timeout or self.timeout
+                ) as resp:
                     # 204 No Content = done; 304 Not Modified = already in that state
                     # (Docker's idempotent response) — both are success for us.
                     if resp.status in (204, 304):
@@ -62,7 +73,9 @@ class DockerControl:
                         log(f"Container {container} {action}: ok (HTTP {resp.status})")
                         return True
                     body = await resp.text()
-                    logger.error(f"Container {container} {action} failed: HTTP {resp.status} {body[:200]}")
+                    logger.error(
+                        f"Container {container} {action} failed: HTTP {resp.status} {body[:200]}"
+                    )
                     return False
         except Exception as e:
             logger.error(f"Container {container} {action} error via {self.base_url}: {e}")

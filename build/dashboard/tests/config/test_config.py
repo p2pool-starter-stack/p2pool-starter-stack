@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 def _reload_config():
     import mining_dashboard.config.config as cfg
+
     return importlib.reload(cfg)
 
 
@@ -16,6 +17,7 @@ class TestConfig:
 
     def test_defaults_load(self):
         import mining_dashboard.config.config as cfg
+
         assert cfg.XMRIG_API_PORT == 8080
         assert cfg.XVB_DONATION_LEVEL == "auto"
         assert cfg.XVB_MAX_DONATION_FRACTION == 0.85

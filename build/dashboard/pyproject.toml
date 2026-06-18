@@ -59,3 +59,11 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
 ]
+
+[tool.ruff]
+# Lint + format for the dashboard (Wave 7 tooling, #280). Run via `make lint-py`, pre-commit,
+# and CI. Keep target-version in lockstep with requires-python above.
+target-version = "py311"
+line-length = 100
+# Generated Tari gRPC stubs aren't ours to style — already omitted from coverage too.
+extend-exclude = ["mining_dashboard/client/tari/generated"]

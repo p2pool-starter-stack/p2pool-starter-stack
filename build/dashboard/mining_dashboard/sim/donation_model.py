@@ -44,7 +44,7 @@ CYCLES_PER_DAY = 24 * CYCLES_PER_HOUR  # 144
 
 # Constraint inputs that keep AlgoService.get_decision past its guard clauses so we
 # exercise the donation math (a recent share, a healthy endpoint, a Main pool).
-_RECENT_SHARES = [{"ts": 10 ** 12}]  # far-future ts -> always inside the PPLNS window
+_RECENT_SHARES = [{"ts": 10**12}]  # far-future ts -> always inside the PPLNS window
 _P2P_MAIN = {"type": "Main"}
 _PPLNS_WINDOW = 2160
 
@@ -113,7 +113,7 @@ class _Window:
     def push(self, credited_hr: float) -> None:
         self._samples.append(credited_hr)
         if len(self._samples) > self.span:
-            self._samples = self._samples[-self.span:]
+            self._samples = self._samples[-self.span :]
 
     def average(self) -> float:
         if not self._samples:
@@ -129,12 +129,12 @@ class Scenario:
     """A simulation setup. Times are in 10-minute cycles."""
 
     name: str
-    target_hr: float           # tier threshold to hold (H/s)
-    current_hr: float          # steady rig hashrate (H/s)
+    target_hr: float  # tier threshold to hold (H/s)
+    current_hr: float  # steady rig hashrate (H/s)
     cycles: int = 3 * CYCLES_PER_DAY
     measurement: str = "fixed"  # "fixed" | "connected" (see _Window)
-    warm_avg: float = 0.0      # initial avg_1h/avg_24h (0 = cold start; >0 = warm)
-    hr_noise: float = 0.0      # deterministic +/- fractional jitter on current_hr
+    warm_avg: float = 0.0  # initial avg_1h/avg_24h (0 = cold start; >0 = warm)
+    hr_noise: float = 0.0  # deterministic +/- fractional jitter on current_hr
     # Per-switch reconnect ramp: XvB credits ~0 for this long at the start of each
     # donation slice while miners reconnect to the new pool. This is exactly what
     # the controller's XVB_SWITCH_OVERHEAD_MS compensates for, so modelling it lets
@@ -161,17 +161,17 @@ class Scenario:
     # Optional sustained hashrate drop (worker disconnect) to test tier recovery.
     drop_at: Optional[int] = None
     drop_until: Optional[int] = None
-    drop_factor: float = 1.0   # current_hr multiplier while dropped
+    drop_factor: float = 1.0  # current_hr multiplier while dropped
 
 
 @dataclass
 class SimResult:
     scenario: Scenario
-    credited: list[float] = field(default_factory=list)      # XvB-credited rate/cycle
-    credited_1h: list[float] = field(default_factory=list)   # XvB-reported 1h avg
+    credited: list[float] = field(default_factory=list)  # XvB-credited rate/cycle
+    credited_1h: list[float] = field(default_factory=list)  # XvB-reported 1h avg
     credited_24h: list[float] = field(default_factory=list)  # XvB-reported 24h avg
-    fraction: list[float] = field(default_factory=list)      # donated fraction/cycle
-    current_hr: list[float] = field(default_factory=list)    # rig hashrate seen
+    fraction: list[float] = field(default_factory=list)  # donated fraction/cycle
+    current_hr: list[float] = field(default_factory=list)  # rig hashrate seen
 
     # --- metrics ------------------------------------------------------------
     @property
@@ -223,8 +223,10 @@ class SimResult:
         noise around the threshold.
         """
         t = self.scenario.target_hr * (1 - tol)
-        return (min(self.credited_1h[self._tail], default=0.0) >= t
-                and min(self.credited_24h[self._tail], default=0.0) >= t)
+        return (
+            min(self.credited_1h[self._tail], default=0.0) >= t
+            and min(self.credited_24h[self._tail], default=0.0) >= t
+        )
 
     def cycles_to_tier_24h(self) -> Optional[int]:
         """First cycle at which the 24h average reaches the threshold (or None)."""
@@ -284,8 +286,10 @@ def run_simulation(controller: Controller, scenario: Scenario) -> SimResult:
 
         # Effective rig hashrate this cycle: deterministic jitter + optional drop.
         base = scenario.current_hr
-        if scenario.drop_at is not None and scenario.drop_at <= cycle and (
-            scenario.drop_until is None or cycle < scenario.drop_until
+        if (
+            scenario.drop_at is not None
+            and scenario.drop_at <= cycle
+            and (scenario.drop_until is None or cycle < scenario.drop_until)
         ):
             base *= scenario.drop_factor
         # Deterministic pseudo-jitter (no RNG: reproducible across runs/resumes).
@@ -345,31 +349,55 @@ def run_algo(scenario: Scenario, donation_level="vip", **tuning) -> SimResult:
 # VIP reserve is exercised rather than the flat fallback.
 _DIFFICULTY = 120_000_000
 DEFAULT_SCENARIOS = [
-    Scenario(name="field (VIP 10k on 46k rig, cold start)",
-             target_hr=10_000, current_hr=46_300, p2pool_difficulty=_DIFFICULTY),
-    Scenario(name="high headroom (VIP 10k on 200k rig)",
-             target_hr=10_000, current_hr=200_000, p2pool_difficulty=_DIFFICULTY),
-    Scenario(name="stale/laggy API reads (~2h reporting lag)",
-             target_hr=10_000, current_hr=46_300, report_lag_cycles=12,
-             p2pool_difficulty=_DIFFICULTY),
-    Scenario(name="XvB over-credits 3x (calibration must back off)",
-             target_hr=10_000, current_hr=46_300, credit_factor=3.0,
-             p2pool_difficulty=_DIFFICULTY),
-    Scenario(name="worker drop below tier mid-run, then recovery",
-             target_hr=10_000, current_hr=46_300, warm_avg=10_300,
-             drop_at=CYCLES_PER_DAY, drop_until=CYCLES_PER_DAY + 18, drop_factor=0.2,
-             p2pool_difficulty=_DIFFICULTY),
+    Scenario(
+        name="field (VIP 10k on 46k rig, cold start)",
+        target_hr=10_000,
+        current_hr=46_300,
+        p2pool_difficulty=_DIFFICULTY,
+    ),
+    Scenario(
+        name="high headroom (VIP 10k on 200k rig)",
+        target_hr=10_000,
+        current_hr=200_000,
+        p2pool_difficulty=_DIFFICULTY,
+    ),
+    Scenario(
+        name="stale/laggy API reads (~2h reporting lag)",
+        target_hr=10_000,
+        current_hr=46_300,
+        report_lag_cycles=12,
+        p2pool_difficulty=_DIFFICULTY,
+    ),
+    Scenario(
+        name="XvB over-credits 3x (calibration must back off)",
+        target_hr=10_000,
+        current_hr=46_300,
+        credit_factor=3.0,
+        p2pool_difficulty=_DIFFICULTY,
+    ),
+    Scenario(
+        name="worker drop below tier mid-run, then recovery",
+        target_hr=10_000,
+        current_hr=46_300,
+        warm_avg=10_300,
+        drop_at=CYCLES_PER_DAY,
+        drop_until=CYCLES_PER_DAY + 18,
+        drop_factor=0.2,
+        p2pool_difficulty=_DIFFICULTY,
+    ),
 ]
 
 
 def _fmt(r: SimResult) -> str:
     shares = r.min_expected_shares()
     vip = "inf" if shares == float("inf") else f"{shares:.1f}"
-    return (f"day1 {r.first_day_overshoot:4.2f}x  "
-            f"peak {r.peak_overshoot:4.2f}x  "
-            f"steady {r.steady_overshoot_1h:4.2f}x  "
-            f"p2pool {r.p2pool_efficiency*100:5.1f}%  "
-            f"tier {str(r.tier_held()):5}  vip_shares {vip}")
+    return (
+        f"day1 {r.first_day_overshoot:4.2f}x  "
+        f"peak {r.peak_overshoot:4.2f}x  "
+        f"steady {r.steady_overshoot_1h:4.2f}x  "
+        f"p2pool {r.p2pool_efficiency * 100:5.1f}%  "
+        f"tier {str(r.tier_held()):5}  vip_shares {vip}"
+    )
 
 
 def main():  # pragma: no cover - human-facing report, not a test path

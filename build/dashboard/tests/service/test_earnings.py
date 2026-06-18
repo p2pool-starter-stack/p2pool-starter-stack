@@ -5,18 +5,21 @@ network difficulty. These tests pin the math (including the worked field example
 the graceful-degradation behaviour when inputs are missing. The client scales this rate to the
 what-if hashrate; that scaling/formatting is tested in tests/frontend/logic.test.mjs.
 """
+
 import pytest
 
 from mining_dashboard.service.earnings import (
-    xmr_per_hs_day, ATOMIC_PER_XMR, SECONDS_PER_DAY,
+    xmr_per_hs_day,
+    ATOMIC_PER_XMR,
+    SECONDS_PER_DAY,
 )
 
 
 class TestXmrPerHsDay:
     def test_matches_closed_form(self):
         # reward_xmr / difficulty * seconds_per_day, with reward given in atomic units.
-        reward_atomic = 0.6 * ATOMIC_PER_XMR        # 0.6 XMR block reward
-        difficulty = 400_000_000_000                # 400 G
+        reward_atomic = 0.6 * ATOMIC_PER_XMR  # 0.6 XMR block reward
+        difficulty = 400_000_000_000  # 400 G
         expected = 0.6 / difficulty * SECONDS_PER_DAY
         assert xmr_per_hs_day(reward_atomic, difficulty) == pytest.approx(expected)
 
@@ -33,13 +36,16 @@ class TestXmrPerHsDay:
         assert xmr_per_hs_day(2 * ATOMIC_PER_XMR, 1_000_000) == pytest.approx(2 * base)
         assert xmr_per_hs_day(ATOMIC_PER_XMR, 2_000_000) == pytest.approx(base / 2)
 
-    @pytest.mark.parametrize("reward,diff", [
-        (0, 400_000_000_000),                 # no reward collected yet
-        (0.6 * ATOMIC_PER_XMR, 0),            # no difficulty yet
-        (0, 0),                               # nothing collected
-        (-1, 400_000_000_000),               # defensive: negative reward
-        (0.6 * ATOMIC_PER_XMR, -5),          # defensive: negative difficulty
-    ])
+    @pytest.mark.parametrize(
+        "reward,diff",
+        [
+            (0, 400_000_000_000),  # no reward collected yet
+            (0.6 * ATOMIC_PER_XMR, 0),  # no difficulty yet
+            (0, 0),  # nothing collected
+            (-1, 400_000_000_000),  # defensive: negative reward
+            (0.6 * ATOMIC_PER_XMR, -5),  # defensive: negative difficulty
+        ],
+    )
     def test_missing_or_bad_inputs_are_zero(self, reward, diff):
         # A zero rate is the dashboard's "unavailable" signal (shows "—"); never raise or divide
         # by zero on incomplete live data.
