@@ -13,16 +13,20 @@ whole new feature, contributions are very welcome. This guide covers the workflo
 
 ## Dev environment
 
-The dashboard's Python tooling — [`ruff`](https://docs.astral.sh/ruff/) (lint + format) and
-[`pre-commit`](https://pre-commit.com/) — is pinned in the `dev` extra. Install it once and
-enable the git hooks, so the same checks that run in CI run on every commit (local == CI):
+The dashboard uses [uv](https://docs.astral.sh/uv/) for dependency management — a hashed
+`uv.lock` pins every transitive dependency so installs are reproducible build-to-build. Its
+Python tooling ([`ruff`](https://docs.astral.sh/ruff/) lint + format,
+[`pre-commit`](https://pre-commit.com/)) lives in the `dev` extra. Install uv, then from the
+repo root:
 
 ```bash
-pip install -e "build/dashboard[dev]"
-pre-commit install
+uv sync --project build/dashboard --extra dev    # deps + tooling into build/dashboard/.venv, from the lock
+uv run --project build/dashboard pre-commit install
 ```
 
-`pre-commit` then runs `ruff` (plus a few hygiene hooks) on your changed files automatically.
+`make test` and `make lint-py` run through uv automatically (no venv to activate); `pre-commit`
+then runs `ruff` (plus a few hygiene hooks) on your changed files. If you change dependencies in
+`build/dashboard/pyproject.toml`, run `uv lock` and commit the updated `uv.lock`.
 
 ## Development workflow
 

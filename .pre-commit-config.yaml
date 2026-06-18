@@ -1,6 +1,6 @@
 # Pre-commit hooks (Wave 7 tooling, #280). Local == CI: these mirror `make lint` + the CI lint
 # jobs, so issues are caught before they reach a PR. Set up once with:
-#   pip install -e "build/dashboard[dev]" && pre-commit install
+#   uv sync --project build/dashboard --extra dev && uv run --project build/dashboard pre-commit install
 # Later Wave 7 children add more hooks here (#281 shfmt/Biome/yamllint/markdownlint;
 # #282 gitleaks). Keep the ruff `rev` in lockstep with the `dev` extra's ruff pin in
 # build/dashboard/pyproject.toml.
