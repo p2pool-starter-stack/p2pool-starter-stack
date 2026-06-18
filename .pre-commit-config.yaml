@@ -1,9 +1,8 @@
 # Pre-commit hooks (Wave 7 tooling, #280). Local == CI: these mirror `make lint` + the CI lint
 # jobs, so issues are caught before they reach a PR. Set up once with:
 #   uv sync --project build/dashboard --extra dev && uv run --project build/dashboard pre-commit install
-# Later Wave 7 children add more hooks here (#281 shfmt/Biome/yamllint/markdownlint;
-# #282 gitleaks). Keep the ruff `rev` in lockstep with the `dev` extra's ruff pin in
-# build/dashboard/pyproject.toml.
+# Later Wave 7 children add more hooks here (#281 shfmt/Biome/yamllint/markdownlint). Keep the
+# ruff `rev` in lockstep with the `dev` extra's ruff pin in build/dashboard/pyproject.toml.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.17
@@ -13,6 +12,12 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  # Secret scanning (#282) — stop a key reaching history in the first place. Uses .gitleaks.toml.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
