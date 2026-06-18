@@ -3,8 +3,8 @@ import time
 
 import pytest
 
+from mining_dashboard.config.config import HISTORY_RETENTION_SEC, TIER_DEFAULTS
 from mining_dashboard.service.storage_service import StateManager
-from mining_dashboard.config.config import TIER_DEFAULTS, HISTORY_RETENTION_SEC
 
 
 class TestDefaults:

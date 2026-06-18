@@ -10,30 +10,30 @@ emits HTML. The client maps tokens to CSS classes and builds the DOM.
 the client share; ``server.py`` stays pure transport.
 """
 
-import os
-import math
-import time
 import bisect
 import logging
+import math
+import os
+import time
 
 from mining_dashboard.config.config import (
+    DEFAULT_HASHRATE_WINDOW,
+    DISK_CRITICAL_PERCENT,
+    DISK_WARN_PERCENT,
+    HASHRATE_WINDOW_COLUMNS,
+    HASHRATE_WINDOWS,
     HOST_IP,
     UPDATE_INTERVAL,
-    DISK_WARN_PERCENT,
-    DISK_CRITICAL_PERCENT,
-    HASHRATE_WINDOWS,
-    DEFAULT_HASHRATE_WINDOW,
-    HASHRATE_WINDOW_COLUMNS,
 )
 from mining_dashboard.helper.utils import (
-    format_hashrate,
+    detect_host_ipv4,
     format_duration,
+    format_hashrate,
     format_time_abs,
     is_ip_address,
-    detect_host_ipv4,
 )
-from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
@@ -93,10 +93,10 @@ _GAP_FACTOR = 3
 
 # Pool/mode palette *tokens* -> CSS colour classes on the client (``.c-<token>``/``.bg-<token>``).
 # The active pool is coloured, the inactive one muted (Issue #27).
-_TOKEN_GREEN = "ok"  # P2Pool active
-_TOKEN_PURPLE = "purple"  # XvB active
-_TOKEN_BLUE = "accent"  # split / neutral mode
-_TOKEN_MUTED = "muted"  # inactive pool
+_TOKEN_GREEN = "ok"  # P2Pool active  # noqa: S105 — CSS palette token, not a secret
+_TOKEN_PURPLE = "purple"  # XvB active  # noqa: S105
+_TOKEN_BLUE = "accent"  # split / neutral mode  # noqa: S105
+_TOKEN_MUTED = "muted"  # inactive pool  # noqa: S105
 
 _LOW_HR_TITLE = (
     "Your hashrate can't sustain the selected XvB donation tier; donation will fall short of it."
@@ -878,7 +878,7 @@ def get_shell_html():
     try:
         mtime = os.path.getmtime(SHELL_PATH)
         if _SHELL_CACHE is None or mtime > _SHELL_MTIME:
-            with open(SHELL_PATH, "r") as f:
+            with open(SHELL_PATH) as f:
                 _SHELL_CACHE = f.read()
             _SHELL_MTIME = mtime
     except Exception as e:

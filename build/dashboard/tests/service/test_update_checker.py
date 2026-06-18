@@ -5,10 +5,10 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from mining_dashboard.service.update_checker import (
-    parse_semver,
-    compute_update,
     GitHubReleaseClient,
     UpdateChecker,
+    compute_update,
+    parse_semver,
 )
 
 

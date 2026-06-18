@@ -1,5 +1,6 @@
-import shutil
 import os
+import shutil
+
 from mining_dashboard.config.config import DISK_PATH
 
 BYTES_IN_GB = 1024**3
@@ -37,7 +38,7 @@ def get_memory_usage():
     try:
         mem_total = 0
         mem_available = 0
-        with open("/proc/meminfo", "r") as f:
+        with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     mem_total = int(line.split()[1]) * 1024  # kB to bytes
@@ -53,7 +54,7 @@ def get_memory_usage():
                 "percent": percent,
                 "percent_str": f"{percent:.1f}%",
             }
-    except Exception:
+    except Exception:  # noqa: S110 — best-effort disk stat; any failure falls through to the zeroed default below
         pass
     return {"total_gb": 0, "used_gb": 0, "percent": 0, "percent_str": "0%"}
 
@@ -76,7 +77,7 @@ def get_cpu_usage():
     """
     global _last_cpu_times
     try:
-        with open("/proc/stat", "r") as f:
+        with open("/proc/stat") as f:
             line = f.readline()
 
         parts = line.split()
@@ -116,7 +117,7 @@ def get_hugepages_status():
     """
     try:
         mem_stats = {}
-        with open("/proc/meminfo", "r") as f:
+        with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("HugePages_Total"):
                     mem_stats["total"] = int(line.split()[1])

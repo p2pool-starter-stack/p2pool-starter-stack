@@ -2,9 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mining_dashboard.web.server import create_app, _apply_security_headers
 from mining_dashboard.service.storage_service import StateManager
-
+from mining_dashboard.web.server import _apply_security_headers, create_app
 
 SECURITY_HEADERS = [
     "X-Content-Type-Options",

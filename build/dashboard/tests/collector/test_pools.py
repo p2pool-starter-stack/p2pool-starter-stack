@@ -3,18 +3,16 @@ from unittest.mock import patch
 import mining_dashboard.collector.pools as pools
 from mining_dashboard.collector.pools import (
     detect_pool_type,
-    get_p2pool_stats,
     get_network_stats,
+    get_p2pool_stats,
     get_stratum_stats,
     get_tari_stats,
 )
 from mining_dashboard.config.config import (
     P2P_STATS_PATH,
     POOL_STATS_PATH,
-    STRATUM_STATS_PATH,
-    NETWORK_STATS_PATH,
-    TARI_STATS_PATH,
     SECOND_PER_BLOCK_MAIN,
+    STRATUM_STATS_PATH,
 )
 
 

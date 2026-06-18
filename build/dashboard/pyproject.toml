@@ -32,6 +32,12 @@ test = [
     "pytest-cov>=5",
     "pytest-aiohttp>=1.0",
 ]
+# Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
+# — lint output is version-sensitive, so a floor would let CI and a contributor disagree.
+dev = [
+    "ruff==0.15.17",
+    "pre-commit>=4",
+]
 
 [tool.setuptools.packages.find]
 include = ["mining_dashboard*"]
@@ -67,3 +73,25 @@ target-version = "py311"
 line-length = 100
 # Generated Tari gRPC stubs aren't ours to style — already omitted from coverage too.
 extend-exclude = ["mining_dashboard/client/tari/generated"]
+
+[tool.ruff.lint]
+# E/F/W pycodestyle+pyflakes · I import-sort · B bugbear · UP pyupgrade ·
+# ASYNC flake8-async (the aiohttp/asyncio event loop + Tor SOCKS paths) ·
+# S flake8-bandit (security). Annotation rules (ANN) are deferred to #284.
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S"]
+ignore = [
+    "E501",  # line length is owned by `ruff format`
+    "S104",  # "bind all interfaces": every hit is the sentinel string "0.0.0.0" used as a
+             # default/comparison value — the dashboard's listen host is config-driven (aiohttp),
+             # it never binds a raw socket to 0.0.0.0 from Python.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: asserts are the idiom (S101); fixtures use dummy creds (S106); broad
+# pytest.raises(Exception) is fine (B017); os.path in async test bodies is harmless (ASYNC240).
+"tests/**" = ["S101", "S106", "B017", "ASYNC240"]
+# Generated-stub imports are intentionally grouped below the logger + the generation guidance.
+"mining_dashboard/client/tari/tari_client.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mining_dashboard"]

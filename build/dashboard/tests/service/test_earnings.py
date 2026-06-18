@@ -9,9 +9,9 @@ what-if hashrate; that scaling/formatting is tested in tests/frontend/logic.test
 import pytest
 
 from mining_dashboard.service.earnings import (
-    xmr_per_hs_day,
     ATOMIC_PER_XMR,
     SECONDS_PER_DAY,
+    xmr_per_hs_day,
 )
 
 

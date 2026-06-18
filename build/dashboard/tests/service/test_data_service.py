@@ -1,20 +1,20 @@
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
     DataService,
-    _normalize_proxy_workers,
-    _merge_direct_stats,
+    WorkerLifecycle,
     _aggregate_hashrate,
     _aggregate_window_hashrates,
-    _parse_proxy_list_worker,
-    _parse_legacy_dict_worker,
-    _parse_proxy_summary,
+    _merge_direct_stats,
     _merge_proxy_summary,
+    _normalize_proxy_workers,
+    _parse_legacy_dict_worker,
+    _parse_proxy_list_worker,
+    _parse_proxy_summary,
     _shares_to_record,
-    WorkerLifecycle,
 )
 
 

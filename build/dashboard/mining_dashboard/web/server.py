@@ -1,9 +1,10 @@
-import os
 import logging
 import mimetypes
+import os
+
 from aiohttp import web
 
-from mining_dashboard.web.views import build_state, get_shell_html, parse_window, canonical_window
+from mining_dashboard.web.views import build_state, canonical_window, get_shell_html, parse_window
 
 logger = logging.getLogger("WebServer")
 
@@ -70,7 +71,7 @@ async def security_headers_middleware(request, handler):
     try:
         return _apply_security_headers(await handler(request))
     except web.HTTPException as exc:
-        raise _apply_security_headers(exc)
+        raise _apply_security_headers(exc) from exc
 
 
 def create_app(state_manager, latest_data_ref):

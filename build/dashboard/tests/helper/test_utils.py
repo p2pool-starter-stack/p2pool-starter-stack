@@ -1,14 +1,14 @@
-import pytest
 from unittest.mock import patch
+
 from mining_dashboard.helper.utils import (
-    parse_hashrate,
-    format_hashrate,
+    detect_host_ipv4,
     format_duration,
+    format_hashrate,
     format_time_abs,
     get_tier_info,
-    resolve_target_threshold,
     is_ip_address,
-    detect_host_ipv4,
+    parse_hashrate,
+    resolve_target_threshold,
 )
 
 

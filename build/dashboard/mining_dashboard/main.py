@@ -3,18 +3,18 @@ import logging
 
 from aiohttp import web
 
-from mining_dashboard.config.config import (
-    PROXY_AUTH_TOKEN,
-    PROXY_HOST,
-    PROXY_API_PORT,
-    MONERO_WALLET_ADDRESS,
-)
-from mining_dashboard.service.storage_service import StateManager
-from mining_dashboard.web.server import create_app
 from mining_dashboard.client.xmrig_proxy_client import XMRigProxyClient
 from mining_dashboard.client.xvb_client import XvbClient
-from mining_dashboard.service.data_service import DataService
+from mining_dashboard.config.config import (
+    MONERO_WALLET_ADDRESS,
+    PROXY_API_PORT,
+    PROXY_AUTH_TOKEN,
+    PROXY_HOST,
+)
 from mining_dashboard.service.algo_service import AlgoService
+from mining_dashboard.service.data_service import DataService
+from mining_dashboard.service.storage_service import StateManager
+from mining_dashboard.web.server import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("Main")

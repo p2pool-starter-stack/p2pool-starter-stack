@@ -2,11 +2,11 @@ import ipaddress
 import logging
 
 from mining_dashboard.config.config import (
-    XMRIG_API_PORT,
-    PROXY_API_PORT,
-    PROXY_AUTH_TOKEN,
     API_TIMEOUT,
     MINING_NET_CIDR,
+    PROXY_API_PORT,
+    PROXY_AUTH_TOKEN,
+    XMRIG_API_PORT,
 )
 
 # Longest worker-name we'll ever echo back as a Bearer token (#122). xmrig names/tokens are short;

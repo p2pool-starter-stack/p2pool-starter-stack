@@ -7,16 +7,15 @@ read these, so the logic is covered thoroughly here rather than through rendered
 """
 
 import time
-
 from unittest.mock import MagicMock
 
 import mining_dashboard.service.metrics as metrics
+from mining_dashboard.config.config import TIER_DEFAULTS
 from mining_dashboard.service.metrics import (
-    build_metrics,
     _avg_p2pool_over_window,
     _avg_xvb_over_window,
+    build_metrics,
 )
-from mining_dashboard.config.config import TIER_DEFAULTS
 
 
 def _mgr(history=None, mode="P2POOL", xvb=None, tiers=None):

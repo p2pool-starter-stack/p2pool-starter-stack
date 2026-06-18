@@ -1,8 +1,10 @@
-import requests
 import logging
 import re
-from mining_dashboard.helper.utils import parse_hashrate
+
+import requests
+
 from mining_dashboard.config.config import XVB_TOR_PROXY
+from mining_dashboard.helper.utils import parse_hashrate
 
 
 class XvbClient:

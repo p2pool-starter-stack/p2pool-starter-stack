@@ -1,10 +1,9 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import requests
 
 import mining_dashboard.client.xvb_client as xvb_mod
 from mining_dashboard.client.xvb_client import XvbClient
-
 
 SAMPLE_HTML = "Fail Count: 2\n1hr avg: 1.5 kH/s\n24hr avg: 3.0 kH/s\n"
 

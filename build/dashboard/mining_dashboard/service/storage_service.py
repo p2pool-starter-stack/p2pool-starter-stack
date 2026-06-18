@@ -1,17 +1,17 @@
+import json
+import logging
+import random
 import sqlite3
 import threading
-import logging
-import json
-import os
 import time
-import random
 from collections import deque
-from typing import Dict, List, Optional, Any
+from typing import Any
+
 from mining_dashboard.config.config import (
     DB_FILE_PATH,
-    TIER_DEFAULTS,
-    HISTORY_RETENTION_SEC,
     HASHRATE_WINDOW_COLUMNS,
+    HISTORY_RETENTION_SEC,
+    TIER_DEFAULTS,
 )
 
 # The 10m window reuses the original v_p2pool/v_xvb pair; every other window in
@@ -174,7 +174,8 @@ class StateManager:
                         ["t", "v", "v_p2pool", "v_xvb", "timestamp"] + _WINDOW_EXTRA_COLUMNS
                     )
                     cursor.execute(
-                        f"SELECT {hist_cols} FROM history WHERE timestamp > ? ORDER BY timestamp ASC",
+                        # Column list is literals + a module constant, never user input; value is ?-bound.
+                        f"SELECT {hist_cols} FROM history WHERE timestamp > ? ORDER BY timestamp ASC",  # noqa: S608
                         (history_cutoff,),
                     )
                     history = []
@@ -301,10 +302,12 @@ class StateManager:
                         extra[c] for c in _WINDOW_EXTRA_COLUMNS
                     )
                     self._conn.execute(
-                        f"INSERT INTO history ({', '.join(cols)}) VALUES ({placeholders})", values
+                        # Column/placeholder lists are literals + a module constant, not user input.
+                        f"INSERT INTO history ({', '.join(cols)}) VALUES ({placeholders})",  # noqa: S608
+                        values,
                     )
                     # Prune old history from DB to prevent unbounded growth (Probabilistic pruning to save I/O)
-                    if random.random() < 0.05:
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
                         self._conn.execute(
                             "DELETE FROM history WHERE timestamp < ?", (ts - HISTORY_RETENTION_SEC,)
                         )
@@ -333,7 +336,7 @@ class StateManager:
                         (ts, difficulty),
                     )
 
-                    if random.random() < 0.05:
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
                         self._conn.execute(
                             "DELETE FROM shares WHERE ts < ?",
                             (time.time() - HISTORY_RETENTION_SEC,),
@@ -353,22 +356,22 @@ class StateManager:
             # Distinct timestamps ending at latest_ts (1 ms steps back) so the ts PRIMARY KEY keeps all.
             self.add_share(round(latest_ts - 0.001 * (count - 1 - i), 3), difficulty)
 
-    def get_shares(self) -> List[Dict[str, Any]]:
+    def get_shares(self) -> list[dict[str, Any]]:
         """Returns a copy of the shares history."""
         with self._lock:
             return list(self.state.get("shares", []))
 
-    def get_xvb_stats(self) -> Dict[str, Any]:
+    def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""
         with self._lock:
             return self.state["xvb"].copy()
 
     def update_xvb_stats(
         self,
-        mode: Optional[str] = None,
-        avg_24h: Optional[float] = None,
-        avg_1h: Optional[float] = None,
-        fail_count: Optional[int] = None,
+        mode: str | None = None,
+        avg_24h: float | None = None,
+        avg_1h: float | None = None,
+        fail_count: int | None = None,
         **kwargs,
     ):
         """
@@ -450,7 +453,7 @@ class StateManager:
             except sqlite3.Error as e:
                 self._db_error("XVB Update Error", e)
 
-    def save_snapshot(self, data: Dict[str, Any]):
+    def save_snapshot(self, data: dict[str, Any]):
         """Persists the full application state snapshot to the KV store."""
         if not data:
             return
@@ -469,7 +472,7 @@ class StateManager:
         except TypeError as e:
             self.logger.error(f"Snapshot serialization error: {e}")
 
-    def load_snapshot(self) -> Optional[Dict[str, Any]]:
+    def load_snapshot(self) -> dict[str, Any] | None:
         """Loads the last persisted application state snapshot."""
         try:
             with self._db_lock:
@@ -484,12 +487,12 @@ class StateManager:
             self.logger.error(f"Snapshot Load Error: {e}")
         return None
 
-    def get_history(self) -> List[Dict[str, Any]]:
+    def get_history(self) -> list[dict[str, Any]]:
         """Returns a copy of the hashrate history."""
         with self._lock:
             return list(self.state["hashrate_history"])
 
-    def get_tiers(self) -> Dict[str, Any]:
+    def get_tiers(self) -> dict[str, Any]:
         """Returns a copy of the donation tiers configuration."""
         with self._lock:
             return self.state["tiers"].copy()

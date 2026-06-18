@@ -28,14 +28,14 @@ all), but a hand-written candidate controller can be dropped in just as easily.
 Run ``python -m mining_dashboard.sim.donation_model`` for a before/after report.
 """
 
-from dataclasses import dataclass, field, replace
-from typing import Callable, Optional
 import math
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 
 from mining_dashboard.config.config import (
-    XVB_TIME_ALGO_MS,
-    XVB_SWITCH_OVERHEAD_MS,
     TIER_DEFAULTS,
+    XVB_SWITCH_OVERHEAD_MS,
+    XVB_TIME_ALGO_MS,
 )
 
 # A 10-minute switching cycle is the simulation's time step.
@@ -159,8 +159,8 @@ class Scenario:
     # actually keeps a share each cycle (VIP status) in `vip_held`.
     p2pool_difficulty: float = 0.0
     # Optional sustained hashrate drop (worker disconnect) to test tier recovery.
-    drop_at: Optional[int] = None
-    drop_until: Optional[int] = None
+    drop_at: int | None = None
+    drop_until: int | None = None
     drop_factor: float = 1.0  # current_hr multiplier while dropped
 
 
@@ -228,7 +228,7 @@ class SimResult:
             and min(self.credited_24h[self._tail], default=0.0) >= t
         )
 
-    def cycles_to_tier_24h(self) -> Optional[int]:
+    def cycles_to_tier_24h(self) -> int | None:
         """First cycle at which the 24h average reaches the threshold (or None)."""
         for i, v in enumerate(self.credited_24h):
             if v >= self.scenario.target_hr:
@@ -249,7 +249,9 @@ class SimResult:
         tail_hr = self.current_hr[self._tail]
         if not tail_frac:
             return float("inf")
-        return min((1 - f) * hr * window_seconds / diff for f, hr in zip(tail_frac, tail_hr))
+        return min(
+            (1 - f) * hr * window_seconds / diff for f, hr in zip(tail_frac, tail_hr, strict=False)
+        )
 
     def vip_held(self, min_shares: float = 1.0) -> bool:
         """True if p2pool keeps at least ``min_shares`` expected shares in the window

@@ -2,43 +2,44 @@ import asyncio
 import logging
 import os
 import time
+
 from aiohttp import ClientSession
 
-from mining_dashboard.config.config import (
-    UPDATE_INTERVAL,
-    TARI_REQUIRED,
-    REJECT_WORKERS_CONTAINER,
-    SYNC_GATE_CONTAINERS,
-    ENABLE_XVB,
-    WORKER_FALLOFF_SEC,
-    CHECK_FOR_UPDATES,
-    GITHUB_RELEASES_API,
-    UPDATE_CHECK_INTERVAL,
-    XVB_TOR_PROXY,
-    MONERO_CLEARNET_SYNC,
-    TARI_CLEARNET_SYNC,
-    CLEARNET_STATE_DIR,
-)
-from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient
-from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.docker.docker_control import DockerControl
-from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
+from mining_dashboard.client.tari.tari_client import TariClient
+from mining_dashboard.client.xmrig_client import XMRigWorkerClient
+from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.pools import (
-    get_p2pool_stats,
     get_network_stats,
+    get_p2pool_stats,
     get_stratum_stats,
     get_tari_stats,
 )
-from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.system import (
+    get_cpu_usage,
     get_disk_usage,
     get_hugepages_status,
-    get_memory_usage,
     get_load_average,
-    get_cpu_usage,
+    get_memory_usage,
 )
+from mining_dashboard.config.config import (
+    CHECK_FOR_UPDATES,
+    CLEARNET_STATE_DIR,
+    ENABLE_XVB,
+    GITHUB_RELEASES_API,
+    MONERO_CLEARNET_SYNC,
+    REJECT_WORKERS_CONTAINER,
+    SYNC_GATE_CONTAINERS,
+    TARI_CLEARNET_SYNC,
+    TARI_REQUIRED,
+    UPDATE_CHECK_INTERVAL,
+    UPDATE_INTERVAL,
+    WORKER_FALLOFF_SEC,
+    XVB_TOR_PROXY,
+)
+from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
 
@@ -185,7 +186,7 @@ def _merge_direct_stats(workers, results, active_pool_port):
     worker is tagged with ``active_pool`` for the UI badge.
     """
     final_workers = []
-    for w, extra_stats in zip(workers, results):
+    for w, extra_stats in zip(workers, results, strict=False):
         if extra_stats:
             w["uptime"] = extra_stats.get("uptime", w["uptime"])
 
@@ -588,12 +589,6 @@ class DataService:
                         "tari": tari_clearnet_exposed,
                         "active": monero_clearnet_exposed or tari_clearnet_exposed,
                     }
-
-                    # Determine effective Tari status for UI display
-                    tari_active = tari_stats.get("active", False)
-                    tari_status_str = (
-                        tari_stats.get("status", "Waiting...") if tari_active else "Waiting..."
-                    )
 
                     # Apply Sync Logic Overrides
                     # 1. Monero Sync Check

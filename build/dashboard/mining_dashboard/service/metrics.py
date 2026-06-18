@@ -16,11 +16,11 @@ from dataclasses import dataclass
 
 from mining_dashboard.config.config import (
     ENABLE_XVB,
+    LOCAL_MONERO_HOST,
+    MONERO_NODE_HOST,
+    MONERO_PRUNE,
     XVB_DONATION_LEVEL,
     XVB_MAX_DONATION_FRACTION,
-    MONERO_PRUNE,
-    MONERO_NODE_HOST,
-    LOCAL_MONERO_HOST,
 )
 from mining_dashboard.helper.utils import get_tier_info, resolve_target_threshold
 

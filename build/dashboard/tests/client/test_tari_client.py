@@ -1,6 +1,4 @@
-from unittest.mock import MagicMock, AsyncMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from mining_dashboard.client.tari.tari_client import TariClient
 

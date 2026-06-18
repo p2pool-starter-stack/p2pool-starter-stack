@@ -1,7 +1,7 @@
 """Tests for the clearnet→Tor auto-transition supervisor (#183/#234)."""
 
 import os
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 

@@ -1,6 +1,7 @@
-import time
-import socket
 import ipaddress
+import socket
+import time
+
 from mining_dashboard.config.config import TIER_DEFAULTS
 
 

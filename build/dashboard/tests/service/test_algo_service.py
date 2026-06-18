@@ -1,10 +1,10 @@
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mining_dashboard.config.config import TIER_DEFAULTS, XVB_SWITCH_OVERHEAD_MS, XVB_TIME_ALGO_MS
 from mining_dashboard.service.algo_service import AlgoService
-from mining_dashboard.config.config import TIER_DEFAULTS, XVB_TIME_ALGO_MS, XVB_SWITCH_OVERHEAD_MS
 
 
 @pytest.fixture

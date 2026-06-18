@@ -1,5 +1,6 @@
-import aiohttp
 import logging
+
+import aiohttp
 
 from mining_dashboard.config.config import DOCKER_CONTROL_URL, DOCKER_TIMEOUT
 

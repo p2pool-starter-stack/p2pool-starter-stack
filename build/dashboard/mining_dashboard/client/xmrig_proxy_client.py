@@ -1,6 +1,7 @@
-import requests
 import json
 import logging
+
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -174,7 +175,7 @@ if __name__ == "__main__":
 
     HOST = "127.0.0.1"
     PORT = 8080
-    TOKEN = "SECRET"
+    TOKEN = "SECRET"  # noqa: S105 — placeholder for this __main__ usage example, not a real secret
 
     client = XMRigProxyClient(HOST, PORT, TOKEN)
 

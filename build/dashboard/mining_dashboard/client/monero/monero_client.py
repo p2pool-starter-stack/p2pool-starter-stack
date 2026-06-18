@@ -1,11 +1,12 @@
 import logging
+
 import requests
 from requests.auth import HTTPDigestAuth
 
 from mining_dashboard.config.config import (
-    MONERO_RPC_URL,
-    MONERO_NODE_USERNAME,
     MONERO_NODE_PASSWORD,
+    MONERO_NODE_USERNAME,
+    MONERO_RPC_URL,
 )
 
 logger = logging.getLogger("MoneroClient")

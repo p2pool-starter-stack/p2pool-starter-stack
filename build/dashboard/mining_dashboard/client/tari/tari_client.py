@@ -1,8 +1,8 @@
-import aiohttp
 import logging
-import grpc
-import os
 import time
+
+import aiohttp
+import grpc
 
 from mining_dashboard.config.config import TARI_GRPC_ADDRESS
 
@@ -10,9 +10,9 @@ logger = logging.getLogger("TariClient")
 
 # Attempt to import generated protobuf modules
 # See README.md for generation instructions (requires grpcio-tools)
-from .generated import base_node_pb2
-from .generated import base_node_pb2_grpc
 from google.protobuf import empty_pb2
+
+from .generated import base_node_pb2_grpc
 
 
 class TariClient:

@@ -13,12 +13,12 @@ keeps p2pool "VIP", and recovers from disturbances.
 import pytest
 
 from mining_dashboard.sim.donation_model import (
-    Scenario,
     CYCLES_PER_DAY,
     CYCLES_PER_HOUR,
-    run_algo,
+    Scenario,
     build_controller,
     make_algo_controller,
+    run_algo,
 )
 
 # A real-ish p2pool-main sidechain difficulty so the VIP reserve is exercised.

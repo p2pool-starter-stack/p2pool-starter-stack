@@ -14,31 +14,30 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import mining_dashboard.web.views as views
-from mining_dashboard.web.views import (
-    build_chart,
-    build_hashrate,
-    build_pool_network,
-    build_workers,
-    build_tari,
-    build_system,
-    build_sync,
-    build_badges,
-    build_earnings,
-    build_state,
-    build_raffle_eligibility,
-    get_shell_html,
-    _mode_palette,
-    parse_window,
-    _target_points,
-    _chart_tension,
-    build_proxy_summary,
-    _reject_flag,
-    host_display_addr,
-    canonical_window,
-)
 from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
-
+from mining_dashboard.web.views import (
+    _chart_tension,
+    _mode_palette,
+    _reject_flag,
+    _target_points,
+    build_badges,
+    build_chart,
+    build_earnings,
+    build_hashrate,
+    build_pool_network,
+    build_proxy_summary,
+    build_raffle_eligibility,
+    build_state,
+    build_sync,
+    build_system,
+    build_tari,
+    build_workers,
+    canonical_window,
+    get_shell_html,
+    host_display_addr,
+    parse_window,
+)
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
 
@@ -303,7 +302,7 @@ class TestChart:
             {"timestamp": 1060, "v": 600, "v_p2pool": 600, "v_xvb": 0, "t": "c"},
         ]
         chart = build_chart(hist, [], "all")
-        for p2p, xvb, row in zip(chart["p2pool"], chart["xvb"], hist):
+        for p2p, xvb, row in zip(chart["p2pool"], chart["xvb"], hist, strict=False):
             assert p2p["y"] + xvb["y"] == row["v"]  # stack top == total at every point
 
     def test_zoom_reveals_more_detail(self):

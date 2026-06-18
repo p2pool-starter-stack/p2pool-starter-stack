@@ -1,19 +1,13 @@
 import json
 import os
-import time
+
 from mining_dashboard.config.config import (
+    NETWORK_STATS_PATH,
     P2P_STATS_PATH,
     POOL_STATS_PATH,
-    NETWORK_STATS_PATH,
+    SECOND_PER_BLOCK_MAIN,
     STRATUM_STATS_PATH,
     TARI_STATS_PATH,
-    SECOND_PER_BLOCK_MAIN,
-    BLOCK_PPLNS_WINDOW_MAIN,
-    BLOCK_PPLNS_WINDOW_MINI,
-    BLOCK_PPLNS_WINDOW_NANO,
-    SECOND_PER_BLOCK_P2POOL_MAIN,
-    SECOND_PER_BLOCK_P2POOL_MINI,
-    SECOND_PER_BLOCK_P2POOL_NANO,
 )
 
 
@@ -24,7 +18,7 @@ def _read_json(path):
     """
     if os.path.exists(path):
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             # Fail silently to allow the dashboard to continue running

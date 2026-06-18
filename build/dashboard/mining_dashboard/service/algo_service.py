@@ -1,25 +1,26 @@
 import asyncio
 import logging
-import time
 import math
+import time
+
 from mining_dashboard.config.config import (
-    XVB_TIME_ALGO_MS,
+    ENABLE_XVB,
     MONERO_WALLET_ADDRESS,
-    XVB_DONOR_ID,
     P2POOL_URL,
+    UPDATE_INTERVAL,
+    XVB_CONTROL_GAIN,
+    XVB_DONATION_LEVEL,
+    XVB_DONOR_ID,
+    XVB_MAINT_MARGIN_ABS_CAP,
+    XVB_MAINT_MARGIN_PCT,
+    XVB_MAX_DONATION_FRACTION,
+    XVB_MIN_TIME_SEND_MS,
+    XVB_P2POOL_RESERVE_FACTOR,
     XVB_POOL_URL,
+    XVB_SWITCH_OVERHEAD_MS,
+    XVB_TIME_ALGO_MS,
     XVB_TOR_ENABLED,
     XVB_TOR_SOCKS5,
-    XVB_MIN_TIME_SEND_MS,
-    ENABLE_XVB,
-    XVB_DONATION_LEVEL,
-    XVB_MAX_DONATION_FRACTION,
-    XVB_MAINT_MARGIN_PCT,
-    XVB_MAINT_MARGIN_ABS_CAP,
-    XVB_CONTROL_GAIN,
-    XVB_P2POOL_RESERVE_FACTOR,
-    XVB_SWITCH_OVERHEAD_MS,
-    UPDATE_INTERVAL,
 )
 from mining_dashboard.helper.utils import resolve_target_threshold
 
