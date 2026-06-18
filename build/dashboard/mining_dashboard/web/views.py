@@ -33,6 +33,7 @@ from mining_dashboard.helper.utils import (
     is_ip_address,
 )
 from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.version import resolve_version
 
@@ -812,6 +813,16 @@ def host_display_addr(host):
     return addr
 
 
+def _egress_badge(summary):
+    """Glanceable header badge for the egress posture (#170): green when Tor-only, red on a leak."""
+    ok = summary["level"] == "ok"
+    return {
+        "variant": "ok" if ok else "bad",
+        "text": "🛡️ Tor-only egress" if ok else f"⚠️ {summary['leaks']} clearnet egress",
+        "title": summary["label"],
+    }
+
+
 def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
@@ -828,6 +839,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     mode_tok, p2p_tok, xvb_tok = _mode_palette(metrics.mode)
     pool_net = build_pool_network(data, metrics)
 
+    egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)
+    badges = build_badges(data, metrics, mode_tok, db_healthy)
+    badges.append(_egress_badge(egress["summary"]))  # glanceable Tor-only / leak header badge
+
     return {
         "syncing": metrics.global_syncing,
         "page_title": "Mining Dashboard - Syncing"
@@ -842,7 +857,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "window": {"from": window[0], "to": window[1]} if window else None,
         "avg_window": avg_window,
         "avg_windows": HASHRATE_WINDOWS,
-        "badges": build_badges(data, metrics, mode_tok, db_healthy),
+        "badges": badges,
         "db_healthy": db_healthy,
         "hashrate": build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok),
         "system": build_system(data),
@@ -858,6 +873,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),
+        "egress": egress,
         "chart": build_chart(history, data.get("shares", []), range_arg, window, avg_window),
     }
 

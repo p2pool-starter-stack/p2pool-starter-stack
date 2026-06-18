@@ -362,6 +362,10 @@ services:
       - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
       - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
       - CLEARNET_STATE_DIR=/clearnet-state
+      # Egress-posture panel (#170): the #270 firewall state + p2pool's clearnet toggle, so the
+      # dashboard can show each component's real egress route rather than a guess.
+      - TOR_EGRESS_FIREWALL=${TOR_EGRESS_FIREWALL:-true}
+      - P2POOL_CLEARNET=${P2POOL_CLEARNET:-false}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
       - XVB_ENABLED=${XVB_ENABLED}

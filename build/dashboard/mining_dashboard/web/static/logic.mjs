@@ -209,6 +209,20 @@ export function formatTimeToShare(sec) {
   return fmtWindowDuration(sec * 1000);
 }
 
+// Egress posture (#170): map a connection's route token to a display glyph + label + CSS token for
+// the Component Health panel. The server (service/egress.py) derives the route from live config; the
+// client only maps it to presentation, no logic of its own (the #61 principle).
+export const EGRESS_ROUTES = {
+  tor: { icon: "🧅", label: "Tor", cls: "ok" },
+  clearnet: { icon: "🌐", label: "Clearnet", cls: "bad" },
+  local: { icon: "🏠", label: "Local/LAN", cls: "muted" },
+  inactive: { icon: "⚪", label: "Inactive", cls: "muted" },
+};
+
+export function egressRoute(route) {
+  return EGRESS_ROUTES[route] || { icon: "❔", label: route || "unknown", cls: "muted" };
+}
+
 // Width of a stacked hashrate band's top border-line for one chart segment. Returns 0 when the band
 // has zero height across the segment (both endpoints y === 0), so a flat-zero series doesn't paint
 // its colored border-line over the other series' edge — the "blue-purple at 100% P2Pool" artifact,

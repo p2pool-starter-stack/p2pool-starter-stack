@@ -778,3 +778,40 @@ tr:last-child td {
     width: 100%;
   }
 }
+
+/* Component Health & egress-posture panel (#170). */
+.c-bad {
+  color: var(--bad);
+}
+.egress-summary {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.egress-component {
+  margin-bottom: 0.5rem;
+}
+.egress-name {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.egress-conns {
+  list-style: none;
+  margin: 0.15rem 0 0;
+  padding: 0;
+}
+.egress-conn {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.85em;
+  padding: 0.1rem 0;
+}
+.egress-route {
+  flex: 0 0 7.5em;
+  font-weight: 600;
+}
+.egress-to {
+  color: var(--text-muted);
+}
+.egress-note {
+  font-style: italic;
+}

@@ -6,6 +6,7 @@
 import { ChartCard } from "./chart.mjs";
 import {
   computeEarnings,
+  egressRoute,
   formatTimeToShare,
   formatXmr,
   heroKpis,
@@ -459,6 +460,45 @@ function WorkersTable({ workers, summary, ui, onSort }) {
 
 // --- Operational view ----------------------------------------------------------------
 
+// Component Health & egress posture (#170). Lists each component's outbound connections tagged with
+// the route the server derived from live config (service/egress.py); the glanceable summary rides in
+// the header badges. The privacy story is only as good as its weakest egress — this makes it visible.
+function ComponentHealth({ egress }) {
+  if (!egress) return null;
+  const ok = egress.summary.level === "ok";
+  return html`
+    <div class="card card-advanced" id="card-egress">
+        <h3>Component Health & Egress</h3>
+        <div class=${"egress-summary c-" + (ok ? "ok" : "bad")}>
+            ${ok ? "🛡️" : "⚠️"} ${egress.summary.label}
+        </div>
+        <div class="egress-list">
+            ${egress.components.map(
+              (comp) => html`
+                <div class="egress-component">
+                    <div class="egress-name">${comp.name}</div>
+                    <ul class="egress-conns">
+                        ${comp.conns.map((conn) => {
+                          const r = egressRoute(conn.route);
+                          return html`
+                            <li class="egress-conn">
+                                <span class=${"egress-route c-" + r.cls}>${r.icon} ${r.label}</span>
+                                <span class="egress-to"
+                                    >${conn.to}${
+                                      conn.blocked_by_firewall
+                                        ? html` <span class="egress-note">(firewall-blocked)</span>`
+                                        : ""
+                                    }</span
+                                >
+                            </li>`;
+                        })}
+                    </ul>
+                </div>`,
+            )}
+        </div>
+    </div>`;
+}
+
 function DashboardView({
   state,
   ui,
@@ -499,6 +539,7 @@ function DashboardView({
             <${TariCard} tari=${state.tari} />
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />
+            <${ComponentHealth} egress=${state.egress} />
         </div>
     </div>`;
 }
