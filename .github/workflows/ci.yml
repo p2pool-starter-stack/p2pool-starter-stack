@@ -28,7 +28,7 @@ jobs:
       - name: Fake-daemon contract test (real clients vs controllable fakes)
         # Points the real Monero/Tari clients at the integration fakes and asserts they parse
         # every state (synced/syncing/down). Docker-free, so it runs on every PR (issue #54).
-        run: PYTHONPATH=build/dashboard uv run --locked --project build/dashboard --extra test python -m pytest tests/integration/fakes -q
+        run: uv run --locked --project build/dashboard --extra test python -m pytest tests/integration/fakes -q
 
   frontend:
     name: Frontend logic tests (node --test)

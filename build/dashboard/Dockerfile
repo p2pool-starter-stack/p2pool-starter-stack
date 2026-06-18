@@ -10,12 +10,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.10@sha256:cbe0a44ba994e327b8fe7ed72beef1aa
 
 # Install into a project venv on PATH (so entrypoint.sh's `python3` resolves to it); use the
 # digest-pinned base interpreter (never let uv download a different Python); compile bytecode and
-# copy (not hardlink) since the cache and target may be on different layers.
+# copy (not hardlink) from the BuildKit cache mount used on the sync steps below.
 ENV UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    UV_NO_CACHE=1 \
     PATH="/app/.venv/bin:$PATH"
 
 # System dependencies.
@@ -36,7 +35,7 @@ COPY mining_dashboard/ ./mining_dashboard/
 # a normal `docker compose build` targets the production stage and skips it.
 # ==========================================================================
 FROM base AS test
-RUN uv sync --locked --extra test
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --extra test
 COPY tests/ ./tests/
 RUN python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
 
@@ -45,7 +44,7 @@ RUN python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail
 # ==========================================================================
 FROM base AS production
 # Runtime deps + the package only (no test/dev extras).
-RUN uv sync --locked
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 

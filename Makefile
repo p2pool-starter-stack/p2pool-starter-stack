@@ -17,8 +17,7 @@ test-integration-selftest: ## Integration harness pure-logic self-test (no serve
 	bash tests/integration/selftest.sh
 
 test-fakes: ## Fake-daemon contract test — real dashboard clients vs controllable fakes (no docker)
-	PYTHONPATH=build/dashboard uv run --locked --project build/dashboard --extra test \
-		python -m pytest tests/integration/fakes -q
+	uv run --locked --project build/dashboard --extra test python -m pytest tests/integration/fakes -q
 
 test-mini-stack: ## Fake-daemon docker mini-stack end-to-end (needs docker; CI)
 	bash tests/integration/mini-stack/run-mini-stack.sh
