@@ -11,6 +11,19 @@ whole new feature, contributions are very welcome. This guide covers the workflo
 - Check the [open issues](https://github.com/p2pool-starter-stack/pithead/issues) to see
   if someone's already on it.
 
+## Dev environment
+
+The dashboard's Python tooling — [`ruff`](https://docs.astral.sh/ruff/) (lint + format) and
+[`pre-commit`](https://pre-commit.com/) — is pinned in the `dev` extra. Install it once and
+enable the git hooks, so the same checks that run in CI run on every commit (local == CI):
+
+```bash
+pip install -e "build/dashboard[dev]"
+pre-commit install
+```
+
+`pre-commit` then runs `ruff` (plus a few hygiene hooks) on your changed files automatically.
+
 ## Development workflow
 
 1. Fork the repo and create a branch off `main`.
@@ -24,7 +37,8 @@ whole new feature, contributions are very welcome. This guide covers the workflo
    This runs everything CI does without a server or Docker:
 
    - **lint** — `shellcheck` over `pithead` and the test scripts (keep them
-     `--severity=warning` clean).
+     `--severity=warning` clean), plus `ruff` lint + format check over all the repo's Python.
+     Run one surface on its own with `make lint-sh` or `make lint-py`.
    - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% coverage gate**).
    - **test-stack** — the `pithead` shell test suite.
    - **test-compose** — `docker-compose.yml` interpolation validation.
@@ -52,7 +66,9 @@ whole new feature, contributions are very welcome. This guide covers the workflo
 
 ## Style
 
-- Match the surrounding code. Shell scripts should pass `shellcheck --severity=warning`.
+- Match the surrounding code. Shell scripts should pass `shellcheck --severity=warning`;
+  Python is linted and formatted by `ruff` (config in `build/dashboard/pyproject.toml`) —
+  run `make lint-py`, or `cd build/dashboard && ruff format` to apply it.
 - Keep commits tidy and messages descriptive.
 
 By contributing, you agree that your contributions are licensed under the project's

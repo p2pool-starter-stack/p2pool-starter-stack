@@ -9,6 +9,7 @@ Privacy: the check is **opt-in (default off)** and routed over the bridge **Tor 
 `XVB_TOR_PROXY`, like the XvB stats fetch #163), so enabling it doesn't reveal the host IP to GitHub.
 Every failure path is silent (returns ``None``) so an offline / Tor-only stack just shows no badge.
 """
+
 import logging
 
 import requests
@@ -53,8 +54,13 @@ class GitHubReleaseClient:
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
             resp = requests.get(
-                self.api_url, timeout=20, proxies=proxies,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "pithead-dashboard"},
+                self.api_url,
+                timeout=20,
+                proxies=proxies,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "pithead-dashboard",
+                },
             )
             if resp.status_code != 200:
                 return None

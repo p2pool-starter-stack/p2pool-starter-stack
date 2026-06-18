@@ -5,13 +5,17 @@ P2Pool/XvB averages, XvB tier qualification, shares-in-PPLNS-window, worker coun
 sync/down state. The web view layer and future consumers (#45 Telegram, #12 calculator) all
 read these, so the logic is covered thoroughly here rather than through rendered output.
 """
-import time
 
+import time
 from unittest.mock import MagicMock
 
 import mining_dashboard.service.metrics as metrics
-from mining_dashboard.service.metrics import build_metrics, _avg_p2pool_over_window, _avg_xvb_over_window
 from mining_dashboard.config.config import TIER_DEFAULTS
+from mining_dashboard.service.metrics import (
+    _avg_p2pool_over_window,
+    _avg_xvb_over_window,
+    build_metrics,
+)
 
 
 def _mgr(history=None, mode="P2POOL", xvb=None, tiers=None):
@@ -28,7 +32,10 @@ def _mgr(history=None, mode="P2POOL", xvb=None, tiers=None):
 
 def _data(**over):
     d = {
-        "shares": [], "workers": [], "global_sync": False, "total_live_h15": 0,
+        "shares": [],
+        "workers": [],
+        "global_sync": False,
+        "total_live_h15": 0,
         "monero_sync": {"percent": 100, "current": 10, "target": 10},
         "tari_sync": {"percent": 100, "current": 5, "target": 5},
     }
@@ -106,13 +113,15 @@ class TestAvgXvbOverWindow:
             {"timestamp": now - 60, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
         ]
         assert _avg_xvb_over_window(history, 3600) == 500.0
-        assert _avg_p2pool_over_window(history, 3600) == 500.0   # 500 + 500 == 1000 total
+        assert _avg_p2pool_over_window(history, 3600) == 500.0  # 500 + 500 == 1000 total
 
 
 class TestHashrate:
     def test_total_and_stratum_passthrough(self):
-        data = _data(total_live_h15=12345,
-                     stratum={"hashrate_15m": 100, "hashrate_1h": 200, "hashrate_24h": 300})
+        data = _data(
+            total_live_h15=12345,
+            stratum={"hashrate_15m": 100, "hashrate_1h": 200, "hashrate_24h": 300},
+        )
         m = build_metrics(data, _mgr())
         assert m.total_h15 == 12345
         assert (m.stratum_h15, m.stratum_h1h, m.stratum_h24h) == (100, 200, 300)
@@ -138,7 +147,7 @@ class TestHashrate:
         m = build_metrics(_data(), _mgr(history=history, xvb={"avg_1h": 30_000, "avg_24h": 30_000}))
         assert m.xvb_routed_1h == 400.0
         assert m.xvb_routed_24h == 400.0
-        assert m.xvb_1h == 30_000      # credited, independent of routed
+        assert m.xvb_1h == 30_000  # credited, independent of routed
 
     def test_xvb_routed_zero_without_history(self):
         m = build_metrics(_data(total_live_h15=40_000), _mgr())
@@ -162,7 +171,7 @@ class TestModeAndTiers:
     def test_current_tier_from_min_1h_24h(self):
         # Current tier qualifies on the lower of the 1h/24h credited averages (#157) — set both.
         m = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000_000, "avg_24h": 50_000_000}))
-        assert m.current_tier != "None"   # some tier qualifies at 50 MH/s on both windows
+        assert m.current_tier != "None"  # some tier qualifies at 50 MH/s on both windows
         assert isinstance(m.target_threshold, float)
 
     def test_current_tier_uses_lower_of_1h_24h_on_drop(self):
@@ -171,8 +180,8 @@ class TestModeAndTiers:
         high = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000_000, "avg_24h": 50_000_000}))
         dropped = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000, "avg_24h": 50_000_000}))
         only_1h = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000, "avg_24h": 50_000}))
-        assert dropped.current_tier != high.current_tier      # the 1h drop lowered the tier
-        assert dropped.current_tier == only_1h.current_tier   # tier follows the LOWER (1h) average
+        assert dropped.current_tier != high.current_tier  # the 1h drop lowered the tier
+        assert dropped.current_tier == only_1h.current_tier  # tier follows the LOWER (1h) average
 
     def test_low_hr_warning_for_unsustainable_explicit_tier(self, monkeypatch):
         monkeypatch.setattr(metrics, "ENABLE_XVB", True)
@@ -199,11 +208,13 @@ class TestModeAndTiers:
 
 class TestWorkers:
     def test_counts_online_and_total(self):
-        data = _data(workers=[
-            {"name": "a", "status": "online"},
-            {"name": "b", "status": "offline"},
-            {"name": "c", "status": "online"},
-        ])
+        data = _data(
+            workers=[
+                {"name": "a", "status": "online"},
+                {"name": "b", "status": "offline"},
+                {"name": "c", "status": "online"},
+            ]
+        )
         m = build_metrics(data, _mgr())
         assert m.workers_online == 2
         assert m.workers_total == 3
@@ -217,7 +228,7 @@ class TestSharesWindow:
     def test_counts_recent_within_pplns_window(self):
         now = time.time()
         data = _data(
-            pool={"pool": {"pplns_window": 10}},          # 10 blocks * 10s (Main) = 100s
+            pool={"pool": {"pplns_window": 10}},  # 10 blocks * 10s (Main) = 100s
             shares=[{"ts": now - 5}, {"ts": now - 50}, {"ts": now - 10_000}],
         )
         m = build_metrics(data, _mgr())
@@ -274,8 +285,10 @@ class TestMoneroMode:
 class TestCalculatorInputs:
     def test_pool_and_network_figures(self):
         data = _data(
-            pool={"p2p": {"type": "Mini"},
-                  "pool": {"hashrate": 120_000_000, "difficulty": 250_000_000}},
+            pool={
+                "p2p": {"type": "Mini"},
+                "pool": {"hashrate": 120_000_000, "difficulty": 250_000_000},
+            },
             network={"difficulty": 380_000_000_000, "height": 3210001},
         )
         m = build_metrics(data, _mgr())
@@ -302,11 +315,11 @@ class TestRobustness:
     def test_history_fetched_when_not_passed(self):
         now = time.time()
         sm = _mgr(history=[{"timestamp": now - 10, "v": 500, "v_p2pool": 500, "v_xvb": 0}])
-        m = build_metrics(_data(), sm)   # no history arg -> pulled from state_mgr
+        m = build_metrics(_data(), sm)  # no history arg -> pulled from state_mgr
         sm.get_history.assert_called_once()
         assert m.p2pool_1h == 500.0
 
     def test_passed_history_avoids_refetch(self):
         sm = _mgr()
-        build_metrics(_data(), sm, history=[])   # explicit history -> no get_history call
+        build_metrics(_data(), sm, history=[])  # explicit history -> no get_history call
         sm.get_history.assert_not_called()

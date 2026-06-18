@@ -8,12 +8,13 @@ monerod/Tari change breaks the parser, this goes red here instead of only on the
 
 Run: PYTHONPATH=build/dashboard python3 -m pytest tests/integration/fakes -q
 """
+
 import asyncio
 import pathlib
 import sys
+from unittest.mock import MagicMock
 
 import requests
-from unittest.mock import MagicMock
 
 _HERE = pathlib.Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
@@ -23,6 +24,7 @@ sys.path.insert(0, str(_HERE))
 
 from fake_monerod import FakeMonerod  # noqa: E402
 from fake_tari import start_server  # noqa: E402
+
 from mining_dashboard.client.monero.monero_client import MoneroClient  # noqa: E402
 from mining_dashboard.client.tari.tari_client import TariClient  # noqa: E402
 
@@ -76,7 +78,11 @@ def test_monero_db_size_unknown_reads_zero():
 def test_monero_http_control_mutates_state():
     # Validates the /control path the docker mini-stack drives over the network.
     with FakeMonerod() as m:
-        requests.post(m.url + "/control", json={"mode": "syncing", "height": 10, "target_height": 100}, timeout=5)
+        requests.post(
+            m.url + "/control",
+            json={"mode": "syncing", "height": 10, "target_height": 100},
+            timeout=5,
+        )
         info = requests.get(m.url + "/get_info", timeout=5).json()
     assert info["synchronized"] is False and info["height"] == 10 and info["target_height"] == 100
 
@@ -127,9 +133,9 @@ def test_tari_serves_cached_reading_when_briefly_unreachable():
         client = TariClient(MagicMock())
         client.grpc_address = f"127.0.0.1:{bound}"
         try:
-            first = await client.get_sync_status()    # live: synced + reachable
+            first = await client.get_sync_status()  # live: synced + reachable
             state["mode"] = "down"
-            second = await client.get_sync_status()    # cached: last reading, reachable False
+            second = await client.get_sync_status()  # cached: last reading, reachable False
             return first, second
         finally:
             await client.close()

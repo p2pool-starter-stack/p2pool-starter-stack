@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint release
+.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py release
 
 test: lint test-dashboard test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -37,9 +37,14 @@ test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: ## shellcheck the CLI, the build/* container scripts, the release script, and the test scripts
+lint: lint-sh lint-py ## Lint every surface (shell + Python)
+
+lint-sh: ## shellcheck the CLI, the build/* container scripts, the release script, and the test scripts
 	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
+
+lint-py: ## ruff lint + format check on all repo Python (install ruff: pip install -e "build/dashboard[dev]")
+	ruff check . && ruff format --check .
 
 # Cut a release from the private build/test server (gouda) — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:

@@ -7,8 +7,10 @@ logger = logging.getLogger("ClearnetSync")
 # and was SIGKILL'd), and Docker holds the stop request open until the container is down — so the
 # HTTP timeout MUST exceed the stop deadline, or the stop call aborts early, reports failure, and
 # (with the old `stop and start`) skipped the start entirely, leaving the daemon down.
-_RESTART_STOP_TIMEOUT = 30   # seconds Docker waits (SIGTERM → SIGKILL) for the daemon to stop
-_RESTART_HTTP_TIMEOUT = 60   # HTTP timeout for the stop/start calls; must exceed _RESTART_STOP_TIMEOUT
+_RESTART_STOP_TIMEOUT = 30  # seconds Docker waits (SIGTERM → SIGKILL) for the daemon to stop
+_RESTART_HTTP_TIMEOUT = (
+    60  # HTTP timeout for the stop/start calls; must exceed _RESTART_STOP_TIMEOUT
+)
 
 
 class ClearnetSyncSupervisor:
@@ -60,8 +62,9 @@ class ClearnetSyncSupervisor:
                 fh.write("clearnet initial sync complete; node returned to Tor (#234)\n")
             return True
         except OSError as exc:
-            logger.error("%s: could not write Tor-resync marker at %s: %s",
-                         name, self.marker_path(name), exc)
+            logger.error(
+                "%s: could not write Tor-resync marker at %s: %s", name, self.marker_path(name), exc
+            )
             return False
 
     async def maybe_transition(self, name, container, flag_on, synced):
@@ -84,15 +87,17 @@ class ClearnetSyncSupervisor:
         # and a reboot would re-expose the node. Stay exposed and retry next cycle instead.
         if not self._write_marker(name):
             return True
-        logger.warning("%s: CLEARNET initial sync complete — switching %s back to Tor (#234).",
-                       name, container)
+        logger.warning(
+            "%s: CLEARNET initial sync complete — switching %s back to Tor (#234).", name, container
+        )
         # Stop with a generous window + an HTTP timeout that OUTLASTS it, then ALWAYS start. The old
         # `stop and start` left a slow-stopping daemon down: when stop's HTTP call timed out before
         # the container finished stopping, `and` short-circuited and start was never called (#234:
         # Tari took >5s to stop and never came back). `ok` is now the START result — the container
         # must end up running; a stop hiccup can no longer skip the start.
-        await self.docker_control.stop(container, stop_timeout=_RESTART_STOP_TIMEOUT,
-                                       request_timeout=_RESTART_HTTP_TIMEOUT)
+        await self.docker_control.stop(
+            container, stop_timeout=_RESTART_STOP_TIMEOUT, request_timeout=_RESTART_HTTP_TIMEOUT
+        )
         ok = await self.docker_control.start(container, request_timeout=_RESTART_HTTP_TIMEOUT)
         if ok:
             self._flipped.add(name)
@@ -100,8 +105,12 @@ class ClearnetSyncSupervisor:
         else:
             # Restart failed: do NOT mark flipped, so we retry next cycle. The marker is already on
             # disk, so any start (this retry, a manual restart, a reboot) brings the node up on Tor.
-            logger.error("%s: restart of %s onto Tor failed — will retry next cycle (the marker is "
-                         "set, so any restart comes up Tor-only).", name, container)
+            logger.error(
+                "%s: restart of %s onto Tor failed — will retry next cycle (the marker is "
+                "set, so any restart comes up Tor-only).",
+                name,
+                container,
+            )
         if self.on_transition is not None:
             try:
                 self.on_transition(name, ok)

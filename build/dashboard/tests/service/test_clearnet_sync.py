@@ -1,6 +1,7 @@
 """Tests for the clearnet→Tor auto-transition supervisor (#183/#234)."""
+
 import os
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 
@@ -38,8 +39,10 @@ class TestClearnetSyncSupervisor:
         exposed = await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
         assert exposed is False  # transitioned → no longer exposed
         assert os.path.exists(sup.marker_path("monero"))  # persistent marker written
-        dc.stop.assert_awaited_once(); assert dc.stop.await_args.args[0] == "monerod"
-        dc.start.assert_awaited_once(); assert dc.start.await_args.args[0] == "monerod"
+        dc.stop.assert_awaited_once()
+        assert dc.stop.await_args.args[0] == "monerod"
+        dc.start.assert_awaited_once()
+        assert dc.start.await_args.args[0] == "monerod"
         assert events == [("monero", True)]
 
     async def test_marker_written_before_restart(self, tmp_path):
@@ -47,9 +50,11 @@ class TestClearnetSyncSupervisor:
         guaranteed to render Tor even if the dashboard dies mid-flip."""
         sup, dc = make_supervisor(tmp_path)
         seen = {}
+
         async def record_stop(container, *a, **k):
             seen["marker_at_stop"] = os.path.exists(sup.marker_path("monero"))
             return True
+
         dc.stop = AsyncMock(side_effect=record_stop)
         await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
         assert seen["marker_at_stop"] is True
@@ -57,7 +62,8 @@ class TestClearnetSyncSupervisor:
     async def test_already_transitioned_is_idempotent(self, tmp_path):
         sup, dc = make_supervisor(tmp_path)
         await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
-        dc.stop.reset_mock(); dc.start.reset_mock()
+        dc.stop.reset_mock()
+        dc.start.reset_mock()
         # Second call: already flipped this run → no further restarts.
         exposed = await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
         assert exposed is False
@@ -93,11 +99,14 @@ class TestClearnetSyncSupervisor:
         # and report False; the old `stop and start` short-circuited and NEVER started it, leaving
         # the daemon down. start must ALWAYS be attempted — a slow/failed stop can't strand it.
         sup, dc = make_supervisor(tmp_path)
-        dc.stop = AsyncMock(return_value=False)   # stop "fails" (HTTP timed out before the slow stop)
-        dc.start = AsyncMock(return_value=True)   # the container does come back up
+        dc.stop = AsyncMock(
+            return_value=False
+        )  # stop "fails" (HTTP timed out before the slow stop)
+        dc.start = AsyncMock(return_value=True)  # the container does come back up
         exposed = await sup.maybe_transition("tari", "tari", flag_on=True, synced=True)
-        assert exposed is False                   # transitioned despite the stop hiccup
-        dc.start.assert_awaited_once(); assert dc.start.await_args.args[0] == "tari"
+        assert exposed is False  # transitioned despite the stop hiccup
+        dc.start.assert_awaited_once()
+        assert dc.start.await_args.args[0] == "tari"
 
     async def test_restart_stop_timeout_outlasts_kill_deadline(self, tmp_path):
         # The stop's HTTP timeout must exceed its SIGTERM→SIGKILL deadline, or a slow daemon's stop
@@ -116,7 +125,8 @@ class TestClearnetSyncSupervisor:
         assert m is False and t is True
         assert os.path.exists(sup.marker_path("monero"))
         assert not os.path.exists(sup.marker_path("tari"))
-        dc.stop.assert_awaited_once(); assert dc.stop.await_args.args[0] == "monerod"
+        dc.stop.assert_awaited_once()
+        assert dc.stop.await_args.args[0] == "monerod"
 
     async def test_marker_write_failure_does_not_restart(self, tmp_path):
         # If the marker can't be persisted (e.g. read-only dir), DON'T restart — a restart without

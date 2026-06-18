@@ -2,6 +2,7 @@
 
 Everything here keeps tests hermetic: no real database on disk, no network, no containers.
 """
+
 import pytest
 
 from mining_dashboard.service.storage_service import StateManager

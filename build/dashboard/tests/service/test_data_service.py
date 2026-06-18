@@ -1,17 +1,26 @@
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import mining_dashboard.service.data_service as ds_mod
 from mining_dashboard.service.data_service import (
-    DataService, _normalize_proxy_workers, _merge_direct_stats, _aggregate_hashrate,
-    _aggregate_window_hashrates, _parse_proxy_list_worker, _parse_legacy_dict_worker,
-    _parse_proxy_summary, _merge_proxy_summary, _shares_to_record, WorkerLifecycle,
+    DataService,
+    WorkerLifecycle,
+    _aggregate_hashrate,
+    _aggregate_window_hashrates,
+    _merge_direct_stats,
+    _merge_proxy_summary,
+    _normalize_proxy_workers,
+    _parse_legacy_dict_worker,
+    _parse_proxy_list_worker,
+    _parse_proxy_summary,
+    _shares_to_record,
 )
 
 
 class _FakeClientSession:
     """Stand-in for aiohttp.ClientSession used as an async context manager."""
+
     async def __aenter__(self):
         return MagicMock()
 
@@ -61,10 +70,21 @@ class TestProxyWorkerParsers:
         # native hashrate windows at idx8..12 = 1m/10m/1h/12h/24h kH/s (the 1h/12h/24h ones are #168).
         row = ["rig", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 3.0, 4.0, 5.0]
         w = _parse_proxy_list_worker(row)
-        assert w == {"name": "rig", "ip": "10.0.0.1", "status": "online",
-                     "h10": 1000, "h60": 1000, "h15": 2000,
-                     "h1h": 3000, "h12h": 4000, "h24h": 5000, "uptime": 0,
-                     "accepted": 0, "rejected": 0, "invalid": 0}
+        assert w == {
+            "name": "rig",
+            "ip": "10.0.0.1",
+            "status": "online",
+            "h10": 1000,
+            "h60": 1000,
+            "h15": 2000,
+            "h1h": 3000,
+            "h12h": 4000,
+            "h24h": 5000,
+            "uptime": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "invalid": 0,
+        }
 
     def test_parse_list_row_share_counts(self):
         # idx3=accepted, idx4=rejected, idx5=invalid are carried through (Issue #82).
@@ -81,14 +101,26 @@ class TestProxyWorkerParsers:
         assert w["uptime"] == 0
 
     def test_parse_legacy_dict_row(self):
-        w = _parse_legacy_dict_worker({"id": "old", "ip": "1.2.3.4",
-                                       "hashrate": [10, 20, 30], "uptime": 5})
+        w = _parse_legacy_dict_worker(
+            {"id": "old", "ip": "1.2.3.4", "hashrate": [10, 20, 30], "uptime": 5}
+        )
         # The legacy shape has only 10s/60s/15m, so the #168 long windows fall back to its longest
         # available average (hr[2]=30) rather than reading zero.
-        assert w == {"name": "old", "ip": "1.2.3.4", "status": "online",
-                     "h10": 10, "h60": 20, "h15": 30,
-                     "h1h": 30, "h12h": 30, "h24h": 30, "uptime": 5,
-                     "accepted": 0, "rejected": 0, "invalid": 0}
+        assert w == {
+            "name": "old",
+            "ip": "1.2.3.4",
+            "status": "online",
+            "h10": 10,
+            "h60": 20,
+            "h15": 30,
+            "h1h": 30,
+            "h12h": 30,
+            "h24h": 30,
+            "uptime": 5,
+            "accepted": 0,
+            "rejected": 0,
+            "invalid": 0,
+        }
 
     def test_parse_legacy_dict_share_counts(self):
         # When a legacy payload happens to carry share counts, they pass through.
@@ -107,8 +139,8 @@ class TestNormalizeProxyWorkers:
         assert w["ip"] == "10.0.0.1"
         assert w["status"] == "online"
         assert w["h10"] == 1000 and w["h60"] == 1000  # idx8 kH/s -> H/s
-        assert w["h15"] == 2000                         # idx9 kH/s -> H/s
-        assert w["uptime"] == 0                          # idx7 (last share ms) == 0
+        assert w["h15"] == 2000  # idx9 kH/s -> H/s
+        assert w["uptime"] == 0  # idx7 (last share ms) == 0
 
     def test_list_format_offline_when_no_connections(self):
         # A worker still listed by the proxy but with 0 connections is a stopped miner.
@@ -151,10 +183,21 @@ class TestParseProxySummary:
     """Pool-wide share totals from the proxy /summary `results` block (Issue #82)."""
 
     def test_extracts_results_and_best(self):
-        summary = {"results": {"accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1,
-                               "best": [987654, 5000, 100]}}
+        summary = {
+            "results": {
+                "accepted": 1000,
+                "rejected": 12,
+                "invalid": 3,
+                "expired": 1,
+                "best": [987654, 5000, 100],
+            }
+        }
         assert _parse_proxy_summary(summary) == {
-            "accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1, "best": 987654,
+            "accepted": 1000,
+            "rejected": 12,
+            "invalid": 3,
+            "expired": 1,
+            "best": 987654,
         }
 
     def test_best_defaults_to_zero_when_empty(self):
@@ -178,8 +221,15 @@ class TestMergeProxySummary:
     _LAST = {"accepted": 999, "rejected": 9, "invalid": 1, "expired": 0, "best": 42}
 
     def test_valid_summary_is_adopted(self):
-        summary = {"results": {"accepted": 1000, "rejected": 12, "invalid": 3, "expired": 1,
-                               "best": [987654]}}
+        summary = {
+            "results": {
+                "accepted": 1000,
+                "rejected": 12,
+                "invalid": 3,
+                "expired": 1,
+                "best": [987654],
+            }
+        }
         assert _merge_proxy_summary(self._LAST, summary) == self._GOOD
 
     def test_malformed_payload_keeps_last_good(self):
@@ -204,9 +254,9 @@ class TestWorkerLifecycle:
     def test_online_uptime_counts_from_first_seen(self):
         lc = WorkerLifecycle(falloff_sec=3600)
         [w] = lc.update([self._w("rig", "online")], now=1000.0)
-        assert w["uptime"] == 0                       # just connected
+        assert w["uptime"] == 0  # just connected
         [w] = lc.update([self._w("rig", "online")], now=1075.0)
-        assert w["uptime"] == 75                      # now - connected_since, monotonic
+        assert w["uptime"] == 75  # now - connected_since, monotonic
 
     def test_real_api_uptime_is_not_overwritten(self):
         # A worker whose direct API is reachable already carries a real (>0) uptime — keep it.
@@ -216,11 +266,11 @@ class TestWorkerLifecycle:
 
     def test_offline_worker_shown_until_falloff_then_dropped(self):
         lc = WorkerLifecycle(falloff_sec=3600)
-        lc.update([self._w("rig", "online")], now=1000.0)           # active at t=1000
-        kept = lc.update([self._w("rig", "offline")], now=4000.0)   # 3000s later: within 1h window
-        assert [w["name"] for w in kept] == ["rig"]                 # still shown (as DOWN)
-        gone = lc.update([self._w("rig", "offline")], now=5000.0)   # 4000s since active: > falloff
-        assert gone == []                                           # fell off the table
+        lc.update([self._w("rig", "online")], now=1000.0)  # active at t=1000
+        kept = lc.update([self._w("rig", "offline")], now=4000.0)  # 3000s later: within 1h window
+        assert [w["name"] for w in kept] == ["rig"]  # still shown (as DOWN)
+        gone = lc.update([self._w("rig", "offline")], now=5000.0)  # 4000s since active: > falloff
+        assert gone == []  # fell off the table
 
     def test_fallen_off_worker_stays_gone_while_proxy_keeps_reporting_it(self):
         # Regression (#182): xmrig-proxy keeps a disconnected worker in /workers for HOURS, so the
@@ -228,7 +278,7 @@ class TestWorkerLifecycle:
         # internal state at falloff meant the next poll re-created it with last_active=now, resetting
         # the 1h clock — the row flickered off for one cycle then came back as DOWN forever.
         lc = WorkerLifecycle(falloff_sec=3600)
-        lc.update([self._w("rig", "online")], now=1000.0)               # active at t=1000
+        lc.update([self._w("rig", "online")], now=1000.0)  # active at t=1000
         assert lc.update([self._w("rig", "offline")], now=4700.0) == []  # 3700s > falloff → dropped
         # The proxy STILL reports it offline on every subsequent poll — it must stay gone, not flicker.
         for t in (4730.0, 8400.0, 8430.0, 30000.0):
@@ -240,17 +290,17 @@ class TestWorkerLifecycle:
     def test_reconnect_restarts_uptime_and_readds(self):
         lc = WorkerLifecycle(falloff_sec=10)
         lc.update([self._w("rig", "online")], now=1000.0)
-        lc.update([], now=2000.0)                                   # proxy drops it entirely (fell off)
-        [w] = lc.update([self._w("rig", "online")], now=3000.0)     # reconnects fresh
-        assert w["uptime"] == 0                                     # uptime restarts, not inherited
+        lc.update([], now=2000.0)  # proxy drops it entirely (fell off)
+        [w] = lc.update([self._w("rig", "online")], now=3000.0)  # reconnects fresh
+        assert w["uptime"] == 0  # uptime restarts, not inherited
         [w] = lc.update([self._w("rig", "online")], now=3050.0)
         assert w["uptime"] == 50
 
     def test_offline_then_online_resets_connected_since(self):
         lc = WorkerLifecycle(falloff_sec=3600)
         lc.update([self._w("rig", "online")], now=1000.0)
-        lc.update([self._w("rig", "offline")], now=1100.0)          # disconnect resets connected_since
-        [w] = lc.update([self._w("rig", "online")], now=1200.0)     # back online — counts from here
+        lc.update([self._w("rig", "offline")], now=1100.0)  # disconnect resets connected_since
+        [w] = lc.update([self._w("rig", "online")], now=1200.0)  # back online — counts from here
         assert w["uptime"] == 0
 
 
@@ -258,8 +308,15 @@ class TestMergeDirectStats:
     """Augment proxy workers with direct-API stats; kind-based scaling + keep-online (#39/#28)."""
 
     def _worker(self):
-        return {"name": "rig", "ip": "10.0.0.1", "status": "online",
-                "h10": 1, "h60": 2, "h15": 3, "uptime": 0}
+        return {
+            "name": "rig",
+            "ip": "10.0.0.1",
+            "status": "online",
+            "h10": 1,
+            "h60": 2,
+            "h15": 3,
+            "uptime": 0,
+        }
 
     def test_proxy_kind_scales_khs_to_hs(self):
         extra = {"kind": "proxy", "uptime": 120, "hashrate": {"total": [1, 2, 3]}}
@@ -300,7 +357,7 @@ class TestAggregateHashrate:
     def test_falls_back_to_h60_then_h10(self):
         workers = [
             {"status": "online", "h15": 0, "h60": 1500, "h10": 500},  # uses h60
-            {"status": "online", "h15": 0, "h60": 0, "h10": 700},     # uses h10
+            {"status": "online", "h15": 0, "h60": 0, "h10": 700},  # uses h10
         ]
         total_h15, total_h10 = _aggregate_hashrate(workers)
         assert total_h15 == 1500 + 700
@@ -324,10 +381,13 @@ class TestAggregateWindowHashrates:
     def test_sums_each_window_independently(self):
         workers = [
             {"status": "online", "h10": 100, "h1h": 300, "h12h": 1200, "h24h": 2400},
-            {"status": "online", "h10": 50,  "h1h": 150, "h12h": 600,  "h24h": 1200},
+            {"status": "online", "h10": 50, "h1h": 150, "h12h": 600, "h24h": 1200},
         ]
         assert _aggregate_window_hashrates(workers) == {
-            "1m": 150, "1h": 450, "12h": 1800, "24h": 3600,
+            "1m": 150,
+            "1h": 450,
+            "12h": 1800,
+            "24h": 3600,
         }
 
     def test_no_fallback_between_windows(self):
@@ -339,8 +399,8 @@ class TestAggregateWindowHashrates:
 
     def test_offline_excluded_and_missing_keys_zero(self):
         workers = [
-            {"status": "online", "h10": 100},                              # missing long windows -> 0
-            {"status": "offline", "h10": 9999, "h1h": 9999, "h24h": 9999}, # excluded entirely
+            {"status": "online", "h10": 100},  # missing long windows -> 0
+            {"status": "offline", "h10": 9999, "h1h": 9999, "h24h": 9999},  # excluded entirely
         ]
         assert _aggregate_window_hashrates(workers) == {"1m": 100, "1h": 0, "12h": 0, "24h": 0}
 
@@ -402,7 +462,10 @@ class TestWorkerRejection:
     async def test_stop_when_monero_down(self):
         # monerod is required, so its outage always rejects — even with Tari non-blocking.
         svc = self._svc()
-        with self._tari(required=False), patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"):
+        with (
+            self._tari(required=False),
+            patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"),
+        ):
             await svc._apply_worker_rejection(monero_down=True, tari_down=False)
         svc.docker_control.stop.assert_awaited_once_with("xmrig-proxy")
         assert svc.workers_rejected is True
@@ -552,8 +615,15 @@ class TestRunIteration:
         # idx8=1.0 kH/s, idx9=2.0 kH/s -> h15 = 2000 H/s.
         worker_row = ["rig1", "10.0.0.1", 1, 0, 0, 0, 0, 0, 1.0, 2.0, 0, 0, 0]
         proxy.get_workers.return_value = {"workers": [worker_row]}
-        proxy.get_summary.return_value = {"results": {"accepted": 100, "rejected": 5, "invalid": 1,
-                                                      "expired": 2, "best": [123456]}}
+        proxy.get_summary.return_value = {
+            "results": {
+                "accepted": 100,
+                "rejected": 5,
+                "invalid": 1,
+                "expired": 2,
+                "best": [123456],
+            }
+        }
 
         worker_client = MagicMock()
         worker_client.get_stats = AsyncMock(return_value={})  # direct API unreachable
@@ -561,20 +631,39 @@ class TestRunIteration:
         tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False})
         tari_client.close = AsyncMock()
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
-             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
-             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
-             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
-             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": False, "percent": 100, "target": 100, "current": 100})), \
-             patch.object(ds_mod, "get_disk_usage", return_value={}), \
-             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
-             patch.object(ds_mod, "get_memory_usage", return_value={}), \
-             patch.object(ds_mod, "get_load_average", return_value="0"), \
-             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(
+                    return_value={
+                        "is_syncing": False,
+                        "percent": 100,
+                        "target": 100,
+                        "current": 100,
+                    }
+                ),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
@@ -584,7 +673,11 @@ class TestRunIteration:
         assert svc.latest_data["total_live_h15"] == 2000.0
         # The proxy /summary totals were collected and surfaced (Issue #82).
         assert svc.latest_data["proxy_summary"] == {
-            "accepted": 100, "rejected": 5, "invalid": 1, "expired": 2, "best": 123456,
+            "accepted": 100,
+            "rejected": 5,
+            "invalid": 1,
+            "expired": 2,
+            "best": 123456,
         }
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
@@ -599,24 +692,46 @@ class TestRunIteration:
         worker_client = MagicMock()
         worker_client.get_stats = AsyncMock(return_value={})
         tari_client = MagicMock()
-        tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False, "reachable": True})
+        tari_client.get_sync_status = AsyncMock(
+            return_value={"is_syncing": False, "reachable": True}
+        )
         tari_client.close = AsyncMock()
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
-             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
-             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
-             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
-             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
-             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": True, "reachable": True, "percent": 50, "current": 50, "target": 100})), \
-             patch.object(ds_mod, "get_disk_usage", return_value={}), \
-             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
-             patch.object(ds_mod, "get_memory_usage", return_value={}), \
-             patch.object(ds_mod, "get_load_average", return_value="0"), \
-             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
+            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(
+                    return_value={
+                        "is_syncing": True,
+                        "reachable": True,
+                        "percent": 50,
+                        "current": 50,
+                        "target": 100,
+                    }
+                ),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
@@ -638,24 +753,38 @@ class TestRunIteration:
         worker_client = MagicMock()
         worker_client.get_stats = AsyncMock(return_value={})
         tari_client = MagicMock()
-        tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False, "reachable": True})
+        tari_client.get_sync_status = AsyncMock(
+            return_value={"is_syncing": False, "reachable": True}
+        )
         tari_client.close = AsyncMock()
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
-             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
-             patch.object(ds_mod, "get_network_stats", return_value={"height": 0}), \
-             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
-             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
-             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": False, "reachable": True})), \
-             patch.object(ds_mod, "get_disk_usage", return_value={}), \
-             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
-             patch.object(ds_mod, "get_memory_usage", return_value={}), \
-             patch.object(ds_mod, "get_load_average", return_value="0"), \
-             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
+            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 0}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False, "reachable": True}),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
@@ -677,25 +806,44 @@ class TestRunIteration:
         worker_client.get_stats = AsyncMock(return_value={})
         tari_client = MagicMock()
         tari_client.get_sync_status = AsyncMock(
-            return_value={"is_syncing": True, "reachable": True, "percent": 42, "current": 42, "target": 100})
+            return_value={
+                "is_syncing": True,
+                "reachable": True,
+                "percent": 42,
+                "current": 42,
+                "target": 100,
+            }
+        )
         tari_client.close = AsyncMock()
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
-             patch.object(ds_mod, "TARI_REQUIRED", False), \
-             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
-             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
-             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
-             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
-             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": False, "reachable": True})), \
-             patch.object(ds_mod, "get_disk_usage", return_value={}), \
-             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
-             patch.object(ds_mod, "get_memory_usage", return_value={}), \
-             patch.object(ds_mod, "get_load_average", return_value="0"), \
-             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
+            patch.object(ds_mod, "TARI_REQUIRED", False),
+            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False, "reachable": True}),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
@@ -712,11 +860,13 @@ class TestRunIteration:
         tari_client = MagicMock()
         tari_client.get_sync_status = AsyncMock(return_value={})
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "get_stratum_stats", side_effect=RuntimeError("boom")), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "get_stratum_stats", side_effect=RuntimeError("boom")),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             # The error is caught inside the loop; the sleep after it raises to stop us.
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
@@ -738,25 +888,44 @@ class TestControlPlaneComposition:
         worker_client.get_stats = AsyncMock(return_value={})
         tari_client = MagicMock()
         tari_client.get_sync_status = AsyncMock(
-            return_value={"is_syncing": True, "reachable": True, "percent": 80, "current": 80, "target": 100})
+            return_value={
+                "is_syncing": True,
+                "reachable": True,
+                "percent": 80,
+                "current": 80,
+                "target": 100,
+            }
+        )
         tari_client.close = AsyncMock()
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
-             patch.object(ds_mod, "TARI_REQUIRED", True), \
-             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
-             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
-             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
-             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
-             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value={"is_syncing": False, "reachable": True})), \
-             patch.object(ds_mod, "get_disk_usage", return_value={}), \
-             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
-             patch.object(ds_mod, "get_memory_usage", return_value={}), \
-             patch.object(ds_mod, "get_load_average", return_value="0"), \
-             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
+            patch.object(ds_mod, "TARI_REQUIRED", True),
+            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False, "reachable": True}),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
@@ -772,21 +941,25 @@ class TestControlPlaneComposition:
         # The two coexist: gate no-ops, rejection acts on the proxy only.
         svc, _sm, _proxy = _make_service()
         svc.miner_released = True
-        with patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]), \
-             patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"), \
-             patch.object(ds_mod, "TARI_REQUIRED", True):
-            await svc._apply_sync_gate(gate_satisfied=False)   # latch → no-op
+        with (
+            patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
+            patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"),
+            patch.object(ds_mod, "TARI_REQUIRED", True),
+        ):
+            await svc._apply_sync_gate(gate_satisfied=False)  # latch → no-op
             await svc._apply_worker_rejection(monero_down=True, tari_down=False)
         stopped = [c.args[0] for c in svc.docker_control.stop.await_args_list]
-        assert stopped == ["xmrig-proxy"]          # p2pool was NOT re-held
+        assert stopped == ["xmrig-proxy"]  # p2pool was NOT re-held
         svc.docker_control.start.assert_not_called()
         assert svc.workers_rejected is True
 
     async def test_both_nodes_down_rejects_once(self):
         # A simultaneous Monero+Tari outage (both required) is a single rejection, not two.
         svc, _sm, _proxy = _make_service()
-        with patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"), \
-             patch.object(ds_mod, "TARI_REQUIRED", True):
+        with (
+            patch.object(ds_mod, "REJECT_WORKERS_CONTAINER", "xmrig-proxy"),
+            patch.object(ds_mod, "TARI_REQUIRED", True),
+        ):
             await svc._apply_worker_rejection(monero_down=True, tari_down=True)
         svc.docker_control.stop.assert_awaited_once_with("xmrig-proxy")
         assert svc.workers_rejected is True

@@ -21,6 +21,8 @@ __pycache__/
 htmlcov/
 *.egg-info/
 .eggs/
+.venv/
+.ruff_cache/
 
 # Integration test artifacts (manifest, per-scenario logs, captured state)
 /tests/integration/results/

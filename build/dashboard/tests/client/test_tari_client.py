@@ -1,6 +1,4 @@
-from unittest.mock import MagicMock, AsyncMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from mining_dashboard.client.tari.tari_client import TariClient
 
@@ -33,24 +31,39 @@ class TestFetchSyncStatus:
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(return_value=_tip(500, synced=True))
         status = await client.get_sync_status()
-        assert status == {"is_syncing": False, "current": 500, "target": 500,
-                          "percent": 100, "reachable": True}
+        assert status == {
+            "is_syncing": False,
+            "current": 500,
+            "target": 500,
+            "percent": 100,
+            "reachable": True,
+        }
 
     async def test_syncing_with_target(self):
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(return_value=_tip(100, synced=False))
         stub.GetSyncProgress = AsyncMock(return_value=_progress(100, 200))
         status = await client.get_sync_status()
-        assert status == {"is_syncing": True, "current": 100, "target": 200,
-                          "percent": 50, "reachable": True}
+        assert status == {
+            "is_syncing": True,
+            "current": 100,
+            "target": 200,
+            "percent": 50,
+            "reachable": True,
+        }
 
     async def test_syncing_without_reliable_target(self):
         client, stub = _client_with_stub()
         stub.GetTipInfo = AsyncMock(return_value=_tip(100, synced=False))
         stub.GetSyncProgress = AsyncMock(return_value=_progress(100, 100))  # target <= local
         status = await client.get_sync_status()
-        assert status == {"is_syncing": True, "current": 100, "target": 0,
-                          "percent": 0, "reachable": True}
+        assert status == {
+            "is_syncing": True,
+            "current": 100,
+            "target": 0,
+            "percent": 0,
+            "reachable": True,
+        }
 
     async def test_grpc_error_returns_default_when_no_cache(self):
         client, stub = _client_with_stub()
@@ -77,7 +90,7 @@ class TestCaching:
         stub.GetTipInfo = AsyncMock(return_value=_tip(300, synced=True))
         await client.get_sync_status()
         # Push the cache timestamp beyond the stale window.
-        client._last_sync_ts -= (client._MAX_STALE_SECONDS + 1)
+        client._last_sync_ts -= client._MAX_STALE_SECONDS + 1
         stub.GetTipInfo = AsyncMock(side_effect=RuntimeError("down"))
         assert await client.get_sync_status() == {"is_syncing": False, "reachable": False}
 

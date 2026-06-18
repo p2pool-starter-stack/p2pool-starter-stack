@@ -10,12 +10,17 @@ This is the single place those values are derived. The web view layer formats di
 (#45) and XvB/P2Pool calculator (#12) — read the same ``Metrics`` instead of re-deriving from
 the raw dict or scraping rendered HTML. Nothing here formats or emits markup.
 """
+
 import time
 from dataclasses import dataclass
 
 from mining_dashboard.config.config import (
-    ENABLE_XVB, XVB_DONATION_LEVEL, XVB_MAX_DONATION_FRACTION,
-    MONERO_PRUNE, MONERO_NODE_HOST, LOCAL_MONERO_HOST,
+    ENABLE_XVB,
+    LOCAL_MONERO_HOST,
+    MONERO_NODE_HOST,
+    MONERO_PRUNE,
+    XVB_DONATION_LEVEL,
+    XVB_MAX_DONATION_FRACTION,
 )
 from mining_dashboard.helper.utils import get_tier_info, resolve_target_threshold
 
@@ -31,26 +36,28 @@ _LOCAL_MONERO_HOST = LOCAL_MONERO_HOST
 @dataclass(frozen=True)
 class SyncMetric:
     """One chain's sync/health state (Issues #31, #51)."""
+
     percent: int
     current: int
     target: int
     remaining: int
-    has_target: bool   # a real target height is known (vs. still discovering it)
-    done: bool         # fully synced
-    down: bool         # debounced unreachable (node-health monitor)
+    has_target: bool  # a real target height is known (vs. still discovering it)
+    done: bool  # fully synced
+    down: bool  # debounced unreachable (node-health monitor)
 
 
 @dataclass(frozen=True)
 class Metrics:
     """Computed dashboard domain values. All hashrates are raw H/s; no display formatting."""
+
     # Effective hashrate (H/s).
     total_h15: float
     p2pool_1h: float
     p2pool_24h: float
-    xvb_1h: float              # credited (XvB API avg_1h) — controller input + Advanced card only
-    xvb_24h: float             # credited (XvB API avg_24h)
-    xvb_routed_1h: float       # routed (proxy v_xvb, time-weighted 1h) — header / Simple / chart (#156)
-    xvb_routed_24h: float      # routed (proxy v_xvb, time-weighted 24h)
+    xvb_1h: float  # credited (XvB API avg_1h) — controller input + Advanced card only
+    xvb_24h: float  # credited (XvB API avg_24h)
+    xvb_routed_1h: float  # routed (proxy v_xvb, time-weighted 1h) — header / Simple / chart (#156)
+    xvb_routed_24h: float  # routed (proxy v_xvb, time-weighted 24h)
     stratum_h15: float
     stratum_h1h: float
     stratum_h24h: float
@@ -61,16 +68,16 @@ class Metrics:
     target_tier: str
     target_threshold: float
     target_sustainable: bool
-    low_hr_warning: bool       # an explicit tier was chosen that the hashrate can't sustain
+    low_hr_warning: bool  # an explicit tier was chosen that the hashrate can't sustain
     xvb_fail_count: int
-    xvb_last_update: float     # epoch seconds of the last XvB stats fetch
+    xvb_last_update: float  # epoch seconds of the last XvB stats fetch
     # Workers.
     workers_online: int
     workers_total: int
     # Shares / PPLNS.
     shares_in_window: int
-    pplns_window: int          # blocks
-    block_time: int            # seconds per sidechain block
+    pplns_window: int  # blocks
+    block_time: int  # seconds per sidechain block
     # Pool / network (raw figures; e.g. payout-calculator inputs, #12).
     pool_type: str
     pool_hashrate: float
@@ -81,8 +88,8 @@ class Metrics:
     global_syncing: bool
     monero: SyncMetric
     tari: SyncMetric
-    monero_mode: str           # "Pruned" / "Full" / "Unknown"
-    tari_mining: bool          # Tari merge-mining active
+    monero_mode: str  # "Pruned" / "Full" / "Unknown"
+    tari_mining: bool  # Tari merge-mining active
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -98,15 +105,15 @@ def build_metrics(latest_data, state_mgr, history=None):
     xvb_stats = state_mgr.get_xvb_stats() or {}
     tiers = state_mgr.get_tiers()
 
-    mode = xvb_stats.get('current_mode', 'P2POOL')
+    mode = xvb_stats.get("current_mode", "P2POOL")
     if not ENABLE_XVB:
         mode = "P2POOL (XvB Disabled)"
 
-    total_h15 = data.get('total_live_h15', 0) or 0
+    total_h15 = data.get("total_live_h15", 0) or 0
     # Credited — XvB's own verdict (avg_1h/24h). The controller steers off this (#9/#70) and the
     # Advanced card shows it next to routed so the credit factor is visible; nowhere else (#156).
-    xvb_1h = xvb_stats.get('avg_1h', 0) or 0
-    xvb_24h = xvb_stats.get('avg_24h', 0) or 0
+    xvb_1h = xvb_stats.get("avg_1h", 0) or 0
+    xvb_24h = xvb_stats.get("avg_24h", 0) or 0
     # Routed — what the proxy ACTUALLY sent to XvB, time-weighted from our own DB history (v_xvb),
     # mirroring P2Pool's v_p2pool averaging so the two sum to total. This is the at-a-glance display
     # figure (header / Simple / chart), NOT the controller's intended donation_fraction (#156).
@@ -129,28 +136,30 @@ def build_metrics(latest_data, state_mgr, history=None):
     )
     target_tier, _ = get_tier_info(target_threshold, tiers)
     low_hr_warning = bool(
-        ENABLE_XVB and XVB_DONATION_LEVEL not in ("auto", "highest")
-        and target_threshold > 0 and not sustainable
+        ENABLE_XVB
+        and XVB_DONATION_LEVEL not in ("auto", "highest")
+        and target_threshold > 0
+        and not sustainable
     )
     if not ENABLE_XVB:
         current_tier = "Disabled"
         target_tier = "Disabled"
         low_hr_warning = False
 
-    stratum = data.get('stratum', {})
-    pool_stats = data.get('pool', {})
-    p2p = pool_stats.get('p2p', {})
-    local_pool = pool_stats.get('pool', {})
-    network = data.get('network', {})
+    stratum = data.get("stratum", {})
+    pool_stats = data.get("pool", {})
+    p2p = pool_stats.get("p2p", {})
+    local_pool = pool_stats.get("pool", {})
+    network = data.get("network", {})
 
-    pool_type = p2p.get('type', 'Main')
-    block_time = _BLOCK_TIME_NANO if pool_type == 'Nano' else _BLOCK_TIME_DEFAULT
-    pplns_window = local_pool.get('pplns_window', 2160)
+    pool_type = p2p.get("type", "Main")
+    block_time = _BLOCK_TIME_NANO if pool_type == "Nano" else _BLOCK_TIME_DEFAULT
+    pplns_window = local_pool.get("pplns_window", 2160)
     cutoff = time.time() - pplns_window * block_time
-    shares_in_window = sum(1 for s in data.get('shares', []) if s.get('ts', 0) >= cutoff)
+    shares_in_window = sum(1 for s in data.get("shares", []) if s.get("ts", 0) >= cutoff)
 
-    workers = data.get('workers', [])
-    workers_online = sum(1 for w in workers if w.get('status') == 'online')
+    workers = data.get("workers", [])
+    workers_online = sum(1 for w in workers if w.get("status") == "online")
 
     return Metrics(
         total_h15=total_h15,
@@ -160,9 +169,9 @@ def build_metrics(latest_data, state_mgr, history=None):
         xvb_24h=xvb_24h,
         xvb_routed_1h=xvb_routed_1h,
         xvb_routed_24h=xvb_routed_24h,
-        stratum_h15=stratum.get('hashrate_15m', 0) or 0,
-        stratum_h1h=stratum.get('hashrate_1h', 0) or 0,
-        stratum_h24h=stratum.get('hashrate_24h', 0) or 0,
+        stratum_h15=stratum.get("hashrate_15m", 0) or 0,
+        stratum_h1h=stratum.get("hashrate_1h", 0) or 0,
+        stratum_h24h=stratum.get("hashrate_24h", 0) or 0,
         mode=mode,
         xvb_enabled=bool(ENABLE_XVB),
         current_tier=current_tier,
@@ -170,23 +179,23 @@ def build_metrics(latest_data, state_mgr, history=None):
         target_threshold=target_threshold,
         target_sustainable=sustainable,
         low_hr_warning=low_hr_warning,
-        xvb_fail_count=xvb_stats.get('fail_count', 0) or 0,
-        xvb_last_update=xvb_stats.get('last_update', 0) or 0,
+        xvb_fail_count=xvb_stats.get("fail_count", 0) or 0,
+        xvb_last_update=xvb_stats.get("last_update", 0) or 0,
         workers_online=workers_online,
         workers_total=len(workers),
         shares_in_window=shares_in_window,
         pplns_window=pplns_window,
         block_time=block_time,
         pool_type=pool_type,
-        pool_hashrate=local_pool.get('hashrate', 0) or 0,
-        pool_difficulty=local_pool.get('difficulty', 0) or 0,
-        network_difficulty=network.get('difficulty', 0) or 0,
-        network_height=network.get('height', 0) or 0,
-        global_syncing=bool(data.get('global_sync', False)),
-        monero=_sync_metric(data.get('monero_sync', {})),
-        tari=_sync_metric(data.get('tari_sync', {})),
+        pool_hashrate=local_pool.get("hashrate", 0) or 0,
+        pool_difficulty=local_pool.get("difficulty", 0) or 0,
+        network_difficulty=network.get("difficulty", 0) or 0,
+        network_height=network.get("height", 0) or 0,
+        global_syncing=bool(data.get("global_sync", False)),
+        monero=_sync_metric(data.get("monero_sync", {})),
+        tari=_sync_metric(data.get("tari_sync", {})),
         monero_mode=_monero_mode(),
-        tari_mining=bool(data.get('tari', {}).get('active', False)),
+        tari_mining=bool(data.get("tari", {}).get("active", False)),
     )
 
 
@@ -205,11 +214,11 @@ def _avg_p2pool_over_window(history, window_seconds):
     total = 0.0
     count = 0
     for x in history:
-        if x.get('timestamp', 0) < cutoff:
+        if x.get("timestamp", 0) < cutoff:
             continue
-        vp = x.get('v_p2pool', 0) or 0
-        vx = x.get('v_xvb', 0) or 0
-        v = x.get('v', 0) or 0
+        vp = x.get("v_p2pool", 0) or 0
+        vx = x.get("v_xvb", 0) or 0
+        v = x.get("v", 0) or 0
         if vp == 0 and vx == 0 and v > 0:
             vp = v
         total += vp
@@ -233,9 +242,9 @@ def _avg_xvb_over_window(history, window_seconds):
     total = 0.0
     count = 0
     for x in history:
-        if x.get('timestamp', 0) < cutoff:
+        if x.get("timestamp", 0) < cutoff:
             continue
-        total += x.get('v_xvb', 0) or 0
+        total += x.get("v_xvb", 0) or 0
         count += 1
 
     return total / count if count else 0.0
@@ -243,9 +252,9 @@ def _avg_xvb_over_window(history, window_seconds):
 
 def _sync_metric(sync):
     """Build a :class:`SyncMetric` from a chain's raw ``*_sync`` dict."""
-    percent = sync.get('percent', 0) or 0
-    current = sync.get('current', 0) or 0
-    target = sync.get('target', 0) or 0
+    percent = sync.get("percent", 0) or 0
+    current = sync.get("current", 0) or 0
+    target = sync.get("target", 0) or 0
     has_target = target > 0
     return SyncMetric(
         percent=percent,
@@ -257,8 +266,9 @@ def _sync_metric(sync):
         # the percent>=100 path never fires for it — which left a fully-synced node stuck at "loading"
         # (found in the #180 gouda validation). Trust the authoritative reachable + not-is_syncing
         # signal too; Tari already reports current==target/percent=100, so it's unaffected.
-        done=(sync.get('reachable', False) and not sync.get('is_syncing', True)) or (has_target and percent >= 100),
-        down=bool(sync.get('down', False)),
+        done=(sync.get("reachable", False) and not sync.get("is_syncing", True))
+        or (has_target and percent >= 100),
+        down=bool(sync.get("down", False)),
     )
 
 
