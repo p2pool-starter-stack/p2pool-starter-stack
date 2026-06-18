@@ -24,18 +24,24 @@ if printf '%s' "${P2POOL_FLAGS:-}" | grep -q -- '--socks5'; then
         _prev="$_a"
     done
     case "$_node" in
-        ""|127.0.0.1|::1|localhost) : ;;   # already loopback (or p2pool's 127.0.0.1 default) — nothing to bridge
-        *)
-            echo "[p2pool-entrypoint] Tor on (#278): bridging 127.0.0.1 -> $_node for monerod RPC($_rpc)/ZMQ($_zmq) so the node stays DIRECT (p2pool only exempts loopback from --socks5)."
-            socat "TCP-LISTEN:$_rpc,bind=127.0.0.1,fork,reuseaddr" "TCP:$_node:$_rpc" &
-            socat "TCP-LISTEN:$_zmq,bind=127.0.0.1,fork,reuseaddr" "TCP:$_node:$_zmq" &
-            _args=(); _skip=0
-            for _a in "$@"; do
-                if [ "$_skip" = 1 ]; then _args+=("127.0.0.1"); _skip=0; continue; fi
-                _args+=("$_a"); [ "$_a" = "--host" ] && _skip=1
-            done
-            set -- "${_args[@]}"
-            ;;
+    "" | 127.0.0.1 | ::1 | localhost) : ;; # already loopback (or p2pool's 127.0.0.1 default) — nothing to bridge
+    *)
+        echo "[p2pool-entrypoint] Tor on (#278): bridging 127.0.0.1 -> $_node for monerod RPC($_rpc)/ZMQ($_zmq) so the node stays DIRECT (p2pool only exempts loopback from --socks5)."
+        socat "TCP-LISTEN:$_rpc,bind=127.0.0.1,fork,reuseaddr" "TCP:$_node:$_rpc" &
+        socat "TCP-LISTEN:$_zmq,bind=127.0.0.1,fork,reuseaddr" "TCP:$_node:$_zmq" &
+        _args=()
+        _skip=0
+        for _a in "$@"; do
+            if [ "$_skip" = 1 ]; then
+                _args+=("127.0.0.1")
+                _skip=0
+                continue
+            fi
+            _args+=("$_a")
+            [ "$_a" = "--host" ] && _skip=1
+        done
+        set -- "${_args[@]}"
+        ;;
     esac
 fi
 

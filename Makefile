@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py release
+.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml release
 
 test: lint test-dashboard test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -37,15 +37,33 @@ test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: lint-sh lint-py ## Lint every surface (shell + Python)
+lint: lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml ## Lint/format-check every surface
 
-lint-sh: ## shellcheck the CLI, the build/* container scripts, the release script, and the test scripts
+lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
 	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
+	shfmt -i 4 -d pithead $(shell git ls-files '*.sh')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
 	uv run --locked --project build/dashboard --extra dev ruff check .
 	uv run --locked --project build/dashboard --extra dev ruff format --check .
+
+lint-js: ## Biome lint + format check on the static frontend (config: biome.json)
+	npx --yes @biomejs/biome@2.5.0 check .
+
+lint-yaml: ## yamllint over all tracked YAML (config: .yamllint)
+	uvx yamllint $(shell git ls-files '*.yml' '*.yaml')
+
+lint-md: ## markdownlint over all Markdown (config: .markdownlint-cli2.jsonc)
+	npx --yes markdownlint-cli2@0.18.1
+
+lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
+	cd build/dashboard/mining_dashboard/client/tari/proto && \
+		docker run --rm -v "$$PWD":/workspace --workdir /workspace bufbuild/buf:1.71.0 lint && \
+		docker run --rm -v "$$PWD":/workspace --workdir /workspace bufbuild/buf:1.71.0 build
+
+lint-toml: ## taplo TOML format check (config: .taplo.toml)
+	npx --yes @taplo/cli@0.7.0 fmt --check
 
 # Cut a release from the private build/test server (gouda) — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:

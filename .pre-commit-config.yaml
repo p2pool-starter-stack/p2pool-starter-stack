@@ -31,3 +31,45 @@ repos:
       - id: trailing-whitespace
         # Also skip Markdown — two trailing spaces are a hard line break (see .editorconfig).
         exclude: '(^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)|\.md$)'
+
+  # Per-surface lint/format (#281). These delegate to the Makefile targets so tool versions and file
+  # lists stay single-sourced (no drift between local, pre-commit, and CI). They need the relevant
+  # tools available (shellcheck, shfmt, node/npx, uv, docker) — see CONTRIBUTING.md.
+  - repo: local
+    hooks:
+      - id: lint-sh
+        name: shellcheck + shfmt
+        entry: make lint-sh
+        language: system
+        types_or: [shell]
+        pass_filenames: false
+      - id: lint-js
+        name: biome (static frontend)
+        entry: make lint-js
+        language: system
+        files: ^build/dashboard/mining_dashboard/web/static/.*\.(js|mjs|css)$
+        pass_filenames: false
+      - id: lint-yaml
+        name: yamllint
+        entry: make lint-yaml
+        language: system
+        types: [yaml]
+        pass_filenames: false
+      - id: lint-md
+        name: markdownlint
+        entry: make lint-md
+        language: system
+        types: [markdown]
+        pass_filenames: false
+      - id: lint-proto
+        name: buf (proto)
+        entry: make lint-proto
+        language: system
+        types: [proto]
+        pass_filenames: false
+      - id: lint-toml
+        name: taplo (toml)
+        entry: make lint-toml
+        language: system
+        types: [toml]
+        pass_filenames: false

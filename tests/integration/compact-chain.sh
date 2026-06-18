@@ -34,26 +34,30 @@ ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 say() { echo "[$(ts)] $*" | tee -a "$LOG"; }
 
 {
-  echo "===== compact run $(ts) ====="
-  echo "data-dir: $DATA_DIR"
-  echo "--- lmdb BEFORE ---"
-  ls -la "$DATA_DIR/lmdb/" 2>/dev/null
-  echo "data.mdb apparent+disk:"; du -h --apparent-size "$DATA_DIR/lmdb/data.mdb" 2>/dev/null; du -h "$DATA_DIR/lmdb/data.mdb" 2>/dev/null
-} >> "$LOG" 2>&1
+    echo "===== compact run $(ts) ====="
+    echo "data-dir: $DATA_DIR"
+    echo "--- lmdb BEFORE ---"
+    ls -la "$DATA_DIR/lmdb/" 2>/dev/null
+    echo "data.mdb apparent+disk:"
+    du -h --apparent-size "$DATA_DIR/lmdb/data.mdb" 2>/dev/null
+    du -h "$DATA_DIR/lmdb/data.mdb" 2>/dev/null
+} >>"$LOG" 2>&1
 
-echo COMPACTING > "$STATUS"
+echo COMPACTING >"$STATUS"
 say "compaction begin (data-dir=$DATA_DIR)"
 t0=$(date +%s)
-"$PRUNE_BIN" --data-dir "$DATA_DIR" --copy-pruned-database >> "$LOG" 2>&1
+"$PRUNE_BIN" --data-dir "$DATA_DIR" --copy-pruned-database >>"$LOG" 2>&1
 rc=$?
 t1=$(date +%s)
 say "compaction done rc=$rc in $((t1 - t0))s"
 
 {
-  echo "--- lmdb AFTER ---"
-  ls -la "$DATA_DIR/lmdb/" 2>/dev/null
-  echo "data.mdb apparent+disk:"; du -h --apparent-size "$DATA_DIR/lmdb/data.mdb" 2>/dev/null; du -h "$DATA_DIR/lmdb/data.mdb" 2>/dev/null
-} >> "$LOG" 2>&1
+    echo "--- lmdb AFTER ---"
+    ls -la "$DATA_DIR/lmdb/" 2>/dev/null
+    echo "data.mdb apparent+disk:"
+    du -h --apparent-size "$DATA_DIR/lmdb/data.mdb" 2>/dev/null
+    du -h "$DATA_DIR/lmdb/data.mdb" 2>/dev/null
+} >>"$LOG" 2>&1
 
-if [ $rc -eq 0 ]; then echo DONE > "$STATUS"; else echo "FAIL_rc$rc" > "$STATUS"; fi
+if [ $rc -eq 0 ]; then echo DONE >"$STATUS"; else echo "FAIL_rc$rc" >"$STATUS"; fi
 say "status=$(cat "$STATUS")"

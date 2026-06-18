@@ -14,14 +14,22 @@
 # --- Output -----------------------------------------------------------------
 # Colour only on a TTY with NO_COLOR unset (https://no-color.org), matching pithead.
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    IT_RESET='\033[0m'; IT_GREEN='\033[1;32m'; IT_YELLOW='\033[1;33m'; IT_RED='\033[1;31m'; IT_DIM='\033[2m'
+    IT_RESET='\033[0m'
+    IT_GREEN='\033[1;32m'
+    IT_YELLOW='\033[1;33m'
+    IT_RED='\033[1;31m'
+    IT_DIM='\033[2m'
 else
-    IT_RESET=''; IT_GREEN=''; IT_YELLOW=''; IT_RED=''; IT_DIM=''
+    IT_RESET=''
+    IT_GREEN=''
+    IT_YELLOW=''
+    IT_RED=''
+    IT_DIM=''
 fi
 
-it_log()  { echo -e "${IT_GREEN}[ITEST]${IT_RESET} $1"; }
+it_log() { echo -e "${IT_GREEN}[ITEST]${IT_RESET} $1"; }
 it_warn() { echo -e "${IT_YELLOW}[ITEST]${IT_RESET} $1" >&2; }
-it_err()  { echo -e "${IT_RED}[ITEST]${IT_RESET} $1" >&2; }
+it_err() { echo -e "${IT_RED}[ITEST]${IT_RESET} $1" >&2; }
 it_step() { echo -e "${IT_DIM}  → $1${IT_RESET}"; }
 
 # --- Secrets hygiene --------------------------------------------------------
@@ -41,22 +49,25 @@ IT_PASS=0
 IT_FAIL=0
 IT_FAILED_NAMES=""
 
-it_pass() { IT_PASS=$((IT_PASS + 1)); printf '    %b✓%b %s\n' "$IT_GREEN" "$IT_RESET" "$1"; }
+it_pass() {
+    IT_PASS=$((IT_PASS + 1))
+    printf '    %b✓%b %s\n' "$IT_GREEN" "$IT_RESET" "$1"
+}
 it_fail() {
     IT_FAIL=$((IT_FAIL + 1))
     IT_FAILED_NAMES="${IT_FAILED_NAMES}\n    - ${IT_CURRENT_SCENARIO:-?}: $1"
     printf '    %b✗%b %s\n        %s\n' "$IT_RED" "$IT_RESET" "$1" "${2:-}"
 }
 
-assert_eq()       { if [ "$2" = "$3" ]; then it_pass "$1"; else it_fail "$1" "expected [$3], got [$2]"; fi; }
-assert_ne()       { if [ "$2" != "$3" ]; then it_pass "$1"; else it_fail "$1" "expected not [$3]"; fi; }
-assert_rc()       { if [ "$2" = "$3" ]; then it_pass "$1"; else it_fail "$1" "expected rc $3, got $2"; fi; }
-assert_contains() { case "$2" in *"$3"*) it_pass "$1" ;; *) it_fail "$1" "[$2] missing [$3]" ;; esac; }
+assert_eq() { if [ "$2" = "$3" ]; then it_pass "$1"; else it_fail "$1" "expected [$3], got [$2]"; fi; }
+assert_ne() { if [ "$2" != "$3" ]; then it_pass "$1"; else it_fail "$1" "expected not [$3]"; fi; }
+assert_rc() { if [ "$2" = "$3" ]; then it_pass "$1"; else it_fail "$1" "expected rc $3, got $2"; fi; }
+assert_contains() { case "$2" in *"$3"*) it_pass "$1" ;; *) it_fail "$1" "[$2] missing [$3]" ;; esac }
 # Numeric "greater than / >=" with a graceful non-number guard.
-assert_num_ge()   {
+assert_num_ge() {
     if [ -n "$2" ] && [ "$2" -ge "$3" ] 2>/dev/null; then it_pass "$1"; else it_fail "$1" "expected >= $3, got [$2]"; fi
 }
-assert_num_gt()   {
+assert_num_gt() {
     if [ -n "$2" ] && [ "$2" -gt "$3" ] 2>/dev/null; then it_pass "$1"; else it_fail "$1" "expected > $3, got [$2]"; fi
 }
 
@@ -71,9 +82,9 @@ overrides_to_jq() {
         path="${pair%%=*}"
         value="${pair#*=}"
         case "$value" in
-            true|false)               jsonval="$value" ;;
-            ''|*[!0-9-]*)             jsonval="\"$value\"" ;;   # has a non-digit -> string
-            *)                        jsonval="$value" ;;       # all digits (+ optional leading -) -> number
+        true | false) jsonval="$value" ;;
+        '' | *[!0-9-]*) jsonval="\"$value\"" ;; # has a non-digit -> string
+        *) jsonval="$value" ;;                  # all digits (+ optional leading -) -> number
         esac
         program="${program} | .${path}=${jsonval}"
     done
@@ -83,8 +94,10 @@ overrides_to_jq() {
 # Render a scenario's config.json to stdout: start from the box's baseline config (real
 # wallets / data dirs / host preserved) and apply the scenario overrides. Requires jq.
 render_scenario_config() {
-    local baseline_json="$1"; shift
-    local program; program="$(overrides_to_jq "$@")"
+    local baseline_json="$1"
+    shift
+    local program
+    program="$(overrides_to_jq "$@")"
     printf '%s' "$baseline_json" | jq "$program"
 }
 
@@ -99,25 +112,35 @@ SKIP_REASON=""
 # shellcheck disable=SC2034  # RESOLVED/SKIP_REASON are output globals consumed by run.sh & selftest.sh
 resolve_overrides() {
     local overrides="$1" prune mode out="$1"
-    RESOLVED=""; SKIP_REASON=""
+    RESOLVED=""
+    SKIP_REASON=""
 
     prune="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.prune=//p')"
-    mode="$(printf '%s' "$overrides"  | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
+    mode="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
 
     # Prune axis: only flip away from the baseline DB if a matching synced dir is provided —
     # flipping prune on the canonical dir would invalidate it (a DEST change).
     if [ "$prune" = "true" ] && [ "${BASELINE_PRUNE:-}" = "0" ]; then
-        [ -n "${PRUNED_DATA_DIR:-}" ] || { SKIP_REASON="needs --pruned-data-dir (box baseline is full)"; return 1; }
+        [ -n "${PRUNED_DATA_DIR:-}" ] || {
+            SKIP_REASON="needs --pruned-data-dir (box baseline is full)"
+            return 1
+        }
         out="$out monero.data_dir=$PRUNED_DATA_DIR"
     fi
     if [ "$prune" = "false" ] && [ "${BASELINE_PRUNE:-}" = "1" ]; then
-        [ -n "${FULL_DATA_DIR:-}" ] || { SKIP_REASON="needs --full-data-dir (box baseline is pruned)"; return 1; }
+        [ -n "${FULL_DATA_DIR:-}" ] || {
+            SKIP_REASON="needs --full-data-dir (box baseline is pruned)"
+            return 1
+        }
         out="$out monero.data_dir=$FULL_DATA_DIR"
     fi
 
     # Remote mode needs an external endpoint to point at.
     if [ "$mode" = "remote" ]; then
-        [ -n "${REMOTE_MONERO_HOST:-}" ] || { SKIP_REASON="needs --remote-monero-host"; return 1; }
+        [ -n "${REMOTE_MONERO_HOST:-}" ] || {
+            SKIP_REASON="needs --remote-monero-host"
+            return 1
+        }
         out="$out monero.remote.host=$REMOTE_MONERO_HOST"
     fi
 
@@ -151,10 +174,10 @@ absent_services() {
 # Human-readable pool label as the dashboard reports it, from the config pool key.
 pool_label() {
     case "$1" in
-        main) printf 'Main' ;;
-        mini) printf 'Mini' ;;
-        nano) printf 'Nano' ;;
-        *)    printf '%s' "$1" ;;
+    main) printf 'Main' ;;
+    mini) printf 'Mini' ;;
+    nano) printf 'Nano' ;;
+    *) printf '%s' "$1" ;;
     esac
 }
 
@@ -167,7 +190,7 @@ pool_label() {
 rx() {
     local snippet="$1"
     if [ "$IT_MODE" = "local" ]; then
-        ( cd "$IT_REMOTE_DIR" && bash -c "$snippet" )
+        (cd "$IT_REMOTE_DIR" && bash -c "$snippet")
     else
         local remote
         remote="cd $(quote_arg "$IT_REMOTE_DIR") && { $snippet; }"
@@ -190,7 +213,7 @@ api_state() { rx "curl -fsS --max-time 10 http://127.0.0.1:8000/api/state" 2>/de
 
 # Split a "<state> <health>" string (from service_state) into its two fields. Pure helpers so
 # the self-test can verify the fault-injection predicates classify correctly.
-svc_state_of()  { printf '%s' "${1%% *}"; }
+svc_state_of() { printf '%s' "${1%% *}"; }
 svc_health_of() { printf '%s' "${1##* }"; }
 
 # Pull a jq path out of a JSON blob, printing nothing for an absent/null value. The `?`
@@ -219,9 +242,10 @@ monero_caught_up() {
 # success, 1 on timeout.
 now_s() { date +%s; }
 
-wait_for() {  # wait_for <timeout_s> <interval_s> <desc> <predicate-cmd...>
-    local timeout="$1" interval="$2" desc="$3"; shift 3
-    local deadline=$(( $(now_s) + timeout ))
+wait_for() { # wait_for <timeout_s> <interval_s> <desc> <predicate-cmd...>
+    local timeout="$1" interval="$2" desc="$3"
+    shift 3
+    local deadline=$(($(now_s) + timeout))
     it_step "waiting for ${desc} (timeout ${timeout}s)…"
     while :; do
         if "$@"; then return 0; fi
@@ -246,15 +270,20 @@ _pred_monero_synced() { monero_caught_up; }
 # failed one scenario during the v1.0.0 release gate; a genuinely stuck panel (the #180 regression)
 # never settles, so a bounded wait still catches it.
 _pred_monero_panel_done() {
-    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
     [ "$(jq_get "$st" '.sync.monero.state')" = "done" ]
 }
 
 # Predicate: the sync gate has released the miner — at least one worker is online on the proxy.
 # (proxy_workers is the reliable signal; stratum.conns can read 0 on a healthy, mining box.)
 _pred_miner_running() {
-    local st; st="$(api_state)"; [ -n "$st" ] || return 1
-    local w; w="$(jq_get "$st" '.proxy_workers')"
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
+    local w
+    w="$(jq_get "$st" '.proxy_workers')"
     [ -n "$w" ] && [ "$w" -ge 1 ] 2>/dev/null
 }
 
@@ -264,7 +293,9 @@ _pred_miner_running() {
 # a restart Tari needs a moment to re-establish peers and close its offline gap, so we poll this
 # rather than asserting cold (issue #54: a real readiness signal, not "sleep and hope").
 _pred_tari_synced() {
-    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
     [ "$(jq_get "$st" '.sync.tari.state')" = "done" ]
 }
 
@@ -272,8 +303,10 @@ _pred_tari_synced() {
 # type is inferred from connected peers' ports (detect_pool_type: 37889 Main / 37888 Mini / 37890
 # Nano), so right after a sidechain switch it reads "Unknown" until enough peers on the NEW chain
 # connect — poll until it matches the expected label rather than asserting cold (issue #54).
-_pred_pool_ready() {  # _pred_pool_ready <expected-label>
-    local st; st="$(api_state)"; [ -n "$st" ] || return 1
+_pred_pool_ready() { # _pred_pool_ready <expected-label>
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
     [ "$(jq_get "$st" '.pool.type')" = "$1" ]
 }
 
@@ -283,16 +316,19 @@ _pred_pool_ready() {  # _pred_pool_ready <expected-label>
 # p2pool re-syncs its sidechain before serving) it reads 0. It's monotonic within a session, so
 # polling until >0 is robust where the instantaneous stratum.conns is not (issue #54).
 _pred_hashes_flowing() {
-    local st; st="$(api_state)"; [ -n "$st" ] || return 1
-    local h; h="$(jq_get "$st" '.stratum.total_hashes')"
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
+    local h
+    h="$(jq_get "$st" '.stratum.total_hashes')"
     [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null
 }
 
-wait_status_ok()     { wait_for "${1:-180}" 5 "pithead status OK"     _pred_status_ok; }
+wait_status_ok() { wait_for "${1:-180}" 5 "pithead status OK" _pred_status_ok; }
 wait_monero_synced() { wait_for "${1:-300}" 10 "Monero sync complete" _pred_monero_synced; }
-wait_miner_running() { wait_for "${1:-180}" 5 "miner released"        _pred_miner_running; }
-wait_tari_synced()   { wait_for "${1:-300}" 10 "Tari sync complete"   _pred_tari_synced; }
-wait_pool_ready()    { wait_for "${1:-180}" 5 "pool type determinate (${2})" _pred_pool_ready "$2"; }
+wait_miner_running() { wait_for "${1:-180}" 5 "miner released" _pred_miner_running; }
+wait_tari_synced() { wait_for "${1:-300}" 10 "Tari sync complete" _pred_tari_synced; }
+wait_pool_ready() { wait_for "${1:-180}" 5 "pool type determinate (${2})" _pred_pool_ready "$2"; }
 wait_hashes_flowing() { wait_for "${1:-300}" 5 "stratum hashes flowing" _pred_hashes_flowing; }
 
 # --- Artifact capture -------------------------------------------------------
@@ -303,12 +339,12 @@ capture_artifacts() {
     local dir="${outdir}/${scenario}"
     mkdir -p "$dir"
     it_step "capturing artifacts to ${dir}"
-    rx "docker compose ps"                 2>&1 | redact > "${dir}/compose-ps.txt"      || true
-    rx "$IT_PITHEAD status"                2>&1 | redact > "${dir}/status.txt"          || true
-    rx "$IT_PITHEAD doctor"                2>&1 | redact > "${dir}/doctor.txt"          || true
-    rx "cat config.json"                   2>&1 | redact > "${dir}/config.json"         || true
-    rx "cat .env"                          2>&1 | redact > "${dir}/env.redacted.txt"    || true
-    api_state                                   | redact > "${dir}/api-state.json"      || true
+    rx "docker compose ps" 2>&1 | redact >"${dir}/compose-ps.txt" || true
+    rx "$IT_PITHEAD status" 2>&1 | redact >"${dir}/status.txt" || true
+    rx "$IT_PITHEAD doctor" 2>&1 | redact >"${dir}/doctor.txt" || true
+    rx "cat config.json" 2>&1 | redact >"${dir}/config.json" || true
+    rx "cat .env" 2>&1 | redact >"${dir}/env.redacted.txt" || true
+    api_state | redact >"${dir}/api-state.json" || true
     # Last 200 lines of each service's logs, redacted.
-    rx "docker compose logs --tail=200 --no-color" 2>&1 | redact > "${dir}/logs.txt"   || true
+    rx "docker compose logs --tail=200 --no-color" 2>&1 | redact >"${dir}/logs.txt" || true
 }

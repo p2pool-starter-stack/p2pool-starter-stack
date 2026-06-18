@@ -1,0 +1,13 @@
+# buf config (Wave 7 tooling, #281). These are vendored upstream Tari protos, so we lint with the
+# MINIMAL ruleset (structural only — not the opinionated style rules we don't own) and except
+# PACKAGE_DIRECTORY_MATCH (the protos declare `package tari.rpc` but are vendored flat into proto/).
+# `buf build` still verifies they compile; `breaking: FILE` enables `buf breaking --against <ref>`.
+version: v2
+lint:
+  use:
+    - MINIMAL
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

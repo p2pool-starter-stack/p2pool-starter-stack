@@ -46,6 +46,7 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 ## Recipes
 
 ### Dashboard behavior (tier 1)
+
 Add a `test_*` to the matching file under `build/dashboard/tests/`. Name it for the behavior,
 add a one-line docstring stating the intent, mock at the client boundary (the conftest gives
 you an in-memory `state_manager`). Run `make test-dashboard` — coverage must stay ≥ 80%.
@@ -57,6 +58,7 @@ def test_pruned_node_is_labelled_pruned(...):
 ```
 
 ### A client parsing a new daemon state (tier 2)
+
 1. Teach the fake to produce the state: edit `tests/integration/fakes/fake_monerod.py` or
    `fake_tari.py` (add a `mode`, or a field the daemon returns).
 2. Assert the *real* client parses it: add a test to `fakes/test_contract.py` that points the
@@ -64,11 +66,13 @@ def test_pruned_node_is_labelled_pruned(...):
 3. `make test-fakes`. This is the seam that catches "the daemon changed its wire format".
 
 ### A config axis (tier 4)
+
 Add a `NAME<TAB>overrides` row to `scenario_matrix()` in `scenarios.sh`, and the value to
 `axis_coverage()`. The self-test **enforces** that every axis value appears in some scenario,
 so a half-added axis fails `make test-integration-selftest`. No code changes needed.
 
 ### A control-plane scenario (tier 3)
+
 Add a scenario to `tests/integration/mini-stack/run-mini-stack.sh`: drive the fakes via their
 `/control` endpoints (`set_monerod`/`set_tari`) and assert real container state with
 `assert_state` / `assert_stays`. `make test-mini-stack` (needs docker).

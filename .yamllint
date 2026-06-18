@@ -1,0 +1,11 @@
+# yamllint config (Wave 7 tooling, #281). Extends the default ruleset; relaxes the rules that
+# fight our house style while keeping the hygiene ones (trailing space, tabs, final newline, etc.).
+extends: default
+rules:
+  line-length: disable          # config/comments/URLs run long — not worth gating or wrapping
+  document-start: disable       # we don't use a leading `---`
+  truthy:
+    check-keys: false           # allow GitHub Actions' `on:` key (otherwise flagged truthy)
+  comments:
+    min-spaces-from-content: 1   # we use `value  # comment` with a single space in places
+  comments-indentation: disable

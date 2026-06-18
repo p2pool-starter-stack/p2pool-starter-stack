@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - name: Install uv (pinned — reproducible, hash-locked installs, #283)
+      - name: "Install uv (pinned — reproducible, hash-locked installs, #283)"
         # Curl the pinned installer (same posture as hadolint below); avoids a mutable-tag action.
         run: |
           export UV_INSTALL_DIR="$HOME/.local/bin"   # deterministic install dir (runners may set CARGO_HOME)
@@ -173,11 +173,16 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      - name: "Install shfmt (pinned — RigForge convention, #281)"
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/shfmt \
+            https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+          sudo chmod +x /usr/local/bin/shfmt
       # shellcheck is preinstalled on ubuntu-* runners, so we invoke it directly.
       # Avoid `apt-get update`, which refreshes every configured source (incl.
       # unrelated third-party mirrors like dl.google.com) and intermittently fails
       # the job when one is briefly out of sync — see issue #64.
-      - name: Lint pithead, build/* container scripts, and test scripts
+      - name: Lint pithead, build/* container scripts, and test scripts (shellcheck + shfmt)
         # Single source of truth: the Makefile `lint-sh` target (so the file list can't drift
         # between here and the Makefile). Covers build/*/*.sh — the entrypoints + healthchecks that
         # run in every container (#124). Gate on warnings+errors; info-level style nits vary by
@@ -205,3 +210,27 @@ jobs:
           persist-credentials: false
       - name: Validate docker-compose.yml interpolation + hardening invariants (#90)
         run: bash tests/stack/test_compose.sh
+
+  lint-surfaces:
+    name: Lint per-surface (biome, yaml, markdown, proto, toml)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: Install uv (pinned)
+        run: |
+          export UV_INSTALL_DIR="$HOME/.local/bin"
+          curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+          echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
+      - name: Lint JS/CSS (Biome), YAML, Markdown, proto (buf), TOML (taplo)
+        # Single source of truth: the Makefile targets. Tools run via npx/uvx/docker (preinstalled).
+        run: make lint-js lint-yaml lint-md lint-proto lint-toml
