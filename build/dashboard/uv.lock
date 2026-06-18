@@ -618,7 +618,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5" },
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.14" },
-    { name = "requests", extras = ["socks"], specifier = ">=2.32.4" },
+    { name = "requests", extras = ["socks"], specifier = ">=2.34.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.17" },
 ]
 provides-extras = ["test", "dev"]
