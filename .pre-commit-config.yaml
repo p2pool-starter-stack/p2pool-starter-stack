@@ -1,0 +1,28 @@
+# Pre-commit hooks (Wave 7 tooling, #280). Local == CI: these mirror `make lint` + the CI lint
+# jobs, so issues are caught before they reach a PR. Set up once with:
+#   pip install -e "build/dashboard[dev]" && pre-commit install
+# Later Wave 7 children add more hooks here (#281 shfmt/Biome/yamllint/markdownlint;
+# #282 gitleaks). Keep the ruff `rev` in lockstep with the `dev` extra's ruff pin in
+# build/dashboard/pyproject.toml.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^build/dashboard/
+      - id: ruff-format
+        files: ^build/dashboard/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Cheap, high-value guards across every surface.
+      - id: detect-private-key  # never commit an onion/wallet/SSH private key
+      - id: check-added-large-files
+      # Skip generated gRPC stubs and vendored/minified third-party assets — not ours to reformat.
+      - id: end-of-file-fixer
+        exclude: '^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)'
+      - id: trailing-whitespace
+        # Also skip Markdown — two trailing spaces are a hard line break (see .editorconfig).
+        exclude: '(^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)|\.md$)'
