@@ -52,6 +52,7 @@ A 1 TB NVMe holds the pruned bench with ~650 GB to spare — room for a full nod
 > `/dev/nvme0n1`), on a link that negotiated down to 1.5 Gbps, and benchmarked at **~37–98 MB/s —
 > HDD-class**. That single fact bottlenecked monerod, builds, and made LMDB compaction (heavy
 > random I/O) impractical (~16 h instead of ~10 min). **Confirm the *bus* before relying on a drive:**
+>
 > ```bash
 > lsblk -d -o NAME,TRAN,ROTA,MODEL   # want TRAN=nvme, not sata
 > ls /dev/nvme*                       # an NVMe drive appears as /dev/nvme0n1
@@ -93,6 +94,7 @@ Goal: stand up an equivalent server. Minutes of work + one chain transfer (vs da
 group. Put the chains' target on the **SSD**.
 
 **2. Clone + configure:**
+
 ```bash
 git clone https://github.com/p2pool-starter-stack/pithead.git ~/pithead && cd ~/pithead
 cp /path/to/your/config.json .         # your wallets/settings — or run `./pithead setup` to make one
@@ -107,20 +109,24 @@ jq '.monero.data_dir="/srv/<you>/pithead/data/monero"
 **3. Bring the chains (the painless part — reuse, don't re-sync).** Stop the stack on the source
 box (`./pithead down`) so the LMDBs are consistent, then copy `/srv/.../pithead/data/` to the new
 box's SSD — over the network or a fast external drive:
+
 ```bash
 # from the new box, pulling from the old one (chains are ~230 GB; hours over GbE, faster over USB3/10G):
 rsync -aP --info=progress2 olduser@oldbox:/srv/code/pithead-data/ /srv/<you>/pithead/data/
 ```
+
 The Tor onion keys travel in `data/tor`, so the box keeps its onion identity. (No old box yet? Omit
 this and let monerod/Tari sync from scratch — days, but hands-off.)
 
 **4. Deploy + verify:**
+
 ```bash
 cd ~/pithead && ./pithead setup        # deps, .env, Tor, Caddy; then `up`
 ./pithead status                        # all healthy; monerod just catches up the gap
 ```
 
 **5. Test-bench tooling:**
+
 ```bash
 mkdir -p ~/pithead-testbench/bin
 cp ~/pithead/tests/integration/{build-pruned-chain,compact-chain,system-info}.sh ~/pithead-testbench/
@@ -130,6 +136,7 @@ cp ~/pithead/tests/integration/gouda-testbench-README.md ~/pithead-testbench/REA
 ```
 
 **6. Validate it's release-fit:**
+
 ```bash
 tests/integration/run.sh --host you@newbox --dir pithead --readiness
 ```

@@ -1,6 +1,7 @@
 # Tari gRPC Collector
 
 ## Generate Protobuf Files
+
 Ensure `base_node.proto` and `types.proto` are in the `proto/` subdirectory, then run:
 
 ```bash

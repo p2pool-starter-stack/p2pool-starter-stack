@@ -38,6 +38,7 @@ Every situation we care about, what triggers it, and the tier(s) that cover it. 
 today; ▶ = exercised by the live matrix / mini-stack when run.
 
 ### A. Configuration permutations
+
 The deploy-time axes — each changes a real runtime path. Full table and assertions in
 [Integration Testing › The config matrix](integration-testing.md#the-config-matrix).
 
@@ -49,6 +50,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `p2pool.pool` main / mini / nano (sidechain, flags) | config | 4 ▶ |
 
 ### B. Sync lifecycle (#35)
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | Cold start, chains syncing → **hold** `p2pool`+`xmrig-proxy` | both `is_syncing` | 1 ✅ · 3 ▶ |
@@ -59,6 +61,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Restart mid-sync / post-release (latch persisted) | snapshot reload | 1 ✅ |
 
 ### C. Node health & failover (#31)
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | monerod down → **reject workers** (stop `xmrig-proxy`) | unreachable ≥ `NODE_DOWN_AFTER_SEC` | 1 ✅ · 3 ▶ · 4 ▶ |
@@ -70,6 +73,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |
 
 ### D. Container health verdicts (`pithead status`)
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | All healthy → exit 0 | steady state | 1 ✅ · 4 ▶ |
@@ -79,6 +83,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Remote mode ignores monerod | profile off | 1 ✅ · 4 ▶ |
 
 ### E. XvB switching engine
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | Disabled / zero shares / `fail_count ≥ 3` / no sustainable tier → P2POOL | guards | 1 ✅ |
@@ -87,6 +92,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Real XvB endpoint reachable / failing | network | 4 (real endpoint) |
 
 ### F. Dashboard `/api/state` field states
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | sync state loading/syncing/done; pruned/full/unknown; db_size | metrics | 1 ✅ |
@@ -95,6 +101,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
 
 ### G. CLI lifecycle (`pithead`)
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | Config validation, secret preservation, `apply` no-op/destructive guards | sourced fns | 1 ✅ |
@@ -103,6 +110,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `backup`/`restore`, `reset-dashboard`, `doctor` | real box | 1 ✅ (partial) · 4 (future) |
 
 ### H. Host / infrastructure (real-only)
+
 | Situation | Trigger | Tier |
 |---|---|---|
 | Real merge-mining share lands; real hashrate on dashboard | live mining | 4 ▶ |

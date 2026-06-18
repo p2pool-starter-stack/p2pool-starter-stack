@@ -30,6 +30,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 ### Dashboard (pytest) — 500 tests
 
 #### tests/client/test_docker_control.py — 6
+
 - test_tcp_scheme_rewritten_to_http
 - test_stop_success_204
 - test_already_stopped_304_is_success
@@ -38,6 +39,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_connection_error_returns_false
 
 #### tests/client/test_monero_client.py — 12
+
 - test_url_and_digest_auth_built
 - test_no_username_means_no_auth
 - test_success_returns_payload
@@ -52,6 +54,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_unreachable_returns_none
 
 #### tests/client/test_tari_client.py — 7
+
 - test_fully_synced
 - test_syncing_with_target
 - test_syncing_without_reliable_target
@@ -61,6 +64,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_close_closes_channel
 
 #### tests/client/test_xmrig_client.py — 7
+
 - test_first_success_returns_payload_and_short_circuits
 - test_all_attempts_fail_returns_empty
 - test_exceptions_are_swallowed
@@ -70,6 +74,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_long_name_token_is_capped
 
 #### tests/client/test_xmrig_proxy_client.py — 7
+
 - test_auth_header_set
 - test_get_summary
 - test_get_workers
@@ -79,6 +84,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_get_summary_raises_on_http_error
 
 #### tests/client/test_xvb_client.py — 9
+
 - test_missing_wallet_returns_none
 - test_get_stats_success_parses_html
 - test_get_stats_routes_through_tor_proxy
@@ -90,6 +96,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_hashrate_units
 
 #### tests/collector/test_logs.py — 18
+
 - test_parses_multiple_frames
 - test_skips_blank_lines
 - test_truncated_frame_breaks_cleanly
@@ -110,6 +117,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_remote_when_other_host
 
 #### tests/collector/test_pools.py — 15
+
 - test_empty_is_unknown
 - test_majority_wins
 - test_unknown_ports
@@ -127,6 +135,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_valid_json
 
 #### tests/collector/test_system.py — 11
+
 - test_normal
 - test_error_returns_zeros
 - test_parses_meminfo
@@ -140,6 +149,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_unknown_when_missing
 
 #### tests/config/test_config.py — 8
+
 - test_defaults_load
 - test_donation_level_env_override
 - test_monero_prune_accepts_truthy_forms
@@ -150,6 +160,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_xvb_enabled_flag
 
 #### tests/helper/test_utils.py — 29
+
 - test_plain_numbers
 - test_unit_suffixes_case_insensitive
 - test_unrecognized_suffix_is_raw
@@ -181,6 +192,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_socket_is_closed_even_on_error
 
 #### tests/service/test_algo_service.py — 31
+
 - test_xvb_disabled_forces_p2pool
 - test_zero_shares_forces_p2pool
 - test_excessive_failures_forces_p2pool
@@ -214,6 +226,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_run_skips_switching_while_workers_rejected
 
 #### tests/service/test_clearnet_sync.py — 11
+
 - test_flag_off_is_noop
 - test_syncing_reports_exposed_without_acting
 - test_synced_writes_marker_and_restarts_onto_tor
@@ -227,6 +240,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_marker_write_failure_does_not_restart
 
 #### tests/service/test_data_service.py — 68
+
 - test_first_poll_baselines_without_backfill
 - test_delta_records_the_difference
 - test_no_change_records_nothing
@@ -297,12 +311,14 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_both_nodes_down_rejects_once
 
 #### tests/service/test_earnings.py — 4
+
 - test_matches_closed_form
 - test_worked_field_example
 - test_linear_in_inputs
 - test_missing_or_bad_inputs_are_zero
 
 #### tests/service/test_metrics.py — 40
+
 - test_empty_history_returns_zero
 - test_averages_v_p2pool_in_window
 - test_excludes_samples_outside_window
@@ -345,6 +361,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_passed_history_avoids_refetch
 
 #### tests/service/test_node_health.py — 6
+
 - test_not_down_before_threshold
 - test_down_after_threshold
 - test_single_blip_does_not_trip
@@ -353,6 +370,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_healthy_requires_stable_window_from_unknown
 
 #### tests/service/test_storage_service.py — 30
+
 - test_get_tiers
 - test_default_xvb_stats
 - test_partial_updates
@@ -385,6 +403,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_old_history_pruned_from_db_when_cleanup_fires
 
 #### tests/service/test_update_checker.py — 16
+
 - test_accepts_plain_and_v_prefixed
 - test_ignores_prerelease_and_build_suffix
 - test_rejects_garbage_partial_and_empty
@@ -403,6 +422,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_up_to_date_yields_none
 
 #### tests/sim/test_donation_model.py — 10
+
 - test_holds_tier_without_overshoot
 - test_no_windup_from_cold_start
 - test_more_headroom_means_more_p2pool
@@ -415,9 +435,11 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_recovers_after_worker_drop
 
 #### tests/test_main.py — 1
+
 - test_build_app_returns_wired_application
 
 #### tests/test_version.py — 11
+
 - test_version_with_no_git_metadata_is_a_release
 - test_leading_v_in_version_is_not_doubled
 - test_explicit_release_flag_wins_over_git_metadata
@@ -431,6 +453,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_blank_values_treated_as_absent
 
 #### tests/web/test_server.py — 23
+
 - test_index_serves_shell
 - test_get_state_ok_json
 - test_range_query_accepted
@@ -456,6 +479,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_host_at_separator_styled_and_rendered
 
 #### tests/web/test_views.py — 120
+
 - test_point_shape_is_xy_with_epoch_ms
 - test_legacy_rows_attributed_to_p2pool
 - test_range_filtering
@@ -578,6 +602,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - test_na_when_xvb_off
 
 ### Frontend logic (node --test) — 31 tests
+
 - sortWorkers: null index keeps the server-provided order
 - sortWorkers: numeric columns sort numerically, not lexically
 - sortWorkers: hashrate column also sorts numerically
@@ -611,6 +636,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - uptimeCell: online shows uptime, offline shows DOWN
 
 ### `pithead` shell suite (tests/stack/run.sh) — 46 sections
+
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -659,6 +685,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - release: install bundle is free of macOS xattr pax headers (#252)
 
 ### Compose validation + hardening (tests/stack/test_compose.sh)
+
 - docker-compose.yml `${VAR}` interpolation resolves against a representative .env
 - #90 hardening invariants: no-new-privileges / cap_drop / read-only roots, credential-free
   healthchecks, least-privilege Docker socket proxies, and the pinned `pithead` project name
@@ -666,6 +693,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 ## Tier 2 — Contract (real clients vs controllable fakes)
 
 ### tests/integration/fakes/test_contract.py — 12 tests
+
 - test_monero_synced_reads_no_sync_and_db_size
 - test_monero_syncing_reports_percent
 - test_monero_down_is_unreachable
@@ -682,6 +710,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 ## Tier 3 — Fake-daemon mini-stack (docker)
 
 ### tests/integration/mini-stack/run-mini-stack.sh — 6 scenarios
+
 - scenario 1: holds the miner while both chains sync
 - scenario 2: keeps holding while Tari (required) is still syncing
 - scenario 3: releases the miner once both chains are synced
@@ -692,6 +721,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 ## Tier 4 — Live config matrix (real synced server)
 
 ### Config scenarios (tests/integration/scenarios.sh) — 9
+
 - local-pruned-main-secure-tari
 - local-full-main-secure-tari
 - local-pruned-mini-secure-tari
@@ -703,6 +733,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - remote-main-secure-tari
 
 ### Axis coverage (every value exercised at least once) — 17
+
 - monero.mode=local
 - monero.mode=remote
 - monero.prune=true
@@ -722,6 +753,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - tari.clearnet_initial_sync=true
 
 ### Per-scenario assertions (tests/integration/run.sh)
+
 - .env is owner-only (mode $envmode)
 - Caddyfile uses correct scheme
 - DASHBOARD_SECURE matches config
@@ -787,6 +819,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - xmrig-proxy stopped for failover
 
 ### Harness self-test (tests/integration/selftest.sh) — 17 sections
+
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
