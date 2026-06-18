@@ -9,7 +9,3 @@ rules:
   comments:
     min-spaces-from-content: 1   # we use `value  # comment` with a single space in places
   comments-indentation: disable
-  # docker-compose.yml's `dashboard` service block has a pre-existing 6-space indent (vs 4-space
-  # siblings); re-indenting a live compose file is out of scope for a tooling PR (tracked separately).
-  # Structural validity is enforced by tests/stack/test_compose.sh.
-  indentation: disable

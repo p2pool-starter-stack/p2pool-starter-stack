@@ -309,41 +309,41 @@ services:
 
   # --- Monitoring Dashboard ---
   dashboard:
-      image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION:-dev}
-      build:
-        context: ./build/dashboard
-        # Stack version baked into the image so the dashboard header can show it (Issue #58).
-        # pithead exports these for the build (PITHEAD_VERSION from the top-level VERSION file;
-        # git branch/commit for dev builds — see export_build_provenance); empty defaults keep a
-        # bare `docker compose build` working (the badge then falls back to a generic dev indicator).
-        args:
-          PITHEAD_VERSION: ${PITHEAD_VERSION:-}
-          PITHEAD_GIT_COMMIT: ${PITHEAD_GIT_COMMIT:-}
-          PITHEAD_GIT_BRANCH: ${PITHEAD_GIT_BRANCH:-}
-          PITHEAD_RELEASE: ${PITHEAD_RELEASE:-}
-      container_name: dashboard
-      # Memory ceiling (#132 — see monerod). A small Flask + SQLite app (~0.06 GiB observed); a tight
-      # cap is pure upside — a memory regression OOM-restarts the dashboard, not the revenue services.
-      mem_limit: 512m
-      memswap_limit: 512m
-      restart: unless-stopped
-      logging: *default-logging
-      network_mode: "host"
-      # Hardened with no-new-privileges (#90). Deliberately NOT cap_drop: [ALL] like the other
-      # leaf services: the dashboard runs as root and persists its SQLite history into the
-      # ${DASHBOARD_DATA_DIR} bind mount, which pithead creates owned by the host user. Dropping
-      # all capabilities strips CAP_DAC_OVERRIDE, so root could no longer create the SQLite
-      # WAL/journal files in that user-owned directory and history writes would fail.
-      security_opt:
-        - no-new-privileges:true
-      volumes:
-        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
-        - ${DASHBOARD_DATA_DIR}:/data
-        # Read-WRITE: the supervisor drops the per-chain "clearnet sync complete" marker here once a
-        # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
-        # the same dir read-only. Holds only non-secret state markers.
-        - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
-      environment:
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION:-dev}
+    build:
+      context: ./build/dashboard
+      # Stack version baked into the image so the dashboard header can show it (Issue #58).
+      # pithead exports these for the build (PITHEAD_VERSION from the top-level VERSION file;
+      # git branch/commit for dev builds — see export_build_provenance); empty defaults keep a
+      # bare `docker compose build` working (the badge then falls back to a generic dev indicator).
+      args:
+        PITHEAD_VERSION: ${PITHEAD_VERSION:-}
+        PITHEAD_GIT_COMMIT: ${PITHEAD_GIT_COMMIT:-}
+        PITHEAD_GIT_BRANCH: ${PITHEAD_GIT_BRANCH:-}
+        PITHEAD_RELEASE: ${PITHEAD_RELEASE:-}
+    container_name: dashboard
+    # Memory ceiling (#132 — see monerod). A small Flask + SQLite app (~0.06 GiB observed); a tight
+    # cap is pure upside — a memory regression OOM-restarts the dashboard, not the revenue services.
+    mem_limit: 512m
+    memswap_limit: 512m
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: "host"
+    # Hardened with no-new-privileges (#90). Deliberately NOT cap_drop: [ALL] like the other
+    # leaf services: the dashboard runs as root and persists its SQLite history into the
+    # ${DASHBOARD_DATA_DIR} bind mount, which pithead creates owned by the host user. Dropping
+    # all capabilities strips CAP_DAC_OVERRIDE, so root could no longer create the SQLite
+    # WAL/journal files in that user-owned directory and history writes would fail.
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
+      - ${DASHBOARD_DATA_DIR}:/data
+      # Read-WRITE: the supervisor drops the per-chain "clearnet sync complete" marker here once a
+      # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
+      # the same dir read-only. Holds only non-secret state markers.
+      - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
+    environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
       # (`auto` = the host's timezone, auto-detected); pithead renders it to DASHBOARD_TZ in
