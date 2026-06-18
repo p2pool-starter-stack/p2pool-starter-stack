@@ -28,7 +28,7 @@ apply_clearnet_initial_sync() {
     sed -e 's/^type = "tor"/type = "tcp"/' \
         -e 's/^dns_seeds = \[\]/dns_seeds = ["seeds.tari.com"]/' \
         -e 's#^public_addresses = .*#public_addresses = []#' \
-        "$cfg" > "$tmp" && mv "$tmp" "$cfg"
+        "$cfg" >"$tmp" && mv "$tmp" "$cfg"
 }
 
 # True when Tari should sync over clearnet NOW: flag on AND the auto-transition marker absent (#234).

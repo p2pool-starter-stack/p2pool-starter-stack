@@ -74,7 +74,10 @@ EOF
 scenario_overrides() {
     local want="$1" name rest
     while IFS=$'\t' read -r name rest; do
-        [ "$name" = "$want" ] && { printf '%s' "$rest"; return 0; }
+        [ "$name" = "$want" ] && {
+            printf '%s' "$rest"
+            return 0
+        }
     done < <(scenario_matrix)
     return 1
 }

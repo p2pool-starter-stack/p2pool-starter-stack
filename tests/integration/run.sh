@@ -17,7 +17,7 @@
 # Read-only against the canonical chain data dirs; safe to run against the live box. See
 # docs/integration-testing.md for provisioning, the safety model, and CI/release wiring.
 #
-set -uo pipefail   # NOT -e: we deliberately continue-on-error to collect the whole matrix.
+set -uo pipefail # NOT -e: we deliberately continue-on-error to collect the whole matrix.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/integration/lib.sh
@@ -115,28 +115,95 @@ EOF
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            --host)       IT_SSH_DEST="$2"; IT_MODE="ssh"; shift 2 ;;
-            --identity)   IT_SSH_OPTS+=(-i "$2"); shift 2 ;;
-            --ssh-opt)    IT_SSH_OPTS+=(-o "$2"); shift 2 ;;
-            --local)      IT_MODE="local"; shift ;;
-            --dir)        IT_REMOTE_DIR="$2"; shift 2 ;;
-            --pithead)    IT_PITHEAD="$2"; shift 2 ;;
-            --check)      CHECK_ONLY=1; shift ;;
-            --readiness)  READINESS=1; shift ;;
-            --scenario)   ONLY_SCENARIO="$2"; shift 2 ;;
-            --workers)    EXPECTED_WORKERS="$2"; shift 2 ;;
-            --remote-monero-host) REMOTE_MONERO_HOST="$2"; shift 2 ;;
-            --pruned-data-dir)    PRUNED_DATA_DIR="$2"; shift 2 ;;
-            --full-data-dir)      FULL_DATA_DIR="$2"; shift 2 ;;
-            --lifecycle)  RUN_LIFECYCLE=1; shift ;;
-            --fault-injection) RUN_FAULTS=1; shift ;;
-            --auth-fail-closed) RUN_AUTH_FAIL_CLOSED=1; shift ;;
-            --safety-backup)   SAFETY_BACKUP=1; shift ;;
-            --keep)       KEEP_STATE=1; shift ;;
-            --out)        OUT_DIR="$2"; shift 2 ;;
-            --list)       print_list; exit 0 ;;
-            -h|--help)    usage; exit 0 ;;
-            *)            it_err "Unknown option: $1 (try --help)"; exit 2 ;;
+        --host)
+            IT_SSH_DEST="$2"
+            IT_MODE="ssh"
+            shift 2
+            ;;
+        --identity)
+            IT_SSH_OPTS+=(-i "$2")
+            shift 2
+            ;;
+        --ssh-opt)
+            IT_SSH_OPTS+=(-o "$2")
+            shift 2
+            ;;
+        --local)
+            IT_MODE="local"
+            shift
+            ;;
+        --dir)
+            IT_REMOTE_DIR="$2"
+            shift 2
+            ;;
+        --pithead)
+            IT_PITHEAD="$2"
+            shift 2
+            ;;
+        --check)
+            CHECK_ONLY=1
+            shift
+            ;;
+        --readiness)
+            READINESS=1
+            shift
+            ;;
+        --scenario)
+            ONLY_SCENARIO="$2"
+            shift 2
+            ;;
+        --workers)
+            EXPECTED_WORKERS="$2"
+            shift 2
+            ;;
+        --remote-monero-host)
+            REMOTE_MONERO_HOST="$2"
+            shift 2
+            ;;
+        --pruned-data-dir)
+            PRUNED_DATA_DIR="$2"
+            shift 2
+            ;;
+        --full-data-dir)
+            FULL_DATA_DIR="$2"
+            shift 2
+            ;;
+        --lifecycle)
+            RUN_LIFECYCLE=1
+            shift
+            ;;
+        --fault-injection)
+            RUN_FAULTS=1
+            shift
+            ;;
+        --auth-fail-closed)
+            RUN_AUTH_FAIL_CLOSED=1
+            shift
+            ;;
+        --safety-backup)
+            SAFETY_BACKUP=1
+            shift
+            ;;
+        --keep)
+            KEEP_STATE=1
+            shift
+            ;;
+        --out)
+            OUT_DIR="$2"
+            shift 2
+            ;;
+        --list)
+            print_list
+            exit 0
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            it_err "Unknown option: $1 (try --help)"
+            exit 2
+            ;;
         esac
     done
 
@@ -162,7 +229,7 @@ print_list() {
 push_config() {
     local json="$1"
     if [ "$IT_MODE" = "local" ]; then
-        printf '%s\n' "$json" > "$IT_REMOTE_DIR/config.json"
+        printf '%s\n' "$json" >"$IT_REMOTE_DIR/config.json"
     else
         printf '%s\n' "$json" | ssh "${IT_SSH_OPTS[@]}" "$IT_SSH_DEST" \
             "cd $(quote_arg "$IT_REMOTE_DIR") && cat > config.json"
@@ -222,7 +289,7 @@ preflight() {
 
     # Snapshot the baseline so we can restore it and compare secrets later.
     BASELINE_CONFIG="$(rx 'cat config.json')"
-    BASELINE_PRUNE="$(env_on_box MONERO_PRUNE)"   # 1 = pruned, 0 = full
+    BASELINE_PRUNE="$(env_on_box MONERO_PRUNE)" # 1 = pruned, 0 = full
     BASELINE_SECRET_FP="$(secret_fingerprint)"
     if [ -z "$BASELINE_CONFIG" ]; then
         it_err "Could not read baseline config.json from the box."
@@ -244,7 +311,7 @@ record_manifest() {
         echo ""
         echo "# docker compose images"
         rx "docker compose images 2>/dev/null"
-    } | redact > "$f" 2>/dev/null || true
+    } | redact >"$f" 2>/dev/null || true
     it_step "wrote run manifest to $f"
 }
 
@@ -277,19 +344,21 @@ run_scenario() {
     push_config "$config"
 
     it_step "applying config (pithead apply -y)…"
-    if ! pithead apply -y > "$OUT_DIR/${name}.apply.log" 2>&1; then
+    if ! pithead apply -y >"$OUT_DIR/${name}.apply.log" 2>&1; then
         it_fail "apply succeeded" "see $OUT_DIR/${name}.apply.log"
         capture_artifacts "$name" "$OUT_DIR"
         return 0
     fi
 
     # Wait for the stack to settle on real readiness signals before asserting.
-    wait_status_ok 240    || true
+    wait_status_ok 240 || true
     wait_monero_synced 120 || true
     wait_miner_running 180 || true
     # p2pool infers its sidechain from connected peers, so after a pool switch it reads "Unknown"
     # until peers on the new chain connect — wait for the dashboard to classify it (issue #54).
-    local _pool; _pool="$(jq_get "$config" '.p2pool.pool')"; _pool="${_pool:-main}"
+    local _pool
+    _pool="$(jq_get "$config" '.p2pool.pool')"
+    _pool="${_pool:-main}"
     wait_pool_ready 180 "$(pool_label "$_pool")" || true
     # End-to-end mining: p2pool's stratum hash counter resets on restart and climbs only once the
     # proxy's upstream reconnects and a share lands — wait for it before asserting hashes>0 (issue #54).
@@ -316,15 +385,19 @@ run_scenario() {
 assert_running_state() {
     local name="$1" config="$2"
     local st mode pool secure tari_req xvb rpc_lan monero_clearnet tari_clearnet
-    mode="$(jq_get "$config" '.monero.mode')";          mode="${mode:-local}"
-    pool="$(jq_get "$config" '.p2pool.pool')";          pool="${pool:-main}"
+    mode="$(jq_get "$config" '.monero.mode')"
+    mode="${mode:-local}"
+    pool="$(jq_get "$config" '.p2pool.pool')"
+    pool="${pool:-main}"
     secure="$(jq_get "$config" '.dashboard.secure')"
     tari_req="$(jq_get "$config" '.dashboard.tari_required')"
     xvb="$(jq_get "$config" '.xvb.enabled')"
     rpc_lan="$(jq_get "$config" '.monero.rpc_lan_access')"
     # Clearnet initial sync (#183): absent => default false.
-    monero_clearnet="$(jq_get "$config" '.monero.clearnet_initial_sync')"; [ "$monero_clearnet" = "true" ] || monero_clearnet="false"
-    tari_clearnet="$(jq_get "$config" '.tari.clearnet_initial_sync')";     [ "$tari_clearnet" = "true" ] || tari_clearnet="false"
+    monero_clearnet="$(jq_get "$config" '.monero.clearnet_initial_sync')"
+    [ "$monero_clearnet" = "true" ] || monero_clearnet="false"
+    tari_clearnet="$(jq_get "$config" '.tari.clearnet_initial_sync')"
+    [ "$tari_clearnet" = "true" ] || tari_clearnet="false"
 
     # 0. Clearnet auto-transition settle (#234). Enabling clearnet on an already-synced node makes the
     # dashboard supervisor flip it back to Tor, which RESTARTS the daemon(s). Wait for that to fully
@@ -334,17 +407,18 @@ assert_running_state() {
     # running config (only true once the flip-back re-render + restart finished), then for the whole
     # stack to report healthy. This block also IS the end-to-end proof the transition fired.
     if [ "$monero_clearnet" = "true" ] || [ "$tari_clearnet" = "true" ]; then
-        local csdir; csdir="$(env_on_box CLEARNET_STATE_DIR)"
+        local csdir
+        csdir="$(env_on_box CLEARNET_STATE_DIR)"
         if [ "$monero_clearnet" = "true" ]; then
-            if wait_for 180 10 "monero clearnet→Tor transition marker (#234)" rx "test -f '$csdir/monero.synced'"
-            then it_pass "monero auto-transitioned clearnet→Tor (#234)"
+            if wait_for 180 10 "monero clearnet→Tor transition marker (#234)" rx "test -f '$csdir/monero.synced'"; then
+                it_pass "monero auto-transitioned clearnet→Tor (#234)"
             else it_fail "monero auto-transitioned clearnet→Tor (#234)" "marker not written within 180s"; fi
             wait_for 240 10 "monerod restarted back on Tor — proxy restored (#234)" \
                 rx "docker exec monerod grep -qE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null" || true
         fi
         if [ "$tari_clearnet" = "true" ]; then
-            if wait_for 180 10 "tari clearnet→Tor transition marker (#234)" rx "test -f '$csdir/tari.synced'"
-            then it_pass "tari auto-transitioned clearnet→Tor (#234)"
+            if wait_for 180 10 "tari clearnet→Tor transition marker (#234)" rx "test -f '$csdir/tari.synced'"; then
+                it_pass "tari auto-transitioned clearnet→Tor (#234)"
             else it_fail "tari auto-transitioned clearnet→Tor (#234)" "marker not written within 180s"; fi
         fi
         wait_for 240 5 "stack healthy after clearnet→Tor transition (#234)" _pred_status_ok || true
@@ -357,19 +431,20 @@ assert_running_state() {
     while IFS= read -r svc; do
         [ -z "$svc" ] && continue
         case "$running" in
-            *"$svc"*) it_pass "container up: $svc" ;;
-            *)        it_fail "container up: $svc" "not in running services" ;;
+        *"$svc"*) it_pass "container up: $svc" ;;
+        *) it_fail "container up: $svc" "not in running services" ;;
         esac
-    done <<< "$expected"
+    done <<<"$expected"
     if [ "$mode" = "remote" ]; then
         case "$running" in
-            *monerod*) it_fail "monerod absent in remote mode" "monerod is running" ;;
-            *)         it_pass "monerod absent in remote mode" ;;
+        *monerod*) it_fail "monerod absent in remote mode" "monerod is running" ;;
+        *) it_pass "monerod absent in remote mode" ;;
         esac
     fi
 
     # 2. pithead status is green for a healthy config.
-    pithead status >/dev/null 2>&1; assert_rc "status exit code is 0 (healthy)" "$?" "0"
+    pithead status >/dev/null 2>&1
+    assert_rc "status exit code is 0 (healthy)" "$?" "0"
 
     # 3. Dashboard reachable and reading live state. In local mode, let the monero sync panel finish
     #    its first poll after the scenario's apply/restart before snapshotting, so step 4 sees settled
@@ -393,12 +468,13 @@ assert_running_state() {
         assert_eq "monero sync panel reads done (dashboard)" "$(jq_get "$st" '.sync.monero.state')" "done"
     fi
     # Pruned/full panel (#32): determinate (Pruned|Full) for a local node; remote is often Unknown.
-    local dmode; dmode="$(jq_get "$st" '.monero.mode')"
+    local dmode
+    dmode="$(jq_get "$st" '.monero.mode')"
     if [ "$mode" = "remote" ]; then
         it_pass "monero display mode present ($dmode)"
     else
-        case "$dmode" in Pruned|Full) it_pass "monero display mode determinate ($dmode)" ;;
-                         *)            it_fail "monero display mode determinate" "got [$dmode], want Pruned|Full" ;; esac
+        case "$dmode" in Pruned | Full) it_pass "monero display mode determinate ($dmode)" ;;
+        *) it_fail "monero display mode determinate" "got [$dmode], want Pruned|Full" ;; esac
     fi
 
     # 5. Sidechain selection matches the pool axis.
@@ -421,7 +497,8 @@ assert_running_state() {
     fi
 
     # 8. Security/posture axes propagated to .env.
-    local want_bind; [ "$rpc_lan" = "true" ] && want_bind="0.0.0.0" || want_bind="127.0.0.1"
+    local want_bind
+    [ "$rpc_lan" = "true" ] && want_bind="0.0.0.0" || want_bind="127.0.0.1"
     assert_eq "MONERO_RPC_BIND matches rpc_lan_access" "$(env_on_box MONERO_RPC_BIND)" "$want_bind"
     assert_eq "DASHBOARD_SECURE matches config" "$(env_on_box DASHBOARD_SECURE)" "${secure:-true}"
     assert_eq "XVB_ENABLED matches config" "$(env_on_box XVB_ENABLED)" "${xvb:-true}"
@@ -446,7 +523,7 @@ assert_running_state() {
         # clearnet node back to Tor once it's synced — so in the synced steady state asserted here,
         # monerod always carries the Tor P2P proxy and Tari's canonical config stays `type = "tor"`.
         assert_eq "MONERO_CLEARNET_SYNC matches config (#183)" "$(env_on_box MONERO_CLEARNET_SYNC)" "$monero_clearnet"
-        assert_eq "TARI_CLEARNET_SYNC matches config (#183)"   "$(env_on_box TARI_CLEARNET_SYNC)"   "$tari_clearnet"
+        assert_eq "TARI_CLEARNET_SYNC matches config (#183)" "$(env_on_box TARI_CLEARNET_SYNC)" "$tari_clearnet"
         assert_num_ge "tari canonical config is always Tor (#234)" \
             "$(rx "docker exec tari grep -c '^type = \"tor\"' /var/tari/config/config.toml 2>/dev/null")" 1
         assert_num_ge "monerod runs Tor-only in steady state — proxy present (#183/#234)" \
@@ -454,28 +531,30 @@ assert_running_state() {
         # (The clearnet→Tor auto-transition was already awaited + asserted at the top of this function,
         # before the steady-state battery, so the assertions above see the settled post-flip state.)
         case "$(rx "docker inspect tari --format '{{.HostConfig.Dns}}' 2>/dev/null")" in
-            *1.1.1.1*|*8.8.8.8*) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "clearnet nameserver present" ;;
-            *127.0.0.1*)         it_pass "tari DNS sinkholed — no clearnet resolver (#162)" ;;
-            *)                   it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "unexpected HostConfig.Dns" ;;
+        *1.1.1.1* | *8.8.8.8*) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "clearnet nameserver present" ;;
+        *127.0.0.1*) it_pass "tari DNS sinkholed — no clearnet resolver (#162)" ;;
+        *) it_fail "tari DNS sinkholed — no clearnet resolver (#162)" "unexpected HostConfig.Dns" ;;
         esac
         # The xmrig-proxy config knobs must reach the RUNNING proxy's argv, not just the compose
         # render. donate-level is rendered explicitly so it's always visible (#173). The matrix
         # deploys the default config (no p2pool.stratum_password) → stratum auth OFF, which must
         # render NO --access-password flag at all: a literal empty '--access-password=' would demand
         # an empty password and reject every rig (the bug verified + guarded for #152).
-        local proxy_args; proxy_args="$(rx "docker inspect xmrig-proxy --format '{{json .Args}}' 2>/dev/null")"
+        local proxy_args
+        proxy_args="$(rx "docker inspect xmrig-proxy --format '{{json .Args}}' 2>/dev/null")"
         case "$proxy_args" in
-            *'--donate-level='*) it_pass "xmrig-proxy dev-fee donate-level is explicit + live (#173)" ;;
-            *)                   it_fail "xmrig-proxy dev-fee donate-level is explicit + live (#173)" "no --donate-level in proxy argv" ;;
+        *'--donate-level='*) it_pass "xmrig-proxy dev-fee donate-level is explicit + live (#173)" ;;
+        *) it_fail "xmrig-proxy dev-fee donate-level is explicit + live (#173)" "no --donate-level in proxy argv" ;;
         esac
         case "$proxy_args" in
-            *'--access-password='*) it_fail "default-off stratum: no --access-password live (#152)" "found --access-password with no stratum_password set — would reject rigs" ;;
-            *)                      it_pass "default-off stratum: no --access-password live (#152)" ;;
+        *'--access-password='*) it_fail "default-off stratum: no --access-password live (#152)" "found --access-password with no stratum_password set — would reject rigs" ;;
+        *) it_pass "default-off stratum: no --access-password live (#152)" ;;
         esac
     fi
 
     # 9. Caddy scheme matches dashboard.secure.
-    local scheme; [ "$secure" = "false" ] && scheme="http://" || scheme="https://"
+    local scheme
+    [ "$secure" = "false" ] && scheme="http://" || scheme="https://"
     assert_contains "Caddyfile uses correct scheme" "$(rx 'head -n1 Caddyfile 2>/dev/null')" "$scheme"
 
     # 10. Secrets intact (proxy token + onions unchanged vs the baseline we captured).
@@ -487,7 +566,8 @@ assert_running_state() {
 assert_scenario() {
     local name="$1" config="$2"
     assert_running_state "$name" "$config"
-    local again; again="$(pithead apply -y 2>&1)"
+    local again
+    again="$(pithead apply -y 2>&1)"
     assert_contains "re-apply is a no-op" "$again" "No configuration changes detected"
 }
 
@@ -499,16 +579,18 @@ assert_scenario() {
 # Skipped when a clearnet initial sync is active (#183): a node is then intentionally on clearnet.
 assert_egress_posture() {
     local mc tc prefix out
-    mc="$(env_on_box MONERO_CLEARNET_SYNC)"; tc="$(env_on_box TARI_CLEARNET_SYNC)"
+    mc="$(env_on_box MONERO_CLEARNET_SYNC)"
+    tc="$(env_on_box TARI_CLEARNET_SYNC)"
     if [ "$mc" = "true" ] || [ "$tc" = "true" ]; then
         it_log "   egress: clearnet initial sync active (#183) — skipping the all-Tor egress gate"
         return 0
     fi
-    prefix="$(env_on_box NETWORK_PREFIX)"; [ -n "$prefix" ] || prefix="172.28.0"
+    prefix="$(env_on_box NETWORK_PREFIX)"
+    [ -n "$prefix" ] || prefix="172.28.0"
     out="$(rx "bash tests/integration/benchmarks/bench-verify-egress.sh tor --dir . --prefix '$prefix' --polls 3 --interval 8 2>&1")"
     case "$out" in
-        *"[verify-egress] OK"*) it_pass "no clearnet egress — every app dials via Tor (#274/#270)" ;;
-        *) it_fail "no clearnet egress — every app dials via Tor (#274/#270)" "$(printf '%s' "$out" | grep -E 'LEAK|✗' | head -4)" ;;
+    *"[verify-egress] OK"*) it_pass "no clearnet egress — every app dials via Tor (#274/#270)" ;;
+    *) it_fail "no clearnet egress — every app dials via Tor (#274/#270)" "$(printf '%s' "$out" | grep -E 'LEAK|✗' | head -4)" ;;
     esac
 }
 
@@ -529,9 +611,9 @@ assert_current_state() {
 # from leaking. Complements `pithead doctor` (stack health) — this checks the server's fitness
 # for the integration harness's job. A WARN is "works, but not ideal"; a FAIL is "fix before
 # using as a release gate".
-box_fstype()   { rx "df --output=fstype $(quote_arg "$1") 2>/dev/null | tail -n1 | tr -d ' '"; }
+box_fstype() { rx "df --output=fstype $(quote_arg "$1") 2>/dev/null | tail -n1 | tr -d ' '"; }
 box_avail_gb() { rx "df -BG --output=avail $(quote_arg "$1") 2>/dev/null | tail -n1 | tr -dc '0-9'"; }
-box_mode()     { rx "stat -c %a $(quote_arg "$1") 2>/dev/null"; }
+box_mode() { rx "stat -c %a $(quote_arg "$1") 2>/dev/null"; }
 
 assert_release_readiness() {
     IT_CURRENT_SCENARIO="readiness"
@@ -540,7 +622,8 @@ assert_release_readiness() {
 
     # 1. The whole point of a release server: chains already synced, reused in minutes.
     if monero_caught_up; then it_pass "Monero is synced (chain reusable by the matrix)"; else it_fail "Monero is synced" "monerod not caught up — the matrix would have to re-sync"; fi
-    pithead status >/dev/null 2>&1; assert_rc "stack is healthy (pithead status)" "$?" "0"
+    pithead status >/dev/null 2>&1
+    assert_rc "stack is healthy (pithead status)" "$?" "0"
 
     # 2. The prune axis must vary the DB without re-syncing or mutating the canonical chain. The
     #    OTHER prune mode is unlocked either by (a) a snapshot/reflink-capable live FS (so a
@@ -551,24 +634,32 @@ assert_release_readiness() {
     #    exercises pruned mode live with snapshot isolation; full mode is covered by the fakes.
     local mdir fstype="" cow_live=0 baseline_mode="full" bp
     mdir="$(env_on_box MONERO_DATA_DIR)"
-    bp="${BASELINE_PRUNE:-$(env_on_box MONERO_PRUNE)}"   # so standalone --readiness sees it too
+    bp="${BASELINE_PRUNE:-$(env_on_box MONERO_PRUNE)}" # so standalone --readiness sees it too
     [ -n "$mdir" ] && fstype="$(box_fstype "$mdir")"
-    case "$fstype" in btrfs|zfs|xfs) cow_live=1 ;; esac
+    case "$fstype" in btrfs | zfs | xfs) cow_live=1 ;; esac
     [ "$bp" = "1" ] && baseline_mode="pruned"
     it_log "   live chain: ${mdir:-?} (${fstype:-unknown}, ${baseline_mode})"
 
     # Classify any supplied chains by prune mode relative to the live baseline.
     local opp_dir opp_label same_dir
-    if [ "$bp" = "1" ]; then opp_dir="${FULL_DATA_DIR:-}"; opp_label="full"; same_dir="${PRUNED_DATA_DIR:-}"
-    else opp_dir="${PRUNED_DATA_DIR:-}"; opp_label="pruned"; same_dir="${FULL_DATA_DIR:-}"; fi
+    if [ "$bp" = "1" ]; then
+        opp_dir="${FULL_DATA_DIR:-}"
+        opp_label="full"
+        same_dir="${PRUNED_DATA_DIR:-}"
+    else
+        opp_dir="${PRUNED_DATA_DIR:-}"
+        opp_label="pruned"
+        same_dir="${FULL_DATA_DIR:-}"
+    fi
 
     # A same-mode copy (e.g. the CoW pruned chain) — snapshot isolation for destructive scenarios.
     if [ -n "$same_dir" ]; then
-        local sfs; sfs="$(box_fstype "$same_dir")"
+        local sfs
+        sfs="$(box_fstype "$same_dir")"
         if rx "test -e $(quote_arg "$same_dir")/lmdb/data.mdb" >/dev/null 2>&1; then
             case "$sfs" in
-                btrfs|zfs|xfs) it_pass "snapshot-isolated $baseline_mode chain on a CoW FS ($same_dir, $sfs) — destructive scenarios needn't touch the live chain" ;;
-                *)             it_log "   same-mode copy at $same_dir ($sfs — not CoW)" ;;
+            btrfs | zfs | xfs) it_pass "snapshot-isolated $baseline_mode chain on a CoW FS ($same_dir, $sfs) — destructive scenarios needn't touch the live chain" ;;
+            *) it_log "   same-mode copy at $same_dir ($sfs — not CoW)" ;;
             esac
         else
             it_warn "supplied same-mode dir has no lmdb/data.mdb ($same_dir)"
@@ -590,7 +681,8 @@ assert_release_readiness() {
 
     # 3. Disk headroom on the live chain FS (room to operate + hold a co-located second chain).
     if [ -n "$mdir" ]; then
-        local avail; avail="$(box_avail_gb "$mdir")"
+        local avail
+        avail="$(box_avail_gb "$mdir")"
         if [ -n "$avail" ] && [ "$avail" -ge 100 ] 2>/dev/null; then
             it_pass "disk headroom on the live chain FS (${avail} GiB free)"
         else
@@ -599,11 +691,12 @@ assert_release_readiness() {
     fi
 
     # 4. Secrets must not be world/group readable (the box holds wallet/RPC creds + onion keys).
-    local envmode; envmode="$(box_mode .env)"
+    local envmode
+    envmode="$(box_mode .env)"
     case "$envmode" in
-        ""|*[!0-9]*) it_warn ".env permissions unknown" ;;
-        ?00)         it_pass ".env is owner-only (mode $envmode)" ;;
-        *)           it_fail ".env is owner-only" "mode is $envmode — group/other can read RPC creds & onions; run: chmod 600 .env" ;;
+    "" | *[!0-9]*) it_warn ".env permissions unknown" ;;
+    ?00) it_pass ".env is owner-only (mode $envmode)" ;;
+    *) it_fail ".env is owner-only" "mode is $envmode — group/other can read RPC creds & onions; run: chmod 600 .env" ;;
     esac
 
     # 5. The dashboard must sit behind Caddy on localhost, never bound to a public interface.
@@ -614,8 +707,8 @@ assert_release_readiness() {
     else
         while read -r st _q1 _q2 laddr _; do
             [ -n "$laddr" ] || continue
-            case "$laddr" in 127.0.0.1:*|"[::1]:"*) : ;; *) exposed=1 ;; esac
-        done <<< "$d_addrs"
+            case "$laddr" in 127.0.0.1:* | "[::1]:"*) : ;; *) exposed=1 ;; esac
+        done <<<"$d_addrs"
         if [ "$exposed" -eq 0 ]; then it_pass "dashboard bound to localhost only (Caddy fronts it)"; else it_fail "dashboard bound to localhost only" "it is listening on a non-loopback address — do not expose the dashboard directly"; fi
     fi
 
@@ -637,13 +730,16 @@ run_lifecycle() {
     it_step "pithead restart…"
     pithead restart >/dev/null 2>&1
     wait_status_ok 240 || true
-    pithead status >/dev/null 2>&1; assert_rc "status OK after restart" "$?" "0"
+    pithead status >/dev/null 2>&1
+    assert_rc "status OK after restart" "$?" "0"
 
     # apply that changes the sidechain recreates only the affected containers, preserving
     # secrets. We flip main<->mini and assert the token/onions are untouched, then revert.
     local cur_pool fp_before
-    cur_pool="$(jq_get "$BASELINE_CONFIG" '.p2pool.pool')"; cur_pool="${cur_pool:-main}"
-    local other; [ "$cur_pool" = "mini" ] && other="main" || other="mini"
+    cur_pool="$(jq_get "$BASELINE_CONFIG" '.p2pool.pool')"
+    cur_pool="${cur_pool:-main}"
+    local other
+    [ "$cur_pool" = "mini" ] && other="main" || other="mini"
     fp_before="$(secret_fingerprint)"
     push_config "$(render_scenario_config "$BASELINE_CONFIG" "p2pool.pool=$other")"
     it_step "apply pool $cur_pool -> $other…"
@@ -660,11 +756,13 @@ run_lifecycle() {
         it_step "stopping monerod to exercise node-down failover…"
         rx "docker compose stop monerod" >/dev/null 2>&1
         wait_for 120 5 "status to report node down" _pred_status_down || true
-        pithead status >/dev/null 2>&1; assert_rc "status non-zero when node down" "$?" "1"
+        pithead status >/dev/null 2>&1
+        assert_rc "status non-zero when node down" "$?" "1"
         it_step "starting monerod and waiting for readmit…"
         rx "docker compose start monerod" >/dev/null 2>&1
         wait_status_ok 240 || true
-        pithead status >/dev/null 2>&1; assert_rc "status OK after node recovery" "$?" "0"
+        pithead status >/dev/null 2>&1
+        assert_rc "status OK after node recovery" "$?" "0"
     else
         it_warn "skipping node-down failover (remote mode: no local monerod to stop)"
     fi
@@ -674,10 +772,13 @@ run_lifecycle() {
     # secrets survived — exercising both CLI verbs end-to-end (not just the rollback net).
     it_step "backup → restore round-trip…"
     if pithead backup -y >/dev/null 2>&1; then
-        local arch; arch="$(rx 'ls -t backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1')"
+        local arch
+        arch="$(rx 'ls -t backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1')"
         if [ -n "$arch" ]; then
-            local fp_b; fp_b="$(secret_fingerprint)"
-            local backed_pool; backed_pool="$(jq_get "$(api_state)" '.pool.type')"
+            local fp_b
+            fp_b="$(secret_fingerprint)"
+            local backed_pool
+            backed_pool="$(jq_get "$(api_state)" '.pool.type')"
             # Diverge from the backed-up state, then restore it back.
             push_config "$(render_scenario_config "$BASELINE_CONFIG" "p2pool.pool=$other")"
             pithead apply -y >/dev/null 2>&1
@@ -706,20 +807,22 @@ _pred_status_down() { ! pithead status >/dev/null 2>&1; }
 # dashboard's failover, then restore. Local mode only (needs a local monerod to break).
 # These are destructive-then-restored and slow (healthcheck + node-health debounce), so the
 # phase is opt-in.
-_monerod_is() {  # _monerod_is <state> [<health>]
-    local s; s="$(service_state monerod)"
+_monerod_is() { # _monerod_is <state> [<health>]
+    local s
+    s="$(service_state monerod)"
     [ "$(svc_state_of "$s")" = "$1" ] && { [ -z "${2:-}" ] || [ "$(svc_health_of "$s")" = "$2" ]; }
 }
-_pred_monerod_missing()   { _monerod_is missing; }
+_pred_monerod_missing() { _monerod_is missing; }
 _pred_monerod_unhealthy() { _monerod_is running unhealthy; }
-_pred_monerod_healthy()   { _monerod_is running healthy; }
-_pred_proxy_stopped()     { [ "$(svc_state_of "$(service_state xmrig-proxy)")" != "running" ]; }
+_pred_monerod_healthy() { _monerod_is running healthy; }
+_pred_proxy_stopped() { [ "$(svc_state_of "$(service_state xmrig-proxy)")" != "running" ]; }
 
 fault_node_down() {
     it_step "fault: stop monerod (required node down)…"
     rx "docker compose stop monerod" >/dev/null 2>&1
     wait_for 60 5 "status to report a problem" _pred_status_down || true
-    pithead status >/dev/null 2>&1; assert_rc "status non-zero when monerod is down" "$?" "1"
+    pithead status >/dev/null 2>&1
+    assert_rc "status non-zero when monerod is down" "$?" "1"
     # The dashboard rejects workers (stops xmrig-proxy) after its node-health debounce so they
     # fail over to backup pools (#31).
     wait_for 180 10 "xmrig-proxy stopped by failover" _pred_proxy_stopped || true
@@ -728,7 +831,8 @@ fault_node_down() {
     rx "docker compose start monerod" >/dev/null 2>&1
     wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
     wait_status_ok 240 || true
-    pithead status >/dev/null 2>&1; assert_rc "status OK after monerod recovery" "$?" "0"
+    pithead status >/dev/null 2>&1
+    assert_rc "status OK after monerod recovery" "$?" "0"
 }
 
 fault_unhealthy() {
@@ -738,7 +842,8 @@ fault_unhealthy() {
     # running-but-unhealthy — the verdict stack_status flags as a problem.
     wait_for 200 10 "monerod to report unhealthy" _pred_monerod_unhealthy || true
     assert_eq "monerod running-but-unhealthy" "$(service_state monerod)" "running unhealthy"
-    pithead status >/dev/null 2>&1; assert_rc "status non-zero when monerod unhealthy" "$?" "1"
+    pithead status >/dev/null 2>&1
+    assert_rc "status non-zero when monerod unhealthy" "$?" "1"
     it_step "recover: thaw monerod (SIGCONT)…"
     rx "docker compose kill -s SIGCONT monerod" >/dev/null 2>&1
     wait_for 120 5 "monerod healthy" _pred_monerod_healthy || true
@@ -749,7 +854,8 @@ fault_missing() {
     rx "docker compose rm -sf monerod" >/dev/null 2>&1
     wait_for 30 3 "monerod to be missing" _pred_monerod_missing || true
     assert_eq "monerod reported missing" "$(svc_state_of "$(service_state monerod)")" "missing"
-    pithead status >/dev/null 2>&1; assert_rc "status non-zero when monerod missing" "$?" "1"
+    pithead status >/dev/null 2>&1
+    assert_rc "status non-zero when monerod missing" "$?" "1"
     it_step "recover: recreate monerod…"
     rx "docker compose up -d monerod" >/dev/null 2>&1
     wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
@@ -789,7 +895,7 @@ run_fault_injection() {
 
 # Rewrite PROXY_AUTH_TOKEN in .env in place, preserving line order. quote_arg makes the value safe
 # for the remote shell; awk leaves every other line untouched.
-_set_env_token() {  # _set_env_token <value>
+_set_env_token() { # _set_env_token <value>
     rx "awk -v t=$(quote_arg "$1") '/^PROXY_AUTH_TOKEN=/{print \"PROXY_AUTH_TOKEN=\" t; next} {print}' .env > .env.itest && mv .env.itest .env"
 }
 
@@ -799,7 +905,8 @@ run_auth_fail_closed() {
     echo ""
     it_log "── fail-closed auth phase (#153/#203) ──────────────"
 
-    local orig; orig="$(env_on_box PROXY_AUTH_TOKEN)"
+    local orig
+    orig="$(env_on_box PROXY_AUTH_TOKEN)"
     if [ -z "$orig" ]; then
         it_warn "skipping: PROXY_AUTH_TOKEN already empty on the box (run 'pithead setup'/'apply' first)"
         return 0
@@ -811,7 +918,8 @@ run_auth_fail_closed() {
     it_step "emptying PROXY_AUTH_TOKEN in .env and running 'pithead up'…"
     _set_env_token ""
     local out rc
-    out="$(pithead up 2>&1)"; rc=$?
+    out="$(pithead up 2>&1)"
+    rc=$?
     assert_ne "pithead up fails closed (non-zero exit) on an empty PROXY_AUTH_TOKEN" "$rc" "0"
     assert_contains "compose guard refuses the unauthenticated proxy API (#153)" \
         "$out" "refusing to start an unauthenticated xmrig-proxy control API"
@@ -822,7 +930,8 @@ run_auth_fail_closed() {
     assert_eq "original PROXY_AUTH_TOKEN restored verbatim" "$(env_on_box PROXY_AUTH_TOKEN)" "$orig"
     pithead up >/dev/null 2>&1 || it_warn "recovery 'pithead up' returned non-zero; check the box."
     wait_status_ok 240 || true
-    pithead status >/dev/null 2>&1; assert_rc "stack healthy again after token restore" "$?" "0"
+    pithead status >/dev/null 2>&1
+    assert_rc "stack healthy again after token restore" "$?" "0"
 
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "auth-fail-closed" "$OUT_DIR"
 }
@@ -834,7 +943,7 @@ run_auth_fail_closed() {
 safety_backup() {
     [ "$SAFETY_BACKUP" = "1" ] || return 0
     it_log "Taking a safety backup before destructive scenarios (pithead backup -y)…"
-    if ! pithead backup -y > "$OUT_DIR/backup.log" 2>&1; then
+    if ! pithead backup -y >"$OUT_DIR/backup.log" 2>&1; then
         it_fail "safety backup created" "see $OUT_DIR/backup.log"
         return 0
     fi
@@ -845,9 +954,10 @@ safety_backup() {
     fi
     it_log "Safety backup: $SAFETY_ARCHIVE"
     # Exercise backup as an assertion: the archive must list the core files we'd roll back to.
-    local listing; listing="$(rx "tar -tzf $(quote_arg "$SAFETY_ARCHIVE") 2>/dev/null")"
+    local listing
+    listing="$(rx "tar -tzf $(quote_arg "$SAFETY_ARCHIVE") 2>/dev/null")"
     assert_contains "backup archive contains config.json" "$listing" "config.json"
-    assert_contains "backup archive contains .env"        "$listing" ".env"
+    assert_contains "backup archive contains .env" "$listing" ".env"
 }
 
 # On a failed run, roll the box back to the pre-test safety backup.
@@ -879,7 +989,10 @@ safety_cleanup() {
 
 # --- Restore + summary ------------------------------------------------------
 restore_baseline() {
-    [ "$KEEP_STATE" = "1" ] && { it_warn "--keep set: leaving the box on the last scenario."; return; }
+    [ "$KEEP_STATE" = "1" ] && {
+        it_warn "--keep set: leaving the box on the last scenario."
+        return
+    }
     [ -z "$BASELINE_CONFIG" ] && return
     it_log "Restoring original config.json and re-applying…"
     push_config "$BASELINE_CONFIG"
@@ -930,7 +1043,10 @@ main() {
 
     local name rest
     if [ -n "$ONLY_SCENARIO" ]; then
-        rest="$(scenario_overrides "$ONLY_SCENARIO")" || { it_err "Unknown scenario: $ONLY_SCENARIO"; exit 2; }
+        rest="$(scenario_overrides "$ONLY_SCENARIO")" || {
+            it_err "Unknown scenario: $ONLY_SCENARIO"
+            exit 2
+        }
         run_scenario "$ONLY_SCENARIO" "$rest"
     else
         while IFS=$'\t' read -r name rest; do

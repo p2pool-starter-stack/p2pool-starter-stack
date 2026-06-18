@@ -35,7 +35,7 @@ CANONICAL_DIR="${CANONICAL_DIR:-/srv/code/pithead}"
 E2E_DIR="${E2E_DIR:-/srv/code/pithead-e2e}"
 MINER_XMRIG_CONFIG="${MINER_XMRIG_CONFIG:-/opt/rigforge/data/worker/xmrig/build/config.json}"
 GIT_REMOTE_URL="${GIT_REMOTE_URL:-https://github.com/p2pool-starter-stack/pithead.git}"
-MODE="targeted"        # targeted (default, lean) | check | matrix (full sweep, opt-in)
+MODE="targeted" # targeted (default, lean) | check | matrix (full sweep, opt-in)
 WORKERS=1
 BORROW_MINER=1
 KEEP=0
@@ -43,15 +43,28 @@ BRANCH=""
 
 # --- Output -----------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    C_RESET='\033[0m'; C_GREEN='\033[1;32m'; C_YELLOW='\033[1;33m'; C_RED='\033[1;31m'; C_BLUE='\033[1;34m'; C_DIM='\033[2m'
+    C_RESET='\033[0m'
+    C_GREEN='\033[1;32m'
+    C_YELLOW='\033[1;33m'
+    C_RED='\033[1;31m'
+    C_BLUE='\033[1;34m'
+    C_DIM='\033[2m'
 else
-    C_RESET=''; C_GREEN=''; C_YELLOW=''; C_RED=''; C_BLUE=''; C_DIM=''
+    C_RESET=''
+    C_GREEN=''
+    C_YELLOW=''
+    C_RED=''
+    C_BLUE=''
+    C_DIM=''
 fi
-log()  { printf '%b==>%b %s\n' "$C_BLUE"   "$C_RESET" "$*"; }
-ok()   { printf '%b ✓%b %s\n'  "$C_GREEN"  "$C_RESET" "$*"; }
-warn() { printf '%b !%b %s\n'  "$C_YELLOW" "$C_RESET" "$*" >&2; }
+log() { printf '%b==>%b %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+ok() { printf '%b ✓%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+warn() { printf '%b !%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 step() { printf '%b  → %s%b\n' "$C_DIM" "$*" "$C_RESET"; }
-die()  { printf '%b ✗%b %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; exit 1; }
+die() {
+    printf '%b ✗%b %s\n' "$C_RED" "$C_RESET" "$*" >&2
+    exit 1
+}
 
 usage() {
     cat <<EOF
@@ -88,18 +101,42 @@ EOF
 # --- Arg parsing ------------------------------------------------------------
 while [ $# -gt 0 ]; do
     case "$1" in
-        --mode)      MODE="$2"; shift 2 ;;
-        --workers)   WORKERS="$2"; shift 2 ;;
-        --miner)     MINER_HOST="$2"; shift 2 ;;
-        --no-miner)  BORROW_MINER=0; shift ;;
-        --keep)      KEEP=1; shift ;;
-        -h|--help)   usage; exit 0 ;;
-        -*)          die "Unknown option: $1 (try --help)" ;;
-        *)           [ -z "$BRANCH" ] && BRANCH="$1" || die "Unexpected arg: $1"; shift ;;
+    --mode)
+        MODE="$2"
+        shift 2
+        ;;
+    --workers)
+        WORKERS="$2"
+        shift 2
+        ;;
+    --miner)
+        MINER_HOST="$2"
+        shift 2
+        ;;
+    --no-miner)
+        BORROW_MINER=0
+        shift
+        ;;
+    --keep)
+        KEEP=1
+        shift
+        ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    -*) die "Unknown option: $1 (try --help)" ;;
+    *)
+        [ -z "$BRANCH" ] && BRANCH="$1" || die "Unexpected arg: $1"
+        shift
+        ;;
     esac
 done
-[ -n "$BRANCH" ] || { usage; die "A <branch> is required."; }
-case "$MODE" in check|targeted|matrix) ;; *) die "--mode must be check|targeted|matrix (got '$MODE')." ;; esac
+[ -n "$BRANCH" ] || {
+    usage
+    die "A <branch> is required."
+}
+case "$MODE" in check | targeted | matrix) ;; *) die "--mode must be check|targeted|matrix (got '$MODE')." ;; esac
 
 # --- SSH helpers ------------------------------------------------------------
 # Keepalives so a quiet (but live) connection isn't dropped; BatchMode so we never hang on a prompt.
@@ -148,7 +185,8 @@ restore_all() {
     fi
 
     # 3. Chains sanity: they must be untouched (the whole point).
-    local sync; sync="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
+    local sync
+    sync="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
     [ -n "$sync" ] && step "post-restore sync state (monero/tari): $sync"
 
     if [ "$rc" -eq 0 ]; then ok "restore complete."; else warn "restore complete (the run itself failed — see above)."; fi
@@ -156,8 +194,8 @@ restore_all() {
 trap restore_all EXIT INT TERM
 
 # --- Small waiters / helpers ------------------------------------------------
-wait_gouda_healthy() {  # <timeout_s>
-    local deadline=$(( $(date +%s) + ${1:-300} ))
+wait_gouda_healthy() { # <timeout_s>
+    local deadline=$(($(date +%s) + ${1:-300}))
     while :; do
         on_gouda "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" && return 0
         [ "$(date +%s)" -ge "$deadline" ] && return 1
@@ -169,12 +207,18 @@ wait_gouda_healthy() {  # <timeout_s>
 # tip (seconds — NOT a re-sync). Wait for the dashboard to report both back to "done" before running
 # the harness, so the readiness pre-check doesn't flap on the brief post-restart "loading". Doubles as
 # a direct check that the sync-detection logic settles correctly against the reused chains.
-wait_synced() {  # <timeout_s>
-    local deadline=$(( $(date +%s) + ${1:-300} )) st
+wait_synced() { # <timeout_s>
+    local deadline=$(($(date +%s) + ${1:-300})) st
     while :; do
         st="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
-        [ "$st" = "done/done" ] && { ok "monero + tari re-confirmed synced ($st) — existing chains reused, no re-sync"; return 0; }
-        [ "$(date +%s)" -ge "$deadline" ] && { warn "sync panels still '$st' after $(( ${1:-300} ))s — the harness will wait further on real sync signals"; return 1; }
+        [ "$st" = "done/done" ] && {
+            ok "monero + tari re-confirmed synced ($st) — existing chains reused, no re-sync"
+            return 0
+        }
+        [ "$(date +%s)" -ge "$deadline" ] && {
+            warn "sync panels still '$st' after $((${1:-300}))s — the harness will wait further on real sync signals"
+            return 1
+        }
         sleep 8
     done
 }
@@ -188,12 +232,18 @@ miner_reload() {
 }
 
 # Poll gouda's dashboard for at least <n> workers connected.
-wait_workers() {  # <n> <timeout_s>
-    local want="$1" deadline=$(( $(date +%s) + ${2:-180} )) got
+wait_workers() { # <n> <timeout_s>
+    local want="$1" deadline=$(($(date +%s) + ${2:-180})) got
     while :; do
         got="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '.proxy_workers // 0' 2>/dev/null" || echo 0)"
-        [ -n "$got" ] && [ "$got" -ge "$want" ] 2>/dev/null && { ok "$got worker(s) mining through gouda"; return 0; }
-        [ "$(date +%s)" -ge "$deadline" ] && { warn "only $got worker(s) connected after $(( ${2:-180} ))s (wanted $want)"; return 1; }
+        [ -n "$got" ] && [ "$got" -ge "$want" ] 2>/dev/null && {
+            ok "$got worker(s) mining through gouda"
+            return 0
+        }
+        [ "$(date +%s)" -ge "$deadline" ] && {
+            warn "only $got worker(s) connected after $((${2:-180}))s (wanted $want)"
+            return 1
+        }
         sleep 8
     done
 }
@@ -204,9 +254,9 @@ preflight() {
     on_gouda 'echo ok >/dev/null' || die "Cannot SSH to gouda host '$GOUDA_HOST'."
     ok "SSH to $GOUDA_HOST"
     on_gouda "test -x '$CANONICAL_DIR/pithead'" || die "No pithead at $CANONICAL_DIR on $GOUDA_HOST."
-    on_gouda "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" \
-        && ok "canonical stack is currently healthy" \
-        || warn "canonical stack is NOT healthy right now — continuing, but check the box."
+    on_gouda "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" &&
+        ok "canonical stack is currently healthy" ||
+        warn "canonical stack is NOT healthy right now — continuing, but check the box."
     if [ "$BORROW_MINER" = "1" ]; then
         on_miner 'echo ok >/dev/null' || die "Cannot SSH to miner '$MINER_HOST' (use --no-miner to skip)."
         on_miner "test -f '$MINER_XMRIG_CONFIG'" || die "No xmrig config at $MINER_XMRIG_CONFIG on $MINER_HOST."
@@ -230,12 +280,13 @@ provision() {
         git -C '$E2E_DIR' checkout -q -B '$BRANCH' FETCH_HEAD
         git -C '$E2E_DIR' reset -q --hard FETCH_HEAD
     " || die "Failed to provision/checkout '$BRANCH' in $E2E_DIR."
-    local head; head="$(on_gouda "git -C '$E2E_DIR' rev-parse --short HEAD")"
+    local head
+    head="$(on_gouda "git -C '$E2E_DIR' rev-parse --short HEAD")"
     ok "e2e checkout on $BRANCH @ $head"
 
     step "seeding the e2e checkout with the canonical config.json/.env (same wallet/secrets/chains)"
-    on_gouda "cp -a '$CANONICAL_DIR/config.json' '$E2E_DIR/config.json' && cp -a '$CANONICAL_DIR/.env' '$E2E_DIR/.env'" \
-        || die "Failed to seed config.json/.env into $E2E_DIR."
+    on_gouda "cp -a '$CANONICAL_DIR/config.json' '$E2E_DIR/config.json' && cp -a '$CANONICAL_DIR/.env' '$E2E_DIR/.env'" ||
+        die "Failed to seed config.json/.env into $E2E_DIR."
     ok "config seeded (data dirs point at the shared chains)"
 }
 
@@ -250,7 +301,10 @@ backup_stack() {
 
 # --- Phase 3: borrow the miner ----------------------------------------------
 borrow_miner() {
-    [ "$BORROW_MINER" = "1" ] || { warn "--no-miner: not borrowing a miner."; return 0; }
+    [ "$BORROW_MINER" = "1" ] || {
+        warn "--no-miner: not borrowing a miner."
+        return 0
+    }
     log "Borrowing $MINER_HOST → pointing it at $GOUDA_HOST"
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
     on_miner "cp -a '$MINER_XMRIG_CONFIG' '$MINER_CFG_BACKUP'" || die "Failed to back up the miner config."
@@ -262,9 +316,10 @@ borrow_miner() {
             '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' \
         && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'
     " || die "Failed to repoint the miner config."
-    local primary; primary="$(on_miner "jq -r '.pools[0].url' '$MINER_XMRIG_CONFIG'")"
+    local primary
+    primary="$(on_miner "jq -r '.pools[0].url' '$MINER_XMRIG_CONFIG'")"
     [ -n "$primary" ] && step "miner primary pool is now: $primary"
-    case "$primary" in *"$GOUDA_HOST"*) ;; *) warn "primary pool ($primary) doesn't look like gouda — does the miner config have a gouda pool?";; esac
+    case "$primary" in *"$GOUDA_HOST"*) ;; *) warn "primary pool ($primary) doesn't look like gouda — does the miner config have a gouda pool?" ;; esac
     miner_reload
     wait_workers "$WORKERS" 180 || warn "proceeding, but the matrix's mining assertions may not pass with too few workers"
 }
@@ -280,7 +335,7 @@ deploy_branch() {
     # Record what was actually built, so "what did we test" is unambiguous in the run log (#272).
     on_gouda "cd '$E2E_DIR' && docker compose images --format '{{.Service}} {{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep -E 'p2pool|dashboard|monero|tor|xmrig' || true" | while IFS= read -r l; do step "image: $l"; done
     wait_gouda_healthy 300 || warn "stack applied but not yet healthy; the harness will wait on real readiness signals"
-    wait_synced 300 || true   # let the recreated monerod/tari re-confirm their tip before the harness pre-check
+    wait_synced 300 || true # let the recreated monerod/tari re-confirm their tip before the harness pre-check
     ok "branch deployed; stack reconciled"
 }
 
@@ -288,16 +343,17 @@ deploy_branch() {
 run_harness() {
     local phases
     case "$MODE" in
-        check)    phases="--check" ;;
-        targeted) phases="--readiness --auth-fail-closed --lifecycle" ;;   # --readiness/--check run first below
-        matrix)   phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed" ;;
+    check) phases="--check" ;;
+    targeted) phases="--readiness --auth-fail-closed --lifecycle" ;; # --readiness/--check run first below
+    matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed" ;;
     esac
     log "Running the live harness on $GOUDA_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 
     # Push a tiny runner that captures the harness exit code into a done-marker, then nohup it.
-    local runner; runner="$(mktemp)"
-    cat > "$runner" <<'RUNNER'
+    local runner
+    runner="$(mktemp)"
+    cat >"$runner" <<'RUNNER'
 #!/usr/bin/env bash
 set -uo pipefail
 dir="$1"; workers="$2"; shift 2
@@ -306,26 +362,28 @@ bash "$dir/tests/integration/run.sh" --local --dir "$dir" --workers "$workers" "
     > "$dir/results/e2e-harness.log" 2>&1
 echo $? > "$dir/results/e2e-harness.done"
 RUNNER
-    on_gouda "cat > '$E2E_DIR/.e2e-run.sh' && chmod +x '$E2E_DIR/.e2e-run.sh'" < "$runner"
+    on_gouda "cat > '$E2E_DIR/.e2e-run.sh' && chmod +x '$E2E_DIR/.e2e-run.sh'" <"$runner"
     rm -f "$runner"
 
     # For non-check modes, run the safe readiness + current-state assertions inline first (fast,
     # gives early signal), then the destructive phases detached.
     if [ "$MODE" != "check" ]; then
-        on_gouda "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check" \
-            || warn "readiness/check reported issues (see above) — continuing to the destructive phases"
+        on_gouda "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check" ||
+            warn "readiness/check reported issues (see above) — continuing to the destructive phases"
     fi
 
-    on_gouda "rm -f '$E2E_DIR/results/e2e-harness.done'; cd '$E2E_DIR' && nohup ./.e2e-run.sh '$E2E_DIR' '$WORKERS' $phases >/dev/null 2>&1 & echo launched" \
-        || die "Failed to launch the harness."
+    on_gouda "rm -f '$E2E_DIR/results/e2e-harness.done'; cd '$E2E_DIR' && nohup ./.e2e-run.sh '$E2E_DIR' '$WORKERS' $phases >/dev/null 2>&1 & echo launched" ||
+        die "Failed to launch the harness."
 
     # Poll the done-marker, printing a heartbeat tail of the log.
     local rc="" waited=0
     while :; do
         if on_gouda "test -f '$E2E_DIR/results/e2e-harness.done'"; then
-            rc="$(on_gouda "cat '$E2E_DIR/results/e2e-harness.done'")"; break
+            rc="$(on_gouda "cat '$E2E_DIR/results/e2e-harness.done'")"
+            break
         fi
-        sleep 20; waited=$(( waited + 20 ))
+        sleep 20
+        waited=$((waited + 20))
         step "harness running… ${waited}s — latest:"
         on_gouda "tail -n 2 '$E2E_DIR/results/e2e-harness.log' 2>/dev/null" | sed 's/^/      /' || true
     done
