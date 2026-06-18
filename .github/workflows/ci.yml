@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          fetch-depth: 0  # full history so diff-cover can diff the PR against origin/develop (#286)
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
@@ -29,13 +30,16 @@ jobs:
           export UV_INSTALL_DIR="$HOME/.local/bin"   # deterministic install dir (runners may set CARGO_HOME)
           curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
           echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
-      - name: Run pytest with coverage gate (deps from uv.lock)
-        working-directory: build/dashboard
-        run: uv run --locked --extra test python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
+      - name: Dashboard tests + coverage gate (emits coverage.xml)
+        run: make test-dashboard
+      - name: "Patch-coverage gate — changed lines >=90% (diff-cover vs origin/develop, #286)"
+        run: |
+          git fetch --no-tags origin develop
+          make test-patch-coverage
       - name: Fake-daemon contract test (real clients vs controllable fakes)
         # Points the real Monero/Tari clients at the integration fakes and asserts they parse
         # every state (synced/syncing/down). Docker-free, so it runs on every PR (issue #54).
-        run: uv run --locked --project build/dashboard --extra test python -m pytest tests/integration/fakes -q
+        run: make test-fakes
 
   frontend:
     name: Frontend logic tests (node --test)
@@ -100,11 +104,12 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - name: Install hadolint
+      - name: "Install hadolint (pinned + sha256-verified, #286)"
         run: |
-          sudo curl -fsSL -o /usr/local/bin/hadolint \
+          curl -fsSL -o /tmp/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
-          sudo chmod +x /usr/local/bin/hadolint
+          echo "56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010  /tmp/hadolint" | sha256sum -c -
+          sudo install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
       - name: Lint all build/* Dockerfiles (config in .hadolint.yaml)
         run: hadolint build/*/Dockerfile
 
@@ -173,15 +178,20 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - name: "Install shfmt (pinned — RigForge convention, #281)"
+      - name: "Install shellcheck + shfmt (pinned + sha256-verified, #286)"
+        # Direct upstream-release downloads with a sha256 check (RigForge convention) instead of the
+        # runner's preinstalled shellcheck / apt — reproducible, and immune to the apt-mirror
+        # flakiness of #64. Keep these pins in sync with the local-dev tooling.
         run: |
-          sudo curl -fsSL -o /usr/local/bin/shfmt \
+          curl -fsSL -o /tmp/shfmt \
             https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
-          sudo chmod +x /usr/local/bin/shfmt
-      # shellcheck is preinstalled on ubuntu-* runners, so we invoke it directly.
-      # Avoid `apt-get update`, which refreshes every configured source (incl.
-      # unrelated third-party mirrors like dl.google.com) and intermittently fails
-      # the job when one is briefly out of sync — see issue #64.
+          echo "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1  /tmp/shfmt" | sha256sum -c -
+          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
+          curl -fsSL -o /tmp/sc.tar.xz \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
       - name: Lint pithead, build/* container scripts, and test scripts (shellcheck + shfmt)
         # Single source of truth: the Makefile `lint-sh` target (so the file list can't drift
         # between here and the Makefile). Covers build/*/*.sh — the entrypoints + healthchecks that

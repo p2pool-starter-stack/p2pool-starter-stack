@@ -31,6 +31,8 @@ test = [
   "pytest-mock>=3.14",
   "pytest-cov>=5",
   "pytest-aiohttp>=1.0",
+  # diff-cover (#286): patch-coverage gate — new/changed lines must be >=90% covered.
+  "diff-cover>=9",
 ]
 # Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
 # — lint output is version-sensitive, so a floor would let CI and a contributor disagree.

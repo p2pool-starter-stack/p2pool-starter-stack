@@ -46,7 +46,9 @@ then runs `ruff` (plus a few hygiene hooks) on your changed files. If you change
      non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
      on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
      (`lychee`) runs on a weekly schedule, not per-PR.
-   - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% coverage gate**).
+   - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% total coverage gate**).
+     CI also runs **`make test-patch-coverage`** (`diff-cover`): new/changed lines must be **≥ 90%**
+     covered vs `origin/develop` — the real ratchet that stops coverage rotting at the margin.
    - **test-stack** — the `pithead` shell test suite.
    - **test-compose** — `docker-compose.yml` interpolation validation.
    - **test-integration-selftest** — the integration harness's own pure logic.

@@ -1,11 +1,15 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml release
+.PHONY: test test-dashboard test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml release
 
 test: lint test-dashboard test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
-test-dashboard: ## Dashboard unit/component tests with coverage gate (deps from uv.lock)
+test-dashboard: ## Dashboard unit/component tests with coverage gate (deps from uv.lock); emits coverage.xml
 	cd build/dashboard && uv run --locked --extra test python -m pytest \
-		--cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
+		--cov=mining_dashboard --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+
+test-patch-coverage: ## diff-cover (#286): new/changed lines must be >=90% covered (run after test-dashboard)
+	cd build/dashboard && uv run --locked --extra test \
+		diff-cover coverage.xml --compare-branch=origin/develop --fail-under=90
 
 test-stack: ## pithead shell test suite
 	bash tests/stack/run.sh
