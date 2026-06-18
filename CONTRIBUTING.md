@@ -37,7 +37,7 @@ pre-commit install
    This runs everything CI does without a server or Docker:
 
    - **lint** — `shellcheck` over `pithead` and the test scripts (keep them
-     `--severity=warning` clean), plus `ruff` lint + format check over the dashboard.
+     `--severity=warning` clean), plus `ruff` lint + format check over all the repo's Python.
      Run one surface on its own with `make lint-sh` or `make lint-py`.
    - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% coverage gate**).
    - **test-stack** — the `pithead` shell test suite.

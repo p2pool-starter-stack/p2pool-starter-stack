@@ -8,11 +8,11 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.17
     hooks:
+      # Lints all repo Python; ruff discovers the right config per file (the dashboard package's
+      # pyproject.toml, or the root ruff.toml for the integration-test fakes).
       - id: ruff-check
         args: [--fix]
-        files: ^build/dashboard/
       - id: ruff-format
-        files: ^build/dashboard/
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

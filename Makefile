@@ -43,8 +43,8 @@ lint-sh: ## shellcheck the CLI, the build/* container scripts, the release scrip
 	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
 
-lint-py: ## ruff lint + format check on the dashboard (install ruff: pip install -e "build/dashboard[dev]")
-	cd build/dashboard && ruff check . && ruff format --check .
+lint-py: ## ruff lint + format check on all repo Python (install ruff: pip install -e "build/dashboard[dev]")
+	ruff check . && ruff format --check .
 
 # Cut a release from the private build/test server (gouda) — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:

@@ -16,6 +16,7 @@ Drive it:
 
 Use in-process (the contract test) via start_server().
 """
+
 import argparse
 import asyncio
 import json
@@ -117,8 +118,12 @@ def main():
     ap = argparse.ArgumentParser(description="Controllable fake Tari base node")
     ap.add_argument("--grpc-port", type=int, default=18142)
     ap.add_argument("--control-port", type=int, default=18152)
-    ap.add_argument("--mode", default="synced", choices=["synced", "syncing", "down"],
-                    help="initial state (the mini-stack boots 'syncing' to exercise the hold)")
+    ap.add_argument(
+        "--mode",
+        default="synced",
+        choices=["synced", "syncing", "down"],
+        help="initial state (the mini-stack boots 'syncing' to exercise the hold)",
+    )
     args = ap.parse_args()
     state = dict(DEFAULT_STATE, mode=args.mode)
     if args.mode == "syncing" and state["height"] >= state["target_height"]:
