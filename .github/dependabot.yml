@@ -20,6 +20,13 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # protobuf/grpcio are pinned to what the vendored Tari gRPC stubs assert at import time
+      # (see build/dashboard/pyproject.toml); a major bump needs the stubs regenerated first.
+      - dependency-name: "protobuf"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "grpcio"
+        update-types: ["version-update:semver-major"]
 
   # Base-image digests across every build/* Dockerfile (incl. the uv build image). This is the
   # mechanism that clears base-distro CVEs — e.g. the openssl point-release accepted in .trivyignore.
@@ -35,3 +42,8 @@ updates:
     groups:
       docker:
         patterns: ["*"]
+    ignore:
+      # Major/minor base bumps (e.g. python 3.11->3.14, ubuntu 24.04->26.04) are deliberate
+      # migrations, not security updates — keep Dependabot to digest + patch within the pinned tag.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
