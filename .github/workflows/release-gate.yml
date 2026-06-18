@@ -32,6 +32,10 @@ concurrency:
   group: release-gate
   cancel-in-progress: false
 
+# Least privilege (#282): this runs on a self-hosted box holding real keys — keep the token read-only.
+permissions:
+  contents: read
+
 jobs:
   release-gate:
     name: Tier-4 live matrix (real nodes)
@@ -45,7 +49,9 @@ jobs:
     # box; prefer an ephemeral / just-in-time runner in its own runner group.
     runs-on: [self-hosted, pithead-release]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Validate against the real synced nodes
         # Inputs go through env (not interpolated into the script) to avoid shell injection.
@@ -70,7 +76,7 @@ jobs:
 
       - name: Upload artifacts (redacted)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-gate-results
           path: tests/integration/results/

@@ -1,0 +1,13 @@
+# gitleaks secret-scan config (Wave 7 tooling, #282). Extends the upstream default ruleset.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Accepted false positives"
+regexTarget = "line"
+# curl auth assembled from shell ENV VARS (e.g. `-u "${USER:-}:${PASS:-}"`) is not a hardcoded
+# secret — the upstream `curl-auth-user` rule can't distinguish `${VAR}` from a literal credential.
+# This pattern only matches env-var expansions, so a real `-u "admin:hunter2"` is still caught.
+regexes = [
+  '''-u "\$\{[A-Z_]+:-\}:\$\{[A-Z_]+:-\}"''',
+]

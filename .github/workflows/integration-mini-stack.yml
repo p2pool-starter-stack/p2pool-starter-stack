@@ -13,12 +13,17 @@ on:
       - "build/dashboard/**"
       - ".github/workflows/integration-mini-stack.yml"
 
+permissions:
+  contents: read
+
 jobs:
   mini-stack:
     name: Fake-daemon mini-stack (docker)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
       # ubuntu-latest ships Docker with the Compose v2 plugin — no setup needed.
       - name: Run the fake-daemon mini-stack
         run: bash tests/integration/mini-stack/run-mini-stack.sh
