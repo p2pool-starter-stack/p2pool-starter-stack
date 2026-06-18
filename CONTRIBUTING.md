@@ -40,9 +40,12 @@ then runs `ruff` (plus a few hygiene hooks) on your changed files. If you change
 
    This runs everything CI does without a server or Docker:
 
-   - **lint** — `shellcheck` over `pithead` and the test scripts (keep them
-     `--severity=warning` clean), plus `ruff` lint + format check over all the repo's Python.
-     Run one surface on its own with `make lint-sh` or `make lint-py`.
+   - **lint** — every file surface gets a linter/formatter check (`make lint` runs them all; run one
+     with `make lint-<surface>`): `lint-sh` (shellcheck + shfmt), `lint-py` (ruff), `lint-js` (Biome),
+     `lint-yaml` (yamllint), `lint-md` (markdownlint), `lint-proto` (buf), `lint-toml` (taplo). The
+     non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
+     on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
+     (`lychee`) runs on a weekly schedule, not per-PR.
    - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% coverage gate**).
    - **test-stack** — the `pithead` shell test suite.
    - **test-compose** — `docker-compose.yml` interpolation validation.
