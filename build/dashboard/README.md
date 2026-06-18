@@ -53,9 +53,8 @@ It is a proper installable package (`pyproject.toml`): all internal imports are 
 ## Development
 
 ```bash
-# from build/dashboard/
-python3 -m venv .venv && source .venv/bin/activate     # Python 3.11+
-pip install -e ".[test]"
+# from build/dashboard/ — uv creates .venv and installs from the hashed uv.lock (Python 3.11+)
+uv sync --extra test
 ```
 
 ## Tests
@@ -81,6 +80,6 @@ via the `state_manager` fixture and the auto-applied DB-isolation fixture in `te
 
 The `Dockerfile` is multi-stage:
 
-- `base` — system deps + package metadata + source.
-- `test` — `pip install -e .[test]` then `pytest --cov-fail-under=80` (build with `--target test`).
-- `production` — runtime install + entrypoint (the default `docker compose build` target).
+- `base` — uv (digest-pinned) + system deps + lock/metadata + source.
+- `test` — `uv sync --locked --extra test` then `pytest --cov-fail-under=80` (build with `--target test`).
+- `production` — `uv sync --locked` (runtime deps only) + entrypoint (the default `docker compose build` target).

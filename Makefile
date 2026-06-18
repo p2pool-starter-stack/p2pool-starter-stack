@@ -3,8 +3,8 @@
 
 test: lint test-dashboard test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
-test-dashboard: ## Dashboard unit/component tests with coverage gate
-	cd build/dashboard && PYTHONPATH=. python3 -m pytest \
+test-dashboard: ## Dashboard unit/component tests with coverage gate (deps from uv.lock)
+	cd build/dashboard && uv run --locked --extra test python -m pytest \
 		--cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
 
 test-stack: ## pithead shell test suite
@@ -17,7 +17,7 @@ test-integration-selftest: ## Integration harness pure-logic self-test (no serve
 	bash tests/integration/selftest.sh
 
 test-fakes: ## Fake-daemon contract test — real dashboard clients vs controllable fakes (no docker)
-	PYTHONPATH=build/dashboard python3 -m pytest tests/integration/fakes -q
+	uv run --locked --project build/dashboard --extra test python -m pytest tests/integration/fakes -q
 
 test-mini-stack: ## Fake-daemon docker mini-stack end-to-end (needs docker; CI)
 	bash tests/integration/mini-stack/run-mini-stack.sh
@@ -43,8 +43,9 @@ lint-sh: ## shellcheck the CLI, the build/* container scripts, the release scrip
 	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
 
-lint-py: ## ruff lint + format check on all repo Python (install ruff: pip install -e "build/dashboard[dev]")
-	ruff check . && ruff format --check .
+lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
+	uv run --locked --project build/dashboard --extra dev ruff check .
+	uv run --locked --project build/dashboard --extra dev ruff format --check .
 
 # Cut a release from the private build/test server (gouda) — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:
