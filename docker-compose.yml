@@ -201,12 +201,12 @@ services:
       - --zmq-port
       - "${MONERO_ZMQ_PORT}"
       - --wallet
-      - ${MONERO_WALLET_ADDRESS} 
+      - ${MONERO_WALLET_ADDRESS}
       - --merge-mine
       - tari://${NETWORK_PREFIX:-172.28.0}.27:18142
       - ${TARI_WALLET_ADDRESS}
       - --onion-address
-      - ${P2POOL_ONION_ADDRESS} 
+      - ${P2POOL_ONION_ADDRESS}
       - --local-api
       - --stratum
       - 0.0.0.0:3333
@@ -492,7 +492,7 @@ services:
 
 # --- Volumes ---
 volumes:
-  caddy_data: 
+  caddy_data:
 
 # --- Network Configuration ---
 networks:

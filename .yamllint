@@ -1,0 +1,15 @@
+# yamllint config (Wave 7 tooling, #281). Extends the default ruleset; relaxes the rules that
+# fight our house style while keeping the hygiene ones (trailing space, tabs, final newline, etc.).
+extends: default
+rules:
+  line-length: disable          # config/comments/URLs run long — not worth gating or wrapping
+  document-start: disable       # we don't use a leading `---`
+  truthy:
+    check-keys: false           # allow GitHub Actions' `on:` key (otherwise flagged truthy)
+  comments:
+    min-spaces-from-content: 1   # we use `value  # comment` with a single space in places
+  comments-indentation: disable
+  # docker-compose.yml's `dashboard` service block has a pre-existing 6-space indent (vs 4-space
+  # siblings); re-indenting a live compose file is out of scope for a tooling PR (tracked separately).
+  # Structural validity is enforced by tests/stack/test_compose.sh.
+  indentation: disable
