@@ -1,6 +1,12 @@
 """Tests for the #170 egress-posture derivation."""
 
-from mining_dashboard.service.egress import CLEARNET, INACTIVE, TOR, compute_egress_posture
+from mining_dashboard.service.egress import (
+    CLEARNET,
+    INACTIVE,
+    TOR,
+    compute_egress_posture,
+    compute_topology,
+)
 
 # The privacy-safe resting config: firewall on, p2pool over Tor, XvB over Tor, local node, no sync.
 SAFE = {
@@ -87,3 +93,91 @@ def test_clearnet_initial_sync_surfaces_only_when_enabled():
 
 def test_monerod_p2p_always_tor():
     assert _conn(_posture(firewall=False), "monerod", "Monero P2P")["route"] == TOR
+
+
+# --- Topology (#170 trust-boundary view) -----------------------------------------------
+
+
+def _topo(**overrides):
+    return compute_topology(**{**SAFE, **overrides})
+
+
+def _edge(topo, src, dst):
+    return next(e for e in topo["edges"] if e["from"] == src and e["to"] == dst)
+
+
+def _from(topo, src):
+    return [e for e in topo["edges"] if e["from"] == src]
+
+
+def test_topology_summary_is_shared_with_egress_list():
+    # The badge can never disagree with the map: same knobs in, identical summary out.
+    for overrides in ({}, {"xvb_tor": False}, {"p2pool_clearnet": True, "firewall": False}):
+        assert _topo(**overrides)["summary"] == _posture(**overrides)["summary"]
+
+
+def test_topology_safe_has_no_leaks_and_hub_nodes():
+    topo = _topo()
+    ids = {n["id"] for n in topo["nodes"]}
+    assert {"tor", "internet", "rigs", "browser"} <= ids
+    assert not any(e.get("leak") for e in topo["edges"])
+    assert topo["summary"]["all_tor"] is True
+
+
+def test_topology_lan_ingress_edges():
+    topo = _topo()
+    rigs = _edge(topo, "rigs", "xmrig-proxy")
+    assert rigs["kind"] == "ingress" and rigs["route"] == "local"
+    assert _edge(topo, "browser", "caddy")["kind"] == "ingress"
+
+
+def test_topology_daemon_p2p_is_bidirectional_over_tor():
+    topo = _topo()
+    for daemon in ("monerod", "tari", "p2pool"):
+        edge = _edge(topo, daemon, "tor")
+        assert edge["kind"] == "p2p", daemon  # egress + onion ingress
+        assert edge["route"] == TOR, daemon
+
+
+def test_topology_clearnet_link_bypasses_the_tor_hub():
+    # A clearnet route must land on `internet`, not `tor`, so a leak visibly skips the hub.
+    topo = _topo(p2pool_clearnet=True, firewall=False)
+    edge = _edge(topo, "p2pool", "internet")
+    assert edge["route"] == CLEARNET and edge["leak"] is True
+    assert not any(e["to"] == "tor" and e["from"] == "p2pool" for e in topo["edges"])
+
+
+def test_topology_clearnet_blocked_by_firewall_is_not_a_leak():
+    topo = _topo(p2pool_clearnet=True, firewall=True)
+    edge = _edge(topo, "p2pool", "internet")
+    assert edge.get("blocked_by_firewall") is True and edge.get("leak") is None
+    assert topo["summary"]["all_tor"] is True
+
+
+def test_topology_host_networked_dashboard_xvb_leaks_but_proxy_is_blocked():
+    topo = _topo(xvb_tor=False, firewall=True)
+    # The dashboard's XvB stats fetch is host-networked → the #270 firewall can't cover it.
+    assert _edge(topo, "dashboard", "internet")["leak"] is True
+    # The xmrig-proxy XvB dial IS a container → the firewall blocks its clearnet route.
+    assert _edge(topo, "xmrig-proxy", "internet").get("blocked_by_firewall") is True
+
+
+def test_topology_xvb_disabled_is_inactive_not_a_leak():
+    topo = _topo(xvb_enabled=False)
+    assert _edge(topo, "xmrig-proxy", "tor")["route"] == INACTIVE
+    assert _edge(topo, "dashboard", "tor")  # update check still present
+    assert not any(e.get("leak") for e in topo["edges"])
+
+
+def test_topology_internal_mesh_is_flagged_and_includes_merge_mining():
+    topo = _topo()
+    merge = _edge(topo, "p2pool", "tari")
+    assert merge["kind"] == "internal" and "merge-mine" in merge["label"]
+    docker = next(n for n in topo["nodes"] if n["id"] == "docker")
+    assert docker.get("internal") is True
+
+
+def test_topology_clearnet_sync_adds_bypass_edge():
+    topo = _topo(monero_clearnet_sync=True, firewall=False)
+    edge = _edge(topo, "monerod", "internet")
+    assert edge["route"] == CLEARNET and edge["leak"] is True

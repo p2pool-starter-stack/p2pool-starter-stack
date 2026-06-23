@@ -815,3 +815,79 @@ tr:last-child td {
 .egress-note {
   font-style: italic;
 }
+
+/* Stack topology panel (#170). */
+.topo-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.8em;
+  margin-bottom: 0.4rem;
+}
+.topo-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-muted);
+}
+.topo-sw {
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 2px;
+  display: inline-block;
+}
+.topo-toggle {
+  margin-left: auto;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font-size: inherit;
+  cursor: pointer;
+}
+.topo-toggle:hover {
+  border-color: var(--accent);
+}
+.topo-svg {
+  width: 100%;
+  height: auto;
+}
+.topo-zone {
+  fill: var(--text-muted);
+  font-size: 10px;
+  text-anchor: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.topo-node rect {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.topo-node text {
+  fill: var(--text);
+  font-size: 11px;
+}
+.topo-hub rect {
+  stroke: var(--ok);
+  stroke-width: 1.5;
+}
+.topo-ext rect {
+  fill: transparent;
+  stroke-dasharray: 3 2;
+}
+.topo-ext text {
+  fill: var(--text-muted);
+}
+/* The per-component egress list, demoted to an expandable drawer under the topology map. */
+.egress-details {
+  margin-top: 0.6rem;
+  font-size: 0.9em;
+}
+.egress-details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}

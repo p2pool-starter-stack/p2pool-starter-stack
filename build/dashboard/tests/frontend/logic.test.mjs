@@ -19,7 +19,7 @@ import {
     parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
-    egressRoute,
+    egressRoute, boxAnchor,
 } from '../../mining_dashboard/web/static/logic.mjs';
 
 const col = (key) => WORKER_COLUMNS.findIndex((c) => c.key === key);
@@ -308,4 +308,16 @@ test('egressRoute: known routes map to icon/label/class; unknown falls back to m
     const unknown = egressRoute('weird');
     assert.equal(unknown.cls, 'muted');
     assert.equal(unknown.label, 'weird');
+});
+
+// #170: boxAnchor returns the point on a node box's border heading toward a target — for topology
+// connectors that start/end flush on the box edge.
+test('boxAnchor: lands on the border facing the target, not the centre', () => {
+    const node = { x: 100, y: 100, w: 40, h: 20 }; // centre (120, 110)
+    // Target straight to the right → exits the right edge (x = 140) at the centre height.
+    assert.deepEqual(boxAnchor(node, 300, 110), { x: 140, y: 110 });
+    // Target straight up → exits the top edge (y = 100) at the centre width.
+    assert.deepEqual(boxAnchor(node, 120, 0), { x: 120, y: 100 });
+    // Degenerate (target == centre) → the centre itself, no NaN.
+    assert.deepEqual(boxAnchor(node, 120, 110), { x: 120, y: 110 });
 });

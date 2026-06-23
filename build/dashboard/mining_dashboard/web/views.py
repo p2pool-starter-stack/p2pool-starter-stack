@@ -33,7 +33,7 @@ from mining_dashboard.helper.utils import (
     is_ip_address,
 )
 from mining_dashboard.service.earnings import xmr_per_hs_day
-from mining_dashboard.service.egress import egress_posture_from_config
+from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.version import resolve_version
 
@@ -840,6 +840,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     pool_net = build_pool_network(data, metrics)
 
     egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)
+    topology = (
+        topology_from_config()
+    )  # full stack wiring for the topology panel (#170); shares summary
     badges = build_badges(data, metrics, mode_tok, db_healthy)
     badges.append(_egress_badge(egress["summary"]))  # glanceable Tor-only / leak header badge
 
@@ -874,6 +877,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "workers": build_workers(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),
         "egress": egress,
+        "topology": topology,
         "chart": build_chart(history, data.get("shares", []), range_arg, window, avg_window),
     }
 

@@ -223,6 +223,22 @@ export function egressRoute(route) {
   return EGRESS_ROUTES[route] || { icon: "❔", label: route || "unknown", cls: "muted" };
 }
 
+// Topology edge routing (#170): the point on a node box's border heading toward a target point, so
+// a connector starts/ends flush on the box edge (not its centre). Pure geometry — `node` is
+// {x, y, w, h}; (tx, ty) the target centre. Used by the StackTopology SVG and unit-tested directly.
+export function boxAnchor(node, tx, ty) {
+  const cx = node.x + node.w / 2;
+  const cy = node.y + node.h / 2;
+  const dx = tx - cx;
+  const dy = ty - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+  // Scale the direction vector until it hits the nearest border (half-width / half-height).
+  const sx = dx !== 0 ? node.w / 2 / Math.abs(dx) : Infinity;
+  const sy = dy !== 0 ? node.h / 2 / Math.abs(dy) : Infinity;
+  const s = Math.min(sx, sy);
+  return { x: cx + dx * s, y: cy + dy * s };
+}
+
 // Width of a stacked hashrate band's top border-line for one chart segment. Returns 0 when the band
 // has zero height across the segment (both endpoints y === 0), so a flat-zero series doesn't paint
 // its colored border-line over the other series' edge — the "blue-purple at 100% P2Pool" artifact,
