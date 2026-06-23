@@ -107,6 +107,15 @@ mining** (#166) — route over Tor **by default**. Each has an opt-out for opera
 exposure for maximum yield (Tor latency can raise stale/uncle shares and rejects). The two sections
 below document the routing and how to opt out.
 
+**What Tor costs you (measured).** A 5-day interleaved benchmark on `mini` (#256 — full
+[methodology + data](benchmarks/tor-vs-clearnet.md)) puts the price of routing P2Pool over Tor at
+**roughly 10 % of mining yield** (−11 % reward share / yield-efficiency vs clearnet, just above the
+run's noise floor). The cause is pure share-propagation **latency**: there were **zero extra rejected
+shares** and **no measurable Tor CPU overhead** — the loss is shares arriving late enough to land as
+uncles. We keep Tor the default anyway, because not leaking your home IP to the P2Pool network is the
+point and ~10 % is a modest, opt-out-able price. The cost is largest on the smaller/faster sidechains
+(where your share of the chain is biggest) and negligible on `main`.
+
 ### P2Pool outbound peers (#165) — ✅ Tor by default
 
 P2Pool advertises its onion for *inbound* peers but, without a SOCKS proxy, would dial *outbound*
@@ -119,11 +128,12 @@ your IP — worse on `--mini`/`--nano`): set `p2pool.clearnet: true` in `config.
 `pithead apply`. For the strictest posture — refuse clearnet peers entirely (onion-only) — P2Pool
 also has a `--no-clearnet-p2p` flag, not yet wired to its own config knob.
 
-Then `docker compose up -d p2pool`. **Trade-off:** Tor adds latency to share propagation, which can
-raise your orphan/uncle rate (most noticeable on mini/nano), and `--no-clearnet-p2p` shrinks your
-peer set to onion-only. Measure the effect on your earnings before keeping it — which is exactly why
-the Tor-by-default flip is a benchmarked **v1.1** change (#165), not a v1.0 default. (This hand-edit
-lives in `docker-compose.yml`, so re-apply it after a stack update until #165 lands.)
+**Trade-off (measured):** Tor adds latency to share propagation, costing **~10 % of yield on `mini`**
+(#256 — the loss is uncles/late shares, not rejects; see the box above), and `--no-clearnet-p2p`
+shrinks your peer set to onion-only. The Tor-by-default flip was gated on that benchmark, which is why
+it's a v1.1 change (#165), not a v1.0 default. Note the `p2pool.clearnet: true` opt-out only began
+working once #294 fixed a config bug that had silently pinned the egress firewall on — on a current
+build it takes effect after `pithead apply`.
 
 ### XvB donation mining (#166) — ✅ Tor by default
 

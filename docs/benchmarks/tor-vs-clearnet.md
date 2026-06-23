@@ -168,12 +168,52 @@ trade-off, and it sets the final default for #165/#166 **before** the v1.1 relea
 
 ## Results
 
-_Pending the multi-day run. To be filled with: a per-arm table (reward share, yield efficiency,
-effort, uncle count, peers, rejects, Tor overhead), the noise floor, and the recommendation._
+**Run:** `mini`, 2026-06-17 → 2026-06-22 (~5 days), 6 × 20h blocks interleaved T/C/T/C/T/C (3 per arm),
+first 3h of each block discarded. Full fleet **miner-0..7 ≈ 269 kH/s held constant**, **XvB disabled**
+so the whole fleet hit p2pool in both arms. The sidechain grew from ~14.7 to ~20.9 MH/s over the run
+(our share drifted ~1.8 % → ~1.3 %) — which is exactly why the yield-efficiency ratio (reward ÷
+hashrate share) is the headline metric, not raw reward share. ~1,220 post-settle snapshots total.
+Reproduce: `python3 tests/integration/benchmarks/bench-analyze.py docs/benchmarks/data/run-2026-06-17-mini`
+— the raw per-arm JSONL + `events.log` are committed there (originals on gouda at `~/pithead-bench/`).
 
-| Arm | Pool | Days | Reward share | Yield eff. | Avg effort | Uncles | Peers | Rejects | Tor CPU/mem |
-|---|---|---|---|---|---|---|---|---|---|
-| _clearnet_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | — |
-| _Tor_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+**Per-arm** (mean of the 3 block means; ± is the block-to-block stdev — the noise floor):
 
-**Recommendation:** _pending._
+| Arm | Blocks | Reward share % | Yield-efficiency | Avg effort % | Shares | Rejects | Peers | Tor-daemon CPU |
+|---|---|---|---|---|---|---|---|---|
+| clearnet | 3 | **1.375 ± 0.132** | **1.054 ± 0.085** | 89.9 | 292 | 0 | 10.0 | 19.6 % |
+| Tor | 3 | **1.218 ± 0.157** | **0.933 ± 0.098** | 112.9 | 270 | 0 | 10.2 | 18.7 % |
+| **Δ (Tor vs clearnet)** | | **−11.4 %** | **−11.5 %** | +23 pts | −7.5 % | — | ≈0 | ≈0 |
+
+**Per-block** (transparency — note the ranges overlap):
+
+| Blk | Arm | Reward % | Yield-eff | Effort % | Shares |
+|---|---|---|---|---|---|
+| 1 | Tor | 1.396 | 0.860 | 111.8 | 107 |
+| 2 | clearnet | 1.543 | 0.969 | 95.6 | 111 |
+| 3 | Tor | 1.013 | 0.869 | 125.0 | 76 |
+| 4 | clearnet | 1.363 | 1.170 | 86.3 | 94 |
+| 5 | Tor | 1.245 | 1.071 | 101.9 | 87 |
+| 6 | clearnet | 1.220 | 1.024 | 87.7 | 87 |
+
+**Findings:**
+1. **Tor costs ≈ 10–12 % of p2pool yield** on `mini`. Reward share and yield-efficiency agree (−11.4 % /
+   −11.5 %), and the direction is consistent across the run.
+2. **The cost is propagation latency, not anything else.** Rejects were **0 in both arms**, the Tor
+   daemon used the **same CPU** in both (~19 % — monerod + Tari route over Tor regardless of arm), and
+   peer counts matched (~10). The only moving part is share-propagation delay over Tor, which shows up
+   as **higher effort on Tor (113 % vs 90 %)** — more hashing per counted share, i.e. more shares
+   landing as uncles / too late for the PPLNS window.
+3. **Confidence: moderate, not precise.** With 3 blocks per arm the ~11 % effect sits only modestly
+   above the clearnet block-to-block noise floor (±8–10 %), and per-block yield-eff ranges overlap
+   (Tor 0.86–1.07 vs clearnet 0.97–1.17). Read it as "**roughly 10 %**", economically real and
+   directionally robust, but not a tight point estimate — a longer run would narrow the interval.
+
+**Recommendation — keep Tor the default (#165/#166 ship as-is in `develop`).** Per the decision rule
+this is the "materially below clearnet" case, so the trade-off is documented rather than hidden: not
+exposing the operator's home IP to the P2Pool network is the project's core value, and **~10 % is a
+modest, opt-out-able price** for it. Operators who prioritise yield over IP privacy can set
+`p2pool.clearnet: true` (now actually functional — it was a no-op until the #294 firewall-toggle fix
+found during this benchmark) and accept the exposure. No per-sidechain split is warranted: the
+mechanism is the ~10 s share interval, common to every sidechain, so `mini` is representative (the
+absolute cost is largest on the smaller, faster chains where our share — and thus uncle sensitivity —
+is highest). This conclusion is mirrored operator-facing in [`../privacy.md`](../privacy.md).
