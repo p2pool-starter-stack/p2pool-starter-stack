@@ -67,21 +67,25 @@ yourself. Different tools for different goals.
 
 ### Is my home IP exposed?
 
-**Mostly not — with two clearnet exceptions today, plus a one-time exposure at install.** A built-in
-Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so **inbound** connections
-need no port forwarding and don't reveal your IP. Monero and Tari route P2P and transaction traffic
-over Tor, and their old clearnet DNS lookups are closed.
+**Mostly not — with the Tor defaults, the only time your IP leaves the box is the one-time install.**
+A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so **inbound**
+connections need no port forwarding and don't reveal your IP. Monero and Tari route P2P and transaction
+traffic over Tor, and their old clearnet DNS lookups are closed.
+
+The two former clearnet yield paths are **Tor-by-default as of v1.1**, each with a yield-vs-privacy opt-out:
+
+- **P2Pool's outbound sidechain peers** (#165) — Tor-routed by default. You may opt into clearnet
+  (`p2pool.clearnet: true`) for ~10 % more yield on `mini`, at the cost of exposing your IP — see the
+  [Tor-vs-clearnet benchmark](benchmarks/tor-vs-clearnet.md).
+- **XvB donation mining** (#166) — only if XvB is enabled; the donation connection to `xmrvsbeast.com`
+  is Tor-routed by default (opt out with `xvb.tor: false`). The XvB *stats* fetch is Tor-routed too.
 
 What still touches clearnet (and so can reveal your IP):
 
-- **P2Pool's outbound sidechain peers** — clearnet today; Tor-by-default is planned for v1.1 (#165),
-  and you can route it through Tor now (see the privacy guide).
-- **XvB donation mining** — only if XvB is enabled; clearnet to `xmrvsbeast.com`. Disable XvB to stop
-  it, or wait for the v1.1 Tor routing (#166). (The XvB *stats* fetch is already Tor-routed.)
 - **Install / build** fetches code and container images from GitHub, getmonero.org, and the image
   registries once — inherent and integrity-pinned, but it reveals your IP at that moment.
 
-**Bottom line:** with XvB disabled, on a normal home connection behind NAT the only time your IP
+**Bottom line:** on a normal home connection behind NAT, with the Tor defaults, the only time your IP
 leaves the box is that one-time install.
 
 See **[Privacy & network egress](privacy.md)** for every connection and how to harden each one.

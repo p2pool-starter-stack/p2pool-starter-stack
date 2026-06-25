@@ -1,8 +1,11 @@
 # Benchmark: mining over Tor vs clearnet (#256)
 
-> **Status: methodology — results pending.** This documents *what* we measure, *from where*, and
-> *how we decide*, so the run is reproducible and the conclusion is honest. The results table at the
-> bottom is filled in after the multi-day run on the [gouda test bench](../../tests/integration/gouda-testbench-README.md).
+> **Status: complete (2026-06-22).** Headline: routing p2pool over Tor costs **≈10 % of mining yield**
+> on `mini` — the cost is propagation latency (uncle/late shares), not rejects, and **Tor stays the
+> default**. This document records *what* we measured, *from where*, and *how we decided*, with the
+> full per-arm results and the committed raw data in [Results](#results). The methodology and decision
+> rule below were fixed **before** the run (pre-registration); the run executed on the
+> [gouda test bench](../../tests/integration/gouda-testbench-README.md).
 
 ## The question
 
@@ -77,11 +80,13 @@ These explain *why* the yield moved (or confirm it didn't) and are all available
   **~11 % of the chain**, large enough that our own latency would drag it and *overstate* the Tor
   penalty. The uncle/orphan rate is set by the ~10 s share interval — the same on every sidechain —
   so the `mini` result generalises to `main`/`nano`.)
-- **Design — INTERLEAVED A/B** (not one long block per arm): alternate **T → C → T → C in ~1.5–2-day
-  blocks** so each arm samples the same diurnal / weekly / network-weather range. (A "5 days Tor then
-  5 days clearnet" layout would confound the arm with the calendar period.) **Discard the first ~6 h
-  after each switch** while p2pool reconnects + the PPLNS window re-stabilises. Run until each arm has
-  **≥ ~500–1000 of our shares** (≈ 10–12 calendar days at ~155/day).
+- **Design — INTERLEAVED A/B** (not one long block per arm): alternate **T → C → T → C** in fixed
+  **20 h blocks** so each arm samples the same diurnal / weekly / network-weather range. (A "5 days Tor
+  then 5 days clearnet" layout would confound the arm with the calendar period.) **Discard the first
+  3 h after each switch** while p2pool reconnects + the PPLNS window re-stabilises. As run: **6 blocks,
+  3 per arm, over ~5 days**, yielding ~270–290 of our shares per arm. That is below the ideal ≥500 — a
+  deliberately shortened schedule — which is exactly why the result is reported as "roughly 10 %"
+  rather than a tight point estimate (see the confidence note in [Results](#results)).
   - **Arm T (Tor):** `p2pool.clearnet=false` (`--socks5`), `tor_egress_firewall=true`, `xvb.tor=true` —
     the `develop` defaults (fail-closed, egress-gated).
   - **Arm C (clearnet):** `p2pool.clearnet=true`, `tor_egress_firewall=false`, `xvb.tor=false`. The
@@ -141,15 +146,16 @@ laptop / SSH session is only an optional observer. Three layers:
 tests/integration/benchmarks/bench-orchestrate.sh --calibrate --pool mini
 
 # 2. start the autonomous interleaved run + install the watchdog cron
-nohup tests/integration/benchmarks/bench-orchestrate.sh \
-      --pool mini --block-hours 36 --settle-hours 6 --target-shares 800 >/dev/null 2>&1 &
+#    (the exact invocation used for the run recorded in Results)
+nohup tests/integration/benchmarks/bench-orchestrate.sh run \
+      --pool mini --block-hours 20 --blocks 6 --settle-hours 3 --interval 300 >/dev/null 2>&1 &
 tests/integration/benchmarks/bench-orchestrate.sh --install-cron   # */15 + @reboot watchdog
 
 # 3. check from anywhere over Tailscale
 ssh gouda bench-status
 ssh gouda tail -n 40 pithead-bench/health.log
 
-# 4. graceful stop (restores the develop default, removes the cron, keeps the JSONL data)
+# 4. graceful stop (restores the Tor default + egress firewall + re-enables XvB, removes the cron, keeps the JSONL)
 tests/integration/benchmarks/bench-orchestrate.sh --stop
 ```
 
