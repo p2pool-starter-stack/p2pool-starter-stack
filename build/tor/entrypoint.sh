@@ -7,6 +7,6 @@ set -eu
 
 : "${NETWORK_PREFIX:=172.28.0}"
 
-sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" /etc/tor/torrc.template > /tmp/torrc
+sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" /etc/tor/torrc.template >/tmp/torrc
 
 exec tor -f /tmp/torrc

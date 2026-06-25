@@ -5,31 +5,50 @@ on:
     branches: [main, develop]
   pull_request:
 
+# Least privilege (#282): every job here only reads the repo — none push commits, comment, or
+# publish packages. Narrowing the default GITHUB_TOKEN limits the blast radius of a compromised step.
+permissions:
+  contents: read
+
 jobs:
   dashboard:
     name: Dashboard tests (pytest + coverage)
     runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_DOWNLOADS: never  # use the setup-python 3.11; don't fetch another interpreter
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # full history so diff-cover can diff the PR against origin/develop (#286)
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
-      - name: Install dashboard with test extras
-        run: pip install -e "build/dashboard[test]"
-      - name: Run pytest with coverage gate
-        working-directory: build/dashboard
-        run: python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
+      - name: "Install uv (pinned — reproducible, hash-locked installs, #283)"
+        # Curl the pinned installer (same posture as hadolint below); avoids a mutable-tag action.
+        run: |
+          export UV_INSTALL_DIR="$HOME/.local/bin"   # deterministic install dir (runners may set CARGO_HOME)
+          curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+          echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
+      - name: Dashboard tests + coverage gate (emits coverage.xml)
+        run: make test-dashboard
+      - name: "Patch-coverage gate — changed lines >=90% (diff-cover vs origin/develop, #286)"
+        run: |
+          git fetch --no-tags origin develop
+          make test-patch-coverage
       - name: Fake-daemon contract test (real clients vs controllable fakes)
         # Points the real Monero/Tari clients at the integration fakes and asserts they parse
         # every state (synced/syncing/down). Docker-free, so it runs on every PR (issue #54).
-        run: PYTHONPATH=build/dashboard python -m pytest tests/integration/fakes -q
+        run: make test-fakes
 
   frontend:
     name: Frontend logic tests (node --test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
       # Pure client logic (worker sort, tooltip formatting) lives in static/logic.mjs and is
@@ -42,7 +61,9 @@ jobs:
     name: Dashboard image (Docker test stage)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Build the dashboard test stage (installs package + runs the suite in-container)
         run: docker build --target test ./build/dashboard
 
@@ -59,38 +80,125 @@ jobs:
       matrix:
         service: [monero, p2pool, tor, xmrig-proxy, dashboard]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: docker build ./build/${{ matrix.service }}
         run: docker build -t "pithead-${{ matrix.service }}:ci" "./build/${{ matrix.service }}"
+      - name: Scan image for CVEs (Trivy)
+        # Gate on actionable (fixable) HIGH/CRITICAL only; accepted findings live in .trivyignore.
+        # Must stay green before v1.1 images publish (#282).
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: pithead-${{ matrix.service }}:ci
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
 
   hadolint:
     name: Dockerfile lint (hadolint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install hadolint
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: "Install hadolint (pinned + sha256-verified, #286)"
         run: |
-          sudo curl -fsSL -o /usr/local/bin/hadolint \
+          curl -fsSL -o /tmp/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
-          sudo chmod +x /usr/local/bin/hadolint
+          echo "56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010  /tmp/hadolint" | sha256sum -c -
+          sudo install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
       - name: Lint all build/* Dockerfiles (config in .hadolint.yaml)
         run: hadolint build/*/Dockerfile
+
+  python-lint:
+    name: Python lint + format (ruff)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install uv (pinned)
+        run: |
+          export UV_INSTALL_DIR="$HOME/.local/bin"   # deterministic install dir (runners may set CARGO_HOME)
+          curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+          echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
+      - name: ruff check + format --check (config in build/dashboard/pyproject.toml + root ruff.toml)
+        # Single source of truth: the Makefile `lint-py` target, which runs ruff via uv from the
+        # locked `dev` extra — one pinned ruff for CI, pre-commit, and local devs.
+        run: make lint-py
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # full history so the scan covers every commit, not just the tip
+      - name: Scan git history for secrets (gitleaks, pinned by digest)
+        # Run the binary via its pinned image (the gitleaks-action requires a license for org repos).
+        # Accepted false positives live in .gitleaks.toml.
+        run: |
+          docker run --rm -v "$PWD":/repo \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git /repo --no-banner --redact --config /repo/.gitleaks.toml
+
+  zizmor:
+    name: Workflow audit (zizmor)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install uv (pinned)
+        run: |
+          export UV_INSTALL_DIR="$HOME/.local/bin"
+          curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+          echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
+      - name: Audit workflows (injection, token scope, self-hosted-runner risks)
+        run: uvx zizmor@1.25.2 --offline .github/workflows/
 
   shell:
     name: Shell tests (shellcheck + pithead suite)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # shellcheck is preinstalled on ubuntu-* runners, so we invoke it directly.
-      # Avoid `apt-get update`, which refreshes every configured source (incl.
-      # unrelated third-party mirrors like dl.google.com) and intermittently fails
-      # the job when one is briefly out of sync — see issue #64.
-      - name: Lint pithead, build/* container scripts, and test scripts
-        # Single source of truth: the Makefile `lint` target (so the file list can't drift between
-        # here and `make lint`). Now also covers build/*/*.sh — the entrypoints + healthchecks that
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: "Install shellcheck + shfmt (pinned + sha256-verified, #286)"
+        # Direct upstream-release downloads with a sha256 check (RigForge convention) instead of the
+        # runner's preinstalled shellcheck / apt — reproducible, and immune to the apt-mirror
+        # flakiness of #64. Keep these pins in sync with the local-dev tooling.
+        run: |
+          curl -fsSL -o /tmp/shfmt \
+            https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+          echo "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1  /tmp/shfmt" | sha256sum -c -
+          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
+          curl -fsSL -o /tmp/sc.tar.xz \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+      - name: Lint pithead, build/* container scripts, and test scripts (shellcheck + shfmt)
+        # Single source of truth: the Makefile `lint-sh` target (so the file list can't drift
+        # between here and the Makefile). Covers build/*/*.sh — the entrypoints + healthchecks that
         # run in every container (#124). Gate on warnings+errors; info-level style nits vary by
-        # shellcheck version.
-        run: make lint
+        # shellcheck version. Python lint runs in its own `python-lint` job (ruff isn't on this
+        # runner; `make lint` runs both for local devs).
+        run: make lint-sh
       - name: Run pithead test suite
         run: bash tests/stack/run.sh
       - name: Run integration harness self-test
@@ -107,6 +215,32 @@ jobs:
     name: Compose config + security hardening
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Validate docker-compose.yml interpolation + hardening invariants (#90)
         run: bash tests/stack/test_compose.sh
+
+  lint-surfaces:
+    name: Lint per-surface (biome, yaml, markdown, proto, toml)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install uv (pinned)
+        run: |
+          export UV_INSTALL_DIR="$HOME/.local/bin"
+          curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+          echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
+      - name: Lint JS/CSS (Biome), YAML, Markdown, proto (buf), TOML (taplo)
+        # Single source of truth: the Makefile targets. Tools run via npx/uvx/docker (preinstalled).
+        run: make lint-js lint-yaml lint-md lint-proto lint-toml

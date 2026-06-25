@@ -1,0 +1,2 @@
+# taplo (TOML formatter) config (Wave 7 tooling, #281).
+exclude = ["**/uv.lock", "**/.venv/**", "**/node_modules/**"]

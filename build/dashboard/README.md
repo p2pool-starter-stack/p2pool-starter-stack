@@ -53,9 +53,8 @@ It is a proper installable package (`pyproject.toml`): all internal imports are 
 ## Development
 
 ```bash
-# from build/dashboard/
-python3 -m venv .venv && source .venv/bin/activate     # Python 3.11+
-pip install -e ".[test]"
+# from build/dashboard/ — uv creates .venv and installs from the hashed uv.lock (Python 3.11+)
+uv sync --extra test
 ```
 
 ## Tests
@@ -77,10 +76,21 @@ docker build --target test ./build/dashboard
 Tests are hermetic — no network, no containers, no real database (an in-memory SQLite is used
 via the `state_manager` fixture and the auto-applied DB-isolation fixture in `tests/conftest.py`).
 
+Two coverage ratchets back the suite: a **total** floor (`--cov-fail-under=80`) and a **patch** gate
+(`make test-patch-coverage` → `diff-cover` ≥ 90% on changed lines, #286). The money/numeric logic
+(earnings, the XvB controller, the donation simulator) also has **property-based tests**
+(`hypothesis`, #284) asserting invariants — non-negativity, conservation, monotonicity, clamp
+bounds — across a wide input range, the class of bug example tests miss (cf. the #70 overshoot).
+
+**Typing roadmap (deferred):** the app is lightly annotated today, so a static type-checker gate is
+premature (and `ty` is still pre-1.0). The on-ramp — turning on ruff's `ANN` ruleset as a
+non-blocking annotation ratchet, then adopting `ty`/`pyright` once coverage is meaningful and `ty`
+reaches 1.0 — is a post-1.0 follow-up (#284), not a v1.1 blocker.
+
 ## Image
 
 The `Dockerfile` is multi-stage:
 
-- `base` — system deps + package metadata + source.
-- `test` — `pip install -e .[test]` then `pytest --cov-fail-under=80` (build with `--target test`).
-- `production` — runtime install + entrypoint (the default `docker compose build` target).
+- `base` — uv (digest-pinned) + system deps + lock/metadata + source.
+- `test` — `uv sync --locked --extra test` then `pytest --cov-fail-under=80` (build with `--target test`).
+- `production` — `uv sync --locked` (runtime deps only) + entrypoint (the default `docker compose build` target).

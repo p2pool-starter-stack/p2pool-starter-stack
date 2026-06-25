@@ -4,12 +4,14 @@ This guide takes you from a fresh machine to a synced, mining stack. The whole p
 driven by a single script — `pithead` — and most of it is automated.
 
 > **TL;DR**
+>
 > ```bash
 > curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 > cd pithead
 > cp config.json.template config.json   # set your Monero + Tari payout addresses
 > ./pithead setup
 > ```
+>
 > Let it run, then open the dashboard at `https://<your-hostname>`.
 
 ---

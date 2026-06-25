@@ -2,11 +2,11 @@ import ipaddress
 import logging
 
 from mining_dashboard.config.config import (
-    XMRIG_API_PORT,
-    PROXY_API_PORT,
-    PROXY_AUTH_TOKEN,
     API_TIMEOUT,
     MINING_NET_CIDR,
+    PROXY_API_PORT,
+    PROXY_AUTH_TOKEN,
+    XMRIG_API_PORT,
 )
 
 # Longest worker-name we'll ever echo back as a Bearer token (#122). xmrig names/tokens are short;
@@ -42,8 +42,13 @@ def _safe_probe_host(ip):
         addr = ipaddress.ip_address(host)
     except ValueError:
         return None  # not a bare IP — never treat a worker name/hostname as a request host
-    if (addr.is_loopback or addr.is_link_local or addr.is_multicast
-            or addr.is_unspecified or addr.is_reserved):
+    if (
+        addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_unspecified
+        or addr.is_reserved
+    ):
         return None
     if addr.version == _INTERNAL_NET.version and addr in _INTERNAL_NET:
         return None
@@ -81,7 +86,7 @@ class XMRigWorkerClient:
             # miner-controlled name as a host — that is the SSRF this guard exists to prevent (#122).
             return {}
 
-        name_token = name.split('+')[0].strip()[:_MAX_NAME_TOKEN] if name else ""
+        name_token = name.split("+")[0].strip()[:_MAX_NAME_TOKEN] if name else ""
 
         attempts = [
             # 1. Open proxy — no auth header at all
@@ -89,16 +94,20 @@ class XMRigWorkerClient:
         ]
         # 2. Secured proxy on a custom port (only if distinct from XMRIG_API_PORT)
         if PROXY_AUTH_TOKEN and PROXY_API_PORT != XMRIG_API_PORT:
-            attempts.append((
-                f"http://{host}:{PROXY_API_PORT}/1/summary",
-                {"Authorization": f"Bearer {PROXY_AUTH_TOKEN}"},
-            ))
+            attempts.append(
+                (
+                    f"http://{host}:{PROXY_API_PORT}/1/summary",
+                    {"Authorization": f"Bearer {PROXY_AUTH_TOKEN}"},
+                )
+            )
         # 3. Direct XMRig miner: the name doubles as the access token, sent only to its own IP.
         if name_token:
-            attempts.append((
-                f"http://{host}:{XMRIG_API_PORT}/1/summary",
-                {"Authorization": f"Bearer {name_token}"},
-            ))
+            attempts.append(
+                (
+                    f"http://{host}:{XMRIG_API_PORT}/1/summary",
+                    {"Authorization": f"Bearer {name_token}"},
+                )
+            )
 
         for url, headers in attempts:
             try:

@@ -20,6 +20,7 @@ Use in-process (the contract test):
         m.set(mode="syncing", height=1500, target_height=3000)
         ...point a real MoneroClient at m.url...
 """
+
 import argparse
 import json
 import threading
@@ -60,8 +61,10 @@ class _Handler(BaseHTTPRequestHandler):
         # "busy" → RPC answers HTTP 200 but reports a non-OK status (e.g. mid-reorg). The
         # client must distrust the heights and treat it as unreachable, not as synced.
         if st["mode"] == "busy":
-            self._send(200, {"status": "BUSY", "height": st["height"],
-                             "target_height": st["target_height"]})
+            self._send(
+                200,
+                {"status": "BUSY", "height": st["height"], "target_height": st["target_height"]},
+            )
             return
         if st["mode"] == "syncing":
             payload = {
@@ -132,8 +135,12 @@ def main():
     ap = argparse.ArgumentParser(description="Controllable fake monerod")
     ap.add_argument("--port", type=int, default=18081)
     ap.add_argument("--host", default="0.0.0.0")  # noqa: S104 — test-only container
-    ap.add_argument("--mode", default="synced", choices=["synced", "syncing", "down"],
-                    help="initial state (the mini-stack boots 'syncing' to exercise the hold)")
+    ap.add_argument(
+        "--mode",
+        default="synced",
+        choices=["synced", "syncing", "down"],
+        help="initial state (the mini-stack boots 'syncing' to exercise the hold)",
+    )
     args = ap.parse_args()
     state = dict(DEFAULT_STATE, mode=args.mode)
     # "syncing" needs height < target_height to read as syncing (else it looks caught up).

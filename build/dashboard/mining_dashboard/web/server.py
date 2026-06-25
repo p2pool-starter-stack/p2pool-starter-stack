@@ -1,9 +1,10 @@
-import os
 import logging
 import mimetypes
+import os
+
 from aiohttp import web
 
-from mining_dashboard.web.views import build_state, get_shell_html, parse_window, canonical_window
+from mining_dashboard.web.views import build_state, canonical_window, get_shell_html, parse_window
 
 logger = logging.getLogger("WebServer")
 
@@ -18,20 +19,20 @@ mimetypes.add_type("text/javascript", ".js")
 async def handle_index(request):
     """Serve the static HTML shell. It carries no data — the client fetches ``/api/state``
     and renders the dashboard. Pure transport."""
-    return web.Response(text=get_shell_html(), content_type='text/html')
+    return web.Response(text=get_shell_html(), content_type="text/html")
 
 
 async def handle_state(request):
     """The dashboard's data API. Pull shared state, delegate to the view layer, and return
     the assembled state object as JSON (or a sanitized 500 on failure)."""
     app = request.app
-    data = app['latest_data']
-    state_mgr = app['state_manager']
-    range_arg = request.query.get('range', 'all')
+    data = app["latest_data"]
+    state_mgr = app["state_manager"]
+    range_arg = request.query.get("range", "all")
     # Optional manual-zoom window (Issue #47); malformed from/to falls back to the preset range.
-    window = parse_window(request.query.get('from'), request.query.get('to'))
+    window = parse_window(request.query.get("from"), request.query.get("to"))
     # Hashrate-averaging window for the chart (#168); unknown/missing falls back to the default.
-    avg_window = canonical_window(request.query.get('avg'))
+    avg_window = canonical_window(request.query.get("avg"))
 
     try:
         return web.json_response(build_state(data, state_mgr, range_arg, window, avg_window))
@@ -47,10 +48,10 @@ def _apply_security_headers(response):
     so no 'unsafe-inline' or 'unsafe-eval' is needed (Issue #60). The frontend libraries are
     eval-free ES modules; dynamic styling is applied via the CSSOM, which style-src doesn't
     govern."""
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Content-Security-Policy'] = (
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = (
         "default-src 'self'; img-src 'self' data:; style-src 'self'; "
         "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'self'; form-action 'self'"
@@ -60,7 +61,7 @@ def _apply_security_headers(response):
     # without this, a browser (notably iOS Safari) can keep serving the pre-upgrade dashboard.css
     # for an unpredictable while (Issue #83). 'no-cache' still allows a conditional request, so an
     # unchanged asset costs only a 304 — no re-download of the vendored libs on each page load.
-    response.headers['Cache-Control'] = 'no-cache'
+    response.headers["Cache-Control"] = "no-cache"
     return response
 
 
@@ -70,22 +71,24 @@ async def security_headers_middleware(request, handler):
     try:
         return _apply_security_headers(await handler(request))
     except web.HTTPException as exc:
-        raise _apply_security_headers(exc)
+        raise _apply_security_headers(exc) from exc
 
 
 def create_app(state_manager, latest_data_ref):
     """Factory to create the web app instance."""
     app = web.Application(middlewares=[security_headers_middleware])
     # Pass shared state objects to the app context
-    app['state_manager'] = state_manager
-    app['latest_data'] = latest_data_ref
+    app["state_manager"] = state_manager
+    app["latest_data"] = latest_data_ref
 
-    app.add_routes([
-        web.get('/', handle_index),
-        web.get('/api/state', handle_state),
-    ])
+    app.add_routes(
+        [
+            web.get("/", handle_index),
+            web.get("/api/state", handle_state),
+        ]
+    )
 
     static_path = os.path.join(os.path.dirname(__file__), "static")
-    app.router.add_static('/static', static_path)
+    app.router.add_static("/static", static_path)
 
     return app

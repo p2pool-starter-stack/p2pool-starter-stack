@@ -10,8 +10,12 @@ set -uo pipefail
 
 STACK_DIR="${STACK_DIR:-$HOME/code/pithead}"
 
-h()    { printf '\n## %s\n\n' "$1"; }
-fence(){ printf '```\n'; cat; printf '```\n'; }
+h() { printf '\n## %s\n\n' "$1"; }
+fence() {
+    printf '```\n'
+    cat
+    printf '```\n'
+}
 
 printf '# Pithead build server — system snapshot\n\n'
 printf '_Host `%s` — generated %s_\n' "$(hostname)" "$(date '+%Y-%m-%d %H:%M:%S %z')"
@@ -64,6 +68,9 @@ h "monerod version"
 docker exec monerod monerod --version 2>/dev/null | head -1 | fence
 
 h "Listening sockets — dashboard :8000 must be 127.0.0.1"
-{ PATH="/usr/sbin:/sbin:$PATH"; ss -tlnH 2>/dev/null | awk '{print $4}' | grep -E ':(8000|3333|18081|18083|37889|3344)$' | sort -u || echo "(ss not available)"; } | fence
+{
+    PATH="/usr/sbin:/sbin:$PATH"
+    ss -tlnH 2>/dev/null | awk '{print $4}' | grep -E ':(8000|3333|18081|18083|37889|3344)$' | sort -u || echo "(ss not available)"
+} | fence
 
 printf '\n---\n_See `README.md` in this directory for how to run the stack and the test harness._\n'

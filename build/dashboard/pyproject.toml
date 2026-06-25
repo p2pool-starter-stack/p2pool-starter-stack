@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=82.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,25 +13,32 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "aiohttp>=3.10.11",
-    # [socks] pulls in PySocks so the XvB stats fetch can route over the Tor SOCKS proxy (#163).
-    "requests[socks]>=2.32.4",
-    # grpcio/protobuf floors are dictated by the checked-in Tari gRPC stubs
-    # (mining_dashboard/client/tari/generated/*_pb2*.py), which assert these at
-    # import time. Do not resolve lower; regenerate the stubs if bumping.
-    "grpcio>=1.78.0",
-    "protobuf>=6.31.1,<7",
-    "aiofiles>=24.1",
+  "aiohttp>=3.10.11",
+  # [socks] pulls in PySocks so the XvB stats fetch can route over the Tor SOCKS proxy (#163).
+  "requests[socks]>=2.34.2",
+  # grpcio/protobuf floors are dictated by the checked-in Tari gRPC stubs
+  # (mining_dashboard/client/tari/generated/*_pb2*.py), which assert these at
+  # import time. Do not resolve lower; regenerate the stubs if bumping.
+  "grpcio>=1.78.0",
+  "protobuf>=6.31.1,<7",
+  "aiofiles>=24.1",
 ]
 
 [project.optional-dependencies]
 test = [
-    "pytest>=8",
-    "pytest-asyncio>=0.24",
-    "pytest-mock>=3.14",
-    "pytest-cov>=5",
-    "pytest-aiohttp>=1.0",
+  "pytest>=9.1.1",
+  "pytest-asyncio>=0.24",
+  "pytest-mock>=3.14",
+  "pytest-cov>=5",
+  "pytest-aiohttp>=1.0",
+  # diff-cover (#286): patch-coverage gate — new/changed lines must be >=90% covered.
+  "diff-cover>=9",
+  # hypothesis (#284): property-based tests asserting invariants on the money/numeric logic.
+  "hypothesis>=6.155.7",
 ]
+# Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
+# — lint output is version-sensitive, so a floor would let CI and a contributor disagree.
+dev = ["ruff==0.15.18", "pre-commit>=4"]
 
 [tool.setuptools.packages.find]
 include = ["mining_dashboard*"]
@@ -43,19 +50,46 @@ asyncio_mode = "auto"
 # __init__.py packages or sys.path games.
 addopts = "-q --import-mode=importlib"
 markers = [
-    "integration: tests that exercise multiple components or external services",
+  "integration: tests that exercise multiple components or external services",
 ]
 
 [tool.coverage.run]
 source = ["mining_dashboard"]
 omit = [
-    "*/client/tari/generated/*",  # generated gRPC stubs
-    "*/tests/*",
+  "*/client/tari/generated/*", # generated gRPC stubs
+  "*/tests/*",
 ]
 
 [tool.coverage.report]
 show_missing = true
-exclude_also = [
-    "if __name__ == .__main__.:",
-    "raise NotImplementedError",
+exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]
+
+[tool.ruff]
+# Lint + format for the dashboard (Wave 7 tooling, #280). Run via `make lint-py`, pre-commit,
+# and CI. Keep target-version in lockstep with requires-python above.
+target-version = "py311"
+line-length = 100
+# Generated Tari gRPC stubs aren't ours to style — already omitted from coverage too.
+extend-exclude = ["mining_dashboard/client/tari/generated"]
+
+[tool.ruff.lint]
+# E/F/W pycodestyle+pyflakes · I import-sort · B bugbear · UP pyupgrade ·
+# ASYNC flake8-async (the aiohttp/asyncio event loop + Tor SOCKS paths) ·
+# S flake8-bandit (security). Annotation rules (ANN) are deferred to #284.
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S"]
+ignore = [
+  "E501", # line length is owned by `ruff format`
+  "S104", # "bind all interfaces": every hit is the sentinel string "0.0.0.0" used as a
+  # default/comparison value — the dashboard's listen host is config-driven (aiohttp),
+  # it never binds a raw socket to 0.0.0.0 from Python.
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: asserts are the idiom (S101); fixtures use dummy creds (S106); broad
+# pytest.raises(Exception) is fine (B017); os.path in async test bodies is harmless (ASYNC240).
+"tests/**" = ["S101", "S106", "B017", "ASYNC240"]
+# Generated-stub imports are intentionally grouped below the logger + the generation guidance.
+"mining_dashboard/client/tari/tari_client.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mining_dashboard"]

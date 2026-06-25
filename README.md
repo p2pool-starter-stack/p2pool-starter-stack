@@ -4,7 +4,7 @@
 
 # Pithead
 
-### Private Monero + Tari merge mining, the whole stack, in one command.
+### Private Monero + Tari merge mining, the whole stack, in one command
 
 [![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)

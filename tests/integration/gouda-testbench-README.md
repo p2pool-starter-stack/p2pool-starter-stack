@@ -48,6 +48,7 @@ constraints that matter:
   re-sync), which is a product decision, not housekeeping.
 
 **Compacting the Monero chain** (reclaim bloat; hours, but no downtime until the swap):
+
 ```bash
 ~/pithead-testbench/compact-chain.sh /srv/code/pithead-data/monero   # builds lmdb-pruned/ (monerod stays up)
 # when DONE, swap it in (brief downtime):
@@ -58,6 +59,7 @@ docker start monerod        # re-syncs the few blocks added during the copy
 ```
 
 ## Running the stack
+
 ```bash
 cd ~/code/pithead
 ./pithead status         # health summary
@@ -68,6 +70,7 @@ cd ~/code/pithead
 ## Running the test harness (the point of this box)
 
 Tiers 1–3 run anywhere with no real chains; **Tier 4 (the live matrix) runs here.**
+
 ```bash
 # Drive gouda over SSH from a dev checkout (start non-destructive):
 tests/integration/run.sh --host vijit@gouda --dir code/pithead --check       # assert current live state
@@ -77,6 +80,7 @@ tests/integration/run.sh --host vijit@gouda --dir code/pithead --safety-backup
 # On the box itself:
 cd ~/code/pithead && tests/integration/run.sh --local --dir "$PWD" --lifecycle
 ```
+
 Always start with `--check`/`--readiness`. Use `--safety-backup` for the destructive matrix so a
 failure rolls the box back (down → restore → up). See `docs/integration-testing.md` in the repo.
 
@@ -104,6 +108,7 @@ recovery; release readiness; **pruned** monerod (the real prod config).
 and #5 (XvB smoke). The rest are nice-to-have.
 
 ## Notes for AI agents
+
 - SSH from a sandboxed agent needs the LAN allowance (e.g. `dangerouslyDisableSandbox`); gouda is on the LAN.
 - **Avoid literal `( )` in remote command strings** — they break the non-interactive remote shell.
 - `pkill -f <pattern>` self-matches your own command line — kill by PID, or use the `[x]`-bracket trick.

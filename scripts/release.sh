@@ -63,17 +63,27 @@ SOURCE_URL="https://github.com/p2pool-starter-stack/pithead"
 
 # --- Small utilities -----------------------------------------------------------------------------
 
-C_RESET=$'\033[0m'; C_BLUE=$'\033[1;34m'; C_GREEN=$'\033[1;32m'; C_YELLOW=$'\033[1;33m'; C_RED=$'\033[1;31m'
+C_RESET=$'\033[0m'
+C_BLUE=$'\033[1;34m'
+C_GREEN=$'\033[1;32m'
+C_YELLOW=$'\033[1;33m'
+C_RED=$'\033[1;31m'
 
-log()   { printf '%s==>%s %s\n' "$C_BLUE"   "$C_RESET" "$*"; }
-ok()    { printf '%s ✓%s %s\n'  "$C_GREEN"  "$C_RESET" "$*"; }
-warn()  { printf '%s !%s %s\n'  "$C_YELLOW" "$C_RESET" "$*" >&2; }
-die()   { printf '%s ✗%s %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; exit 1; }
+log() { printf '%s==>%s %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+ok() { printf '%s ✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+warn() { printf '%s !%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+die() {
+    printf '%s ✗%s %s\n' "$C_RED" "$C_RESET" "$*" >&2
+    exit 1
+}
 stage() { printf '\n%s━━ %s %s\n' "$C_BLUE" "$*" "$C_RESET"; }
 
 # In --dry-run, side-effecting commands are printed, not run. Read-only steps always run.
 run() {
-    if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; return 0; fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '   %s[dry-run]%s %s\n' "$C_YELLOW" "$C_RESET" "$*"
+        return 0
+    fi
     "$@"
 }
 
@@ -92,23 +102,36 @@ is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]]; }
 
 # --- Argument parsing ----------------------------------------------------------------------------
 
-DRY_RUN=0; RC=1; SKIP_TESTS=0; SKIP_INTEGRATION=0; SKIP_SMOKE=0
-RESUME_PROMOTE=0; ALLOW_DIRTY=0; ASSUME_YES=0; DRAFT=0
+DRY_RUN=0
+RC=1
+SKIP_TESTS=0
+SKIP_INTEGRATION=0
+SKIP_SMOKE=0
+RESUME_PROMOTE=0
+ALLOW_DIRTY=0
+ASSUME_YES=0
+DRAFT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --dry-run)          DRY_RUN=1 ;;
-        --rc)               RC="${2:?--rc needs a number}"; shift ;;
-        --rc=*)             RC="${1#*=}" ;;
-        --skip-tests)       SKIP_TESTS=1 ;;
-        --skip-integration) SKIP_INTEGRATION=1 ;;
-        --skip-smoke)       SKIP_SMOKE=1 ;;
-        --draft)            DRAFT=1 ;;
-        --resume-promote)   RESUME_PROMOTE=1 ;;
-        --allow-dirty)      ALLOW_DIRTY=1 ;;
-        -y|--yes)           ASSUME_YES=1 ;;
-        -h|--help)          sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *)                  die "Unknown option: $1 (try --help)" ;;
+    --dry-run) DRY_RUN=1 ;;
+    --rc)
+        RC="${2:?--rc needs a number}"
+        shift
+        ;;
+    --rc=*) RC="${1#*=}" ;;
+    --skip-tests) SKIP_TESTS=1 ;;
+    --skip-integration) SKIP_INTEGRATION=1 ;;
+    --skip-smoke) SKIP_SMOKE=1 ;;
+    --draft) DRAFT=1 ;;
+    --resume-promote) RESUME_PROMOTE=1 ;;
+    --allow-dirty) ALLOW_DIRTY=1 ;;
+    -y | --yes) ASSUME_YES=1 ;;
+    -h | --help)
+        sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    *) die "Unknown option: $1 (try --help)" ;;
     esac
     shift
 done
@@ -118,11 +141,11 @@ done
 # --- State (filled by the stages) ----------------------------------------------------------------
 
 REPO_ROOT="" STACK_VERSION="" TAG="" STAGING_TAG="" GIT_COMMIT="" GIT_BRANCH="" BUILD_DATE=""
-WORKDIR=""   # scratch dir for digests, the manifest and the bundle (created in main, after preflight)
+WORKDIR="" # scratch dir for digests, the manifest and the bundle (created in main, after preflight)
 
 # Staged image digests are kept as files ($WORKDIR/digest.<suffix>), not an associative array, so this
 # runs on the stock macOS bash 3.2 too and the digests survive across stages.
-set_digest() { printf '%s' "$2" > "$WORKDIR/digest.$1"; }
+set_digest() { printf '%s' "$2" >"$WORKDIR/digest.$1"; }
 get_digest() { cat "$WORKDIR/digest.$1" 2>/dev/null || true; }
 
 # The manifest-LIST (index) digest of a pushed tag — the sha that spans every built platform, which
@@ -134,13 +157,13 @@ manifest_digest() { docker buildx imagetools inspect "$1" 2>/dev/null | awk '/^D
 # Resolve a single upstream component pin on demand (the "ingredients" each release bundles).
 pin() {
     case "$1" in
-        p2pool)       grep -oE '^ARG P2POOL_VERSION=.*'      build/p2pool/Dockerfile      | cut -d= -f2 ;;
-        monero)       grep -oE '^ARG MONERO_VERSION=.*'       build/monero/Dockerfile       | cut -d= -f2 ;;
-        xmrig-proxy)  grep -oE '^ARG XMRIG_PROXY_VERSION=.*'  build/xmrig-proxy/Dockerfile  | cut -d= -f2 ;;
-        tor-base)     grep -oE '^FROM [^ ]+' build/tor/Dockerfile | head -1 | awk '{print $2}' ;;
-        tari)         grep -oE 'quay.io/tarilabs/minotari_node:[^ ]+' docker-compose.yml | head -1 ;;
-        caddy)        grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1 ;;
-        socket-proxy) grep -oE 'tecnativa/docker-socket-proxy:[^ ]+' docker-compose.yml | head -1 ;;
+    p2pool) grep -oE '^ARG P2POOL_VERSION=.*' build/p2pool/Dockerfile | cut -d= -f2 ;;
+    monero) grep -oE '^ARG MONERO_VERSION=.*' build/monero/Dockerfile | cut -d= -f2 ;;
+    xmrig-proxy) grep -oE '^ARG XMRIG_PROXY_VERSION=.*' build/xmrig-proxy/Dockerfile | cut -d= -f2 ;;
+    tor-base) grep -oE '^FROM [^ ]+' build/tor/Dockerfile | head -1 | awk '{print $2}' ;;
+    tari) grep -oE 'quay.io/tarilabs/minotari_node:[^ ]+' docker-compose.yml | head -1 ;;
+    caddy) grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1 ;;
+    socket-proxy) grep -oE 'tecnativa/docker-socket-proxy:[^ ]+' docker-compose.yml | head -1 ;;
     esac
 }
 
@@ -155,7 +178,7 @@ preflight() {
     command -v docker >/dev/null 2>&1 || die "docker is required."
     docker buildx version >/dev/null 2>&1 || die "docker buildx is required (for digest-level promotion)."
 
-    STACK_VERSION="$(tr -d ' \t\r\n' < VERSION)"
+    STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
     is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
     TAG="v$STACK_VERSION"
     STAGING_TAG="${TAG}-rc.${RC}"
@@ -268,7 +291,9 @@ stage_push() {
     for suffix in "${IMAGES[@]}"; do
         repo="$(image_for "$suffix")"
         if [ "$DRY_RUN" -eq 1 ]; then
-            set_digest "$suffix" "$repo@sha256:<dry-run>"; log "  digest: $repo@sha256:<dry-run>"; continue
+            set_digest "$suffix" "$repo@sha256:<dry-run>"
+            log "  digest: $repo@sha256:<dry-run>"
+            continue
         fi
         digest="$(manifest_digest "$repo:$STAGING_TAG")"
         [ -n "$digest" ] || die "Could not read the pushed manifest digest for $repo:$STAGING_TAG."
@@ -283,7 +308,7 @@ ghcr_login() {
     user="${GHCR_USER:-}"
     token="${GHCR_TOKEN:-${GITHUB_TOKEN:-}}"
     [ -n "$token" ] || token="$(gh auth token 2>/dev/null || true)"
-    [ -n "$user" ]  || user="$(gh api user --jq .login 2>/dev/null || true)"
+    [ -n "$user" ] || user="$(gh api user --jq .login 2>/dev/null || true)"
     if [ -z "$token" ]; then
         warn "No registry token (GHCR_TOKEN / GITHUB_TOKEN / gh auth) — assuming docker is already logged in to $registry_host."
         return 0
@@ -295,8 +320,8 @@ ghcr_login() {
         return 0
     fi
     log "Logging in to $registry_host as ${user:-<token-user>} (token not shown)..."
-    printf '%s' "$token" | docker login "$registry_host" -u "${user:-x}" --password-stdin >/dev/null \
-        || die "docker login to $registry_host failed."
+    printf '%s' "$token" | docker login "$registry_host" -u "${user:-x}" --password-stdin >/dev/null ||
+        die "docker login to $registry_host failed."
     ok "Registry login OK."
 }
 
@@ -322,15 +347,17 @@ smoke_test() {
         run docker pull --quiet --platform "${PLATFORMS%%,*}" "$repo:$STAGING_TAG"
         if [ "$DRY_RUN" -eq 0 ]; then
             got="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$repo:$STAGING_TAG" 2>/dev/null || true)"
-            [ "$got" = "$STACK_VERSION" ] \
-                || die "Smoke: $repo:$STAGING_TAG reports version '$got', expected '$STACK_VERSION'."
+            [ "$got" = "$STACK_VERSION" ] ||
+                die "Smoke: $repo:$STAGING_TAG reports version '$got', expected '$STACK_VERSION'."
             # The pushed manifest MUST carry every target platform — a wrong-arch image here means the
             # build host's arch leaked through (the v1.0.0 bug: an arm64 host produced an arm64-labelled
             # image that doesn't run on x86_64). Read the raw manifest list and require each $PLATFORMS.
-            local arches; arches="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --raw 2>/dev/null \
-                | python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(sorted({m.get("platform",{}).get("os","")+"/"+m["platform"]["architecture"] for m in d.get("manifests",[]) if m.get("platform",{}).get("architecture") not in (None,"unknown")})))' 2>/dev/null || true)"
-            local p; for p in ${PLATFORMS//,/ }; do
-                case " $arches " in *" $p "*) ;; *) die "Smoke: $repo:$STAGING_TAG is missing target platform $p (got: ${arches:-none}). A wrong-arch build leaked through (the v1.0.0 arm64-only bug).";; esac
+            local arches
+            arches="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --raw 2>/dev/null |
+                python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(sorted({m.get("platform",{}).get("os","")+"/"+m["platform"]["architecture"] for m in d.get("manifests",[]) if m.get("platform",{}).get("architecture") not in (None,"unknown")})))' 2>/dev/null || true)"
+            local p
+            for p in ${PLATFORMS//,/ }; do
+                case " $arches " in *" $p "*) ;; *) die "Smoke: $repo:$STAGING_TAG is missing target platform $p (got: ${arches:-none}). A wrong-arch build leaked through (the v1.0.0 arm64-only bug)." ;; esac
             done
             log "  $repo:$STAGING_TAG OK ($arches)"
         fi
@@ -346,8 +373,8 @@ smoke_test() {
 
 promote() {
     stage "6/7  Promote by digest -> $TAG + latest"
-    confirm "Promote the smoke-tested digests to $TAG and :latest (publishes user-facing tags)?" \
-        || die "Promotion cancelled — nothing user-facing was published."
+    confirm "Promote the smoke-tested digests to $TAG and :latest (publishes user-facing tags)?" ||
+        die "Promotion cancelled — nothing user-facing was published."
     ghcr_login
     local suffix repo digest
     for suffix in "${IMAGES[@]}"; do
@@ -368,18 +395,21 @@ publish() {
     stage "7/7  Publish GitHub Release $TAG"
     local manifest="$WORKDIR/ingredients-$TAG.md"
     write_manifest "$manifest"
-    local bundle="$WORKDIR/pithead.tar.gz"   # versionless name → stable /releases/latest/download/ URL
+    local bundle="$WORKDIR/pithead.tar.gz" # versionless name → stable /releases/latest/download/ URL
     make_bundle "$bundle"
 
-    confirm "Create git tag $TAG, push it, and publish the GitHub Release?" \
-        || { warn "Publish cancelled. Images are promoted; re-run --resume-promote-less to finish, or publish by hand."; return 0; }
+    confirm "Create git tag $TAG, push it, and publish the GitHub Release?" ||
+        {
+            warn "Publish cancelled. Images are promoted; re-run --resume-promote-less to finish, or publish by hand."
+            return 0
+        }
 
     run git tag -a "$TAG" -m "Pithead $TAG"
     run git push origin "$TAG"
 
     local notes="$WORKDIR/notes.md"
-    changelog_notes > "$notes"
-    cat "$manifest" >> "$notes"
+    changelog_notes >"$notes"
+    cat "$manifest" >>"$notes"
 
     if command -v gh >/dev/null 2>&1; then
         # --draft holds the GitHub Release for review (not visible/announced until published by hand).
@@ -406,14 +436,14 @@ write_manifest() {
             printf -- '- `%s`\n  - digest: `%s`\n' "$repo:$TAG" "${dg:-<not staged>}"
         done
         printf '\n### Upstream component pins\n\n'
-        printf -- '- p2pool: `%s`\n'              "$(pin p2pool)"
-        printf -- '- monerod: `%s`\n'             "$(pin monero)"
-        printf -- '- xmrig-proxy: `%s`\n'         "$(pin xmrig-proxy)"
-        printf -- '- tor base: `%s`\n'            "$(pin tor-base)"
-        printf -- '- tari: `%s`\n'                "$(pin tari)"
-        printf -- '- caddy: `%s`\n'               "$(pin caddy)"
+        printf -- '- p2pool: `%s`\n' "$(pin p2pool)"
+        printf -- '- monerod: `%s`\n' "$(pin monero)"
+        printf -- '- xmrig-proxy: `%s`\n' "$(pin xmrig-proxy)"
+        printf -- '- tor base: `%s`\n' "$(pin tor-base)"
+        printf -- '- tari: `%s`\n' "$(pin tari)"
+        printf -- '- caddy: `%s`\n' "$(pin caddy)"
         printf -- '- docker-socket-proxy: `%s`\n' "$(pin socket-proxy)"
-    } > "$out"
+    } >"$out"
     log "Wrote ingredients manifest: $out"
 }
 
@@ -425,8 +455,8 @@ write_manifest() {
 # build:/context: lines so no Dockerfile lands in the bundle (which would flip is_source_checkout to true
 # and make pithead build instead of pull). Sourced + unit-tested.
 compose_build_mounts() {
-    grep -oE '^[[:space:]]*-[[:space:]]+\./build/[^:[:space:]]+:' "${1:-docker-compose.yml}" \
-        | sed -E 's/^[[:space:]]*-[[:space:]]+//; s/:$//' | sort -u
+    grep -oE '^[[:space:]]*-[[:space:]]+\./build/[^:[:space:]]+:' "${1:-docker-compose.yml}" |
+        sed -E 's/^[[:space:]]*-[[:space:]]+//; s/:$//' | sort -u
 }
 
 # A pinned, pull-based install bundle: the runtime files needed to `./pithead setup` WITHOUT building.
@@ -445,13 +475,19 @@ make_bundle() {
     cp pithead VERSION docker-compose.yml config.json.template config.advanced.example.json "$d/" 2>/dev/null || true
     local m
     while IFS= read -r m; do
-        [ -e "$m" ] || { warn "bundle: compose mounts '$m' but it is missing from the tree — skipping"; continue; }
+        [ -e "$m" ] || {
+            warn "bundle: compose mounts '$m' but it is missing from the tree — skipping"
+            continue
+        }
         mkdir -p "$d/$(dirname "$m")"
         cp -R "$m" "$d/$(dirname "$m")/"
     done < <(compose_build_mounts docker-compose.yml)
     printf 'Pithead %s — pinned install bundle (images pulled from %s, no local build).\n\nQuick start:\n  1. cp config.json.template config.json   # then set your Monero + Tari payout addresses\n     (more options: config.advanced.example.json)\n  2. ./pithead setup\n\nThere are no build contexts here, so pithead pulls the published %s images instead of building.\n' \
-        "$TAG" "$REGISTRY" "$TAG" > "$d/README.txt"
-    if [ "$DRY_RUN" -eq 1 ]; then printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"; return 0; fi
+        "$TAG" "$REGISTRY" "$TAG" >"$d/README.txt"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"
+        return 0
+    fi
     # --no-xattrs: we cut releases on macOS, where tar is bsdtar and stores each file's extended
     # attributes (incl. macOS's com.apple.provenance) as LIBARCHIVE.xattr.* pax headers. GNU tar on
     # a user's Linux box doesn't know that keyword and warns once per file on extract (#252). Stripping
@@ -470,7 +506,10 @@ make_bundle() {
 
 # Release notes = the top (newest) section of CHANGELOG.md — the curated, user-facing summary.
 changelog_notes() {
-    if [ ! -f CHANGELOG.md ]; then printf 'Pithead %s\n' "$TAG"; return; fi
+    if [ ! -f CHANGELOG.md ]; then
+        printf 'Pithead %s\n' "$TAG"
+        return
+    fi
     # Print from the first "## [" heading up to (but not including) the next one.
     awk '/^## \[/{ if (seen) exit; seen=1 } seen' CHANGELOG.md
 }
@@ -480,7 +519,7 @@ changelog_notes() {
 main() {
     log "Pithead release pipeline (#44)$([ "$DRY_RUN" -eq 1 ] && echo '  [DRY RUN]')"
     preflight
-    WORKDIR="$(mktemp -d)"   # holds the captured digests, the ingredients manifest and the bundle
+    WORKDIR="$(mktemp -d)" # holds the captured digests, the ingredients manifest and the bundle
     if [ "$RESUME_PROMOTE" -eq 1 ]; then
         warn "--resume-promote: skipping build/stage. Re-staging to recover digests..."
         ghcr_login

@@ -1,0 +1,7 @@
+# Links lychee should skip (Wave 7 tooling, #281). One URL regex per line.
+# Local/example/non-resolvable addresses that appear in docs as illustrations.
+https?://127\.0\.0\.1.*
+https?://localhost.*
+https?://0\.0\.0\.0.*
+https?://example\.(com|org).*
+.*\.onion.*

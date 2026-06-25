@@ -13,8 +13,8 @@ cd "$ROOT" || exit 1
 
 # Test functions (def test_… / async def test_…) in a python file, in source order.
 py_tests() {
-    grep -E '^[[:space:]]*(async[[:space:]]+)?def test_' "$1" 2>/dev/null \
-        | sed -E 's/^[[:space:]]*(async[[:space:]]+)?def (test_[A-Za-z0-9_]+).*/\2/'
+    grep -E '^[[:space:]]*(async[[:space:]]+)?def test_' "$1" 2>/dev/null |
+        sed -E 's/^[[:space:]]*(async[[:space:]]+)?def (test_[A-Za-z0-9_]+).*/\2/'
 }
 # test('name' | test("name") cases in a node test file.
 node_tests() { grep -oE "test\((['\"])[^'\"]+\1" "$1" 2>/dev/null | sed -E "s/^test\(['\"]//; s/['\"]$//"; }
@@ -114,8 +114,8 @@ cat <<EOF
 
 ### tests/integration/mini-stack/run-mini-stack.sh — ${n_mini} scenarios
 EOF
-grep -oE 'log "scenario [0-9]+: [^"]+"' tests/integration/mini-stack/run-mini-stack.sh \
-    | sed -E 's/^log "//; s/"$//' | bullets
+grep -oE 'log "scenario [0-9]+: [^"]+"' tests/integration/mini-stack/run-mini-stack.sh |
+    sed -E 's/^log "//; s/"$//' | bullets
 
 cat <<EOF
 
@@ -123,8 +123,8 @@ cat <<EOF
 
 ### Config scenarios (tests/integration/scenarios.sh) — ${n_scen}
 EOF
-sed -n '/scenario_matrix() {/,/^EOF/p' tests/integration/scenarios.sh \
-    | grep -E $'\t' | awk -F'\t' '{print $1}' | bullets
+sed -n '/scenario_matrix() {/,/^EOF/p' tests/integration/scenarios.sh |
+    grep -E $'\t' | awk -F'\t' '{print $1}' | bullets
 
 cat <<EOF
 
@@ -136,9 +136,9 @@ cat <<EOF
 
 ### Per-scenario assertions (tests/integration/run.sh)
 EOF
-grep -hoE '(assert_[a-z_]+|it_pass) "[^"]+"' tests/integration/run.sh \
-    | sed -E 's/^(assert_[a-z_]+|it_pass) "//; s/"$//' \
-    | grep -vE '^\$[A-Za-z_]+$' | sort -u | bullets
+grep -hoE '(assert_[a-z_]+|it_pass) "[^"]+"' tests/integration/run.sh |
+    sed -E 's/^(assert_[a-z_]+|it_pass) "//; s/"$//' |
+    grep -vE '^\$[A-Za-z_]+$' | sort -u | bullets
 
 cat <<EOF
 

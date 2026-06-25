@@ -2,40 +2,52 @@
 // on the server). The server sends formatted display strings and semantic tokens
 // (variant: "ok"/"purple"/"accent"/"muted", level: "high"/"ok"); the client maps those to
 // classes — it does no number formatting or business logic of its own.
-import { Component, Fragment, html } from './preact.mjs';
-import { ChartCard } from './chart.mjs';
+
+import { ChartCard } from "./chart.mjs";
 import {
-    WORKER_COLUMNS, sortWorkers, THEME_ORDER, THEME_LABELS, heroKpis, raffleCls,
-    computeEarnings, formatXmr, formatTimeToShare, parseHashrate, uptimeCell,
-} from './logic.mjs';
+  computeEarnings,
+  formatTimeToShare,
+  formatXmr,
+  heroKpis,
+  parseHashrate,
+  raffleCls,
+  sortWorkers,
+  THEME_LABELS,
+  THEME_ORDER,
+  uptimeCell,
+  WORKER_COLUMNS,
+} from "./logic.mjs";
+import { Component, Fragment, html } from "./preact.mjs";
 
 // Palette token -> text-colour class (defined in dashboard.css).
-const cVar = (v) => 'c-' + v;
+const cVar = (v) => "c-" + v;
 
 // --- Small shared pieces -------------------------------------------------------------
 
 const StatCard = ({ label, value, cls, span }) => html`
-    <div class=${'stat-card' + (span ? ' col-span-2' : '')}>
+    <div class=${"stat-card" + (span ? " col-span-2" : "")}>
         <h5>${label}</h5>
-        <p class=${cls || ''}>${value}</p>
+        <p class=${cls || ""}>${value}</p>
     </div>`;
 
-const SharesStat = ({ sw, label = 'Share In Window' }) => html`
+const SharesStat = ({ sw, label = "Share In Window" }) => html`
     <div class="stat-card">
         <h5>${label}</h5>
-        <p><span class=${sw.ok ? 'status-ok' : 'status-bad'}>${sw.count}</span></p>
+        <p><span class=${sw.ok ? "status-ok" : "status-bad"}>${sw.count}</span></p>
     </div>`;
 
 // Tari status with the ✔ the server signals via `active`.
 const TariStatus = ({ tari }) => html`
-    <p class=${tari.active ? 'status-ok' : ''}>
+    <p class=${tari.active ? "status-ok" : ""}>
         ${tari.status}${tari.active ? html` <span class="check-inline">✔</span>` : null}
     </p>`;
 
 const Badges = ({ badges }) => html`
     <div class="badge-row">
-        ${badges.map((b) => html`
-            <span class=${'badge badge-' + b.variant} title=${b.title || ''}>${b.text}</span>`)}
+        ${badges.map(
+          (b) => html`
+            <span class=${"badge badge-" + b.variant} title=${b.title || ""}>${b.text}</span>`,
+        )}
     </div>`;
 
 // Build-version badge (Issue #58). Muted badge-outline so it reads as informative, not loud;
@@ -43,24 +55,24 @@ const Badges = ({ badges }) => html`
 // release to `vX.Y.Z` and any other build to `dev · branch @ hash`, so a dev build is
 // unmistakable. `dev` adds a marker class purely as a class hook (text already distinguishes it).
 const VersionBadge = ({ version }) =>
-    version && version.text
-        ? html`<span class=${'badge badge-outline version-badge ml-2' + (version.dev ? ' version-dev' : '')}
-                     title=${version.title || ''}>${version.text}</span>`
-        : null;
+  version && version.text
+    ? html`<span class=${"badge badge-outline version-badge ml-2" + (version.dev ? " version-dev" : "")}
+                     title=${version.title || ""}>${version.text}</span>`
+    : null;
 
 // New-release callout (#224). Shown only when the server reports a newer GitHub release is available
 // (opt-in `dashboard.check_for_updates`, off by default). Notify-only — it's a link to the release,
 // not an upgrade button (#59). Accent so it's noticeable; opens the release page in a new tab.
 const UpdateBadge = ({ update }) =>
-    update && update.available && update.url
-        ? html`<a class="badge badge-accent version-badge ml-2" href=${update.url}
+  update && update.available && update.url
+    ? html`<a class="badge badge-accent version-badge ml-2" href=${update.url}
                   target="_blank" rel="noopener noreferrer"
-                  title=${'A newer Pithead release is available: ' + update.latest}
+                  title=${"A newer Pithead release is available: " + update.latest}
                >New release ${update.latest} available ↗</a>`
-        : null;
+    : null;
 
 const HighUsage = ({ level }) =>
-    level === 'high' ? html`<span class="badge badge-bad mx-1">High Usage</span>` : null;
+  level === "high" ? html`<span class="badge badge-bad mx-1">High Usage</span>` : null;
 
 // Theme icons (Issue #43) — minimal Lucide-style line glyphs drawn with currentColor, so they
 // pick up the segment's text colour (muted → full on hover/active). Inline SVG keeps them crisp
@@ -69,9 +81,13 @@ const svgIcon = (body) => html`
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const THEME_ICON = {
-    light: () => svgIcon(html`<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />`),
-    auto: () => svgIcon(html`<rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />`),
-    dark: () => svgIcon(html`<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />`),
+  light: () =>
+    svgIcon(
+      html`<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />`,
+    ),
+  auto: () =>
+    svgIcon(html`<rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />`),
+  dark: () => svgIcon(html`<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />`),
 };
 
 // Fixed bottom-right segmented control to pick light / auto / dark (Issue #43). Icon-only and
@@ -79,25 +95,28 @@ const THEME_ICON = {
 // in every app state (loading / sync / dashboard) so it's always reachable; the choice is
 // persisted by the onTheme handler in dashboard.js.
 const ThemeSwitcher = ({ theme, onTheme }) => {
-    const current = theme || 'auto';
-    return html`
+  const current = theme || "auto";
+  return html`
     <div class="theme-switcher" role="group" aria-label="Theme">
-        ${THEME_ORDER.map((id) => html`
-            <button type="button" class=${'theme-seg' + (id === current ? ' active' : '')}
-                    title=${'Theme: ' + THEME_LABELS[id]} aria-label=${THEME_LABELS[id]}
+        ${THEME_ORDER.map(
+          (id) => html`
+            <button type="button" class=${"theme-seg" + (id === current ? " active" : "")}
+                    title=${"Theme: " + THEME_LABELS[id]} aria-label=${THEME_LABELS[id]}
                     aria-pressed=${id === current} onClick=${() => onTheme(id)}>
                 ${THEME_ICON[id]()}
-            </button>`)}
+            </button>`,
+        )}
     </div>`;
 };
 
 // --- Top bar -------------------------------------------------------------------------
 
 function Header({ state }) {
-    const s = state.system, hr = state.hashrate;
-    const labelCls = (level) => (level === 'high' ? 'status-bad' : 'text-muted');
-    const valCls = (level) => (level === 'high' ? 'status-bad' : '');
-    return html`
+  const s = state.system,
+    hr = state.hashrate;
+  const labelCls = (level) => (level === "high" ? "status-bad" : "text-muted");
+  const valCls = (level) => (level === "high" ? "status-bad" : "");
+  return html`
     <div class="header" id="top-header">
         <div>
             <div class="brand">
@@ -121,13 +140,13 @@ function Header({ state }) {
                 <div class="mb-1">
                     <span class=${labelCls(s.mem.level)}>RAM:</span>
                     <span class=${valCls(s.mem.level)}>${s.mem.used} / ${s.mem.total} GB (${s.mem.percent})</span> <${HighUsage} level=${s.mem.level} />
-                    <span class=${s.hugepages.variant === 'ok' ? 'status-ok' : 'status-bad'}>Huge Pages: ${s.hugepages.status} (${s.hugepages.value})</span>
+                    <span class=${s.hugepages.variant === "ok" ? "status-ok" : "status-bad"}>Huge Pages: ${s.hugepages.status} (${s.hugepages.value})</span>
                 </div>
                 <div class="flex items-center">
-                    <span class=${(s.disk.level === 'high' ? 'status-bad' : 'text-muted') + ' mr-2'}>Disk: ${s.disk.used} / ${s.disk.total} GB (${s.disk.percent})</span> <${HighUsage} level=${s.disk.level} />
+                    <span class=${(s.disk.level === "high" ? "status-bad" : "text-muted") + " mr-2"}>Disk: ${s.disk.used} / ${s.disk.total} GB (${s.disk.percent})</span> <${HighUsage} level=${s.disk.level} />
                     <div class="disk-bar">
                         <div class="progress-bg">
-                            <div class=${'progress-fill ' + s.disk.fill} style=${{ width: s.disk.width }}></div>
+                            <div class=${"progress-fill " + s.disk.fill} style=${{ width: s.disk.width }}></div>
                         </div>
                     </div>
                 </div>
@@ -135,8 +154,8 @@ function Header({ state }) {
         </div>
         <div class="text-right">
             <div class="text-muted text-xs">Last Update: ${state.last_update}</div>
-            <div class=${'text-xs mt-1 ' + cVar(hr.p2p_variant)}>P2Pool (routed): ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
-            <div class=${'text-xs mt-xs ' + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>
+            <div class=${"text-xs mt-1 " + cVar(hr.p2p_variant)}>P2Pool (routed): ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
+            <div class=${"text-xs mt-xs " + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>
         </div>
     </div>`;
 }
@@ -149,28 +168,33 @@ function Header({ state }) {
 // when operational — during sync the numbers aren't meaningful yet.
 const HeroBand = ({ state }) => html`
     <div class="hero-band" id="hero-band">
-        ${heroKpis(state).map((k) => html`
+        ${heroKpis(state).map(
+          (k) => html`
             <div class="hero-kpi">
-                <div class=${'hero-value ' + (k.cls || '')}>${k.value}</div>
+                <div class=${"hero-value " + (k.cls || "")}>${k.value}</div>
                 <div class="hero-label">${k.label}</div>
-            </div>`)}
+            </div>`,
+        )}
     </div>`;
 
 // --- Sync Mode -----------------------------------------------------------------------
 
 function Gauge({ percent, state }) {
-    const inner = state === 'done'
-        ? html`<span class="status-ok check-big">✔</span>`
-        : state === 'loading' ? '…' : percent + '%';
-    return html`
+  const inner =
+    state === "done"
+      ? html`<span class="status-ok check-big">✔</span>`
+      : state === "loading"
+        ? "…"
+        : percent + "%";
+  return html`
     <div class="loader-container">
-        <div class="progress-wheel" style=${{ '--p': percent + '%' }}></div>
+        <div class="progress-wheel" style=${{ "--p": percent + "%" }}></div>
         <div class="progress-text">${inner}</div>
     </div>`;
 }
 
 function SyncView({ sync }) {
-    return html`
+  return html`
     <div id="sync-view">
         <div class="header-placeholder"><p>System is currently synchronizing with the network.</p></div>
         <div class="grid">
@@ -198,10 +222,12 @@ function SyncView({ sync }) {
 // --- Operational cards ---------------------------------------------------------------
 
 function Overview({ state }) {
-    const hr = state.hashrate, st = state.stratum, t = state.tari;
-    // Stat order (#159): fleet headline (total / mode / workers) → raffle status (tier / VIP /
-    // shares / target) → routed split → reference (last share / Tari / wallets).
-    return html`
+  const hr = state.hashrate,
+    st = state.stratum,
+    t = state.tari;
+  // Stat order (#159): fleet headline (total / mode / workers) → raffle status (tier / VIP /
+  // shares / target) → routed split → reference (last share / Tari / wallets).
+  return html`
     <div class="card card-simple" id="card-overview">
         <h3>Overview</h3>
         <div class="stat-grid">
@@ -225,8 +251,9 @@ function Overview({ state }) {
 }
 
 function NodeStats({ state }) {
-    const hr = state.hashrate, st = state.stratum;
-    return html`
+  const hr = state.hashrate,
+    st = state.stratum;
+  return html`
     <div class="card card-advanced" id="card-mynode">
         <h3>My P2Pool Node Stats</h3>
         <div class="stat-grid">
@@ -251,8 +278,8 @@ function NodeStats({ state }) {
 }
 
 function GlobalStats({ state }) {
-    const p = state.pool;
-    return html`
+  const p = state.pool;
+  return html`
     <div class="card card-advanced" id="card-global">
         <h3>Global P2Pool Stats</h3>
         <div class="stat-grid">
@@ -273,8 +300,8 @@ function GlobalStats({ state }) {
 }
 
 function XvBStats({ state }) {
-    const hr = state.hashrate;
-    return html`
+  const hr = state.hashrate;
+  return html`
     <div class="card card-advanced" id="card-xvb">
         <h3>XvB Donation Stats</h3>
         <div class="stat-grid">
@@ -291,8 +318,9 @@ function XvBStats({ state }) {
 }
 
 function NetworkCard({ state }) {
-    const n = state.network, m = state.monero;
-    return html`
+  const n = state.network,
+    m = state.monero;
+  return html`
     <div class="card card-advanced" id="card-network">
         <h3>XMR Network</h3>
         <div class="stat-grid">
@@ -314,28 +342,28 @@ function NetworkCard({ state }) {
 // live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header / Overview show, which
 // already excludes the XvB-donated slice) until they take control, then holds their raw text.
 class EarningsCard extends Component {
-    constructor(props) {
-        super(props);
-        this.state = { input: null };
-        this.onInput = (e) => this.setState({ input: e.target.value });
-    }
+  constructor(props) {
+    super(props);
+    this.state = { input: null };
+    this.onInput = (e) => this.setState({ input: e.target.value });
+  }
 
-    render() {
-        const e = this.props.earnings;
-        if (!e || !e.available) {
-            return html`
+  render() {
+    const e = this.props.earnings;
+    if (!e || !e.available) {
+      return html`
             <div class="card card-advanced" id="card-earnings">
                 <h3>P2Pool Earnings (estimated)</h3>
                 <p class="text-muted text-small">Network stats unavailable — the estimate can't be computed right now.</p>
             </div>`;
-        }
-        const { input } = this.state;
-        const useDefault = input === null;
-        // Default to your P2Pool 1h-average hashrate (the figure shown in the header / Overview,
-        // already excluding the XvB-donated slice); once edited, use the parsed what-if value.
-        const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
-        const est = computeEarnings(hr, e);
-        return html`
+    }
+    const { input } = this.state;
+    const useDefault = input === null;
+    // Default to your P2Pool 1h-average hashrate (the figure shown in the header / Overview,
+    // already excluding the XvB-donated slice); once edited, use the parsed what-if value.
+    const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
+    const est = computeEarnings(hr, e);
+    return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
             <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining only — excludes XvB donations and Tari merge-mining.</p>
@@ -354,11 +382,11 @@ class EarningsCard extends Component {
             </div>
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
-    }
+  }
 }
 
 function TariCard({ tari }) {
-    return html`
+  return html`
     <div class="card card-advanced" id="card-tari">
         <h3>Tari Merge Mining</h3>
         <div class="stat-grid">
@@ -374,29 +402,29 @@ function TariCard({ tari }) {
 // --- Workers table (WORKER_COLUMNS + sortWorkers live in logic.mjs, unit-tested) -----
 
 function PoolBadge({ pool }) {
-    if (pool === 'p2pool') return html`<span class="badge badge-ok">P2Pool</span>`;
-    if (pool === 'xvb') return html`<span class="badge badge-purple">XvB</span>`;
-    return html`<span class="badge badge-bad">Unknown</span>`;
+  if (pool === "p2pool") return html`<span class="badge badge-ok">P2Pool</span>`;
+  if (pool === "xvb") return html`<span class="badge badge-purple">XvB</span>`;
+  return html`<span class="badge badge-bad">Unknown</span>`;
 }
 
 // Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
 // has reported any shares so it isn't an all-zero line on a fresh start.
 const ProxyTotals = ({ summary }) => {
-    if (!summary || !summary.has_data) return null;
-    // htm trims whitespace that wraps across a newline at an element boundary, so the spaces
-    // around the rejected <span> are added explicitly via ${' '} rather than left to indentation.
-    const rejCls = summary.reject_level === 'high' ? 'status-bad' : '';
-    return html`
+  if (!summary || !summary.has_data) return null;
+  // htm trims whitespace that wraps across a newline at an element boundary, so the spaces
+  // around the rejected <span> are added explicitly via ${' '} rather than left to indentation.
+  const rejCls = summary.reject_level === "high" ? "status-bad" : "";
+  return html`
     <div class="proxy-totals text-small text-muted">
-        Proxy totals: <span class="status-ok">${summary.accepted}</span> accepted ·${' '}
-        <span class=${rejCls}>${summary.rejected}</span> rejected (${summary.reject_pct}) ·${' '}
+        Proxy totals: <span class="status-ok">${summary.accepted}</span> accepted ·${" "}
+        <span class=${rejCls}>${summary.rejected}</span> rejected (${summary.reject_pct}) ·${" "}
         ${summary.invalid} invalid · Best diff ${summary.best}
     </div>`;
 };
 
 function WorkersTable({ workers, summary, ui, onSort }) {
-    const rows = sortWorkers(workers, ui.sortIndex, ui.sortAsc);
-    return html`
+  const rows = sortWorkers(workers, ui.sortIndex, ui.sortAsc);
+  return html`
     <div class="card">
         <h3>Workers Alive</h3>
         <div class="table-scroll">
@@ -405,8 +433,9 @@ function WorkersTable({ workers, summary, ui, onSort }) {
                     <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
                 </thead>
                 <tbody id="workers-tbody">
-                    ${rows.map((w) => html`
-                        <tr class=${w.status === 'online' ? 'status-ok' : 'status-bad'}>
+                    ${rows.map(
+                      (w) => html`
+                        <tr class=${w.status === "online" ? "status-ok" : "status-bad"}>
                             <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
@@ -414,10 +443,13 @@ function WorkersTable({ workers, summary, ui, onSort }) {
                             <td>${w.h60_str}</td>
                             <td>${w.h15_str}</td>
                             <td>${w.accepted_str}</td>
-                            <td>${w.rejected_str}${w.reject_flag
+                            <td>${w.rejected_str}${
+                              w.reject_flag
                                 ? html` <span class="badge badge-bad" title=${w.reject_flag.title}>${w.reject_flag.text}</span>`
-                                : null}</td>
-                        </tr>`)}
+                                : null
+                            }</td>
+                        </tr>`,
+                    )}
                 </tbody>
             </table>
         </div>
@@ -427,17 +459,27 @@ function WorkersTable({ workers, summary, ui, onSort }) {
 
 // --- Operational view ----------------------------------------------------------------
 
-function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom, onToggleSeries, onAvgWindow }) {
-    const advanced = ui.view === 'advanced';
-    // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
-    // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
-    // context as reference at the bottom — "mine" first, "the world" last.
-    return html`
-    <div id="dashboard-view" class=${advanced ? 'mode-advanced' : ''}>
+function DashboardView({
+  state,
+  ui,
+  onRange,
+  onSort,
+  onView,
+  onZoom,
+  onResetZoom,
+  onToggleSeries,
+  onAvgWindow,
+}) {
+  const advanced = ui.view === "advanced";
+  // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
+  // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
+  // context as reference at the bottom — "mine" first, "the world" last.
+  return html`
+    <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
             <div class="toggle-group">
-                <button class=${'btn-toggle' + (!advanced ? ' active' : '')} onClick=${() => onView('simple')}>Simple</button>
-                <button class=${'btn-toggle' + (advanced ? ' active' : '')} onClick=${() => onView('advanced')}>Advanced</button>
+                <button class=${"btn-toggle" + (!advanced ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
+                <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
             </div>
         </div>
         <div class="grid">
@@ -463,26 +505,40 @@ function DashboardView({ state, ui, onRange, onSort, onView, onZoom, onResetZoom
 
 // --- Root ----------------------------------------------------------------------------
 
-export function App({ state, connected, ui, onRange, onSort, onView, onTheme, onZoom, onResetZoom, onToggleSeries, onAvgWindow }) {
-    // The theme toggle is fixed-position and always available, even before the first data load.
-    const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
-    if (!state) {
-        return html`<${Fragment}>
-            <div class="loading">${connected ? 'Connecting to the dashboard…' : 'Cannot reach the dashboard.'}</div>
+export function App({
+  state,
+  connected,
+  ui,
+  onRange,
+  onSort,
+  onView,
+  onTheme,
+  onZoom,
+  onResetZoom,
+  onToggleSeries,
+  onAvgWindow,
+}) {
+  // The theme toggle is fixed-position and always available, even before the first data load.
+  const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
+  if (!state) {
+    return html`<${Fragment}>
+            <div class="loading">${connected ? "Connecting to the dashboard…" : "Cannot reach the dashboard."}</div>
             ${switcher}
         <//>`;
-    }
-    return html`<${Fragment}>
+  }
+  return html`<${Fragment}>
         <${Header} state=${state} />
         ${!connected ? html`<div class="disconnected-banner">Disconnected — showing last known data. Retrying…</div>` : null}
-        ${state.syncing
+        ${
+          state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
             : html`<${Fragment}>
                 <${HeroBand} state=${state} />
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
                                   onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
-              <//>`}
+              <//>`
+        }
         ${switcher}
     <//>`;
 }

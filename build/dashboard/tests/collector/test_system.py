@@ -12,7 +12,9 @@ def _fake_open(content):
 
 class TestDiskUsage:
     def test_normal(self):
-        usage = SimpleNamespace(total=100 * system.BYTES_IN_GB, used=25 * system.BYTES_IN_GB, free=0)
+        usage = SimpleNamespace(
+            total=100 * system.BYTES_IN_GB, used=25 * system.BYTES_IN_GB, free=0
+        )
         with patch.object(system.shutil, "disk_usage", return_value=usage):
             d = system.get_disk_usage()
         assert d["total_gb"] == 100
