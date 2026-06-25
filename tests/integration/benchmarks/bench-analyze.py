@@ -18,15 +18,19 @@ Methodology (matches docs/benchmarks/tor-vs-clearnet.md):
   * shares_found / shares_failed are cumulative counters that RESET when p2pool is recreated at each
     switch, so per-block totals are taken as the max within the block.
 """
+
+import calendar
 import json
 import os
 import sys
-from datetime import datetime, timezone
-from statistics import mean, median, pstdev
+import time
+from statistics import mean, pstdev
 
 
 def parse_ts(s):
-    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    # timegm treats the parsed struct_time as UTC (the events.log stamps are all `...Z`). Avoids the
+    # datetime.UTC alias so the script stays portable to older Pythons — it's documented as run-anywhere.
+    return calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ"))
 
 
 def load_blocks(events_path):
@@ -82,8 +86,11 @@ def block_summary(rows):
     our_hr = num(rows, "hashrate_1h")
     pool_hr = [h for h in num(rows, "pool_hr") if h > 0]
     # hashrate share (%) computed per-snapshot then averaged, guarding divide-by-zero.
-    hs = [100.0 * r["hashrate_1h"] / r["pool_hr"]
-          for r in rows if r.get("pool_hr") and r.get("hashrate_1h") is not None and r["pool_hr"] > 0]
+    hs = [
+        100.0 * r["hashrate_1h"] / r["pool_hr"]
+        for r in rows
+        if r.get("pool_hr") and r.get("hashrate_1h") is not None and r["pool_hr"] > 0
+    ]
     return {
         "n": len(rows),
         "reward_share": mean(rs) if rs else 0.0,
@@ -102,13 +109,17 @@ def block_summary(rows):
 def main():
     bench_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/pithead-bench")
     blocks, settle = load_blocks(os.path.join(bench_dir, "events.log"))
-    rows = {"tor": load_rows(os.path.join(bench_dir, "tor.jsonl")),
-            "clearnet": load_rows(os.path.join(bench_dir, "clearnet.jsonl"))}
+    rows = {
+        "tor": load_rows(os.path.join(bench_dir, "tor.jsonl")),
+        "clearnet": load_rows(os.path.join(bench_dir, "clearnet.jsonl")),
+    }
 
-    print(f"# #256 Tor-vs-clearnet analysis   (settle discarded: {settle/3600:.0f}h/block)\n")
+    print(f"# #256 Tor-vs-clearnet analysis   (settle discarded: {settle / 3600:.0f}h/block)\n")
     per_block = {"tor": [], "clearnet": []}
-    hdr = f"{'blk':>3} {'arm':<8} {'n':>4} {'reward%':>8} {'hr-share%':>9} {'yield-eff':>9} " \
-          f"{'shares':>6} {'rej':>4} {'effort%':>7} {'peers':>5} {'torCPU%':>7}"
+    hdr = (
+        f"{'blk':>3} {'arm':<8} {'n':>4} {'reward%':>8} {'hr-share%':>9} {'yield-eff':>9} "
+        f"{'shares':>6} {'rej':>4} {'effort%':>7} {'peers':>5} {'torCPU%':>7}"
+    )
     print(hdr)
     print("-" * len(hdr))
     for idx, arm, start, stop in blocks:
@@ -117,9 +128,11 @@ def main():
             continue
         s = block_summary(keep)
         per_block[arm].append(s)
-        print(f"{idx:>3} {arm:<8} {s['n']:>4} {s['reward_share']:>8.3f} {s['hashrate_share']:>9.3f} "
-              f"{s['yield_eff']:>9.3f} {int(s['shares_found']):>6} {int(s['shares_failed']):>4} "
-              f"{s['avg_effort']:>7.1f} {s['peers_out']:>5.1f} {s['tor_cpu']:>7.1f}")
+        print(
+            f"{idx:>3} {arm:<8} {s['n']:>4} {s['reward_share']:>8.3f} {s['hashrate_share']:>9.3f} "
+            f"{s['yield_eff']:>9.3f} {int(s['shares_found']):>6} {int(s['shares_failed']):>4} "
+            f"{s['avg_effort']:>7.1f} {s['peers_out']:>5.1f} {s['tor_cpu']:>7.1f}"
+        )
 
     print("\n## Per-arm (mean of block means; ± = block-to-block stdev, the noise floor)\n")
     agg = {}
@@ -127,32 +140,49 @@ def main():
         bs = per_block[arm]
         if not bs:
             continue
-        g = lambda k: [b[k] for b in bs]
-        agg[arm] = {k: mean(g(k)) for k in bs[0]}
-        agg[arm]["reward_sd"] = pstdev(g("reward_share")) if len(bs) > 1 else 0.0
-        agg[arm]["yield_sd"] = pstdev(g("yield_eff")) if len(bs) > 1 else 0.0
-        agg[arm]["shares_total"] = sum(g("shares_found"))
-        agg[arm]["rej_total"] = sum(g("shares_failed"))
+
+        def col(key, blocks=bs):
+            return [b[key] for b in blocks]
+
+        agg[arm] = {k: mean(col(k)) for k in bs[0]}
+        agg[arm]["reward_sd"] = pstdev(col("reward_share")) if len(bs) > 1 else 0.0
+        agg[arm]["yield_sd"] = pstdev(col("yield_eff")) if len(bs) > 1 else 0.0
+        agg[arm]["shares_total"] = sum(col("shares_found"))
+        agg[arm]["rej_total"] = sum(col("shares_failed"))
         a = agg[arm]
-        print(f"  {arm:<9} blocks={len(bs)}  reward%={a['reward_share']:.3f} ±{a['reward_sd']:.3f}  "
-              f"yield-eff={a['yield_eff']:.3f} ±{a['yield_sd']:.3f}  "
-              f"shares={int(a['shares_total'])}  rej={int(a['rej_total'])}  "
-              f"effort={a['avg_effort']:.1f}%  peers={a['peers_out']:.1f}  "
-              f"our_hr={a['our_hr_khs']:.0f}kH/s  pool={a['pool_hr_mhs']:.1f}MH/s  torCPU={a['tor_cpu']:.1f}%")
+        print(
+            f"  {arm:<9} blocks={len(bs)}  reward%={a['reward_share']:.3f} ±{a['reward_sd']:.3f}  "
+            f"yield-eff={a['yield_eff']:.3f} ±{a['yield_sd']:.3f}  "
+            f"shares={int(a['shares_total'])}  rej={int(a['rej_total'])}  "
+            f"effort={a['avg_effort']:.1f}%  peers={a['peers_out']:.1f}  "
+            f"our_hr={a['our_hr_khs']:.0f}kH/s  pool={a['pool_hr_mhs']:.1f}MH/s  torCPU={a['tor_cpu']:.1f}%"
+        )
 
     if "tor" in agg and "clearnet" in agg:
         t, c = agg["tor"], agg["clearnet"]
-        d_rs = 100.0 * (t["reward_share"] - c["reward_share"]) / c["reward_share"] if c["reward_share"] else 0.0
+        d_rs = (
+            100.0 * (t["reward_share"] - c["reward_share"]) / c["reward_share"]
+            if c["reward_share"]
+            else 0.0
+        )
         d_ye = 100.0 * (t["yield_eff"] - c["yield_eff"]) / c["yield_eff"] if c["yield_eff"] else 0.0
         print("\n## Tor vs clearnet")
-        print(f"  reward-share:     Tor is {d_rs:+.1f}% vs clearnet  "
-              f"(clearnet block-to-block spread ±{100*c['reward_sd']/c['reward_share']:.1f}%)"
-              if c["reward_share"] else "")
-        print(f"  yield-efficiency: Tor is {d_ye:+.1f}% vs clearnet  "
-              f"(clearnet spread ±{100*c['yield_sd']/c['yield_eff']:.1f}%)"
-              if c["yield_eff"] else "")
-        print(f"  reject rate:      Tor {t['rej_total']}/{int(t['shares_total'])}  "
-              f"clearnet {c['rej_total']}/{int(c['shares_total'])}")
+        print(
+            f"  reward-share:     Tor is {d_rs:+.1f}% vs clearnet  "
+            f"(clearnet block-to-block spread ±{100 * c['reward_sd'] / c['reward_share']:.1f}%)"
+            if c["reward_share"]
+            else ""
+        )
+        print(
+            f"  yield-efficiency: Tor is {d_ye:+.1f}% vs clearnet  "
+            f"(clearnet spread ±{100 * c['yield_sd'] / c['yield_eff']:.1f}%)"
+            if c["yield_eff"]
+            else ""
+        )
+        print(
+            f"  reject rate:      Tor {t['rej_total']}/{int(t['shares_total'])}  "
+            f"clearnet {c['rej_total']}/{int(c['shares_total'])}"
+        )
         print(f"  Tor daemon CPU:   Tor arm {t['tor_cpu']:.1f}%   clearnet arm {c['tor_cpu']:.1f}%")
 
 

@@ -24,18 +24,45 @@
 
 set -uo pipefail
 
-ARM="${1:-}"; shift || true
-case "$ARM" in ""|-*) echo "usage: bench-collect.sh <arm-label> [--interval N] [--out FILE] [--once]" >&2; exit 2;; esac
+ARM="${1:-}"
+shift || true
+case "$ARM" in "" | -*)
+    echo "usage: bench-collect.sh <arm-label> [--interval N] [--out FILE] [--once]" >&2
+    exit 2
+    ;;
+esac
 
-INTERVAL=300; OUT=""; P2POOL="p2pool"; TOR="tor"; ONCE=0
+INTERVAL=300
+OUT=""
+P2POOL="p2pool"
+TOR="tor"
+ONCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --interval) INTERVAL="$2"; shift 2 ;;
-        --out)      OUT="$2"; shift 2 ;;
-        --p2pool)   P2POOL="$2"; shift 2 ;;
-        --tor)      TOR="$2"; shift 2 ;;
-        --once)     ONCE=1; shift ;;
-        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    --interval)
+        INTERVAL="$2"
+        shift 2
+        ;;
+    --out)
+        OUT="$2"
+        shift 2
+        ;;
+    --p2pool)
+        P2POOL="$2"
+        shift 2
+        ;;
+    --tor)
+        TOR="$2"
+        shift 2
+        ;;
+    --once)
+        ONCE=1
+        shift
+        ;;
+    *)
+        echo "unknown arg: $1" >&2
+        exit 2
+        ;;
     esac
 done
 [ -n "$OUT" ] || OUT="$HOME/pithead-bench/${ARM}.jsonl"
@@ -46,13 +73,16 @@ pstat() { docker exec "$P2POOL" cat "/stats/$1" 2>/dev/null | jq -c . 2>/dev/nul
 snapshot() {
     local now strat p2p pool tor_line tor_cpu tor_mem
     now=$(date -u +%s)
-    strat=$(pstat local/stratum); [ -n "$strat" ] || strat=null
-    p2p=$(pstat local/p2p);       [ -n "$p2p" ]   || p2p=null
-    pool=$(pstat pool/stats);     [ -n "$pool" ]  || pool=null
+    strat=$(pstat local/stratum)
+    [ -n "$strat" ] || strat=null
+    p2p=$(pstat local/p2p)
+    [ -n "$p2p" ] || p2p=null
+    pool=$(pstat pool/stats)
+    [ -n "$pool" ] || pool=null
     # Tor daemon overhead under sustained mining traffic.
     tor_line=$(docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' "$TOR" 2>/dev/null)
     tor_cpu=$(printf '%s' "$tor_line" | awk -F'|' '{gsub(/%/,"",$1); print ($1==""?"null":$1+0)}')
-    tor_mem=$(printf '%s' "$tor_line" | awk -F'|' '{split($2,a," / "); print a[1]}')   # e.g. "12.3MiB"
+    tor_mem=$(printf '%s' "$tor_line" | awk -F'|' '{split($2,a," / "); print a[1]}') # e.g. "12.3MiB"
     [ -n "$tor_cpu" ] || tor_cpu=null
 
     jq -cn --arg arm "$ARM" --argjson ts "$now" \
@@ -82,11 +112,14 @@ snapshot() {
         }'
 }
 
-if [ "$ONCE" = "1" ]; then snapshot; exit 0; fi
+if [ "$ONCE" = "1" ]; then
+    snapshot
+    exit 0
+fi
 
 mkdir -p "$(dirname "$OUT")"
 echo "[bench] arm=$ARM interval=${INTERVAL}s out=$OUT started=$(date -u +%FT%TZ)" >&2
 while :; do
-    line=$(snapshot 2>/dev/null) && [ -n "$line" ] && printf '%s\n' "$line" >> "$OUT"
+    line=$(snapshot 2>/dev/null) && [ -n "$line" ] && printf '%s\n' "$line" >>"$OUT"
     sleep "$INTERVAL"
 done

@@ -202,6 +202,7 @@ Reproduce: `python3 tests/integration/benchmarks/bench-analyze.py docs/benchmark
 | 6 | clearnet | 1.220 | 1.024 | 87.7 | 87 |
 
 **Findings:**
+
 1. **Tor costs ≈ 10–12 % of p2pool yield** on `mini`. Reward share and yield-efficiency agree (−11.4 % /
    −11.5 %), and the direction is consistent across the run.
 2. **The cost is propagation latency, not anything else.** Rejects were **0 in both arms**, the Tor

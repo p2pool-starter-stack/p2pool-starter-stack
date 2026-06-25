@@ -9,8 +9,14 @@ set -uo pipefail
 BENCH_DIR="${BENCH_DIR:-$HOME/pithead-bench}"
 S="$BENCH_DIR/status.json"
 
-[ "${1:-}" = --json ] && { cat "$S" 2>/dev/null || echo '{}'; exit 0; }
-[ -f "$S" ] || { echo "No benchmark status yet ($S missing). Is the run started?"; exit 0; }
+[ "${1:-}" = --json ] && {
+    cat "$S" 2>/dev/null || echo '{}'
+    exit 0
+}
+[ -f "$S" ] || {
+    echo "No benchmark status yet ($S missing). Is the run started?"
+    exit 0
+}
 
 jq -r '
   "Tor-vs-clearnet benchmark  (pool=\(.pool))",
@@ -28,11 +34,11 @@ echo "  ---"
 # a while, the run is simply healthy and quiet (switches/leaks/recoveries would log a fresh event).
 last_ts="$(tail -n1 "$BENCH_DIR/events.log" 2>/dev/null | awk '{print $1}')"
 if [ -n "$last_ts" ]; then
-    age=$(( $(date -u +%s) - $(date -u -d "$last_ts" +%s 2>/dev/null || echo "$(date -u +%s)") ))
+    age=$(($(date -u +%s) - $(date -u -d "$last_ts" +%s 2>/dev/null || echo "$(date -u +%s)")))
     [ "$age" -lt 0 ] && age=0
-    printf '  stable: no new events for %dh %dm (a switch / leak / recovery would log one)\n' $((age/3600)) $(((age%3600)/60))
+    printf '  stable: no new events for %dh %dm (a switch / leak / recovery would log one)\n' $((age / 3600)) $(((age % 3600) / 60))
 fi
 echo "  recent events (oldest may be from launch):"
 tail -n 5 "$BENCH_DIR/events.log" 2>/dev/null | sed 's/^/    /' || true
-tcl() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
+tcl() { [ -f "$1" ] && wc -l <"$1" | tr -d ' ' || echo 0; }
 echo "  collector lines: tor=$(tcl "$BENCH_DIR/tor.jsonl")  clearnet=$(tcl "$BENCH_DIR/clearnet.jsonl")"
