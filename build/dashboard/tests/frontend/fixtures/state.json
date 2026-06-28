@@ -1,0 +1,543 @@
+{
+  "avg_window": "10m",
+  "avg_windows": [
+    "1m",
+    "10m",
+    "1h",
+    "12h",
+    "24h"
+  ],
+  "badges": [
+    {
+      "text": "P2POOL",
+      "variant": "ok"
+    },
+    {
+      "text": "P2Pool Main",
+      "variant": "outline"
+    },
+    {
+      "text": "XMR Pruned",
+      "title": "Monero blockchain is pruned",
+      "variant": "outline"
+    },
+    {
+      "text": "\ud83d\udee1\ufe0f Tor-only egress",
+      "title": "All egress via Tor",
+      "variant": "ok"
+    }
+  ],
+  "chart": {
+    "p2pool": [
+      {
+        "x": 1782646167000,
+        "y": 8000
+      },
+      {
+        "x": 1782646467000,
+        "y": 8100
+      }
+    ],
+    "shares": [
+      {
+        "c": 1,
+        "r": 9,
+        "x": 1782646467000,
+        "y": 0.93
+      }
+    ],
+    "tension": 0.0,
+    "xvb": [
+      {
+        "x": 1782646167000,
+        "y": 2200
+      },
+      {
+        "x": 1782646467000,
+        "y": 2400
+      }
+    ]
+  },
+  "db_healthy": true,
+  "earnings": {
+    "available": false,
+    "block_reward": "0.0000 XMR",
+    "coeff_day": 0.0,
+    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
+    "p2pool_hr": 8050.0,
+    "p2pool_hr_str": "8.05 kH/s",
+    "pool_difficulty": 0
+  },
+  "egress": {
+    "components": [
+      {
+        "conns": [
+          {
+            "route": "tor",
+            "to": "Monero P2P / tx relay"
+          }
+        ],
+        "firewalled": true,
+        "name": "monerod"
+      },
+      {
+        "conns": [
+          {
+            "route": "tor",
+            "to": "sidechain P2P peers"
+          },
+          {
+            "route": "local",
+            "to": "monerod RPC/ZMQ"
+          }
+        ],
+        "firewalled": true,
+        "name": "p2pool"
+      },
+      {
+        "conns": [
+          {
+            "route": "tor",
+            "to": "Tari P2P transport"
+          },
+          {
+            "route": "local",
+            "to": "DNS resolution"
+          }
+        ],
+        "firewalled": true,
+        "name": "tari"
+      },
+      {
+        "conns": [
+          {
+            "route": "local",
+            "to": "upstream pool (local p2pool stratum)"
+          },
+          {
+            "route": "tor",
+            "to": "XvB donation pool"
+          },
+          {
+            "route": "inactive",
+            "to": "dev donation"
+          }
+        ],
+        "firewalled": true,
+        "name": "xmrig-proxy"
+      },
+      {
+        "conns": [
+          {
+            "route": "tor",
+            "to": "XvB stats (xmrvsbeast.com)"
+          },
+          {
+            "route": "tor",
+            "to": "update check (github)"
+          }
+        ],
+        "firewalled": false,
+        "name": "dashboard"
+      },
+      {
+        "conns": [
+          {
+            "route": "local",
+            "to": "TLS (internal CA, no ACME)"
+          }
+        ],
+        "firewalled": true,
+        "name": "caddy"
+      }
+    ],
+    "summary": {
+      "all_tor": true,
+      "blocked_by_firewall": 0,
+      "firewall": true,
+      "label": "All egress via Tor",
+      "leaks": 0,
+      "level": "ok"
+    }
+  },
+  "hashrate": {
+    "low_hr": null,
+    "mode_name": "P2POOL",
+    "mode_variant": "ok",
+    "p2p_1h": "8.05 kH/s",
+    "p2p_24h": "8.05 kH/s",
+    "p2p_variant": "ok",
+    "target_tier": "None",
+    "tier": "None",
+    "total": "10.00 kH/s",
+    "xvb_1h": "0.00 H/s",
+    "xvb_24h": "0.00 H/s",
+    "xvb_fail_count": 0,
+    "xvb_routed_1h": "2.30 kH/s",
+    "xvb_routed_24h": "2.30 kH/s",
+    "xvb_updated": "Never",
+    "xvb_variant": "muted"
+  },
+  "host_addr": "100.68.38.126",
+  "host_ip": "Unknown Host",
+  "last_update": "17:09:27",
+  "monero": {
+    "db_size": "\u2014",
+    "mode": "Pruned"
+  },
+  "network": {
+    "diff": "0.00 G",
+    "hash": "N/A",
+    "height": 0,
+    "reward": "0.0000 XMR",
+    "ts": "Never"
+  },
+  "page_title": "Mining Dashboard",
+  "pool": {
+    "blocks": 0,
+    "diff": "0.00 M",
+    "hr": "0.00 H/s",
+    "last_blk": "Never",
+    "miners": 0,
+    "peers": "0 / 0",
+    "pplns_wgt": 0,
+    "pplns_win": "2160 (6h 0m)",
+    "sidechain_height": 0,
+    "total_hashes": 0,
+    "type": "Main",
+    "uptime": "0m 0s"
+  },
+  "proxy_summary": {
+    "accepted": "0",
+    "best": "\u2014",
+    "expired": "0",
+    "has_data": false,
+    "invalid": "0",
+    "reject_level": "ok",
+    "reject_pct": "0.00%",
+    "rejected": "0"
+  },
+  "proxy_workers": 1,
+  "raffle_eligible": {
+    "applies": true,
+    "eligible": false,
+    "label": "No"
+  },
+  "range": "all",
+  "shares_window": {
+    "count": 1,
+    "ok": true
+  },
+  "stratum": {
+    "conns": 0,
+    "effort": "0.0%",
+    "h15": "0.00 H/s",
+    "h1h": "0.00 H/s",
+    "h24h": "0.00 H/s",
+    "last_share": "Never",
+    "reward_pct": "0.0000%",
+    "shares": "0 / 0",
+    "total_hashes": 0,
+    "total_shares": 0,
+    "wallet": "Unknown",
+    "wallet_short": "Unknown"
+  },
+  "sync": {
+    "monero": {
+      "current": 3000000,
+      "db_size": "\u2014",
+      "mode": "Pruned",
+      "percent": 100,
+      "remaining": 0,
+      "state": "done",
+      "target": 3000000
+    },
+    "tari": {
+      "current": 50000,
+      "percent": 100,
+      "remaining": 0,
+      "state": "done",
+      "target": 50000
+    }
+  },
+  "syncing": false,
+  "system": {
+    "cpu": {
+      "level": "ok",
+      "load": "1m: 0.00 5m: 0.00 15m: 0.00",
+      "percent": "0.0%"
+    },
+    "disk": {
+      "fill": "",
+      "level": "ok",
+      "percent": "0%",
+      "total": "0.0",
+      "used": "0.0",
+      "width": "0%"
+    },
+    "hugepages": {
+      "status": "Disabled",
+      "value": "0/0",
+      "variant": "bad"
+    },
+    "mem": {
+      "level": "ok",
+      "percent": "0%",
+      "total": "0.0",
+      "used": "0.0"
+    }
+  },
+  "tari": {
+    "active": false,
+    "diff": "0",
+    "height": "0",
+    "reward": "0.00 TARI",
+    "status": "Waiting...",
+    "wallet": "Unknown",
+    "wallet_short": "Unknown"
+  },
+  "topology": {
+    "edges": [
+      {
+        "from": "rigs",
+        "kind": "ingress",
+        "label": "stratum :3333",
+        "route": "local",
+        "to": "xmrig-proxy"
+      },
+      {
+        "from": "browser",
+        "kind": "ingress",
+        "label": "https :443",
+        "route": "local",
+        "to": "caddy"
+      },
+      {
+        "from": "p2pool",
+        "kind": "p2p",
+        "label": "sidechain P2P",
+        "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "monerod",
+        "kind": "p2p",
+        "label": "Monero P2P + tx",
+        "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "tari",
+        "kind": "p2p",
+        "label": "Tari P2P",
+        "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "xmrig-proxy",
+        "kind": "egress",
+        "label": "XvB donation",
+        "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "update check",
+        "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "XvB stats",
+        "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "tor",
+        "kind": "p2p",
+        "label": "SOCKS + onion circuits",
+        "route": "tor",
+        "to": "internet"
+      },
+      {
+        "from": "xmrig-proxy",
+        "kind": "internal",
+        "label": "upstream pool",
+        "route": "local",
+        "to": "p2pool"
+      },
+      {
+        "from": "p2pool",
+        "kind": "internal",
+        "label": "RPC / ZMQ",
+        "route": "local",
+        "to": "monerod"
+      },
+      {
+        "from": "p2pool",
+        "kind": "internal",
+        "label": "gRPC merge-mine",
+        "route": "local",
+        "to": "tari"
+      },
+      {
+        "from": "caddy",
+        "kind": "internal",
+        "label": "reverse-proxy :8000",
+        "route": "local",
+        "to": "dashboard"
+      },
+      {
+        "from": "dashboard",
+        "kind": "internal",
+        "label": "get_info RPC",
+        "route": "local",
+        "to": "monerod"
+      },
+      {
+        "from": "dashboard",
+        "kind": "internal",
+        "label": "proxy API",
+        "route": "local",
+        "to": "xmrig-proxy"
+      },
+      {
+        "from": "dashboard",
+        "kind": "internal",
+        "label": "gRPC",
+        "route": "local",
+        "to": "tari"
+      },
+      {
+        "from": "dashboard",
+        "kind": "internal",
+        "label": "container API",
+        "route": "local",
+        "to": "docker"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "rigs",
+        "label": "Mining rigs",
+        "zone": "lan"
+      },
+      {
+        "id": "browser",
+        "label": "Browser",
+        "zone": "lan"
+      },
+      {
+        "id": "xmrig-proxy",
+        "label": "xmrig-proxy",
+        "zone": "host"
+      },
+      {
+        "id": "caddy",
+        "label": "caddy",
+        "zone": "host"
+      },
+      {
+        "id": "dashboard",
+        "label": "dashboard",
+        "zone": "host"
+      },
+      {
+        "id": "p2pool",
+        "label": "p2pool",
+        "zone": "host"
+      },
+      {
+        "id": "monerod",
+        "label": "monerod",
+        "zone": "host"
+      },
+      {
+        "id": "tari",
+        "label": "tari",
+        "zone": "host"
+      },
+      {
+        "id": "docker",
+        "internal": true,
+        "label": "docker-proxy",
+        "zone": "host"
+      },
+      {
+        "id": "tor",
+        "label": "tor",
+        "zone": "tor"
+      },
+      {
+        "id": "internet",
+        "label": "Tor network",
+        "zone": "internet"
+      }
+    ],
+    "summary": {
+      "all_tor": true,
+      "blocked_by_firewall": 0,
+      "firewall": true,
+      "label": "All egress via Tor",
+      "leaks": 0,
+      "level": "ok"
+    }
+  },
+  "update": {
+    "available": true,
+    "latest": "v9.9.9",
+    "url": "https://example/releases/v9.9.9"
+  },
+  "version": {
+    "dev": true,
+    "text": "dev build",
+    "title": "Development build"
+  },
+  "window": null,
+  "workers": [
+    {
+      "accepted": 1200,
+      "accepted_str": "1,200",
+      "h10": 0,
+      "h10_str": "0.00 H/s",
+      "h15": 0,
+      "h15_str": "0.00 H/s",
+      "h60": 0,
+      "h60_str": "0.00 H/s",
+      "invalid": 0,
+      "ip": "192.168.1.10",
+      "ip_sort": 3232235786,
+      "name": "rig-alpha",
+      "pool": "p2pool",
+      "reject_flag": null,
+      "rejected": 1,
+      "rejected_str": "1",
+      "status": "online",
+      "uptime": 0,
+      "uptime_str": "0m 0s"
+    },
+    {
+      "accepted": 800,
+      "accepted_str": "800",
+      "h10": 0,
+      "h10_str": "0.00 H/s",
+      "h15": 0,
+      "h15_str": "0.00 H/s",
+      "h60": 0,
+      "h60_str": "0.00 H/s",
+      "invalid": 0,
+      "ip": "192.168.1.11",
+      "ip_sort": 3232235787,
+      "name": "rig-bravo",
+      "pool": "p2pool",
+      "reject_flag": null,
+      "rejected": 40,
+      "rejected_str": "40",
+      "status": "offline",
+      "uptime": 0,
+      "uptime_str": "0m 0s"
+    }
+  ]
+}
