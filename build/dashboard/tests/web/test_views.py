@@ -866,6 +866,19 @@ class TestTari:
         t = build_tari({"tari": {"active": False}})
         assert t["active"] is False and t["connected"] is False and t["status"] == "Waiting..."
 
+    def test_active_without_status_falls_back_to_waiting(self):
+        # #295: effective status is derived here (not data_service). Active but the channel state is
+        # absent => the "Waiting..." fallback still applies, so the panel is never blank.
+        t = build_tari({"tari": {"active": True}})
+        assert t["status"] == "Waiting..."
+
+    def test_connected_requires_active(self):
+        # #295: a stray connected=True while inactive must not render as connected, and an inactive
+        # chain's status is always "Waiting..." regardless of any raw status it carries.
+        t = build_tari({"tari": {"active": False, "connected": True, "status": "READY"}})
+        assert t["connected"] is False
+        assert t["status"] == "Waiting..."
+
     def test_long_wallet_shortened(self):
         t = build_tari({"tari": {"active": True, "address": "T" * 40}})
         assert "..." in t["wallet_short"] and t["wallet"] == "T" * 40
