@@ -551,6 +551,30 @@ class TestBadges:
             )
         )
 
+    def test_xvb_registered_badge(self):
+        # registered_at set + clean state => a muted "✓" confirmation badge (#263).
+        out = build_badges({}, _metrics(xvb_enabled=True, xvb_registered_at=1.0), "ok")
+        assert any(b["text"] == "XvB raffle ✓" and b["variant"] == "outline" for b in out)
+
+    def test_xvb_invalid_wallet_badge(self):
+        # Endpoint rejected the wallet => loud "bad" badge so the user fixes MONERO_WALLET_ADDRESS.
+        out = build_badges({}, _metrics(xvb_enabled=True, xvb_registration_state="invalid"), "ok")
+        assert any(b["variant"] == "bad" and "wallet rejected" in b["text"] for b in out)
+
+    def test_xvb_failing_badge_takes_priority_over_checkmark(self):
+        # A real problem must not be masked by a stale registered_at.
+        out = build_badges(
+            {},
+            _metrics(xvb_enabled=True, xvb_registration_state="failing", xvb_registered_at=1.0),
+            "ok",
+        )
+        assert any(b["variant"] == "bad" and "failing" in b["text"] for b in out)
+        assert not any("✓" in b["text"] for b in out)
+
+    def test_no_xvb_registration_badge_when_disabled(self):
+        out = build_badges({}, _metrics(xvb_enabled=False, xvb_registered_at=1.0), "ok")
+        assert not any("XvB raffle" in b["text"] for b in out)
+
     def test_node_down_and_rejected(self):
         m = _metrics(monero=_sync(down=True), tari=_sync(down=True))
         out = build_badges({"workers_rejected": True}, m, "ok")

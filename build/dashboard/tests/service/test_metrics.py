@@ -205,6 +205,20 @@ class TestModeAndTiers:
         assert m.xvb_fail_count == 4
         assert m.xvb_last_update == 1700000000
 
+    def test_registration_status_surfaced(self):
+        # #263: registered_at + registration_state flow from XvB state to the metrics (badge driver).
+        m = build_metrics(
+            _data(), _mgr(xvb={"registered_at": 1700000500, "registration_state": "registered"})
+        )
+        assert m.xvb_registered_at == 1700000500
+        assert m.xvb_registration_state == "registered"
+
+    def test_registration_status_defaults(self):
+        # Absent from state (older DBs / fresh start) => safe zero/empty defaults, no badge.
+        m = build_metrics(_data(), _mgr(xvb={}))
+        assert m.xvb_registered_at == 0
+        assert m.xvb_registration_state == ""
+
 
 class TestWorkers:
     def test_counts_online_and_total(self):

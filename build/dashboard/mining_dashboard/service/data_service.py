@@ -8,6 +8,11 @@ from aiohttp import ClientSession
 from mining_dashboard.client.docker.docker_control import DockerControl
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
+from mining_dashboard.client.xvb_client import (
+    REG_INVALID,
+    REG_NOT_ELIGIBLE,
+    REG_OK,
+)
 from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.pools import (
     get_network_stats,
@@ -35,6 +40,7 @@ from mining_dashboard.config.config import (
     UPDATE_CHECK_INTERVAL,
     UPDATE_INTERVAL,
     WORKER_FALLOFF_SEC,
+    XVB_REGISTER_INTERVAL_S,
     XVB_TOR_PROXY,
 )
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
@@ -61,6 +67,12 @@ _PX_MIN_FIELDS = 13
 
 # xmrig-proxy reports hashrate in kH/s; the dashboard works in H/s.
 _KHS_TO_HS = 1000
+
+# Consecutive XvB-registration failures (while never yet registered) before we raise the dashboard
+# "registration failing" warning (#263). A couple of transient blips during the normal first-share
+# window shouldn't alarm; a configured-but-refusing endpoint should. At one attempt per 10th poll
+# (~5 min) this is ~15 min of sustained failure.
+_XVB_REGISTER_FAIL_ALERT = 3
 
 
 def _parse_proxy_list_worker(w):
@@ -342,6 +354,14 @@ class DataService:
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
         )
+        # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
+        # None until the wallet is first entered. Drives the daily re-register cadence below.
+        self._xvb_last_registered = None
+        # Consecutive transient register() failures while never-yet-registered (drives the "failing"
+        # badge), and a latch that stops retrying once the endpoint calls the wallet invalid — a
+        # permanent error that won't fix itself on retry (#263).
+        self._xvb_register_failures = 0
+        self._xvb_invalid_wallet = False
 
         self.latest_data = {
             "workers": [],
@@ -477,6 +497,85 @@ class DataService:
                 f"Required chain(s) still syncing — holding {', '.join(SYNC_GATE_CONTAINERS)} "
                 f"until synced."
             )
+
+    async def _maybe_register_xvb(self, shares, p2pool_stats):
+        """
+        Auto-enter the wallet into the XvB raffle once it's eligible (#263).
+
+        Mining to the XvB pool doesn't enter a wallet — it must be registered against the operator's
+        endpoint, which only takes effect once the wallet has a share in the P2Pool PPLNS window. So
+        we gate on a PPLNS share existing (same window math as the dashboard/algo) and skip silently
+        until then, retrying on the next poll. After the first success we re-register on a daily
+        cadence (XVB_REGISTER_INTERVAL_S): registration is idempotent, and re-running picks up the
+        operator's newer security-token behaviour and re-enters a long-offline miner cleanly.
+
+        The caller already gated on ENABLE_XVB + the 10th-iteration throttle. Edge cases are handled
+        from the endpoint's real contract (see XvbClient.register): "already registered" is the
+        idempotent steady state (success); an invalid wallet is permanent (latch + warn, stop
+        retrying); transient errors escalate to a "failing" badge only after a few attempts.
+        register() routes over Tor.
+        """
+        # Nothing to do if registration is disabled (XVB_SUBMIT_URL off) or the wallet was already
+        # rejected as permanently invalid — both are terminal for this process, skip quietly.
+        if not self.xvb_client.submit_url or self._xvb_invalid_wallet:
+            return
+
+        # PPLNS-share check — mirrors metrics/algo: a share counts if it's within pplns_window
+        # blocks (30s/block on Nano, else 10s) of now.
+        pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
+        pplns_window = p2pool_stats.get("pool", {}).get("pplns_window", 2160)
+        block_time = 30 if pool_type == "Nano" else 10
+        cutoff = time.time() - pplns_window * block_time
+        if not any(s.get("ts", 0) >= cutoff for s in shares):
+            return  # no eligible share yet — the endpoint would no-op, so don't call it
+
+        now = time.time()
+        if self._xvb_last_registered is not None and (
+            now - self._xvb_last_registered < XVB_REGISTER_INTERVAL_S
+        ):
+            return  # already registered recently; next re-register isn't due yet
+
+        status = await asyncio.to_thread(self.xvb_client.register)
+
+        if status == REG_OK:
+            # Fresh registration OR the idempotent "already registered" steady state — either way the
+            # wallet is in the raffle. Stamp it and clear the transient-failure counter.
+            self._xvb_last_registered = now
+            self._xvb_register_failures = 0
+            await asyncio.to_thread(
+                self.state_manager.update_xvb_stats,
+                registered_at=now,
+                registration_state="registered",
+            )
+            logger.info("External Sync: Registered wallet with XvB raffle ✓")
+        elif status == REG_INVALID:
+            # Permanent: the endpoint won't accept this wallet, and it won't change on retry. Latch
+            # off, warn once, and surface it — don't hammer the endpoint every poll.
+            self._xvb_invalid_wallet = True
+            logger.warning(
+                "XvB registration rejected MONERO_WALLET_ADDRESS as invalid — auto-registration "
+                "disabled. The XvB raffle needs a standard primary Monero address (4…). (#263)"
+            )
+            await asyncio.to_thread(
+                self.state_manager.update_xvb_stats, registration_state="invalid"
+            )
+        elif status == REG_NOT_ELIGIBLE:
+            # The share we see locally hasn't propagated to XvB yet — not a failure, just retry next
+            # poll. Don't count it toward the "failing" escalation.
+            return
+        else:
+            # Transient (network / 5xx / unrecognised). register() already logged specifics. Only
+            # escalate to a dashboard warning once it's *persistently* failing AND we've never
+            # succeeded — a blip while the first share propagates shouldn't alarm. (A failed daily
+            # re-register after a prior success keeps the "registered ✓"; we're still entered.)
+            self._xvb_register_failures += 1
+            if (
+                self._xvb_last_registered is None
+                and self._xvb_register_failures >= _XVB_REGISTER_FAIL_ALERT
+            ):
+                await asyncio.to_thread(
+                    self.state_manager.update_xvb_stats, registration_state="failing"
+                )
 
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
@@ -714,6 +813,11 @@ class DataService:
                             logger.info(
                                 f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)"
                             )
+
+                        # 7b. XvB raffle auto-registration (#263). Rides the same throttle/egress as
+                        # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS
+                        # share existing — before then the endpoint is a no-op, so we just retry.
+                        await self._maybe_register_xvb(shares_list, p2pool_stats)
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to

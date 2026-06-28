@@ -106,6 +106,19 @@ the XvB raffle picks winners at random, donating above a tier's threshold earns 
 [Architecture › Algorithmic switching](architecture.md#algorithmic-switching) and the `xvb.*`
 keys in [Configuration](configuration.md#configuration-reference).
 
+### Do I have to sign up for the XvB raffle?
+
+No — there's no manual signup. With `xvb.enabled: true`, the stack auto-registers your wallet in
+the XMRvsBeast raffle once you have a share in the P2Pool PPLNS window (registration only takes
+effect after that first share, so it can take a little while on a fresh stack). It then re-registers
+periodically so a long-offline rig re-enters cleanly. The registration call carries your full wallet
+address and is routed over Tor like the XvB stats fetch, so it never exposes your IP on clearnet. If
+XvB is disabled, no registration happens.
+
+The dashboard shows an **`XvB raffle ✓`** header badge once you're registered (and a warning badge
+if your wallet is rejected or registration is failing — see
+[Configuration › XvB raffle auto-registration](configuration.md#xvb-raffle-auto-registration-xvb_submit_url)).
+
 ### What is Tari? Do I have to mine it?
 
 Tari (the [Minotari](https://www.tari.com/) node) is a chain that's **merge-mined alongside

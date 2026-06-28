@@ -90,6 +90,9 @@ class Metrics:
     tari: SyncMetric
     monero_mode: str  # "Pruned" / "Full" / "Unknown"
     tari_mining: bool  # Tari merge-mining active
+    # XvB raffle registration (#263). Defaulted so direct Metrics(...) constructors needn't set them.
+    xvb_registered_at: float = 0.0  # epoch secs of last successful registration; 0.0 = never
+    xvb_registration_state: str = ""  # ""|registered|invalid|failing — drives the badge
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -196,6 +199,8 @@ def build_metrics(latest_data, state_mgr, history=None):
         tari=_sync_metric(data.get("tari_sync", {})),
         monero_mode=_monero_mode(),
         tari_mining=bool(data.get("tari", {}).get("active", False)),
+        xvb_registered_at=xvb_stats.get("registered_at", 0) or 0,
+        xvb_registration_state=xvb_stats.get("registration_state", "") or "",
     )
 
 

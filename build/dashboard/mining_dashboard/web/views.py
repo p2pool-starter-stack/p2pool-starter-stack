@@ -110,6 +110,20 @@ _NOT_ELIGIBLE_TITLE = (
     "your donation tier. Keep enough hashrate on P2Pool to keep landing shares."
 )
 
+# XvB raffle auto-registration status (#263).
+_XVB_REGISTERED_TITLE = (
+    "This wallet is auto-registered with the XMRvsBeast raffle. Re-registration runs periodically; "
+    "no manual signup is needed."
+)
+_XVB_INVALID_TITLE = (
+    "The XvB raffle endpoint rejected your wallet as invalid, so you won't be entered. The raffle "
+    "needs a standard primary Monero address (starts with 4). Check MONERO_WALLET_ADDRESS."
+)
+_XVB_FAILING_TITLE = (
+    "XvB raffle registration keeps failing despite a PPLNS share — the endpoint may be unreachable "
+    "or erroring. Check the dashboard logs and the XvB egress (Tor) path."
+)
+
 
 def build_raffle_eligibility(metrics):
     """Raffle-eligibility status — are you set up to both WIN and COLLECT an XvB payout? (#158)
@@ -677,6 +691,34 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
                     "title": _NOT_ELIGIBLE_TITLE,
                 }
             )
+
+        # XvB raffle auto-registration status (#263). Warnings take priority over the ✓ so a real
+        # problem (invalid wallet / persistently failing) is never masked by a stale timestamp.
+        if metrics.xvb_enabled:
+            if metrics.xvb_registration_state == "invalid":
+                badges.append(
+                    {
+                        "text": "⚠ XvB wallet rejected",
+                        "variant": "bad",
+                        "title": _XVB_INVALID_TITLE,
+                    }
+                )
+            elif metrics.xvb_registration_state == "failing":
+                badges.append(
+                    {
+                        "text": "⚠ XvB registration failing",
+                        "variant": "bad",
+                        "title": _XVB_FAILING_TITLE,
+                    }
+                )
+            elif metrics.xvb_registered_at > 0:
+                badges.append(
+                    {
+                        "text": "XvB raffle ✓",
+                        "variant": "outline",
+                        "title": _XVB_REGISTERED_TITLE,
+                    }
+                )
 
     # Node-down badges (Issue #31) — shown whenever a node is unreachable, regardless of sync.
     if metrics.monero.down:
