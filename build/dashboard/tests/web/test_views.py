@@ -677,6 +677,14 @@ class TestWorkers:
         assert row["uptime"] == 3600 and row["uptime_str"]
         assert row["h10"] == 5000 and "kH/s" in row["h10_str"]
 
+    def test_api_ok_passes_through(self):
+        # The probe verdict reaches the client so it can badge a misconfigured worker API; a worker
+        # we never probed (no api_ok) stays None and is left unflagged.
+        base = {"name": "r", "ip": "10.0.0.1", "status": "online", "active_pool": "3333"}
+        assert build_workers([{**base, "api_ok": False}])[0]["api_ok"] is False
+        assert build_workers([{**base, "api_ok": True}])[0]["api_ok"] is True
+        assert build_workers([base])[0]["api_ok"] is None
+
     def test_online_sorted_before_offline(self):
         rows = build_workers(
             [

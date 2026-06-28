@@ -2004,6 +2004,19 @@ render_env() {
     local check_for_updates
     check_for_updates=$(jq -r 'if .dashboard.check_for_updates == false then "false" else "true" end' "$CONFIG_FILE")
 
+    # Per-worker xmrig API probe (#171/#172). The dashboard enriches each proxy-reported worker by
+    # reading that miner's own xmrig /1/summary for uptime + per-miner hashrate — ONE configured
+    # way, no auto-detection. Defaults match the stock RigForge worker: an open, read-only API
+    # (xmrig http.restricted, no access-token) on port 8080, so the standard stack needs no config.
+    #   workers.api_auth: none (default) | name (Bearer = the worker's stratum name) | token
+    #                     (Bearer = workers.api_token, a single shared token for every worker).
+    # Upgrade note: a stack whose miners still set an xmrig access-token should set api_auth "name",
+    # else the no-auth probe 401s and those workers read api_ok=false (see docs/configuration.md).
+    local worker_api_port worker_api_auth worker_api_token
+    worker_api_port=$(jq -r '.workers.api_port // 8080' "$CONFIG_FILE")
+    worker_api_auth=$(jq -r '.workers.api_auth // "none"' "$CONFIG_FILE")
+    worker_api_token=$(jq -r '.workers.api_token // ""' "$CONFIG_FILE")
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -2088,6 +2101,9 @@ TOR_EGRESS_FIREWALL=$TOR_EGRESS_FIREWALL
 P2POOL_CLEARNET=$P2POOL_CLEARNET
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
+XMRIG_API_PORT=$worker_api_port
+XMRIG_API_AUTH=$worker_api_auth
+XMRIG_API_TOKEN=$worker_api_token
 PROXY_DONATE_LEVEL=$DONATE_LEVEL
 MONERO_PRUNE=$prune
 MONERO_CLEARNET_SYNC=$monero_clearnet

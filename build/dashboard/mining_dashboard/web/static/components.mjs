@@ -441,7 +441,11 @@ function WorkersTable({ workers, summary, ui, onSort }) {
                     ${rows.map(
                       (w) => html`
                         <tr class=${w.status === "online" ? "status-ok" : "status-bad"}>
-                            <td>${w.name} <${PoolBadge} pool=${w.pool} /></td>
+                            <td>${w.name} <${PoolBadge} pool=${w.pool} />${
+                              w.api_ok === false
+                                ? html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`
+                                : null
+                            }</td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
                             <td>${w.h10_str}</td>

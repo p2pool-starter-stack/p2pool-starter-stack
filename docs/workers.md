@@ -144,6 +144,35 @@ access control — *who may mine* — not eavesdropping protection. On a trusted
 must expose `3333` more widely, combine it with `stratum_bind` and a firewall (above). Leaving it
 unset (`""`, the default) keeps the open, no-password behavior.
 
+### Reading each worker's stats (the dashboard's worker API probe)
+
+Beyond what the proxy reports, the dashboard fetches each connected miner's **own** xmrig HTTP API
+(`http://<miner-ip>:8080/1/summary`) for uptime and per-miner hashrate. It does this **one** way,
+chosen by config — there's no trial-and-error. Defaults match a stock
+[RigForge](https://github.com/p2pool-starter-stack/rigforge) worker: an **open, read-only** API
+(xmrig `http.restricted` with **no** `access-token`) on port `8080`, so the standard stack needs no
+configuration.
+
+To point it at a differently-configured fleet, set
+[`workers.api_auth`](configuration.md#configuration-reference) (and `workers.api_port` /
+`workers.api_token`):
+
+| `workers.api_auth` | Use when… | Bearer sent |
+|---|---|---|
+| `none` *(default)* | miners expose an open, restricted API (no token) | — |
+| `name` | each miner's `access-token` equals its stratum name | the worker's name |
+| `token` | all miners share one API token | `workers.api_token` |
+
+Only the worker's **validated IP** is ever contacted; a miner-controlled worker *name* is never used
+as a request host (the SSRF guard). If a probe fails, the worker isn't dropped — it keeps its
+proxy-reported hashrate and is flagged **`api ⚠`** on the dashboard, with a single log line naming the
+URL, status, and likely fix, so a misconfigured API reads differently from an offline miner.
+
+> **Upgrading?** Earlier builds provisioned each miner with `access-token = <worker name>`. If your
+> miners still carry a token, set `workers.api_auth: name` — otherwise the new no-auth default probe
+> gets `401` and every worker shows `api ⚠`. (Reprovisioning the miners to drop the token is the
+> other option; new RigForge workers ship open by default.)
+
 ---
 
 ## New to mining? Start with RigForge

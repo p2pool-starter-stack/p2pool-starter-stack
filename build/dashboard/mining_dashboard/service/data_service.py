@@ -183,11 +183,19 @@ def _merge_direct_stats(workers, results, active_pool_port):
     unreachable (falsy ``extra_stats``) the worker keeps its proxy-derived hashrate/uptime
     and stays online — the proxy already confirmed it's connected and submitting shares —
     rather than dropping out of the hashrate total and reading zero (Fixes #28). Each
-    worker is tagged with ``active_pool`` for the UI badge.
+    worker is tagged with ``active_pool`` for the UI badge, and with ``api_ok`` (True/False) when
+    the worker API was probed so the UI can flag a worker whose direct API is misconfigured /
+    unreachable — distinct from a worker that's simply offline.
     """
     final_workers = []
     for w, extra_stats in zip(workers, results, strict=False):
-        if extra_stats:
+        # api_ok: True (probe succeeded), False (probe failed — surfaced, not swallowed), or unset
+        # (worker we deliberately didn't probe, e.g. an internal/invalid IP per the SSRF guard).
+        api_ok = extra_stats.get("api_ok") if extra_stats else None
+        if api_ok is not None:
+            w["api_ok"] = api_ok
+
+        if api_ok:  # only a successful probe carries uptime + per-miner hashrate
             w["uptime"] = extra_stats.get("uptime", w["uptime"])
 
             is_proxy = extra_stats.get("kind") == "proxy"

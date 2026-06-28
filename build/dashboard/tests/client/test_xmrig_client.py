@@ -1,12 +1,13 @@
 import pytest
 
+from mining_dashboard.client import xmrig_client as xc
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 
 
 class FakeResponse:
     def __init__(self, status, payload=None):
         self.status = status
-        self._payload = payload or {}
+        self._payload = payload if payload is not None else {}
 
     async def json(self):
         return self._payload
@@ -39,29 +40,118 @@ class FakeSession:
         return FakeGet(self._response, self._exc)
 
 
-async def test_first_success_returns_payload_and_short_circuits():
+# --- One probe, derived from config (no auto-detection fallback) -------------------------------
+
+
+async def test_success_returns_payload_with_api_ok_and_single_call():
     session = FakeSession(
         response=FakeResponse(200, {"kind": "proxy", "hashrate": {"total": [10]}})
     )
     client = XMRigWorkerClient(session)
     result = await client.get_stats("10.0.0.1", "rig1")
-    assert result == {"kind": "proxy", "hashrate": {"total": [10]}}
-    assert len(session.calls) == 1  # stopped after the first 200
+    assert result == {"kind": "proxy", "hashrate": {"total": [10]}, "api_ok": True}
+    assert len(session.calls) == 1  # exactly one probe — never multiple auth combinations
     assert session.calls[0][0] == "http://10.0.0.1:8080/1/summary"
 
 
-async def test_all_attempts_fail_returns_empty():
-    session = FakeSession(response=FakeResponse(500))
+async def test_default_auth_is_none_no_authorization_header():
+    session = FakeSession(response=FakeResponse(200, {"ok": True}))
+    client = XMRigWorkerClient(session)
+    await client.get_stats("10.0.0.1", "rig1")
+    _, headers = session.calls[0]
+    assert "Authorization" not in (headers or {})  # default mode is no-auth
+
+
+async def test_failure_status_returns_api_ok_false_single_call():
+    session = FakeSession(response=FakeResponse(401))
     client = XMRigWorkerClient(session)
     result = await client.get_stats("10.0.0.1", "rig1")
-    assert result == {}
-    assert len(session.calls) > 1  # tried multiple auth combinations against the validated IP
+    assert result == {"api_ok": False}
+    assert len(session.calls) == 1  # no retry with a different credential
 
 
-async def test_exceptions_are_swallowed():
+async def test_exception_returns_api_ok_false():
     session = FakeSession(exc=OSError("connection refused"))
     client = XMRigWorkerClient(session)
-    assert await client.get_stats("10.0.0.1", "rig1") == {}
+    assert await client.get_stats("10.0.0.1", "rig1") == {"api_ok": False}
+
+
+async def test_non_dict_200_body_is_a_failure():
+    session = FakeSession(response=FakeResponse(200, ["not", "a", "dict"]))
+    client = XMRigWorkerClient(session)
+    assert await client.get_stats("10.0.0.1", "rig1") == {"api_ok": False}
+
+
+# --- Auth modes (the "rest defined through config") --------------------------------------------
+
+
+async def test_auth_name_uses_worker_name_as_bearer(monkeypatch):
+    monkeypatch.setattr(xc, "XMRIG_API_AUTH", "name")
+    session = FakeSession(response=FakeResponse(200, {"ok": True}))
+    client = XMRigWorkerClient(session)
+    await client.get_stats("10.0.0.1", "rig1+worker")
+    _, headers = session.calls[0]
+    assert headers["Authorization"] == "Bearer rig1"  # '+'-suffix stripped, name as token
+
+
+async def test_auth_token_uses_shared_token_as_bearer(monkeypatch):
+    monkeypatch.setattr(xc, "XMRIG_API_AUTH", "token")
+    monkeypatch.setattr(xc, "XMRIG_API_TOKEN", "s3cr3t")
+    session = FakeSession(response=FakeResponse(200, {"ok": True}))
+    client = XMRigWorkerClient(session)
+    await client.get_stats("10.0.0.1", "rig1")
+    _, headers = session.calls[0]
+    assert headers["Authorization"] == "Bearer s3cr3t"
+
+
+async def test_auth_token_without_token_sends_no_header(monkeypatch):
+    monkeypatch.setattr(xc, "XMRIG_API_AUTH", "token")
+    monkeypatch.setattr(xc, "XMRIG_API_TOKEN", "")
+    session = FakeSession(response=FakeResponse(200, {"ok": True}))
+    client = XMRigWorkerClient(session)
+    await client.get_stats("10.0.0.1", "rig1")
+    _, headers = session.calls[0]
+    assert "Authorization" not in (headers or {})
+
+
+async def test_custom_port_is_used(monkeypatch):
+    monkeypatch.setattr(xc, "XMRIG_API_PORT", 18088)
+    session = FakeSession(response=FakeResponse(200, {"ok": True}))
+    client = XMRigWorkerClient(session)
+    await client.get_stats("10.0.0.1", "rig1")
+    assert session.calls[0][0] == "http://10.0.0.1:18088/1/summary"
+
+
+# --- Failure is surfaced once per worker, not every poll ---------------------------------------
+
+
+async def test_repeated_failures_warn_once_then_dedup(monkeypatch, caplog):
+    # Freeze the clock so the dedup window never elapses between calls.
+    monkeypatch.setattr(xc.time, "monotonic", lambda: 1000.0)
+    session = FakeSession(response=FakeResponse(401))
+    client = XMRigWorkerClient(session)
+    with caplog.at_level("WARNING", logger="WorkerClient"):
+        for _ in range(5):
+            await client.get_stats("10.0.0.1", "rig1")
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1  # one worker, one warning per interval
+    assert "rig1" in warnings[0].getMessage()
+    assert "10.0.0.1" in warnings[0].getMessage()
+
+
+async def test_recovery_then_failure_warns_again(monkeypatch, caplog):
+    monkeypatch.setattr(xc.time, "monotonic", lambda: 1000.0)
+    fail = FakeSession(response=FakeResponse(401))
+    client = XMRigWorkerClient(fail)
+    with caplog.at_level("WARNING", logger="WorkerClient"):
+        await client.get_stats("10.0.0.1", "rig1")  # warns
+        # A success clears the dedup state...
+        client.session = FakeSession(response=FakeResponse(200, {"ok": True}))
+        await client.get_stats("10.0.0.1", "rig1")
+        # ...so the next failure warns again even within the interval.
+        client.session = fail
+        await client.get_stats("10.0.0.1", "rig1")  # warns again
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 2
 
 
 # --- SSRF guard (#122) -------------------------------------------------------------------------
@@ -89,6 +179,7 @@ async def test_exceptions_are_swallowed():
 async def test_ssrf_targets_are_never_probed(ip, name, why):
     session = FakeSession(response=FakeResponse(200, {"ok": True}))
     client = XMRigWorkerClient(session)
+    # A skipped target returns {} (api_ok unset = "unknown", not a failure) and issues no request.
     assert await client.get_stats(ip, name) == {}, why
     assert session.calls == [], f"issued a request despite {why}"
 
@@ -107,14 +198,15 @@ async def test_real_miner_ip_is_probed(ip):
     session = FakeSession(response=FakeResponse(200, {"ok": True}))
     client = XMRigWorkerClient(session)
     result = await client.get_stats(ip, "rig")
-    assert result == {"ok": True}
+    assert result == {"ok": True, "api_ok": True}
     host = ip.split(":")[0]
     assert session.calls[0][0] == f"http://{host}:8080/1/summary"
 
 
-async def test_name_is_used_as_bearer_never_as_host():
-    # With a valid IP, the stripped name is offered back as the miner's access token — but every
+async def test_name_is_used_as_bearer_never_as_host(monkeypatch):
+    # Under name-auth, the stripped name is offered back as the miner's access token — but the
     # request still targets the validated IP, never the name.
+    monkeypatch.setattr(xc, "XMRIG_API_AUTH", "name")
     session = FakeSession(response=FakeResponse(404))
     client = XMRigWorkerClient(session)
     await client.get_stats("10.0.0.1", "rig1+worker")
@@ -124,7 +216,8 @@ async def test_name_is_used_as_bearer_never_as_host():
     assert "Bearer rig1" in bearers  # '+'-suffix stripped, used as token
 
 
-async def test_long_name_token_is_capped():
+async def test_long_name_token_is_capped(monkeypatch):
+    monkeypatch.setattr(xc, "XMRIG_API_AUTH", "name")
     session = FakeSession(response=FakeResponse(404))
     client = XMRigWorkerClient(session)
     await client.get_stats("10.0.0.1", "A" * 500)

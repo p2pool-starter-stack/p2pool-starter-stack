@@ -29,7 +29,25 @@ NETWORK_STATS_PATH = f"{BASE_STATS_DIR}/network/stats"
 HOST_IP = os.environ.get("HOST_IP", "Unknown Host")
 
 # XMRig Worker API Configuration
-XMRIG_API_PORT = 8080
+#
+# The dashboard enriches each proxy-reported worker by probing that miner's own xmrig HTTP API
+# (/1/summary) for uptime + per-miner hashrate. There is exactly ONE way it does this, derived from
+# config — no auto-detection fallback. A failed probe is surfaced (api_ok=false + a logged warning),
+# never silently swallowed.
+#
+#   XMRIG_API_AUTH  how to authenticate to the worker API:
+#                     none  (default) — open, read-only API (xmrig http.restricted, no access-token).
+#                                       This is the stock RigForge worker.
+#                     name           — Bearer = the worker's stratum name (xmrig access-token = name).
+#                     token          — Bearer = a single shared XMRIG_API_TOKEN for every worker.
+#   XMRIG_API_TOKEN the shared bearer used when XMRIG_API_AUTH=token.
+#   XMRIG_API_PORT  the port the worker API listens on.
+#
+# Upgrade note: stacks whose miners still set an xmrig access-token (the pre-open default) should set
+# XMRIG_API_AUTH=name — otherwise the no-auth default probe 401s and those workers read api_ok=false.
+XMRIG_API_PORT = int(os.environ.get("XMRIG_API_PORT", 8080))
+XMRIG_API_AUTH = os.environ.get("XMRIG_API_AUTH", "none").strip().lower()
+XMRIG_API_TOKEN = os.environ.get("XMRIG_API_TOKEN", "")
 API_TIMEOUT = 1  # Connection timeout (seconds) for worker API calls
 
 # The stack's internal docker bridge subnet. The dashboard runs network_mode: host and a connecting

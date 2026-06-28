@@ -1,17 +1,22 @@
 import ipaddress
 import logging
+import time
 
 from mining_dashboard.config.config import (
     API_TIMEOUT,
     MINING_NET_CIDR,
-    PROXY_API_PORT,
-    PROXY_AUTH_TOKEN,
+    XMRIG_API_AUTH,
     XMRIG_API_PORT,
+    XMRIG_API_TOKEN,
 )
 
 # Longest worker-name we'll ever echo back as a Bearer token (#122). xmrig names/tokens are short;
 # this just bounds a pathological miner-supplied value before it goes into a header.
 _MAX_NAME_TOKEN = 128
+
+# Re-warn about a worker whose API keeps failing at most this often, so a misconfigured fleet logs
+# one line per worker per interval — not one per poll (the data loop runs every ~30s).
+_WARN_INTERVAL_S = 300
 
 try:
     _INTERNAL_NET = ipaddress.ip_network(MINING_NET_CIDR, strict=False)
@@ -63,58 +68,92 @@ class XMRigWorkerClient:
         """
         self.session = session
         self.logger = logging.getLogger("WorkerClient")
+        # host -> monotonic timestamp of the last failure we logged, so a persistently-broken
+        # worker doesn't spam a WARNING every poll. The client outlives the poll loop, so this
+        # state survives across iterations.
+        self._warned = {}
+
+    def _auth_header(self, name_token):
+        """Build the single Authorization header for the configured auth mode (or no header)."""
+        mode = XMRIG_API_AUTH
+        if mode == "name":
+            return {"Authorization": f"Bearer {name_token}"} if name_token else {}
+        if mode == "token":
+            return {"Authorization": f"Bearer {XMRIG_API_TOKEN}"} if XMRIG_API_TOKEN else {}
+        # "none" (default) and any unrecognized value -> open, unauthenticated API
+        return {}
+
+    def _fix_hint(self):
+        """A short, actionable remedy tailored to the configured auth mode."""
+        mode = XMRIG_API_AUTH
+        if mode == "name":
+            return (
+                "expected the miner's xmrig access-token to equal its stratum name; verify that, "
+                f"or that the API is on XMRIG_API_PORT ({XMRIG_API_PORT})"
+            )
+        if mode == "token":
+            return (
+                "expected XMRIG_API_TOKEN to match the miner's xmrig access-token; verify that, "
+                f"or that the API is on XMRIG_API_PORT ({XMRIG_API_PORT})"
+            )
+        return (
+            "expected an open (http.restricted, no access-token) miner API; if this miner sets an "
+            "access-token, set XMRIG_API_AUTH=name (or =token with XMRIG_API_TOKEN), or check "
+            f"XMRIG_API_PORT ({XMRIG_API_PORT})"
+        )
+
+    def _warn(self, host, name, url, detail):
+        now = time.monotonic()
+        if now - self._warned.get(host, float("-inf")) < _WARN_INTERVAL_S:
+            return
+        self._warned[host] = now
+        self.logger.warning(
+            "Worker %r (%s): xmrig API probe failed at %s — %s. %s.",
+            name,
+            host,
+            url,
+            detail,
+            self._fix_hint(),
+        )
 
     async def get_stats(self, ip, name):
         """
-        Fetch /1/summary from a worker. Works for both XMRig miners and upstream
-        XMRig Proxy instances, trying the most likely credential first:
+        Fetch /1/summary from a worker's xmrig API — exactly ONE way, derived from config.
 
-          1. No auth on XMRIG_API_PORT      — open xmrig-proxy (restricted=true, no token)
-          2. PROXY_AUTH_TOKEN on PROXY_API_PORT — secured proxy on a non-standard port
-          3. Name-derived token on XMRIG_API_PORT — direct XMRig miner (name = access token)
-
-        Callers use the returned 'kind' field ('proxy' vs 'miner') to handle any
-        unit differences (xmrig-proxy reports hashrate in kH/s; miner reports H/s).
+        The auth method is chosen by ``XMRIG_API_AUTH`` (``none`` default / ``name`` / ``token``);
+        the port by ``XMRIG_API_PORT``. There is no auto-detection fallback: if the configured probe
+        fails, we return ``{"api_ok": False}`` and log a single (rate-limited) WARNING with a fix
+        hint, rather than silently trying alternatives or swallowing the error. On success the parsed
+        summary is returned with ``api_ok`` set to ``True``.
 
         Only the worker's validated IP is ever used as the request host (SSRF guard, #122): a
-        miner-controlled worker *name* is never a host, it's only offered back to that same IP as
-        the "name = access token" Bearer for direct XMRig miners.
+        miner-controlled worker *name* is never a host — in ``name`` auth it is only offered back to
+        that same IP as the Bearer token.
         """
         host = _safe_probe_host(ip)
         if host is None:
-            # No safe target: ip is missing/internal/not a bare address. Never fall back to the
-            # miner-controlled name as a host — that is the SSRF this guard exists to prevent (#122).
+            # No safe target: ip is missing/internal/not a bare address. This isn't a misconfigured
+            # miner — it's a worker we deliberately won't probe — so stay quiet and leave api_ok
+            # unset (unknown) rather than flagging a failure. Never fall back to the
+            # miner-controlled name as a host: that is the SSRF this guard exists to prevent (#122).
             return {}
 
         name_token = name.split("+")[0].strip()[:_MAX_NAME_TOKEN] if name else ""
+        url = f"http://{host}:{XMRIG_API_PORT}/1/summary"
+        headers = self._auth_header(name_token)
 
-        attempts = [
-            # 1. Open proxy — no auth header at all
-            (f"http://{host}:{XMRIG_API_PORT}/1/summary", {}),
-        ]
-        # 2. Secured proxy on a custom port (only if distinct from XMRIG_API_PORT)
-        if PROXY_AUTH_TOKEN and PROXY_API_PORT != XMRIG_API_PORT:
-            attempts.append(
-                (
-                    f"http://{host}:{PROXY_API_PORT}/1/summary",
-                    {"Authorization": f"Bearer {PROXY_AUTH_TOKEN}"},
-                )
-            )
-        # 3. Direct XMRig miner: the name doubles as the access token, sent only to its own IP.
-        if name_token:
-            attempts.append(
-                (
-                    f"http://{host}:{XMRIG_API_PORT}/1/summary",
-                    {"Authorization": f"Bearer {name_token}"},
-                )
-            )
-
-        for url, headers in attempts:
-            try:
-                async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
-                    if response.status == 200:
-                        return await response.json()
-            except Exception as e:
-                self.logger.debug(f"Worker API Error ({url}): {e}")
-
-        return {}
+        try:
+            async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
+                if response.status == 200:
+                    payload = await response.json()
+                    if isinstance(payload, dict):
+                        self._warned.pop(host, None)  # recovered — allow the next failure to log
+                        payload["api_ok"] = True
+                        return payload
+                    self._warn(host, name, url, f"HTTP 200 but body was {type(payload).__name__}")
+                    return {"api_ok": False}
+                self._warn(host, name, url, f"HTTP {response.status}")
+                return {"api_ok": False}
+        except Exception as e:
+            self._warn(host, name, url, f"{type(e).__name__}: {e}")
+            return {"api_ok": False}
