@@ -33,10 +33,10 @@ We aim to acknowledge reports promptly and will keep you posted as we work on a 
 
 ## Security posture
 
-The stack is hardened by default: least-privilege containers (leaf services run with
-`no-new-privileges` and — except the dashboard, which writes its history DB as root into a
-user-owned volume — drop all Linux capabilities; the internet-facing and Docker-socket-facing
-ones also use a read-only root filesystem), SHA256-verified and version-pinned binaries,
+The stack is hardened by default: least-privilege containers (every service runs as a **non-root
+user**, not uid 0; leaf services run with `no-new-privileges` and drop all Linux capabilities; the
+internet-facing and Docker-socket-facing ones also use a read-only root filesystem),
+SHA256-verified and version-pinned binaries,
 localhost-only RPC, a LAN-scoped (and narrowable) stratum port, scoped Docker socket proxies,
 and Tor for all node networking. If you find a gap in any of these, that's exactly the kind of
 report we want.

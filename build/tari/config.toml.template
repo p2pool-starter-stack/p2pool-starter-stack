@@ -41,7 +41,12 @@ mining_enabled = true
 grpc_enabled = true
 grpc_address = "/ip4/0.0.0.0/tcp/18142"
 
-# Allowed gRPC methods for interaction with the dashboard and miner
+# Allowed gRPC methods (#91): pruned to the node-status + merge-mining surface our two consumers
+# actually call. The dashboard's Tari client (tari_client.py) uses get_tip_info + get_sync_progress
+# (with get_version/get_sync_info as fallbacks); p2pool's merge-mining needs the block-template,
+# submit_block and tip methods. Everything else — the wallet/transaction, UTXO/kernel/payment-ref
+# search, mempool-tx and DAN validator-node calls — has no consumer here, so it's removed (smaller
+# attack surface on the gRPC port). Re-add a method if a future dashboard panel needs it.
 grpc_server_allow_methods = [
     "get_version",
     "get_sync_info",
@@ -56,7 +61,6 @@ grpc_server_allow_methods = [
     "get_constants",
     "get_block_size",
     "get_block_fees",
-    "get_tokens_in_circulation",
     "get_network_difficulty",
     "get_new_block_template",
     "get_new_block",
@@ -65,22 +69,8 @@ grpc_server_allow_methods = [
     "get_new_block_blob",
     "submit_block",
     "submit_block_blob",
-    "submit_transaction",
-    "search_kernels",
-    "search_utxos",
-    "fetch_matching_utxos",
     "get_peers",
-    "get_mempool_transactions",
-    "transaction_state",
     "list_connected_peers",
-    "get_mempool_stats",
-    "get_active_validator_nodes",
-    "get_validator_node_changes",
-    "get_shard_key",
-    "get_template_registrations",
-    "get_side_chain_utxos",
-    "search_payment_references",
-    "search_payment_references_via_output_hash",
 ]
 
 [base_node.p2p]
