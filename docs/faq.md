@@ -50,16 +50,24 @@ what Pithead is for.
 
 ### vs. Gupax
 
-[Gupax](https://github.com/hinto-janai/gupax) is an excellent GUI for running P2Pool + XMRig on a
-**single machine** — if you want a friendly, one-box way to solo-mine Monero on P2Pool, it's a
-great choice and worth a look.
+[Gupax](https://github.com/gupax-io/gupax) is a desktop GUI for mining Monero on P2Pool. It runs on
+Windows, macOS, and Linux, has a `--daemon` headless mode, and manages more than it used to: P2Pool
+and XMRig by default, plus optional tabs for a local Monero node, a proxy for external miners, and
+XvB hashrate-splitting. If you mine on one machine and want a friendly app to drive it, Gupax is a
+great choice.
 
-Pithead solves a different problem. It's a full self-hosted **stack**, not a single-machine GUI:
-your own Monero full node, Tor for privacy, Tari merge-mining, a single proxy endpoint for many
-rigs, algorithmic XvB switching, node-down failover, and a LAN dashboard — all orchestrated
-together. Think of Gupax as the right tool when you're mining on one PC, and Pithead as the right
-tool when you want to run the whole operation — node, privacy, dashboard, and a fleet of workers —
-yourself. Different tools for different goals.
+Pithead is a different form factor — an always-on server stack rather than a desktop app you launch
+on your mining PC. The two overlap more than they once did: both can run your own node, take
+external miners through a proxy, and split hashrate to the XvB raffle. Where Pithead goes further:
+
+- **Tor-first by default.** Monero, Tari, and P2Pool reach the network over onion addresses with no
+  extra setup. Gupax ships no built-in Tor; a community Docker image adds an optional hidden service.
+- **Tari merge-mining.** A second payout from the same hashes. Gupax doesn't merge-mine Tari.
+- **Built to run unattended.** Nine version-pinned containers on a dedicated Linux box, node-down
+  worker failover, and a LAN web dashboard — not an app you keep open on your desktop.
+
+Pick Gupax to mine from one machine. Pick Pithead to run the whole operation yourself — node,
+privacy, dashboard, and a fleet of workers — as a server you set up once.
 
 ---
 
