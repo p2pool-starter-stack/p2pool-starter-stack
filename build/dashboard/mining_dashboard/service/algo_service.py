@@ -17,6 +17,7 @@ from mining_dashboard.config.config import (
     XVB_MIN_TIME_SEND_MS,
     XVB_P2POOL_RESERVE_FACTOR,
     XVB_POOL_URL,
+    XVB_STATS_STALE_AFTER_S,
     XVB_SWITCH_OVERHEAD_MS,
     XVB_TIME_ALGO_MS,
     XVB_TOR_ENABLED,
@@ -155,8 +156,20 @@ class AlgoService:
         avg_24h = xvb_stats.get("avg_24h", 0)
 
         # Advance the calibration loop once per real cycle (not during _smart_sleep).
+        # But never steer off a stale read (#311): if the xmrvsbeast.com fetch has gone
+        # quiet, avg_1h is frozen and stepping the loop would wind the fraction up
+        # against a target we can't refresh. Hold the last split until a fresh read lands.
         if advance:
-            self._advance_controller(current_hr, target_hr, avg_1h, max_fraction)
+            if self._stats_are_stale(xvb_stats):
+                logger.warning(
+                    "XvB stats stale (no fetch in >%.0fs): holding donation fraction at %.3f "
+                    "(frozen 1h %.0f)",
+                    XVB_STATS_STALE_AFTER_S,
+                    self.donation_fraction or 0.0,
+                    avg_1h,
+                )
+            else:
+                self._advance_controller(current_hr, target_hr, avg_1h, max_fraction)
 
         fraction = min(self.donation_fraction or 0.0, max_fraction)
         needed_time_ms = self._fraction_to_ms(fraction)
@@ -195,6 +208,17 @@ class AlgoService:
             tiers, stable_hr, self.donation_level, self.max_donation_fraction
         )
         return target
+
+    def _stats_are_stale(self, xvb_stats):
+        """True when the XvB stats fetch has gone quiet long enough that ``avg_1h``
+        is no longer a trustworthy live reading (#311).
+
+        ``last_update`` bumps ONLY on a genuine xmrvsbeast.com fetch (#136), so its
+        age is the fetch age. A zero ``last_update`` means we've never fetched (cold
+        start) — that's NOT stale: it's the feedforward-ramp regime, which must be
+        left alone so the controller can seed and climb to tier."""
+        last_update = xvb_stats.get("last_update", 0) or 0
+        return last_update > 0 and (time.time() - last_update) > XVB_STATS_STALE_AFTER_S
 
     def _reference_hr(self, target_hr):
         """Hashrate the controller holds XvB's 1h average at: the tier threshold
@@ -304,8 +328,17 @@ class AlgoService:
                     shares,
                     advance=False,
                 )
+                # The "under tier -> catch up early" override acts directly on avg_1h,
+                # so suppress it when the read is stale (#311): a frozen below-tier
+                # number would otherwise cut every p2pool dwell short and drift the
+                # effective split far past the computed fraction. The held decision
+                # (XVB/SPLIT) still ends the dwell — only the avg-driven override pauses.
                 target_hr = self._get_target_donation_hr(stable_hr)
-                under_tier = target_hr > 0 and xvb_stats.get("avg_1h", 0) < target_hr
+                under_tier = (
+                    not self._stats_are_stale(xvb_stats)
+                    and target_hr > 0
+                    and xvb_stats.get("avg_1h", 0) < target_hr
+                )
                 if decision in ("XVB", "SPLIT") or under_tier:
                     logger.info(
                         "Smart-sleep: donation target needs attention — ending P2Pool dwell early."
