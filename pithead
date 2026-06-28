@@ -48,6 +48,13 @@ readonly CONFIG_FILE="config.json"
 readonly ENV_FILE=".env"
 readonly REAL_USER="${SUDO_USER:-$USER}"
 
+# Non-root uid:gid the BUILT images run their main process as (#255). pithead owns the data dirs,
+# so it chowns each service's bind-mount to this id to match the in-image USER. Tor is the
+# exception — it keeps its own alpine 'tor' user (100:101). Was $REAL_USER when every container
+# ran as root; existing installs are migrated in place by ensure_owner on the next apply/upgrade.
+readonly APP_UID=1000
+readonly APP_GID=1000
+
 REBOOT_REQUIRED=false
 SKIP_OPTIMIZE=0
 SKIP_DEPS=0
@@ -843,7 +850,8 @@ reset_dashboard() {
 
     log "Recreating data directories..."
     mkdir -p "$dashboard_dir" "$p2pool_dir"
-    sudo chown -R "$REAL_USER":"$REAL_USER" "$p2pool_dir"
+    # Owned by the non-root uid the dashboard + p2pool containers run as (#255).
+    sudo chown -R "$APP_UID":"$APP_GID" "$p2pool_dir" "$dashboard_dir"
     mkdir -p "$p2pool_dir/stats"
     sudo chmod -R 755 "$p2pool_dir/stats"
 
@@ -1018,6 +1026,13 @@ stack_restore() {
     parse_and_validate_config
     log "Fixing Tor data ownership (100:101)..."
     sudo chown -R 100:101 "$TOR_DATA_DIR"
+    # The archive is extracted as root, so the restored dashboard DB (and any --with-chains data)
+    # comes back root-owned. The containers run non-root (#255), so hand each data dir back to the
+    # uid its container uses — conditional, so a same-owner archive is a no-op.
+    ensure_owner "$MONERO_DIR" "$APP_UID" "$APP_GID"
+    ensure_owner "$TARI_DIR" "$APP_UID" "$APP_GID"
+    ensure_owner "$P2POOL_DIR" "$APP_UID" "$APP_GID"
+    ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
 
     log "Restore complete. Start the stack with '$0 up'."
 }
@@ -1176,10 +1191,24 @@ require_deployed() {
 
 # Refuse data directories that would be catastrophic to chown -R / rm -rf.
 assert_safe_dir() {
-    case "$1" in
-    "" | / | // | /. | /root | /home | /etc | /usr | /var | /bin | /sbin | /lib | /lib64 | /boot | /dev | /proc | /sys)
-        error "Refusing to use '$1' as a data directory. Choose a dedicated folder in $CONFIG_FILE."
+    local d="$1"
+    # 1) System + top-level roots, the invoking and real user's homes, and the bare mount/parent
+    #    dirs people most often fat-finger a data_dir to. A dedicated SUBfolder of any of these
+    #    (e.g. /srv/pithead, /mnt/disk/monero) is still allowed — only the bare root is refused (#91).
+    case "$d" in
+    "" | / | // | /. | /root | /home | /etc | /usr | /var | /var/lib | /opt | /srv | /mnt | /media | /tmp | /bin | /sbin | /lib | /lib64 | /boot | /dev | /proc | /sys | /Users | /Applications | "$HOME" | "/home/$REAL_USER" | "/Users/$REAL_USER")
+        error "Refusing to use '$d' as a data directory — it's a system, home, or bare mount root. Choose a dedicated subfolder in $CONFIG_FILE (e.g. .../pithead-data)."
         ;;
+    esac
+    # 2) Data dirs are stored as ABSOLUTE paths in .env; reject anything relative or containing a
+    #    '..' traversal so a malformed config.json value can't resolve somewhere unexpected before
+    #    a chown -R / rm -rf runs against it (#91).
+    case "$d" in
+    /*) ;;
+    *) error "Refusing non-absolute data directory '$d' — set an absolute path in $CONFIG_FILE." ;;
+    esac
+    case "$d" in
+    *..*) error "Refusing data directory '$d' — '..' path traversal is not allowed." ;;
     esac
 }
 
@@ -1807,9 +1836,10 @@ prepare_directories() {
     log "Initializing data directories..."
     mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR"
 
-    # Enforce permissions
+    # Enforce permissions. Each data dir is owned by the uid its container runs as: Tor keeps its
+    # alpine 'tor' user (100:101); the built images + tari run non-root as APP_UID:APP_GID (#255).
     sudo chown -R 100:101 "$TOR_DATA_DIR"
-    sudo chown -R "$REAL_USER":"$REAL_USER" "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR"
+    sudo chown -R "$APP_UID":"$APP_GID" "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$DASHBOARD_DIR"
     mkdir -p "$P2POOL_DIR/stats"
     sudo chmod -R 755 "$P2POOL_DIR/stats"
     # World-writable so the dashboard container (its own uid) can drop the clearnet auto-transition
@@ -1843,28 +1873,37 @@ warn_missing_data_dirs() {
     warn "move the data to these paths, or set the data_dir(s) in config.json (absolute) and run './pithead apply'."
 }
 
-# Lightweight directory check for `apply`: create any missing data dir and chown only the
-# ones we just created, so a routine apply does not require sudo on every run.
+# chown -R "$dir" to $uid:$gid, but ONLY when something in it isn't already owned by $uid. Keeps a
+# routine apply sudo-free in steady state, while migrating an existing install in one pass the first
+# time the owning uid changes — e.g. the root->non-root container switch (#255). We scan the whole
+# tree, not just the top-level dir: an install upgraded from the root-container era has a user-owned
+# data dir but root-owned *contents* (the daemons wrote bitmonero.conf, the SQLite DB, etc. as
+# root), and those are exactly what the non-root container can no longer overwrite. `find … -quit`
+# stops at the first foreign inode, so a clean dir stays a quick metadata scan with no chown/sudo.
+ensure_owner() {
+    local d="$1" want_u="$2" want_g="$3"
+    [ -d "$d" ] || return 0
+    [ -z "$(find "$d" ! -uid "$want_u" -print -quit 2>/dev/null)" ] && return 0
+    log "Setting ownership of $d to $want_u:$want_g (non-root containers, #255)..."
+    sudo chown -R "$want_u":"$want_g" "$d"
+}
+
+# Lightweight directory check for `apply`/`upgrade`: create any missing data dir, then ensure each is
+# owned by the uid its container runs as. ensure_owner is conditional, so a routine apply stays
+# sudo-free once ownership is correct; the first run after the non-root switch migrates the data.
 ensure_directories() {
     local d created=()
     for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR"; do
-        if [ ! -d "$d" ]; then
-            mkdir -p "$d"
-            created+=("$d")
-        fi
+        [ -d "$d" ] || { mkdir -p "$d" && created+=("$d"); }
     done
     mkdir -p "$P2POOL_DIR/stats"
-    if [ "${#created[@]}" -gt 0 ]; then
-        log "Created new data directories; applying ownership..."
-        for d in "${created[@]}"; do
-            if [ "$d" == "$TOR_DATA_DIR" ]; then
-                sudo chown -R 100:101 "$d"
-            else
-                sudo chown -R "$REAL_USER":"$REAL_USER" "$d"
-            fi
-        done
-        sudo chmod -R 755 "$P2POOL_DIR/stats"
-    fi
+    ensure_owner "$TOR_DATA_DIR" 100 101
+    ensure_owner "$MONERO_DIR" "$APP_UID" "$APP_GID"
+    ensure_owner "$TARI_DIR" "$APP_UID" "$APP_GID"
+    ensure_owner "$P2POOL_DIR" "$APP_UID" "$APP_GID"
+    ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
+    [ "${#created[@]}" -gt 0 ] && sudo chmod -R 755 "$P2POOL_DIR/stats"
+    return 0
 }
 
 # Decide the hostname the dashboard is reached at: an explicit dashboard.host wins; otherwise

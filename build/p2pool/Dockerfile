@@ -27,7 +27,14 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 COPY healthcheck.sh /usr/local/bin/p2pool-healthcheck.sh
 RUN chmod +x /usr/local/bin/p2pool-healthcheck.sh
 
-WORKDIR /root
+# Run non-root (#255). Reuse ubuntu:24.04's built-in 'ubuntu' user (uid 1000) and keep p2pool's data
+# under that user's home; pithead chowns the ${P2POOL_DATA_DIR} bind-mount (mapped to /home/ubuntu)
+# + /stats to match, so the cache and data-api writes succeed as uid 1000. The IPC_LOCK/SYS_NICE
+# caps granted in compose are not effective for a non-root process, but p2pool only needs them for
+# mlock (covered by the unlimited memlock ulimit) and best-effort thread priority — neither is fatal.
+RUN install -d -o ubuntu -g ubuntu /home/ubuntu
+WORKDIR /home/ubuntu
+USER ubuntu
 
 # Use the wrapper script as the entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

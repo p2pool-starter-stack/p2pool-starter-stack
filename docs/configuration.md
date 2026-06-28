@@ -132,9 +132,9 @@ default each one lives under `./data/<service>` inside the repo:
 
 | Service | Config key | Default path | Mounted in container at |
 |---|---|---|---|
-| Monero | `monero.data_dir` | `./data/monero` | `/root/.bitmonero` |
+| Monero | `monero.data_dir` | `./data/monero` | `/home/ubuntu/.bitmonero` |
 | Tari | `tari.data_dir` | `./data/tari` | `/var/tari/node` |
-| P2Pool | `p2pool.data_dir` | `./data/p2pool` | `/root` |
+| P2Pool | `p2pool.data_dir` | `./data/p2pool` | `/home/ubuntu` |
 | Tor | `tor.data_dir` | `./data/tor` | `/var/lib/tor` |
 | Dashboard | `dashboard.data_dir` | `./data/dashboard` | `/data` |
 
@@ -221,8 +221,8 @@ sync. There are two ways to do it.
 
 ### Option A — Point the bundled node at your existing blockchain
 
-The Monero data directory mounts to `/root/.bitmonero` inside the container, the same layout a
-standard `monerod` uses. To have the bundled node adopt a blockchain you've already downloaded,
+The Monero data directory mounts to `/home/ubuntu/.bitmonero` inside the container, the same layout a
+standard `monerod` uses (its native `$HOME/.bitmonero`). To have the bundled node adopt a blockchain you've already downloaded,
 point `monero.data_dir` at your existing `.bitmonero` directory:
 
 ```json

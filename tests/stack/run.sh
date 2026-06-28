@@ -86,6 +86,18 @@ run_sourced "$SANDBOX" assert_safe_dir "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/srv/p2pool/data" >/dev/null 2>&1
 assert_rc "allows real dir" "$?" "0"
+# Tightened guard (#91): bare mount/parent roots, non-absolute paths and '..' traversal are refused;
+# a dedicated subfolder of a mount root is still fine.
+run_sourced "$SANDBOX" assert_safe_dir "/srv" >/dev/null 2>&1
+assert_rc "rejects bare /srv" "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir "/mnt" >/dev/null 2>&1
+assert_rc "rejects bare /mnt" "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir "relative/data" >/dev/null 2>&1
+assert_rc "rejects relative path" "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir "/srv/../etc/data" >/dev/null 2>&1
+assert_rc "rejects .. traversal" "$?" "1"
+run_sourced "$SANDBOX" assert_safe_dir "/mnt/disk/monero" >/dev/null 2>&1
+assert_rc "allows mount subfolder" "$?" "0"
 
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.

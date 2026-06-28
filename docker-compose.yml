@@ -75,9 +75,9 @@ services:
       # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     volumes:
-      - ${MONERO_DATA_DIR}:/root/.bitmonero
+      - ${MONERO_DATA_DIR}:/home/ubuntu/.bitmonero
       - /dev/hugepages:/dev/hugepages
-      - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
+      - ./build/monero/bitmonero.conf.template:/home/ubuntu/bitmonero.conf.template:ro
       # Read-only view of the shared clearnet-state dir (#234): the entrypoint reads the
       # dashboard-written "sync complete" marker to decide clearnet-vs-Tor at startup.
       - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state:ro
@@ -106,6 +106,10 @@ services:
     # Pinned by digest (#135) so the v5.3.1-mainnet tag can't be silently re-pointed.
     image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0
     container_name: tari
+    # Run non-root (#255). Pulled image (not our Dockerfile), so set the uid via compose to match the
+    # uid pithead chowns ${TARI_DATA_DIR} to. The wrapper entrypoint reads the canonical config
+    # read-only and writes its runtime copy to /tmp, so only the data dir needs to be owned by 1000.
+    user: "1000:1000"
     restart: unless-stopped
     stop_grace_period: 1m
     logging: *default-logging
@@ -178,8 +182,10 @@ services:
     memswap_limit: 1g
     restart: unless-stopped
     logging: *default-logging
-    # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the
-    # RandomX dataset (IPC_LOCK) and raise thread priority (SYS_NICE).
+    # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the RandomX dataset
+    # (IPC_LOCK) and raise thread priority (SYS_NICE). NOTE (#255): the container now runs non-root,
+    # so these caps aren't in the process's effective set — but mlock is covered by the unlimited
+    # memlock ulimit below, and SYS_NICE is best-effort (p2pool warns and continues without it).
     cap_add:
       - IPC_LOCK
       - SYS_NICE
@@ -188,7 +194,7 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - ${P2POOL_DATA_DIR}:/root
+      - ${P2POOL_DATA_DIR}:/home/ubuntu
       - ${P2POOL_DATA_DIR}/stats:/stats
       - /dev/hugepages:/dev/hugepages
     command:
@@ -328,14 +334,19 @@ services:
     memswap_limit: 512m
     restart: unless-stopped
     logging: *default-logging
+    # Host networking, kept deliberately (#91 P5, evaluated & closed): the dashboard reaches the
+    # local monerod RPC on 127.0.0.1:18081 (Issue #29) plus the host-published proxy/Tor-SOCKS
+    # endpoints, and Caddy proxies it on the host. Moving to the bridge would mean re-plumbing the
+    # monerod address, the dashboard's bind, Caddy's upstream and LAN-worker reachability for a
+    # marginal gain — net negative, so host networking stays. It binds only 127.0.0.1 (HOST_IP).
     network_mode: "host"
-    # Hardened with no-new-privileges (#90). Deliberately NOT cap_drop: [ALL] like the other
-    # leaf services: the dashboard runs as root and persists its SQLite history into the
-    # ${DASHBOARD_DATA_DIR} bind mount, which pithead creates owned by the host user. Dropping
-    # all capabilities strips CAP_DAC_OVERRIDE, so root could no longer create the SQLite
-    # WAL/journal files in that user-owned directory and history writes would fail.
+    # Now runs non-root (uid 1000, #255) and owns ${DASHBOARD_DATA_DIR}, so it no longer needs
+    # root's CAP_DAC_OVERRIDE to write its SQLite history — drop all capabilities like the other
+    # leaf services (#90). no-new-privileges stays as defense-in-depth.
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
       - ${DASHBOARD_DATA_DIR}:/data
