@@ -54,6 +54,61 @@ def test_get_stats_network_error_returns_none():
         assert client.get_stats() is None
 
 
+_SUBMIT = (
+    "https://xmrvsbeast.example/submit.cgi"  # placeholder; real endpoint is unpublished (#263)
+)
+
+
+class TestRegister:
+    def test_no_endpoint_configured_is_noop(self):
+        # Public default: XVB_SUBMIT_URL unset => never reach out at all (no clearnet/Tor call).
+        client = XvbClient("49abc", submit_url="")
+        with patch.object(xvb_mod.requests, "get") as mock_get:
+            assert client.register() is False
+        mock_get.assert_not_called()
+
+    def test_missing_wallet_is_noop(self):
+        client = XvbClient("", submit_url=_SUBMIT)
+        with patch.object(xvb_mod.requests, "get") as mock_get:
+            assert client.register() is False
+        mock_get.assert_not_called()
+        assert XvbClient("placeholder", submit_url=_SUBMIT).register() is False
+
+    def test_success_sends_full_wallet(self):
+        client = XvbClient("49fullwalletaddress", submit_url=_SUBMIT)
+        resp = MagicMock(status_code=200, text="ok")
+        with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
+            assert client.register() is True
+        # Registration takes the FULL wallet address as ?address=...
+        assert mock_get.call_args.kwargs["params"] == {"address": "49fullwalletaddress"}
+        assert mock_get.call_args.args[0] == _SUBMIT
+
+    def test_routes_through_tor_proxy(self):
+        # #163: the call carries the full wallet, so it must ride the Tor SOCKS proxy like get_stats.
+        client = XvbClient("49abc", submit_url=_SUBMIT)
+        resp = MagicMock(status_code=200, text="ok")
+        with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
+            client.register()
+        proxies = mock_get.call_args.kwargs["proxies"]
+        assert proxies["https"].startswith("socks5h://")
+        assert proxies["http"] == proxies["https"]
+
+    def test_non_200_returns_false(self):
+        client = XvbClient("49abc", submit_url=_SUBMIT)
+        with patch.object(xvb_mod.requests, "get", return_value=MagicMock(status_code=503)):
+            assert client.register() is False
+
+    def test_network_error_returns_false(self):
+        client = XvbClient("49abc", submit_url=_SUBMIT)
+        with patch.object(xvb_mod.requests, "get", side_effect=requests.RequestException("boom")):
+            assert client.register() is False
+
+    def test_unexpected_error_returns_false(self):
+        client = XvbClient("49abc", submit_url=_SUBMIT)
+        with patch.object(xvb_mod.requests, "get", side_effect=ValueError("kaboom")):
+            assert client.register() is False
+
+
 class TestParseHtml:
     def test_fail_count_only(self):
         client = XvbClient("49abc")

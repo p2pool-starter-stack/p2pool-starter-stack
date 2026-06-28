@@ -94,6 +94,19 @@ XVB_TOR_PROXY = os.environ.get("XVB_TOR_PROXY", "socks5h://172.28.0.25:9050")
 XVB_TOR_ENABLED = os.environ.get("XVB_TOR_ENABLED", "true").lower() == "true"
 XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
 
+# XvB raffle-registration endpoint (#263). Mining to the XvB pool isn't enough to enter the raffle —
+# a wallet is only entered once it's registered against this endpoint (and only if it already has a
+# share in the P2Pool PPLNS window). The XvB operator deliberately does NOT publish this API ("to
+# mitigate abuse"), so it is never hard-coded here: the maintainer injects the full URL (it takes
+# ?address=<full wallet>) via XVB_SUBMIT_URL at deploy time. Unset => the stack still mines to XvB
+# and reads stats, it just skips auto-registration (no clearnet/Tor call is made at all).
+XVB_SUBMIT_URL = os.environ.get("XVB_SUBMIT_URL", "").strip()
+
+# How often to re-register with XvB once eligible (#263), seconds. Registration is idempotent, so we
+# re-run on a daily cadence: it picks up the operator's newer security-token behaviour and re-enters
+# a long-offline miner cleanly.
+XVB_REGISTER_INTERVAL_S = 24 * 3600
+
 # --- Egress posture knobs (#170 Component Health panel) ---
 # Surfaced so the dashboard can show each component's outbound egress route + a privacy roll-up.
 # Defaults are the privacy-safe resting state (firewall fail-closed; p2pool peers over Tor); pithead

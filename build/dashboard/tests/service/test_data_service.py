@@ -1,8 +1,10 @@
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import mining_dashboard.service.data_service as ds_mod
+from mining_dashboard.config.config import XVB_REGISTER_INTERVAL_S
 from mining_dashboard.service.data_service import (
     DataService,
     WorkerLifecycle,
@@ -978,3 +980,65 @@ class TestControlPlaneComposition:
             await svc._apply_worker_rejection(monero_down=True, tari_down=True)
         svc.docker_control.stop.assert_awaited_once_with("xmrig-proxy")
         assert svc.workers_rejected is True
+
+
+class TestXvbAutoRegister:
+    """XvB raffle auto-registration gating (#263)."""
+
+    def _svc(self):
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        xvb = MagicMock()
+        svc = DataService(sm, MagicMock(), xvb)
+        return svc, sm, xvb
+
+    def _stats(self, pplns_window=2160, pool_type="Main"):
+        return {"p2p": {"type": pool_type}, "pool": {"pplns_window": pplns_window}}
+
+    def _fresh_share(self):
+        return [{"ts": time.time()}]
+
+    async def test_no_share_does_not_register(self):
+        # Endpoint only takes effect with a PPLNS share, so we don't even call it before then.
+        svc, _sm, xvb = self._svc()
+        await svc._maybe_register_xvb(shares=[], p2pool_stats=self._stats())
+        xvb.register.assert_not_called()
+        assert svc._xvb_last_registered is None
+
+    async def test_stale_share_outside_window_does_not_register(self):
+        svc, _sm, xvb = self._svc()
+        # 2160 blocks * 10s = 6h window; a share 7h old is outside it.
+        stale = [{"ts": time.time() - 7 * 3600}]
+        await svc._maybe_register_xvb(shares=stale, p2pool_stats=self._stats())
+        xvb.register.assert_not_called()
+
+    async def test_registers_once_eligible(self):
+        svc, sm, xvb = self._svc()
+        xvb.register.return_value = True
+        await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        xvb.register.assert_called_once()
+        assert svc._xvb_last_registered is not None
+        sm.update_xvb_stats.assert_called_once()
+        assert "registered_at" in sm.update_xvb_stats.call_args.kwargs
+
+    async def test_failed_registration_retries_next_poll(self):
+        # A failed call must NOT latch the timestamp, so the next eligible poll retries.
+        svc, sm, xvb = self._svc()
+        xvb.register.return_value = False
+        await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        assert svc._xvb_last_registered is None
+        sm.update_xvb_stats.assert_not_called()
+
+    async def test_skips_when_recently_registered(self):
+        svc, _sm, xvb = self._svc()
+        svc._xvb_last_registered = time.time()  # just registered
+        await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        xvb.register.assert_not_called()
+
+    async def test_reregisters_after_interval(self):
+        # Idempotent daily re-register once the cadence elapses.
+        svc, _sm, xvb = self._svc()
+        xvb.register.return_value = True
+        svc._xvb_last_registered = time.time() - XVB_REGISTER_INTERVAL_S - 1
+        await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        xvb.register.assert_called_once()

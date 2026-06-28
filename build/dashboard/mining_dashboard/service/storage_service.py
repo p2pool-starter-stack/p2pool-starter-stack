@@ -50,6 +50,9 @@ class StateManager:
                 "avg_1h": 0.0,
                 "fail_count": 0,
                 "last_update": 0.0,
+                # Unix ts of the last successful XvB raffle registration (#263); 0.0 until the
+                # wallet is first auto-registered. Lets the UI show "Registered with XvB ✓".
+                "registered_at": 0.0,
                 # Fraction of the current cycle routed to XvB, written by the
                 # controller each cycle. Lets the dashboard show what we *send*
                 # (routed) next to what XvB *credits* (avg_1h/24h) — the live

@@ -35,6 +35,7 @@ from mining_dashboard.config.config import (
     UPDATE_CHECK_INTERVAL,
     UPDATE_INTERVAL,
     WORKER_FALLOFF_SEC,
+    XVB_REGISTER_INTERVAL_S,
     XVB_TOR_PROXY,
 )
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
@@ -342,6 +343,9 @@ class DataService:
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
         )
+        # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
+        # None until the wallet is first entered. Drives the daily re-register cadence below.
+        self._xvb_last_registered = None
 
         self.latest_data = {
             "workers": [],
@@ -477,6 +481,40 @@ class DataService:
                 f"Required chain(s) still syncing — holding {', '.join(SYNC_GATE_CONTAINERS)} "
                 f"until synced."
             )
+
+    async def _maybe_register_xvb(self, shares, p2pool_stats):
+        """
+        Auto-enter the wallet into the XvB raffle once it's eligible (#263).
+
+        Mining to the XvB pool doesn't enter a wallet — it must be registered against the operator's
+        endpoint, which only takes effect once the wallet has a share in the P2Pool PPLNS window. So
+        we gate on a PPLNS share existing (same window math as the dashboard/algo) and skip silently
+        until then, retrying on the next poll. After the first success we re-register on a daily
+        cadence (XVB_REGISTER_INTERVAL_S): registration is idempotent, and re-running picks up the
+        operator's newer security-token behaviour and re-enters a long-offline miner cleanly.
+
+        The caller already gated on ENABLE_XVB + the 10th-iteration throttle; register() itself
+        routes over Tor and no-ops when no endpoint is configured (XVB_SUBMIT_URL unset).
+        """
+        # PPLNS-share check — mirrors metrics/algo: a share counts if it's within pplns_window
+        # blocks (30s/block on Nano, else 10s) of now.
+        pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
+        pplns_window = p2pool_stats.get("pool", {}).get("pplns_window", 2160)
+        block_time = 30 if pool_type == "Nano" else 10
+        cutoff = time.time() - pplns_window * block_time
+        if not any(s.get("ts", 0) >= cutoff for s in shares):
+            return  # no eligible share yet — the endpoint would no-op, so don't call it
+
+        now = time.time()
+        if self._xvb_last_registered is not None and (
+            now - self._xvb_last_registered < XVB_REGISTER_INTERVAL_S
+        ):
+            return  # already registered recently; next re-register isn't due yet
+
+        if await asyncio.to_thread(self.xvb_client.register):
+            self._xvb_last_registered = now
+            await asyncio.to_thread(self.state_manager.update_xvb_stats, registered_at=now)
+            logger.info("External Sync: Registered wallet with XvB raffle ✓")
 
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
@@ -714,6 +752,11 @@ class DataService:
                             logger.info(
                                 f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)"
                             )
+
+                        # 7b. XvB raffle auto-registration (#263). Rides the same throttle/egress as
+                        # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS
+                        # share existing — before then the endpoint is a no-op, so we just retry.
+                        await self._maybe_register_xvb(shares_list, p2pool_stats)
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to
