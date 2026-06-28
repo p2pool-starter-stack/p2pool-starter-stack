@@ -11,10 +11,10 @@
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Tor](https://img.shields.io/badge/Networking-Tor--first-7D4698?logo=torproject&logoColor=white)
 
-A professional-grade, containerized stack for running a private [Monero](https://www.getmonero.org/)
-full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge
-mining — engineered for **privacy**, **performance**, and **a setup you can finish before your
-coffee gets cold**.
+A containerized stack for running a private [Monero](https://www.getmonero.org/) full node,
+[P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge mining. It's
+built for privacy and performance, and the interactive setup takes you from clone to mining in a few
+minutes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
@@ -31,22 +31,22 @@ coffee gets cold**.
   operator, no fees, rewards paid straight to your own wallet — and every hash **merge-mines Tari
   for free**: a second payout for zero extra power or config.
 - 🧠 **Set-and-forget yield optimizer.** An algorithmic engine watches the XMRvsBeast raffle and
-  automatically shifts hashrate to grab bonus rounds — donating only the **minimum** needed to hold
-  your tier, then handing every spare cycle back to your own P2Pool payouts. No manual tuning, no
-  over-donating.
-- 🧅 **Tor-first, no port forwarding.** A built-in Tor daemon gives Monero, Tari, and P2Pool
-  hidden-service (onion) addresses, so **your router stays closed and your home IP is never
-  advertised to an inbound peer**. (Two outbound yield paths still touch clearnet in v1.0 — the
-  [privacy guide](docs/privacy.md) maps every connection and how to harden it today.)
-- 🔌 **One endpoint for every rig.** Point all your workers at a single address — no wallet in the
-  miner, no per-rig pool config, ever. The stack routes the hashrate for you.
+  shifts hashrate to catch bonus rounds, donating only the minimum needed to hold your tier and
+  handing every spare cycle back to your own P2Pool payouts. It tunes itself, and it won't
+  over-donate.
+- 🧅 **Tor-first.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses, so your
+  router stays closed and your home IP is never advertised to an inbound peer. (Two outbound yield
+  paths still touch clearnet in v1.0; the [privacy guide](docs/privacy.md) maps every connection and
+  how to harden it today.)
+- 🔌 **One endpoint for every rig.** Point all your workers at a single address. Wallets and per-rig
+  pool config stay out of the miner entirely — the stack routes the hashrate for you.
 - 📊 **A dashboard worth leaving open.** Watch live hashrate, your P2Pool/XvB split shading in real
-  time, the PPLNS window, and every worker update — served over HTTPS on your LAN.
-- 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and — on Linux —
-  RandomX kernel tuning (it asks before touching GRUB), then offers to start everything for you.
-- 🔒 **Hardened out of the box.** Least-privilege containers, SHA256-verified binaries, pinned
-  versions, localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for
-  stats, plus a separate start/stop-only one for node-down worker failover).
+  time, the PPLNS window, and every worker update, served over HTTPS on your LAN.
+- 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and (on Linux)
+  RandomX kernel tuning. It asks before touching GRUB, then offers to start everything for you.
+- 🔒 **Hardened.** Least-privilege containers, SHA256-verified binaries, pinned versions,
+  localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for stats, plus a
+  separate start/stop-only one for node-down worker failover).
 
 ---
 
