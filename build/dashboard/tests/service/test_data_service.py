@@ -1114,6 +1114,33 @@ class TestXvbAutoRegister:
         assert self._state_writes(sm)["registration_state"] == "registered"
 
 
+class TestXvbStatsSync:
+    """XvB stats fetch → persist (#163), and the #311 precondition: a FAILED fetch must write
+    nothing, so the last reading and ``last_update`` stay frozen and the staleness guard can fire.
+    This is the integration seam the algo-level unit tests assume but can't see."""
+
+    def _svc(self):
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        xvb = MagicMock()
+        return DataService(sm, MagicMock(), xvb), sm, xvb
+
+    async def test_successful_fetch_persists_stats(self):
+        svc, sm, xvb = self._svc()
+        xvb.get_stats.return_value = {"avg_1h": 12_000.0, "avg_24h": 11_000.0, "fail_count": 0}
+        await svc._sync_xvb_stats()
+        sm.update_xvb_stats.assert_called_once_with(avg_1h=12_000.0, avg_24h=11_000.0, fail_count=0)
+
+    async def test_failed_fetch_writes_nothing(self):
+        # #311 linchpin: get_stats() returns None on a Tor timeout / 5xx. Persisting nothing is what
+        # keeps last_update frozen so the controller can detect the feed is stale. If this regresses
+        # to stamping on failure, the staleness guard silently never triggers.
+        svc, sm, xvb = self._svc()
+        xvb.get_stats.return_value = None
+        await svc._sync_xvb_stats()
+        sm.update_xvb_stats.assert_not_called()
+
+
 class _RecordingGet:
     """One aiohttp ``session.get()`` async-context-manager that records nothing itself."""
 
