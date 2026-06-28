@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import mining_dashboard.web.views as views
+from mining_dashboard.config import config as egress_config
 from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
@@ -1045,6 +1046,8 @@ class TestBuildState:
             "tari",
             "workers",
             "proxy_summary",
+            "egress",
+            "topology",
             "chart",
         ):
             assert key in st, f"missing section: {key}"
@@ -1119,6 +1122,76 @@ class TestBuildState:
         bad_sm.get_history.side_effect = RuntimeError("boom")
         with pytest.raises(RuntimeError):
             build_state(_data(), bad_sm, "all")
+
+
+def _set_egress_config(monkeypatch, **over):
+    """Pin the live egress knobs so the #170 panel is deterministic regardless of the test env.
+
+    Defaults are the privacy-safe resting config (firewall on, everything over Tor, local node);
+    pass overrides to model a leak. ``egress_posture_from_config`` / ``topology_from_config`` read
+    these off the config module at call time, so patching them steers ``build_state``'s payload.
+    """
+    safe = {
+        "TOR_EGRESS_FIREWALL": True,
+        "P2POOL_CLEARNET": False,
+        "ENABLE_XVB": True,
+        "XVB_TOR_ENABLED": True,
+        "MONERO_CLEARNET_SYNC": False,
+        "TARI_CLEARNET_SYNC": False,
+        "MONERO_NODE_HOST": "127.0.0.1",
+        "LOCAL_MONERO_HOST": "127.0.0.1",
+    }
+    for name, value in {**safe, **over}.items():
+        monkeypatch.setattr(egress_config, name, value)
+
+
+class TestEgressTopology:
+    """The #170 egress posture + topology ride on /api/state and feed the header badge. These
+    cover the *wiring* (build_state → payload → badge); the derivation itself is unit-tested in
+    tests/service/test_egress.py."""
+
+    def test_both_sections_present_and_share_one_summary(self, monkeypatch):
+        _set_egress_config(monkeypatch)
+        st = build_state(_data(), _state_mgr(), "all")
+        assert st["egress"]["components"]
+        assert st["topology"]["nodes"] and st["topology"]["edges"]
+        # The badge can never contradict the map: identical summary in both sections.
+        assert st["topology"]["summary"] == st["egress"]["summary"]
+
+    def test_safe_config_emits_a_tor_only_header_badge(self, monkeypatch):
+        _set_egress_config(monkeypatch)
+        st = build_state(_data(), _state_mgr(), "all")
+        badge = st["badges"][-1]  # _egress_badge is appended last in build_state
+        assert badge["variant"] == "ok"
+        assert "Tor-only" in badge["text"]
+        assert st["egress"]["summary"]["all_tor"] is True
+
+    def test_host_dashboard_clearnet_leak_emits_a_warning_badge(self, monkeypatch):
+        # The host-networked dashboard's XvB stats fetch over clearnet leaks despite the firewall —
+        # the payload must flip the badge to a loud warning and the topology summary to "warn".
+        _set_egress_config(monkeypatch, XVB_TOR_ENABLED=False)
+        st = build_state(_data(), _state_mgr(), "all")
+        badge = st["badges"][-1]
+        assert badge["variant"] == "bad"
+        assert "clearnet egress" in badge["text"]
+        assert st["topology"]["summary"]["level"] == "warn"
+        assert st["egress"]["summary"]["leaks"] >= 1
+
+    def test_remote_monerod_is_reflected_in_the_payload(self, monkeypatch):
+        # A remote (non-local) monerod RPC host is a clearnet hop; with the firewall on it's blocked,
+        # not leaked, so the badge stays green but the blocked count rises — end to end.
+        _set_egress_config(monkeypatch, MONERO_NODE_HOST="10.0.0.9", LOCAL_MONERO_HOST="127.0.0.1")
+        st = build_state(_data(), _state_mgr(), "all")
+        assert st["egress"]["summary"]["all_tor"] is True
+        assert st["egress"]["summary"]["blocked_by_firewall"] >= 1
+        assert any(
+            e["from"] == "p2pool" and e["to"] == "monerod" and e["route"] == "clearnet"
+            for e in st["topology"]["edges"]
+        )
+
+    def test_payload_stays_json_serializable_with_a_leak(self, monkeypatch):
+        _set_egress_config(monkeypatch, XVB_TOR_ENABLED=False, P2POOL_CLEARNET=True)
+        json.dumps(build_state(_data(), _state_mgr(), "all"))
 
 
 class TestParseWindow:
