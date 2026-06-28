@@ -295,6 +295,133 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 : >"$FW/ipt.log"
 PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
+# remove: `down` (and every re-apply) strips ONLY our tagged rules — this removal is the precondition
+# for the #291 down->upgrade/apply window, so prove it deletes the tags and spares foreign DOCKER-USER
+# rules. iptables-save replays two tagged rules + one foreign rule; remove must -D the tagged pair only.
+RM="$SANDBOX/rm"
+mkdir -p "$RM/bin"
+printf '#!/usr/bin/env bash\nexec "$@"\n' >"$RM/bin/sudo"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/ipt.log"\n' "$RM" >"$RM/bin/iptables"
+cat >"$RM/bin/iptables-save" <<'SAVE'
+#!/usr/bin/env bash
+cat <<'RULES'
+-A DOCKER-USER -m comment --comment pithead-tor-egress -s 172.28.0.0/24 -j DROP
+-A DOCKER-USER -m comment --comment pithead-tor-egress -s 172.28.0.25 -j ACCEPT
+-A DOCKER-USER -j RETURN
+RULES
+SAVE
+chmod +x "$RM/bin/sudo" "$RM/bin/iptables" "$RM/bin/iptables-save"
+: >"$RM/ipt.log"
+PATH="$RM/bin:$PATH" run_sourced "$RM" remove_tor_egress_firewall >/dev/null 2>&1
+rmlog="$(cat "$RM/ipt.log" 2>/dev/null)"
+assert_contains "down removes the tagged clearnet DROP" "$rmlog" "-D DOCKER-USER -m comment --comment pithead-tor-egress -s 172.28.0.0/24 -j DROP"
+assert_contains "down removes the tagged Tor-exempt ACCEPT" "$rmlog" "-D DOCKER-USER -m comment --comment pithead-tor-egress -s 172.28.0.25 -j ACCEPT"
+assert_not_contains "down leaves foreign DOCKER-USER rules untouched" "$rmlog" "RETURN"
+
+echo "== regression: every command installs the Tor-egress firewall BEFORE compose (#291) =="
+# The firewall must go in BEFORE any clearnet-capable container starts, on EVERY path that brings one
+# up (#276 closed the window for stack_up; #291 + this change close it for upgrade/apply/reset). If a
+# container starts first, the leading ESTABLISHED rule grandfathers its clearnet dial past the DROP.
+# Each case neutralises the command's preamble and records the order of the two load-bearing ops; the
+# firewall sentinel MUST precede the compose sentinel. fw_then_compose() extracts just those two from
+# whatever else the function prints (warnings, banners) so the assert is exact.
+fw_then_compose() { printf '%s\n' "$1" | grep -xE 'firewall|compose' | tr '\n' ','; }
+
+# up: the reference path #276 fixed — pin it too so a future reorder of stack_up is caught here.
+up_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    log() { :; }
+    warn_missing_data_dirs() { :; }
+    migrate_compose_project() { :; }
+    print_clearnet_banner() { :; }
+    announce_dashboard_url() { :; }
+    apply_tor_egress_firewall() { echo firewall; }
+    compose_up_checked() { echo compose; }
+    stack_up
+)
+assert_eq "up applies the firewall before 'compose up' (#276)" "$(fw_then_compose "$up_order")" "firewall,compose,"
+
+upg_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { echo firewall; }
+    compose_up_checked() { echo compose; }
+    stack_upgrade
+)
+assert_eq "upgrade applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$upg_order")" "firewall,compose,"
+
+# apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
+# the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
+# diff (env_changed_keys returns nothing; a pre-seeded .apply-incomplete marker forces the retry).
+apply_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    # shellcheck disable=SC2034  # read by the sourced apply()'s "not provisioned" guard, unseen here
+    MONERO_ONION=onion
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    is_deployed() { return 0; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    env_changed_keys() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    announce_dashboard_url() { :; }
+    log() { :; }
+    warn() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { echo firewall; }
+    compose_up_checked() { echo compose; }
+    : >".env.apply-incomplete" # force the retry path
+    apply
+)
+assert_eq "apply applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$apply_order")" "firewall,compose,"
+
+# reset-dashboard recreates p2pool (clearnet-capable); on a `down` stack it must install the firewall
+# first or p2pool comes up with no firewall at all. -y skips the destructive confirm; the docker stub
+# emits the compose sentinel only for the `compose up` it ends on.
+rd_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    env_get() { echo "/nonexistent/reset-$1"; } # non-existent dirs -> rm skipped
+    assert_safe_dir() { :; }
+    mkdir() { :; }
+    sudo() { :; }
+    log() { :; }
+    docker() {
+        [ "$1 $2" = "compose up" ] && echo compose
+        return 0
+    }
+    apply_tor_egress_firewall() { echo firewall; }
+    reset_dashboard -y
+)
+assert_eq "reset-dashboard applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$rd_order")" "firewall,compose,"
 
 echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
 # Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as

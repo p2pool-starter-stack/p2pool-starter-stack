@@ -193,8 +193,9 @@ stack_restart() {
 # Fail-closed host firewall so a misconfigured/buggy bridge daemon (monerod/p2pool/tari/xmrig-proxy)
 # CAN'T leak the home IP: each may reach the LAN, the other containers and the Tor SOCKS, but any
 # DIRECT clearnet dial is DROPPED — only the `tor` container reaches the internet. Rules live in
-# Docker's DOCKER-USER chain (preserved across Docker restarts), installed BEFORE containers start at
-# `up` (so there is no startup window to grandfather), re-asserted at `apply`, removed at `down`. Needs
+# Docker's DOCKER-USER chain (preserved across Docker restarts), installed BEFORE containers start on
+# every path that brings a clearnet-capable app up — `up`, `upgrade`, `apply`, `reset-dashboard` (so
+# there is no startup window to grandfather a leak past) — and removed at `down`. Needs
 # root (sudo), like the GRUB/HugePages steps; IPv4-only (mining_net is IPv4). Opt out with
 # network.tor_egress_firewall=false. Proven by tests/integration/benchmarks/bench-verify-egress.sh.
 # See docs/privacy.md.
@@ -290,6 +291,13 @@ stack_upgrade() {
     generate_caddyfile
     log "Re-rendered generated config for the current release."
     migrate_compose_project
+    # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
+    # the same reason: if the firewall isn't already installed (e.g. `down` then `upgrade`), starting
+    # containers first opens a startup window where a clearnet app (Tari, #271) can open a connection
+    # that the leading ESTABLISHED rule then grandfathers past the DROP (#291). In normal operation
+    # it's already installed from `up` and this is a cheap idempotent re-apply. Runs after the .env
+    # render above so the toggle/subnet are current.
+    apply_tor_egress_firewall # Tor-only egress (#270), consistent with up/apply
     # Source checkout: rebuild the images from build/. Release install: pull the new published images
     # instead — force a re-pull so a moved tag is refreshed (#44).
     if is_source_checkout; then
@@ -303,7 +311,6 @@ stack_upgrade() {
     else
         PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
     fi
-    apply_tor_egress_firewall # reassert the Tor-only egress firewall (#270), consistent with up/apply
     log "Stack upgraded."
 }
 
@@ -841,6 +848,10 @@ reset_dashboard() {
     sudo chmod -R 755 "$p2pool_dir/stats"
 
     log "Bringing services back up..."
+    # p2pool can dial clearnet, so assert the Tor-only egress firewall BEFORE it starts (#270/#291).
+    # Idempotent if it's already present from `up`; closes the gap where running reset-dashboard on a
+    # `down` stack would otherwise bring p2pool up with no firewall installed at all.
+    apply_tor_egress_firewall
     docker compose up --pull "$(resolve_pull_policy)" -d dashboard p2pool
 }
 
@@ -2704,6 +2715,12 @@ apply() {
 
     log "Updating containers..."
     migrate_compose_project
+    # (Re)assert the Tor-only egress firewall BEFORE compose recreates anything — same ordering as
+    # up/upgrade (#276/#291), for the same reason: if it isn't already installed (e.g. `down` then
+    # `apply`), recreating containers first opens a startup window where a clearnet app dials out and
+    # the leading ESTABLISHED rule grandfathers it past the DROP. Idempotent, so the common case
+    # (already installed from `up`) is a cheap re-assert; the .env it reads was committed just above.
+    apply_tor_egress_firewall
     # Mark the recreate in-flight: cleared only after a SUCCESSFUL `up`, so a failure here (image
     # build error, a port already bound, a failed health/dependency gate, daemon hiccup) leaves the
     # marker for the next apply to retry instead of no-opping on the already-committed config (#125).
@@ -2720,7 +2737,6 @@ apply() {
         docker compose restart caddy
     fi
     rm -f "$apply_marker"
-    apply_tor_egress_firewall # (re)install the fail-closed Tor-only egress rules (#270)
     log "Configuration applied."
     announce_dashboard_url
 }
