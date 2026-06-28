@@ -1628,6 +1628,8 @@ parse_and_validate_config() {
     # Fail-closed Tor-only egress firewall (#270); default on. Renders to .env so `up` can read it.
     # config_bool (not a plain `// true`) so an explicit false actually disables it — see #294.
     TOR_EGRESS_FIREWALL=$(normalize_bool "$(config_bool '.network.tor_egress_firewall' true)")
+    # Surfaced for the dashboard's egress-posture panel (#170); mirrors what p2pool_outbound_flags reads.
+    P2POOL_CLEARNET=$(normalize_bool "$(config_bool '.p2pool.clearnet' false)")
     if [ "$MONERO_MODE" == "remote" ]; then
         local remote_host
         remote_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
@@ -2083,6 +2085,7 @@ P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
 NETWORK_PREFIX=$NETWORK_PREFIX
 TOR_EGRESS_FIREWALL=$TOR_EGRESS_FIREWALL
+P2POOL_CLEARNET=$P2POOL_CLEARNET
 PROXY_API_PORT=3344
 PROXY_AUTH_TOKEN=$PROXY_AUTH_TOKEN
 PROXY_DONATE_LEVEL=$DONATE_LEVEL

@@ -76,6 +76,16 @@ XVB_TOR_PROXY = os.environ.get("XVB_TOR_PROXY", "socks5h://172.28.0.25:9050")
 XVB_TOR_ENABLED = os.environ.get("XVB_TOR_ENABLED", "true").lower() == "true"
 XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
 
+# --- Egress posture knobs (#170 Component Health panel) ---
+# Surfaced so the dashboard can show each component's outbound egress route + a privacy roll-up.
+# Defaults are the privacy-safe resting state (firewall fail-closed; p2pool peers over Tor); pithead
+# renders the real values into the dashboard env (docker-compose.yml) so the panel reflects actual
+# config rather than a hardcoded guess. TOR_EGRESS_FIREWALL is the #270 network-layer backstop: when
+# on, any non-Tor egress from the container subnet is DROPPED (fail-closed), so the whole stack is
+# Tor-only regardless of per-app config.
+TOR_EGRESS_FIREWALL = os.environ.get("TOR_EGRESS_FIREWALL", "true").strip().lower() == "true"
+P2POOL_CLEARNET = os.environ.get("P2POOL_CLEARNET", "false").strip().lower() == "true"
+
 # New-release check (#224, config.json: dashboard.check_for_updates). Default ON — the dashboard asks
 # GitHub for the latest release and shows a header badge linking to it if it's newer than the running
 # version. Notify-only (no upgrade — that's #59). The check is routed over the same bridge Tor SOCKS
