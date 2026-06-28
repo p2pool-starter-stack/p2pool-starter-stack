@@ -92,7 +92,7 @@ class Metrics:
     tari_mining: bool  # Tari merge-mining active
     # XvB raffle registration (#263). Defaulted so direct Metrics(...) constructors needn't set them.
     xvb_registered_at: float = 0.0  # epoch secs of last successful registration; 0.0 = never
-    xvb_registration_state: str = ""  # ""|registered|unconfigured|failing — drives the badge
+    xvb_registration_state: str = ""  # ""|registered|invalid|failing — drives the badge
 
 
 def build_metrics(latest_data, state_mgr, history=None):

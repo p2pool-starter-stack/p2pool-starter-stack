@@ -4,6 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import mining_dashboard.service.data_service as ds_mod
+from mining_dashboard.client.xvb_client import (
+    REG_ERROR,
+    REG_INVALID,
+    REG_NOT_ELIGIBLE,
+    REG_OK,
+)
 from mining_dashboard.config.config import XVB_REGISTER_INTERVAL_S
 from mining_dashboard.service.data_service import (
     _XVB_REGISTER_FAIL_ALERT,
@@ -1022,8 +1028,9 @@ class TestXvbAutoRegister:
         xvb.register.assert_not_called()
 
     async def test_registers_once_eligible(self):
+        # REG_OK covers both a fresh 2xx and the idempotent "already registered" steady state.
         svc, sm, xvb = self._svc()
-        xvb.register.return_value = True
+        xvb.register.return_value = REG_OK
         await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         xvb.register.assert_called_once()
         assert svc._xvb_last_registered is not None
@@ -1031,13 +1038,35 @@ class TestXvbAutoRegister:
         assert "registered_at" in writes
         assert writes["registration_state"] == "registered"
 
-    async def test_failed_registration_retries_next_poll(self):
-        # A failed call must NOT latch the timestamp, so the next eligible poll retries.
+    async def test_transient_error_retries_next_poll(self):
+        # A transient error must NOT latch the timestamp, so the next eligible poll retries; and one
+        # blip stays below the failing threshold (no dashboard warning yet).
         svc, sm, xvb = self._svc()
-        xvb.register.return_value = False
+        xvb.register.return_value = REG_ERROR
         await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         assert svc._xvb_last_registered is None
+        assert svc._xvb_register_failures == 1
+        assert "registration_state" not in self._state_writes(sm)
+
+    async def test_not_eligible_is_quiet_retry(self):
+        # Local share hasn't propagated to XvB yet => retry quietly, NOT counted as a failure.
+        svc, sm, xvb = self._svc()
+        xvb.register.return_value = REG_NOT_ELIGIBLE
+        await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        assert svc._xvb_register_failures == 0
         sm.update_xvb_stats.assert_not_called()
+        assert svc._xvb_last_registered is None  # not registered, will retry
+
+    async def test_invalid_wallet_latches_and_warns(self, caplog):
+        # Permanent rejection: surface "invalid", warn once, and stop calling the endpoint.
+        svc, sm, xvb = self._svc()
+        xvb.register.return_value = REG_INVALID
+        with caplog.at_level("WARNING"):
+            await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+            await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        xvb.register.assert_called_once()  # latched after the first rejection — no re-hammering
+        assert self._state_writes(sm)["registration_state"] == "invalid"
+        assert sum("rejected MONERO_WALLET_ADDRESS" in r.message for r in caplog.records) == 1
 
     async def test_skips_when_recently_registered(self):
         svc, _sm, xvb = self._svc()
@@ -1048,27 +1077,22 @@ class TestXvbAutoRegister:
     async def test_reregisters_after_interval(self):
         # Idempotent daily re-register once the cadence elapses.
         svc, _sm, xvb = self._svc()
-        xvb.register.return_value = True
+        xvb.register.return_value = REG_OK
         svc._xvb_last_registered = time.time() - XVB_REGISTER_INTERVAL_S - 1
         await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         xvb.register.assert_called_once()
 
-    async def test_unconfigured_endpoint_warns_once_and_skips(self, caplog):
-        # XvB on but no XVB_SUBMIT_URL: warn ONCE, surface "unconfigured", never call the endpoint.
+    async def test_disabled_endpoint_skips_silently(self):
+        # XVB_SUBMIT_URL disabled => empty submit_url => no call, no warning, no status write.
         svc, sm, xvb = self._svc(submit_url="")
-        with caplog.at_level("WARNING"):
-            await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
-            # Repeat polls must not re-warn or re-write — the latch suppresses the spam.
-            await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
+        await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         xvb.register.assert_not_called()
-        assert sum("XVB_SUBMIT_URL is not set" in r.message for r in caplog.records) == 1
-        assert self._state_writes(sm)["registration_state"] == "unconfigured"
-        sm.update_xvb_stats.assert_called_once()  # one status write, not one per poll
+        sm.update_xvb_stats.assert_not_called()
 
     async def test_persistent_failure_flags_failing_after_threshold(self):
-        # A configured-but-refusing endpoint surfaces a "failing" badge only after a few attempts.
+        # A configured-but-erroring endpoint surfaces a "failing" badge only after a few attempts.
         svc, sm, xvb = self._svc()
-        xvb.register.return_value = False
+        xvb.register.return_value = REG_ERROR
         for _ in range(_XVB_REGISTER_FAIL_ALERT - 1):
             await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         # Below the threshold: no dashboard warning yet.
@@ -1079,10 +1103,10 @@ class TestXvbAutoRegister:
 
     async def test_success_after_failures_resets_counter(self):
         svc, sm, xvb = self._svc()
-        xvb.register.return_value = False
+        xvb.register.return_value = REG_ERROR
         await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         assert svc._xvb_register_failures == 1
-        xvb.register.return_value = True
+        xvb.register.return_value = REG_OK
         await svc._maybe_register_xvb(shares=self._fresh_share(), p2pool_stats=self._stats())
         assert svc._xvb_register_failures == 0
         assert self._state_writes(sm)["registration_state"] == "registered"

@@ -67,3 +67,24 @@ class TestConfig:
         with patch.dict(os.environ, {"XVB_ENABLED": "true"}):
             cfg = _reload_config()
             assert cfg.ENABLE_XVB is True
+
+    def test_xvb_submit_url_default_is_assembled_endpoint(self):
+        # #263: registration works out of the box — the default is the real endpoint, assembled onto
+        # the public cgi-bin base (we assert structure, not the exact script name, to avoid
+        # re-committing the path the operator asked us not to publish).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("XVB_SUBMIT_URL", None)
+            cfg = _reload_config()
+        assert cfg.XVB_SUBMIT_URL.startswith("https://xmrvsbeast.com/cgi-bin/")
+        assert cfg.XVB_SUBMIT_URL.endswith(".cgi")
+        assert "history" not in cfg.XVB_SUBMIT_URL  # the submit endpoint, not the stats one
+
+    def test_xvb_submit_url_explicit_override(self):
+        with patch.dict(os.environ, {"XVB_SUBMIT_URL": "https://test.example/submit.cgi"}):
+            assert _reload_config().XVB_SUBMIT_URL == "https://test.example/submit.cgi"
+
+    def test_xvb_submit_url_disable_sentinels(self):
+        # Turn auto-registration off (keeping XvB on) without knowing the endpoint.
+        for v in ("off", "none", "FALSE", "disabled", "0"):
+            with patch.dict(os.environ, {"XVB_SUBMIT_URL": v}):
+                assert _reload_config().XVB_SUBMIT_URL == "", f"{v!r} should disable"

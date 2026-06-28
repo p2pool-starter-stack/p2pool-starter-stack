@@ -374,10 +374,11 @@ services:
       # Route XvB donation mining over Tor by default (#166); xvb.tor:false opts out.
       - XVB_TOR_ENABLED=${XVB_TOR_ENABLED:-true}
       - XVB_DONATION_LEVEL=${XVB_DONATION_LEVEL:-auto}
-      # XvB raffle auto-registration endpoint (#263). The XvB operator deliberately does NOT publish
-      # this API, so NO value ships in this repo — it's empty by default (registration is then a
-      # no-op). A maintainer who has the endpoint sets XVB_SUBMIT_URL in their host env / .env and it
-      # flows through here; the call carries the full wallet and is Tor-routed like the stats fetch.
+      # XvB raffle auto-registration endpoint (#263). Defaults to the real endpoint (assembled in the
+      # dashboard config, not committed as plaintext per the operator's request) so registration just
+      # works. Override here to point at a different/test endpoint, or set a disable sentinel
+      # (off/none/false/disabled) to turn auto-registration off while keeping XvB on. The call carries
+      # the full wallet and is Tor-routed like the stats fetch.
       - XVB_SUBMIT_URL=${XVB_SUBMIT_URL:-}
       - PROXY_HOST=${NETWORK_PREFIX:-172.28.0}.29
       - PROXY_API_PORT=${PROXY_API_PORT}

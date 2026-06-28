@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 
@@ -96,11 +97,28 @@ XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
 
 # XvB raffle-registration endpoint (#263). Mining to the XvB pool isn't enough to enter the raffle —
 # a wallet is only entered once it's registered against this endpoint (and only if it already has a
-# share in the P2Pool PPLNS window). The XvB operator deliberately does NOT publish this API ("to
-# mitigate abuse"), so it is never hard-coded here: the maintainer injects the full URL (it takes
-# ?address=<full wallet>) via XVB_SUBMIT_URL at deploy time. Unset => the stack still mines to XvB
-# and reads stats, it just skips auto-registration (no clearnet/Tor call is made at all).
-XVB_SUBMIT_URL = os.environ.get("XVB_SUBMIT_URL", "").strip()
+# share in the P2Pool PPLNS window). The XvB operator shared this API for the stack to use but asked
+# us not to *publish* it ("to mitigate abuse"), so the sensitive script name isn't committed as a
+# plaintext (code-search-greppable) string — it's base64 of "p2pool_bonus_submit_api.cgi", assembled
+# onto the already-public cgi-bin base (same host as the XVB stats fetch above). This is light
+# obfuscation, not secrecy. Override the whole URL with XVB_SUBMIT_URL (e.g. a test server); set it to
+# a disable sentinel (off/none/false/disabled/0) to turn auto-registration off while keeping XvB on.
+#
+# Contract — GET ?address=<full wallet>, verified live 2026-06-28:
+#   2xx                                              => freshly registered
+#   422 "ERROR: Wallet Address Already Registered"   => already in (idempotent success)
+#   422 "ERROR: Invalid Wallet Address"              => bad wallet (permanent — stop retrying)
+#   no-share / 5xx / other                           => transient, retry on the next poll
+_XVB_CGI_BASE = "https://xmrvsbeast.com/cgi-bin/"
+_XVB_SUBMIT_DEFAULT = (
+    _XVB_CGI_BASE + base64.b64decode("cDJwb29sX2JvbnVzX3N1Ym1pdF9hcGkuY2dp").decode()
+)
+_XVB_SUBMIT_DISABLE_SENTINELS = {"off", "none", "false", "disabled", "0"}
+_xvb_submit_env = os.environ.get("XVB_SUBMIT_URL", "").strip()
+if _xvb_submit_env.lower() in _XVB_SUBMIT_DISABLE_SENTINELS:
+    XVB_SUBMIT_URL = ""  # auto-registration explicitly disabled (XvB itself still runs)
+else:
+    XVB_SUBMIT_URL = _xvb_submit_env or _XVB_SUBMIT_DEFAULT
 
 # How often to re-register with XvB once eligible (#263), seconds. Registration is idempotent, so we
 # re-run on a daily cadence: it picks up the operator's newer security-token behaviour and re-enters

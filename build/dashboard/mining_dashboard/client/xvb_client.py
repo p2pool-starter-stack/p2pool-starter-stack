@@ -6,6 +6,15 @@ import requests
 from mining_dashboard.config.config import XVB_SUBMIT_URL, XVB_TOR_PROXY
 from mining_dashboard.helper.utils import parse_hashrate
 
+# register() outcomes (#263). The endpoint returns plaintext "ERROR: ..." with a 422 for the error
+# cases (not a 200/JSON contract), so success/failure is classified from status + body, not status
+# alone. The caller maps these to dashboard state + retry behaviour.
+REG_OK = "registered"  # 2xx (fresh) OR "already registered" (idempotent) — wallet is in the raffle
+REG_INVALID = "invalid_wallet"  # endpoint rejected the address — permanent, stop retrying
+REG_NOT_ELIGIBLE = "not_eligible"  # no PPLNS share server-side yet — retry quietly, don't alarm
+REG_ERROR = "error"  # 5xx / network / unknown shape — transient, retry
+REG_DISABLED = "disabled"  # no endpoint configured (XVB_SUBMIT_URL disabled) — caller skips
+
 
 class XvbClient:
     def __init__(self, wallet_address, tor_proxy=None, submit_url=None):
@@ -69,26 +78,31 @@ class XvbClient:
 
         Mining to the XvB pool isn't enough to be entered — the wallet must be registered against
         the operator's submit endpoint. That endpoint registers the wallet ONLY if it already has a
-        share in the P2Pool PPLNS window, so callers must gate this on PPLNS-share eligibility;
+        share in the P2Pool PPLNS window, so callers should gate this on PPLNS-share eligibility;
         before a share lands server-side the call is a harmless no-op and we just retry next poll.
 
         Routes over the SAME Tor SOCKS5 proxy as get_stats — the call carries the FULL wallet
         address, so a clearnet request would correlate the operator's IP with the wallet (#163).
 
-        Returns:
-            bool: True on a 200 from the endpoint; False otherwise — including when no submit
-                  endpoint is configured (XVB_SUBMIT_URL unset) or the wallet is missing/invalid.
+        The endpoint does NOT use a 200/JSON contract — it returns a plaintext ``ERROR: ...`` body
+        with HTTP 422 for the error cases — so the outcome is classified from status AND body
+        (verified live, see config). Returns one of the module ``REG_*`` strings:
+            REG_OK         — 2xx, or "already registered" (idempotent; the wallet is in the raffle)
+            REG_INVALID    — endpoint rejected the address (permanent; caller stops retrying)
+            REG_NOT_ELIGIBLE — no PPLNS share server-side yet (retry quietly)
+            REG_ERROR      — 5xx / network / unrecognised shape (transient; retry)
+            REG_DISABLED   — no endpoint configured (XVB_SUBMIT_URL disabled)
         """
         if not self.submit_url:
-            # No endpoint injected (public default): we never reach out at all.
-            self.logger.debug("XvB registration skipped: no submit endpoint configured.")
-            return False
+            # Endpoint disabled (XVB_SUBMIT_URL set to a disable sentinel): we never reach out.
+            self.logger.debug("XvB registration skipped: endpoint disabled.")
+            return REG_DISABLED
 
         if not self.wallet_address or self.wallet_address == "placeholder":
             self.logger.warning(
                 "XvB registration skipped: MONERO_WALLET_ADDRESS is missing or invalid."
             )
-            return False
+            return REG_INVALID
 
         params = {"address": self.wallet_address}
 
@@ -98,18 +112,39 @@ class XvbClient:
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
             response = requests.get(self.submit_url, params=params, timeout=20, proxies=proxies)
-            if response.status_code == 200:
-                return True
-            self.logger.error(
-                f"XvB registration request failed with status code: {response.status_code}"
+            body = (response.text or "").strip()
+            low = body.lower()
+
+            # Fresh registration: the endpoint answers 2xx.
+            if 200 <= response.status_code < 300:
+                return REG_OK
+            # Idempotent: re-registering an entered wallet returns 422 "Already Registered". That's
+            # the steady state once we're in — treat it as success so the daily re-register is a
+            # no-op rather than a "failure".
+            if "already registered" in low:
+                return REG_OK
+            # Permanent: a wallet the endpoint won't accept (e.g. wrong address type). Don't hammer.
+            if "invalid wallet" in low:
+                self.logger.warning("XvB registration: endpoint rejected the wallet as invalid.")
+                return REG_INVALID
+            # Best-effort: the share hasn't propagated to XvB yet. We can't pin the exact wording
+            # (we only have the already-registered/invalid samples), so match the obvious tokens and
+            # otherwise fall through to a retryable error.
+            if "pplns" in low or "share" in low or "window" in low:
+                return REG_NOT_ELIGIBLE
+            # Anything else (5xx, an unrecognised body) — log it so a contract change surfaces.
+            self.logger.warning(
+                "XvB registration: unexpected response (HTTP %s): %s",
+                response.status_code,
+                body[:200],
             )
-            return False
+            return REG_ERROR
         except requests.RequestException as e:
             self.logger.error(f"Network error while registering with XvB: {e}")
-            return False
+            return REG_ERROR
         except Exception as e:
             self.logger.error(f"Unexpected error during XvB registration: {e}")
-            return False
+            return REG_ERROR
 
     def _parse_html(self, html_text):
         """

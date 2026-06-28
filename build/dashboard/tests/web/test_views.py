@@ -556,12 +556,10 @@ class TestBadges:
         out = build_badges({}, _metrics(xvb_enabled=True, xvb_registered_at=1.0), "ok")
         assert any(b["text"] == "XvB raffle ✓" and b["variant"] == "outline" for b in out)
 
-    def test_xvb_unconfigured_badge(self):
-        # XVB_SUBMIT_URL unset => warn the operator the raffle is never entered.
-        out = build_badges(
-            {}, _metrics(xvb_enabled=True, xvb_registration_state="unconfigured"), "ok"
-        )
-        assert any(b["variant"] == "warn" and "not configured" in b["text"] for b in out)
+    def test_xvb_invalid_wallet_badge(self):
+        # Endpoint rejected the wallet => loud "bad" badge so the user fixes MONERO_WALLET_ADDRESS.
+        out = build_badges({}, _metrics(xvb_enabled=True, xvb_registration_state="invalid"), "ok")
+        assert any(b["variant"] == "bad" and "wallet rejected" in b["text"] for b in out)
 
     def test_xvb_failing_badge_takes_priority_over_checkmark(self):
         # A real problem must not be masked by a stale registered_at.

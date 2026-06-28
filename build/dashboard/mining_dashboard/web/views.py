@@ -115,13 +115,13 @@ _XVB_REGISTERED_TITLE = (
     "This wallet is auto-registered with the XMRvsBeast raffle. Re-registration runs periodically; "
     "no manual signup is needed."
 )
-_XVB_UNCONFIGURED_TITLE = (
-    "XvB is enabled but no raffle-registration endpoint is configured (XVB_SUBMIT_URL is unset), so "
-    "the stack mines/donates but never enters the raffle. The maintainer must set XVB_SUBMIT_URL."
+_XVB_INVALID_TITLE = (
+    "The XvB raffle endpoint rejected your wallet as invalid, so you won't be entered. The raffle "
+    "needs a standard primary Monero address (starts with 4). Check MONERO_WALLET_ADDRESS."
 )
 _XVB_FAILING_TITLE = (
     "XvB raffle registration keeps failing despite a PPLNS share — the endpoint may be unreachable "
-    "or rejecting the request. Check the dashboard logs and the XvB egress (Tor) path."
+    "or erroring. Check the dashboard logs and the XvB egress (Tor) path."
 )
 
 
@@ -693,14 +693,14 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
             )
 
         # XvB raffle auto-registration status (#263). Warnings take priority over the ✓ so a real
-        # problem (endpoint unset / persistently refusing) is never masked by a stale timestamp.
+        # problem (invalid wallet / persistently failing) is never masked by a stale timestamp.
         if metrics.xvb_enabled:
-            if metrics.xvb_registration_state == "unconfigured":
+            if metrics.xvb_registration_state == "invalid":
                 badges.append(
                     {
-                        "text": "⚠ XvB raffle not configured",
-                        "variant": "warn",
-                        "title": _XVB_UNCONFIGURED_TITLE,
+                        "text": "⚠ XvB wallet rejected",
+                        "variant": "bad",
+                        "title": _XVB_INVALID_TITLE,
                     }
                 )
             elif metrics.xvb_registration_state == "failing":

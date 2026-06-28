@@ -116,7 +116,7 @@ address and is routed over Tor like the XvB stats fetch, so it never exposes you
 XvB is disabled, no registration happens.
 
 The dashboard shows an **`XvB raffle ✓`** header badge once you're registered (and a warning badge
-if registration isn't configured or is failing — see
+if your wallet is rejected or registration is failing — see
 [Configuration › XvB raffle auto-registration](configuration.md#xvb-raffle-auto-registration-xvb_submit_url)).
 
 ### What is Tari? Do I have to mine it?
