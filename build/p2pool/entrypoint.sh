@@ -43,6 +43,42 @@ if printf '%s' "${P2POOL_FLAGS:-}" | grep -q -- '--socks5'; then
         set -- "${_args[@]}"
         ;;
     esac
+
+    # Same trap, one leg further (#278 covered monerod only): p2pool's MergeMiningClientTari reaches
+    # the Tari base node via TCPServer::connect_to_peer, which — like the node RPC — only skips the
+    # SOCKS5 proxy for a LOOPBACK IP literal (no_proxy = m_addressType != DomainName && is_localhost();
+    # verified vs p2pool v4.16 src/tcp_server.cpp). So `--merge-mine tari://<private-docker-ip>:18142`
+    # is dialled THROUGH Tor, which rejects RFC1918 ("Rejecting SOCKS request ... to private address")
+    # → the gRPC channel_state sticks at TRANSIENT_FAILURE and no Tari is merge-mined. Same remedy:
+    # bridge 127.0.0.1 -> the real node and rewrite the URL host to the 127.0.0.1 IP literal (NOT
+    # "localhost" — that parses as a DomainName and would still be proxied). The merge-mine P2P egress
+    # is unaffected; only this local gRPC leg is moved back onto loopback.
+    _mm="" _prev=""
+    for _a in "$@"; do
+        [ "$_prev" = "--merge-mine" ] && {
+            _mm="$_a"
+            break
+        }
+        _prev="$_a"
+    done
+    case "$_mm" in
+    tari://*)
+        _mmhp="${_mm#tari://}" # HOST:PORT
+        _mmhost="${_mmhp%:*}" _mmport="${_mmhp##*:}"
+        case "$_mmhost" in
+        "" | 127.0.0.1 | ::1 | localhost) : ;; # already loopback — nothing to bridge
+        *)
+            echo "[p2pool-entrypoint] Tor on (#278): bridging 127.0.0.1 -> $_mmhost for Tari merge-mine gRPC($_mmport) so it stays DIRECT (p2pool only exempts loopback from --socks5)."
+            socat "TCP-LISTEN:$_mmport,bind=127.0.0.1,fork,reuseaddr" "TCP:$_mmhost:$_mmport" &
+            _args=()
+            for _a in "$@"; do
+                if [ "$_a" = "$_mm" ]; then _args+=("tari://127.0.0.1:$_mmport"); else _args+=("$_a"); fi
+            done
+            set -- "${_args[@]}"
+            ;;
+        esac
+        ;;
+    esac
 fi
 
 # Log the FINAL launch command (#273): makes the applied flags — notably the #165 `--socks5` Tor

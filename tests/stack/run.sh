@@ -22,6 +22,7 @@ bad() {
 
 assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$3], got [$2]"; fi; }
 assert_contains() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "[$2] missing [$3]" ;; esac }
+assert_not_contains() { case "$2" in *"$3"*) bad "$1" "[$2] unexpectedly contains [$3]" ;; *) ok "$1" ;; esac }
 assert_rc() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected rc $3, got $2"; fi; }
 
 # Run a command with pithead sourced (functions available, no cd/main side effects),
@@ -237,6 +238,31 @@ assert_contains "proxy-type value split out" "$ep_out" "ARG=[tor]"
 assert_contains "2 fixed + 5 flag tokens = ARGC 7" "$ep_out" "ARGC=7"
 ep_empty=$(PATH="$PE:$PATH" P2POOL_FLAGS="" bash "$ROOT/build/p2pool/entrypoint.sh" --stratum 0.0.0.0:3333 2>&1)
 assert_contains "empty P2POOL_FLAGS → no stray empty arg (ARGC=2)" "$ep_empty" "ARGC=2"
+
+echo "== p2pool entrypoint moves the Tari merge-mine gRPC onto loopback under Tor (#278 follow-up) =="
+# With --socks5 on, p2pool would dial --merge-mine tari://<private-ip> THROUGH Tor (rejected as an
+# RFC1918 address → TRANSIENT_FAILURE). The entrypoint must socat-bridge that node to 127.0.0.1 and
+# rewrite the URL host to the loopback IP literal. Stub socat so the test never binds a real port.
+SE="$SANDBOX/socat-ep/bin"
+mkdir -p "$SE"
+cat >"$SE/socat" <<STUB
+#!/usr/bin/env bash
+printf 'SOCAT=[%s]\n' "\$*" >> "$SANDBOX/socat.log"
+STUB
+chmod +x "$SE/socat"
+: >"$SANDBOX/socat.log"
+mm_out=$(PATH="$PE:$SE:$PATH" P2POOL_FLAGS="--mini --socks5 172.28.0.25:9050 --socks5-proxy-type tor" \
+    bash "$ROOT/build/p2pool/entrypoint.sh" --host 172.28.0.26 --merge-mine tari://172.28.0.27:18142 WALLET --stratum 0.0.0.0:3333 2>&1)
+assert_contains "merge-mine URL rewritten to loopback IP literal" "$mm_out" "ARG=[tari://127.0.0.1:18142]"
+assert_not_contains "original private merge-mine IP no longer dialled by p2pool" "$mm_out" "ARG=[tari://172.28.0.27:18142]"
+assert_contains "merge-mine wallet arg preserved" "$mm_out" "ARG=[WALLET]"
+assert_contains "socat bridges loopback:18142 -> the real Tari node" "$(cat "$SANDBOX/socat.log")" "TCP-LISTEN:18142,bind=127.0.0.1,fork,reuseaddr TCP:172.28.0.27:18142"
+# No SOCKS proxy → no rewrite, no bridge (clearnet mode dials the node directly, the gRPC stays put).
+: >"$SANDBOX/socat.log"
+mm_clear=$(PATH="$PE:$SE:$PATH" P2POOL_FLAGS="--mini" \
+    bash "$ROOT/build/p2pool/entrypoint.sh" --merge-mine tari://172.28.0.27:18142 WALLET --stratum 0.0.0.0:3333 2>&1)
+assert_contains "no --socks5 → merge-mine URL untouched" "$mm_clear" "ARG=[tari://172.28.0.27:18142]"
+assert_eq "no --socks5 → no Tari bridge spawned" "$(cat "$SANDBOX/socat.log")" ""
 
 echo "== unit: tor_egress_rules — fail-closed Tor-only egress ruleset (#270) =="
 TER=$(run_sourced "$SANDBOX" tor_egress_rules 172.28.0.0/24 172.28.0.25)

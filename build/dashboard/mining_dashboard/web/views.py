@@ -597,13 +597,15 @@ def _ip_to_sort_int(ip):
 
 
 def build_tari(data):
-    """Tari merge-mining display values. ``status`` is plain text; the client adds the ✔."""
+    """Tari merge-mining display values. ``status`` is plain text; the client adds the ✔ only when
+    ``connected`` (the gRPC merge-mine channel is actually READY), never merely when ``active``."""
     tari_stats = data.get("tari", {})
     tari_active = tari_stats.get("active", False)
     t_addr = tari_stats.get("address", "Unknown")
 
     return {
         "active": tari_active,
+        "connected": bool(tari_stats.get("connected", False)) and tari_active,
         "status": tari_stats.get("status", "Waiting...") if tari_active else "Waiting...",
         "reward": f"{tari_stats.get('reward', 0):.2f} TARI",
         "height": str(tari_stats.get("height", 0)),
