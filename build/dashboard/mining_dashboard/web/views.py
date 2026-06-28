@@ -617,6 +617,10 @@ def _ip_to_sort_int(ip):
 def build_tari(data):
     """Tari merge-mining display values. ``status`` is plain text; the client adds the ✔ only when
     ``connected`` (the gRPC merge-mine channel is actually READY), never merely when ``active``."""
+    # This is the SINGLE place the effective Tari UI status is derived — `active`, the "Waiting..."
+    # fallback, and the connected-gates-the-✔ rule. A duplicate that computed the same thing and then
+    # discarded it lived (dead) in data_service and was removed in #280; keep this the only source so
+    # the panel can't drift or go stale (#295).
     tari_stats = data.get("tari", {})
     tari_active = tari_stats.get("active", False)
     t_addr = tari_stats.get("address", "Unknown")
