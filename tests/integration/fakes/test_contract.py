@@ -12,7 +12,6 @@ Run: PYTHONPATH=build/dashboard python3 -m pytest tests/integration/fakes -q
 import asyncio
 import pathlib
 import sys
-from unittest.mock import MagicMock
 
 import requests
 
@@ -92,7 +91,7 @@ def test_monero_http_control_mutates_state():
 # asyncio_mode=auto only applies when pytest's rootdir is build/dashboard).
 async def _tari_get_status(state):
     server, bound = await start_server(0, state)
-    client = TariClient(MagicMock())
+    client = TariClient()
     client.grpc_address = f"127.0.0.1:{bound}"
     try:
         return await client.get_sync_status()
@@ -130,7 +129,7 @@ def test_tari_serves_cached_reading_when_briefly_unreachable():
     async def _impl():
         state = {"mode": "synced", "height": 2000, "target_height": 2000}
         server, bound = await start_server(0, state)
-        client = TariClient(MagicMock())
+        client = TariClient()
         client.grpc_address = f"127.0.0.1:{bound}"
         try:
             first = await client.get_sync_status()  # live: synced + reachable
