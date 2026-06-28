@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 from mining_dashboard.config.config import XVB_STATS_STALE_AFTER_S
 from mining_dashboard.helper.utils import (
+    PPLNS_BLOCK_TIME_DEFAULT,
+    PPLNS_BLOCK_TIME_NANO,
     detect_host_ipv4,
     format_duration,
     format_hashrate,
@@ -10,7 +12,9 @@ from mining_dashboard.helper.utils import (
     get_tier_info,
     is_ip_address,
     parse_hashrate,
+    pplns_block_time,
     resolve_target_threshold,
+    shares_in_pplns_window,
     xvb_stats_are_stale,
 )
 
@@ -37,6 +41,26 @@ class TestXvbStatsAreStale:
         assert (
             xvb_stats_are_stale({"last_update": time.time() - XVB_STATS_STALE_AFTER_S + 5}) is False
         )
+
+
+class TestPplnsWindow:
+    """#263: shared PPLNS-window math used by metrics, the controller, and XvB auto-register."""
+
+    def test_block_time_by_pool_type(self):
+        assert pplns_block_time("Nano") == PPLNS_BLOCK_TIME_NANO
+        assert pplns_block_time("Main") == PPLNS_BLOCK_TIME_DEFAULT
+        assert pplns_block_time("Mini") == PPLNS_BLOCK_TIME_DEFAULT
+        assert pplns_block_time("anything-else") == PPLNS_BLOCK_TIME_DEFAULT
+
+    def test_counts_only_shares_inside_the_window(self):
+        now = 10_000
+        # window = 2 blocks * 10 s = 20 s => cutoff at now-20
+        shares = [{"ts": now - 5}, {"ts": now - 19}, {"ts": now - 20}, {"ts": now - 21}, {}]
+        # ts >= cutoff counts: -5, -19, -20 (boundary inclusive); -21 and the missing-ts drop out.
+        assert shares_in_pplns_window(shares, 2, 10, now=now) == 3
+
+    def test_empty_shares_is_zero(self):
+        assert shares_in_pplns_window([], 2160, 10, now=10_000) == 0
 
 
 class TestParseHashrate:

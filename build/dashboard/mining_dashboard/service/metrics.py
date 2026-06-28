@@ -23,14 +23,13 @@ from mining_dashboard.config.config import (
     XVB_MAX_DONATION_FRACTION,
 )
 from mining_dashboard.helper.utils import (
+    DEFAULT_PPLNS_WINDOW,
     get_tier_info,
+    pplns_block_time,
     resolve_target_threshold,
+    shares_in_pplns_window,
     xvb_stats_are_stale,
 )
-
-# Nano sidechain blocks are 30s; Main/Mini are 10s. Drives the PPLNS-window duration.
-_BLOCK_TIME_NANO = 30
-_BLOCK_TIME_DEFAULT = 10
 
 # Only a local monerod's pruning state is knowable to us; a remote node isn't probed. The local
 # bridge IP tracks the configurable subnet prefix (#180).
@@ -163,10 +162,9 @@ def build_metrics(latest_data, state_mgr, history=None):
     network = data.get("network", {})
 
     pool_type = p2p.get("type", "Main")
-    block_time = _BLOCK_TIME_NANO if pool_type == "Nano" else _BLOCK_TIME_DEFAULT
-    pplns_window = local_pool.get("pplns_window", 2160)
-    cutoff = time.time() - pplns_window * block_time
-    shares_in_window = sum(1 for s in data.get("shares", []) if s.get("ts", 0) >= cutoff)
+    block_time = pplns_block_time(pool_type)
+    pplns_window = local_pool.get("pplns_window", DEFAULT_PPLNS_WINDOW)
+    shares_in_window = shares_in_pplns_window(data.get("shares", []), pplns_window, block_time)
 
     workers = data.get("workers", [])
     workers_online = sum(1 for w in workers if w.get("status") == "online")

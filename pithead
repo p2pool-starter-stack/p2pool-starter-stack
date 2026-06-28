@@ -513,6 +513,16 @@ docker_boot_enabled() {
     systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
 }
 
+# True (rc 0) when the host CPU advertises AVX2 — RandomX wants it, but it's performance-only,
+# not fatal. Linux reads /proc/cpuinfo; macOS reads sysctl's machdep CPU features.
+cpu_has_avx2() {
+    if [ "$OS_TYPE" == "Darwin" ]; then
+        sysctl -a 2>/dev/null | grep "machdep.cpu" | grep -q "AVX2"
+    else
+        grep -q "avx2" /proc/cpuinfo 2>/dev/null
+    fi
+}
+
 doctor() {
     DR_OK=0
     DR_WARN=0
@@ -575,13 +585,7 @@ doctor() {
     # --- CPU: AVX2 (performance only) ---
     echo ""
     echo "CPU:"
-    local avx2_detected=0
-    if [ "$OS_TYPE" == "Darwin" ]; then
-        if sysctl -a 2>/dev/null | grep "machdep.cpu" | grep -q "AVX2"; then avx2_detected=1; fi
-    else
-        if grep -q "avx2" /proc/cpuinfo 2>/dev/null; then avx2_detected=1; fi
-    fi
-    if [ "$avx2_detected" -eq 1 ]; then
+    if cpu_has_avx2; then
         dr_ok "AVX2 supported."
     else
         dr_warn "AVX2 not detected — mining performance will be poor (performance only, not fatal)."
@@ -1126,6 +1130,13 @@ config_bool() {
     jq -r "if $1 == null then $2 else $1 end" "$CONFIG_FILE"
 }
 
+# Monero pruning as the .env-style flag the dashboard reads: 1 (on) / 0 (off). Pruning is on
+# unless config explicitly sets monero.prune:false — via config_bool so that explicit false is
+# honoured, not coerced (#294). Tolerates a missing/unreadable config (defaults to pruned).
+monero_prune_flag() {
+    [ "$(config_bool '.monero.prune' true 2>/dev/null || echo true)" = "true" ] && echo 1 || echo 0
+}
+
 # p2pool outbound SOCKS flags (#165). p2pool's --onion-address only advertises an onion for INBOUND;
 # without --socks5 it dials outbound sidechain peers over clearnet, exposing the home IP. Returns the
 # Tor SOCKS flags by default; empty when the operator opts into clearnet (p2pool.clearnet=true) for
@@ -1447,15 +1458,7 @@ check_prerequisites() {
     docker info >/dev/null 2>&1 || error "Docker daemon is not reachable. Start it (e.g. 'sudo systemctl start docker') and ensure your user can use Docker (add yourself to the 'docker' group, then re-log in)."
 
     # Verify AVX2 instruction set support (performance only)
-    if [ "$OS_TYPE" == "Darwin" ]; then
-        if ! sysctl -a 2>/dev/null | grep "machdep.cpu" | grep -q "AVX2"; then
-            warn "AVX2 not detected. Mining performance will be poor."
-        fi
-    else
-        if ! grep -q "avx2" /proc/cpuinfo 2>/dev/null; then
-            warn "AVX2 not detected. Mining performance will be poor."
-        fi
-    fi
+    cpu_has_avx2 || warn "AVX2 not detected. Mining performance will be poor."
     log "All dependencies satisfied."
 }
 
@@ -1970,21 +1973,19 @@ render_env() {
         profiles="" # Empty profile disables local monerod
     fi
 
-    # Pruning. Use the `!= null` form, not `//`: jq's `//` treats a literal `false` as absent,
-    # which would silently ignore "prune": false and leave pruning on.
-    local prune_bool prune
-    prune_bool=$(jq -r 'if .monero.prune != null then .monero.prune else true end' "$CONFIG_FILE")
-    if [ "$prune_bool" == "true" ]; then prune=1; else prune=0; fi
+    # Pruning is on unless config explicitly sets monero.prune:false (config_bool honours that
+    # explicit false rather than coercing it back to the default — see #294).
+    local prune
+    prune=$(monero_prune_flag)
 
     # Optional clearnet initial sync (#183). DEFAULT OFF (privacy-first). When on for a daemon, its
     # initial blockchain download runs over CLEARNET (fast) instead of Tor — briefly exposing this
-    # host's IP to that P2P network. Per-component, since Monero and Tari sync independently. The
-    # `// false` is safe for a false-default bool (jq's // treats a literal false as the default,
-    # which is what we want); normalize_bool then accepts 1/true/yes/on. Monero keeps tx-proxy=tor
-    # the whole time. Flip back to false + `apply` once synced to return all P2P to Tor.
+    # host's IP to that P2P network. Per-component, since Monero and Tari sync independently.
+    # config_bool honours an explicit false; normalize_bool then maps the result to true/false.
+    # Monero keeps tx-proxy=tor the whole time. Flip back to false + `apply` once synced.
     local monero_clearnet tari_clearnet
-    monero_clearnet=$(normalize_bool "$(jq -r '.monero.clearnet_initial_sync // false' "$CONFIG_FILE")")
-    tari_clearnet=$(normalize_bool "$(jq -r '.tari.clearnet_initial_sync // false' "$CONFIG_FILE")")
+    monero_clearnet=$(normalize_bool "$(config_bool '.monero.clearnet_initial_sync' false)")
+    tari_clearnet=$(normalize_bool "$(config_bool '.tari.clearnet_initial_sync' false)")
 
     # Block-verification threads — hardware-dependent, so derive from THIS host's core count
     # rather than hardcoding (more cores = faster initial-sync verification). Reserve 2 cores
@@ -2461,11 +2462,9 @@ check_disk_grouped() {
 # blocks or exits: a missing path or unreadable file just skips that check. Call after
 # parse_and_validate_config has resolved the data dirs, before starting the stack.
 preflight_resources() {
-    # Pruning is on unless config explicitly sets monero.prune:false (matches render_env's
-    # `!= null` form, not `//`, so a literal false isn't mistaken for absent).
-    local prune_bool prune
-    prune_bool=$(jq -r 'if .monero.prune != null then .monero.prune else true end' "$CONFIG_FILE" 2>/dev/null || echo true)
-    if [ "$prune_bool" == "true" ]; then prune=1; else prune=0; fi
+    # Pruning is on unless config explicitly sets monero.prune:false (same derivation as render_env).
+    local prune
+    prune=$(monero_prune_flag)
 
     # --- Disk: free space per underlying filesystem ---
     # Treat the stack as one unit: group all five data dirs by the filesystem they live on and warn
