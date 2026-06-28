@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import math
-import time
 
 from mining_dashboard.config.config import (
     ENABLE_XVB,
@@ -23,7 +22,13 @@ from mining_dashboard.config.config import (
     XVB_TOR_ENABLED,
     XVB_TOR_SOCKS5,
 )
-from mining_dashboard.helper.utils import resolve_target_threshold, xvb_stats_are_stale
+from mining_dashboard.helper.utils import (
+    DEFAULT_PPLNS_WINDOW,
+    pplns_block_time,
+    resolve_target_threshold,
+    shares_in_pplns_window,
+    xvb_stats_are_stale,
+)
 
 logger = logging.getLogger("AlgoService")
 
@@ -118,15 +123,10 @@ class AlgoService:
         # Constraint: Enforce P2Pool mode if no shares have been found recently.
         # This uses the same logic as the dashboard UI to count shares within the PPLNS window.
         pool_type = p2p_stats.get("type", "Main")
-        pplns_window = p2pool_stats.get("pplns_window", 2160)
-
-        block_time = 10  # Default for Main/Mini
-        if pool_type == "Nano":
-            block_time = 30
-
+        pplns_window = p2pool_stats.get("pplns_window", DEFAULT_PPLNS_WINDOW)
+        block_time = pplns_block_time(pool_type)
         window_duration = pplns_window * block_time
-        cutoff = time.time() - window_duration
-        shares_in_window_count = sum(1 for s in shares if s.get("ts", 0) >= cutoff)
+        shares_in_window_count = shares_in_pplns_window(shares, pplns_window, block_time)
 
         if shares_in_window_count == 0:
             logger.info(

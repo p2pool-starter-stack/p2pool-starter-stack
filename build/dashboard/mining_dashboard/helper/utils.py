@@ -127,6 +127,32 @@ def xvb_stats_are_stale(xvb_stats):
     return last_update > 0 and (time.time() - last_update) > XVB_STATS_STALE_AFTER_S
 
 
+# PPLNS window math, shared by metrics (display), the donation controller (routing
+# decisions), and XvB auto-register (eligibility) so the three never drift (#263). Nano
+# sidechain blocks are 30s; Main/Mini are 10s. P2Pool's default window is 2160 blocks.
+PPLNS_BLOCK_TIME_NANO = 30
+PPLNS_BLOCK_TIME_DEFAULT = 10
+DEFAULT_PPLNS_WINDOW = 2160
+
+
+def pplns_block_time(pool_type):
+    """Seconds per sidechain block for the given pool type ("Nano" else Main/Mini)."""
+    return PPLNS_BLOCK_TIME_NANO if pool_type == "Nano" else PPLNS_BLOCK_TIME_DEFAULT
+
+
+def shares_in_pplns_window(shares, pplns_window, block_time, now=None):
+    """Count shares whose timestamp falls within the PPLNS window.
+
+    The window spans ``pplns_window`` blocks of ``block_time`` seconds each; a share with
+    ``ts >= now - pplns_window * block_time`` counts. ``now`` defaults to ``time.time()``
+    and is injectable for tests.
+    """
+    if now is None:
+        now = time.time()
+    cutoff = now - pplns_window * block_time
+    return sum(1 for s in shares if s.get("ts", 0) >= cutoff)
+
+
 def get_tier_info(hashrate, tiers=None):
     """
     Determines the donation tier based on hashrate.

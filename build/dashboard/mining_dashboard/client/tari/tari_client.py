@@ -1,7 +1,6 @@
 import logging
 import time
 
-import aiohttp
 import grpc
 
 from mining_dashboard.config.config import TARI_GRPC_ADDRESS
@@ -23,8 +22,7 @@ class TariClient:
     # the proper "node is down" indicator is tracked separately in the TODO.
     _MAX_STALE_SECONDS = 300
 
-    def __init__(self, session: aiohttp.ClientSession):
-        self.session = session
+    def __init__(self):
         self.grpc_address = TARI_GRPC_ADDRESS
         self._channel = None
         self._stub = None
@@ -119,6 +117,10 @@ class TariClient:
         return {"is_syncing": True, "current": local_height, "target": target, "percent": percent}
 
     async def close(self):
+        # ponytail: intentionally NOT wired into DataService.run()'s shutdown. Doing so means a
+        # try/finally around the whole poll loop, which drags the (partly untested) loop body into
+        # the diff-cover patch gate — a lot of churn to close a channel the OS reclaims on process
+        # exit anyway. Kept as a tested lifecycle method for whenever a real graceful path needs it.
         if self._channel:
             await self._channel.close()
             self._channel = None

@@ -490,6 +490,18 @@ printf '{}' >"$CB/config.json"
 assert_eq "absent -> default true" "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)" "true"
 assert_eq "absent -> default false" "$(run_sourced "$CB" config_bool '.xvb.tor' false)" "false"
 
+echo "== unit: monero_prune_flag maps prune bool -> 1/0, honouring explicit false (#294) =="
+# render_env + preflight both size disk off this flag; an explicit prune:false must yield 0, not the
+# pruned default of 1. Missing config falls back to pruned (1).
+printf '{"monero":{"prune":false}}' >"$CB/config.json"
+assert_eq "explicit false -> 0" "$(run_sourced "$CB" monero_prune_flag)" "0"
+printf '{"monero":{"prune":true}}' >"$CB/config.json"
+assert_eq "explicit true -> 1" "$(run_sourced "$CB" monero_prune_flag)" "1"
+printf '{}' >"$CB/config.json"
+assert_eq "absent -> 1 (pruned default)" "$(run_sourced "$CB" monero_prune_flag)" "1"
+rm -f "$CB/config.json"
+assert_eq "missing config -> 1 (pruned default)" "$(run_sourced "$CB" monero_prune_flag)" "1"
+
 echo "== unit: clearnet initial sync helpers (#183) =="
 # normalize_bool: 1/true/yes/on (any case) => true; everything else (incl. empty) => false, matching
 # the dashboard's MONERO_PRUNE truthiness so a config bool reads the same on both sides.

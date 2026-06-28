@@ -43,6 +43,11 @@ from mining_dashboard.config.config import (
     XVB_REGISTER_INTERVAL_S,
     XVB_TOR_PROXY,
 )
+from mining_dashboard.helper.utils import (
+    DEFAULT_PPLNS_WINDOW,
+    pplns_block_time,
+    shares_in_pplns_window,
+)
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.node_health import NodeHealthMonitor
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
@@ -541,10 +546,9 @@ class DataService:
         # PPLNS-share check — mirrors metrics/algo: a share counts if it's within pplns_window
         # blocks (30s/block on Nano, else 10s) of now.
         pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
-        pplns_window = p2pool_stats.get("pool", {}).get("pplns_window", 2160)
-        block_time = 30 if pool_type == "Nano" else 10
-        cutoff = time.time() - pplns_window * block_time
-        if not any(s.get("ts", 0) >= cutoff for s in shares):
+        pplns_window = p2pool_stats.get("pool", {}).get("pplns_window", DEFAULT_PPLNS_WINDOW)
+        block_time = pplns_block_time(pool_type)
+        if shares_in_pplns_window(shares, pplns_window, block_time) == 0:
             return  # no eligible share yet — the endpoint would no-op, so don't call it
 
         now = time.time()
@@ -615,7 +619,7 @@ class DataService:
 
         async with ClientSession() as session:
             worker_client = XMRigWorkerClient(session)
-            tari_client = TariClient(session)
+            tari_client = TariClient()
 
             # P2Pool shares are recorded from the cumulative shares_found counter (#129); None until
             # the first poll baselines it, so we never backfill the whole historical count on startup
@@ -625,7 +629,7 @@ class DataService:
             while True:
                 try:
                     # 1. Collect Local Statistics (High Frequency Polling)
-                    stratum_raw, _ = get_stratum_stats()
+                    stratum_raw = get_stratum_stats()
 
                     # 2. Fetch Worker Statistics from XMRig Proxy + normalize the payload.
                     proxy_workers = []

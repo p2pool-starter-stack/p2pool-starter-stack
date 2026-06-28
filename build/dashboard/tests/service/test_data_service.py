@@ -661,7 +661,7 @@ class TestRunIteration:
             patch.object(ds_mod, "ClientSession", _FakeClientSession),
             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
             patch.object(ds_mod, "TariClient", return_value=tari_client),
-            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
             patch.object(
                 ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
@@ -728,7 +728,7 @@ class TestRunIteration:
             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
             patch.object(ds_mod, "TariClient", return_value=tari_client),
             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
-            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
             patch.object(
                 ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
@@ -789,7 +789,7 @@ class TestRunIteration:
             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
             patch.object(ds_mod, "TariClient", return_value=tari_client),
             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
-            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
             patch.object(ds_mod, "get_network_stats", return_value={"height": 0}),
             patch.object(
                 ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
@@ -848,7 +848,7 @@ class TestRunIteration:
             patch.object(ds_mod, "TariClient", return_value=tari_client),
             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
             patch.object(ds_mod, "TARI_REQUIRED", False),
-            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
             patch.object(
                 ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
@@ -930,7 +930,7 @@ class TestControlPlaneComposition:
             patch.object(ds_mod, "TariClient", return_value=tari_client),
             patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool", "xmrig-proxy"]),
             patch.object(ds_mod, "TARI_REQUIRED", True),
-            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
             patch.object(
                 ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}

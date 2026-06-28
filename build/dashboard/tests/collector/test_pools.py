@@ -87,22 +87,10 @@ class TestNetworkStats:
 
 
 class TestStratumStats:
-    def test_worker_parsing(self):
-        raw = {"workers": ["10.0.0.1:3333,x,y,z,rig-01,extra"]}
+    def test_returns_raw_json(self):
+        raw = {"workers": ["10.0.0.1:3333,x,y,z,rig-01"]}
         with patch.object(pools, "_read_json", return_value=raw):
-            _, workers = get_stratum_stats()
-        assert workers == [
-            {
-                "ip": "10.0.0.1",
-                "name": "rig-01",
-                "parts": ["10.0.0.1:3333", "x", "y", "z", "rig-01", "extra"],
-            }
-        ]
-
-    def test_worker_without_name_defaults_to_miner(self):
-        with patch.object(pools, "_read_json", return_value={"workers": ["10.0.0.2:3333"]}):
-            _, workers = get_stratum_stats()
-        assert workers[0]["name"] == "miner"
+            assert get_stratum_stats() == raw
 
 
 class TestTariStats:

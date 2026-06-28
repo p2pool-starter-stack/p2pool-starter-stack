@@ -1055,6 +1055,9 @@ class TestEarnings:
 # --- build_state integration ----------------------------------------------------------
 
 
+# ponytail: this _state_mgr()/_data() pair looks near-duplicated with the ones in test_metrics.py,
+# but the per-module defaults differ on purpose (e.g. tari_sync, the get_tiers/xvb shapes). A shared
+# builder would need enough params that it reads worse than the local copy — left duplicated.
 def _state_mgr(history=None, mode="P2POOL"):
     sm = MagicMock()
     sm.get_history.return_value = history or []
