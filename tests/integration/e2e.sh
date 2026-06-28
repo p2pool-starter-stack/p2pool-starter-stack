@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# e2e.sh — one-command Tier-4 end-to-end run of a branch against the live `gouda` test bench.
+# e2e.sh — one-command Tier-4 end-to-end run of a branch against a live test bench.
 #
 #   tests/integration/e2e.sh <branch> [options]
 #   tests/integration/e2e.sh claude/my-feature --mode matrix
 #
 # What it does, end to end, then puts everything back the way it found it:
-#   1. Provisions a DEDICATED checkout on gouda (/srv/code/pithead-e2e) — the canonical
+#   1. Provisions a DEDICATED checkout on the test bench (/srv/code/pithead-e2e) — the canonical
 #      /srv/code/pithead is the baseline and is never git-touched.
 #   2. Fetches + checks out <branch> there, and seeds it with the canonical config.json/.env so
 #      it has the same wallet / secrets / onion keys / shared chains (just the branch's code).
 #   3. Takes a `pithead backup` of the live stack (the rollback anchor).
-#   4. Borrows a miner (default miner-0): backs up its xmrig config and repoints it at gouda so
+#   4. Borrows a miner (set MINER_HOST): backs up its xmrig config and repoints it at the test bench so
 #      the live matrix has a real worker mining through this stack.
 #   5. Deploys the branch (`pithead upgrade` — re-renders configs AND rebuilds the branch's first-party
 #      images from build/, so a Dockerfile/entrypoint change is actually tested #272) and runs the live
@@ -23,14 +23,14 @@
 # drive the SAME containers + the SAME shared chains — they are two code copies of one stack, run
 # one at a time, not two stacks. That's why borrow→test→restore is a code/image swap, not a re-sync.
 #
-# Requires: SSH access to the gouda box and the miner (keys, LAN reachable), and `jq` on both.
-# See tests/integration/gouda-testbench-README.md and docs/integration-testing.md.
+# Requires: SSH access to the test bench and the miner (keys, LAN reachable), and `jq` on both.
+# See tests/integration/testbench-README.md and docs/integration-testing.md.
 
 set -uo pipefail
 
 # --- Config (override via env or flags) -------------------------------------
-GOUDA_HOST="${GOUDA_HOST:-gouda}"
-MINER_HOST="${MINER_HOST:-miner-0}"
+BENCH_HOST="${BENCH_HOST:-}"
+MINER_HOST="${MINER_HOST:-}"
 CANONICAL_DIR="${CANONICAL_DIR:-/srv/code/pithead}"
 E2E_DIR="${E2E_DIR:-/srv/code/pithead-e2e}"
 MINER_XMRIG_CONFIG="${MINER_XMRIG_CONFIG:-/opt/rigforge/data/worker/xmrig/build/config.json}"
@@ -68,7 +68,7 @@ die() {
 
 usage() {
     cat <<EOF
-Run a branch end-to-end against the live gouda test bench, then restore everything.
+Run a branch end-to-end against a live test bench, then restore everything.
 
 USAGE:
   tests/integration/e2e.sh <branch> [options]
@@ -84,15 +84,16 @@ OPTIONS:
                                  + auth-fail-closed, with --safety-backup auto-rollback. Opt-in —
                                  a full pre-release sweep; recreates containers across many configs.
   --workers <n>     workers expected mining through the stack (default: 1 — the borrowed miner)
-  --miner <host>    SSH host of the miner to borrow (default: $MINER_HOST)
+  --bench <host>    SSH host of the test bench to deploy onto (or set BENCH_HOST)
+  --miner <host>    SSH host of the miner to borrow (or set MINER_HOST)
   --no-miner        don't borrow a miner (mining assertions will be skipped/limited)
   --keep            don't restore at the end (leave the branch deployed + miner repointed — debugging)
   -h, --help        this help
 
-ENV OVERRIDES: GOUDA_HOST, MINER_HOST, CANONICAL_DIR, E2E_DIR, MINER_XMRIG_CONFIG, GIT_REMOTE_URL
+ENV OVERRIDES: BENCH_HOST, MINER_HOST, CANONICAL_DIR, E2E_DIR, MINER_XMRIG_CONFIG, GIT_REMOTE_URL
 
 EXAMPLES:
-  tests/integration/e2e.sh claude/my-feature                 # full matrix, borrow miner-0
+  tests/integration/e2e.sh claude/my-feature                 # full matrix, borrow the configured miner
   tests/integration/e2e.sh claude/my-feature --mode check    # safe, non-destructive first run
   tests/integration/e2e.sh main --mode targeted --keep       # quick, leave it deployed to inspect
 EOF
@@ -107,6 +108,10 @@ while [ $# -gt 0 ]; do
         ;;
     --workers)
         WORKERS="$2"
+        shift 2
+        ;;
+    --bench)
+        BENCH_HOST="$2"
         shift 2
         ;;
     --miner)
@@ -141,9 +146,9 @@ case "$MODE" in check | targeted | matrix) ;; *) die "--mode must be check|targe
 # --- SSH helpers ------------------------------------------------------------
 # Keepalives so a quiet (but live) connection isn't dropped; BatchMode so we never hang on a prompt.
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=8 -o StrictHostKeyChecking=accept-new)
-# NOTE (gouda README): avoid literal shell parens '()' in remote command strings — they break the
+# NOTE (testbench README): avoid literal shell parens '()' in remote command strings — they break the
 # non-interactive remote shell. jq filters (quoted) are fine; shell subshells are not.
-on_gouda() { ssh "${SSH_OPTS[@]}" "$GOUDA_HOST" "$1"; }
+on_bench() { ssh "${SSH_OPTS[@]}" "$BENCH_HOST" "$1"; }
 on_miner() { ssh "${SSH_OPTS[@]}" "$MINER_HOST" "$1"; }
 
 # State captured for the restore trap.
@@ -157,7 +162,7 @@ restore_all() {
     [ "$RESTORED" = "1" ] && return
     RESTORED=1
     if [ "$KEEP" = "1" ]; then
-        warn "--keep set: leaving the branch deployed on $GOUDA_HOST and the miner repointed."
+        warn "--keep set: leaving the branch deployed on $BENCH_HOST and the miner repointed."
         warn "  Re-run without --keep, or restore by hand: canonical=$CANONICAL_DIR, miner cfg backup=$MINER_CFG_BACKUP"
         return
     fi
@@ -176,17 +181,17 @@ restore_all() {
 
     # 2. Stack: stop the branch (e2e checkout) and bring the canonical baseline back up healthy.
     step "bringing the canonical baseline stack ($CANONICAL_DIR) back up"
-    on_gouda "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
-    if on_gouda "cd '$CANONICAL_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
-        wait_gouda_healthy 300 && ok "canonical baseline stack healthy again" || warn "canonical stack came up but isn't reporting healthy yet — check 'pithead status' on $GOUDA_HOST"
+    on_bench "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
+    if on_bench "cd '$CANONICAL_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
+        wait_bench_healthy 300 && ok "canonical baseline stack healthy again" || warn "canonical stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
     else
-        warn "canonical 'pithead apply/up' returned non-zero — check $GOUDA_HOST by hand."
+        warn "canonical 'pithead apply/up' returned non-zero — check $BENCH_HOST by hand."
         warn "  Safety backup to roll back to: $SAFETY_ARCHIVE"
     fi
 
     # 3. Chains sanity: they must be untouched (the whole point).
     local sync
-    sync="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
+    sync="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
     [ -n "$sync" ] && step "post-restore sync state (monero/tari): $sync"
 
     if [ "$rc" -eq 0 ]; then ok "restore complete."; else warn "restore complete (the run itself failed — see above)."; fi
@@ -194,10 +199,10 @@ restore_all() {
 trap restore_all EXIT INT TERM
 
 # --- Small waiters / helpers ------------------------------------------------
-wait_gouda_healthy() { # <timeout_s>
+wait_bench_healthy() { # <timeout_s>
     local deadline=$(($(date +%s) + ${1:-300}))
     while :; do
-        on_gouda "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" && return 0
+        on_bench "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" && return 0
         [ "$(date +%s)" -ge "$deadline" ] && return 1
         sleep 10
     done
@@ -210,7 +215,7 @@ wait_gouda_healthy() { # <timeout_s>
 wait_synced() { # <timeout_s>
     local deadline=$(($(date +%s) + ${1:-300})) st
     while :; do
-        st="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
+        st="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
         [ "$st" = "done/done" ] && {
             ok "monero + tari re-confirmed synced ($st) — existing chains reused, no re-sync"
             return 0
@@ -225,19 +230,19 @@ wait_synced() { # <timeout_s>
 
 # Nudge the miner's xmrig to reload its (rewritten) config. xmrig watches its config file and
 # reloads on change; the systemctl/SIGHUP fallbacks cover builds that don't. Whichever works, we
-# verify by polling gouda for the worker — so the exact mechanism doesn't matter.
+# verify by polling the test bench for the worker — so the exact mechanism doesn't matter.
 miner_reload() {
     on_miner "sudo -n systemctl restart xmrig >/dev/null 2>&1 || systemctl --user restart xmrig >/dev/null 2>&1 || pkill -HUP -x xmrig >/dev/null 2>&1 || true"
     return 0
 }
 
-# Poll gouda's dashboard for at least <n> workers connected.
+# Poll the test bench's dashboard for at least <n> workers connected.
 wait_workers() { # <n> <timeout_s>
     local want="$1" deadline=$(($(date +%s) + ${2:-180})) got
     while :; do
-        got="$(on_gouda "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '.proxy_workers // 0' 2>/dev/null" || echo 0)"
+        got="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '.proxy_workers // 0' 2>/dev/null" || echo 0)"
         [ -n "$got" ] && [ "$got" -ge "$want" ] 2>/dev/null && {
-            ok "$got worker(s) mining through gouda"
+            ok "$got worker(s) mining through the test bench"
             return 0
         }
         [ "$(date +%s)" -ge "$deadline" ] && {
@@ -251,10 +256,12 @@ wait_workers() { # <n> <timeout_s>
 # --- Phase 0: preflight -----------------------------------------------------
 preflight() {
     log "Preflight"
-    on_gouda 'echo ok >/dev/null' || die "Cannot SSH to gouda host '$GOUDA_HOST'."
-    ok "SSH to $GOUDA_HOST"
-    on_gouda "test -x '$CANONICAL_DIR/pithead'" || die "No pithead at $CANONICAL_DIR on $GOUDA_HOST."
-    on_gouda "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" &&
+    [ -n "$BENCH_HOST" ] || die "Set BENCH_HOST to your test-bench SSH host (env BENCH_HOST or --bench)."
+    [ "$BORROW_MINER" != "1" ] || [ -n "$MINER_HOST" ] || die "Set MINER_HOST to a miner to borrow, or pass --no-miner."
+    on_bench 'echo ok >/dev/null' || die "Cannot SSH to test-bench host '$BENCH_HOST'."
+    ok "SSH to $BENCH_HOST"
+    on_bench "test -x '$CANONICAL_DIR/pithead'" || die "No pithead at $CANONICAL_DIR on $BENCH_HOST."
+    on_bench "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" &&
         ok "canonical stack is currently healthy" ||
         warn "canonical stack is NOT healthy right now — continuing, but check the box."
     if [ "$BORROW_MINER" = "1" ]; then
@@ -266,10 +273,10 @@ preflight() {
 
 # --- Phase 1: provision the dedicated e2e checkout + check out the branch ---
 provision() {
-    log "Provisioning the dedicated e2e checkout ($E2E_DIR) on $GOUDA_HOST"
+    log "Provisioning the dedicated e2e checkout ($E2E_DIR) on $BENCH_HOST"
     # Clone from the local canonical checkout (fast, no network) the first time, then point origin
     # at GitHub so we can fetch arbitrary branches.
-    on_gouda "
+    on_bench "
         set -e
         if [ ! -d '$E2E_DIR/.git' ]; then
             git clone --quiet '$CANONICAL_DIR' '$E2E_DIR'
@@ -281,11 +288,11 @@ provision() {
         git -C '$E2E_DIR' reset -q --hard FETCH_HEAD
     " || die "Failed to provision/checkout '$BRANCH' in $E2E_DIR."
     local head
-    head="$(on_gouda "git -C '$E2E_DIR' rev-parse --short HEAD")"
+    head="$(on_bench "git -C '$E2E_DIR' rev-parse --short HEAD")"
     ok "e2e checkout on $BRANCH @ $head"
 
     step "seeding the e2e checkout with the canonical config.json/.env (same wallet/secrets/chains)"
-    on_gouda "cp -a '$CANONICAL_DIR/config.json' '$E2E_DIR/config.json' && cp -a '$CANONICAL_DIR/.env' '$E2E_DIR/.env'" ||
+    on_bench "cp -a '$CANONICAL_DIR/config.json' '$E2E_DIR/config.json' && cp -a '$CANONICAL_DIR/.env' '$E2E_DIR/.env'" ||
         die "Failed to seed config.json/.env into $E2E_DIR."
     ok "config seeded (data dirs point at the shared chains)"
 }
@@ -293,8 +300,8 @@ provision() {
 # --- Phase 2: safety backup of the live stack -------------------------------
 backup_stack() {
     log "Taking a safety backup of the live stack (the rollback anchor)"
-    on_gouda "cd '$CANONICAL_DIR' && ./pithead backup -y >/dev/null 2>&1" || die "pithead backup failed."
-    SAFETY_ARCHIVE="$(on_gouda "ls -t '$CANONICAL_DIR'/backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1")"
+    on_bench "cd '$CANONICAL_DIR' && ./pithead backup -y >/dev/null 2>&1" || die "pithead backup failed."
+    SAFETY_ARCHIVE="$(on_bench "ls -t '$CANONICAL_DIR'/backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1")"
     [ -n "$SAFETY_ARCHIVE" ] || die "Backup ran but produced no archive."
     ok "safety backup: $SAFETY_ARCHIVE"
 }
@@ -305,21 +312,21 @@ borrow_miner() {
         warn "--no-miner: not borrowing a miner."
         return 0
     }
-    log "Borrowing $MINER_HOST → pointing it at $GOUDA_HOST"
+    log "Borrowing $MINER_HOST → pointing it at $BENCH_HOST"
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
     on_miner "cp -a '$MINER_XMRIG_CONFIG' '$MINER_CFG_BACKUP'" || die "Failed to back up the miner config."
     step "miner config backed up → $MINER_CFG_BACKUP"
-    # Reorder pools so the gouda pool is primary (index 0); keep the rest as failover. Non-destructive
-    # and fully reversible from the backup above. Assumes a gouda pool already exists in the config.
+    # Reorder pools so the test-bench pool is primary (index 0); keep the rest as failover. Non-destructive
+    # and fully reversible from the backup above. Assumes a test-bench pool already exists in the config.
     on_miner "
-        jq '.pools |= ([.[] | select(.url | ascii_downcase | contains(\"$GOUDA_HOST\"))] + [.[] | select(.url | ascii_downcase | contains(\"$GOUDA_HOST\") | not)])' \
+        jq '.pools |= ([.[] | select(.url | ascii_downcase | contains(\"$BENCH_HOST\"))] + [.[] | select(.url | ascii_downcase | contains(\"$BENCH_HOST\") | not)])' \
             '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' \
         && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'
     " || die "Failed to repoint the miner config."
     local primary
     primary="$(on_miner "jq -r '.pools[0].url' '$MINER_XMRIG_CONFIG'")"
     [ -n "$primary" ] && step "miner primary pool is now: $primary"
-    case "$primary" in *"$GOUDA_HOST"*) ;; *) warn "primary pool ($primary) doesn't look like gouda — does the miner config have a gouda pool?" ;; esac
+    case "$primary" in *"$BENCH_HOST"*) ;; *) warn "primary pool ($primary) doesn't look like the test bench — does the miner config have a test-bench pool?" ;; esac
     miner_reload
     wait_workers "$WORKERS" 180 || warn "proceeding, but the matrix's mining assertions may not pass with too few workers"
 }
@@ -330,11 +337,11 @@ deploy_branch() {
     # were last built on the box, not this branch. `pithead upgrade` re-renders the generated configs
     # (inject_service_configs) AND rebuilds the first-party images from build/ (--build) before
     # recreating — so a Dockerfile/entrypoint change in the branch is actually under test.
-    log "Deploying the branch on $GOUDA_HOST (pithead upgrade — re-render configs + rebuild first-party images)"
-    on_gouda "cd '$E2E_DIR' && ./pithead upgrade" || die "pithead upgrade failed in $E2E_DIR — branch did not deploy."
+    log "Deploying the branch on $BENCH_HOST (pithead upgrade — re-render configs + rebuild first-party images)"
+    on_bench "cd '$E2E_DIR' && ./pithead upgrade" || die "pithead upgrade failed in $E2E_DIR — branch did not deploy."
     # Record what was actually built, so "what did we test" is unambiguous in the run log (#272).
-    on_gouda "cd '$E2E_DIR' && docker compose images --format '{{.Service}} {{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep -E 'p2pool|dashboard|monero|tor|xmrig' || true" | while IFS= read -r l; do step "image: $l"; done
-    wait_gouda_healthy 300 || warn "stack applied but not yet healthy; the harness will wait on real readiness signals"
+    on_bench "cd '$E2E_DIR' && docker compose images --format '{{.Service}} {{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null | grep -E 'p2pool|dashboard|monero|tor|xmrig' || true" | while IFS= read -r l; do step "image: $l"; done
+    wait_bench_healthy 300 || warn "stack applied but not yet healthy; the harness will wait on real readiness signals"
     wait_synced 300 || true # let the recreated monerod/tari re-confirm their tip before the harness pre-check
     ok "branch deployed; stack reconciled"
 }
@@ -347,7 +354,7 @@ run_harness() {
     targeted) phases="--readiness --auth-fail-closed --lifecycle" ;; # --readiness/--check run first below
     matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed" ;;
     esac
-    log "Running the live harness on $GOUDA_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
+    log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 
     # Push a tiny runner that captures the harness exit code into a done-marker, then nohup it.
@@ -362,41 +369,41 @@ bash "$dir/tests/integration/run.sh" --local --dir "$dir" --workers "$workers" "
     > "$dir/results/e2e-harness.log" 2>&1
 echo $? > "$dir/results/e2e-harness.done"
 RUNNER
-    on_gouda "cat > '$E2E_DIR/.e2e-run.sh' && chmod +x '$E2E_DIR/.e2e-run.sh'" <"$runner"
+    on_bench "cat > '$E2E_DIR/.e2e-run.sh' && chmod +x '$E2E_DIR/.e2e-run.sh'" <"$runner"
     rm -f "$runner"
 
     # For non-check modes, run the safe readiness + current-state assertions inline first (fast,
     # gives early signal), then the destructive phases detached.
     if [ "$MODE" != "check" ]; then
-        on_gouda "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check" ||
+        on_bench "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check" ||
             warn "readiness/check reported issues (see above) — continuing to the destructive phases"
     fi
 
-    on_gouda "rm -f '$E2E_DIR/results/e2e-harness.done'; cd '$E2E_DIR' && nohup ./.e2e-run.sh '$E2E_DIR' '$WORKERS' $phases >/dev/null 2>&1 & echo launched" ||
+    on_bench "rm -f '$E2E_DIR/results/e2e-harness.done'; cd '$E2E_DIR' && nohup ./.e2e-run.sh '$E2E_DIR' '$WORKERS' $phases >/dev/null 2>&1 & echo launched" ||
         die "Failed to launch the harness."
 
     # Poll the done-marker, printing a heartbeat tail of the log.
     local rc="" waited=0
     while :; do
-        if on_gouda "test -f '$E2E_DIR/results/e2e-harness.done'"; then
-            rc="$(on_gouda "cat '$E2E_DIR/results/e2e-harness.done'")"
+        if on_bench "test -f '$E2E_DIR/results/e2e-harness.done'"; then
+            rc="$(on_bench "cat '$E2E_DIR/results/e2e-harness.done'")"
             break
         fi
         sleep 20
         waited=$((waited + 20))
         step "harness running… ${waited}s — latest:"
-        on_gouda "tail -n 2 '$E2E_DIR/results/e2e-harness.log' 2>/dev/null" | sed 's/^/      /' || true
+        on_bench "tail -n 2 '$E2E_DIR/results/e2e-harness.log' 2>/dev/null" | sed 's/^/      /' || true
     done
 
     echo ""
     log "Harness finished (exit $rc). Full log:"
-    on_gouda "cat '$E2E_DIR/results/e2e-harness.log' 2>/dev/null" | sed 's/^/  /'
+    on_bench "cat '$E2E_DIR/results/e2e-harness.log' 2>/dev/null" | sed 's/^/  /'
     return "${rc:-1}"
 }
 
 # --- Main -------------------------------------------------------------------
 main() {
-    log "Pithead e2e — branch '$BRANCH' → $GOUDA_HOST (mode=$MODE)$([ "$KEEP" = 1 ] && echo '  [--keep: no restore]')"
+    log "Pithead e2e — branch '$BRANCH' → $BENCH_HOST (mode=$MODE)$([ "$KEEP" = 1 ] && echo '  [--keep: no restore]')"
     preflight
     provision
     backup_stack
@@ -409,7 +416,7 @@ main() {
     if [ "$hrc" -eq 0 ]; then
         ok "E2E PASSED for '$BRANCH' (mode=$MODE)."
     else
-        die "E2E FAILED for '$BRANCH' (harness exit $hrc). Artifacts under $E2E_DIR/results on $GOUDA_HOST."
+        die "E2E FAILED for '$BRANCH' (harness exit $hrc). Artifacts under $E2E_DIR/results on $BENCH_HOST."
     fi
 }
 

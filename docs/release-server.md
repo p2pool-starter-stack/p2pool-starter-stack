@@ -127,7 +127,7 @@ it end-to-end — and build it on fast storage:
 - **Full chain?** Pruning is irreversible, so a full chain means a fresh full sync
   (`MONERO_PRUNE=0`, ~1–3 days) — rarely worth it just for test coverage.
 
-`gouda` (the reference box) is a **pruned** node on NVMe: it validates pruned mode live with
+The reference box is a **pruned** node on NVMe: it validates pruned mode live with
 `--safety-backup`, and full mode comes from the fakes. `--readiness` reports exactly this:
 
 ```bash
@@ -185,7 +185,7 @@ releases.
 ## End-to-end coverage & gaps
 
 What the live tier-4 gate actually exercises, and what it doesn't — so a release decision is made
-with eyes open. (The reference box `gouda` is a **pruned** Monero node on NVMe; its own snapshot
+with eyes open. (The reference box is a **pruned** Monero node on NVMe; its own snapshot
 and this table also live at `~/pithead-testbench/` on the box, for operators and AI agents.)
 
 **Validated live** (real synced chains): the config matrix (remote/local node, dashboard

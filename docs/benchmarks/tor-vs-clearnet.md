@@ -5,7 +5,7 @@
 > default**. This document records *what* we measured, *from where*, and *how we decided*, with the
 > full per-arm results and the committed raw data in [Results](#results). The methodology and decision
 > rule below were fixed **before** the run (pre-registration); the run executed on the
-> [gouda test bench](../../tests/integration/gouda-testbench-README.md).
+> [test bench](../../tests/integration/testbench-README.md).
 
 ## The question
 
@@ -23,7 +23,7 @@ throughout; only the **p2pool / XvB** egress changes between arms.
 
 ## What we measure, and from where
 
-Every source below was verified against the live p2pool container on gouda (`/stats/*` files written
+Every source below was verified against the live p2pool container on the test bench (`/stats/*` files written
 by p2pool's `--local-api` / `--data-api`, plus the dashboard `/api/state` and `docker stats`).
 
 ### Primary — yield (the bottom line)
@@ -71,8 +71,8 @@ These explain *why* the yield moved (or confirm it didn't) and are all available
 
 ## Method
 
-- **Rig:** the gouda bench (running `develop`) + the **full RigForge fleet, `miner-0`…`miner-7`
-  (~269 kH/s combined)** at a **fixed hashrate**, all pointed at gouda's stratum. A constant total
+- **Rig:** the test bench (running `develop`) + the **full RigForge fleet (8 miners,
+  ~269 kH/s combined)** at a **fixed hashrate**, all pointed at the bench's stratum. A constant total
   hashrate across both arms is load-bearing for the ratio metric below.
 - **Sidechain: `mini`.** At ~269 kH/s we are **~1.8 % of the `mini` sidechain** (observed ~14.75 MH/s)
   → **~155 of our own shares/day** — enough statistical power while staying a small, *representative*
@@ -97,7 +97,7 @@ These explain *why* the yield moved (or confirm it didn't) and are all available
   - Only the **mining-path transport** flips. Held constant in *both* arms: monerod + Tari on Tor,
     **XvB disabled** (`xvb.enabled=false`, see below), the rig, hashrate, sidechain, and monerod tip.
   - **Why XvB is disabled for this run.** With `XVB_DONATION_LEVEL=auto` the optimizer dynamically
-    splits the fleet between p2pool and XvB to climb raffle tiers — observed on gouda routing ~96 kH/s
+    splits the fleet between p2pool and XvB to climb raffle tiers — observed on the test bench routing ~96 kH/s
     to XvB vs only ~18 kH/s to p2pool while chasing the **Whale** tier. That (a) starves p2pool, so
     `reward_share` — our **primary** metric — would be measured on a fraction of the fleet, and (b)
     makes the split itself a function of Tor latency, i.e. the optimizer reacts to the very thing we're
@@ -117,13 +117,13 @@ These explain *why* the yield moved (or confirm it didn't) and are all available
   read-only poller that snapshots the `/stats/*` fields + `docker stats tor` into one JSONL line per
   interval (default 5 min), per arm, in `~/pithead-bench/<arm>.jsonl`. No new container.
 
-## Running it — autonomous on gouda
+## Running it — autonomous on the test bench
 
-The run must survive the operator being **offline for days**, so **everything runs on gouda**; a
+The run must survive the operator being **offline for days**, so **everything runs on the test bench**; a
 laptop / SSH session is only an optional observer. Three layers:
 
 - **[`bench-orchestrate.sh`](../../tests/integration/benchmarks/bench-orchestrate.sh)** (detached on
-  gouda) drives the whole run: flips the arm each block via `pithead apply`, egress-gates the switch,
+  the bench) drives the whole run: flips the arm each block via `pithead apply`, egress-gates the switch,
   (re)starts the collector, health-checks every cycle, writes `~/pithead-bench/status.json`, and
   **self-protects** — transient blips (a miner reconnecting, Tor circuit churn) are tolerated and
   recorded, but a genuine *unrecoverable* break **pauses collection and marks that window invalid**
@@ -131,13 +131,13 @@ laptop / SSH session is only an optional observer. Three layers:
 - **Cron watchdog** (`*/15 * * * *` + an `@reboot` entry) runs
   [`bench-healthcheck.sh`](../../tests/integration/benchmarks/bench-healthcheck.sh): restarts the
   orchestrator or collector if either died, re-`up`s the stack if it's down, appends `health.log`.
-  This catches the orchestrator itself dying or a gouda reboot — what the orchestrator can't
+  This catches the orchestrator itself dying or a bench reboot — what the orchestrator can't
   self-report. Runs as the operator user; the only privileged step (`iptables`) is covered by the
   scoped `/etc/sudoers.d/pithead-firewall` grant.
-- **Observe over Tailscale:** `ssh gouda bench-status`
+- **Observe over Tailscale:** `ssh $BENCH_HOST bench-status`
   ([`bench-status.sh`](../../tests/integration/benchmarks/bench-status.sh)) prints a one-screen
   summary — current arm, day, last-OK, shares per arm, egress verdict, miners, collector. The
-  dashboard UI (on gouda's Tailscale IP) is the live stack glance.
+  dashboard UI (on the bench's Tailscale IP) is the live stack glance.
 
 ### Runbook
 
@@ -152,8 +152,8 @@ nohup tests/integration/benchmarks/bench-orchestrate.sh run \
 tests/integration/benchmarks/bench-orchestrate.sh --install-cron   # */15 + @reboot watchdog
 
 # 3. check from anywhere over Tailscale
-ssh gouda bench-status
-ssh gouda tail -n 40 pithead-bench/health.log
+ssh $BENCH_HOST bench-status
+ssh $BENCH_HOST tail -n 40 pithead-bench/health.log
 
 # 4. graceful stop (restores the Tor default + egress firewall + re-enables XvB, removes the cron, keeps the JSONL)
 tests/integration/benchmarks/bench-orchestrate.sh --stop
@@ -175,12 +175,12 @@ trade-off, and it sets the final default for #165/#166 **before** the v1.1 relea
 ## Results
 
 **Run:** `mini`, 2026-06-17 → 2026-06-22 (~5 days), 6 × 20h blocks interleaved T/C/T/C/T/C (3 per arm),
-first 3h of each block discarded. Full fleet **miner-0..7 ≈ 269 kH/s held constant**, **XvB disabled**
+first 3h of each block discarded. Full **8-miner fleet ≈ 269 kH/s held constant**, **XvB disabled**
 so the whole fleet hit p2pool in both arms. The sidechain grew from ~14.7 to ~20.9 MH/s over the run
 (our share drifted ~1.8 % → ~1.3 %) — which is exactly why the yield-efficiency ratio (reward ÷
 hashrate share) is the headline metric, not raw reward share. ~1,220 post-settle snapshots total.
 Reproduce: `python3 tests/integration/benchmarks/bench-analyze.py docs/benchmarks/data/run-2026-06-17-mini`
-— the raw per-arm JSONL + `events.log` are committed there (originals on gouda at `~/pithead-bench/`).
+— the raw per-arm JSONL + `events.log` are committed there (originals on the test bench at `~/pithead-bench/`).
 
 **Per-arm** (mean of the 3 block means; ± is the block-to-block stdev — the noise floor):
 

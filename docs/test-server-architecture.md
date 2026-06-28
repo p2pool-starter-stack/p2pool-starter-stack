@@ -1,6 +1,6 @@
 # Test / build server architecture & recreation
 
-How the Pithead reference test server (`gouda`) is structured, and how to **recreate it on another
+How the Pithead reference test server (the reference box) is structured, and how to **recreate it on another
 box** with minimal pain. The whole point: the synced chains are the slow-to-acquire asset (days to
 sync) — everything else is reproducible in minutes from the repo.
 
@@ -48,26 +48,26 @@ crawl. The HDD is for **cold** things only (backup tarballs, archived snapshots)
 A 1 TB NVMe holds the pruned bench with ~650 GB to spare — room for a full node and copies too.
 
 > **⚠️ Verify the disk is actually fast.** "SSD" in the model name is not enough — check the *bus*.
-> On the reference box (`gouda`) the original "1 TB SSD" enumerated as `/dev/sdb` on **SATA** (not
-> `/dev/nvme0n1`), on a link that negotiated down to 1.5 Gbps, and benchmarked at **~37–98 MB/s —
-> HDD-class**. That single fact bottlenecked monerod, builds, and made LMDB compaction (heavy
-> random I/O) impractical (~16 h instead of ~10 min). **Confirm the *bus* before relying on a drive:**
+> A drive sold as an "SSD" can enumerate on **SATA** rather than NVMe, on a link that negotiates
+> down to a slow speed, and benchmark at **~37–98 MB/s — HDD-class**. That single fact bottlenecks
+> monerod, builds, and makes LMDB compaction (heavy random I/O) impractical (~16 h instead of
+> ~10 min). **Confirm the *bus* before relying on a drive:**
 >
 > ```bash
 > lsblk -d -o NAME,TRAN,ROTA,MODEL   # want TRAN=nvme, not sata
-> ls /dev/nvme*                       # an NVMe drive appears as /dev/nvme0n1
+> ls /dev/nvme*                       # an NVMe drive appears as a /dev/nvme* node
 > # quick reality check on random read (what monerod does):
 > dd if=/path/to/data.mdb of=/dev/null bs=4k count=200000 skip=10000000   # want >>100 MB/s
 > ```
 >
-> **✅ Resolved on `gouda` (2026-06):** a **4 TB WD SN850X m.2 PCIe NVMe** (`/dev/nvme0n1`) was added
-> and the chains migrated onto it. `/srv/code/pithead-data` is now `/dev/nvme0n1p1` (ext4, `noatime`,
-> mounted by UUID via fstab with `nofail`); the SATA SSD now carries only the OS. monerod opens the
-> ~266 GB pruned LMDB in seconds, and the full integration matrix runs green against it. Compaction
-> to ~95 GB is now a minutes-long `mdb_copy -c <chain>/lmdb <dest>` if ever wanted (the chain is
-> correctly pruned — the extra size is reclaimable free-page bloat, not a full chain); the matching
-> `mdb_copy` (LMDB 0.9.70, from Monero's vendored source) is staged at `~/pithead-testbench/bin/mdb_copy`.
-> CoW snapshots would still need btrfs/zfs on the NVMe (it's ext4 today) — see below.
+> **The fix is to put the chains on a fast NVMe SSD.** Add an m.2 PCIe NVMe and migrate the chains
+> onto it; mount the data dir by UUID via fstab (ext4, `noatime`, `nofail`) and keep the OS on a
+> separate disk. monerod then opens the ~266 GB pruned LMDB in seconds and the full integration
+> matrix runs green. Compaction to ~95 GB is a minutes-long `mdb_copy -c <chain>/lmdb <dest>` if ever
+> wanted (the chain is correctly pruned — the extra size is reclaimable free-page bloat, not a full
+> chain); stage the matching `mdb_copy` (LMDB 0.9.70, from Monero's vendored source) at
+> `~/pithead-testbench/bin/mdb_copy`. CoW snapshots would still need btrfs/zfs on the NVMe (if it's
+> ext4) — see below.
 
 A **second m.2 NVMe (PCIe) with btrfs/zfs** additionally enables **copy-on-write snapshots** —
 instant, near-free chain clones for isolated/parallel test runs — the upgrade that helps a busy
@@ -78,7 +78,7 @@ multi-agent bench.
 | Path | Disk | What | Lose it? |
 |---|---|---|---|
 | `~/code/pithead/` (`/srv/code/pithead`) | SSD | stack checkout (`docker-compose.yml`, the `pithead` CLI), `config.json`, `.env` | reproducible (clone) |
-| `/srv/code/pithead-data/{monero,tari,p2pool,dashboard,tor}/` | **NVMe** | the chains + Tor onion keys — **the asset** (`/dev/nvme0n1p1`, ext4) | **don't** (days to re-sync) |
+| `/srv/code/pithead-data/{monero,tari,p2pool,dashboard,tor}/` | **NVMe** | the chains + Tor onion keys — **the asset** (mounted by UUID, ext4) | **don't** (days to re-sync) |
 | `/var/lib/docker/` | SSD | images / build cache | reproducible (rebuild) |
 | `~/pithead-testbench/` | HDD | build-server docs + ops tools (see its `README.md`) | reproducible (repo) |
 | `/home` … `/mnt/chains` | HDD | cold backups / archives | — |
@@ -130,7 +130,7 @@ cd ~/pithead && ./pithead setup        # deps, .env, Tor, Caddy; then `up`
 ```bash
 mkdir -p ~/pithead-testbench/bin
 cp ~/pithead/tests/integration/{build-pruned-chain,compact-chain,system-info}.sh ~/pithead-testbench/
-cp ~/pithead/tests/integration/gouda-testbench-README.md ~/pithead-testbench/README.md
+cp ~/pithead/tests/integration/testbench-README.md ~/pithead-testbench/README.md
 # fetch monero-blockchain-prune at the running monerod's version (see build/monero/Dockerfile pins):
 ~/pithead-testbench/system-info.sh > ~/pithead-testbench/system-info.md
 ```
@@ -141,7 +141,7 @@ cp ~/pithead/tests/integration/gouda-testbench-README.md ~/pithead-testbench/REA
 tests/integration/run.sh --host you@newbox --dir pithead --readiness
 ```
 
-## Migrating gouda → a bigger box later
+## Migrating the test bench → a bigger box later
 
 Same as above, steps 3–6: `rsync` the chains + `config.json` over, `pithead setup`, redeploy,
 copy the test-bench tooling, regenerate `system-info.md`. Because the chains are decoupled and the

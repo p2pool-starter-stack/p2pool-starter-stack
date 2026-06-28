@@ -69,7 +69,7 @@ lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/pr
 lint-toml: ## taplo TOML format check (config: .taplo.toml)
 	npx --yes @taplo/cli@0.7.0 fmt --check
 
-# Cut a release from the private build/test server (gouda) — GHCR publish, gated on the test suite +
+# Cut a release from the private build/test server — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:
 #   make release ARGS="--dry-run"
 # See docs/releasing.md.

@@ -465,7 +465,7 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   node reports `target_height: 0` (no target), so the panel's `done` check — which compared
   `percent >= 100` against a target, and derived the state string from `has_target` first — never
   fired, leaving the *normal steady state* stuck at "loading" indefinitely (surfaced in the #180
-  gouda validation; mining and worker-gating were unaffected — those use monerod's RPC flag
+  live validation; mining and worker-gating were unaffected — those use monerod's RPC flag
   directly). The sync state now trusts monerod's authoritative caught-up signal (`reachable &&
   not is_syncing`), and the live integration harness asserts the panel reads "done" — closing the
   test gap that let this escape both the unit suite and the e2e matrix.

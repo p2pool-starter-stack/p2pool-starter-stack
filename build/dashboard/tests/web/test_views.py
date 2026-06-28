@@ -485,7 +485,7 @@ class TestSync:
         assert sync["monero"]["state"] == "done"
 
     def test_synced_node_with_no_target_shows_done(self):
-        # Regression for the bug found in the #180 gouda validation: a fully-synced monerod reports
+        # Regression for the bug found in the #180 live validation: a fully-synced monerod reports
         # target_height: 0 (so has_target is False) and is_syncing: False. Through the real
         # _sync_metric + build_sync it must read "done" — previously it stuck at "loading" forever,
         # because _sync_metric derived `done` purely from percent>=100 (which needs a target) and

@@ -148,7 +148,7 @@ The runner exits non-zero if any assertion failed.
 ## One-command branch e2e (`e2e.sh`)
 
 `run.sh` assumes a stack is already deployed on the box. [`tests/integration/e2e.sh`](../tests/integration/e2e.sh)
-is the wrapper that does the whole thing for a **branch** against the live `gouda` test bench — deploy,
+is the wrapper that does the whole thing for a **branch** against the live test bench — deploy,
 borrow a real miner, run the matrix, and **put everything back** — in one command:
 
 ```bash
@@ -168,8 +168,8 @@ What it does, then reverses on exit (even on failure / Ctrl-C — an `EXIT` trap
 2. **Seeds** the e2e checkout with the canonical `config.json`/`.env` (same wallet, secrets, onion keys,
    and shared `monero/tari/p2pool` data dirs), so only the branch's *code* differs.
 3. **Safety backup** (`pithead backup`) as the rollback anchor.
-4. **Borrows a miner** (default `miner-0`): backs up its xmrig config and repoints it at gouda so the
-   matrix has a real worker mining through this stack (1 worker → run with `--workers 1`).
+4. **Borrows a miner** (default the configured miner): backs up its xmrig config and repoints it at the
+   bench so the matrix has a real worker mining through this stack (1 worker → run with `--workers 1`).
 5. **Deploys** the branch (`pithead apply` — builds the branch's images) and runs `run.sh` **detached**
    on the box (survives an SSH drop on a long matrix), streaming a heartbeat and the full log at the end.
 6. **Restores** the miner's original pool config and the canonical baseline stack. The synced chains are
@@ -181,8 +181,8 @@ node-down failover) + `--auth-fail-closed`. No full config sweep, and **never a 
 restarts reload the existing chain and re-confirm the tip in seconds. `check` is pure reads only.
 `matrix` is the opt-in full destructive config sweep (lifecycle + fault-injection + auth-fail-closed,
 `--safety-backup` auto-rollback) for a pre-release tier-4 gate. `--keep` leaves it deployed for
-inspection (skips the restore). Requires SSH access to the gouda box and the miner; see the
-[gouda testbench README](../tests/integration/gouda-testbench-README.md).
+inspection (skips the restore). Requires SSH access to the test bench and the miner; see the
+[testbench README](../tests/integration/testbench-README.md).
 
 ---
 

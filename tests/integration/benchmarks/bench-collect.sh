@@ -4,7 +4,7 @@
 #
 # Snapshots p2pool's yield + latency/connectivity metrics and the Tor daemon's overhead into a JSONL
 # file, ONE line per interval, until killed. Read-only: it only reads the `/stats/*` files p2pool
-# already writes (its --local-api / --data-api) and `docker stats`. Runs ON the mining host (gouda),
+# already writes (its --local-api / --data-api) and `docker stats`. Runs ON the mining host,
 # typically detached for days per arm. Metrics + sources are documented in
 # docs/benchmarks/tor-vs-clearnet.md.
 #

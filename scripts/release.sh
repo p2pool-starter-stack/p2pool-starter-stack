@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Pithead release pipeline (#44) — run from the private build/test server (e.g. gouda).
+# Pithead release pipeline (#44) — run from the private build/test server.
 #
 # Implements the documented stage -> smoke-test -> promote-by-digest flow (docs/releasing.md):
 #

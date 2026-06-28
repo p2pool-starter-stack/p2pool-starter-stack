@@ -463,7 +463,7 @@ assert_running_state() {
     # The dashboard's sync panel must also read "done" for a synced node — not stay stuck at
     # "loading". A synced monerod reports target_height 0, so the panel has to trust the caught-up
     # flag, not percent-vs-target; getting that wrong left a synced node "loading" forever (the real
-    # bug found in the #180 gouda validation). Local only: we control + know the node is synced.
+    # bug found in the #180 live validation). Local only: we control + know the node is synced.
     if [ "$mode" = "local" ]; then
         assert_eq "monero sync panel reads done (dashboard)" "$(jq_get "$st" '.sync.monero.state')" "done"
     fi
@@ -669,7 +669,7 @@ assert_release_readiness() {
     #    variant can be made cheaply) or (b) supplying a pre-built chain of the OPPOSITE mode
     #    (--full-data-dir when the box is pruned, --pruned-data-dir when it's full). A SAME-mode
     #    copy on a CoW volume is also useful: it lets destructive scenarios run off the live chain.
-    #    gouda is a pruned box (MONERO_PRUNE=1) with a pruned copy on a btrfs CoW loopback, so it
+    #    the test bench is a pruned box (MONERO_PRUNE=1) with a pruned copy on a btrfs CoW loopback, so it
     #    exercises pruned mode live with snapshot isolation; full mode is covered by the fakes.
     local mdir fstype="" cow_live=0 baseline_mode="full" bp
     mdir="$(env_on_box MONERO_DATA_DIR)"
