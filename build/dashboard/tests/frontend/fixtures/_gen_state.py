@@ -12,19 +12,18 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# Pin time + timezone so regeneration is reproducible and diff-clean: build_state stamps
-# last_update via time.localtime(time.time()) and the chart x-axis is now-relative. Freeze
-# NOW (and patch views.time.time below) for deterministic timestamps; force UTC for the
-# localtime-based last_update string. 2025-01-01 00:00:00 UTC.
+import mining_dashboard.web.views as views
+
+# Pin everything machine- or time-dependent so the fixture regenerates identically on any box.
+# build_state stamps last_update via time.localtime(time.time()) and the chart x-axis is
+# now-relative, so freeze NOW (2025-01-01 00:00:00 UTC) + patch views.time.time and force UTC
+# for the localtime-based last_update string. host_addr is a live socket lookup
+# (detect_host_ipv4) and host_ip an env default — pin both too.
 os.environ["TZ"] = "UTC"
 time.tzset()
 NOW = 1735689600
 
-import mining_dashboard.web.views as views
-
 views.time.time = lambda: NOW  # build_state's last_update + history cutoff
-# host_addr is a live socket lookup (detect_host_ipv4) and host_ip an env default — both
-# machine-dependent. Pin them so the fixture regenerates identically on any contributor's box.
 views.HOST_IP = "Unknown Host"
 views.detect_host_ipv4 = lambda: "100.68.38.126"
 
