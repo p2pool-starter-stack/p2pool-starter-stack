@@ -7,15 +7,29 @@ hand-built guess. Regenerate when the payload contract changes.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import mining_dashboard.web.views as views
 
+# Pin everything machine- or time-dependent so the fixture regenerates identically on any box.
+# build_state stamps last_update via time.localtime(time.time()) and the chart x-axis is
+# now-relative, so freeze NOW (2025-01-01 00:00:00 UTC) + patch views.time.time and force UTC
+# for the localtime-based last_update string. host_addr is a live socket lookup
+# (detect_host_ipv4) and host_ip an env default — pin both too.
+os.environ["TZ"] = "UTC"
+time.tzset()
+NOW = 1735689600
+
+views.time.time = lambda: NOW  # build_state's last_update + history cutoff
+views.HOST_IP = "Unknown Host"
+views.detect_host_ipv4 = lambda: "100.68.38.126"
+
 HISTORY = [
-    {"timestamp": int(time.time()) - 600, "v": 10200, "v_p2pool": 8000, "v_xvb": 2200, "t": "a"},
-    {"timestamp": int(time.time()) - 300, "v": 10500, "v_p2pool": 8100, "v_xvb": 2400, "t": "b"},
+    {"timestamp": NOW - 600, "v": 10200, "v_p2pool": 8000, "v_xvb": 2200, "t": "a"},
+    {"timestamp": NOW - 300, "v": 10500, "v_p2pool": 8100, "v_xvb": 2400, "t": "b"},
 ]
 
 WORKERS = [
@@ -55,7 +69,7 @@ def _state_mgr():
 
 def main():
     data = {
-        "shares": [{"ts": int(time.time()) - 120}],
+        "shares": [{"ts": NOW - 120}],
         "workers": WORKERS,
         "global_sync": False,
         "total_live_h15": 10000,
