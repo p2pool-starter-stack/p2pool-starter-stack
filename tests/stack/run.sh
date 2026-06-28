@@ -296,6 +296,28 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
 
+echo "== regression: stack_upgrade installs the Tor-egress firewall BEFORE compose (#291) =="
+# #272 added the firewall re-assert AFTER compose in stack_upgrade, reopening the startup window #276
+# closed for stack_up: if the firewall isn't already installed (down -> upgrade), a clearnet app can
+# dial out before the DROP lands and get grandfathered by the leading ESTABLISHED rule. The order of
+# apply_tor_egress_firewall vs compose_up_checked is load-bearing, so pin it. Neutralise the upgrade
+# preamble (config render, dirs, migrations) and record only the two ops we care about.
+upg_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }; parse_and_validate_config() { :; }; load_preserved_state() { :; }
+    ensure_directories() { :; }; resolve_dashboard_host() { :; }; render_env() { :; }; mv() { :; }
+    inject_service_configs() { :; }; generate_caddyfile() { :; }; migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }; log() { :; }; docker() { :; }
+    apply_tor_egress_firewall() { echo firewall; }
+    compose_up_checked() { echo compose; }
+    stack_upgrade
+)
+assert_eq "stack_upgrade applies the firewall before 'compose up' (#291)" \
+    "$(printf '%s' "$upg_order" | tr '\n' ',')" "firewall,compose"
+
 echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
 # Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
 # empty), which silently broke the #270 firewall opt-out (config false → .env stayed true) and

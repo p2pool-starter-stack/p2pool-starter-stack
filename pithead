@@ -290,6 +290,13 @@ stack_upgrade() {
     generate_caddyfile
     log "Re-rendered generated config for the current release."
     migrate_compose_project
+    # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
+    # the same reason: if the firewall isn't already installed (e.g. `down` then `upgrade`), starting
+    # containers first opens a startup window where a clearnet app (Tari, #271) can open a connection
+    # that the leading ESTABLISHED rule then grandfathers past the DROP (#291). In normal operation
+    # it's already installed from `up` and this is a cheap idempotent re-apply. Runs after the .env
+    # render above so the toggle/subnet are current.
+    apply_tor_egress_firewall # Tor-only egress (#270), consistent with up/apply
     # Source checkout: rebuild the images from build/. Release install: pull the new published images
     # instead — force a re-pull so a moved tag is refreshed (#44).
     if is_source_checkout; then
@@ -303,7 +310,6 @@ stack_upgrade() {
     else
         PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
     fi
-    apply_tor_egress_firewall # reassert the Tor-only egress firewall (#270), consistent with up/apply
     log "Stack upgraded."
 }
 
