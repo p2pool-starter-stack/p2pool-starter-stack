@@ -11,7 +11,7 @@ import { Component, html } from "./preact.mjs";
 
 // Fixed layout — the stack is a known, fixed set of components, so positions are hand-placed
 // (left→right by trust: your LAN, the host bridge, the Tor hub, the internet) rather than solved.
-const POS = {
+export const POS = {
   rigs: { x: 12, y: 64, w: 88, h: 32 },
   browser: { x: 12, y: 150, w: 88, h: 32 },
   "xmrig-proxy": { x: 132, y: 64, w: 104, h: 32 },
@@ -25,13 +25,18 @@ const POS = {
   internet: { x: 392, y: 220, w: 96, h: 36 },
 };
 
-const ROUTE_COLOR = {
+export const ROUTE_COLOR = {
   tor: "var(--ok)",
   clearnet: "var(--bad)",
   local: "var(--text-muted)",
   inactive: "var(--text-muted)",
 };
-const ROUTE_NAME = { tor: "Tor", clearnet: "Clearnet", local: "Local/LAN", inactive: "Inactive" };
+export const ROUTE_NAME = {
+  tor: "Tor",
+  clearnet: "Clearnet",
+  local: "Local/LAN",
+  inactive: "Inactive",
+};
 const ROUTES = ["tor", "clearnet", "local", "inactive"];
 
 const center = (n) => ({ x: n.x + n.w / 2, y: n.y + n.h / 2 });
@@ -42,7 +47,7 @@ const nodeCls = (zone) =>
 // otherwise cross the daemon column are routed orthogonally through a clear lane (xmrig-proxy and
 // dashboard reach the Tor hub over the top / under the bottom; p2pool→tari skips monerod between
 // them). Lanes: y=42 (top), y=312 (bottom), x=372 (right gutter), x=254 (left gutter).
-function edgePath(e, a, b) {
+export function edgePath(e, a, b) {
   if (e.from === "xmrig-proxy" && (e.to === "tor" || e.to === "internet")) {
     return `M${a.x + a.w / 2},${a.y} V42 H372 V${b.y + b.h / 2} H${b.x}`;
   }

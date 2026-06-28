@@ -496,6 +496,20 @@ assert_running_state() {
         assert_eq "tari synced (required)" "$(jq_get "$st" '.sync.tari.state')" "done"
     fi
 
+    # 7b. The #170 Stack Topology & Egress panel rides on /api/state, derived live from config.
+    #     Assert the data contract survives the trip (the on-the-wire privacy posture is verified
+    #     separately by assert_egress_posture via /proc/net/tcp): both sections present, the badge
+    #     summary shared verbatim with the map so they can never disagree, and the canonical node
+    #     set exposed. Holds for every scenario — the node set is static and the summary invariant
+    #     is config-independent.
+    assert_eq "egress posture section present" "$(jq_get "$st" '.egress.summary | type')" "object"
+    assert_eq "topology section present" "$(jq_get "$st" '.topology.summary | type')" "object"
+    assert_eq "topology + egress share one summary" \
+        "$(jq_get "$st" '.topology.summary == .egress.summary')" "true"
+    assert_eq "topology exposes the canonical node set" \
+        "$(jq_get "$st" '[.topology.nodes[].id] | sort | join(",")')" \
+        "browser,caddy,dashboard,docker,internet,monerod,p2pool,rigs,tari,tor,xmrig-proxy"
+
     # 8. Security/posture axes propagated to .env.
     local want_bind
     [ "$rpc_lan" = "true" ] && want_bind="0.0.0.0" || want_bind="127.0.0.1"

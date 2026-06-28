@@ -63,7 +63,7 @@ if (typeof Chart !== "undefined" && typeof window !== "undefined" && window.Char
 
 // Append an 8-bit alpha to a #rrggbb hex (Chart.js accepts #rrggbbaa). Non-hex values pass
 // through opaque, so a future palette change can't break the fills.
-const withAlpha = (hex, aa) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + aa : hex);
+export const withAlpha = (hex, aa) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + aa : hex);
 
 // The chart's colours, read from the active theme's CSS variables (Issue #43) so the chart
 // matches light/dark/auto. Re-read on every sync() so a theme switch recolours it in place.
@@ -106,7 +106,7 @@ function areaFill(baseHex) {
 // Pad the auto-fitted y-range so a near-flat line fills the card instead of hugging the bottom
 // (Issue #145). Pads by a fraction of the visible span, with a floor tied to the magnitude so a
 // dead-flat series isn't magnified into pure noise; never drops below zero.
-function padYAxis(scale) {
+export function padYAxis(scale) {
   const { min, max } = scale;
   if (!Number.isFinite(min) || !Number.isFinite(max)) return; // all series hidden / no data
   const pad = Math.max((max - min) * 0.2, max * 0.03);

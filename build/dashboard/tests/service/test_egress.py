@@ -1,8 +1,12 @@
 """Tests for the #170 egress-posture derivation."""
 
+import itertools
+
 from mining_dashboard.service.egress import (
     CLEARNET,
     INACTIVE,
+    LOCAL,
+    TOPOLOGY_NODES,
     TOR,
     compute_egress_posture,
     compute_topology,
@@ -181,3 +185,130 @@ def test_topology_clearnet_sync_adds_bypass_edge():
     topo = _topo(monero_clearnet_sync=True, firewall=False)
     edge = _edge(topo, "monerod", "internet")
     assert edge["route"] == CLEARNET and edge["leak"] is True
+
+
+def test_tari_clearnet_sync_surfaces_in_egress_and_topology():
+    # The Tari clearnet-sync branch is symmetric with Monero's — exercise it explicitly so the
+    # tari path can't regress unnoticed (only the monerod one was covered before).
+    base = _posture()
+    tari_conns = next(c for c in base["components"] if c["name"] == "tari")["conns"]
+    assert not any("initial sync" in c["to"] for c in tari_conns)
+
+    p = _posture(tari_clearnet_sync=True, firewall=False)
+    assert _conn(p, "tari", "initial sync")["route"] == CLEARNET
+    topo = _topo(tari_clearnet_sync=True, firewall=False)
+    edge = _edge(topo, "tari", "internet")
+    assert edge["route"] == CLEARNET and edge["leak"] is True
+
+
+# --- Exhaustive config sweep + frontend contract ---------------------------------------
+# The diagram must hold for ANY operator config, not just the hand-picked cases above.
+
+_KNOBS = (
+    "firewall",
+    "p2pool_clearnet",
+    "xvb_enabled",
+    "xvb_tor",
+    "monero_clearnet_sync",
+    "tari_clearnet_sync",
+    "remote_monero",
+)
+
+
+def _all_configs():
+    """Every one of the 2**7 combinations of the boolean knobs."""
+    for combo in itertools.product((False, True), repeat=len(_KNOBS)):
+        yield dict(zip(_KNOBS, combo, strict=True))
+
+
+# Canonical node ids — MUST stay in lockstep with the frontend's POS map in
+# web/static/topology.mjs (the SVG silently drops any edge whose endpoint it can't place, so a
+# drift here would make a real connection vanish from the diagram with no error). The frontend
+# half of this contract is asserted in tests/frontend/topology.test.mjs.
+TOPOLOGY_NODE_IDS = {
+    "rigs",
+    "browser",
+    "xmrig-proxy",
+    "caddy",
+    "dashboard",
+    "p2pool",
+    "monerod",
+    "tari",
+    "docker",
+    "tor",
+    "internet",
+}
+
+
+def test_topology_nodes_match_the_canonical_set():
+    assert {n["id"] for n in TOPOLOGY_NODES} == TOPOLOGY_NODE_IDS
+
+
+def test_every_edge_endpoint_is_a_placeable_node_for_all_configs():
+    # No config may emit an edge to/from a node the diagram can't place — that edge would silently
+    # disappear from the SVG. This is the contract that keeps "various configs show correctly".
+    for cfg in _all_configs():
+        topo = compute_topology(**cfg)
+        assert {n["id"] for n in topo["nodes"]} == TOPOLOGY_NODE_IDS, cfg
+        for e in topo["edges"]:
+            assert e["from"] in TOPOLOGY_NODE_IDS, (cfg, e)
+            assert e["to"] in TOPOLOGY_NODE_IDS, (cfg, e)
+
+
+def test_every_edge_is_well_formed_for_all_configs():
+    routes = {TOR, CLEARNET, LOCAL, INACTIVE}
+    kinds = {"ingress", "egress", "p2p", "internal"}
+    for cfg in _all_configs():
+        for e in compute_topology(**cfg)["edges"]:
+            assert e["route"] in routes, (cfg, e)
+            assert e["kind"] in kinds, (cfg, e)
+            assert e["label"], (cfg, e)
+            # A link is either a real leak or firewall-blocked, never tagged both at once.
+            assert not (e.get("leak") and e.get("blocked_by_firewall")), (cfg, e)
+            # Only clearnet links may carry a leak / blocked tag.
+            if e.get("leak") or e.get("blocked_by_firewall"):
+                assert e["route"] == CLEARNET, (cfg, e)
+
+
+def test_topology_summary_matches_egress_for_all_configs():
+    # The header badge (built from the egress summary) can never disagree with the map: the two are
+    # derived from the same knobs and must return a byte-identical summary for every combination.
+    for cfg in _all_configs():
+        assert compute_topology(**cfg)["summary"] == compute_egress_posture(**cfg)["summary"], cfg
+
+
+def test_firewall_off_counts_every_clearnet_path_as_a_leak():
+    # Firewall down + every clearnet knob on: there's no backstop, so each clearnet path is a real,
+    # counted leak — leaks must equal the number of clearnet connections, with nothing "blocked".
+    p = _posture(
+        firewall=False,
+        p2pool_clearnet=True,
+        xvb_tor=False,
+        monero_clearnet_sync=True,
+        tari_clearnet_sync=True,
+        remote_monero=True,
+    )
+    clearnet = sum(1 for comp in p["components"] for c in comp["conns"] if c["route"] == CLEARNET)
+    assert clearnet >= 5  # sidechain, RPC, monero IBD, tari IBD, XvB donation, XvB stats...
+    assert p["summary"]["leaks"] == clearnet
+    assert p["summary"]["blocked_by_firewall"] == 0
+    assert p["summary"]["all_tor"] is False
+    assert "exposing your IP" in p["summary"]["label"]
+
+
+def test_firewall_on_blocks_containers_but_not_the_host_dashboard():
+    # Same clearnet-everywhere config with the firewall ON: every container path is blocked, leaving
+    # exactly the host-networked dashboard's XvB stats fetch as the sole real leak (the #270 nuance).
+    p = _posture(
+        firewall=True,
+        p2pool_clearnet=True,
+        xvb_tor=False,
+        monero_clearnet_sync=True,
+        tari_clearnet_sync=True,
+        remote_monero=True,
+    )
+    assert p["summary"]["leaks"] == 1
+    assert _conn(p, "dashboard", "XvB stats")["route"] == CLEARNET
+    assert _conn(p, "dashboard", "XvB stats").get("blocked_by_firewall") is None
+    assert p["summary"]["blocked_by_firewall"] >= 4
+    assert p["summary"]["all_tor"] is False
