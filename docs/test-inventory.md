@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 553 dashboard unit tests · 12 contract tests · 59 frontend
-tests · 48 `pithead` shell sections · 17 harness self-test sections ·
+tests · 49 `pithead` shell sections · 17 harness self-test sections ·
 9 live config scenarios (17 axis values) · 7 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 48 `pithead` shell sections · 17 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 553 |
 | 1 — Unit | frontend (node --test) | 59 |
-| 1 — Unit | `pithead` shell suite | 48 sections |
+| 1 — Unit | `pithead` shell suite | 49 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 7 |
@@ -697,7 +697,7 @@ tests · 48 `pithead` shell sections · 17 harness self-test sections ·
 - edgePath: column-crossing edges route orthogonally through a clear lane
 - route palette + names cover every route the server can emit
 
-### `pithead` shell suite (tests/stack/run.sh) — 48 sections
+### `pithead` shell suite (tests/stack/run.sh) — 49 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -711,6 +711,7 @@ tests · 48 `pithead` shell sections · 17 harness self-test sections ·
 - p2pool entrypoint moves the Tari merge-mine gRPC onto loopback under Tor (#278 follow-up)
 - unit: tor_egress_rules — fail-closed Tor-only egress ruleset (#270)
 - black-box: apply/remove_tor_egress_firewall via stubbed iptables (#270)
+- regression: every command installs the Tor-egress firewall BEFORE compose (#291)
 - unit: config_bool honours an explicit false (jq // false-coercion guard, #294)
 - unit: clearnet initial sync helpers (#183)
 - unit: clock_sync_status (mining is time-sensitive)
@@ -901,5 +902,5 @@ tests · 48 `pithead` shell sections · 17 harness self-test sections ·
 
 ---
 
-_Grand total: **705** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **706** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
