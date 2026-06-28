@@ -73,3 +73,12 @@ repos:
         language: system
         types: [toml]
         pass_filenames: false
+      # Keep docs/test-inventory.md in lockstep with the suites (#54). The CI shell job already
+      # FAILS on drift (test-inventory-check); this hook regenerates it locally so a test add/remove
+      # never reaches CI stale — same auto-fix UX as ruff-format. Static grep, no test run, so cheap.
+      - id: test-inventory
+        name: test inventory (regenerate docs/test-inventory.md)
+        entry: make test-inventory
+        language: system
+        files: '^(build/dashboard/tests/|tests/(stack|integration)/|tests/inventory\.sh)'
+        pass_filenames: false
