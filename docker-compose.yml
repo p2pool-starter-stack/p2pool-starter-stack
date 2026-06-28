@@ -377,6 +377,12 @@ services:
       - PROXY_HOST=${NETWORK_PREFIX:-172.28.0}.29
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
+      # How the dashboard reads each worker's own xmrig /1/summary (config.json: workers.*). One
+      # configured way, no auto-detection. Defaults = stock RigForge worker (open read-only API,
+      # no token, port 8080). api_auth: none (default) | name (Bearer=worker name) | token.
+      - XMRIG_API_PORT=${XMRIG_API_PORT:-8080}
+      - XMRIG_API_AUTH=${XMRIG_API_AUTH:-none}
+      - XMRIG_API_TOKEN=${XMRIG_API_TOKEN}
       - DOCKER_PROXY_URL=tcp://${NETWORK_PREFIX:-172.28.0}.30:2375
       - DOCKER_CONTROL_URL=tcp://${NETWORK_PREFIX:-172.28.0}.31:2375
       - TARI_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142

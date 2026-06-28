@@ -319,29 +319,44 @@ class TestMergeDirectStats:
         }
 
     def test_proxy_kind_scales_khs_to_hs(self):
-        extra = {"kind": "proxy", "uptime": 120, "hashrate": {"total": [1, 2, 3]}}
+        # A successful probe carries api_ok=True (injected by get_stats); enrichment applies.
+        extra = {"api_ok": True, "kind": "proxy", "uptime": 120, "hashrate": {"total": [1, 2, 3]}}
         [w] = _merge_direct_stats([self._worker()], [extra], "3333")
         assert (w["h10"], w["h60"], w["h15"]) == (1000, 2000, 3000)
         assert w["uptime"] == 120
         assert w["active_pool"] == "3333"
+        assert w["api_ok"] is True
 
     def test_xmrig_kind_not_scaled(self):
-        extra = {"uptime": 99, "hashrate": {"total": [10, 20, 30]}}
+        extra = {"api_ok": True, "uptime": 99, "hashrate": {"total": [10, 20, 30]}}
         [w] = _merge_direct_stats([self._worker()], [extra], "3344")
         assert (w["h10"], w["h60"], w["h15"]) == (10, 20, 30)
         assert w["active_pool"] == "3344"
+        assert w["api_ok"] is True
 
-    def test_unreachable_direct_api_keeps_proxy_values_online(self):
-        # Falsy extra_stats -> keep proxy-derived hashrate/uptime and stay online (#28).
+    def test_failed_probe_flags_api_ok_false_keeps_proxy_values_online(self):
+        # A surfaced failure (api_ok=False) keeps proxy-derived hashrate/uptime and stays online
+        # (#28) but flags the worker so the UI can distinguish "API misconfigured" from "offline".
+        w0 = self._worker()
+        [w] = _merge_direct_stats([w0], [{"api_ok": False}], "3333")
+        assert w["status"] == "online"
+        assert (w["h10"], w["h60"], w["h15"]) == (1, 2, 3)  # untouched
+        assert w["api_ok"] is False
+        assert w["active_pool"] == "3333"
+
+    def test_skipped_probe_leaves_api_ok_unset(self):
+        # An empty result is a worker we deliberately didn't probe (SSRF guard): unknown, not a
+        # failure — keep proxy values, stay online, and don't claim an api_ok verdict.
         w0 = self._worker()
         [w] = _merge_direct_stats([w0], [{}], "3333")
         assert w["status"] == "online"
         assert (w["h10"], w["h60"], w["h15"]) == (1, 2, 3)  # untouched
+        assert "api_ok" not in w
         assert w["active_pool"] == "3333"
 
     def test_short_hashrate_total_ignored(self):
         # A <3-entry total isn't applied; uptime still updates and active_pool is tagged.
-        extra = {"uptime": 7, "hashrate": {"total": [5, 6]}}
+        extra = {"api_ok": True, "uptime": 7, "hashrate": {"total": [5, 6]}}
         [w] = _merge_direct_stats([self._worker()], [extra], "3333")
         assert (w["h10"], w["h60"], w["h15"]) == (1, 2, 3)
         assert w["uptime"] == 7

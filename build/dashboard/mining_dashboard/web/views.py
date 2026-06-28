@@ -553,6 +553,10 @@ def build_workers(workers):
                     "rejected_str": rejected_str,
                     "invalid": invalid,
                     "reject_flag": _reject_flag(accepted, rejected),
+                    # Worker-API probe verdict: False = configured probe failed (uptime/per-miner
+                    # hashrate unavailable; the client badges it), True = ok, None = not probed
+                    # (internal/invalid IP per the SSRF guard) — don't flag the unknown case.
+                    "api_ok": worker.get("api_ok"),
                 }
             )
         except Exception as e:
