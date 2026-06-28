@@ -38,10 +38,13 @@ const SharesStat = ({ sw, label = "Share In Window" }) => html`
         <p><span class=${sw.ok ? "status-ok" : "status-bad"}>${sw.count}</span></p>
     </div>`;
 
-// Tari status with the ✔ the server signals via `active`.
+// Tari merge-mine status. The ✔ means the gRPC channel is actually up, so it's gated on `connected`
+// (channel_state READY) — NOT on `active` (a chain is merely configured). When configured but the
+// channel is down (e.g. TRANSIENT_FAILURE) we show the raw state in a warn style and no ✔, so a dead
+// channel can never read as "TRANSIENT_FAILURE ✔".
 const TariStatus = ({ tari }) => html`
-    <p class=${tari.active ? "status-ok" : ""}>
-        ${tari.status}${tari.active ? html` <span class="check-inline">✔</span>` : null}
+    <p class=${tari.connected ? "status-ok" : tari.active ? "status-warn" : ""}>
+        ${tari.status}${tari.connected ? html` <span class="check-inline">✔</span>` : null}
     </p>`;
 
 const Badges = ({ badges }) => html`
