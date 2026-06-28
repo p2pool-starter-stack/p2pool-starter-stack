@@ -112,6 +112,45 @@ for ip in 10.0.0.5 172.16.0.1 172.31.255.1 192.168.1.50 127.0.0.1 169.254.1.1 10
     assert_rc "non-public: ${ip:-<empty>}" "$?" "1"
 done
 
+echo "== unit: check_stratum_exposure warning (#113/#206) =="
+# The classifier above is unit-tested; this exercises the WARNING COMPOSITION that uses it —
+# the bind × public-IP × mode matrix that #206 wanted live-validated. We shadow `ip` with a stub
+# emitting canned `ip -o addr show` lines, so the host's real interfaces never decide the outcome.
+# STRATUM_BIND is read straight from the env when set, so no .env is needed.
+IPBIN="$SANDBOX/ipbin"
+mkdir -p "$IPBIN"
+make_ip_stub() { # $1 = body for `ip -o addr show`
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'cat <<'\''ADDRS'\''\n%s\nADDRS\n' "$1"
+    } >"$IPBIN/ip"
+    chmod +x "$IPBIN/ip"
+}
+PUBLIC_IFACE='2: eth0    inet 8.8.8.8/24 scope global eth0'
+PRIVATE_IFACE='1: lo    inet 127.0.0.1/8 scope host lo
+2: eth0    inet 192.168.1.5/24 scope global eth0'
+
+# Exposed: a public IP on an interface AND stratum on the default all-interfaces bind -> warn.
+make_ip_stub "$PUBLIC_IFACE"
+out="$(STRATUM_BIND=0.0.0.0 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure setup 2>&1)"
+assert_contains "setup warns: public IP + 0.0.0.0 bind" "$out" "public IP"
+out="$(STRATUM_BIND=0.0.0.0 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure doctor 2>&1)"
+assert_contains "doctor WARNs: public IP + 0.0.0.0 bind" "$out" "WARN"
+
+# No public IP on any interface -> quiet in setup; an explicit OK in doctor.
+make_ip_stub "$PRIVATE_IFACE"
+out="$(STRATUM_BIND=0.0.0.0 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure setup 2>&1)"
+assert_eq "setup is quiet: no public IP" "$out" ""
+out="$(STRATUM_BIND=0.0.0.0 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure doctor 2>&1)"
+assert_contains "doctor OK: no public IP" "$out" "No public IP"
+
+# Narrowed bind short-circuits BEFORE the IP check (public stub present): quiet setup / OK doctor.
+make_ip_stub "$PUBLIC_IFACE"
+out="$(STRATUM_BIND=192.168.1.5 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure setup 2>&1)"
+assert_eq "setup is quiet: bind narrowed to a LAN IP" "$out" ""
+out="$(STRATUM_BIND=192.168.1.5 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure doctor 2>&1)"
+assert_contains "doctor OK: bind narrowed to a LAN IP" "$out" "not all interfaces"
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0" >/dev/null 2>&1
 assert_rc "accepts 0.0.0.0" "$?" "0"
