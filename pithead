@@ -1115,6 +1115,8 @@ env_get() { env_get_file "$ENV_FILE" "$1"; }
 # Normalize a config truthy value to the literal "true"/"false". Accepts 1/true/yes/on
 # (case-insensitive) as true; everything else (incl. empty/absent) is false. Matches the
 # dashboard's MONERO_PRUNE parsing so config booleans read the same on both sides (#183).
+# ponytail: deliberately distinct from config_bool below — this normalizes an already-extracted
+# STRING; config_bool does the null-aware JSON READ. Merging them risks the #294 `// false` bug.
 normalize_bool() {
     case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
     true | 1 | yes | on) printf 'true' ;;
@@ -1235,6 +1237,9 @@ safe_sed() {
 
 # Like safe_sed, but with sudo — for editing root-owned system files such as /etc/default/grub.
 # Same GNU/BSD in-place (-i) portability split as safe_sed.
+# ponytail: kept as a separate twin of safe_sed on purpose. Collapsing the two onto a shared
+# helper needs an unquoted `${1:+sudo}` (shellcheck disable) or an empty-array sudo toggle that's
+# fragile under `set -u` on macOS bash 3.2 — more risk than the 5 trivial duplicated lines is worth.
 sudo_sed() {
     if [ "$OS_TYPE" == "Darwin" ]; then
         sudo sed -i '' "$1" "$2"

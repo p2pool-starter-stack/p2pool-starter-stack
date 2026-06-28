@@ -119,6 +119,10 @@ class TariClient:
         return {"is_syncing": True, "current": local_height, "target": target, "percent": percent}
 
     async def close(self):
+        # ponytail: intentionally NOT wired into DataService.run()'s shutdown. Doing so means a
+        # try/finally around the whole poll loop, which drags the (partly untested) loop body into
+        # the diff-cover patch gate — a lot of churn to close a channel the OS reclaims on process
+        # exit anyway. Kept as a tested lifecycle method for whenever a real graceful path needs it.
         if self._channel:
             await self._channel.close()
             self._channel = None
