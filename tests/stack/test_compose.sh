@@ -93,14 +93,18 @@ expect_absent() { # <label> <pattern>
 
 # no-new-privileges on all 5 leaf services.
 expect_min "no-new-privileges on leaf services" "no-new-privileges:true" 5
-# cap_drop: [ALL] on exactly 4 of them — caddy, xmrig-proxy, and the two socket proxies. The
-# dashboard is intentionally exempt (it writes its history DB as root into a user-owned volume,
-# which needs CAP_DAC_OVERRIDE); pin the count so re-adding cap_drop there fails CI.
+# cap_drop: [ALL] on all 5 leaf services — caddy, xmrig-proxy, the two socket proxies, AND the
+# dashboard. The dashboard now runs non-root and owns its volume (#255), so it no longer needs
+# CAP_DAC_OVERRIDE to write its history DB and joins the others; pin the count so dropping cap_drop
+# from any leaf fails CI.
 caps=$(printf '%s\n' "$RENDERED" | grep -c -- "- ALL")
-if [ "$caps" -eq 4 ]; then echo "  ✓ cap_drop: [ALL] on 4 leaves, dashboard exempt ($caps)"; else
-    echo "  ✗ cap_drop: [ALL]: expected 4 (dashboard exempt), got $caps"
+if [ "$caps" -eq 5 ]; then echo "  ✓ cap_drop: [ALL] on all 5 leaves incl. dashboard ($caps)"; else
+    echo "  ✗ cap_drop: [ALL]: expected 5 (incl. dashboard, #255), got $caps"
     fails=$((fails + 1))
 fi
+# Non-root containers (#255): the pulled tari image has no first-party Dockerfile USER, so its
+# non-root uid is pinned via compose. Guard it so a silent drop back to root fails CI.
+expect_min "tari runs non-root via compose user: (#255)" "user: 1000:1000" 1
 # Anchor to the 4-space service-level indent so read-only :ro *bind mounts* (rendered with the
 # same key, deeper-indented) don't inflate the count — we want exactly the 3 read-only roots.
 expect_min "read-only roots (caddy + 2 socket proxies)" "^    read_only: true" 3
