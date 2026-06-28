@@ -80,6 +80,27 @@ test('operational App renders the hero band and the headline cards', () => {
     assert.match(html, /Stack Topology & Egress/);
 });
 
+test('operational App renders the remaining advanced cards', () => {
+    const html = renderApp();
+    assert.match(html, /Global P2Pool Stats/);
+    assert.match(html, /XMR Network/);
+    assert.match(html, /Tari Merge Mining/);
+    assert.match(html, /P2Pool Earnings \(estimated\)/);
+});
+
+test('EarningsCard shows the fallback when stats are down, the calculator when available', () => {
+    // The base fixture has earnings.available === false → the fallback copy, no what-if input.
+    const down = renderApp();
+    assert.match(down, /the estimate can't be computed right now/);
+    assert.doesNotMatch(down, /whatif-hr/);
+    // With stats available, the class component renders its what-if input (local UI state).
+    const s = clone();
+    s.earnings.available = true;
+    const up = renderApp({ state: s });
+    assert.match(up, /Your P2Pool Hashrate/);
+    assert.match(up, /id="whatif-hr"/);
+});
+
 // --- Workers table ----------------------------------------------------------------------
 
 test('WorkersTable renders headers and a row per worker with status classes', () => {

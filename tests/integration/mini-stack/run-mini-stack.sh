@@ -101,6 +101,52 @@ for _ in $(seq 1 30); do
 done
 [ "$api_up" = 1 ] && c_ok "dashboard API is up" || c_bad "dashboard API is up" "no /api/state after ~60s"
 
+# 0. The /api/state payload must carry the #170 Stack Topology & Egress contract, derived live
+#    from config by the REAL dashboard. The pure derivation is unit-tested (tests/service/
+#    test_egress.py); this proves it survives the trip through build_state -> /api/state on a
+#    running server: both sections present, their summary shared verbatim with the map (so the
+#    header badge can't disagree with it), the topology's node set is the canonical one, and every
+#    edge lands on a placeable node (an off-map endpoint would vanish silently from the diagram).
+log "scenario 0: /api/state exposes a well-formed #170 topology + egress contract"
+contract="$(
+    compose exec -T dashboard python3 - <<'PY' 2>&1
+import json
+import urllib.request
+
+NODES = {"rigs", "browser", "xmrig-proxy", "caddy", "dashboard", "p2pool",
+         "monerod", "tari", "docker", "tor", "internet"}
+
+
+def bail(msg):
+    print("FAIL:", msg)
+    raise SystemExit(1)
+
+
+st = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/state", timeout=5))
+eg, topo = st.get("egress"), st.get("topology")
+if not isinstance(eg, dict) or not isinstance(topo, dict):
+    bail("egress/topology section missing")
+if topo.get("summary") != eg.get("summary"):
+    bail("topology and egress summaries disagree")
+ids = {n["id"] for n in topo["nodes"]}
+if ids != NODES:
+    bail("topology node ids %s != canonical set" % sorted(ids))
+for e in topo["edges"]:
+    if e["from"] not in NODES or e["to"] not in NODES:
+        bail("edge endpoint off the map: %s" % e)
+if not any("egress" in b.get("text", "") for b in st.get("badges", [])):
+    bail("no egress header badge in /api/state")
+if not isinstance(st.get("db_healthy"), bool):
+    bail("db_healthy missing or not a bool")
+print("OK level=%s nodes=%d edges=%d db_healthy=%s"
+      % (topo["summary"]["level"], len(ids), len(topo["edges"]), st["db_healthy"]))
+PY
+)"
+case "$contract" in
+OK*) c_ok "/api/state #170 contract — $contract" ;;
+*) c_bad "/api/state #170 topology+egress contract" "$contract" ;;
+esac
+
 # 1. Booting mid-sync → the gate holds both miner containers (stops them). (#35)
 log "scenario 1: holds the miner while both chains sync"
 assert_state "held: itest-p2pool stopped" itest-p2pool exited 90
