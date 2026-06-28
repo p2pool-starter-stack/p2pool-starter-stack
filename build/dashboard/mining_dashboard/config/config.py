@@ -358,4 +358,3 @@ if env_tiers and env_tiers.strip() and env_tiers != "''":
 
 # --- P2Pool Protocol Constants ---
 SECOND_PER_BLOCK_MAIN = 120  # Monero Target block time in seconds
-# PPLNS-window constants live in helper/utils.py (PPLNS_BLOCK_TIME_*, DEFAULT_PPLNS_WINDOW).
