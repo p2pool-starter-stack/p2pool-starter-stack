@@ -5,6 +5,7 @@ from mining_dashboard.collector.pools import (
     detect_pool_type,
     get_network_stats,
     get_p2pool_stats,
+    get_stratum_stats,
     get_tari_stats,
 )
 from mining_dashboard.config.config import (
@@ -83,6 +84,13 @@ class TestNetworkStats:
     def test_hashrate_passthrough(self):
         with patch.object(pools, "_read_json", return_value={"difficulty": 1200, "hash": 999}):
             assert get_network_stats()["hash"] == 999
+
+
+class TestStratumStats:
+    def test_returns_raw_json(self):
+        raw = {"workers": ["10.0.0.1:3333,x,y,z,rig-01"]}
+        with patch.object(pools, "_read_json", return_value=raw):
+            assert get_stratum_stats() == raw
 
 
 class TestTariStats:

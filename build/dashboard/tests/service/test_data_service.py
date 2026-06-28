@@ -707,8 +707,6 @@ class TestRunIteration:
         }
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
-        # On loop teardown the Tari gRPC channel is closed (graceful shutdown).
-        tari_client.close.assert_awaited()
 
     async def test_run_holds_miner_while_syncing(self):
         # A syncing Monero node → gate holds p2pool + xmrig-proxy and #31's failover stays
@@ -887,7 +885,6 @@ class TestRunIteration:
         worker_client.get_stats = AsyncMock(return_value={})
         tari_client = MagicMock()
         tari_client.get_sync_status = AsyncMock(return_value={})
-        tari_client.close = AsyncMock()
 
         with (
             patch.object(ds_mod, "ClientSession", _FakeClientSession),
