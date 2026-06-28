@@ -193,8 +193,9 @@ stack_restart() {
 # Fail-closed host firewall so a misconfigured/buggy bridge daemon (monerod/p2pool/tari/xmrig-proxy)
 # CAN'T leak the home IP: each may reach the LAN, the other containers and the Tor SOCKS, but any
 # DIRECT clearnet dial is DROPPED — only the `tor` container reaches the internet. Rules live in
-# Docker's DOCKER-USER chain (preserved across Docker restarts), installed BEFORE containers start at
-# `up` (so there is no startup window to grandfather), re-asserted at `apply`, removed at `down`. Needs
+# Docker's DOCKER-USER chain (preserved across Docker restarts), installed BEFORE containers start on
+# every path that brings a clearnet-capable app up — `up`, `upgrade`, `apply`, `reset-dashboard` (so
+# there is no startup window to grandfather a leak past) — and removed at `down`. Needs
 # root (sudo), like the GRUB/HugePages steps; IPv4-only (mining_net is IPv4). Opt out with
 # network.tor_egress_firewall=false. Proven by tests/integration/benchmarks/bench-verify-egress.sh.
 # See docs/privacy.md.
@@ -847,6 +848,10 @@ reset_dashboard() {
     sudo chmod -R 755 "$p2pool_dir/stats"
 
     log "Bringing services back up..."
+    # p2pool can dial clearnet, so assert the Tor-only egress firewall BEFORE it starts (#270/#291).
+    # Idempotent if it's already present from `up`; closes the gap where running reset-dashboard on a
+    # `down` stack would otherwise bring p2pool up with no firewall installed at all.
+    apply_tor_egress_firewall
     docker compose up --pull "$(resolve_pull_policy)" -d dashboard p2pool
 }
 
@@ -2710,6 +2715,12 @@ apply() {
 
     log "Updating containers..."
     migrate_compose_project
+    # (Re)assert the Tor-only egress firewall BEFORE compose recreates anything — same ordering as
+    # up/upgrade (#276/#291), for the same reason: if it isn't already installed (e.g. `down` then
+    # `apply`), recreating containers first opens a startup window where a clearnet app dials out and
+    # the leading ESTABLISHED rule grandfathers it past the DROP. Idempotent, so the common case
+    # (already installed from `up`) is a cheap re-assert; the .env it reads was committed just above.
+    apply_tor_egress_firewall
     # Mark the recreate in-flight: cleared only after a SUCCESSFUL `up`, so a failure here (image
     # build error, a port already bound, a failed health/dependency gate, daemon hiccup) leaves the
     # marker for the next apply to retry instead of no-opping on the already-committed config (#125).
@@ -2726,7 +2737,6 @@ apply() {
         docker compose restart caddy
     fi
     rm -f "$apply_marker"
-    apply_tor_egress_firewall # (re)install the fail-closed Tor-only egress rules (#270)
     log "Configuration applied."
     announce_dashboard_url
 }

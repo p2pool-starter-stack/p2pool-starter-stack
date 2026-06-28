@@ -296,27 +296,93 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
 
-echo "== regression: stack_upgrade installs the Tor-egress firewall BEFORE compose (#291) =="
-# #272 added the firewall re-assert AFTER compose in stack_upgrade, reopening the startup window #276
-# closed for stack_up: if the firewall isn't already installed (down -> upgrade), a clearnet app can
-# dial out before the DROP lands and get grandfathered by the leading ESTABLISHED rule. The order of
-# apply_tor_egress_firewall vs compose_up_checked is load-bearing, so pin it. Neutralise the upgrade
-# preamble (config render, dirs, migrations) and record only the two ops we care about.
+echo "== regression: every command installs the Tor-egress firewall BEFORE compose (#291) =="
+# The firewall must go in BEFORE any clearnet-capable container starts, on EVERY path that brings one
+# up (#276 closed the window for stack_up; #291 + this change close it for upgrade/apply/reset). If a
+# container starts first, the leading ESTABLISHED rule grandfathers its clearnet dial past the DROP.
+# Each case neutralises the command's preamble and records the order of the two load-bearing ops; the
+# firewall sentinel MUST precede the compose sentinel. fw_then_compose() extracts just those two from
+# whatever else the function prints (warnings, banners) so the assert is exact.
+fw_then_compose() { printf '%s\n' "$1" | grep -xE 'firewall|compose' | tr '\n' ','; }
+
 upg_order=$(
     cd "$SANDBOX" || exit
     # shellcheck disable=SC1090
     source "$STACK"
     set +e
-    require_env() { :; }; parse_and_validate_config() { :; }; load_preserved_state() { :; }
-    ensure_directories() { :; }; resolve_dashboard_host() { :; }; render_env() { :; }; mv() { :; }
-    inject_service_configs() { :; }; generate_caddyfile() { :; }; migrate_compose_project() { :; }
-    is_source_checkout() { return 1; }; log() { :; }; docker() { :; }
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
     apply_tor_egress_firewall() { echo firewall; }
     compose_up_checked() { echo compose; }
     stack_upgrade
 )
-assert_eq "stack_upgrade applies the firewall before 'compose up' (#291)" \
-    "$(printf '%s' "$upg_order" | tr '\n' ',')" "firewall,compose"
+assert_eq "upgrade applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$upg_order")" "firewall,compose,"
+
+# apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
+# the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
+# diff (env_changed_keys returns nothing; a pre-seeded .apply-incomplete marker forces the retry).
+apply_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    # shellcheck disable=SC2034  # read by the sourced apply()'s "not provisioned" guard, unseen here
+    MONERO_ONION=onion
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    is_deployed() { return 0; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    env_changed_keys() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    announce_dashboard_url() { :; }
+    log() { :; }
+    warn() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { echo firewall; }
+    compose_up_checked() { echo compose; }
+    : >".env.apply-incomplete" # force the retry path
+    apply
+)
+assert_eq "apply applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$apply_order")" "firewall,compose,"
+
+# reset-dashboard recreates p2pool (clearnet-capable); on a `down` stack it must install the firewall
+# first or p2pool comes up with no firewall at all. -y skips the destructive confirm; the docker stub
+# emits the compose sentinel only for the `compose up` it ends on.
+rd_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    env_get() { echo "/nonexistent/reset-$1"; } # non-existent dirs -> rm skipped
+    assert_safe_dir() { :; }
+    mkdir() { :; }
+    sudo() { :; }
+    log() { :; }
+    docker() {
+        [ "$1 $2" = "compose up" ] && echo compose
+        return 0
+    }
+    apply_tor_egress_firewall() { echo firewall; }
+    reset_dashboard -y
+)
+assert_eq "reset-dashboard applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$rd_order")" "firewall,compose,"
 
 echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
 # Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
