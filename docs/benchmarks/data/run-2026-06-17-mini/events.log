@@ -1,0 +1,13 @@
+2026-06-17T23:33:11Z RUN START pool=mini block-hours=20 blocks=6 settle-hours=3
+2026-06-17T23:37:05Z arm=tor egress-gate=PASS(after-tari-restart)
+2026-06-18T19:33:30Z BLOCK 2/6 arm=clearnet (settle 3h)
+2026-06-18T19:33:33Z arm=clearnet egress-gate=skip(clearnet)
+2026-06-19T15:35:52Z BLOCK 3/6 arm=tor (settle 3h)
+2026-06-19T15:39:48Z arm=tor egress-gate=PASS(after-tari-restart)
+2026-06-20T11:36:14Z BLOCK 4/6 arm=clearnet (settle 3h)
+2026-06-20T11:36:17Z arm=clearnet egress-gate=skip(clearnet)
+2026-06-21T07:38:38Z BLOCK 5/6 arm=tor (settle 3h)
+2026-06-21T07:42:33Z arm=tor egress-gate=PASS(after-tari-restart)
+2026-06-22T03:38:59Z BLOCK 6/6 arm=clearnet (settle 3h)
+2026-06-22T03:39:01Z arm=clearnet egress-gate=skip(clearnet)
+2026-06-22T23:41:28Z RUN COMPLETE — 6 blocks done

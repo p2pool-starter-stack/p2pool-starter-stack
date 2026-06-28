@@ -1092,6 +1092,14 @@ normalize_bool() {
     esac
 }
 
+# Read a JSON boolean from $CONFIG_FILE honouring an explicit `false`. jq's `//` treats `false` (not
+# just `null`) as empty, so `<path> // true` silently coerces a configured false back to the default —
+# we null-check instead. Args: <jq-path-expr> <default:true|false>. Pure given $CONFIG_FILE so it
+# unit-tests in isolation (#294 — this bug had broken the #270 firewall opt-out and xvb.tor=false).
+config_bool() {
+    jq -r "if $1 == null then $2 else $1 end" "$CONFIG_FILE"
+}
+
 # p2pool outbound SOCKS flags (#165). p2pool's --onion-address only advertises an onion for INBOUND;
 # without --socks5 it dials outbound sidechain peers over clearnet, exposing the home IP. Returns the
 # Tor SOCKS flags by default; empty when the operator opts into clearnet (p2pool.clearnet=true) for
@@ -1618,9 +1626,10 @@ parse_and_validate_config() {
     esac
     is_ipv4 "${NETWORK_PREFIX}.0" || error "network.subnet is not a valid IPv4 /24 (got \"$NETWORK_SUBNET\")."
     # Fail-closed Tor-only egress firewall (#270); default on. Renders to .env so `up` can read it.
-    TOR_EGRESS_FIREWALL=$(normalize_bool "$(jq -r '.network.tor_egress_firewall // true' "$CONFIG_FILE")")
+    # config_bool (not a plain `// true`) so an explicit false actually disables it — see #294.
+    TOR_EGRESS_FIREWALL=$(normalize_bool "$(config_bool '.network.tor_egress_firewall' true)")
     # Surfaced for the dashboard's egress-posture panel (#170); mirrors what p2pool_outbound_flags reads.
-    P2POOL_CLEARNET=$(normalize_bool "$(jq -r '.p2pool.clearnet // false' "$CONFIG_FILE")")
+    P2POOL_CLEARNET=$(normalize_bool "$(config_bool '.p2pool.clearnet' false)")
     if [ "$MONERO_MODE" == "remote" ]; then
         local remote_host
         remote_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
@@ -1969,7 +1978,8 @@ render_env() {
     local xvb_enabled xvb_url xvb_donor xvb_donation_level xvb_tor
     xvb_enabled=$(jq -r 'if .xvb.enabled != null then .xvb.enabled elif .xmrig_proxy.enabled != null then .xmrig_proxy.enabled else "true" end' "$CONFIG_FILE")
     # Route XvB donation mining through Tor by default (#166); xvb.tor:false opts out for max yield.
-    xvb_tor=$(normalize_bool "$(jq -r '.xvb.tor // true' "$CONFIG_FILE")")
+    # config_bool so xvb.tor=false (route XvB over clearnet) is honoured rather than coerced to Tor (#294).
+    xvb_tor=$(normalize_bool "$(config_bool '.xvb.tor' true)")
     xvb_url=$(jq -r '.xvb.url // .xmrig_proxy.url // empty' "$CONFIG_FILE")
     [ -z "$xvb_url" ] && xvb_url="na.xmrvsbeast.com:4247"
     xvb_donor=$(jq -r '.xvb.donor_id // .xmrig_proxy.donor_id // empty' "$CONFIG_FILE")

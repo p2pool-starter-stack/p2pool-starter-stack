@@ -94,10 +94,11 @@ transaction traffic over Tor, and the clearnet DNS lookups those nodes used to l
 (monerod checkpoints/blocklist/update-check, Tari DNS seeds + Pulse). The node's RPC is bound to
 localhost by default (opt into LAN access explicitly via `monero.rpc_lan_access`).
 
-It is **Tor-first, not yet Tor-only.** Two *outbound* yield paths still use clearnet in v1.0 and so
-**can reveal your home IP** — P2Pool's outbound sidechain peers and XvB donation mining — both slated
-to move to Tor-by-default (with a documented opt-out) in v1.1, and both hardenable today. Install and
-image pulls also reveal your IP once. See **[Privacy & network egress](privacy.md)** for the complete
+It is **Tor-first.** Two *outbound* yield paths used clearnet in v1.0 and could **reveal your home IP**
+— P2Pool's outbound sidechain peers and XvB donation mining — but **as of v1.1 both are Tor-by-default**,
+each with a documented opt-out for operators who'd trade privacy for yield (measured at ~10 % of yield
+on `mini`; see the [Tor-vs-clearnet benchmark](benchmarks/tor-vs-clearnet.md)). Install and image pulls
+still reveal your IP once. See **[Privacy & network egress](privacy.md)** for the complete
 connection-by-connection map and how to lock down the rest.
 
 ## Security posture

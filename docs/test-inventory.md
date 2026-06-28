@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 529 dashboard unit tests · 12 contract tests · 33 frontend
-tests · 46 `pithead` shell sections · 17 harness self-test sections ·
+tests · 47 `pithead` shell sections · 17 harness self-test sections ·
 9 live config scenarios (17 axis values) · 6 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 529 |
 | 1 — Unit | frontend (node --test) | 33 |
-| 1 — Unit | `pithead` shell suite | 46 sections |
+| 1 — Unit | `pithead` shell suite | 47 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 6 |
@@ -647,7 +647,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - egressRoute: known routes map to icon/label/class; unknown falls back to muted
 - boxAnchor: lands on the border facing the target, not the centre
 
-### `pithead` shell suite (tests/stack/run.sh) — 46 sections
+### `pithead` shell suite (tests/stack/run.sh) — 47 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -660,6 +660,7 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 - p2pool entrypoint word-splits P2POOL_FLAGS into separate args (#165)
 - unit: tor_egress_rules — fail-closed Tor-only egress ruleset (#270)
 - black-box: apply/remove_tor_egress_firewall via stubbed iptables (#270)
+- unit: config_bool honours an explicit false (jq // false-coercion guard, #294)
 - unit: clearnet initial sync helpers (#183)
 - unit: clock_sync_status (mining is time-sensitive)
 - unit: monero_address_type — p2pool needs a PRIMARY address (#250)
@@ -844,5 +845,5 @@ tests · 46 `pithead` shell sections · 17 harness self-test sections ·
 
 ---
 
-_Grand total: **652** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **653** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
