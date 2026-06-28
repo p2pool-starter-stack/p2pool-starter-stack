@@ -110,6 +110,18 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 
 ---
 
+### XvB raffle auto-registration (`XVB_SUBMIT_URL`)
+
+When XvB is enabled, the stack **auto-registers your wallet in the XMRvsBeast raffle** once you have a P2Pool PPLNS share — no manual signup ([FAQ](faq.md#do-i-have-to-sign-up-for-the-xvb-raffle)). The registration call carries your **full** wallet address and is routed over Tor like the XvB stats fetch, so it never exposes your IP ([Privacy › Runtime egress](privacy.md#runtime-egress)).
+
+The registration endpoint is **deliberately unpublished** by the XvB operator, so it is **not** a `config.json` key and ships **empty** — registration is supplied out-of-band via the `XVB_SUBMIT_URL` environment variable (set it in the dashboard service's env / `.env`). It re-registers on a daily cadence and is idempotent. The dashboard surfaces the result as a header badge:
+
+- **`XvB raffle ✓`** — registered.
+- **`⚠ XvB raffle not configured`** — XvB is on but `XVB_SUBMIT_URL` is unset, so the stack mines/donates but never enters the raffle (also logged once at WARNING).
+- **`⚠ XvB registration failing`** — the endpoint is configured but keeps refusing despite a PPLNS share.
+
+Leave `XVB_SUBMIT_URL` unset to disable auto-registration entirely (everything else still works); set `xvb.enabled: false` to stop all XvB activity.
+
 ## Data directories
 
 Every stateful service stores its data in a host directory that you can place anywhere. By

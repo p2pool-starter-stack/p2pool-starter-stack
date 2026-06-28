@@ -115,6 +115,10 @@ periodically so a long-offline rig re-enters cleanly. The registration call carr
 address and is routed over Tor like the XvB stats fetch, so it never exposes your IP on clearnet. If
 XvB is disabled, no registration happens.
 
+The dashboard shows an **`XvB raffle ✓`** header badge once you're registered (and a warning badge
+if registration isn't configured or is failing — see
+[Configuration › XvB raffle auto-registration](configuration.md#xvb-raffle-auto-registration-xvb_submit_url)).
+
 ### What is Tari? Do I have to mine it?
 
 Tari (the [Minotari](https://www.tari.com/) node) is a chain that's **merge-mined alongside

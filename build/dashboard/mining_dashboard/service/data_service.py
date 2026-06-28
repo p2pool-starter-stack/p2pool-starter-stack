@@ -63,6 +63,12 @@ _PX_MIN_FIELDS = 13
 # xmrig-proxy reports hashrate in kH/s; the dashboard works in H/s.
 _KHS_TO_HS = 1000
 
+# Consecutive XvB-registration failures (while never yet registered) before we raise the dashboard
+# "registration failing" warning (#263). A couple of transient blips during the normal first-share
+# window shouldn't alarm; a configured-but-refusing endpoint should. At one attempt per 10th poll
+# (~5 min) this is ~15 min of sustained failure.
+_XVB_REGISTER_FAIL_ALERT = 3
+
 
 def _parse_proxy_list_worker(w):
     """Parse one xmrig-proxy 6.x positional row into a worker dict.
@@ -346,6 +352,10 @@ class DataService:
         # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
         # None until the wallet is first entered. Drives the daily re-register cadence below.
         self._xvb_last_registered = None
+        # Consecutive register() failures while never-yet-registered, and a one-shot latch so the
+        # "endpoint not configured" warning is logged once rather than every poll (#263).
+        self._xvb_register_failures = 0
+        self._xvb_unconfigured_warned = False
 
         self.latest_data = {
             "workers": [],
@@ -493,9 +503,27 @@ class DataService:
         cadence (XVB_REGISTER_INTERVAL_S): registration is idempotent, and re-running picks up the
         operator's newer security-token behaviour and re-enters a long-offline miner cleanly.
 
-        The caller already gated on ENABLE_XVB + the 10th-iteration throttle; register() itself
-        routes over Tor and no-ops when no endpoint is configured (XVB_SUBMIT_URL unset).
+        The caller already gated on ENABLE_XVB + the 10th-iteration throttle. Edge cases are handled
+        loudly rather than silently (the whole point of #263 is to not *quietly* skip the raffle):
+        an unconfigured endpoint warns once + shows an "unconfigured" badge; a configured endpoint
+        that keeps refusing shows a "failing" badge after a few attempts. register() itself routes
+        over Tor.
         """
+        # Fallback + warning: XvB is on but the operator's (unpublished) endpoint isn't configured.
+        # We can't enter the raffle, so warn ONCE and surface it on the dashboard rather than
+        # silently no-op'ing forever — then skip without the wasteful Tor round-trip.
+        if not self.xvb_client.submit_url:
+            if not self._xvb_unconfigured_warned:
+                self._xvb_unconfigured_warned = True
+                logger.warning(
+                    "XvB is enabled but XVB_SUBMIT_URL is not set — miners mine/donate but are NOT "
+                    "entered in the XvB raffle. Set XVB_SUBMIT_URL to enable auto-registration (#263)."
+                )
+                await asyncio.to_thread(
+                    self.state_manager.update_xvb_stats, registration_state="unconfigured"
+                )
+            return
+
         # PPLNS-share check — mirrors metrics/algo: a share counts if it's within pplns_window
         # blocks (30s/block on Nano, else 10s) of now.
         pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
@@ -513,8 +541,26 @@ class DataService:
 
         if await asyncio.to_thread(self.xvb_client.register):
             self._xvb_last_registered = now
-            await asyncio.to_thread(self.state_manager.update_xvb_stats, registered_at=now)
+            self._xvb_register_failures = 0
+            await asyncio.to_thread(
+                self.state_manager.update_xvb_stats,
+                registered_at=now,
+                registration_state="registered",
+            )
             logger.info("External Sync: Registered wallet with XvB raffle ✓")
+        else:
+            # register() already logged the specific error. Only escalate to a dashboard warning
+            # once it's *persistently* failing AND we've never succeeded — a blip while the first
+            # share propagates server-side shouldn't alarm. (A failed daily re-register after a
+            # prior success keeps the "registered ✓" badge; we're still entered from before.)
+            self._xvb_register_failures += 1
+            if (
+                self._xvb_last_registered is None
+                and self._xvb_register_failures >= _XVB_REGISTER_FAIL_ALERT
+            ):
+                await asyncio.to_thread(
+                    self.state_manager.update_xvb_stats, registration_state="failing"
+                )
 
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
