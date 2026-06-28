@@ -112,9 +112,9 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 
 ### XvB raffle auto-registration (`XVB_SUBMIT_URL`)
 
-When XvB is enabled, the stack **auto-registers your wallet in the XMRvsBeast raffle** once you have a P2Pool PPLNS share — no manual signup ([FAQ](faq.md#do-i-have-to-sign-up-for-the-xvb-raffle)). This works **out of the box**; the registration call carries your **full** wallet address and is routed over Tor like the XvB stats fetch, so it never exposes your IP ([Privacy › Runtime egress](privacy.md#runtime-egress)). It re-registers on a daily cadence and is idempotent (re-running an already-entered wallet is a no-op).
+When XvB is enabled, the stack **auto-registers your wallet in the XMRvsBeast raffle** once you have a P2Pool PPLNS share — no manual signup ([FAQ](faq.md#do-i-have-to-sign-up-for-the-xvb-raffle)). This works **out of the box**; the registration call carries your **full** wallet address and is **always routed over Tor** like the XvB stats fetch (it is not subject to the `xvb.tor` donation opt-out), so it never exposes your IP ([Privacy › Runtime egress](privacy.md#runtime-egress)). It re-registers on a daily cadence and is idempotent (re-running an already-entered wallet is a no-op).
 
-The registration endpoint is **deliberately unpublished** by the XvB operator (to mitigate abuse), so it is **not** a `config.json` key — it's not committed as plaintext and is assembled internally. Two `XVB_SUBMIT_URL` environment overrides exist for operators who need them:
+The endpoint ships as the working default, so it is **not** a `config.json` key. Two `XVB_SUBMIT_URL` environment overrides exist for operators who need them:
 
 - Set it to a **URL** to point registration at a different endpoint (e.g. a test server).
 - Set it to a **disable sentinel** (`off` / `none` / `false` / `disabled` / `0`) to turn auto-registration off while keeping the rest of XvB running. (`xvb.enabled: false` stops _all_ XvB activity instead.)

@@ -81,8 +81,9 @@ class XvbClient:
         share in the P2Pool PPLNS window, so callers should gate this on PPLNS-share eligibility;
         before a share lands server-side the call is a harmless no-op and we just retry next poll.
 
-        Routes over the SAME Tor SOCKS5 proxy as get_stats — the call carries the FULL wallet
-        address, so a clearnet request would correlate the operator's IP with the wallet (#163).
+        ALWAYS routes over the SAME Tor SOCKS5 proxy as get_stats (XVB_TOR_PROXY) — the call carries
+        the FULL wallet address, so a clearnet request would correlate the operator's IP with the
+        wallet (#163). Like the stats fetch, this is NOT subject to the xvb.tor donation opt-out.
 
         The endpoint does NOT use a 200/JSON contract — it returns a plaintext ``ERROR: ...`` body
         with HTTP 422 for the error cases — so the outcome is classified from status AND body

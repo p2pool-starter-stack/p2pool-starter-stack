@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 
@@ -97,22 +96,19 @@ XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
 
 # XvB raffle-registration endpoint (#263). Mining to the XvB pool isn't enough to enter the raffle —
 # a wallet is only entered once it's registered against this endpoint (and only if it already has a
-# share in the P2Pool PPLNS window). The XvB operator shared this API for the stack to use but asked
-# us not to *publish* it ("to mitigate abuse"), so the sensitive script name isn't committed as a
-# plaintext (code-search-greppable) string — it's base64 of "p2pool_bonus_submit_api.cgi", assembled
-# onto the already-public cgi-bin base (same host as the XVB stats fetch above). This is light
-# obfuscation, not secrecy. Override the whole URL with XVB_SUBMIT_URL (e.g. a test server); set it to
-# a disable sentinel (off/none/false/disabled/0) to turn auto-registration off while keeping XvB on.
+# share in the P2Pool PPLNS window). Same host as the XvB stats fetch above. The operator asked us
+# not to *advertise* this API ("to mitigate abuse"), so don't surface the bare URL in user-facing
+# docs/README — but it ships here as the working default. Override with XVB_SUBMIT_URL (e.g. a test
+# server); set it to a disable sentinel (off/none/false/disabled/0) to turn auto-registration off
+# while keeping XvB on. The call ALWAYS rides Tor (XVB_TOR_PROXY) like the stats fetch (#163) since it
+# carries the full wallet — it is NOT subject to the xvb.tor donation opt-out.
 #
 # Contract — GET ?address=<full wallet>, verified live 2026-06-28:
 #   2xx                                              => freshly registered
 #   422 "ERROR: Wallet Address Already Registered"   => already in (idempotent success)
 #   422 "ERROR: Invalid Wallet Address"              => bad wallet (permanent — stop retrying)
 #   no-share / 5xx / other                           => transient, retry on the next poll
-_XVB_CGI_BASE = "https://xmrvsbeast.com/cgi-bin/"
-_XVB_SUBMIT_DEFAULT = (
-    _XVB_CGI_BASE + base64.b64decode("cDJwb29sX2JvbnVzX3N1Ym1pdF9hcGkuY2dp").decode()
-)
+_XVB_SUBMIT_DEFAULT = "https://xmrvsbeast.com/cgi-bin/p2pool_bonus_submit_api.cgi"
 _XVB_SUBMIT_DISABLE_SENTINELS = {"off", "none", "false", "disabled", "0"}
 _xvb_submit_env = os.environ.get("XVB_SUBMIT_URL", "").strip()
 if _xvb_submit_env.lower() in _XVB_SUBMIT_DISABLE_SENTINELS:
