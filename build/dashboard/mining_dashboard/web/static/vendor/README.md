@@ -5,13 +5,16 @@ step and serves entirely from `/static` under a strict Content-Security-Policy
 (`script-src 'self'`, no `'unsafe-inline'`/`'unsafe-eval'`). Both are standalone ES modules
 with no bare imports and no `eval`/`new Function`, so they load and run under that CSP.
 
-| File                | Package  | Version | Source                                               |
-|---------------------|----------|---------|------------------------------------------------------|
-| `preact.module.js`  | preact   | 10.24.3 | <https://unpkg.com/preact@10.24.3/dist/preact.module.js> |
-| `htm.module.js`     | htm      | 3.1.1   | <https://unpkg.com/htm@3.1.1/dist/htm.module.js>         |
-| `chart.umd.min.js`  | chart.js | (vendored previously) | <https://www.chartjs.org/>                 |
-| `chartjs-plugin-zoom.min.js` | chartjs-plugin-zoom | 2.2.0 | <https://unpkg.com/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js> |
-| `hammer.min.js`     | hammerjs | 2.0.8 | <https://unpkg.com/hammerjs@2.0.8/hammer.min.js> |
+| File                | Package  | Version | License | Source                                     |
+|---------------------|----------|---------|---------|--------------------------------------------|
+| `preact.module.js`  | preact   | 10.24.3 | MIT | <https://unpkg.com/preact@10.24.3/dist/preact.module.js> |
+| `htm.module.js`     | htm      | 3.1.1   | Apache-2.0 | <https://unpkg.com/htm@3.1.1/dist/htm.module.js>     |
+| `chart.umd.min.js`  | chart.js | 4.4.6 | MIT | <https://www.chartjs.org/>                             |
+| `chartjs-plugin-zoom.min.js` | chartjs-plugin-zoom | 2.2.0 | MIT | <https://unpkg.com/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js> |
+| `hammer.min.js`     | hammerjs | 2.0.8 | MIT | <https://unpkg.com/hammerjs@2.0.8/hammer.min.js> |
+
+These licenses are also recorded in the repo-root `THIRD_PARTY_LICENSES.md`. `chart.umd.min.js`
+lives one directory up (in `static/`, not `vendor/`); listed here so the attribution is complete.
 
 `chartjs-plugin-zoom` is a UMD bundle (like `chart.umd.min.js`), loaded as a classic `<script>`
 after Chart.js; it exposes the global `ChartZoom` and is registered explicitly via
