@@ -110,7 +110,7 @@ class TestTariStats:
         raw = {
             "chains": [
                 {
-                    "channel_state": "Active",
+                    "channel_state": "READY",
                     "wallet": "T123",
                     "height": 5,
                     "reward": 2_000_000,
@@ -122,7 +122,18 @@ class TestTariStats:
             s = get_tari_stats()
         assert s["active"] is True
         assert s["reward"] == 2.0  # 2_000_000 uTari -> 2 Tari
-        assert s["status"] == "Active"
+        assert s["status"] == "READY"
+        assert s["connected"] is True  # gRPC channel READY -> drives the ✔
+
+    def test_unhealthy_channel_is_active_but_not_connected(self):
+        # A configured chain whose gRPC channel is down (e.g. dialled through Tor and rejected) must
+        # report active=True (so the panel shows) but connected=False (so the UI shows no ✔).
+        raw = {"chains": [{"channel_state": "TRANSIENT_FAILURE", "wallet": "T123"}]}
+        with patch.object(pools, "_read_json", return_value=raw):
+            s = get_tari_stats()
+        assert s["active"] is True
+        assert s["status"] == "TRANSIENT_FAILURE"
+        assert s["connected"] is False
 
     def test_no_chains_inactive(self):
         with patch.object(pools, "_read_json", return_value={}):

@@ -805,7 +805,8 @@ class TestTari:
             {
                 "tari": {
                     "active": True,
-                    "status": "Mining",
+                    "connected": True,
+                    "status": "READY",
                     "reward": 12.5,
                     "height": 42,
                     "difficulty": 1234567,
@@ -814,13 +815,24 @@ class TestTari:
             }
         )
         assert t["active"] is True
-        assert t["status"] == "Mining"
+        assert t["connected"] is True  # gates the ✔ on the client
+        assert t["status"] == "READY"
         assert t["reward"] == "12.50 TARI"
         assert t["diff"] == "1,234,567"
 
+    def test_active_but_disconnected_has_no_check(self):
+        # Configured but the gRPC channel is down: active stays True (panel shows) but connected is
+        # False, so the client renders the raw state with no ✔ — never "TRANSIENT_FAILURE ✔".
+        t = build_tari(
+            {"tari": {"active": True, "connected": False, "status": "TRANSIENT_FAILURE"}}
+        )
+        assert t["active"] is True
+        assert t["connected"] is False
+        assert t["status"] == "TRANSIENT_FAILURE"
+
     def test_inactive_defaults(self):
         t = build_tari({"tari": {"active": False}})
-        assert t["active"] is False and t["status"] == "Waiting..."
+        assert t["active"] is False and t["connected"] is False and t["status"] == "Waiting..."
 
     def test_long_wallet_shortened(self):
         t = build_tari({"tari": {"active": True, "address": "T" * 40}})

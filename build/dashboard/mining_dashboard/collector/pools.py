@@ -140,9 +140,15 @@ def get_tari_stats():
     chains = raw.get("chains", [])
     if chains:
         t = chains[0]
+        # `channel_state` is p2pool's gRPC connectivity state to the Tari node (IDLE/CONNECTING/READY/
+        # TRANSIENT_FAILURE/SHUTDOWN). `active` only means a chain is configured; `connected` means the
+        # channel is actually up — the dashboard must gate the "✔" on the latter, never on `active`,
+        # so a broken channel can't render as "TRANSIENT_FAILURE ✔".
+        state = t.get("channel_state", "UNKNOWN")
         return {
             "active": True,
-            "status": t.get("channel_state", "UNKNOWN"),
+            "status": state,
+            "connected": state == "READY",
             "address": t.get("wallet", "Unknown"),
             "height": t.get("height", 0),
             "reward": t.get("reward", 0) / 1_000_000,  # Convert uTari to Tari
