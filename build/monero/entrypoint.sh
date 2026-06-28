@@ -2,8 +2,8 @@
 set -e
 
 # Define paths for configuration management (overridable for testing).
-TEMPLATE_PATH="${TEMPLATE_PATH:-/root/bitmonero.conf.template}"
-CONFIG_PATH="${CONFIG_PATH:-/root/.bitmonero/bitmonero.conf}"
+TEMPLATE_PATH="${TEMPLATE_PATH:-/home/ubuntu/bitmonero.conf.template}"
+CONFIG_PATH="${CONFIG_PATH:-/home/ubuntu/.bitmonero/bitmonero.conf}"
 # Shared, dashboard-writable state dir (#234). The dashboard drops this marker once monerod has
 # finished its clearnet initial sync and restarts the container; seeing it here means "the clearnet
 # sync already completed — come up on Tor." Default matches the compose mount; overridable for tests.

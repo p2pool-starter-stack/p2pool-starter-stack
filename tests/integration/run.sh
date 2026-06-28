@@ -414,7 +414,7 @@ assert_running_state() {
                 it_pass "monero auto-transitioned clearnet→Tor (#234)"
             else it_fail "monero auto-transitioned clearnet→Tor (#234)" "marker not written within 180s"; fi
             wait_for 240 10 "monerod restarted back on Tor — proxy restored (#234)" \
-                rx "docker exec monerod grep -qE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null" || true
+                rx "docker exec monerod grep -qE '^proxy=' /home/ubuntu/.bitmonero/bitmonero.conf 2>/dev/null" || true
         fi
         if [ "$tari_clearnet" = "true" ]; then
             if wait_for 180 10 "tari clearnet→Tor transition marker (#234)" rx "test -f '$csdir/tari.synced'"; then
@@ -528,9 +528,9 @@ assert_running_state() {
             assert_num_gt "memory ceiling live on $svc (#132)" "${memlim:-0}" 0
         done
         assert_num_ge "monerod DNS checkpoints disabled (#161)" \
-            "$(rx "docker exec monerod grep -c '^disable-dns-checkpoints=1' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+            "$(rx "docker exec monerod grep -c '^disable-dns-checkpoints=1' /home/ubuntu/.bitmonero/bitmonero.conf 2>/dev/null")" 1
         assert_eq "monerod has no clearnet priority-node hostnames (#161)" \
-            "$(rx "docker exec monerod grep -cE 'xmrvsbeast.com|hashvault.pro' /root/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
+            "$(rx "docker exec monerod grep -cE 'xmrvsbeast.com|hashvault.pro' /home/ubuntu/.bitmonero/bitmonero.conf 2>/dev/null")" "0"
         # Clearnet initial sync (#183) + auto-transition (#234). The flag propagates to .env; pithead
         # ALWAYS renders the canonical Tor config (the clearnet transform is applied per-start
         # in-container, gated on the flag AND the dashboard's marker). The dashboard switches a
@@ -541,7 +541,7 @@ assert_running_state() {
         assert_num_ge "tari canonical config is always Tor (#234)" \
             "$(rx "docker exec tari grep -c '^type = \"tor\"' /var/tari/config/config.toml 2>/dev/null")" 1
         assert_num_ge "monerod runs Tor-only in steady state — proxy present (#183/#234)" \
-            "$(rx "docker exec monerod grep -cE '^proxy=' /root/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+            "$(rx "docker exec monerod grep -cE '^proxy=' /home/ubuntu/.bitmonero/bitmonero.conf 2>/dev/null")" 1
         # (The clearnet→Tor auto-transition was already awaited + asserted at the top of this function,
         # before the steady-state battery, so the assertions above see the settled post-flip state.)
         case "$(rx "docker inspect tari --format '{{.HostConfig.Dns}}' 2>/dev/null")" in

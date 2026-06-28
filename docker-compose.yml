@@ -75,9 +75,9 @@ services:
       # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     volumes:
-      - ${MONERO_DATA_DIR}:/root/.bitmonero
+      - ${MONERO_DATA_DIR}:/home/ubuntu/.bitmonero
       - /dev/hugepages:/dev/hugepages
-      - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
+      - ./build/monero/bitmonero.conf.template:/home/ubuntu/bitmonero.conf.template:ro
       # Read-only view of the shared clearnet-state dir (#234): the entrypoint reads the
       # dashboard-written "sync complete" marker to decide clearnet-vs-Tor at startup.
       - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state:ro
@@ -194,7 +194,7 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - ${P2POOL_DATA_DIR}:/root
+      - ${P2POOL_DATA_DIR}:/home/ubuntu
       - ${P2POOL_DATA_DIR}/stats:/stats
       - /dev/hugepages:/dev/hugepages
     command:

@@ -449,7 +449,7 @@ write_manifest() {
 
 # The host paths under ./build/ that docker-compose.yml MOUNTS at runtime (volumes:), as opposed to
 # build: contexts. A pull-based bundle builds nothing and the images do NOT bake these in — monerod, for
-# instance, reads /root/bitmonero.conf.template purely from this host mount — so every one MUST ship in
+# instance, reads /home/ubuntu/bitmonero.conf.template purely from this host mount — so every one MUST ship in
 # the bundle, or the container mounts an empty dir and fails to start (the v1.0.0 bundle missed monerod's
 # template this way). Matches the volume short-syntax source (between "- " and the first ":"); ignores
 # build:/context: lines so no Dockerfile lands in the bundle (which would flip is_source_checkout to true

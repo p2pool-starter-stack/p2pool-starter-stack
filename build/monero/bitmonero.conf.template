@@ -1,7 +1,7 @@
 # --- Data & Logging Configuration ---
 # Internal container paths for blockchain data and logs
-data-dir=/root/.bitmonero
-log-file=/root/.bitmonero/bitmonero.log
+data-dir=/home/ubuntu/.bitmonero
+log-file=/home/ubuntu/.bitmonero/bitmonero.log
 log-level=0
 
 # --- Blockchain Pruning ---

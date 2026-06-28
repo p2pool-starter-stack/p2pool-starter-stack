@@ -28,10 +28,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 COPY healthcheck.sh /usr/local/bin/monerod-healthcheck.sh
 RUN chmod +x /usr/local/bin/monerod-healthcheck.sh
 
-# Run non-root (#255). Reuse ubuntu:24.04's built-in 'ubuntu' user (uid 1000); pithead chowns the
-# blockchain bind-mount (/root/.bitmonero) to match. /root itself isn't bind-mounted, so make it
-# traversable+readable so uid 1000 can chdir there and read the bind-mounted config template.
-RUN chmod 0755 /root
-WORKDIR /root
+# Run non-root (#255). Reuse ubuntu:24.04's built-in 'ubuntu' user (uid 1000) and keep monerod's
+# data under that user's home — /home/ubuntu/.bitmonero, which is also monerod's native
+# $HOME/.bitmonero default. pithead chowns the blockchain bind-mount to match.
+RUN install -d -o ubuntu -g ubuntu /home/ubuntu
+WORKDIR /home/ubuntu
 USER ubuntu
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
