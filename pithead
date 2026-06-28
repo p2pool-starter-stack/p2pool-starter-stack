@@ -157,7 +157,7 @@ compose_up_checked() {
     tmp="$(mktemp)"
     docker compose up --pull "$(resolve_pull_policy)" "$@" 2>&1 | tee "$tmp"
     rc=${PIPESTATUS[0]}
-    out="$(cat "$tmp")"
+    out="$(<"$tmp")"
     rm -f "$tmp"
     [ "$rc" -ne 0 ] && explain_subnet_collision "$out"
     return "$rc"

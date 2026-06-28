@@ -112,26 +112,8 @@ def get_network_stats():
 
 
 def get_stratum_stats():
-    """
-    Parses local stratum statistics to extract worker configurations.
-
-    Returns:
-        tuple: (Raw JSON dict, List of worker config dicts)
-    """
-    raw = _read_json(STRATUM_STATS_PATH)
-
-    worker_configs = []
-    # Iterate through worker entries (Format: "IP, ..., ..., ..., Name, ...")
-    for w_entry in raw.get("workers", []):
-        if isinstance(w_entry, str):
-            parts = w_entry.split(",")
-            if len(parts) >= 1:
-                ip = parts[0].split(":")[0].strip()
-                # Default to "miner" if name field (index 4) is missing
-                name = parts[4].strip() if len(parts) >= 5 else "miner"
-                worker_configs.append({"ip": ip, "name": name, "parts": parts})
-
-    return raw, worker_configs
+    """Returns the raw local stratum statistics JSON dict."""
+    return _read_json(STRATUM_STATS_PATH)
 
 
 def get_tari_stats():

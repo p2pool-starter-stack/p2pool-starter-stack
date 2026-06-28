@@ -54,7 +54,7 @@ def get_memory_usage():
                 "percent": percent,
                 "percent_str": f"{percent:.1f}%",
             }
-    except Exception:  # noqa: S110 — best-effort disk stat; any failure falls through to the zeroed default below
+    except Exception:  # noqa: S110 — best-effort memory stat; any failure falls through to the zeroed default below
         pass
     return {"total_gb": 0, "used_gb": 0, "percent": 0, "percent_str": "0%"}
 

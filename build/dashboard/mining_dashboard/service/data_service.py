@@ -625,7 +625,7 @@ class DataService:
             while True:
                 try:
                     # 1. Collect Local Statistics (High Frequency Polling)
-                    stratum_raw, _ = get_stratum_stats()
+                    stratum_raw = get_stratum_stats()
 
                     # 2. Fetch Worker Statistics from XMRig Proxy + normalize the payload.
                     proxy_workers = []

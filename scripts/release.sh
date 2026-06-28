@@ -400,7 +400,7 @@ publish() {
 
     confirm "Create git tag $TAG, push it, and publish the GitHub Release?" ||
         {
-            warn "Publish cancelled. Images are promoted; re-run --resume-promote-less to finish, or publish by hand."
+            warn "Publish cancelled. Images are promoted; re-run --resume-promote to finish, or publish by hand."
             return 0
         }
 
