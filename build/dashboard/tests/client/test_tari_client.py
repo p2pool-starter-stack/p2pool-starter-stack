@@ -4,7 +4,7 @@ from mining_dashboard.client.tari.tari_client import TariClient
 
 
 def _client_with_stub():
-    client = TariClient(MagicMock())
+    client = TariClient()
     stub = MagicMock()
     client._channel = MagicMock()
     client._channel.close = AsyncMock()

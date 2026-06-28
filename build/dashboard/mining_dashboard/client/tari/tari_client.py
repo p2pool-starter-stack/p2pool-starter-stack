@@ -1,7 +1,6 @@
 import logging
 import time
 
-import aiohttp
 import grpc
 
 from mining_dashboard.config.config import TARI_GRPC_ADDRESS
@@ -23,8 +22,7 @@ class TariClient:
     # the proper "node is down" indicator is tracked separately in the TODO.
     _MAX_STALE_SECONDS = 300
 
-    def __init__(self, session: aiohttp.ClientSession):
-        self.session = session
+    def __init__(self):
         self.grpc_address = TARI_GRPC_ADDRESS
         self._channel = None
         self._stub = None

@@ -31,10 +31,6 @@ from mining_dashboard.helper.utils import (
     xvb_stats_are_stale,
 )
 
-# Only a local monerod's pruning state is knowable to us; a remote node isn't probed. The local
-# bridge IP tracks the configurable subnet prefix (#180).
-_LOCAL_MONERO_HOST = LOCAL_MONERO_HOST
-
 
 @dataclass(frozen=True)
 class SyncMetric:
@@ -285,7 +281,10 @@ def _sync_metric(sync):
 
 def _monero_mode():
     """Monero node pruning mode (Issue #32). Only meaningful for a local node — a remote
-    node's pruning state isn't something we probe, so it reads 'Unknown'."""
-    if MONERO_NODE_HOST == _LOCAL_MONERO_HOST:
+    node's pruning state isn't something we probe, so it reads 'Unknown'.
+
+    Only a local monerod's pruning state is knowable; the local bridge IP tracks the
+    configurable subnet prefix (#180)."""
+    if MONERO_NODE_HOST == LOCAL_MONERO_HOST:
         return "Pruned" if MONERO_PRUNE else "Full"
     return "Unknown"

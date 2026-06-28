@@ -619,7 +619,7 @@ class DataService:
 
         async with ClientSession() as session:
             worker_client = XMRigWorkerClient(session)
-            tari_client = TariClient(session)
+            tari_client = TariClient()
 
             # P2Pool shares are recorded from the cumulative shares_found counter (#129); None until
             # the first poll baselines it, so we never backfill the whole historical count on startup

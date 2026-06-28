@@ -864,7 +864,8 @@ reset_dashboard() {
     # Idempotent if it's already present from `up`; closes the gap where running reset-dashboard on a
     # `down` stack would otherwise bring p2pool up with no firewall installed at all.
     apply_tor_egress_firewall
-    docker compose up --pull "$(resolve_pull_policy)" -d dashboard p2pool
+    # Route through compose_up_checked so a subnet collision (#180) gets explained, like every other up-path.
+    compose_up_checked -d dashboard p2pool
 }
 
 # --- Backup / Restore ---
@@ -2040,7 +2041,7 @@ render_env() {
     [ -z "$xvb_url" ] && xvb_url="na.xmrvsbeast.com:4247"
     xvb_donor=$(jq -r '.xvb.donor_id // .xmrig_proxy.donor_id // empty' "$CONFIG_FILE")
     case "$xvb_donor" in
-    "" | auto | DYNAMIC_ID) xvb_donor=$(echo "$MONERO_WALLET" | cut -c 1-8) ;;
+    "" | auto | DYNAMIC_ID) xvb_donor="${MONERO_WALLET:0:8}" ;;
     esac
     # Donation tier target: auto (default) / donor|vip|whale|mega
     xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
@@ -2186,8 +2187,7 @@ EOF
 inject_service_configs() {
     log "Injecting service configurations..."
     cp build/tari/config.toml.template build/tari/config.toml
-    local tari_onion_short
-    tari_onion_short=$(echo "$TARI_ONION" | cut -d'.' -f1)
+    local tari_onion_short="${TARI_ONION%%.*}"
     safe_sed "s/<your_tari_onion_address_no_extension>/$tari_onion_short/g" build/tari/config.toml
     # Rebase the Tor control/SOCKS IPs onto the configured subnet prefix (#180): a no-op at the
     # default 172.28.0, rewrites the .25 Tor IP when network.subnet has been moved.
@@ -2204,8 +2204,7 @@ inject_service_configs() {
     # OFF, so re-enabling later starts a fresh clearnet sync. While a flag is ON the dashboard owns
     # the marker, so leave it. Markers live in the shared, dashboard-writable clearnet-state dir.
     local _csdir
-    _csdir=$(env_get CLEARNET_STATE_DIR)
-    [ -n "$_csdir" ] || _csdir="$PWD/data/clearnet-state"
+    _csdir=$(clearnet_state_dir)
     mkdir -p "$_csdir" 2>/dev/null || true
     [ "$(env_get MONERO_CLEARNET_SYNC)" = "true" ] || rm -f "$_csdir/monero.synced" 2>/dev/null || true
     [ "$(env_get TARI_CLEARNET_SYNC)" = "true" ] || rm -f "$_csdir/tari.synced" 2>/dev/null || true

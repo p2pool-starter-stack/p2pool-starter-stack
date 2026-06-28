@@ -199,9 +199,8 @@ class StateManager:
                     # 2. Load XVB Stats (KV Store)
                     cursor.execute("SELECT key, value FROM kv_store WHERE key LIKE 'xvb_%'")
                     for row in cursor.fetchall():
-                        key = row["key"]
-                        if key.startswith("xvb_"):
-                            key = key[4:]
+                        # The query filters to 'xvb_%', so every key carries the prefix; strip it.
+                        key = row["key"][4:]
 
                         val = row["value"]
 

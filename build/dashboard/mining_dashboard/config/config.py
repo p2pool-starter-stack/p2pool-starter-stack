@@ -357,12 +357,5 @@ if env_tiers and env_tiers.strip() and env_tiers != "''":
         pass
 
 # --- P2Pool Protocol Constants ---
-# Constants for PPLNS (Pay Per Last N Shares) window calculation
-BLOCK_PPLNS_WINDOW_MAIN = 2160  # Window size in blocks
-BLOCK_PPLNS_WINDOW_MINI = 2160
-BLOCK_PPLNS_WINDOW_NANO = 2160
-
 SECOND_PER_BLOCK_MAIN = 120  # Monero Target block time in seconds
-SECOND_PER_BLOCK_P2POOL_MAIN = 10  # P2Pool Main Block Time
-SECOND_PER_BLOCK_P2POOL_MINI = 10  # P2Pool Mini Block Time
-SECOND_PER_BLOCK_P2POOL_NANO = 30  # P2Pool Nano Block Time
+# PPLNS-window constants live in helper/utils.py (PPLNS_BLOCK_TIME_*, DEFAULT_PPLNS_WINDOW).
