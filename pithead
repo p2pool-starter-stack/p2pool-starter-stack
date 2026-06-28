@@ -1873,16 +1873,17 @@ warn_missing_data_dirs() {
     warn "move the data to these paths, or set the data_dir(s) in config.json (absolute) and run './pithead apply'."
 }
 
-# chown -R "$dir" to $uid:$gid, but ONLY when it isn't already owned by $uid. Keeps a routine apply
-# sudo-free in steady state, while migrating an existing install in one pass the first time the
-# owning uid changes — e.g. the root->non-root container switch (#255), whose already-synced chain
-# data was written by the old root containers. Portable stat: GNU (-c) on Linux deploy hosts, BSD
-# (-f) on a macOS dev checkout.
+# chown -R "$dir" to $uid:$gid, but ONLY when something in it isn't already owned by $uid. Keeps a
+# routine apply sudo-free in steady state, while migrating an existing install in one pass the first
+# time the owning uid changes — e.g. the root->non-root container switch (#255). We scan the whole
+# tree, not just the top-level dir: an install upgraded from the root-container era has a user-owned
+# data dir but root-owned *contents* (the daemons wrote bitmonero.conf, the SQLite DB, etc. as
+# root), and those are exactly what the non-root container can no longer overwrite. `find … -quit`
+# stops at the first foreign inode, so a clean dir stays a quick metadata scan with no chown/sudo.
 ensure_owner() {
-    local d="$1" want_u="$2" want_g="$3" cur
+    local d="$1" want_u="$2" want_g="$3"
     [ -d "$d" ] || return 0
-    cur=$(stat -c %u "$d" 2>/dev/null || stat -f %u "$d" 2>/dev/null || echo "")
-    [ "$cur" = "$want_u" ] && return 0
+    [ -z "$(find "$d" ! -uid "$want_u" -print -quit 2>/dev/null)" ] && return 0
     log "Setting ownership of $d to $want_u:$want_g (non-root containers, #255)..."
     sudo chown -R "$want_u":"$want_g" "$d"
 }
