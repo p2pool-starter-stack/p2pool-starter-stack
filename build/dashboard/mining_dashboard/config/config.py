@@ -285,6 +285,14 @@ XVB_MAINT_MARGIN_ABS_CAP = float(os.environ.get("XVB_MAINT_MARGIN_ABS_CAP", 1000
 # especially if XvB over-credits). 0.03 converges in a few hours and stays stable.
 XVB_CONTROL_GAIN = float(os.environ.get("XVB_CONTROL_GAIN", 0.03))
 
+# Age past which a frozen XvB stats read is treated as stale (#311). A successful
+# fetch lands every ~10 poll cycles (data_service throttle) and only a real fetch
+# bumps `last_update` (#136), so its age IS the fetch age. When the fetch goes quiet
+# (e.g. a stuck Tor circuit) `avg_1h` freezes; steering off that frozen number
+# over-donates against a target we can't refresh. Past this age the controller holds
+# the last split instead of chasing it. Default ~3 fetch intervals.
+XVB_STATS_STALE_AFTER_S = float(os.environ.get("XVB_STATS_STALE_AFTER_S", 3 * 10 * UPDATE_INTERVAL))
+
 # VIP / PPLNS reserve. To stay "VIP" we must keep finding p2pool shares, so we
 # reserve enough hashrate for p2pool to hold a share in the PPLNS window. The bare
 # minimum (one expected share per window) is sidechain_difficulty / window_seconds;

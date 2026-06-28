@@ -175,6 +175,7 @@
     "xvb_fail_count": 0,
     "xvb_routed_1h": "2.30 kH/s",
     "xvb_routed_24h": "2.30 kH/s",
+    "xvb_stale": false,
     "xvb_updated": "Never",
     "xvb_variant": "muted"
   },

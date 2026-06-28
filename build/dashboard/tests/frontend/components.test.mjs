@@ -101,6 +101,22 @@ test('EarningsCard shows the fallback when stats are down, the calculator when a
     assert.match(up, /id="whatif-hr"/);
 });
 
+test('XvBStats greys the credited figures and flags the footer when the fetch is stale (#311)', () => {
+    // Fresh (base fixture, xvb_stale false): the normal "Stats fetched" footer, no stale marks.
+    const fresh = renderApp();
+    assert.match(fresh, /Stats fetched from xmrvsbeast\.com \(Updated:/);
+    assert.doesNotMatch(fresh, /Stale —/);
+    assert.doesNotMatch(fresh, /Credited\) ⚠/);
+    // Stale: credited labels get a ⚠, the footer flips to the stale warning, status-warn applied.
+    const s = clone();
+    s.hashrate.xvb_stale = true;
+    const stale = renderApp({ state: s });
+    assert.match(stale, /1h Avg \(Credited\) ⚠/);
+    assert.match(stale, /24h Avg \(Credited\) ⚠/);
+    assert.match(stale, /⚠ Stale — last successful fetch from xmrvsbeast\.com/);
+    assert.match(stale, /status-warn/);
+});
+
 // --- Workers table ----------------------------------------------------------------------
 
 test('WorkersTable renders headers and a row per worker with status classes', () => {

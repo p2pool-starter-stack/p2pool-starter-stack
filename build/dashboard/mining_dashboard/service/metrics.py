@@ -22,7 +22,11 @@ from mining_dashboard.config.config import (
     XVB_DONATION_LEVEL,
     XVB_MAX_DONATION_FRACTION,
 )
-from mining_dashboard.helper.utils import get_tier_info, resolve_target_threshold
+from mining_dashboard.helper.utils import (
+    get_tier_info,
+    resolve_target_threshold,
+    xvb_stats_are_stale,
+)
 
 # Nano sidechain blocks are 30s; Main/Mini are 10s. Drives the PPLNS-window duration.
 _BLOCK_TIME_NANO = 30
@@ -93,6 +97,9 @@ class Metrics:
     # XvB raffle registration (#263). Defaulted so direct Metrics(...) constructors needn't set them.
     xvb_registered_at: float = 0.0  # epoch secs of last successful registration; 0.0 = never
     xvb_registration_state: str = ""  # ""|registered|invalid|failing — drives the badge
+    # True when the xmrvsbeast.com fetch has gone quiet (#311) — credited 1h/24h are frozen,
+    # so the UI greys them and the controller holds its split. Same predicate as the controller.
+    xvb_stale: bool = False
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -201,6 +208,7 @@ def build_metrics(latest_data, state_mgr, history=None):
         tari_mining=bool(data.get("tari", {}).get("active", False)),
         xvb_registered_at=xvb_stats.get("registered_at", 0) or 0,
         xvb_registration_state=xvb_stats.get("registration_state", "") or "",
+        xvb_stale=bool(ENABLE_XVB and xvb_stats_are_stale(xvb_stats)),
     )
 
 

@@ -498,6 +498,24 @@ class DataService:
                 f"until synced."
             )
 
+    async def _sync_xvb_stats(self):
+        """
+        Fetch XvB's reported averages (avg_1h/avg_24h/fail_count) over Tor and persist them.
+
+        A failed fetch (Tor timeout, 5xx) returns None — we write NOTHING in that case, leaving the
+        last-good values AND ``last_update`` frozen. That frozen ``last_update`` is exactly what the
+        controller and dashboard read to detect a stale feed and stop steering off a dead number
+        (#311). So "no write on failure" is a correctness precondition, not just an optimisation —
+        if this ever started stamping on failure, the staleness guard would silently never trigger.
+
+        The caller already gated on ENABLE_XVB + the 10th-iteration throttle.
+        """
+        real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
+        if not real_xvb_stats:
+            return  # fetch failed — keep the last reading + last_update frozen so #311 can detect it
+        await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
+        logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)")
+
     async def _maybe_register_xvb(self, shares, p2pool_stats):
         """
         Auto-enter the wallet into the XvB raffle once it's eligible (#263).
@@ -805,14 +823,7 @@ class DataService:
                     # 7. External XvB stats sync over Tor (#163), throttled to every 10th iteration,
                     # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.
                     if ENABLE_XVB and iteration_count % 10 == 0:
-                        real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
-                        if real_xvb_stats:
-                            await asyncio.to_thread(
-                                self.state_manager.update_xvb_stats, **real_xvb_stats
-                            )
-                            logger.info(
-                                f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)"
-                            )
+                        await self._sync_xvb_stats()
 
                         # 7b. XvB raffle auto-registration (#263). Rides the same throttle/egress as
                         # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS

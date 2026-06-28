@@ -26,8 +26,8 @@ const cVar = (v) => "c-" + v;
 
 // --- Small shared pieces -------------------------------------------------------------
 
-const StatCard = ({ label, value, cls, span }) => html`
-    <div class=${"stat-card" + (span ? " col-span-2" : "")}>
+const StatCard = ({ label, value, cls, span, title }) => html`
+    <div class=${"stat-card" + (span ? " col-span-2" : "")} title=${title || ""}>
         <h5>${label}</h5>
         <p class=${cls || ""}>${value}</p>
     </div>`;
@@ -306,6 +306,15 @@ function GlobalStats({ state }) {
 
 function XvBStats({ state }) {
   const hr = state.hashrate;
+  // When the xmrvsbeast.com fetch is stale (#311) the CREDITED figures are frozen —
+  // grey them and tag the label so they don't read as live. Routed (our own proxy
+  // history) is unaffected. Tooltip explains why.
+  const staleTitle =
+    "Stale: no successful fetch from xmrvsbeast.com since the time below. The credited " +
+    "figures are frozen at the last reading; the controller holds its split until a fresh read lands.";
+  const credLabel = (base) => (hr.xvb_stale ? base + " ⚠" : base);
+  const credCls = hr.xvb_stale ? "status-warn" : cVar(hr.xvb_variant);
+  const credTitle = hr.xvb_stale ? staleTitle : "";
   return html`
     <div class="card card-advanced" id="card-xvb">
         <h3>XvB Donation Stats</h3>
@@ -313,12 +322,14 @@ function XvBStats({ state }) {
             <${StatCard} label="Current Tier" value=${hr.tier} />
             <${StatCard} label="Target Tier" value=${hr.target_tier} />
             <${StatCard} label="1h Avg (Routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="1h Avg (Credited)" value=${hr.xvb_1h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label=${credLabel("1h Avg (Credited)")} value=${hr.xvb_1h} cls=${credCls} title=${credTitle} />
             <${StatCard} label="24h Avg (Routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="24h Avg (Credited)" value=${hr.xvb_24h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label=${credLabel("24h Avg (Credited)")} value=${hr.xvb_24h} cls=${credCls} title=${credTitle} />
             <${StatCard} label="Fail Count" value=${hr.xvb_fail_count} />
         </div>
-        <div class="text-xs text-muted mt-2">Stats fetched from xmrvsbeast.com (Updated: ${hr.xvb_updated})</div>
+        <div class=${"text-xs mt-2 " + (hr.xvb_stale ? "status-warn" : "text-muted")} title=${credTitle}>
+            ${hr.xvb_stale ? "⚠ Stale — last successful fetch from xmrvsbeast.com: " : "Stats fetched from xmrvsbeast.com (Updated: "}${hr.xvb_updated}${hr.xvb_stale ? "" : ")"}
+        </div>
     </div>`;
 }
 
