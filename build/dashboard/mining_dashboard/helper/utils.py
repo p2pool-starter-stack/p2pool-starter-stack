@@ -2,7 +2,7 @@ import ipaddress
 import socket
 import time
 
-from mining_dashboard.config.config import TIER_DEFAULTS
+from mining_dashboard.config.config import TIER_DEFAULTS, XVB_STATS_STALE_AFTER_S
 
 
 def parse_hashrate(val_str, unit_str=None):
@@ -112,6 +112,19 @@ def format_time_abs(timestamp):
         return time.strftime("%H:%M:%S", time.localtime(timestamp))
     except (ValueError, OSError, TypeError):
         return "Invalid Time"
+
+
+def xvb_stats_are_stale(xvb_stats):
+    """True when the XvB stats fetch has gone quiet long enough that ``avg_1h`` /
+    ``avg_24h`` are no longer trustworthy live readings (#311).
+
+    ``last_update`` bumps ONLY on a genuine xmrvsbeast.com fetch (#136), so its age
+    is the fetch age. A zero ``last_update`` means we've never fetched (cold start) —
+    NOT stale. Shared by the donation controller (which holds its split rather than
+    steering off a frozen number) and the dashboard (which greys the credited figures)
+    so the two never disagree about what "stale" means."""
+    last_update = (xvb_stats or {}).get("last_update", 0) or 0
+    return last_update > 0 and (time.time() - last_update) > XVB_STATS_STALE_AFTER_S
 
 
 def get_tier_info(hashrate, tiers=None):

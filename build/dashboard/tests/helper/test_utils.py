@@ -1,5 +1,7 @@
+import time
 from unittest.mock import patch
 
+from mining_dashboard.config.config import XVB_STATS_STALE_AFTER_S
 from mining_dashboard.helper.utils import (
     detect_host_ipv4,
     format_duration,
@@ -9,7 +11,32 @@ from mining_dashboard.helper.utils import (
     is_ip_address,
     parse_hashrate,
     resolve_target_threshold,
+    xvb_stats_are_stale,
 )
+
+
+class TestXvbStatsAreStale:
+    """#311: the shared freshness predicate used by both the controller and the dashboard."""
+
+    def test_cold_start_never_fetched_is_not_stale(self):
+        # No/zero last_update => never fetched => the feedforward-ramp regime, not stale.
+        assert xvb_stats_are_stale({}) is False
+        assert xvb_stats_are_stale({"last_update": 0}) is False
+        assert xvb_stats_are_stale(None) is False
+
+    def test_recent_fetch_is_not_stale(self):
+        assert xvb_stats_are_stale({"last_update": time.time()}) is False
+
+    def test_old_fetch_is_stale(self):
+        assert (
+            xvb_stats_are_stale({"last_update": time.time() - XVB_STATS_STALE_AFTER_S - 1}) is True
+        )
+
+    def test_boundary_just_within_threshold_is_not_stale(self):
+        # Age just under the threshold is still fresh (strict > comparison).
+        assert (
+            xvb_stats_are_stale({"last_update": time.time() - XVB_STATS_STALE_AFTER_S + 5}) is False
+        )
 
 
 class TestParseHashrate:

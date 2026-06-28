@@ -374,6 +374,9 @@ def build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok):
         "target_tier": metrics.target_tier,
         "xvb_fail_count": metrics.xvb_fail_count,
         "xvb_updated": format_time_abs(metrics.xvb_last_update),
+        # Credited 1h/24h are frozen while the fetch is stale (#311) — the UI greys
+        # them and flags the "Updated" line so the operator isn't misled by stale data.
+        "xvb_stale": metrics.xvb_stale,
         "low_hr": {"text": "⚠ Hashrate low for tier", "title": _LOW_HR_TITLE}
         if metrics.low_hr_warning
         else None,

@@ -10,7 +10,7 @@ import time
 from unittest.mock import MagicMock
 
 import mining_dashboard.service.metrics as metrics
-from mining_dashboard.config.config import TIER_DEFAULTS
+from mining_dashboard.config.config import TIER_DEFAULTS, XVB_STATS_STALE_AFTER_S
 from mining_dashboard.service.metrics import (
     _avg_p2pool_over_window,
     _avg_xvb_over_window,
@@ -218,6 +218,29 @@ class TestModeAndTiers:
         m = build_metrics(_data(), _mgr(xvb={}))
         assert m.xvb_registered_at == 0
         assert m.xvb_registration_state == ""
+
+    def test_xvb_stale_flag_tracks_fetch_age(self, monkeypatch):
+        # #311: surface a stale fetch so the UI can grey the credited figures.
+        monkeypatch.setattr(metrics, "ENABLE_XVB", True)
+        fresh = build_metrics(_data(), _mgr(xvb={"last_update": time.time()}))
+        assert fresh.xvb_stale is False
+        stale = build_metrics(
+            _data(), _mgr(xvb={"last_update": time.time() - XVB_STATS_STALE_AFTER_S - 60})
+        )
+        assert stale.xvb_stale is True
+
+    def test_xvb_stale_never_set_when_disabled(self, monkeypatch):
+        # XvB off => no donation logic, so an old timestamp must not raise a stale flag.
+        monkeypatch.setattr(metrics, "ENABLE_XVB", False)
+        m = build_metrics(
+            _data(), _mgr(xvb={"last_update": time.time() - XVB_STATS_STALE_AFTER_S - 60})
+        )
+        assert m.xvb_stale is False
+
+    def test_xvb_stale_false_on_cold_start(self, monkeypatch):
+        # Never fetched (last_update absent) => cold start, not stale (the ramp regime).
+        monkeypatch.setattr(metrics, "ENABLE_XVB", True)
+        assert build_metrics(_data(), _mgr(xvb={})).xvb_stale is False
 
 
 class TestWorkers:

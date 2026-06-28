@@ -23,7 +23,7 @@ from mining_dashboard.config.config import (
     XVB_TOR_ENABLED,
     XVB_TOR_SOCKS5,
 )
-from mining_dashboard.helper.utils import resolve_target_threshold
+from mining_dashboard.helper.utils import resolve_target_threshold, xvb_stats_are_stale
 
 logger = logging.getLogger("AlgoService")
 
@@ -210,15 +210,11 @@ class AlgoService:
         return target
 
     def _stats_are_stale(self, xvb_stats):
-        """True when the XvB stats fetch has gone quiet long enough that ``avg_1h``
-        is no longer a trustworthy live reading (#311).
-
-        ``last_update`` bumps ONLY on a genuine xmrvsbeast.com fetch (#136), so its
-        age is the fetch age. A zero ``last_update`` means we've never fetched (cold
-        start) — that's NOT stale: it's the feedforward-ramp regime, which must be
-        left alone so the controller can seed and climb to tier."""
-        last_update = xvb_stats.get("last_update", 0) or 0
-        return last_update > 0 and (time.time() - last_update) > XVB_STATS_STALE_AFTER_S
+        """A stale XvB read freezes ``avg_1h`` (#311); holding the split beats steering
+        off a frozen number. Shared with the dashboard via ``xvb_stats_are_stale`` so
+        the controller and the UI agree on staleness. Cold start (no fetch yet) is NOT
+        stale — the feedforward ramp must be left to seed and climb to tier."""
+        return xvb_stats_are_stale(xvb_stats)
 
     def _reference_hr(self, target_hr):
         """Hashrate the controller holds XvB's 1h average at: the tier threshold
