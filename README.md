@@ -208,4 +208,7 @@ appreciated:
 
 ## 📄 License
 
-Provided "as-is" under the [MIT License](./LICENSE).
+Pithead's own code is provided "as-is" under the [MIT License](./LICENSE). Bundled
+third-party components keep their own licenses (two — `p2pool`, `xmrig-proxy` — are GPLv3,
+shipped unmodified as separate containers) — see
+[`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md).
