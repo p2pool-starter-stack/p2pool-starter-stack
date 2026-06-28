@@ -72,11 +72,14 @@ LABEL org.opencontainers.image.title="Pithead Dashboard" \
 
 # Run non-root (#255). debian-slim has no stock uid-1000 user, so create 'pithead' (uid:gid
 # 1000:1000) to match the uid pithead chowns ${DASHBOARD_DATA_DIR} (/data) to. /app + the venv stay
-# root-owned and are only read/executed at runtime; the SQLite history is written to /data, and the
-# clearnet-state marker dir is world-writable (#234), so no app-dir writes are needed. This lets
-# compose finally cap_drop:[ALL] the dashboard — it no longer needs root's CAP_DAC_OVERRIDE to write
-# into the host-user-owned data dir.
-RUN groupadd -g 1000 pithead && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin pithead
+# root-owned and are only read/executed at runtime; the SQLite history is written to /data and the
+# clearnet-state marker to /clearnet-state. Create both in-image owned by pithead: with a host
+# bind-mount (the real stack) the mount masks them and pithead's chown governs ownership; with a
+# NAMED volume (the integration mini-stack) Docker seeds the empty volume from the image dir's
+# ownership, so this is what makes /data writable there. This lets compose finally cap_drop:[ALL]
+# the dashboard — it no longer needs root's CAP_DAC_OVERRIDE to write the host-user-owned data dir.
+RUN groupadd -g 1000 pithead && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin pithead \
+    && install -d -o pithead -g pithead /data /clearnet-state
 USER pithead
 
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
