@@ -466,13 +466,13 @@ compose_build_mounts() {
 # containers find the config templates they render at setup.
 make_bundle() {
     # Unpacks to a versionless "pithead/" dir so the documented quick start can `cd pithead` and so a
-    # later bundle re-download upgrades it in place. Ships BOTH config templates: config.json.template
+    # later bundle re-download upgrades it in place. Ships BOTH config templates: config.minimal.json
     # (basic — just the two wallet addresses, the documented quick-start config) and the advanced
     # example. The bundle README + the repo quick start both point at the basic one (matching setup's
-    # own "copy config.json.template" guidance); the advanced example is "for more options".
+    # own "copy config.minimal.json" guidance); the advanced example is "for more options".
     local out="$1" d="$WORKDIR/pithead"
     mkdir -p "$d"
-    cp pithead VERSION docker-compose.yml config.json.template config.advanced.example.json "$d/" 2>/dev/null || true
+    cp pithead VERSION docker-compose.yml config.minimal.json config.reference.json "$d/" 2>/dev/null || true
     local m
     while IFS= read -r m; do
         [ -e "$m" ] || {
@@ -482,7 +482,7 @@ make_bundle() {
         mkdir -p "$d/$(dirname "$m")"
         cp -R "$m" "$d/$(dirname "$m")/"
     done < <(compose_build_mounts docker-compose.yml)
-    printf 'Pithead %s — pinned install bundle (images pulled from %s, no local build).\n\nQuick start:\n  1. cp config.json.template config.json   # then set your Monero + Tari payout addresses\n     (more options: config.advanced.example.json)\n  2. ./pithead setup\n\nThere are no build contexts here, so pithead pulls the published %s images instead of building.\n' \
+    printf 'Pithead %s — pinned install bundle (images pulled from %s, no local build).\n\nQuick start:\n  1. cp config.minimal.json config.json   # then set your Monero + Tari payout addresses\n     (more options: config.reference.json)\n  2. ./pithead setup\n\nThere are no build contexts here, so pithead pulls the published %s images instead of building.\n' \
         "$TAG" "$REGISTRY" "$TAG" >"$d/README.txt"
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"

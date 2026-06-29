@@ -9,7 +9,7 @@ Only your two wallet addresses are required. Every other key is optional and fal
 the node runs locally, on the `main` pool, with a secure dashboard, and the local node's RPC
 credentials are auto-generated. Leave a key out unless you want to change it.
 
-A fresh `config.json` is just this (see [`config.json.template`](../config.json.template)):
+A fresh `config.json` is just this (see [`config.minimal.json`](../config.minimal.json)):
 
 ```json
 {
@@ -23,7 +23,7 @@ A fresh `config.json` is just this (see [`config.json.template`](../config.json.
 ```
 
 For the full shape with every key and its default, see
-[`config.advanced.example.json`](../config.advanced.example.json) and copy in only the keys you
+[`config.reference.json`](../config.reference.json) and copy in only the keys you
 want to override.
 
 > The string `"auto"` anywhere means "let the stack pick the default": a default path, the
