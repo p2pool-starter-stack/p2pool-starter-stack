@@ -1,10 +1,10 @@
 # Pithead reference build & test server
 
-A dedicated dev + test platform that runs the live Pithead stack (Monero node + P2Pool + Tari
-merge-mining + dashboard) against real, synced chains, and serves as the Tier-4 release gate —
-changes are validated end-to-end here before release. This guide describes how to provision and
-run your own; substitute your own host, user, and paths throughout. The examples below assume the
-host is reachable over SSH as `$BENCH_HOST`.
+A dev and test box that runs the live Pithead stack (Monero node + P2Pool + Tari merge-mining +
+dashboard) against real, synced chains, and serves as the Tier-4 release gate: changes are
+validated end-to-end here before release. This guide covers how to provision and run your own;
+substitute your own host, user, and paths throughout. The examples assume the host is reachable
+over SSH as `$BENCH_HOST`.
 
 See `docs/test-server-architecture.md` for the full architecture and how to stand a box up from
 scratch.
@@ -98,7 +98,7 @@ recovery; release readiness; pruned monerod (the common production config).
 |---|---|---|
 | 1 | Full (unpruned) Monero mode live — a pruned bench can't cover it | Low. Stack code paths don't differ by prune mode (it's monerod-internal); fakes/config cover it. A multi-day full sync isn't justified. |
 | 2 | Privacy / Tor egress — clearnet-leak assertions in the live harness (issue #160) | High. Privacy is a core promise. Assert no clearnet to XvB stats, p2pool, or Tari DNS. |
-| 3 | Automated PR gate — a self-hosted runner is manual/opt-in | Medium-high, high-leverage. Wire the live harness as a required check on `workflow_dispatch`/push-to-`main` only (never fork PRs). |
+| 3 | Automated PR gate — a self-hosted runner is manual/opt-in | Medium-high, high-impact. Wire the live harness as a required check on `workflow_dispatch`/push-to-`main` only (never fork PRs). |
 | 4 | Upgrade / migration across image versions with chain continuity | Medium. Real users upgrade. Add a scenario: pull new images → `apply` → assert chain continuity, no re-sync, secrets intact. |
 | 5 | XvB live routing end-to-end (the raffle optimization) | Medium. Core value-prop, but unit/sim-tested today. A periodic live XvB smoke test would help; hard to assert deterministically. |
 | 6 | Multi-worker scale — the harness assumes ~2 workers | Medium. For perf confidence add a load-gen worker and assert proxy routing/hashrate. Not a blocker. |
