@@ -4,17 +4,16 @@
 
 # Pithead
 
-### Private Monero + Tari merge mining, the whole stack, in one command
+### Private Monero + Tari merge mining stack
 
 [![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Tor](https://img.shields.io/badge/Networking-Tor--first-7D4698?logo=torproject&logoColor=white)
 
-A professional-grade, containerized stack for running a private [Monero](https://www.getmonero.org/)
-full node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge
-mining — engineered for **privacy**, **performance**, and **a setup you can finish before your
-coffee gets cold**.
+Pithead is a containerized stack for running a private [Monero](https://www.getmonero.org/) full
+node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge mining.
+An interactive setup script takes you from clone to mining in a few minutes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
@@ -25,28 +24,27 @@ coffee gets cold**.
 
 ---
 
-## ✨ Why this stack?
+## What it does
 
-- ⛏️ **Zero-fee, decentralized payouts.** Mine Monero on [P2Pool](https://p2pool.io/) — no pool
-  operator, no fees, rewards paid straight to your own wallet — and every hash **merge-mines Tari
-  for free**: a second payout for zero extra power or config.
-- 🧠 **Set-and-forget yield optimizer.** An algorithmic engine watches the XMRvsBeast raffle and
-  automatically shifts hashrate to grab bonus rounds — donating only the **minimum** needed to hold
-  your tier, then handing every spare cycle back to your own P2Pool payouts. No manual tuning, no
-  over-donating.
-- 🧅 **Tor-first, no port forwarding.** A built-in Tor daemon gives Monero, Tari, and P2Pool
-  hidden-service (onion) addresses, so **your router stays closed and your home IP is never
-  advertised to an inbound peer**. (Two outbound yield paths still touch clearnet in v1.0 — the
-  [privacy guide](docs/privacy.md) maps every connection and how to harden it today.)
-- 🔌 **One endpoint for every rig.** Point all your workers at a single address — no wallet in the
-  miner, no per-rig pool config, ever. The stack routes the hashrate for you.
-- 📊 **A dashboard worth leaving open.** Watch live hashrate, your P2Pool/XvB split shading in real
-  time, the PPLNS window, and every worker update — served over HTTPS on your LAN.
-- 🚀 **One-command setup.** An interactive script handles dependencies, config, Tor, and — on Linux —
-  RandomX kernel tuning (it asks before touching GRUB), then offers to start everything for you.
-- 🔒 **Hardened out of the box.** Least-privilege containers, SHA256-verified binaries, pinned
-  versions, localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for
-  stats, plus a separate start/stop-only one for node-down worker failover).
+- ⛏️ **Zero-fee, decentralized payouts.** Mines Monero on [P2Pool](https://p2pool.io/): no pool
+  operator, no fees, rewards paid straight to your own wallet. Every hash also merge-mines Tari at
+  no extra power or config cost.
+- 🧠 **XvB yield optimizer.** An algorithmic engine watches the XMRvsBeast raffle and shifts
+  hashrate to catch bonus rounds. It donates only the minimum needed to hold your tier and returns
+  every spare cycle to your own P2Pool payouts.
+- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses,
+  so your router stays closed and your home IP is never advertised to an inbound peer. Two outbound
+  yield paths still touch clearnet in v1.0; the [privacy guide](docs/privacy.md) maps every
+  connection and how to harden it.
+- 🔌 **One endpoint for every rig.** Point all your workers at a single address. Wallets and per-rig
+  pool config stay out of the miner; the stack routes the hashrate.
+- 📊 **Live dashboard.** Shows hashrate, your P2Pool/XvB split, the PPLNS window, and every worker
+  update, served over HTTPS on your LAN.
+- 🚀 **Interactive setup.** A script handles dependencies, config, Tor, and (on Linux) RandomX
+  kernel tuning. It asks before touching GRUB, then offers to start the stack.
+- 🔒 **Hardened defaults.** Least-privilege containers, SHA256-verified binaries, pinned versions,
+  localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for stats, plus a
+  separate start/stop-only one for node-down worker failover).
 
 ---
 
@@ -60,21 +58,21 @@ cp config.json.template config.json   # then set your Monero + Tari payout addre
 ./pithead setup
 ```
 
-> Want every tunable? Copy `config.advanced.example.json` instead. Prefer to build from source (a
-> `dev` build) — e.g. to contribute? See [Install from source](docs/getting-started.md#alternative-build-from-source).
+> For every tunable, copy `config.advanced.example.json` instead. To build from source (a `dev`
+> build), e.g. to contribute, see [Install from source](docs/getting-started.md#alternative-build-from-source).
 
-> **Prereqs:** Ubuntu Server **24.04 LTS**, **16 GB+ RAM**, an **SSD** (~300 GB pruned / ~500 GB
-> full minimum — the chains grow ~100+ GB/year, so 2–4 TB is the set-and-forget choice), and your
-> **Monero + Tari payout addresses** handy — full sizing in [Hardware Requirements](docs/hardware.md).
+> NOTE: Prereqs are Ubuntu Server 24.04 LTS, 16 GB+ RAM, an SSD (~300 GB pruned / ~500 GB full
+> minimum; the chains grow ~100+ GB/year, so 2–4 TB avoids a later resize), and your Monero + Tari
+> payout addresses. Full sizing in [Hardware Requirements](docs/hardware.md).
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
 addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the stack. Then:
 
-1. **Open the dashboard** at `https://<your-hostname>` (the script prints the exact URL).
-2. **Let it sync.** On first boot the dashboard shows **Sync Mode** while your Monero and Tari
-   nodes catch up to the network — it switches to the live view automatically once synced. p2pool
-   and the proxy stay parked until then, so the sync logs stay clean.
-3. **Connect your miners** by pointing any [XMRig](https://github.com/xmrig/xmrig) rig at
+1. Open the dashboard at `https://<your-hostname>` (the script prints the exact URL).
+2. Let it sync. On first boot the dashboard shows Sync Mode while your Monero and Tari nodes catch
+   up to the network, then switches to the live view automatically once synced. p2pool and the
+   proxy stay parked until then, so the sync logs stay clean.
+3. Connect your miners by pointing any [XMRig](https://github.com/xmrig/xmrig) rig at
    `YOUR_STACK_IP:3333` (no wallet address needed). New to mining?
    [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a tuned worker in one
    command.
@@ -83,10 +81,10 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
   <img src="./images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">
 </div>
 
-📖 **Full walkthrough:** [docs/getting-started.md](docs/getting-started.md)
+Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 
-> **Already have a synced Monero node?** Skip the wait by pointing the stack at your existing
-> blockchain — see [Reusing an existing node](docs/configuration.md#reusing-an-existing-node).
+> NOTE: Already have a synced Monero node? Point the stack at your existing blockchain to skip the
+> wait. See [Reusing an existing node](docs/configuration.md#reusing-an-existing-node).
 
 ---
 
@@ -95,12 +93,12 @@ addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the
 | Guide | What's inside |
 |---|---|
 | **[Getting Started](docs/getting-started.md)** | Prerequisites, install, first-run setup, and what to expect while the node syncs. |
-| **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network — and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
+| **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network), and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode and a tour of the live operational view. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
 | **[Architecture](docs/architecture.md)** | The nine services, the privacy model, and the algorithmic XvB switching engine. |
-| **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection — what's Tor-routed, what's clearnet today, and how to harden it. |
+| **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection: what's Tor-routed, what's clearnet today, and how to harden it. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
 Browse the full index at **[docs/](docs/README.md)**.
@@ -109,10 +107,10 @@ Browse the full index at **[docs/](docs/README.md)**.
 
 ## 🏗️ How it works
 
-The stack orchestrates nine services via Docker Compose: a Monero **full node**, **P2Pool**, a
-**Tari** base node, an **XMRig proxy** (your single worker endpoint), **Tor** for anonymity, the
-**dashboard** + switching engine, a read-only **Docker socket proxy** (plus a tiny start/stop-only
-control proxy), and **Caddy** for HTTPS.
+The stack orchestrates nine services via Docker Compose: a Monero full node, P2Pool, a Tari base
+node, an XMRig proxy (your single worker endpoint), Tor for anonymity, the dashboard plus switching
+engine, a read-only Docker socket proxy (plus a tiny start/stop-only control proxy), and Caddy for
+HTTPS.
 
 ```mermaid
 flowchart TB
@@ -172,8 +170,8 @@ flowchart TB
     style core stroke:#10b981,stroke-width:1px,stroke-dasharray:5 4;
 ```
 
-Read the full breakdown — including the privacy model and the algorithmic switching engine — in
-**[Architecture](docs/architecture.md)**.
+Read the full breakdown, including the privacy model and the algorithmic switching engine, in
+[Architecture](docs/architecture.md).
 
 ---
 
@@ -199,8 +197,7 @@ Full reference: **[Operations & Maintenance](docs/operations.md)**.
 
 ## 🤝 Donate
 
-If this stack saved you time and you'd like to support it, donations to this XMR wallet are
-appreciated:
+If this stack saved you time, donations to this XMR wallet are appreciated:
 
 ```
 486aGn4qhH1MkaASjnEWMDN7stD1SVtPF5fvihmjffeBE5ACL1u1jU95KxiqmoiaPZMexi4R4W11MLXut66XWVVF8wjAE5R
@@ -209,6 +206,6 @@ appreciated:
 ## 📄 License
 
 Pithead's own code is provided "as-is" under the [MIT License](./LICENSE). Bundled
-third-party components keep their own licenses (two — `p2pool`, `xmrig-proxy` — are GPLv3,
-shipped unmodified as separate containers) — see
+third-party components keep their own licenses (two, `p2pool` and `xmrig-proxy`, are GPLv3,
+shipped unmodified as separate containers). See
 [`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # bench-status.sh — one-screen status of the Tor-vs-clearnet benchmark (#256), for checking over
-# Tailscale: `ssh gouda bench-status`. Read-only; prints status.json + the recent event/health tail.
+# Remotely: `ssh <bench-host> bench-status`. Read-only; prints status.json + the recent event/health tail.
 #
 #   bench-status.sh [--json]     (--json: dump the raw status.json instead of the pretty view)
 

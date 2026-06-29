@@ -2,7 +2,7 @@
 #
 # bench-orchestrate.sh — autonomous driver for the Tor-vs-clearnet benchmark (#256).
 #
-# Runs ENTIRELY on the mining host (gouda) so the benchmark survives the operator being offline for
+# Runs ENTIRELY on the mining host so the benchmark survives the operator being offline for
 # days. It interleaves the two arms on a fixed block schedule (T -> C -> T -> C ...), egress-gates
 # every switch, keeps the collector running, health-checks each cycle, and writes a heartbeat the
 # operator reads over Tailscale (`bench-status`). All state lives in ~/pithead-bench, so a crash or a
@@ -310,9 +310,9 @@ cmd_stop() {
     log "stop requested"
     pkill -f "bench-collect.sh " 2>/dev/null || true
     crontab -l 2>/dev/null | grep -v "bench-orchestrate.sh" | crontab - 2>/dev/null || true
-    # Restore the resting config: Tor default + firewall fail-closed + XvB re-enabled (gouda's normal
+    # Restore the resting config: Tor default + firewall fail-closed + XvB re-enabled (the bench's normal
     # pre-benchmark state). The firewall=true is load-bearing — if we stop mid-clearnet-block we must
-    # not leave gouda with the egress firewall off.
+    # not leave the bench with the egress firewall off.
     (cd "$DIR" && jq '.p2pool.clearnet=false | .network.tor_egress_firewall=true | .xvb.tor=true | .xvb.enabled=true' config.json >config.json.bench && mv config.json.bench config.json && ./pithead apply -y) >>"$ORCH_LOG" 2>&1 || true
     log "stopped: collector killed, cron removed, restored Tor default + firewall on + re-enabled XvB. Data kept in $BENCH_DIR."
 }

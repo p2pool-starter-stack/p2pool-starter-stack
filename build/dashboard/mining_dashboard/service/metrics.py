@@ -271,7 +271,7 @@ def _sync_metric(sync):
         has_target=has_target,
         # "done" = the chain reports itself caught up. A synced monerod returns target_height: 0, so
         # the percent>=100 path never fires for it — which left a fully-synced node stuck at "loading"
-        # (found in the #180 gouda validation). Trust the authoritative reachable + not-is_syncing
+        # (found in the #180 live validation). Trust the authoritative reachable + not-is_syncing
         # signal too; Tari already reports current==target/percent=100, so it's unaffected.
         done=(sync.get("reachable", False) and not sync.get("is_syncing", True))
         or (has_target and percent >= 100),

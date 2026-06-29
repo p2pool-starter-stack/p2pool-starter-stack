@@ -1,13 +1,13 @@
 # Testing Strategy
 
-How Pithead simulates **every situation the stack can be in** — and which layer proves each
-one. This is the map behind the [integration suite](integration-testing.md); read that for how
-to run the live matrix, and this for *what we test where, and why*.
+How Pithead simulates every situation the stack can be in, and which layer proves each one. This
+is the map behind the [integration suite](integration-testing.md); read that for how to run the
+live matrix, and this for what we test where, and why.
 
-The guiding idea: the stack's runtime behaviour is a **state machine** (syncing → held →
-released; healthy → down → rejected → recovered → readmitted; XvB tiers; container health),
-and a healthy, already-synced box only ever shows you one corner of it. So we simulate the rest
-— at the cheapest layer that can prove each situation honestly.
+The stack's runtime behaviour is a state machine: syncing → held → released; healthy → down →
+rejected → recovered → readmitted; XvB tiers; container health. A healthy, already-synced box only
+ever shows one corner of it, so we simulate the rest at the cheapest layer that can prove each
+situation honestly.
 
 ## The four tiers
 
@@ -18,19 +18,18 @@ and a healthy, already-synced box only ever shows you one corner of it. So we si
 | **3 — Mini-stack** | `tests/integration/mini-stack/` (real dashboard + docker-control vs fake daemons) | The control plane **end-to-end with real containers**: hold/release and reject/readmit actually stopping/starting `p2pool`/`xmrig-proxy`, driven deterministically | CI with Docker (`make test-mini-stack`) |
 | **4 — Live matrix** | `tests/integration/run.sh` against a real, synced box | What only reality proves: real merge-mining, prune/full DB size, Caddy TLS, Tor onions, HugePages, plus fault injection for real container health verdicts | Manual / release gate (`make test-integration`) |
 
-**Why this shape, and the answer to "should we use stubs?"** Stubs already do the heavy
-lifting — the dashboard has ~140 unit tests that exhaustively drive the hard runtime states with
-mocked clients. Adding *more* mocks for the same logic would be duplication. What stubs **can't**
-prove is wiring: that the real clients parse real daemon output (tier 2), that the dashboard's
-stop/start actually moves real containers (tier 3), and that real daemons sync/merge-mine and
-real containers go unhealthy (tier 4). So the strategy is **stubs for logic, controllable fake
-daemons for the control-plane wiring, and the real box for the irreducibly-real** — each
-situation tested once, at the lowest tier that's honest.
+Why this shape, and whether to use stubs: stubs already do most of the work. The dashboard has
+~140 unit tests that drive the hard runtime states with mocked clients. More mocks for the same
+logic would be duplication. What stubs can't prove is wiring: that the real clients parse real
+daemon output (tier 2), that the dashboard's stop/start moves real containers (tier 3), and that
+real daemons sync/merge-mine and real containers go unhealthy (tier 4). So the strategy is stubs
+for logic, controllable fake daemons for the control-plane wiring, and the real box for the
+irreducibly-real. Each situation is tested once, at the lowest tier that's honest.
 
-The fakes are the key enabler: because the whole control plane is env-configurable
+The fakes are the key enabler. Because the whole control plane is env-configurable
 (`MONERO_RPC_URL`, `TARI_GRPC_ADDRESS`, `DOCKER_CONTROL_URL`, `NODE_DOWN_AFTER_SEC`,
-`UPDATE_INTERVAL`, …), we can point the real code at tiny controllable servers and drive the
-entire state machine in seconds, in CI, with no chain and no test box.
+`UPDATE_INTERVAL`, …), we point the real code at tiny controllable servers and drive the entire
+state machine in seconds, in CI, with no chain and no test box.
 
 ## Scenario catalog
 
@@ -127,9 +126,9 @@ make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-in
 
 ## Production-readiness posture
 
-What gates a merge vs. a release, the engineering standards every test holds to, and the gaps
-we know about. The full enumerated coverage is in the generated
-[Test Inventory](test-inventory.md) (kept honest by a CI drift check).
+What gates a merge vs. a release, the engineering standards every test holds to, and the gaps we
+know about. The full enumerated coverage is in the generated [Test Inventory](test-inventory.md)
+(kept honest by a CI drift check).
 
 ### What runs where
 
@@ -146,73 +145,73 @@ we know about. The full enumerated coverage is in the generated
 | Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
 | **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
 
-The first three tiers run on every PR with no special infrastructure; tier 4 is the blocking
-**pre-release** gate (see [Releasing](releasing.md)) because it needs the real synced nodes.
+The first three tiers run on every PR with no special infrastructure. Tier 4 is the blocking
+pre-release gate (see [Releasing](releasing.md)) because it needs the real synced nodes.
 
 ### Engineering standards
 
-Every scenario, at every tier, holds to the same discipline:
+Every scenario, at every tier, holds to the same discipline.
 
-- **Deterministic, no sleep-and-hope.** Wait on real readiness signals — container health,
+- Deterministic, no sleep-and-hope. Wait on real readiness signals — container health,
   `pithead status`, dashboard sync %, miner-released — with timeouts. The only fixed sleeps are
-  *poll intervals* and the deliberate "stays in state" windows that prove the gate does **not**
-  act prematurely.
-- **Isolated & idempotent.** Each scenario starts from a known baseline and restores it; the
-  live matrix snapshots `config.json` and reuses (never mutates) the canonical chain dirs; the
+  poll intervals and the deliberate "stays in state" windows that prove the gate does not act
+  prematurely.
+- Isolated and idempotent. Each scenario starts from a known baseline and restores it. The live
+  matrix snapshots `config.json` and reuses (never mutates) the canonical chain dirs; the
   mini-stack tears down with `down -v`.
-- **Actionable failures.** Per-scenario pass/fail, continue-on-error to collect the whole
-  matrix, and artifact capture (redacted logs, `compose ps`, `.env`-minus-secrets, dashboard
-  responses) on failure.
-- **Secrets hygiene.** Tokens / RPC creds / onions are never printed; preservation is checked
-  by hashing on the box; all artifacts pass a redactor.
-- **Reproducible.** The live run records a manifest (stack `VERSION`, git rev, image digests).
-- **Test code is real code.** Same lint (shellcheck), the coverage gate, and the inventory
-  drift check apply to the tests themselves.
+- Actionable failures. Per-scenario pass/fail, continue-on-error to collect the whole matrix, and
+  artifact capture (redacted logs, `compose ps`, `.env`-minus-secrets, dashboard responses) on
+  failure.
+- Secrets hygiene. Tokens, RPC creds, and onions are never printed; preservation is checked by
+  hashing on the box; all artifacts pass a redactor.
+- Reproducible. The live run records a manifest (stack `VERSION`, git rev, image digests).
+- Test code is real code. The same lint (shellcheck), coverage gate, and inventory drift check
+  apply to the tests themselves.
 
 ### Flake policy
 
-Integration scenarios **quarantine, never blind-retry**: a scenario that fails intermittently
-is marked and investigated, not wrapped in a retry loop that hides a real race. The waiters
-have generous timeouts so a slow-but-correct stack passes while a genuinely broken one fails
-fast with artifacts.
+Integration scenarios quarantine, never blind-retry. A scenario that fails intermittently is
+marked and investigated, not wrapped in a retry loop that hides a real race. The waiters have
+generous timeouts so a slow-but-correct stack passes while a genuinely broken one fails fast with
+artifacts.
 
 ### Known gaps (honest)
 
-These are deliberately **not** yet covered and are the road to full production confidence:
+These are deliberately not yet covered and are the road to full production confidence.
 
-- **First green run on real hardware.** ✅ Two of the three real-environment tiers are green:
-  the live harness `--check` (tier 4 read path — 22/22 against a synced, mining box) and the
-  fake-daemon mini-stack (tier 3 — 11/11 on a real Docker host). Between them they surfaced and
-  fixed four bugs: the dashboard pruned/full label (#32); the harness's three over-strict
-  assertions (monero-synced, conns, prune display); the fake Tari binding gRPC to loopback; and
-  the mini-stack's container-name/port isolation. Still pending: the full **destructive** config
-  matrix run on the box (its read path is already proven via `--check`).
-- **Destructive-matrix safety.** ✅ `run.sh --safety-backup` takes a real `pithead backup`
-  before the destructive scenarios and **automatically rolls the box back** (down → restore →
-  up) if anything fails; the archive is removed on success. So the matrix can run on a precious
-  box with a one-command rollback net.
-- **CLI breadth in automation.** ✅ `backup`/`restore` are now exercised end-to-end — by
-  `--safety-backup` and by a `--lifecycle` backup→restore round-trip (assert the pool reverts
-  and secrets survive). `reset-dashboard` and `upgrade` are still only unit-covered (upgrade
-  belongs to the release staging smoke test, since it rebuilds/pulls the bundle under test).
-- **Soak / longevity.** No multi-hour run asserting no leaks, no log/DB growth runaway, and that
-  the XvB controller converges over a realistic window.
-- **Load / capacity.** No test drives many workers or high share rates to find limits.
-- **Security review.** The compose **hardening invariants are regression-guarded** (the #90
-  section of `tests/stack/test_compose.sh`: RPC creds never in a healthcheck command,
+- First green run on real hardware. ✅ Two of the three real-environment tiers are green: the live
+  harness `--check` (tier 4 read path, 22/22 against a synced, mining box) and the fake-daemon
+  mini-stack (tier 3, 11/11 on a real Docker host). Between them they surfaced and fixed four bugs:
+  the dashboard pruned/full label (#32); the harness's three over-strict assertions (monero-synced,
+  conns, prune display); the fake Tari binding gRPC to loopback; and the mini-stack's
+  container-name/port isolation. Still pending: the full destructive config matrix run on the box
+  (its read path is already proven via `--check`).
+- Destructive-matrix safety. ✅ `run.sh --safety-backup` takes a real `pithead backup` before the
+  destructive scenarios and automatically rolls the box back (down → restore → up) if anything
+  fails; the archive is removed on success. So the matrix can run on a precious box with a
+  one-command rollback net.
+- CLI breadth in automation. ✅ `backup`/`restore` are now exercised end-to-end: by
+  `--safety-backup` and by a `--lifecycle` backup→restore round-trip (assert the pool reverts and
+  secrets survive). `reset-dashboard` and `upgrade` are still only unit-covered (upgrade belongs to
+  the release staging smoke test, since it rebuilds/pulls the bundle under test).
+- Soak / longevity. No multi-hour run asserting no leaks, no log/DB growth runaway, and that the
+  XvB controller converges over a realistic window.
+- Load / capacity. No test drives many workers or high share rates to find limits.
+- Security review. The compose hardening invariants are regression-guarded (the #90 section of
+  `tests/stack/test_compose.sh`: RPC creds never in a healthcheck command,
   `no-new-privileges` / `cap_drop` on the leaf containers, the Docker socket proxies stay
-  least-privilege), so a past fix can't be silently undone. A full security *audit* is still a
-  separate exercise (`SECURITY.md`) — these tests pin the decisions we've already made, they
-  don't find new ones.
+  least-privilege), so a past fix can't be silently undone. A full security audit is still a
+  separate exercise (`SECURITY.md`). These tests pin the decisions we've already made; they don't
+  find new ones.
 
 ## Adding a scenario
 
-- **Logic** (a new decision/branch) → a unit test (tier 1). Cheapest, fastest.
-- **A new daemon state** the clients must parse → extend the fakes + the contract test (tier 2),
-  and it becomes drivable in the mini-stack (tier 3).
-- **A config axis** → one row in `tests/integration/scenarios.sh` (tier 4). The self-test
-  enforces every axis value is covered.
-- **A failure mode needing real containers** → a fault in `run.sh`'s fault-injection phase
-  (tier 4) and/or a mini-stack scenario (tier 3).
+- Logic (a new decision/branch) → a unit test (tier 1). Cheapest, fastest.
+- A new daemon state the clients must parse → extend the fakes plus the contract test (tier 2), and
+  it becomes drivable in the mini-stack (tier 3).
+- A config axis → one row in `tests/integration/scenarios.sh` (tier 4). The self-test enforces
+  every axis value is covered.
+- A failure mode needing real containers → a fault in `run.sh`'s fault-injection phase (tier 4)
+  and/or a mini-stack scenario (tier 3).
 
 Keep each situation at the lowest honest tier; don't re-prove logic with a heavier harness.
