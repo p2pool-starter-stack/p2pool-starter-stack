@@ -1,29 +1,29 @@
 # Documentation
 
-Everything you need to run, configure, and operate **Pithead**.
+Guides for running, configuring, and operating Pithead.
 
-New here? Start with the [Getting Started](getting-started.md) guide — it takes you from a
-fresh Ubuntu machine to a synced, mining stack in a handful of commands. The other guides go
-deeper on individual topics once you're up and running.
+New here? Start with the [Getting Started](getting-started.md) guide. It takes you from a fresh
+Ubuntu machine to a synced, mining stack in a handful of commands. The other guides go deeper on
+individual topics once you're running.
 
 ## Guides
 
 | Guide | What it covers |
 |---|---|
 | [Getting Started](getting-started.md) | Prerequisites, installation, first-run setup, and what to expect while the node syncs. |
-| [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the **stack host** — CPU, RAM, disk, network, OS — plus lighter-footprint options. (Miner hardware lives in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
-| [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, **reusing an existing node via data directories**, and connecting to a **remote Monero node**. |
-| [The Dashboard](dashboard.md) | **Sync Mode**, the live operational view, and how to read every panel. |
+| [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network, OS), plus lighter-footprint options. (Miner hardware lives in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
+| [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, reusing an existing node via data directories, and connecting to a remote Monero node. |
+| [The Dashboard](dashboard.md) | Sync Mode, the live operational view, and how to read every panel. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
-| [Privacy & Network Egress](privacy.md) | Every connection the stack makes off-box — what's Tor-routed, what's clearnet today, and how to harden each path. |
+| [Privacy & Network Egress](privacy.md) | Every connection the stack makes off-box: what's Tor-routed, what's clearnet today, and how to harden each path. |
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
 | [Testing Strategy](testing-strategy.md) | The four test tiers (unit → contract → fake-daemon mini-stack → live matrix), the full scenario catalog, and which tier proves each situation. |
 | [Testing Guide](testing-guide.md) | For developers: how to write and run tests, per-change recipes, conventions, and real-hardware gotchas. |
-| [Test Inventory](test-inventory.md) | Generated, exhaustive list of every test/scenario across all suites — the inventory of what's covered. |
-| [Integration Testing](integration-testing.md) | The end-to-end config-matrix suite that validates the stack against real Monero + Tari nodes — the blocking pre-release gate. |
-| [Releasing](releasing.md) | How Pithead is versioned and released — one product, one version, the `VERSION` source of truth, and the GHCR stage→promote pipeline. |
-| [Release / Validation Server](release-server.md) | Why end-to-end validation needs a dedicated server (and what GitHub Actions does free on every PR), how to provision and **harden** it, and the safe self-hosted-runner setup. |
+| [Test Inventory](test-inventory.md) | Generated, exhaustive list of every test/scenario across all suites: what's covered. |
+| [Integration Testing](integration-testing.md) | The end-to-end config-matrix suite that validates the stack against real Monero + Tari nodes: the blocking pre-release gate. |
+| [Releasing](releasing.md) | How Pithead is versioned and released: one product, one version, the `VERSION` source of truth, and the GHCR stage→promote pipeline. |
+| [Release / Validation Server](release-server.md) | Why end-to-end validation needs a dedicated server (and what GitHub Actions does free on every PR), how to provision and harden it, and the safe self-hosted-runner setup. |
 | [FAQ](faq.md) | Common questions, plus why Pithead vs. doing it yourself or Gupax. |
 
 ## Quick links
