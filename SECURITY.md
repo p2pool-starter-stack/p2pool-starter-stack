@@ -1,13 +1,16 @@
 # Security Policy
 
+This is the security policy for Pithead: supported versions, how to report a vulnerability,
+and the stack's default security posture.
+
 Pithead runs a Monero full node, P2Pool, Tari merge mining, and a dashboard on your
-hardware, and it handles wallet payout addresses. We take security seriously and
-appreciate reports that help keep operators safe.
+hardware, and it handles wallet payout addresses. We appreciate reports that help keep
+operators safe.
 
 ## Supported versions
 
-Security fixes land on the latest `main`. There are no long-lived release branches —
-please make sure you're running an up-to-date checkout before reporting an issue.
+Security fixes land on the latest `main`. There are no long-lived release branches.
+Make sure you're running an up-to-date checkout before reporting an issue.
 
 | Version       | Supported          |
 |---------------|--------------------|
@@ -38,5 +41,5 @@ user**, not uid 0; leaf services run with `no-new-privileges` and drop all Linux
 internet-facing and Docker-socket-facing ones also use a read-only root filesystem),
 SHA256-verified and version-pinned binaries,
 localhost-only RPC, a LAN-scoped (and narrowable) stratum port, scoped Docker socket proxies,
-and Tor for all node networking. If you find a gap in any of these, that's exactly the kind of
+and Tor for all node networking. If you find a gap in any of these, that's the kind of
 report we want.
