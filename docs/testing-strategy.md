@@ -204,6 +204,49 @@ These are deliberately not yet covered and are the road to full production confi
   separate exercise (`SECURITY.md`). These tests pin the decisions we've already made; they don't
   find new ones.
 
+### Coverage-audit follow-ups (2026-06)
+
+A source-vs-tests audit added Tier-1 coverage for a real bug (snapshot serialization failure left
+the #131 persistence badge green), the firewall install-failure rollback (#270), the wallet
+hard-fail guards (#250), remote-host/subnet validation (#180), `ensure_owner`'s whole-tree scan
+(#255), and several dashboard render branches (per-worker api/reject badges, XvB/Unknown pool
+badges, the #278/#313 Tari-✔ invariant, `Gauge` done vs syncing). The gaps it surfaced that are
+**not yet covered at an automatable tier** — all needing Docker or the real box, so they land at
+tier 3/4:
+
+- **Firewall rollback, real kernel.** ✅ Now a tier-4 `--fault-injection` case: it shadows `iptables`
+  with a wrapper that fails every `-I` insert, re-runs `apply_tor_egress_firewall`, and asserts the
+  box ends fail-closed (no `pithead-tor-egress` rule left half-installed), then reinstates the real
+  firewall. The tier-1 stubbed test proves the control flow; this proves the real-kernel strip.
+  Runs at the release gate only (destructive-then-restored, local box).
+- **`ensure_owner` real mixed-ownership tree.** ✅ Now a tier-4 `--lifecycle` step: it plants a
+  root-owned file under the dashboard data dir and asserts the pool-flip `apply` (which runs
+  `ensure_directories` → `ensure_owner`) chowns it to uid 1000 — the #255 "scan contents, not just
+  the dir" regression. Runs at the release gate only (needs root to create a foreign-uid inode).
+- **Real-container monerod failover in PR CI.** The primary-node reject/readmit cycle only runs on
+  the manual tier-4 box (`--fault-injection`); the mini-stack (tier 3) breaks Tari, not monerod.
+- **Non-blocking-Tari "ignore" path with real containers.** Unit-tested only; the mini-stack proves
+  Tari-down-while-required (reject) but never Tari-down-while-optional (keep mining). This is the
+  path that silently kills yield if it regresses to a reject.
+- **monerod busy / mid-reorg failover.** The contract test proves the client reads a busy node as
+  unreachable; no mini-stack or fault-injection scenario asserts the dashboard actually rejects
+  workers on a busy-but-alive node (a real reorg state, distinct from a clean stop).
+- **Double outage, both-must-recover.** Unit-tested (monerod ∧ Tari down → readmit only when both
+  healthy); never driven with real containers, so the recovery ordering is unproven end-to-end.
+- **Partial-start / stop-failure idempotency.** The control loop's "container fails to start/stop →
+  retry next cycle" is unit-only; no tier-3/4 scenario injects a docker start/stop error.
+- **`pithead doctor` on a real box.** Only its exit code is unit-tested; its NTP/clock-drift check
+  (mining is time-sensitive) is never fault-injected or asserted at tier 4.
+- **Disk-full / ENOSPC verdict.** Only a disk-headroom *warning* is checked; a real
+  container-unhealthy-on-ENOSPC verdict is never forced, though the disk badge + db-write-error
+  paths are unit-tested.
+- **Tor-container-down partial start.** No Caddy/Tor services exist in the mini-stack compose, so
+  "what happens when the Tor container is down" (SOCKS unreachable) is exercised at no tier below
+  the manual real box; every all-Tor egress assertion is read-path only.
+- **Insecure + main matrix row.** `dashboard.secure=false` only ever pairs with `p2pool.pool=nano`,
+  so the Caddy-scheme / bind assertions for insecure mode are entangled with the nano path; an
+  insecure+main regression has no row.
+
 ## Adding a scenario
 
 - Logic (a new decision/branch) → a unit test (tier 1). Cheapest, fastest.

@@ -159,6 +159,16 @@ class TestSnapshot:
     def test_load_missing_snapshot_returns_none(self, state_manager):
         assert state_manager.load_snapshot() is None
 
+    def test_unserializable_snapshot_flags_persistence_unhealthy(self, state_manager):
+        # A snapshot json.dumps can't serialize (here a set) is a persistent write failure: the
+        # data is lost and will be lost on restart. Like every other write path it must flip
+        # db_healthy so /api/state raises the #131 badge — not log-and-look-green (regression guard
+        # for save_snapshot's TypeError branch that used to call logger.error directly).
+        assert state_manager.is_db_healthy() is True
+        state_manager.save_snapshot({"workers": {1, 2, 3}})  # set -> TypeError in json.dumps
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.load_snapshot() is None  # nothing was persisted
+
     def test_share_stats_persist_across_instances(self, tmp_path):
         # Issue #82: the per-worker share counts and the proxy /summary totals ride along in the
         # latest_data snapshot, so they survive a dashboard restart (the snapshot is what

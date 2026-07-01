@@ -83,16 +83,19 @@ MATRIX:
                          box's baseline is full)
   --full-data-dir <d>    synced FULL monero data dir (enables the full case when the box's
                          baseline is pruned)
-  --lifecycle            also run the lifecycle phase (restart, apply secret-preservation)
+  --lifecycle            also run the lifecycle phase (restart, apply secret-preservation,
+                         and the #255 ensure_owner migration: a root-owned file under a data
+                         dir must be chowned to the container uid by apply)
   --safety-backup        take a `pithead backup` BEFORE the destructive scenarios; if anything
                          fails, automatically roll the box back to it (down → restore → up).
                          The archive is removed on success. Recommended for the destructive
                          matrix on a precious box. Also exercises backup/restore end-to-end.
   --fault-injection      also run the fault-injection phase: deliberately break monerod
                          (stop / SIGSTOP / remove) and assert pithead's status verdicts
-                         (down / unhealthy / missing) and the failover→recovery cycle.
-                         DESTRUCTIVE-then-restored; local mode only. Slow (healthcheck +
-                         node-health debounce).
+                         (down / unhealthy / missing) and the failover→recovery cycle. Also
+                         forces a real `iptables -I` failure and asserts the #270 firewall
+                         rolls back fail-closed (no half-open ruleset). DESTRUCTIVE-then-
+                         restored; local mode only. Slow (healthcheck + node-health debounce).
   --auth-fail-closed     also run the fail-closed auth phase (#153/#203): empty PROXY_AUTH_TOKEN
                          in .env and assert `pithead up` REFUSES to start (the live counterpart
                          to the tier-1 compose-config check), then restore the exact token and
@@ -780,11 +783,31 @@ run_lifecycle() {
     local other
     [ "$cur_pool" = "mini" ] && other="main" || other="mini"
     fp_before="$(secret_fingerprint)"
+    # ensure_owner whole-tree migration (#255): plant a root-owned file UNDER a data dir (the
+    # root-container-era signature — user-owned dir, root-owned contents) and prove this apply chowns
+    # it to the container uid, the exact regression MEMORY flags ("scan contents, not just the dir").
+    # Piggybacks the pool-flip apply below, which always runs ensure_directories -> ensure_owner.
+    # Local mode only (has data dirs); a stub can't create a foreign-uid inode, so this is tier-4.
+    local own_dir own_probe=""
+    if [ "$(env_on_box COMPOSE_PROFILES)" = "local_node" ]; then
+        own_dir="$(env_on_box DASHBOARD_DATA_DIR)"
+        if [ -n "$own_dir" ]; then
+            own_probe="$own_dir/.itest-owner-probe"
+            it_step "planting a root-owned file under $own_dir to exercise ensure_owner (#255)…"
+            rx "sudo touch $(quote_arg "$own_probe") && sudo chown 0:0 $(quote_arg "$own_probe")" >/dev/null 2>&1
+        fi
+    fi
     push_config "$(render_scenario_config "$BASELINE_CONFIG" "p2pool.pool=$other")"
     it_step "apply pool $cur_pool -> $other…"
     pithead apply -y >/dev/null 2>&1
     wait_status_ok 180 || true
     assert_eq "secrets preserved across pool change" "$(secret_fingerprint)" "$fp_before"
+    # APP_UID is 1000 in pithead; the migrated contents must now be owned by it, not root.
+    if [ -n "$own_probe" ]; then
+        assert_eq "apply migrates root-owned CONTENTS to the container uid (#255)" \
+            "$(rx "stat -c %u $(quote_arg "$own_probe") 2>/dev/null")" "1000"
+        rx "sudo rm -f $(quote_arg "$own_probe")" >/dev/null 2>&1 || true
+    fi
     # .pool.type lags a sidechain switch until peers on the new chain connect — wait, don't assert cold (#54).
     wait_pool_ready 180 "$(pool_label "$other")" || true
     assert_eq "pool actually changed" "$(jq_get "$(api_state)" '.pool.type')" "$(pool_label "$other")"
@@ -900,6 +923,41 @@ fault_missing() {
     wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
 }
 
+# Live counterpart to the tier-1 stubbed rollback (tests/stack/run.sh #270): force a REAL
+# `iptables -I` to fail mid-apply and prove the box ends fail-closed — the partial ruleset is
+# rolled BACK, not left half-open (a stubbed iptables can't prove the real kernel strips a partial
+# insert). DESTRUCTIVE-then-restored: apply_tor_egress_firewall clears the live rules before
+# re-inserting, so on the sabotaged run the firewall is briefly down until the recover step (and
+# run_fault_injection's belt-and-braces) reinstate it — hence opt-in, local-box only.
+fault_firewall_rollback() {
+    if [ "$(env_on_box TOR_EGRESS_FIREWALL)" = "false" ]; then
+        it_warn "skipping firewall-rollback fault (network.tor_egress_firewall=false)"
+        return 0
+    fi
+    it_step "fault: force an iptables -I failure during the firewall apply…"
+    # Shadow SUDO (not iptables): apply calls `sudo iptables -I`, and sudo's secure_path ignores a
+    # PATH-shadowed iptables, so the insert would really succeed. sudo itself is still found via PATH,
+    # so a wrapper that fails an `iptables … -I …` insert and execs real sudo for everything else
+    # (remove's -D, -N, iptables-save) makes the insert fail exactly as a real mid-insert error would.
+    # On PATH only for the apply below, deleted on recover. $realsudo baked at write time; \$1/\$a/\$@
+    # stay literal. (Verified live on a real box — the iptables-shadow variant silently no-ops.)
+    rx 'realsudo=$(command -v sudo) && mkdir -p .itest-bin && printf "%s\n" "#!/usr/bin/env bash" "if [ \"\$1\" = iptables ]; then for a; do [ \"\$a\" = -I ] && exit 1; done; fi" "exec $realsudo \"\$@\"" > .itest-bin/sudo && chmod +x .itest-bin/sudo' >/dev/null 2>&1
+    # apply_tor_egress_firewall is a pithead function (main is guarded when sourced), so sourcing +
+    # calling it with the sabotaged iptables hits the exact rollback branch.
+    local rc
+    rx 'PATH="$PWD/.itest-bin:$PATH" bash -c "source ./pithead && apply_tor_egress_firewall" >/dev/null 2>&1'
+    rc=$?
+    assert_rc "firewall apply degrades gracefully on an insert failure (rc 0)" "$rc" "0"
+    # No pithead-tagged rule may survive a failed insert — the rollback must strip the partial set.
+    assert_eq "insert failure leaves NO half-open firewall (rolled back)" \
+        "$(rx 'sudo iptables-save 2>/dev/null | grep -c pithead-tor-egress')" "0"
+    it_step "recover: drop the sabotage and reinstall the real firewall…"
+    rx 'rm -rf .itest-bin' >/dev/null 2>&1
+    rx 'bash -c "source ./pithead && apply_tor_egress_firewall" >/dev/null 2>&1' || true
+    assert_num_gt "firewall reinstated after recovery" \
+        "$(rx 'sudo iptables-save 2>/dev/null | grep -c pithead-tor-egress')" 0
+}
+
 run_fault_injection() {
     # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="fault-injection"
@@ -914,10 +972,14 @@ run_fault_injection() {
     fault_node_down
     fault_unhealthy
     fault_missing
+    fault_firewall_rollback
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "fault-injection" "$OUT_DIR"
 
-    # Belt-and-braces: whatever happened above, leave monerod up and the stack healthy.
+    # Belt-and-braces: whatever happened above, leave monerod up, the firewall reinstated, and the
+    # stack healthy (the firewall reinstate is unconditional so a mid-phase abort can't leave the box
+    # with clearnet egress open).
     rx "docker compose up -d monerod" >/dev/null 2>&1 || true
+    rx 'bash -c "source ./pithead && apply_tor_egress_firewall" >/dev/null 2>&1' || true
     wait_for 240 5 "monerod healthy after fault phase" _pred_monerod_healthy || true
     wait_status_ok 240 || true
 }
