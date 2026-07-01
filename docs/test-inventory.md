@@ -887,6 +887,7 @@ tests · 52 `pithead` shell sections · 17 harness self-test sections ·
 - TARI_REQUIRED env matches config
 - XVB_ENABLED matches config
 - XvB stats + auto-register wired to the Tor SOCKS (#206/#163)
+- apply migrates root-owned CONTENTS to the container uid (#255)
 - backup archive contains .env
 - backup archive contains config.json
 - backup/rollback prerequisites present (writable backups/, tar)
@@ -899,6 +900,9 @@ tests · 52 `pithead` shell sections · 17 harness self-test sections ·
 - default-off stratum: no --access-password live (#152)
 - disk headroom on the live chain FS (${avail} GiB free)
 - egress posture section present
+- firewall apply degrades gracefully on an insert failure (rc 0)
+- firewall reinstated after recovery
+- insert failure leaves NO half-open firewall (rolled back)
 - memory ceiling live on $svc (#132)
 - monero auto-transitioned clearnet→Tor (#234)
 - monero display mode determinate ($dmode)

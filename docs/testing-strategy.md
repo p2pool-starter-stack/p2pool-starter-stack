@@ -214,15 +214,15 @@ badges, the #278/#313 Tari-✔ invariant, `Gauge` done vs syncing). The gaps it 
 **not yet covered at an automatable tier** — all needing Docker or the real box, so they land at
 tier 3/4:
 
-- **Firewall rollback, real kernel.** The #270 install-failure rollback is proven at tier 1 with a
-  stubbed `iptables` (control flow only). Whether a real kernel actually strips a *partially
-  inserted* `DOCKER-USER` rule and ends fail-closed is only ever exercised by the clean-apply
-  `no clearnet egress` assertion — never with an induced mid-insert failure. Needs a
-  `--fault-injection` case that fails one `iptables -I` and re-asserts no clearnet path survives.
-- **`ensure_owner` real mixed-ownership tree.** Tier 1 forces the foreign-uid branch with a stub;
-  the actual #255 scenario (user-owned dir, root-owned *contents*, migrated in one `chown -R`) can
-  only be built as root. Needs a `--lifecycle` step that root-owns a file under a data dir and
-  asserts the next `apply` makes it container-owned.
+- **Firewall rollback, real kernel.** ✅ Now a tier-4 `--fault-injection` case: it shadows `iptables`
+  with a wrapper that fails every `-I` insert, re-runs `apply_tor_egress_firewall`, and asserts the
+  box ends fail-closed (no `pithead-tor-egress` rule left half-installed), then reinstates the real
+  firewall. The tier-1 stubbed test proves the control flow; this proves the real-kernel strip.
+  Runs at the release gate only (destructive-then-restored, local box).
+- **`ensure_owner` real mixed-ownership tree.** ✅ Now a tier-4 `--lifecycle` step: it plants a
+  root-owned file under the dashboard data dir and asserts the pool-flip `apply` (which runs
+  `ensure_directories` → `ensure_owner`) chowns it to uid 1000 — the #255 "scan contents, not just
+  the dir" regression. Runs at the release gate only (needs root to create a foreign-uid inode).
 - **Real-container monerod failover in PR CI.** The primary-node reject/readmit cycle only runs on
   the manual tier-4 box (`--fault-injection`); the mini-stack (tier 3) breaks Tari, not monerod.
 - **Non-blocking-Tari "ignore" path with real containers.** Unit-tested only; the mini-stack proves
