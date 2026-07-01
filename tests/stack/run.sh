@@ -346,6 +346,28 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 : >"$FW/ipt.log"
 PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
+# install-failure rollback (#270): if an `iptables -I` insert fails partway, apply must NOT leave a
+# half-open firewall it believes is fail-closed — it warns and rolls back via remove_tor_egress_firewall.
+# Stub: -N/-D succeed but every -I insert fails (rc 1). remove runs once up-front (idempotent clear)
+# and again on rollback, so iptables-save fires TWICE — that second call is the proof the rollback ran.
+FF="$SANDBOX/fwfail"
+mkdir -p "$FF/bin"
+printf '#!/usr/bin/env bash\nexec "$@"\n' >"$FF/bin/sudo"
+cat >"$FF/bin/iptables" <<'IPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$IPT_LOG"
+case "$1" in -I) exit 1 ;; esac # every insert fails midway
+exit 0
+IPT
+printf '#!/usr/bin/env bash\nprintf "save\\n" >>"$IPT_LOG"\nexit 0\n' >"$FF/bin/iptables-save"
+chmod +x "$FF/bin/sudo" "$FF/bin/iptables" "$FF/bin/iptables-save"
+printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' >"$FF/.env"
+: >"$FF/ipt.log"
+fwfail_out="$(PATH="$FF/bin:$PATH" IPT_LOG="$FF/ipt.log" run_sourced "$FF" apply_tor_egress_firewall 2>&1)"
+fwfail_rc=$?
+assert_rc "insert failure degrades gracefully (stack still runs, rc 0)" "$fwfail_rc" "0"
+assert_contains "insert failure warns clearnet is NOT fail-closed" "$fwfail_out" "NOT fail-closed"
+assert_eq "insert failure rolls back the partial firewall (remove reruns -> save x2)" "$(grep -c '^save$' "$FF/ipt.log")" "2"
 # remove: `down` (and every re-apply) strips ONLY our tagged rules — this removal is the precondition
 # for the #291 down->upgrade/apply window, so prove it deletes the tags and spares foreign DOCKER-USER
 # rules. iptables-save replays two tagged rules + one foreign rule; remove must -D the tagged pair only.
@@ -1076,6 +1098,40 @@ run_grub append_grub_boot_params "$g"
 assert_rc "insert: no active line -> rc 1" "$?" "1"
 assert_eq "insert: leaves file unchanged when no active line" "$(cat "$g")" "$before"
 
+echo "== unit: ensure_owner conditional recursive chown (#255) =="
+# ensure_owner migrates a data tree to the container's uid ONLY when something in it is foreign-owned,
+# and scans the WHOLE tree (not just the top dir) — an install upgraded from the root-container era has
+# a user-owned dir but root-owned *contents*, and those are what the non-root container can't overwrite.
+# MEMORY flags "must scan contents not just dir" as a past bug, so we guard both the decision and that
+# the find scan is recursive (no -maxdepth). sudo is stubbed to record what it would chown.
+EO="$SANDBOX/eo"
+mkdir -p "$EO/bin" "$EO/tree/sub"
+: >"$EO/tree/sub/file"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"%s/sudo.log"\n' "$EO" >"$EO/bin/sudo"
+chmod +x "$EO/bin/sudo"
+myuid="$(id -u)"
+: >"$EO/sudo.log"
+PATH="$EO/bin:$PATH" run_sourced "$EO" ensure_owner "$EO/tree" "$myuid" "$myuid" >/dev/null 2>&1
+assert_rc "clean tree (already owned) stays sudo-free" "$?" "0"
+assert_eq "clean tree triggers no chown" "$(grep -c chown "$EO/sudo.log")" "0"
+: >"$EO/sudo.log"
+PATH="$EO/bin:$PATH" run_sourced "$EO" ensure_owner "$EO/tree" 424242 424242 >/dev/null 2>&1
+assert_contains "foreign ownership triggers a recursive chown" "$(cat "$EO/sudo.log")" "chown -R 424242:424242 $EO/tree"
+: >"$EO/sudo.log"
+PATH="$EO/bin:$PATH" run_sourced "$EO" ensure_owner "$EO/nonexistent" "$myuid" "$myuid" >/dev/null 2>&1
+assert_rc "missing dir is a no-op" "$?" "0"
+assert_eq "missing dir triggers no chown" "$(grep -c chown "$EO/sudo.log")" "0"
+# Regression guard for #255: the ownership scan must be whole-tree. Stub `find` to capture its args and
+# assert ensure_owner never passes -maxdepth (which would re-introduce the top-dir-only bug).
+mkdir -p "$EO/findbin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"%s/find.log"\n' "$EO" >"$EO/findbin/find"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$EO/findbin/sudo"
+chmod +x "$EO/findbin/find" "$EO/findbin/sudo"
+: >"$EO/find.log"
+PATH="$EO/findbin:$PATH" run_sourced "$EO" ensure_owner "$EO/tree" "$myuid" "$myuid" >/dev/null 2>&1
+assert_not_contains "the ownership scan is recursive (no -maxdepth)" "$(cat "$EO/find.log")" "-maxdepth"
+assert_contains "the ownership scan keys off foreign uid" "$(cat "$EO/find.log")" "! -uid $myuid"
+
 echo "== unit: disk_component_gib =="
 assert_eq "monero pruned -> 120" "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "120"
 assert_eq "monero full -> 320" "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "320"
@@ -1286,6 +1342,43 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
 assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.password"
+
+# Wallet-type hard-fail (#250): p2pool pays via coinbase, which CANNOT reach a subaddress or an
+# integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is
+# unit-tested in isolation; these prove parse_and_validate_config actually ABORTS apply on each,
+# so the guardrail against losing every reward is wired, not just present.
+SUBADDR="8$(printf 'A%.0s' $(seq 94))"  # 95-char, starts with 8 -> subaddress
+INTADDR="4$(printf 'A%.0s' $(seq 105))" # 106-char, starts with 4 -> integrated
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$SUBADDR" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "subaddress payout rejected (would never be paid)" "$rc" "1"
+assert_contains "subaddress message names the type" "$out" "SUBADDRESS"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$INTADDR" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "integrated payout rejected (would never be paid)" "$rc" "1"
+assert_contains "integrated message names the type" "$out" "INTEGRATED"
+
+# Remote mode with no host (#*): renders an empty MONERO_NODE_HOST -> p2pool/dashboard dial nothing,
+# mining can't start. Must abort at validation, not silently proceed.
+seed_env
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "remote mode without a host rejected" "$rc" "1"
+assert_contains "remote-host message" "$out" "monero.remote.host"
+
+# A malformed network.subnet (#180): anything but an X.Y.Z.0/24 block renders a broken NETWORK_PREFIX
+# into every service IP and the #270 firewall rules — reject before it can.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "network":{"subnet":"172.28.0.0/16"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "non-/24 network.subnet rejected" "$rc" "1"
+assert_contains "network.subnet message" "$out" "network.subnet"
 
 echo "== black-box: dashboard auth lifecycle (#8) =="
 # The hashing reads the pinned Caddy image out of docker-compose.yml and shells out to the stubbed

@@ -148,6 +148,59 @@ test('ProxyTotals footer is hidden until the proxy reports data', () => {
     assert.match(renderApp({ state: s }), /Proxy totals/);
 });
 
+test('ProxyTotals reddens the rejected figure only when reject_level is high', () => {
+    // The base fixture's workers are all clean, so nothing reaches the styled-rejects branch.
+    const s = clone();
+    Object.assign(s.proxy_summary, {
+        has_data: true, accepted: '1200', rejected: '50', reject_pct: '4%',
+        reject_level: 'high', invalid: '0', best: '123',
+    });
+    assert.match(renderApp({ state: s }), /status-bad">50/); // high -> rejected total is reddened
+    s.proxy_summary.reject_level = 'ok';
+    assert.doesNotMatch(renderApp({ state: s }), /status-bad">50/); // ok -> plain, not reddened
+});
+
+test('WorkersTable surfaces the per-rig api-unreadable and reject badges, and the pool badge variants', () => {
+    // The single fixture pins both workers to pool=p2pool, api_ok=null, reject_flag=null, so these
+    // three problem-rig signals — the whole point of the pool/api/rejected columns — never render.
+    const s = clone();
+    s.workers[0].api_ok = false; // xmrig API unreadable -> "api ⚠"
+    s.workers[0].reject_flag = { text: '90% rejected', title: 'high reject rate' };
+    s.workers[0].pool = 'xvb'; // purple XvB badge
+    s.workers[1].pool = 'somethingelse'; // unrecognised -> Unknown (bad) badge
+    const html = renderApp({ state: s });
+    assert.match(html, /api ⚠/); // api_ok===false badge (only UI signal a rig's API is unreadable)
+    assert.match(html, /90% rejected/); // per-row reject badge (how you spot a problem rig)
+    assert.match(html, /badge-purple">XvB/);
+    assert.match(html, /badge-bad">Unknown/);
+});
+
+test('Tari status gates the ✔ on a live gRPC channel, never on active-but-dead (#278/#313)', () => {
+    // The ✔ must mean the merge-mine channel is actually up. A dead channel that still reads "active"
+    // must show status-warn and NO check — otherwise a TRANSIENT_FAILURE reads as healthy (#278/#313).
+    const connected = clone();
+    Object.assign(connected.tari, { connected: true, active: true, status: 'Merge mining' });
+    const cHtml = renderApp({ state: connected });
+    assert.match(cHtml, /status-ok">Merge mining/);
+    assert.match(cHtml, /check-inline/); // connected -> the ✔ shows
+
+    const deadButActive = clone();
+    Object.assign(deadButActive.tari, { connected: false, active: true, status: 'Merge mining' });
+    const dHtml = renderApp({ state: deadButActive });
+    assert.match(dHtml, /status-warn">Merge mining/);
+    assert.doesNotMatch(dHtml, /check-inline/); // active-but-dead -> NO ✔ (the invariant)
+});
+
+test('Sync gauge shows a ✔ for a done chain and a live percent while syncing', () => {
+    const s = clone();
+    s.syncing = true;
+    s.sync.monero.state = 'syncing';
+    s.sync.monero.percent = 42;
+    assert.match(renderApp({ state: s }), /42%/); // syncing chain shows its percent
+    s.sync.monero.state = 'done';
+    assert.match(renderApp({ state: s }), /check-big/); // done chain shows the ✔, not a percent
+});
+
 // --- Component Health & Egress (#170) ---------------------------------------------------
 
 test('ComponentHealth shows a Tor-only summary, the topology nodes, and the egress drawer', () => {

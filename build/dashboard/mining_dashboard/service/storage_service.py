@@ -475,7 +475,10 @@ class StateManager:
         except sqlite3.Error as e:
             self._db_error("Snapshot Save Error", e)
         except TypeError as e:
-            self.logger.error(f"Snapshot serialization error: {e}")
+            # A non-serializable snapshot is a persistent write failure (data lost on restart),
+            # so flag persistence unhealthy like every other write path — otherwise the #131
+            # badge stays green while snapshots silently never persist.
+            self._db_error("Snapshot Serialization Error", e)
 
     def load_snapshot(self) -> dict[str, Any] | None:
         """Loads the last persisted application state snapshot."""
