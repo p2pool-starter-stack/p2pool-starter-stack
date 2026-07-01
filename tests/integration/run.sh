@@ -935,10 +935,13 @@ fault_firewall_rollback() {
         return 0
     fi
     it_step "fault: force an iptables -I failure during the firewall apply…"
-    # Shadow iptables with a wrapper that execs the real binary but exits 1 on any -I insert; on PATH
-    # only for the apply we invoke below, deleted on recover. $real is baked at write time; \$a/\$@
-    # stay literal in the wrapper.
-    rx 'real=$(command -v iptables) && mkdir -p .itest-bin && printf "%s\n" "#!/usr/bin/env bash" "for a; do [ \"\$a\" = -I ] && exit 1; done" "exec $real \"\$@\"" > .itest-bin/iptables && chmod +x .itest-bin/iptables' >/dev/null 2>&1
+    # Shadow SUDO (not iptables): apply calls `sudo iptables -I`, and sudo's secure_path ignores a
+    # PATH-shadowed iptables, so the insert would really succeed. sudo itself is still found via PATH,
+    # so a wrapper that fails an `iptables … -I …` insert and execs real sudo for everything else
+    # (remove's -D, -N, iptables-save) makes the insert fail exactly as a real mid-insert error would.
+    # On PATH only for the apply below, deleted on recover. $realsudo baked at write time; \$1/\$a/\$@
+    # stay literal. (Verified live on a real box — the iptables-shadow variant silently no-ops.)
+    rx 'realsudo=$(command -v sudo) && mkdir -p .itest-bin && printf "%s\n" "#!/usr/bin/env bash" "if [ \"\$1\" = iptables ]; then for a; do [ \"\$a\" = -I ] && exit 1; done; fi" "exec $realsudo \"\$@\"" > .itest-bin/sudo && chmod +x .itest-bin/sudo' >/dev/null 2>&1
     # apply_tor_egress_firewall is a pithead function (main is guarded when sourced), so sourcing +
     # calling it with the sabotaged iptables hits the exact rollback branch.
     local rc
