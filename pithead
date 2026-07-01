@@ -1468,7 +1468,7 @@ check_prerequisites() {
     log "All dependencies satisfied."
 }
 
-# Placeholder credentials shipped in config.json.template / config.advanced.example.json. We
+# Placeholder credentials shipped in config.minimal.json / config.reference.json. We
 # treat them like empty values so a user who copies the template but never edits the node creds
 # still gets real, auto-generated ones (rather than working-but-predictable defaults).
 readonly PLACEHOLDER_NODE_USER="create_a_username_for_node"
@@ -1520,7 +1520,7 @@ ensure_config_exists() {
     [ -f "$CONFIG_FILE" ] && return 0
 
     if [ ! -t 0 ]; then
-        error "$CONFIG_FILE not found and no interactive terminal is available.\n  Create it first (copy config.json.template to config.json and edit it), then re-run."
+        error "$CONFIG_FILE not found and no interactive terminal is available.\n  Create it first (copy config.minimal.json to config.json and edit it), then re-run."
     fi
 
     log "$CONFIG_FILE not found. Starting interactive setup..."

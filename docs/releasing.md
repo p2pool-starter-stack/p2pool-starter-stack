@@ -159,7 +159,7 @@ What exists today:
   (the bundle ships no Dockerfiles, just `pithead` + `VERSION` + compose + the config templates + the
   `./build` runtime mounts) resolves `STACK_VERSION` to `vX.Y.Z` and pulls the published images
   (`--pull missing`; `upgrade` forces a re-pull). Override with `PITHEAD_REGISTRY` / `PITHEAD_PULL`. So
-  a release is now `cp config.json.template config.json && ./pithead setup`, no local build.
+  a release is now `cp config.minimal.json config.json && ./pithead setup`, no local build.
 
 **Remaining:**
 

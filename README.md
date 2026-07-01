@@ -54,11 +54,11 @@ An interactive setup script takes you from clone to mining in a few minutes.
 # Grab the latest release — pulls the published, tested images (no local build)
 curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 cd pithead
-cp config.json.template config.json   # then set your Monero + Tari payout addresses
+cp config.minimal.json config.json   # then set your Monero + Tari payout addresses
 ./pithead setup
 ```
 
-> For every tunable, copy `config.advanced.example.json` instead. To build from source (a `dev`
+> For every tunable, copy `config.reference.json` instead. To build from source (a `dev`
 > build), e.g. to contribute, see [Install from source](docs/getting-started.md#alternative-build-from-source).
 
 > NOTE: Prereqs are Ubuntu Server 24.04 LTS, 16 GB+ RAM, an SSD (~300 GB pruned / ~500 GB full

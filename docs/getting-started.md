@@ -8,7 +8,7 @@ process; most of it runs on its own.
 > ```bash
 > curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 > cd pithead
-> cp config.json.template config.json   # set your Monero + Tari payout addresses
+> cp config.minimal.json config.json   # set your Monero + Tari payout addresses
 > ./pithead setup
 > ```
 >
@@ -55,11 +55,11 @@ dashboard shows the real version and the update-checker works:
 ```bash
 curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz
 cd pithead
-cp config.json.template config.json   # then set your Monero + Tari payout addresses
+cp config.minimal.json config.json   # then set your Monero + Tari payout addresses
 ```
 
-`config.json.template` is minimal: just your two payout addresses. `setup` fills in defaults for
-everything else. For the full set of knobs, copy `config.advanced.example.json` instead. Have your
+`config.minimal.json` is minimal: just your two payout addresses. `setup` fills in defaults for
+everything else. For the full set of knobs, copy `config.reference.json` instead. Have your
 Monero and Tari payout addresses ready (Tari wallets are sometimes labeled Minotari, same thing).
 
 ### Alternative: build from source
@@ -71,7 +71,7 @@ stack, clone the repo. pithead sees the `build/` context and builds locally, tag
 ```bash
 git clone https://github.com/p2pool-starter-stack/pithead.git
 cd pithead && chmod +x pithead
-cp config.json.template config.json   # then set your payout addresses
+cp config.minimal.json config.json   # then set your payout addresses
 ```
 
 > Changed your mind later? You can convert a clone to the published images in place. See
