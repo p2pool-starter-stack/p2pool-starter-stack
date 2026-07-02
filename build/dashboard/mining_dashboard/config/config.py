@@ -219,16 +219,6 @@ NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 # instance; a LAN-only self-hosted address is unreachable through Tor).
 HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
 
-# How often to ping. The loop runs every UPDATE_INTERVAL, so this is a throttle floor — a
-# value below UPDATE_INTERVAL just pings every cycle. Set your Healthchecks period + grace
-# comfortably above this so a single missed cycle (e.g. a dashboard restart) doesn't alert.
-try:
-    HEALTHCHECKS_INTERVAL_SEC = int(os.environ.get("HEALTHCHECKS_INTERVAL_SECONDS", "60"))
-except ValueError:
-    HEALTHCHECKS_INTERVAL_SEC = 60
-if HEALTHCHECKS_INTERVAL_SEC < 0:
-    HEALTHCHECKS_INTERVAL_SEC = 0
-
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")

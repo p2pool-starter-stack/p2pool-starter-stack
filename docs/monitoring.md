@@ -28,14 +28,13 @@ pings and nothing is logged.
    months of history) is plenty for one stack. (Prefer to self-host? See
    [Self-hosting](#self-hosting-your-own-instance) below.)
 2. Create a new check. Name it something like `pithead`.
-3. Set its schedule. The recommended values, which match Pithead's default 60-second ping
-   interval:
-   - **Period — 1 minute.** How often Healthchecks.io *expects* a ping. The stack pings once
-     a minute by default, so a 1-minute period tracks it closely.
+3. Set its schedule. The recommended values, which match Pithead's fixed 60-second ping interval:
+   - **Period — 1 minute.** How often Healthchecks.io *expects* a ping. The stack pings once a
+     minute, so a 1-minute period tracks it closely.
    - **Grace — 5 minutes.** How long after a missed period before you're alerted. This slack
      absorbs a brief blip — e.g. a quick dashboard-container restart — without a false alarm,
      so you're only alerted after roughly **6 minutes** of true silence. Shorten it for faster
-     alerts (more false positives on blips); lengthen it if you also raise `interval_seconds`.
+     alerts (more false positives on blips), lengthen it to tolerate longer restarts.
 4. Copy the check's **ping URL** — it looks like `https://hc-ping.com/<uuid>`.
 
 ### 2. Choose where alerts go
@@ -96,12 +95,11 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
 
 ---
 
-## Configuration reference
+## Configuration
 
-| Key | Default | Description |
-|---|---|---|
-| `healthchecks.ping_url` | *(blank)* | The full ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>` (or your [self-hosted](#self-hosting-your-own-instance) instance's URL). **This is the on/off switch** — set it to enable, leave it blank to keep the monitor off. Must be reachable over Tor (see [Privacy note](#privacy-note)). Treated as a secret (stored in the owner-only `.env`). |
-| `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (default **1 minute**). The loop runs every 30s, so a value below that just pings every cycle. Match your Healthchecks **period** to this and give the **grace** enough slack for a restart (the recommended **1-minute period / 5-minute grace** above). |
+There's a single key: **`healthchecks.ping_url`** — set it to turn the monitor on, leave it blank
+to keep it off. The stack then pings that URL over Tor every 60 seconds. Full reference (with the
+secret-handling and Tor-reachability notes): [Configuration › reference](configuration.md#configuration-reference).
 
 > Auto-provisioning the check via the Healthchecks.io Management API (so you wouldn't have to
 > copy the URL by hand) was considered but deliberately left out: it would mean storing a

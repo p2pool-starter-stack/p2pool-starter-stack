@@ -423,7 +423,6 @@ services:
       # Healthchecks.io alerts externally — the one failure mode an in-stack notifier can't
       # report. The ping always rides the bridge Tor SOCKS (TOR_SOCKS_PROXY). See docs/monitoring.md.
       - HEALTHCHECKS_PING_URL=${HEALTHCHECKS_PING_URL:-}
-      - HEALTHCHECKS_INTERVAL_SECONDS=${HEALTHCHECKS_INTERVAL_SECONDS:-60}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

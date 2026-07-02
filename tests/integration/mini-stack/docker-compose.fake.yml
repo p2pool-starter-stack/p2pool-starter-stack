@@ -60,10 +60,9 @@ services:
       NODE_RECOVERY_AFTER_SEC: "3"
       # Healthchecks.io dead-man's switch (#79), pointed at the fake receiver so the e2e proves the
       # REAL loop fires a heartbeat over a real HTTP call (not a mock). The ping URL is the on switch;
-      # interval 0 pings every cycle for speed. There's no Tor container here, so blank the shared
-      # TOR_SOCKS_PROXY — the client then pings the fake receiver directly instead of a dead SOCKS.
+      # the first ping fires immediately (throttle starts unarmed). There's no Tor container here, so
+      # blank the shared TOR_SOCKS_PROXY — the client then pings the fake receiver directly.
       HEALTHCHECKS_PING_URL: "http://fake-hc:9000/ph"
-      HEALTHCHECKS_INTERVAL_SECONDS: "0"
       TOR_SOCKS_PROXY: ""
     depends_on: [fake-monerod, fake-tari, docker-control, docker-proxy, p2pool, xmrig-proxy, fake-hc]
 

@@ -29,7 +29,6 @@ import time
 import requests
 
 from mining_dashboard.config.config import (
-    HEALTHCHECKS_INTERVAL_SEC,
     HEALTHCHECKS_PING_URL,
     TOR_SOCKS_PROXY,
 )
@@ -39,6 +38,11 @@ logger = logging.getLogger("Healthchecks")
 # A ping is a tiny request; keep the timeout short so a hung endpoint can't stall the loop's
 # worker thread for long. Healthchecks.io recommends GET/HEAD/POST to the ping URL.
 _PING_TIMEOUT_SEC = 10
+
+# Throttle floor between pings (the loop runs faster, but we only hit the network this often). Fixed,
+# not configurable: 60s pairs with the recommended 1-min Healthchecks period, and no operator needs
+# to tune a dead-man's-switch cadence.
+_PING_INTERVAL_SEC = 60
 
 
 class HealthchecksClient:
@@ -76,7 +80,7 @@ class HealthchecksClient:
         """Build a client from the module-level config (env-backed) values."""
         return cls(
             ping_url=HEALTHCHECKS_PING_URL,
-            interval_seconds=HEALTHCHECKS_INTERVAL_SEC,
+            interval_seconds=_PING_INTERVAL_SEC,
             tor_proxy=TOR_SOCKS_PROXY,
         )
 

@@ -77,7 +77,6 @@
     },
 
     "healthchecks": {
-        "ping_url": "",
-        "interval_seconds": 60
+        "ping_url": ""
     }
 }

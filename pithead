@@ -2057,9 +2057,8 @@ render_env() {
     # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor: a ping URL is the
     # on/off switch (blank = off), and the ping always rides Tor. The URL is a capability secret, so
     # it lives in the owner-only .env (chmod 600 below), never a world-readable file. docs/monitoring.md.
-    local hc_ping_url hc_interval
+    local hc_ping_url
     hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
-    hc_interval=$(jq -r '.healthchecks.interval_seconds // 60' "$CONFIG_FILE")
 
     # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
     # a header badge linking to it (notify-only — no upgrade). On by default because the check is
@@ -2158,7 +2157,6 @@ TARI_REQUIRED=$tari_required
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
 HEALTHCHECKS_PING_URL=$hc_ping_url
-HEALTHCHECKS_INTERVAL_SECONDS=$hc_interval
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -2671,9 +2669,6 @@ describe_change() {
         else
             msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
         fi
-        ;;
-    HEALTHCHECKS_INTERVAL_SECONDS)
-        msg="Healthchecks.io setting ($key): $old → $new (#79) — the dashboard container is recreated."
         ;;
     MONERO_CLEARNET_SYNC)
         flag=DEST

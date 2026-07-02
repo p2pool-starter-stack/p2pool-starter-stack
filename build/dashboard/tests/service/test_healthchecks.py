@@ -161,11 +161,8 @@ class TestFromConfig:
         assert HealthchecksClient.from_config().enabled is False
 
     def test_reads_config_values(self):
-        with (
-            patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
-            patch.object(hc_mod, "HEALTHCHECKS_INTERVAL_SEC", 120),
-        ):
+        with patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"):
             c = HealthchecksClient.from_config()
         assert c.enabled is True  # a URL is configured
         assert c.url == "https://hc-ping.com/zzz"
-        assert c.interval == 120
+        assert c.interval == hc_mod._PING_INTERVAL_SEC  # fixed throttle floor, not configurable
