@@ -53,6 +53,18 @@ class TestSend:
         assert body["chat_id"] == "123"
         assert body["text"] == "node down"
 
+    def test_send_routes_over_tor(self):
+        # The bot dial must ride the Tor SOCKS proxy, never leak the host IP to Telegram.
+        n = _enabled(tor_proxy="socks5h://tor:9050")
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        with patch.object(tg_mod.requests, "post", return_value=resp) as post:
+            n.send("x")
+        assert post.call_args.kwargs["proxies"] == {
+            "http": "socks5h://tor:9050",
+            "https": "socks5h://tor:9050",
+        }
+
     def test_send_swallows_network_error(self):
         n = _enabled()
         with patch.object(

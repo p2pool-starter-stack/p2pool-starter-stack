@@ -28,8 +28,13 @@ flowchart TB
     %% ── External actors ──
     You(["👤 You · Browser"])
     Workers(["⛏️ XMRig Workers"])
-    XvB(["🎲 XMRvsBeast Pool"])
     Net(["🌐 Tor Network / Internet"])
+
+    %% ── External services the dashboard calls out to (each labeled with its route) ──
+    Telegram(["✈️ Telegram<br/>alerts + commands"])
+    HC(["🩺 Healthchecks.io<br/>dead-man's switch"])
+    XvB(["🎲 XMRvsBeast<br/>pool + stats"])
+    GitHub(["🐙 GitHub<br/>release check"])
 
     subgraph stack ["🐳 Pithead"]
         direction TB
@@ -52,27 +57,40 @@ flowchart TB
     Caddy --> Dashboard
     Workers ==>|"Stratum 3333"| Proxy
 
+    %% Dashboard internal control + monitoring (never leaves the box)
     Dashboard -.->|controls| Proxy
     Dashboard -.->|monitors| DockerProxy
     Dashboard -.->|"reads stats & sync"| core
 
+    %% ── Dashboard egress — every outbound call is routed through Tor (🟢), so none leak the host IP ──
+    Dashboard ==>|"🚨 alerts + commands · 🟢 Tor"| Tor
+    Dashboard ==>|"🩺 liveness ping · 🟢 Tor"| Tor
+    Dashboard ==>|"📈 XvB stats · 🟢 Tor"| Tor
+    Dashboard ==>|"🆕 update check · 🟢 Tor"| Tor
+
     Proxy ==>|hashrate| P2Pool
-    Proxy ==>|hashrate| XvB
+    Proxy ==>|"hashrate · 🟢 Tor"| Tor
 
     P2Pool <-->|"RPC / ZMQ"| Monerod
     P2Pool -->|merge-mine| Tari
 
-    Monerod <-->|tx broadcast| Tor
-    Tari <-->|P2P| Tor
-    P2Pool <-->|P2P| Tor
+    Monerod <-->|"tx + P2P · 🟢 Tor"| Tor
+    Tari <-->|"P2P · 🟢 Tor"| Tor
+    P2Pool <-->|"P2P · 🟢 Tor"| Tor
     Tor <--> Net
+
+    %% Tor exit reaches each external service
+    Net -.-> Telegram
+    Net -.-> HC
+    Net -.-> XvB
+    Net -.-> GitHub
 
     classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
     classDef ctrl fill:#1d4ed8,stroke:#93c5fd,color:#eff6ff;
     classDef priv fill:#6d28d9,stroke:#c4b5fd,color:#f5f3ff;
     classDef mine fill:#047857,stroke:#6ee7b7,color:#ecfdf5;
 
-    class You,Workers,XvB,Net ext;
+    class You,Workers,Net,Telegram,HC,XvB,GitHub ext;
     class Caddy,Dashboard ctrl;
     class Tor,DockerProxy priv;
     class Proxy,P2Pool,Monerod,Tari mine;
@@ -81,11 +99,20 @@ flowchart TB
     style core stroke:#10b981,stroke-width:1px,stroke-dasharray:5 4;
 ```
 
-Reading the diagram: thick arrows carry mining hashrate and inbound connections, dotted arrows are
-the dashboard's control and monitoring, and solid arrows are internal service data and anonymized
-network traffic. Node colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy
-and isolation (Tor, Docker socket proxy), and 🟩 the mining core. In remote-node mode the bundled 🟠
-Monero node isn't started, and P2Pool talks to your external node instead.
+Reading the diagram: thick arrows carry inbound connections and every path that **leaves the box** —
+each egress edge is tagged with its route, and **🟢 Tor** means it exits through the Tor daemon (a Tor
+exit IP, never your host's). Dotted arrows are the dashboard's internal control and monitoring, which
+never leave the machine. The dashboard makes four outbound calls — the **Telegram** bot (alerts +
+commands), the **Healthchecks.io** liveness ping, the **XvB** stats fetch, and the **GitHub** release
+check — and all four are Tor-routed, so enabling any of them never reveals where your stack runs. Node
+colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy and isolation (Tor,
+Docker socket proxies), and 🟩 the mining core. In remote-node mode the bundled 🟠 Monero node isn't
+started, and P2Pool talks to your external node instead.
+
+> The one exception is **optional clearnet initial sync** (`monero.clearnet_initial_sync` /
+> `tari.clearnet_initial_sync`, default **off**): while active, that node's P2P leaves Tor to sync
+> faster and its IP is exposed until it finishes, after which it reverts to Tor automatically (#234).
+> The Telegram bot alerts you the whole time it's exposed. See [Privacy](privacy.md).
 
 ## Privacy by design
 

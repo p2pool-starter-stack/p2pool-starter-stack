@@ -100,12 +100,14 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   silently when offline / Tor down. The URL is the on/off switch and is stored as a secret in the
   owner-only `.env`. See [`docs/monitoring.md`](docs/monitoring.md) (#79).
 - **Telegram operator bot — push alerts + on-demand status** (#121, #45): the dashboard can push a
-  high-value set of operational alerts to Telegram — **node down / recovered**, **worker offline /
-  back online**, **new worker joined / left**, **sync finished**, **data disk filling up**,
-  **dashboard DB write failing**, **no PPLNS share while donating to XvB** (raffle wins skipped), and
-  **a node exposed on clearnet** during initial sync — and answer status commands on demand:
-  **`/status`**, **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**,
-  **`/xvb`**, **`/earnings`**, and **`/help`**. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
+  high-value set of operational alerts to Telegram — a **🚀 "Pithead online"** heartbeat on start,
+  **node down / recovered**, **worker offline / back online**, **new worker joined / left**, **sync
+  finished**, **data disk filling up**, **dashboard DB write failing**, **no PPLNS share while
+  donating to XvB** (raffle wins skipped), **XvB registration rejected / failing**, **a node exposed
+  on clearnet** during initial sync, and **a new release being available** — and answer status
+  commands on demand: **`/status`**, **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**,
+  **`/pool`**, **`/xvb`**, **`/earnings`**, and **`/help`**. All traffic is **routed over Tor** (the
+  same bridge SOCKS as Healthchecks/XvB), so the bot never exposes the host IP to Telegram. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
   `bot_token`, `chat_id`, per-event `events` toggles, and a `commands.enabled` switch for the
   interactive half). Every alert is **debounced** so a momentary blip won't ping you and you get one
   message per real transition — and each is built by *reusing* what the dashboard already computes:

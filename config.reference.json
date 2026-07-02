@@ -95,7 +95,10 @@
             "disk_space": true,
             "db_unhealthy": true,
             "xvb_no_share": true,
-            "clearnet_exposed": true
+            "clearnet_exposed": true,
+            "xvb_registration": true,
+            "new_release": true,
+            "stack_online": true
         },
         "commands": {
             "enabled": false

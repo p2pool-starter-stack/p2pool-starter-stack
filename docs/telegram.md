@@ -32,6 +32,9 @@ transition, not a stream:
 | 🔴 **DB write failing** | The dashboard can no longer write to its database; hashrate history, shares, and stats will be lost on restart until it's fixed (usually disk space or permissions). |
 | ⚠ **No PPLNS share (XvB)** | You're donating to XvB but hold no share in the PPLNS window, so raffle wins are **skipped** — donations are wasted until you land one. Only fires when XvB is enabled. |
 | ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
+| 🎰 **XvB registration** | XvB auto-registration was rejected (bad payout address) or is failing — raffle wins won't count until it recovers. Only fires when XvB is enabled. |
+| 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
+| 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
 
 Every message is prefixed with your dashboard hostname (e.g. `[rig-box.lan]`), so if you point
 more than one stack at the same chat you can tell them apart.
@@ -149,6 +152,9 @@ block and set it to `false` — any event you don't list stays on:
 | `db_unhealthy` | `true` | Dashboard database writes failing / recovered |
 | `xvb_no_share` | `true` | XvB on but no PPLNS share (wins skipped) / restored |
 | `clearnet_exposed` | `true` | A node is syncing over clearnet (IP exposed) / back on Tor |
+| `xvb_registration` | `true` | XvB auto-registration rejected / failing / recovered |
+| `new_release` | `true` | A newer Pithead release is available |
+| `stack_online` | `true` | One-shot "dashboard is up" heartbeat on start |
 
 Run `./pithead apply` after editing.
 
@@ -235,12 +241,12 @@ differently.)
 - **The bot token is a secret.** Pithead stores it in `.env`, which is created **owner-only**
   (`chmod 600`) and is **git-ignored**, exactly like the Monero node RPC password. The dashboard
   **never writes the token to a log line** — not even inside an error message.
-- **Telegram is a clearnet service.** The dashboard reaches `api.telegram.org` directly — both to
-  send alerts and (if commands are on) to poll for them. On a **Tor-only host with no clearnet
-  egress**, the Telegram API is unreachable and both **fail silently** — no errors, no log spam, the
-  rest of the stack is unaffected. (Same applies if your network blocks Telegram.) If you run
-  Tor-only and want these, you'll need clearnet egress for the dashboard, or rely on Healthchecks.io's
-  own delivery.
+- **Always over Tor.** Both the alert sends and the command long-poll reach `api.telegram.org`
+  **through the bundled Tor SOCKS proxy** (`socks5h`, so the DNS lookup goes through Tor too) — the
+  same routing as the Healthchecks.io pinger and the XvB fetch. Telegram sees a **Tor exit, not your
+  host IP**, so enabling the bot doesn't expose where your stack runs. If Tor is momentarily down (or
+  Telegram is blocking that exit), sends and polls **fail silently** — no errors, no log spam, the
+  rest of the stack is unaffected — and resume on their own.
 
 ---
 
@@ -269,7 +275,7 @@ Node-down timing is shared with the existing failover logic (`NODE_DOWN_AFTER_SE
 | Works for "down" but not a specific alert | Check `telegram.events` — that event may be toggled `false`. |
 | Alerts work but commands don't | Commands are a **separate** switch: set `telegram.commands.enabled` to `true` and `./pithead apply`. |
 | Bot ignores my commands | It only answers the configured `chat_id`. Send from that exact chat, and check the id with `@userinfobot`. |
-| Tor-only host | Expected: Telegram is clearnet, so both alerts and command polling fail silently. See [Privacy and secrets](#privacy-and-secrets). |
+| No messages, Tor issues | Telegram is reached **over Tor**; if Tor is down or Telegram is blocking the exit, sends/polls fail silently and resume on their own. See [Privacy and secrets](#privacy-and-secrets). |
 
 ---
 

@@ -20,11 +20,16 @@ class _FakeNotifier:
         return True
 
 
-def _svc(notifier=None, **kw):
+def _svc(notifier=None, announce_online=True, **kw):
     notifier = notifier if notifier is not None else _FakeNotifier()
     kw.setdefault("worker_monitor", WorkerPresenceMonitor(offline_after=300, recovery_after=120))
     kw.setdefault("host_label", "")
-    return AlertService(notifier=notifier, **kw)
+    svc = AlertService(notifier=notifier, **kw)
+    # The one-shot "stack online" ping fires on the first evaluate; mark it already sent so it
+    # doesn't perturb the per-signal tests. TestStackOnline opts out to exercise it.
+    if announce_online:
+        svc._announced_online = True
+    return svc
 
 
 def _ev(
@@ -41,6 +46,8 @@ def _ev(
     xvb_enabled=False,
     shares_in_window=0,
     clearnet_active=False,
+    xvb_registration_state="",
+    update_available=False,
     now=0,
 ):
     return svc.evaluate(
@@ -55,6 +62,8 @@ def _ev(
         xvb_enabled=xvb_enabled,
         shares_in_window=shares_in_window,
         clearnet_active=clearnet_active,
+        xvb_registration_state=xvb_registration_state,
+        update_available=update_available,
         now=now,
     )
 
@@ -228,6 +237,48 @@ class TestClearnetEdges:
         assert _ev(svc, clearnet_active=True) == []  # no repeat
         _, text = _ev(svc, clearnet_active=False)[0]
         assert "Tor-only" in text
+
+
+class TestStackOnline:
+    def test_online_fires_once_on_first_cycle(self):
+        svc = _svc(announce_online=False)
+        assert _keys(_ev(svc)) == [AlertService.EVT_STACK_ONLINE]
+        assert _ev(svc) == []  # one-shot — not on later cycles
+
+    def test_online_text_is_friendly(self):
+        svc = _svc(announce_online=False)
+        _, text = _ev(svc)[0]
+        assert "online" in text.lower()
+
+
+class TestXvbRegistration:
+    def test_invalid_then_recovered(self):
+        svc = _svc()
+        assert _ev(svc, xvb_enabled=True, xvb_registration_state="registered") == []  # seed
+        assert _keys(_ev(svc, xvb_enabled=True, xvb_registration_state="invalid")) == [
+            AlertService.EVT_XVB_REGISTRATION
+        ]
+        assert _keys(_ev(svc, xvb_enabled=True, xvb_registration_state="registered")) == [
+            AlertService.EVT_XVB_REGISTRATION
+        ]
+
+    def test_failing_alerts(self):
+        svc = _svc()
+        _ev(svc, xvb_enabled=True, xvb_registration_state="registered")
+        _, text = _ev(svc, xvb_enabled=True, xvb_registration_state="failing")[0]
+        assert "failing" in text.lower()
+
+    def test_silent_while_disabled(self):
+        svc = _svc()
+        assert _ev(svc, xvb_enabled=False, xvb_registration_state="invalid") == []
+
+
+class TestNewRelease:
+    def test_fires_once_on_rising_edge(self):
+        svc = _svc()
+        assert _ev(svc, update_available=False) == []  # seed
+        assert _keys(_ev(svc, update_available=True)) == [AlertService.EVT_NEW_RELEASE]
+        assert _ev(svc, update_available=True) == []  # no repeat while still available
 
 
 class TestEventFiltering:

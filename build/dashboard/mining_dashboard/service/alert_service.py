@@ -67,13 +67,16 @@ class AlertService:
     EVT_DB_UNHEALTHY = "db_unhealthy"
     EVT_XVB_NO_SHARE = "xvb_no_share"
     EVT_CLEARNET_EXPOSED = "clearnet_exposed"
+    EVT_XVB_REGISTRATION = "xvb_registration"
+    EVT_NEW_RELEASE = "new_release"
+    EVT_STACK_ONLINE = "stack_online"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
-        "offline": (EVT_WORKER_OFFLINE, "\U0001f534 Worker offline: {name}"),
-        "recovered": (EVT_WORKER_RECOVERED, "\U0001f7e2 Worker back online: {name}"),
-        "joined": (EVT_WORKER_JOINED, "\U0001f7e2 New worker joined: {name}"),
-        "left": (EVT_WORKER_LEFT, "⚪ Worker left: {name}"),
+        "offline": (EVT_WORKER_OFFLINE, "\U0001f534 ⛏️ Worker offline: {name}"),
+        "recovered": (EVT_WORKER_RECOVERED, "\U0001f7e2 ⛏️ Worker back online: {name}"),
+        "joined": (EVT_WORKER_JOINED, "\U0001f389 New worker joined: {name}"),
+        "left": (EVT_WORKER_LEFT, "\U0001f44b Worker left: {name}"),
     }
 
     def __init__(self, notifier=None, worker_monitor=None, host_label=HOST_IP):
@@ -89,6 +92,10 @@ class AlertService:
         self._prev_db_healthy = None
         self._prev_xvb_has_share = None
         self._prev_clearnet_active = None
+        self._prev_xvb_reg = None
+        self._prev_update_available = None
+        # One-shot "stack is online" ping, sent on the first cycle after the dashboard starts.
+        self._announced_online = False
 
     @property
     def enabled(self):
@@ -108,11 +115,23 @@ class AlertService:
         xvb_enabled=False,
         shares_in_window=0,
         clearnet_active=False,
+        xvb_registration_state="",
+        update_available=False,
         now=None,
     ):
         """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
         filtered to the events the operator left enabled."""
         alerts = []
+
+        # --- Stack online (one-shot on the first cycle after the dashboard starts) ---
+        if not self._announced_online:
+            self._announced_online = True
+            alerts.append(
+                (
+                    self.EVT_STACK_ONLINE,
+                    self._fmt("\U0001f680 Pithead is online — dashboard up and monitoring."),
+                )
+            )
 
         # --- Node down / recovered (consume NodeHealthMonitor edges) ---
         alerts += self._node_edges("Monero", monero_down, "_prev_monero_down")
@@ -155,6 +174,10 @@ class AlertService:
         alerts += self._xvb_share_edges(xvb_enabled, shares_in_window)
         alerts += self._clearnet_edges(clearnet_active)
 
+        # --- XvB auto-registration health, and a new Pithead release being available ---
+        alerts += self._registration_edges(xvb_enabled, xvb_registration_state)
+        alerts += self._release_edges(update_available)
+
         return [(evt, text) for evt, text in alerts if self.notifier.event_enabled(evt)]
 
     def _node_edges(self, label, down, attr):
@@ -167,14 +190,14 @@ class AlertService:
                 (
                     self.EVT_NODE_DOWN,
                     self._fmt(
-                        f"\U0001f534 {label} node is DOWN — workers failing over to backup pools."
+                        f"\U0001f534 ⛓️ {label} node is DOWN — workers failing over to backup pools."
                     ),
                 )
             ]
         return [
             (
                 self.EVT_NODE_RECOVERED,
-                self._fmt(f"\U0001f7e2 {label} node recovered — workers readmitted."),
+                self._fmt(f"\U0001f7e2 ⛓️ {label} node recovered — workers readmitted."),
             )
         ]
 
@@ -197,14 +220,24 @@ class AlertService:
                 (
                     self.EVT_DISK_SPACE,
                     self._fmt(
-                        f"\U0001f534 Data disk almost full ({pct}) — free space now; a full disk "
-                        "can corrupt the Monero database."
+                        f"\U0001f534 \U0001f4be Data disk almost full ({pct}) — free space now; a "
+                        "full disk can corrupt the Monero database."
                     ),
                 )
             ]
         if level == "warn":
-            return [(self.EVT_DISK_SPACE, self._fmt(f"\U0001f7e0 Data disk filling up ({pct})."))]
-        return [(self.EVT_DISK_SPACE, self._fmt(f"\U0001f7e2 Data disk back to healthy ({pct})."))]
+            return [
+                (
+                    self.EVT_DISK_SPACE,
+                    self._fmt(f"\U0001f7e0 \U0001f4be Data disk filling up ({pct})."),
+                )
+            ]
+        return [
+            (
+                self.EVT_DISK_SPACE,
+                self._fmt(f"\U0001f7e2 \U0001f4be Data disk back to healthy ({pct})."),
+            )
+        ]
 
     def _db_edges(self, db_healthy):
         """Alert when the dashboard can no longer persist to its SQLite DB (#131)."""
@@ -217,12 +250,17 @@ class AlertService:
                 (
                     self.EVT_DB_UNHEALTHY,
                     self._fmt(
-                        "\U0001f534 Dashboard DB write failing — hashrate history, shares and stats "
-                        "won't persist. Check disk space and permissions on the dashboard data dir."
+                        "\U0001f534 \U0001f5c4️ Dashboard DB write failing — hashrate history, shares "
+                        "and stats won't persist. Check disk space + permissions on the data dir."
                     ),
                 )
             ]
-        return [(self.EVT_DB_UNHEALTHY, self._fmt("\U0001f7e2 Dashboard DB writes recovered."))]
+        return [
+            (
+                self.EVT_DB_UNHEALTHY,
+                self._fmt("\U0001f7e2 \U0001f5c4️ Dashboard DB writes recovered."),
+            )
+        ]
 
     def _xvb_share_edges(self, xvb_enabled, shares_in_window):
         """Alert on losing / regaining the PPLNS share XvB needs to bank a raffle win (#158).
@@ -245,15 +283,17 @@ class AlertService:
                 (
                     self.EVT_XVB_NO_SHARE,
                     self._fmt(
-                        "⚠ No PPLNS share — XvB raffle wins are skipped until you land one "
-                        "(donations are wasted meanwhile)."
+                        "⚠️ \U0001f3b0 No PPLNS share — XvB raffle wins are skipped until you land "
+                        "one (donations are wasted meanwhile)."
                     ),
                 )
             ]
         return [
             (
                 self.EVT_XVB_NO_SHARE,
-                self._fmt("\U0001f7e2 PPLNS share restored — XvB raffle wins count again."),
+                self._fmt(
+                    "\U0001f7e2 \U0001f3b0 PPLNS share restored — XvB raffle wins count again."
+                ),
             )
         ]
 
@@ -269,8 +309,8 @@ class AlertService:
                 (
                     self.EVT_CLEARNET_EXPOSED,
                     self._fmt(
-                        "⚠ Clearnet initial sync ACTIVE — this host's IP is exposed to the chain's "
-                        "P2P network until it finishes syncing (reverts to Tor automatically)."
+                        "⚠️ \U0001f310 Clearnet initial sync ACTIVE — this host's IP is exposed to the "
+                        "chain's P2P network until it finishes syncing (reverts to Tor automatically)."
                     ),
                 )
             ]
@@ -278,7 +318,61 @@ class AlertService:
             (
                 self.EVT_CLEARNET_EXPOSED,
                 self._fmt(
-                    "\U0001f7e2 Back on Tor-only — clearnet sync finished, host IP no longer exposed."
+                    "\U0001f7e2 \U0001f9c5 Back on Tor-only — clearnet sync finished, host IP no "
+                    "longer exposed."
+                ),
+            )
+        ]
+
+    def _registration_edges(self, xvb_enabled, state):
+        """Alert on XvB auto-registration going bad / recovering (#263). ``state`` is one of
+        ``""`` / ``registered`` / ``invalid`` (wallet rejected — permanent) / ``failing``."""
+        if not xvb_enabled:
+            self._prev_xvb_reg = None
+            return []
+        prev = self._prev_xvb_reg
+        self._prev_xvb_reg = state
+        if prev is None or state == prev:
+            return []
+        if state == "invalid":
+            return [
+                (
+                    self.EVT_XVB_REGISTRATION,
+                    self._fmt(
+                        "\U0001f534 \U0001f3b0 XvB wallet rejected — auto-registration failed "
+                        "(check the payout address); raffle wins won't count."
+                    ),
+                )
+            ]
+        if state == "failing":
+            return [
+                (
+                    self.EVT_XVB_REGISTRATION,
+                    self._fmt("⚠️ \U0001f3b0 XvB auto-registration failing — retrying."),
+                )
+            ]
+        if state == "registered" and prev in ("invalid", "failing"):
+            return [
+                (
+                    self.EVT_XVB_REGISTRATION,
+                    self._fmt(
+                        "\U0001f7e2 \U0001f3b0 XvB registration recovered — you're in the raffle."
+                    ),
+                )
+            ]
+        return []
+
+    def _release_edges(self, update_available):
+        """One-shot ping when a newer Pithead release becomes available (#224)."""
+        prev = self._prev_update_available
+        self._prev_update_available = bool(update_available)
+        if prev is None or not update_available or update_available == prev:
+            return []
+        return [
+            (
+                self.EVT_NEW_RELEASE,
+                self._fmt(
+                    "\U0001f195 A new Pithead release is available — see the dashboard header."
                 ),
             )
         ]

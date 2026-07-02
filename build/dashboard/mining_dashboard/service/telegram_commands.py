@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-import aiohttp
+import requests
 
 from mining_dashboard.config.config import (
     HOST_IP,
@@ -9,6 +9,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_CHAT_ID,
     TELEGRAM_COMMANDS_ENABLED,
     TELEGRAM_ENABLED,
+    TOR_SOCKS_PROXY,
 )
 from mining_dashboard.helper.utils import format_duration, format_hashrate
 from mining_dashboard.service.earnings import xmr_per_hs_day
@@ -263,6 +264,7 @@ class TelegramCommandBot:
         host_label=HOST_IP,
         api_base=TELEGRAM_API_BASE,
         long_poll=LONG_POLL_SECONDS,
+        tor_proxy=TOR_SOCKS_PROXY,
     ):
         self.data_service = data_service
         self._token = (bot_token or "").strip()
@@ -272,6 +274,9 @@ class TelegramCommandBot:
         self.host_label = host_label
         self._api_base = api_base.rstrip("/")
         self.long_poll = long_poll
+        # Route getUpdates + replies over the bridge Tor SOCKS proxy, so polling Telegram never
+        # exposes the host IP (same discipline as the notifier / Healthchecks pinger).
+        self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
         if enabled is None:
             enabled = bool(TELEGRAM_ENABLED and TELEGRAM_COMMANDS_ENABLED)
         self.enabled = bool(enabled and self._token and self.chat_id)
@@ -315,51 +320,56 @@ class TelegramCommandBot:
         return None
 
     async def run(self):
-        """Long-poll for commands until cancelled. A no-op when disabled."""
+        """Long-poll for commands until cancelled. A no-op when disabled.
+
+        The network calls use ``requests`` (so they ride the same Tor SOCKS proxy as the notifier)
+        run off the event loop via :func:`asyncio.to_thread`, so a 25s long-poll never blocks it.
+        """
         if not self.enabled:
             return
-        logger.info("Telegram command interface enabled — polling for commands.")
-        async with aiohttp.ClientSession() as session:
-            await self._prime_offset(session)
-            while True:
-                try:
-                    updates = await self._get_updates(session, self.long_poll)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.debug("Telegram getUpdates failed (%s)", type(exc).__name__)
-                    await asyncio.sleep(POLL_ERROR_BACKOFF_SECONDS)
-                    continue
-                for update in updates:
-                    self._offset = update.get("update_id", 0) + 1
-                    await self._handle_update(session, update)
+        logger.info("Telegram command interface enabled — polling for commands (over Tor).")
+        await asyncio.to_thread(self._prime_offset)
+        while True:
+            try:
+                updates = await asyncio.to_thread(self._get_updates, self.long_poll)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Telegram getUpdates failed (%s)", type(exc).__name__)
+                await asyncio.sleep(POLL_ERROR_BACKOFF_SECONDS)
+                continue
+            for update in updates:
+                self._offset = update.get("update_id", 0) + 1
+                await self._handle_update(update)
 
-    async def _prime_offset(self, session):
+    def _prime_offset(self):
         """Advance the offset past any pending backlog without acting on it, so a command queued
         while the dashboard was down isn't run on startup."""
         try:
-            updates = await self._get_updates(session, 0)
+            updates = self._get_updates(0)
             if updates:
                 self._offset = updates[-1].get("update_id", 0) + 1
         except Exception as exc:
             logger.debug("Telegram offset prime skipped (%s)", type(exc).__name__)
 
-    async def _get_updates(self, session, poll_timeout):
+    def _get_updates(self, poll_timeout):
+        """Blocking ``getUpdates`` over Tor. Called via ``to_thread`` from the loop."""
         params = {"timeout": poll_timeout, "allowed_updates": '["message"]'}
         if self._offset is not None:
             params["offset"] = self._offset
         url = f"{self._api_base}/bot{self._token}/getUpdates"
-        # The client read timeout must outlast Telegram's long-poll hold, or aiohttp aborts the
-        # request the server is legitimately keeping open.
-        client_timeout = aiohttp.ClientTimeout(total=poll_timeout + 10)
-        async with session.get(url, params=params, timeout=client_timeout) as resp:
-            resp.raise_for_status()
-            payload = await resp.json()
+        # The read timeout must outlast Telegram's long-poll hold, or requests aborts the request
+        # the server is legitimately keeping open; (connect, read) tuple.
+        resp = requests.get(
+            url, params=params, timeout=(10, poll_timeout + 10), proxies=self._proxies
+        )
+        resp.raise_for_status()
+        payload = resp.json()
         if not payload.get("ok"):
             return []
         return payload.get("result", [])
 
-    async def _handle_update(self, session, update):
+    async def _handle_update(self, update):
         message = update.get("message") or {}
         chat = message.get("chat") or {}
         # Access control: only the configured chat may drive the bot. Anything else is dropped
@@ -368,7 +378,7 @@ class TelegramCommandBot:
             return
         reply = await asyncio.to_thread(self._safe_reply_for, message.get("text", ""))
         if reply:
-            await self._send(session, reply)
+            await asyncio.to_thread(self._send, reply)
 
     def _safe_reply_for(self, text):
         """Never let a formatting/read bug kill the poll loop — a broken command just goes quiet."""
@@ -378,14 +388,13 @@ class TelegramCommandBot:
             logger.debug("Telegram command handling failed (%s)", type(exc).__name__)
             return None
 
-    async def _send(self, session, text):
+    def _send(self, text):
+        """Blocking reply over Tor. Called via ``to_thread``."""
         url = f"{self._api_base}/bot{self._token}/sendMessage"
         payload = {"chat_id": self.chat_id, "text": text, "disable_web_page_preview": True}
         try:
-            async with session.post(
-                url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                resp.raise_for_status()
+            resp = requests.post(url, json=payload, timeout=10, proxies=self._proxies)
+            resp.raise_for_status()
         except Exception as exc:
-            # Log only the exception type — a requests/aiohttp error can embed the token-bearing URL.
+            # Log only the exception type — a requests error can embed the token-bearing URL.
             logger.debug("Telegram reply failed (%s)", type(exc).__name__)

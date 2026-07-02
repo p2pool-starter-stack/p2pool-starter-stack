@@ -2095,7 +2095,7 @@ render_env() {
     tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
     local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
     local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
-    local tg_ev_xvb_no_share tg_ev_clearnet_exposed
+    local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
     tg_ev_worker_offline=$(tg_event worker_offline)
@@ -2107,6 +2107,9 @@ render_env() {
     tg_ev_db_unhealthy=$(tg_event db_unhealthy)
     tg_ev_xvb_no_share=$(tg_event xvb_no_share)
     tg_ev_clearnet_exposed=$(tg_event clearnet_exposed)
+    tg_ev_xvb_registration=$(tg_event xvb_registration)
+    tg_ev_new_release=$(tg_event new_release)
+    tg_ev_stack_online=$(tg_event stack_online)
 
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
@@ -2200,6 +2203,9 @@ TELEGRAM_EVENT_DISK_SPACE=$tg_ev_disk_space
 TELEGRAM_EVENT_DB_UNHEALTHY=$tg_ev_db_unhealthy
 TELEGRAM_EVENT_XVB_NO_SHARE=$tg_ev_xvb_no_share
 TELEGRAM_EVENT_CLEARNET_EXPOSED=$tg_ev_clearnet_exposed
+TELEGRAM_EVENT_XVB_REGISTRATION=$tg_ev_xvb_registration
+TELEGRAM_EVENT_NEW_RELEASE=$tg_ev_new_release
+TELEGRAM_EVENT_STACK_ONLINE=$tg_ev_stack_online
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET

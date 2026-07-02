@@ -810,6 +810,14 @@ class DataService:
                         xvb_enabled=ENABLE_XVB,
                         shares_in_window=shares_in_window,
                         clearnet_active=bool(self.clearnet_sync_state.get("active")),
+                        xvb_registration_state=(self.state_manager.get_xvb_stats() or {}).get(
+                            "registration_state", ""
+                        ),
+                        # From the previous cycle's snapshot (the update check writes it below); a
+                        # one-cycle lag is fine for a one-shot "new release" ping.
+                        update_available=bool(
+                            (self.latest_data.get("update") or {}).get("available")
+                        ),
                     )
 
                     self.latest_data.update(

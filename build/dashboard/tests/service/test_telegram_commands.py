@@ -298,133 +298,121 @@ async def test_run_is_noop_when_disabled():
 async def test_handle_update_ignores_foreign_chat(monkeypatch):
     bot = _bot(monkeypatch)
     sent = []
-
-    async def _record(session, text):
-        sent.append(text)
-
-    monkeypatch.setattr(bot, "_send", _record)
+    monkeypatch.setattr(bot, "_send", sent.append)  # _send is sync now (run via to_thread)
     # chat_id 999 != configured 42 → dropped, nothing sent.
-    await bot._handle_update(None, {"message": {"chat": {"id": 999}, "text": "/help"}})
+    await bot._handle_update({"message": {"chat": {"id": 999}, "text": "/help"}})
     assert sent == []
 
 
 async def test_handle_update_replies_to_configured_chat(monkeypatch):
     bot = _bot(monkeypatch)
     sent = []
-
-    async def _record(session, text):
-        sent.append(text)
-
-    monkeypatch.setattr(bot, "_send", _record)
-    await bot._handle_update(None, {"message": {"chat": {"id": 42}, "text": "/help"}})
+    monkeypatch.setattr(bot, "_send", sent.append)
+    await bot._handle_update({"message": {"chat": {"id": 42}, "text": "/help"}})
     assert len(sent) == 1 and "/status" in sent[0]
 
 
-# --- transport (stubbed aiohttp session) --------------------------------------------------
+# --- transport (stubbed requests, over Tor) -----------------------------------------------
 
 
 class _Resp:
-    """Minimal stand-in for an aiohttp response context manager."""
+    """Minimal stand-in for a requests.Response."""
 
-    def __init__(self, payload=None, raise_on_enter=None, raise_on_status=False):
+    def __init__(self, payload=None, raise_status=False):
         self._payload = payload or {}
-        self._raise_on_enter = raise_on_enter
-        self._raise_on_status = raise_on_status
-
-    async def __aenter__(self):
-        if self._raise_on_enter:
-            raise self._raise_on_enter
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
+        self._raise = raise_status
 
     def raise_for_status(self):
-        if self._raise_on_status:
+        if self._raise:
             raise RuntimeError("http error")
 
-    async def json(self):
+    def json(self):
         return self._payload
 
 
-class _Session:
-    """Stub aiohttp session: hands back queued responses and records calls."""
-
-    def __init__(self, gets=None, posts=None):
-        self._gets = list(gets or [])
-        self._posts = list(posts or [])
-        self.get_calls = []
-        self.post_calls = []
-
-    def get(self, url, params=None, timeout=None):
-        self.get_calls.append((url, params))
-        return self._gets.pop(0)
-
-    def post(self, url, json=None, timeout=None):
-        self.post_calls.append((url, json))
-        return self._posts.pop(0)
-
-
-def _make_bot():
+def _make_bot(tor_proxy="socks5h://tor:9050"):
     ds = SimpleNamespace(latest_data={}, state_manager=object())
-    return tc.TelegramCommandBot(ds, enabled=True, bot_token="tok", chat_id="42")
+    return tc.TelegramCommandBot(
+        ds, enabled=True, bot_token="tok", chat_id="42", tor_proxy=tor_proxy
+    )
 
 
-async def test_get_updates_parses_results_and_sends_offset():
+def test_get_updates_parses_results_over_tor(monkeypatch):
     bot = _make_bot()
     bot._offset = 7
-    session = _Session(gets=[_Resp({"ok": True, "result": [{"update_id": 8}]})])
-    result = await bot._get_updates(session, 0)
-    assert result == [{"update_id": 8}]
-    url, params = session.get_calls[0]
-    assert "bottok" in url and params["offset"] == 7  # token in URL, offset forwarded
+    seen = {}
+
+    def fake_get(url, params=None, timeout=None, proxies=None):
+        seen.update(url=url, params=params, proxies=proxies)
+        return _Resp({"ok": True, "result": [{"update_id": 8}]})
+
+    monkeypatch.setattr(tc.requests, "get", fake_get)
+    assert bot._get_updates(0) == [{"update_id": 8}]
+    assert "bottok" in seen["url"] and seen["params"]["offset"] == 7  # token + offset forwarded
+    assert seen["proxies"] == {"http": "socks5h://tor:9050", "https": "socks5h://tor:9050"}
 
 
-async def test_get_updates_not_ok_returns_empty():
+def test_get_updates_not_ok_returns_empty(monkeypatch):
     bot = _make_bot()
-    session = _Session(gets=[_Resp({"ok": False})])
-    assert await bot._get_updates(session, 0) == []
+    monkeypatch.setattr(tc.requests, "get", lambda *a, **k: _Resp({"ok": False}))
+    assert bot._get_updates(0) == []
 
 
-async def test_prime_offset_skips_backlog():
+def test_prime_offset_skips_backlog(monkeypatch):
     bot = _make_bot()
-    session = _Session(gets=[_Resp({"ok": True, "result": [{"update_id": 3}, {"update_id": 9}]})])
-    await bot._prime_offset(session)
+    monkeypatch.setattr(
+        tc.requests,
+        "get",
+        lambda *a, **k: _Resp({"ok": True, "result": [{"update_id": 3}, {"update_id": 9}]}),
+    )
+    bot._prime_offset()
     assert bot._offset == 10  # past the last pending update
 
 
-async def test_prime_offset_swallows_error():
+def test_prime_offset_swallows_error(monkeypatch):
     bot = _make_bot()
-    session = _Session(gets=[_Resp(raise_on_enter=OSError("offline"))])
-    await bot._prime_offset(session)  # must not raise
+
+    def boom(*a, **k):
+        raise OSError("offline")
+
+    monkeypatch.setattr(tc.requests, "get", boom)
+    bot._prime_offset()  # must not raise
     assert bot._offset is None
 
 
-async def test_send_posts_message():
+def test_send_posts_over_tor(monkeypatch):
     bot = _make_bot()
-    session = _Session(posts=[_Resp({"ok": True})])
-    await bot._send(session, "hi")
-    url, body = session.post_calls[0]
-    assert "bottok" in url and body["chat_id"] == "42" and body["text"] == "hi"
+    seen = {}
+
+    def fake_post(url, json=None, timeout=None, proxies=None):
+        seen.update(url=url, body=json, proxies=proxies)
+        return _Resp({"ok": True})
+
+    monkeypatch.setattr(tc.requests, "post", fake_post)
+    bot._send("hi")
+    assert (
+        "bottok" in seen["url"] and seen["body"]["chat_id"] == "42" and seen["body"]["text"] == "hi"
+    )
+    assert seen["proxies"]["https"] == "socks5h://tor:9050"
 
 
-async def test_send_swallows_network_error():
+def test_send_swallows_network_error(monkeypatch):
     bot = _make_bot()
-    session = _Session(posts=[_Resp(raise_on_status=True)])
-    await bot._send(session, "hi")  # must not raise
+    monkeypatch.setattr(tc.requests, "post", lambda *a, **k: _Resp(raise_status=True))
+    bot._send("hi")  # must not raise
 
 
 async def test_run_processes_update_then_honours_cancel(monkeypatch):
     bot = _make_bot()
-    monkeypatch.setattr(bot, "_prime_offset", _async_noop)
+    monkeypatch.setattr(bot, "_prime_offset", lambda: None)
     handled = []
 
-    async def _fake_handle(session, update):
+    async def _fake_handle(update):
         handled.append(update)
 
     calls = {"n": 0}
 
-    async def _fake_get(session, poll_timeout):
+    def _fake_get(poll_timeout):
         calls["n"] += 1
         if calls["n"] == 1:
             return [{"update_id": 1}]
@@ -439,14 +427,14 @@ async def test_run_processes_update_then_honours_cancel(monkeypatch):
 
 async def test_run_backs_off_on_poll_error(monkeypatch):
     bot = _make_bot()
-    monkeypatch.setattr(bot, "_prime_offset", _async_noop)
+    monkeypatch.setattr(bot, "_prime_offset", lambda: None)
     slept = []
 
     async def _sleep(secs):
         slept.append(secs)
         raise asyncio.CancelledError  # break out after the first backoff
 
-    async def _boom(session, poll_timeout):
+    def _boom(poll_timeout):
         raise OSError("telegram unreachable")
 
     monkeypatch.setattr(tc.asyncio, "sleep", _sleep)
@@ -454,7 +442,3 @@ async def test_run_backs_off_on_poll_error(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await bot.run()
     assert slept == [tc.POLL_ERROR_BACKOFF_SECONDS]
-
-
-async def _async_noop(*args, **kwargs):
-    return None

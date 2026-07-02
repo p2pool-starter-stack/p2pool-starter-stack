@@ -266,6 +266,9 @@ TELEGRAM_EVENTS = {
     "db_unhealthy": _telegram_event_enabled("db_unhealthy"),
     "xvb_no_share": _telegram_event_enabled("xvb_no_share"),
     "clearnet_exposed": _telegram_event_enabled("clearnet_exposed"),
+    "xvb_registration": _telegram_event_enabled("xvb_registration"),
+    "new_release": _telegram_event_enabled("new_release"),
+    "stack_online": _telegram_event_enabled("stack_online"),
 }
 
 # Worker offline/online debounce (Issue #121). A worker must be unseen this long before it's

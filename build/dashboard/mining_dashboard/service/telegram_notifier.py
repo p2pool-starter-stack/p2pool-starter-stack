@@ -2,6 +2,8 @@ import logging
 
 import requests
 
+from mining_dashboard.config.config import TOR_SOCKS_PROXY
+
 logger = logging.getLogger("TelegramNotifier")
 
 # Telegram Bot API base. Overridable in tests so we never touch the network.
@@ -23,9 +25,12 @@ class TelegramNotifier:
       off, so :meth:`send` is a silent no-op rather than an error on every cycle.
     - **Per-event toggles.** ``events`` gates which alert kinds are delivered, so an operator
       can enable Telegram and still silence the ones they find noisy.
-    - **Fail silent.** Any network error (offline host, Tor-only egress with no clearnet,
-      Telegram unreachable) is swallowed and logged at debug — an alerter must never crash
-      the data loop or spam ERROR for the very condition it exists to report (#59 discipline).
+    - **Always over Tor.** Sends ride the bridge Tor SOCKS proxy (``socks5h``, so the DNS lookup
+      goes through Tor too), so Telegram sees a Tor exit, not the host IP — never a clearnet beacon,
+      matching the Healthchecks.io pinger (#79) and the XvB fetch (#163).
+    - **Fail silent.** Any network error (offline host, Tor down, Telegram unreachable / blocking a
+      Tor exit) is swallowed and logged at debug — an alerter must never crash the data loop or spam
+      ERROR for the very condition it exists to report (#59 discipline).
     - **Never logs the token.** ``bot_token`` is a secret; it only ever appears in the request
       URL and is never written to a log line — not even inside an exception message (which for
       ``requests`` would otherwise include the full URL).
@@ -39,6 +44,7 @@ class TelegramNotifier:
         events=None,
         timeout=10,
         api_base=TELEGRAM_API_BASE,
+        tor_proxy=TOR_SOCKS_PROXY,
     ):
         self.bot_token = (bot_token or "").strip()
         # chat_id may be a negative integer (Telegram group ids look like -1001234567890);
@@ -47,6 +53,9 @@ class TelegramNotifier:
         self.events = dict(events or {})
         self.timeout = timeout
         self._api_base = api_base.rstrip("/")
+        # Route over the bridge Tor SOCKS proxy so the host IP is never exposed to Telegram.
+        # tor_proxy is a test seam; the default wires the configured proxy.
+        self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
         self.enabled = bool(enabled and self.bot_token and self.chat_id)
 
         if enabled and not self.enabled:
@@ -75,6 +84,7 @@ class TelegramNotifier:
                     "disable_web_page_preview": True,
                 },
                 timeout=self.timeout,
+                proxies=self._proxies,
             )
             resp.raise_for_status()
             return True
