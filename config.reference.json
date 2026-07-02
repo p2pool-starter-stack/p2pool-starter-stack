@@ -74,5 +74,9 @@
     "network": {
         "subnet": "172.28.0.0/24",
         "tor_egress_firewall": true
+    },
+
+    "healthchecks": {
+        "ping_url": ""
     }
 }

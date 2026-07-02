@@ -89,6 +89,16 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
 
 ### Added
 
+- **Healthchecks.io dead-man's switch** (`healthchecks.ping_url` in `config.json`, **off until
+  set**): an optional external liveness monitor. Set a ping URL and the dashboard loop pings it
+  every cycle; if the host dies (power loss, kernel panic, NIC death) the pings stop and
+  Healthchecks.io alerts you — the one failure mode an in-stack notifier can't report from a dead
+  machine. It's a **pure "is the stack alive" signal** — in-stack node-health alerting (a node down
+  while the box is up) is out of scope, handled separately by the Telegram alerter (#121). The ping
+  **always rides Tor** (the shared bridge SOCKS) so the endpoint sees a Tor exit, not your host IP,
+  so paste a Tor-reachable URL (hosted `hc-ping.com`, or a self-hosted onion/public instance). Fails
+  silently when offline / Tor down. The URL is the on/off switch and is stored as a secret in the
+  owner-only `.env`. See [`docs/monitoring.md`](docs/monitoring.md) (#79).
 - **Optional clearnet initial sync (#183).** A default-off, per-component opt-in
   (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`) that lets a node do its **one-time
   initial block download over clearnet** — much faster than over bandwidth-capped Tor circuits, which

@@ -6,7 +6,7 @@ linking to it (`build_state` -> `state.update`). It never updates anything — i
 operator knows to upgrade on their own terms (the one-click upgrade is the separate #59).
 
 Privacy: the check is **opt-in (default off)** and routed over the bridge **Tor SOCKS** (reusing
-`XVB_TOR_PROXY`, like the XvB stats fetch #163), so enabling it doesn't reveal the host IP to GitHub.
+`TOR_SOCKS_PROXY`, like the XvB stats fetch #163), so enabling it doesn't reveal the host IP to GitHub.
 Every failure path is silent (returns ``None``) so an offline / Tor-only stack just shows no badge.
 """
 

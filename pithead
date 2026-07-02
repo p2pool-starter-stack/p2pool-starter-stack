@@ -2054,6 +2054,12 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor: a ping URL is the
+    # on/off switch (blank = off), and the ping always rides Tor. The URL is a capability secret, so
+    # it lives in the owner-only .env (chmod 600 below), never a world-readable file. docs/monitoring.md.
+    local hc_ping_url
+    hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
+
     # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
     # a header badge linking to it (notify-only — no upgrade). On by default because the check is
     # Tor-routed (socks5h), so it leaks neither the host IP nor a DNS lookup to GitHub; set false to opt
@@ -2150,6 +2156,7 @@ XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
+HEALTHCHECKS_PING_URL=$hc_ping_url
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -2651,6 +2658,17 @@ describe_change() {
         ;;
     MONERO_PREP_THREADS)
         msg="Monero block-prep threads: $old → $new."
+        ;;
+    HEALTHCHECKS_PING_URL)
+        # The ping URL is both the on/off switch and a capability secret — report the change
+        # (enable/disable/update) WITHOUT printing the value.
+        if [ -z "$new" ]; then
+            msg="Healthchecks.io dead-man's switch DISABLED (#79) — ping URL cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="Healthchecks.io dead-man's switch ENABLED (#79) — ping URL set (pings over Tor); the dashboard container is recreated."
+        else
+            msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
+        fi
         ;;
     MONERO_CLEARNET_SYNC)
         flag=DEST

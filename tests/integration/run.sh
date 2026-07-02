@@ -621,7 +621,7 @@ assert_egress_posture() {
 # the XvB call to xmrvsbeast (the bonus-history stats fetch and the #263 auto-register POST). It must
 # ride the bridge Tor SOCKS so the operator's home IP is never correlated with the wallet. Two-part
 # LIVE proof, the tier-4 counterpart to test_xvb_client's socks5h assertion:
-#   1. the RUNNING dashboard is wired to the Tor SOCKS — XVB_TOR_PROXY = socks5h://<prefix>.25:9050.
+#   1. the RUNNING dashboard is wired to the Tor SOCKS — TOR_SOCKS_PROXY = socks5h://<prefix>.25:9050.
 #      Reading the live container env (not the compose render) catches a stale-image/partial update
 #      that didn't apply the proxy, exactly like the #152/#173 live xmrig-proxy argv checks. socks5h
 #      (not socks5) means the xmrvsbeast hostname resolves over Tor too — no local DNS leak.
@@ -637,7 +637,7 @@ assert_xvb_over_tor() {
     prefix="$(env_on_box NETWORK_PREFIX)"
     [ -n "$prefix" ] || prefix="172.28.0"
     want="socks5h://$prefix.25:9050"
-    proxy="$(rx "docker exec dashboard printenv XVB_TOR_PROXY 2>/dev/null")"
+    proxy="$(rx "docker exec dashboard printenv TOR_SOCKS_PROXY 2>/dev/null")"
     assert_eq "XvB stats + auto-register wired to the Tor SOCKS (#206/#163)" "$proxy" "$want"
 }
 
