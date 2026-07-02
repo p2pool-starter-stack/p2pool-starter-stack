@@ -28,12 +28,14 @@ logged.
    months of history) is plenty for one stack. (Prefer to self-host? See
    [Self-hosting](#self-hosting-your-own-instance) below.)
 2. Create a new check. Name it something like `pithead`.
-3. Set its schedule:
-   - **Period** — how often Healthchecks.io *expects* a ping. Set this comfortably **above**
-     your ping interval (default 60s) so a single missed cycle — e.g. a quick dashboard
-     restart — doesn't trip a false alarm. **5 minutes** is a sensible starting point.
-   - **Grace** — how long after a missed period before you're alerted. **5–10 minutes** is
-     reasonable; shorter means faster alerts but more false positives on brief blips.
+3. Set its schedule. The recommended values, which match Pithead's default 60-second ping
+   interval:
+   - **Period — 1 minute.** How often Healthchecks.io *expects* a ping. The stack pings once
+     a minute by default, so a 1-minute period tracks it closely.
+   - **Grace — 5 minutes.** How long after a missed period before you're alerted. This slack
+     absorbs a brief blip — e.g. a quick dashboard-container restart — without a false alarm,
+     so you're only alerted after roughly **6 minutes** of true silence. Shorten it for faster
+     alerts (more false positives on blips); lengthen it if you also raise `interval_seconds`.
 4. Copy the check's **ping URL** — it looks like `https://hc-ping.com/<uuid>`.
 
 ### 2. Choose where alerts go
@@ -45,7 +47,7 @@ in-stack events land in one place.
 
 ### 3. Paste the ping URL into `config.json`
 
-Add a `healthchecks` block (see [`config.advanced.example.json`](../config.advanced.example.json)):
+Add a `healthchecks` block (see [`config.reference.json`](../config.reference.json)):
 
 ```json
 {
@@ -98,7 +100,7 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
 | `healthchecks.enabled` | `false` | Master switch. When off, the stack never pings and logs nothing. |
 | `healthchecks.ping_url` | _(blank)_ | The ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>`. A bare uuid/slug is also accepted and is joined onto `base_url`. Treated as a secret (stored in the owner-only `.env`). |
 | `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid (not a full URL). Override it to point at a [self-hosted](#self-hosting-your-own-instance) instance. |
-| `healthchecks.interval_seconds` | `60` | Minimum seconds between pings. The loop runs every 30s, so a value below that just pings every cycle. Keep your Healthchecks **period + grace** well above this. |
+| `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (default **1 minute**). The loop runs every 30s, so a value below that just pings every cycle. Match your Healthchecks **period** to this and give the **grace** enough slack for a restart (the recommended **1-minute period / 5-minute grace** above). |
 | `healthchecks.signal_fail_on_node_down` | `true` | Send `/fail` (red the check now) while a required node is down. `false` = plain liveness only. |
 
 > Auto-provisioning the check via the Healthchecks.io Management API (so you wouldn't have to
