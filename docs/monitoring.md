@@ -102,7 +102,7 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
 | Key | Default | Description |
 |---|---|---|
 | `healthchecks.enabled` | `false` | Master switch. When off, the stack never pings and logs nothing. |
-| `healthchecks.ping_url` | _(blank)_ | The ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>`. A bare uuid/slug is also accepted and is joined onto `base_url`. Treated as a secret (stored in the owner-only `.env`). |
+| `healthchecks.ping_url` | *(blank)* | The ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>`. A bare uuid/slug is also accepted and is joined onto `base_url`. Treated as a secret (stored in the owner-only `.env`). |
 | `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid (not a full URL). Override it to point at a [self-hosted](#self-hosting-your-own-instance) instance. |
 | `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (default **1 minute**). The loop runs every 30s, so a value below that just pings every cycle. Match your Healthchecks **period** to this and give the **grace** enough slack for a restart (the recommended **1-minute period / 5-minute grace** above). |
 | `healthchecks.signal_fail_on_node_down` | `true` | Send `/fail` (red the check now) while a required node is down. `false` = plain liveness only. |

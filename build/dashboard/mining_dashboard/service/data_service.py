@@ -49,8 +49,8 @@ from mining_dashboard.helper.utils import (
     shares_in_pplns_window,
 )
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
-from mining_dashboard.service.node_health import NodeHealthMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
+from mining_dashboard.service.node_health import NodeHealthMonitor
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")

@@ -1515,19 +1515,19 @@ assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file 
 
 # Healthchecks.io (#79): absent => disabled with the hosted base_url default.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" > "$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-assert_eq "healthchecks default disabled"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "false"
-assert_eq "healthchecks default base_url"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_BASE_URL)" "https://hc-ping.com"
+assert_eq "healthchecks default disabled" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "false"
+assert_eq "healthchecks default base_url" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_BASE_URL)" "https://hc-ping.com"
 assert_eq "healthchecks tor on by default" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_TOR)" "true"
 
 # An enabled config propagates the ping URL + tuning knobs verbatim to .env; tor:false opts out.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"enabled":true,"ping_url":"https://hc-ping.com/abc","interval_seconds":120,"signal_fail_on_node_down":false,"tor":false} }\n' "$WALLET" > "$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"enabled":true,"ping_url":"https://hc-ping.com/abc","interval_seconds":120,"signal_fail_on_node_down":false,"tor":false} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-assert_eq "healthchecks enabled propagated"   "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "true"
-assert_eq "healthchecks ping_url propagated"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
-assert_eq "healthchecks interval propagated"  "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_INTERVAL_SECONDS)" "120"
+assert_eq "healthchecks enabled propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "true"
+assert_eq "healthchecks ping_url propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
+assert_eq "healthchecks interval propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_INTERVAL_SECONDS)" "120"
 assert_eq "healthchecks fail-on-down propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_FAIL_ON_NODE_DOWN)" "false"
 assert_eq "healthchecks tor:false propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_TOR)" "false"
 

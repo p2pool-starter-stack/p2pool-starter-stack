@@ -887,20 +887,28 @@ class TestRunIteration:
         tari_client.get_sync_status = AsyncMock(return_value=tari_sync)
         tari_client.close = AsyncMock()
 
-        with patch.object(ds_mod, "ClientSession", _FakeClientSession), \
-             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client), \
-             patch.object(ds_mod, "TariClient", return_value=tari_client), \
-             patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])), \
-             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}), \
-             patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}), \
-             patch.object(ds_mod, "get_p2pool_stats", return_value={"pool": {"last_share_time": 0, "difficulty": 0}}), \
-             patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value=monero_sync)), \
-             patch.object(ds_mod, "get_disk_usage", return_value={}), \
-             patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")), \
-             patch.object(ds_mod, "get_memory_usage", return_value={}), \
-             patch.object(ds_mod, "get_load_average", return_value="0"), \
-             patch.object(ds_mod, "get_cpu_usage", return_value="0%"), \
-             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(ds_mod, "get_monero_sync_status", AsyncMock(return_value=monero_sync)),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
@@ -914,7 +922,13 @@ class TestRunIteration:
 
         await self._run_one_iteration(
             svc,
-            monero_sync={"is_syncing": False, "reachable": True, "percent": 100, "current": 100, "target": 100},
+            monero_sync={
+                "is_syncing": False,
+                "reachable": True,
+                "percent": 100,
+                "current": 100,
+                "target": 100,
+            },
             tari_sync={"is_syncing": False, "reachable": True},
         )
         svc.healthchecks.ping.assert_called_once_with(fail=False)

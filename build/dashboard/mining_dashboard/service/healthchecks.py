@@ -21,17 +21,18 @@ Manual setup only (MVP): the operator pastes the ping URL from Healthchecks.io. 
 provisioning via the Management API (which would mean storing a powerful API key) is
 intentionally left out — see ``docs/monitoring.md``.
 """
+
 import logging
 import time
 
 import requests
 
 from mining_dashboard.config.config import (
-    HEALTHCHECKS_ENABLED,
-    HEALTHCHECKS_PING_URL,
     HEALTHCHECKS_BASE_URL,
-    HEALTHCHECKS_INTERVAL_SEC,
+    HEALTHCHECKS_ENABLED,
     HEALTHCHECKS_FAIL_ON_NODE_DOWN,
+    HEALTHCHECKS_INTERVAL_SEC,
+    HEALTHCHECKS_PING_URL,
     HEALTHCHECKS_TOR_PROXY,
 )
 
@@ -66,8 +67,16 @@ def _resolve_ping_url(ping_url, base_url):
 class HealthchecksClient:
     """Pings a Healthchecks.io check on a throttle; safe to call every loop cycle."""
 
-    def __init__(self, enabled, ping_url, base_url, interval_seconds,
-                 fail_on_node_down, tor_proxy=None, clock=time.monotonic):
+    def __init__(
+        self,
+        enabled,
+        ping_url,
+        base_url,
+        interval_seconds,
+        fail_on_node_down,
+        tor_proxy=None,
+        clock=time.monotonic,
+    ):
         self.enabled = bool(enabled)
         self.url = _resolve_ping_url(ping_url, base_url)
         self.interval = max(0, int(interval_seconds or 0))
@@ -76,7 +85,7 @@ class HealthchecksClient:
         # bridge Tor SOCKS the XvB fetch uses; socks5h so hc-ping.com's host resolves through Tor too.
         self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
         self._clock = clock
-        self._last_ping = None       # monotonic time of the last *successful* send
+        self._last_ping = None  # monotonic time of the last *successful* send
         self._warned_misconfig = False
 
         if self.enabled and self.url:

@@ -1,4 +1,5 @@
 """Tests for the Healthchecks.io dead-man's-switch client (Issue #79)."""
+
 import logging
 from unittest.mock import patch
 
@@ -32,24 +33,32 @@ def _client(clock=None, **overrides):
 
 class TestResolvePingUrl:
     def test_full_https_url_used_as_is(self):
-        assert _resolve_ping_url("https://hc-ping.com/uuid", "https://hc-ping.com") == \
-            "https://hc-ping.com/uuid"
+        assert (
+            _resolve_ping_url("https://hc-ping.com/uuid", "https://hc-ping.com")
+            == "https://hc-ping.com/uuid"
+        )
 
     def test_full_http_url_used_as_is(self):
-        assert _resolve_ping_url("http://hc.local/ping/uuid", "https://hc-ping.com") == \
-            "http://hc.local/ping/uuid"
+        assert (
+            _resolve_ping_url("http://hc.local/ping/uuid", "https://hc-ping.com")
+            == "http://hc.local/ping/uuid"
+        )
 
     def test_trailing_slash_stripped(self):
-        assert _resolve_ping_url("https://hc-ping.com/uuid/", "https://hc-ping.com") == \
-            "https://hc-ping.com/uuid"
+        assert (
+            _resolve_ping_url("https://hc-ping.com/uuid/", "https://hc-ping.com")
+            == "https://hc-ping.com/uuid"
+        )
 
     def test_bare_uuid_joined_with_default_base(self):
         assert _resolve_ping_url("abc-123", "https://hc-ping.com") == "https://hc-ping.com/abc-123"
 
     def test_bare_uuid_joined_with_selfhosted_base(self):
         # base_url override is how a self-hosted instance is supported with a bare uuid.
-        assert _resolve_ping_url("abc-123", "https://hc.example.com/ping/") == \
-            "https://hc.example.com/ping/abc-123"
+        assert (
+            _resolve_ping_url("abc-123", "https://hc.example.com/ping/")
+            == "https://hc.example.com/ping/abc-123"
+        )
 
     def test_blank_and_none_resolve_to_empty(self):
         assert _resolve_ping_url("", "https://hc-ping.com") == ""
@@ -73,8 +82,10 @@ class TestPingDisabledOrUnconfigured:
 
     def test_enabled_without_url_warns_once(self, caplog):
         c = _client(ping_url="", base_url="https://hc-ping.com")
-        with patch.object(hc_mod.requests, "get") as get, \
-             caplog.at_level(logging.WARNING, logger="Healthchecks"):
+        with (
+            patch.object(hc_mod.requests, "get") as get,
+            caplog.at_level(logging.WARNING, logger="Healthchecks"),
+        ):
             assert c.ping() is False
             assert c.ping() is False
         get.assert_not_called()
@@ -121,9 +132,11 @@ class TestTorRouting:
         assert get.call_args.kwargs["proxies"] is None
 
     def test_from_config_wires_the_tor_proxy(self):
-        with patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True), \
-             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"), \
-             patch.object(hc_mod, "HEALTHCHECKS_TOR_PROXY", "socks5h://172.28.0.25:9050"):
+        with (
+            patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True),
+            patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
+            patch.object(hc_mod, "HEALTHCHECKS_TOR_PROXY", "socks5h://172.28.0.25:9050"),
+        ):
             c = HealthchecksClient.from_config()
         with patch.object(hc_mod.requests, "get") as get:
             c.ping()
@@ -135,8 +148,8 @@ class TestThrottle:
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
         with patch.object(hc_mod.requests, "get") as get:
-            assert c.ping() is True            # first ping goes out
-            assert c.ping() is False           # within the interval → skipped
+            assert c.ping() is True  # first ping goes out
+            assert c.ping() is False  # within the interval → skipped
         get.assert_called_once()
 
     def test_ping_again_after_interval_elapses(self):
@@ -144,7 +157,7 @@ class TestThrottle:
         c = _client(clock=clock, interval_seconds=60)
         with patch.object(hc_mod.requests, "get") as get:
             assert c.ping() is True
-            clock.t += 61                       # interval elapsed
+            clock.t += 61  # interval elapsed
             assert c.ping() is True
         assert get.call_count == 2
 
@@ -161,9 +174,12 @@ class TestPingFailsSilently:
     def test_network_error_is_swallowed_and_retries(self, caplog):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get",
-                          side_effect=requests.exceptions.ConnectionError("offline")) as get, \
-             caplog.at_level(logging.DEBUG, logger="Healthchecks"):
+        with (
+            patch.object(
+                hc_mod.requests, "get", side_effect=requests.exceptions.ConnectionError("offline")
+            ) as get,
+            caplog.at_level(logging.DEBUG, logger="Healthchecks"),
+        ):
             assert c.ping() is False
             # Throttle clock did NOT advance on failure → the very next call retries immediately.
             assert c.ping() is False
@@ -174,11 +190,12 @@ class TestPingFailsSilently:
     def test_success_after_failure_advances_throttle(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get",
-                          side_effect=[requests.exceptions.ConnectionError("x"), None]):
-            assert c.ping() is False           # failed, no throttle advance
-            assert c.ping() is True            # retried immediately, succeeded → throttle set
-            assert c.ping() is False           # now throttled
+        with patch.object(
+            hc_mod.requests, "get", side_effect=[requests.exceptions.ConnectionError("x"), None]
+        ):
+            assert c.ping() is False  # failed, no throttle advance
+            assert c.ping() is True  # retried immediately, succeeded → throttle set
+            assert c.ping() is False  # now throttled
 
 
 class TestFromConfig:
@@ -187,11 +204,13 @@ class TestFromConfig:
         assert HealthchecksClient.from_config().enabled is False
 
     def test_reads_config_values(self):
-        with patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True), \
-             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"), \
-             patch.object(hc_mod, "HEALTHCHECKS_BASE_URL", "https://hc-ping.com"), \
-             patch.object(hc_mod, "HEALTHCHECKS_INTERVAL_SEC", 120), \
-             patch.object(hc_mod, "HEALTHCHECKS_FAIL_ON_NODE_DOWN", False):
+        with (
+            patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True),
+            patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
+            patch.object(hc_mod, "HEALTHCHECKS_BASE_URL", "https://hc-ping.com"),
+            patch.object(hc_mod, "HEALTHCHECKS_INTERVAL_SEC", 120),
+            patch.object(hc_mod, "HEALTHCHECKS_FAIL_ON_NODE_DOWN", False),
+        ):
             c = HealthchecksClient.from_config()
         assert c.enabled is True
         assert c.url == "https://hc-ping.com/zzz"
