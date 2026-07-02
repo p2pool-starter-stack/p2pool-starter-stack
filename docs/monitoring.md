@@ -87,9 +87,13 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
   [Configuration](configuration.md#configuration-reference)). So the check catches a
   degraded-but-alive stack too, not just a dead host. Set it to `false` for plain liveness
   (only a dead host trips the alert).
-- **Fails silently.** A ping that can't get out — you're offline, or running
-  [Tor-only](architecture.md) without clearnet — is ignored quietly (it's logged at debug
-  level only). Healthchecks.io will alert on the missed ping regardless, which is the point.
+- **Routed over Tor by default.** The ping goes through the stack's [Tor](architecture.md) SOCKS
+  proxy (`healthchecks.tor: true`), so the endpoint sees a Tor exit, not your host IP. Set
+  `healthchecks.tor: false` to ping directly over clearnet — needed for a self-hosted instance on
+  your LAN. See the [Privacy note](#privacy-note).
+- **Fails silently.** A ping that can't get out — you're offline, or Tor is momentarily down — is
+  ignored quietly (logged at debug level only). Healthchecks.io will alert on the missed ping
+  regardless, which is the point.
 
 ---
 
@@ -102,6 +106,7 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
 | `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid (not a full URL). Override it to point at a [self-hosted](#self-hosting-your-own-instance) instance. |
 | `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (default **1 minute**). The loop runs every 30s, so a value below that just pings every cycle. Match your Healthchecks **period** to this and give the **grace** enough slack for a restart (the recommended **1-minute period / 5-minute grace** above). |
 | `healthchecks.signal_fail_on_node_down` | `true` | Send `/fail` (red the check now) while a required node is down. `false` = plain liveness only. |
+| `healthchecks.tor` | `true` | Route the ping through the stack's **Tor** SOCKS proxy (the same one the XvB fetch uses), so Healthchecks.io sees a Tor exit instead of your host IP. Set `false` for a **self-hosted instance on your LAN** — Tor can't reach a private `192.168.x`/`10.x`/`localhost` address — or if `hc-ping.com` is ever Tor-blocked. See [Privacy note](#privacy-note). |
 
 > Auto-provisioning the check via the Healthchecks.io Management API (so you wouldn't have to
 > copy the URL by hand) was considered but deliberately left out: it would mean storing a
@@ -132,11 +137,25 @@ prefix (e.g. `https://hc.example.com/ping`).
 
 ## Privacy note
 
-Pinging the hosted **hc-ping.com** happens over **clearnet**, which reveals your host's IP
-address to Healthchecks.io — separate from the Monero/Tari traffic the stack routes over
-[Tor](architecture.md). If that matters to you, **self-host** Healthchecks on infrastructure
-you control (ideally reachable as an onion service or over a VPN). This feature is opt-in and
-off by default precisely because it's a clearnet beacon.
+By default the ping is **routed over Tor** (`healthchecks.tor: true`), reusing the same bridge
+Tor SOCKS proxy as the XvB fetch — so Healthchecks.io sees a **Tor exit**, not your host's IP,
+and the DNS lookup goes through Tor too (`socks5h`). The dead-man's switch is not a clearnet
+beacon out of the box.
+
+Two things to know:
+
+- **Tor becomes part of the ping path.** If the Tor container is down while the host is up, the
+  ping can't get out and the check will eventually alert — a *false* "host down". The 5-minute
+  grace absorbs brief Tor blips, and pings retry every cycle, so only a sustained Tor outage
+  trips it. That's usually what you want (Tor down *is* a problem worth knowing about), but it's
+  the trade-off for hiding your IP.
+- **Set `healthchecks.tor: false`** to ping directly over clearnet instead. Do this for a
+  **self-hosted instance on your LAN** (Tor can't reach a private `192.168.x`/`10.x`/`localhost`
+  address) or if `hc-ping.com` ever blocks Tor exits. That reveals your host IP to the ping
+  endpoint — fine for a LAN instance you control, a consideration for the hosted service.
+
+For maximum privacy, **self-host** Healthchecks reachable as an **onion service** and paste the
+`.onion` ping URL — then the ping stays on Tor end to end with no exit node in the middle.
 
 ---
 

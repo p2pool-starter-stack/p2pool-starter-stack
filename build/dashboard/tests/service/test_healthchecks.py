@@ -104,6 +104,32 @@ class TestPingSuccess:
         assert get.call_args.args[0] == "https://hc-ping.com/abc"
 
 
+class TestTorRouting:
+    def test_ping_over_tor_passes_socks_proxies(self):
+        # tor_proxy set → the ping rides the bridge Tor SOCKS (host IP hidden from hc-ping.com).
+        proxy = "socks5h://172.28.0.25:9050"
+        c = _client(tor_proxy=proxy)
+        with patch.object(hc_mod.requests, "get") as get:
+            assert c.ping() is True
+        assert get.call_args.kwargs["proxies"] == {"http": proxy, "https": proxy}
+
+    def test_ping_without_tor_sends_no_proxies(self):
+        # Default (no tor_proxy) → direct clearnet ping, proxies=None.
+        c = _client()
+        with patch.object(hc_mod.requests, "get") as get:
+            assert c.ping() is True
+        assert get.call_args.kwargs["proxies"] is None
+
+    def test_from_config_wires_the_tor_proxy(self):
+        with patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True), \
+             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"), \
+             patch.object(hc_mod, "HEALTHCHECKS_TOR_PROXY", "socks5h://172.28.0.25:9050"):
+            c = HealthchecksClient.from_config()
+        with patch.object(hc_mod.requests, "get") as get:
+            c.ping()
+        assert get.call_args.kwargs["proxies"]["https"] == "socks5h://172.28.0.25:9050"
+
+
 class TestThrottle:
     def test_second_immediate_ping_is_throttled(self):
         clock = _Clock(1000.0)

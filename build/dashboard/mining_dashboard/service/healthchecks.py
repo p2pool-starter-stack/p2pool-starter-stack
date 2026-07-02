@@ -32,6 +32,7 @@ from mining_dashboard.config.config import (
     HEALTHCHECKS_BASE_URL,
     HEALTHCHECKS_INTERVAL_SEC,
     HEALTHCHECKS_FAIL_ON_NODE_DOWN,
+    HEALTHCHECKS_TOR_PROXY,
 )
 
 logger = logging.getLogger("Healthchecks")
@@ -66,20 +67,24 @@ class HealthchecksClient:
     """Pings a Healthchecks.io check on a throttle; safe to call every loop cycle."""
 
     def __init__(self, enabled, ping_url, base_url, interval_seconds,
-                 fail_on_node_down, clock=time.monotonic):
+                 fail_on_node_down, tor_proxy=None, clock=time.monotonic):
         self.enabled = bool(enabled)
         self.url = _resolve_ping_url(ping_url, base_url)
         self.interval = max(0, int(interval_seconds or 0))
         self.fail_on_node_down = bool(fail_on_node_down)
+        # A requests proxies dict when routing over Tor, else None (direct clearnet ping). Reuses the
+        # bridge Tor SOCKS the XvB fetch uses; socks5h so hc-ping.com's host resolves through Tor too.
+        self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
         self._clock = clock
         self._last_ping = None       # monotonic time of the last *successful* send
         self._warned_misconfig = False
 
         if self.enabled and self.url:
             logger.info(
-                "Healthchecks.io dead-man's switch enabled (ping every %ss%s).",
+                "Healthchecks.io dead-man's switch enabled (ping every %ss%s, %s).",
                 self.interval,
                 ", /fail on required-node-down" if self.fail_on_node_down else "",
+                "over Tor" if self._proxies else "over clearnet",
             )
 
     @classmethod
@@ -91,6 +96,7 @@ class HealthchecksClient:
             base_url=HEALTHCHECKS_BASE_URL,
             interval_seconds=HEALTHCHECKS_INTERVAL_SEC,
             fail_on_node_down=HEALTHCHECKS_FAIL_ON_NODE_DOWN,
+            tor_proxy=HEALTHCHECKS_TOR_PROXY,
         )
 
     @property
@@ -131,12 +137,12 @@ class HealthchecksClient:
 
         endpoint = self.url + "/fail" if (fail and self.fail_on_node_down) else self.url
         try:
-            requests.get(endpoint, timeout=_PING_TIMEOUT_SEC)
+            requests.get(endpoint, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
             # Advance the throttle only on success so a transient outage keeps retrying.
             self._last_ping = now
             return True
         except requests.RequestException as e:
-            # Offline / Tor-only / endpoint hiccup: the whole point is to survive these
+            # Offline / Tor down / endpoint hiccup: the whole point is to survive these
             # silently — Healthchecks.io will alert on the missed ping. DEBUG, never noise.
             logger.debug("Healthchecks ping failed (offline?): %s", e)
             return False

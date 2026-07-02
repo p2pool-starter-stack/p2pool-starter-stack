@@ -2058,12 +2058,15 @@ render_env() {
     # Manual mode only — the operator pastes the ping URL Healthchecks.io shows them. The ping
     # URL is a capability secret, so it lives in the owner-only .env (chmod 600 below) alongside
     # the other secrets, never in a world-readable file. See docs/monitoring.md.
-    local hc_enabled hc_ping_url hc_base_url hc_interval hc_fail_on_down
+    local hc_enabled hc_ping_url hc_base_url hc_interval hc_fail_on_down hc_tor
     hc_enabled=$(jq -r 'if .healthchecks.enabled != null then .healthchecks.enabled | tostring else "false" end' "$CONFIG_FILE")
     hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
     hc_base_url=$(jq -r '.healthchecks.base_url // "https://hc-ping.com"' "$CONFIG_FILE")
     hc_interval=$(jq -r '.healthchecks.interval_seconds // 60' "$CONFIG_FILE")
     hc_fail_on_down=$(jq -r 'if .healthchecks.signal_fail_on_node_down != null then .healthchecks.signal_fail_on_node_down | tostring else "true" end' "$CONFIG_FILE")
+    # Route the ping over the bridge Tor SOCKS by default (#79) — the ping is the one clearnet beacon
+    # otherwise; set healthchecks.tor:false for a LAN self-hosted instance (Tor can't reach RFC1918).
+    hc_tor=$(jq -r 'if .healthchecks.tor != null then .healthchecks.tor | tostring else "true" end' "$CONFIG_FILE")
 
     # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
     # a header badge linking to it (notify-only — no upgrade). On by default because the check is
@@ -2166,6 +2169,7 @@ HEALTHCHECKS_PING_URL=$hc_ping_url
 HEALTHCHECKS_BASE_URL=$hc_base_url
 HEALTHCHECKS_INTERVAL_SECONDS=$hc_interval
 HEALTHCHECKS_FAIL_ON_NODE_DOWN=$hc_fail_on_down
+HEALTHCHECKS_TOR=$hc_tor
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -2674,6 +2678,9 @@ describe_change() {
     HEALTHCHECKS_PING_URL)
         # The ping URL is a capability secret — report the change without printing it.
         msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
+        ;;
+    HEALTHCHECKS_TOR)
+        msg="Healthchecks.io ping now routed over $([ "$new" == "true" ] && echo "Tor (host IP hidden from hc-ping.com)" || echo "CLEARNET (host IP visible to hc-ping.com)") (#79) — the dashboard container is recreated."
         ;;
     HEALTHCHECKS_BASE_URL | HEALTHCHECKS_INTERVAL_SECONDS | HEALTHCHECKS_FAIL_ON_NODE_DOWN)
         msg="Healthchecks.io setting ($key): $old → $new (#79) — the dashboard container is recreated."

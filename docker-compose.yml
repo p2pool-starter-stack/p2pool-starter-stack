@@ -428,6 +428,7 @@ services:
       - HEALTHCHECKS_BASE_URL=${HEALTHCHECKS_BASE_URL:-https://hc-ping.com}
       - HEALTHCHECKS_INTERVAL_SECONDS=${HEALTHCHECKS_INTERVAL_SECONDS:-60}
       - HEALTHCHECKS_FAIL_ON_NODE_DOWN=${HEALTHCHECKS_FAIL_ON_NODE_DOWN:-true}
+      - HEALTHCHECKS_TOR=${HEALTHCHECKS_TOR:-true}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

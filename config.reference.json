@@ -81,6 +81,7 @@
         "ping_url": "",
         "base_url": "https://hc-ping.com",
         "interval_seconds": 60,
-        "signal_fail_on_node_down": true
+        "signal_fail_on_node_down": true,
+        "tor": true
     }
 }

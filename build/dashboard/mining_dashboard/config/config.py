@@ -240,6 +240,15 @@ if HEALTHCHECKS_INTERVAL_SEC < 0:
 # stack, not just a dead host. Set false for plain liveness (only host death trips it).
 HEALTHCHECKS_FAIL_ON_NODE_DOWN = os.environ.get("HEALTHCHECKS_FAIL_ON_NODE_DOWN", "true").strip().lower() == "true"
 
+# Route the ping through the bridge Tor SOCKS (reusing XVB_TOR_PROXY, #163) so hc-ping.com sees a
+# Tor exit, not the host IP — the ping is otherwise the one clearnet beacon on the box. Default ON,
+# consistent with the stack's Tor-first posture and the XvB fetch (socks5h resolves the host via Tor
+# too, no DNS leak). Set false (healthchecks.tor:false) for a self-hosted instance on your LAN —
+# ponytail: RFC1918/localhost is unreachable through Tor, so that case must opt out — or if
+# hc-ping.com is ever Tor-blocked. HEALTHCHECKS_TOR_PROXY is None when off (a direct clearnet ping).
+HEALTHCHECKS_TOR = os.environ.get("HEALTHCHECKS_TOR", "true").strip().lower() == "true"
+HEALTHCHECKS_TOR_PROXY = os.environ.get("HEALTHCHECKS_TOR_PROXY", XVB_TOR_PROXY) if HEALTHCHECKS_TOR else None
+
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote
 MONERO_NODE_HOST = os.environ.get("MONERO_NODE_HOST", "172.28.0.26")
