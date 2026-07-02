@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 609 dashboard unit tests · 12 contract tests · 64 frontend
-tests · 52 `pithead` shell sections · 17 harness self-test sections ·
+tests · 52 `pithead` shell sections · 18 harness self-test sections ·
 9 live config scenarios (17 axis values) · 7 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -21,7 +21,7 @@ tests · 52 `pithead` shell sections · 17 harness self-test sections ·
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 7 |
 | 4 — Live matrix | config scenarios | 9 (17 axis values) |
-| 4 — Live matrix | harness self-test | 17 sections |
+| 4 — Live matrix | harness self-test | 18 sections |
 
 ---
 
@@ -950,7 +950,7 @@ tests · 52 `pithead` shell sections · 17 harness self-test sections ·
 - xmrig-proxy dev-fee donate-level is explicit + live (#173)
 - xmrig-proxy stopped for failover
 
-### Harness self-test (tests/integration/selftest.sh) — 17 sections
+### Harness self-test (tests/integration/selftest.sh) — 18 sections
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
@@ -967,9 +967,10 @@ tests · 52 `pithead` shell sections · 17 harness self-test sections ·
 - _pred_hashes_flowing: gates on stratum.total_hashes > 0
 - dispatch loop: a stdin-draining child must not skip iterations
 - service_state parsing (fault-injection predicates)
+- egress_verdict: clean / leak / verifier-couldn't-run are distinct
 - assertion helpers: counters behave
 
 ---
 
-_Grand total: **770** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **771** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
