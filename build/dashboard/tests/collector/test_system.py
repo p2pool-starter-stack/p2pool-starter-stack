@@ -12,7 +12,9 @@ def _fake_open(content):
 
 class TestDiskUsage:
     def test_normal(self):
-        usage = SimpleNamespace(total=100 * system.BYTES_IN_GB, used=25 * system.BYTES_IN_GB, free=0)
+        usage = SimpleNamespace(
+            total=100 * system.BYTES_IN_GB, used=25 * system.BYTES_IN_GB, free=0
+        )
         with patch.object(system.shutil, "disk_usage", return_value=usage):
             d = system.get_disk_usage()
         assert d["total_gb"] == 100
@@ -70,7 +72,9 @@ class TestHugepages:
 
     def test_allocated_when_unused(self):
         with patch("builtins.open", _fake_open("HugePages_Total: 3072\nHugePages_Free: 3072\n")):
-            assert system.get_hugepages_status()[0] == "Allocated"
+            label, css, _ = system.get_hugepages_status()
+        # Reserved but not yet consumed (boot / sync-hold) is the normal state — green, not red (#175).
+        assert (label, css) == ("Allocated", "status-ok")
 
     def test_unknown_when_missing(self):
         with patch("builtins.open", _fake_open("SomethingElse: 1\n")):

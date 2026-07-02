@@ -6,12 +6,10 @@
 base_path = "/var/tari/node"
 
 [p2p.seeds]
-# Resolve DNS seeds over DNS-over-TLS (port 853). The seeds.tari.com TXT answer is 15
-# records (~1KB), which overflows a 512-byte UDP packet; Docker's embedded resolver
-# (127.0.0.11) has no EDNS0 and truncates it ("received truncated response"), and Tari's
-# resolver doesn't retry over TCP. DoT is TCP-based (no truncation) and encrypted. Mirrors
-# the Tari upstream default. If port 853 is filtered on your host, fall back to "1.1.1.1:53"
-# (plain UDP, but Cloudflare honours EDNS0 so the full answer still fits).
+# DNS seeds are DISABLED for privacy (dns_seeds = [] below), so the node does ZERO seed DNS and
+# bootstraps purely from the onion peer_seeds over Tor (#162). The name servers below are now inert,
+# kept only for reference. NOTE: despite the ":853/host" form, this was never DNS-over-TLS — with
+# dns_seeds_use_dnssec = false the suffix is dropped and Tari queries plaintext UDP/53.
 dns_seed_name_servers = [
     "1.1.1.1:853/cloudflare-dns.com",
     "8.8.8.8:853/dns.google",
@@ -20,26 +18,14 @@ dns_seed_name_servers = [
 dns_seeds_use_dnssec = false
 
 [mainnet.p2p.seeds]
-# DNS seeds: the v5.3.1 binary defaults to `seeds.mainnet.tari.com` (+ ip4./ip6./tor.
-# variants), but those hostnames have NO DNS records — mainnet's live seed list is
-# published at the bare `seeds.tari.com`. Without this override the node logs
-# "DNS seed ... failed to resolve" on every start and falls back to peer_seeds only.
-dns_seeds = ["seeds.tari.com"]
+# No DNS seeds: a seeds.tari.com TXT lookup leaks a clearnet DNS query from this host's IP (#162).
+# Bootstrap from the onion peer_seeds below instead (refresh them periodically as seeds rotate).
+dns_seeds = []
 
-# Hardcoded peer seeds (bootstrap fallback). Mirror of the live `seeds.tari.com` TXT
-# records — re-sync periodically as seeds rotate.
+# Hardcoded ONION peer seeds (bootstrap over Tor). The clearnet /ip4//ip6/ variants are inert under
+# `transport = tor` and were dropped for a strict no-clearnet audit (#162) — onion-only.
 # Source of truth: `dig TXT seeds.tari.com`. Last synced 2026-05-30 (minotari_node v5.3.1).
 peer_seeds = [
-    "94a4b29148621479b1c1dffb1a2f5680dcf2c0cfb901152e245d6ec299821f61::/ip4/91.134.83.67/tcp/18189",
-    "1069fb56a3aaba45b9aa9839714251a4dfeb850e8d79d6ac9ca180377120fe1c::/ip4/51.75.116.227/tcp/18189",
-    "7c8e6530294e8bb7ff45b0f39e8bf8ea4e461b3df15a2df1ba3fa3a9bcc9ef71::/ip4/15.235.224.202/tcp/18189",
-    "54e491e0d88633170a98898f5d89ccc6b4f7ec22252afc23fe645d5bab453734::/ip4/198.244.203.249/tcp/18189",
-    "94b0e12289ed6a39c898d13048026a0b5ab939bd52544574d61da88f3deb5c70::/ip4/147.135.213.176/tcp/18189",
-    "54e491e0d88633170a98898f5d89ccc6b4f7ec22252afc23fe645d5bab453734::/ip6/2001:41d0:803:f900::/tcp/18189",
-    "94a4b29148621479b1c1dffb1a2f5680dcf2c0cfb901152e245d6ec299821f61::/ip6/2001:41d0:40d:4300::/tcp/18189",
-    "1069fb56a3aaba45b9aa9839714251a4dfeb850e8d79d6ac9ca180377120fe1c::/ip6/2001:41d0:303:83e3::1/tcp/18189",
-    "7c8e6530294e8bb7ff45b0f39e8bf8ea4e461b3df15a2df1ba3fa3a9bcc9ef71::/ip6/2402:1f00:8005:ca00::/tcp/18189",
-    "94b0e12289ed6a39c898d13048026a0b5ab939bd52544574d61da88f3deb5c70::/ip6/2001:41d0:303:6fb0::1/tcp/18189",
     "1069fb56a3aaba45b9aa9839714251a4dfeb850e8d79d6ac9ca180377120fe1c::/onion3/urvwskrhqa52km46xt2oevblebmylleglph6dythhndmctwdzl6cuoqd:18141",
     "54e491e0d88633170a98898f5d89ccc6b4f7ec22252afc23fe645d5bab453734::/onion3/b5zgqd6emm6p2zmj7gdniysbxvmtvltrwshsyfxjoq26xqfjoicge5id:18141",
     "7c8e6530294e8bb7ff45b0f39e8bf8ea4e461b3df15a2df1ba3fa3a9bcc9ef71::/onion3/5husjyv2zskwjh2wzbuirbq4gk5uiyx4gnn277r3yoxv4oucn72tmeyd:18141",
@@ -55,10 +41,14 @@ mining_enabled = true
 grpc_enabled = true
 grpc_address = "/ip4/0.0.0.0/tcp/18142"
 
-# Allowed gRPC methods for interaction with the dashboard and miner
+# Allowed gRPC methods (#91): pruned to the node-status + merge-mining surface our two consumers
+# actually call. The dashboard's Tari client (tari_client.py) uses get_tip_info + get_sync_progress
+# (with get_version/get_sync_info as fallbacks); p2pool's merge-mining needs the block-template,
+# submit_block and tip methods. Everything else — the wallet/transaction, UTXO/kernel/payment-ref
+# search, mempool-tx and DAN validator-node calls — has no consumer here, so it's removed (smaller
+# attack surface on the gRPC port). Re-add a method if a future dashboard panel needs it.
 grpc_server_allow_methods = [
     "get_version",
-    "check_for_updates",
     "get_sync_info",
     "get_sync_progress",
     "get_tip_info",
@@ -71,7 +61,6 @@ grpc_server_allow_methods = [
     "get_constants",
     "get_block_size",
     "get_block_fees",
-    "get_tokens_in_circulation",
     "get_network_difficulty",
     "get_new_block_template",
     "get_new_block",
@@ -80,22 +69,8 @@ grpc_server_allow_methods = [
     "get_new_block_blob",
     "submit_block",
     "submit_block_blob",
-    "submit_transaction",
-    "search_kernels",
-    "search_utxos",
-    "fetch_matching_utxos",
     "get_peers",
-    "get_mempool_transactions",
-    "transaction_state",
     "list_connected_peers",
-    "get_mempool_stats",
-    "get_active_validator_nodes",
-    "get_validator_node_changes",
-    "get_shard_key",
-    "get_template_registrations",
-    "get_side_chain_utxos",
-    "search_payment_references",
-    "search_payment_references_via_output_hash",
 ]
 
 [base_node.p2p]
@@ -126,6 +101,14 @@ blockchain_sync_config.rpc_deadline = 2000
 control_address = "/ip4/172.28.0.25/tcp/9051"
 socks_address_override = "/ip4/172.28.0.25/tcp/9050"
 control_auth = "auto"
+
+# Route EVERY outbound dial through the Tor SOCKS proxy — including peers learned via gossip that
+# advertise a bare /ip4 (clearnet) address. With this true (an upstream default that favours speed),
+# minotari direct-dials those clearnet peers and leaks the home IP (#271, observed as sustained
+# connections to public IPs). false = clearnet peers are reached via Tor exit nodes, so Tari stays
+# fully functional AND never touches clearnet directly. No per-address exemptions (no local wallet).
+proxy_bypass_for_outbound_tcp = false
+proxy_bypass_addresses = []
 
 # Port mapping for the hidden service
 onion_port = 18189

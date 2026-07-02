@@ -8,27 +8,28 @@ DataDirectory /var/lib/tor
 SocksPort 0.0.0.0:9050
 
 # Control interface (required by the Tari base node, which connects from another container).
-# Bind explicitly to this container's bridge IP (for Tari at 172.28.0.27) + loopback (for the
-# bootstrap healthcheck) instead of 0.0.0.0, so the control port isn't auto-exposed on any
-# interface added later. The real protection is the cookie auth below: the auth cookie lives
-# in this container's private /var/lib/tor volume, so other bridge containers can't read it.
-ControlPort 172.28.0.25:9051
+# Bind explicitly to this container's bridge IP (__NETWORK_PREFIX__.25) + loopback (for the bootstrap
+# healthcheck) instead of 0.0.0.0, so the control port isn't auto-exposed on any interface added
+# later. The real protection is the cookie auth below: the auth cookie lives in this container's
+# private /var/lib/tor volume, so other bridge containers can't read it.
+# __NETWORK_PREFIX__ is substituted from the configured bridge subnet at container start (#180).
+ControlPort __NETWORK_PREFIX__.25:9051
 ControlPort 127.0.0.1:9051
 
 # --- Hidden Services (Onion Routing) ---
-# Note: Target IPs (172.28.0.x) correspond to static assignments in docker-compose.yml
+# Note: Target IPs (__NETWORK_PREFIX__.x) correspond to static assignments in docker-compose.yml
 
 # Monero P2P Hidden Service
 HiddenServiceDir /var/lib/tor/monero/
-HiddenServicePort 18080  172.28.0.26:18084
+HiddenServicePort 18080  __NETWORK_PREFIX__.26:18084
 
 # Tari Base Node Hidden Service
 HiddenServiceDir /var/lib/tor/tari/
-HiddenServicePort 18189  172.28.0.27:18189
+HiddenServicePort 18189  __NETWORK_PREFIX__.27:18189
 
 # P2Pool Hidden Service
 HiddenServiceDir /var/lib/tor/p2pool/
-HiddenServicePort 37888 172.28.0.28:37888
+HiddenServicePort 37888 __NETWORK_PREFIX__.28:37888
 
 # --- Authentication & Permissions ---
 # Enable cookie-based authentication for the Control Port

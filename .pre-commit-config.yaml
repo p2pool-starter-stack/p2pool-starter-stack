@@ -1,0 +1,84 @@
+# Pre-commit hooks (Wave 7 tooling, #280). Local == CI: these mirror `make lint` + the CI lint
+# jobs, so issues are caught before they reach a PR. Set up once with:
+#   uv sync --project build/dashboard --extra dev && uv run --project build/dashboard pre-commit install
+# Later Wave 7 children add more hooks here (#281 shfmt/Biome/yamllint/markdownlint). Keep the
+# ruff `rev` in lockstep with the `dev` extra's ruff pin in build/dashboard/pyproject.toml.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      # Lints all repo Python; ruff discovers the right config per file (the dashboard package's
+      # pyproject.toml, or the root ruff.toml for the integration-test fakes).
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # Secret scanning (#282) — stop a key reaching history in the first place. Uses .gitleaks.toml.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Cheap, high-value guards across every surface.
+      - id: detect-private-key  # never commit an onion/wallet/SSH private key
+      - id: check-added-large-files
+      # Skip generated gRPC stubs and vendored/minified third-party assets — not ours to reformat.
+      - id: end-of-file-fixer
+        exclude: '^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)'
+      - id: trailing-whitespace
+        # Also skip Markdown — two trailing spaces are a hard line break (see .editorconfig).
+        exclude: '(^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)|\.md$)'
+
+  # Per-surface lint/format (#281). These delegate to the Makefile targets so tool versions and file
+  # lists stay single-sourced (no drift between local, pre-commit, and CI). They need the relevant
+  # tools available (shellcheck, shfmt, node/npx, uv, docker) — see CONTRIBUTING.md.
+  - repo: local
+    hooks:
+      - id: lint-sh
+        name: shellcheck + shfmt
+        entry: make lint-sh
+        language: system
+        types_or: [shell]
+        pass_filenames: false
+      - id: lint-js
+        name: biome (static frontend)
+        entry: make lint-js
+        language: system
+        files: ^build/dashboard/mining_dashboard/web/static/.*\.(js|mjs|css)$
+        pass_filenames: false
+      - id: lint-yaml
+        name: yamllint
+        entry: make lint-yaml
+        language: system
+        types: [yaml]
+        pass_filenames: false
+      - id: lint-md
+        name: markdownlint
+        entry: make lint-md
+        language: system
+        types: [markdown]
+        pass_filenames: false
+      - id: lint-proto
+        name: buf (proto)
+        entry: make lint-proto
+        language: system
+        types: [proto]
+        pass_filenames: false
+      - id: lint-toml
+        name: taplo (toml)
+        entry: make lint-toml
+        language: system
+        types: [toml]
+        pass_filenames: false
+      # Keep docs/test-inventory.md in lockstep with the suites (#54). The CI shell job already
+      # FAILS on drift (test-inventory-check); this hook regenerates it locally so a test add/remove
+      # never reaches CI stale — same auto-fix UX as ruff-format. Static grep, no test run, so cheap.
+      - id: test-inventory
+        name: test inventory (regenerate docs/test-inventory.md)
+        entry: make test-inventory
+        language: system
+        files: '^(build/dashboard/tests/|tests/(stack|integration)/|tests/inventory\.sh)'
+        pass_filenames: false

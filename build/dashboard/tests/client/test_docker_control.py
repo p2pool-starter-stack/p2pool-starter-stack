@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import mining_dashboard.client.docker.docker_control as dc_mod
 from mining_dashboard.client.docker.docker_control import DockerControl

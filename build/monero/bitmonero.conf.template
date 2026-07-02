@@ -1,7 +1,7 @@
 # --- Data & Logging Configuration ---
 # Internal container paths for blockchain data and logs
-data-dir=/root/.bitmonero
-log-file=/root/.bitmonero/bitmonero.log
+data-dir=/home/ubuntu/.bitmonero
+log-file=/home/ubuntu/.bitmonero/bitmonero.log
 log-level=0
 
 # --- Blockchain Pruning ---
@@ -24,9 +24,12 @@ public-node=1
 # ZeroMQ publisher for block notifications (Required for P2Pool)
 zmq-pub=tcp://0.0.0.0:18083
 
-# Peer Management. out-peers raised for Tor: each peer is roughly one bandwidth-capped
-# Tor circuit, so more peers = more aggregate download bandwidth in parallel. This is
-# network tuning (not CPU) — it does NOT scale with cores, unlike prep-blocks-threads below.
+# Peer Management. P2Pool v4.16 recommends out-peers=32 / in-peers=64 for a clearnet node, where
+# in-peers=64 is the one that matters: it caps INBOUND connections so they can't grow past ~1000 and
+# hit Linux's open-files limit — we honor it exactly. out-peers is raised to 48 here because each
+# peer is roughly one bandwidth-capped Tor circuit, so more peers = more aggregate download bandwidth
+# over Tor (this is network tuning, not CPU — it doesn't scale with cores). The optional clearnet
+# initial sync (#183) drops out-peers back to the recommended 32 + adds P2Pool's priority nodes.
 out-peers=48
 in-peers=64
 
@@ -35,13 +38,22 @@ in-peers=64
 # verification on multi-core hosts while leaving headroom for the system and p2pool.
 prep-blocks-threads=${MONERO_PREP_THREADS}
 
-# Priority Nodes (High uptime public nodes for faster initial sync)
-add-priority-node=p2pmd.xmrvsbeast.com:18080
-add-priority-node=nodes.hashvault.pro:18080
+# Priority-node HOSTNAMES were resolved by the local resolver BEFORE --proxy, leaking a clearnet
+# DNS lookup tied to this host's IP (#161). Dropped — monerod still bootstraps from its compiled-in
+# IP seed nodes, dialed over Tor. Re-add only as IP:port or .onion if you want specific peers.
 
-# Checkpointing & DNS Security
-enforce-dns-checkpointing=true
-enable-dns-blocklist=true
+# Privacy: close the remaining clearnet DNS paths (#161).
+# - disable-dns-checkpoints: stops the hourly checkpoints.moneropulse.* TXT lookups (removing
+#   `enforce-dns-checkpointing` alone does NOT). Trades MoneroPulse deep-reorg defense for zero
+#   DNS; the compiled-in checkpoints still apply — acceptable for a Tor node.
+# - check-updates=disabled: the default `notify` does an updates.moneropulse.* TXT lookup.
+# - enable-dns-blocklist=0: the DNS blocklist (already auto-disabled by --proxy) made explicit.
+disable-dns-checkpoints=1
+check-updates=disabled
+enable-dns-blocklist=0
+# Anonymity hygiene for a Tor-only node.
+pad-transactions=1
+hide-my-port=1
 
 # --- RPC Security ---
 # Restrict RPC access and enforce authentication
@@ -51,9 +63,9 @@ no-igd=1
 
 # --- Tor Anonymity Network ---
 # Proxy transaction traffic through the Tor container
-# Note: IP 172.28.0.25 corresponds to the static IP assigned to the Tor service in docker-compose
-proxy=172.28.0.25:9050
-tx-proxy=tor,172.28.0.25:9050,disable_noise
+# Note: ${NETWORK_PREFIX}.25 is the Tor service's static bridge IP (configurable subnet base, #180).
+proxy=${NETWORK_PREFIX}.25:9050
+tx-proxy=tor,${NETWORK_PREFIX}.25:9050,disable_noise
 
 # Advertise Tor hidden service for inbound connections
 anonymous-inbound=${MONERO_ONION_ADDRESS}:18080,127.0.0.1:18084

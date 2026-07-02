@@ -1,3 +1,9 @@
+# Pin the Compose project name so the stack is always "pithead" — its images, network and
+# volumes are prefixed `pithead*` regardless of the checkout directory's name. Without this,
+# Compose derives the project from the directory, which left older checkouts named after the
+# repo's previous name. `pithead up`/`apply`/`upgrade` migrate an old-named stack automatically.
+name: pithead
+
 x-logging: &default-logging
   driver: "json-file"
   options:
@@ -7,15 +13,27 @@ x-logging: &default-logging
 services:
   # --- Tor Anonymity Service ---
   tor:
+    # A source checkout builds the 5 first-party images locally from build/; a release install pulls
+    # these published images instead. pithead chooses build-vs-pull via its `--pull` policy and sets
+    # PITHEAD_REGISTRY / STACK_VERSION (export_build_provenance, #44); the defaults below keep a bare
+    # `docker compose` working (tag `:dev`).
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-tor:${STACK_VERSION:-dev}
     build: ./build/tor
     container_name: tor
+    # Memory ceiling (#132 — see monerod). Generous so an OOM-restart, which would blip every onion
+    # service, stays very unlikely (~0.07 GiB observed).
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      # Subnet prefix (#180): the entrypoint envsubst's it into the rendered torrc's bridge IPs.
+      - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     networks:
       mining_net:
-        ipv4_address: 172.28.0.25
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.25
     # Healthy only once Tor has finished bootstrapping (circuits built), not merely
     # when the SOCKS port is open — so tari/monerod don't start against a Tor that
     # can't route yet. start_period covers a cold bootstrap without counting failures.
@@ -30,8 +48,18 @@ services:
   # Only starts if "local_node" profile is active
   monerod:
     profiles: ["local_node"]
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-monero:${STACK_VERSION:-dev}
     build: ./build/monero
     container_name: monerod
+    # Memory CEILINGS (#132): cap each service so a leak/spike OOM-restarts the offender in its own
+    # cgroup instead of the kernel's host-wide OOM-killer picking a victim (e.g. monerod, the revenue
+    # service). These are ceilings, NOT reservations — steady-state is far lower (observed on a synced
+    # 32 GB host: monerod ~0.3 GiB RSS since its LMDB is reclaimable page cache; dashboard ~0.06;
+    # p2pool ~0.35). memswap_limit == mem_limit => zero swap => clean OOM-kill, no disk thrash (same as
+    # Tari). monerod's ceiling is generous + tunable via monero.mem_limit so heavy initial-sync
+    # verification never trips it — raise it if a low-RAM host OOMs monerod during IBD.
+    mem_limit: ${MONERO_MEM_LIMIT:-6g}
+    memswap_limit: ${MONERO_MEM_LIMIT:-6g}
     restart: unless-stopped
     stop_grace_period: 1m
     logging: *default-logging
@@ -40,11 +68,19 @@ services:
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       - MONERO_ONION_ADDRESS=${MONERO_ONION_ADDRESS}
       - MONERO_PRUNE=${MONERO_PRUNE}
+      # Optional clearnet initial sync (#183): default off. When true the entrypoint strips the Tor
+      # P2P proxy from the rendered config so IBD runs over clearnet (tx broadcast stays on Tor).
+      - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
       - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
+      # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
+      - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     volumes:
-      - ${MONERO_DATA_DIR}:/root/.bitmonero
+      - ${MONERO_DATA_DIR}:/home/ubuntu/.bitmonero
       - /dev/hugepages:/dev/hugepages
-      - ./build/monero/bitmonero.conf.template:/root/bitmonero.conf.template:ro
+      - ./build/monero/bitmonero.conf.template:/home/ubuntu/bitmonero.conf.template:ro
+      # Read-only view of the shared clearnet-state dir (#234): the entrypoint reads the
+      # dashboard-written "sync complete" marker to decide clearnet-vs-Tor at startup.
+      - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state:ro
     ports:
       # Default 127.0.0.1 = host-local only (no LAN exposure); p2pool reaches monerod over
       # the internal Docker network regardless. Set monero.rpc_lan_access:true in config.json
@@ -52,7 +88,7 @@ services:
       - "${MONERO_RPC_BIND:-127.0.0.1}:18081:18081"
     networks:
       mining_net:
-        ipv4_address: 172.28.0.26
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.26
     depends_on:
       tor:
         condition: service_healthy
@@ -70,6 +106,10 @@ services:
     # Pinned by digest (#135) so the v5.3.1-mainnet tag can't be silently re-pointed.
     image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0
     container_name: tari
+    # Run non-root (#255). Pulled image (not our Dockerfile), so set the uid via compose to match the
+    # uid pithead chowns ${TARI_DATA_DIR} to. The wrapper entrypoint reads the canonical config
+    # read-only and writes its runtime copy to /tmp, so only the data dir needs to be owned by 1000.
+    user: "1000:1000"
     restart: unless-stopped
     stop_grace_period: 1m
     logging: *default-logging
@@ -85,23 +125,38 @@ services:
     # value for a 16 GB host with HugePages on, until the next `pithead apply`).
     mem_limit: ${TARI_MEM_LIMIT:-7680m}
     memswap_limit: ${TARI_MEM_LIMIT:-7680m}
+    # Tari needs NO clearnet DNS: dns_seeds = [] (config.toml), onion peer_seeds resolve via Tor, and
+    # the Tor SOCKS is reached by IP (this container already overrode Docker's 127.0.0.11, so nothing
+    # here depends on service discovery). The one OS-resolver lookup left is the Tari Pulse service's
+    # checkpoints.tari.com TXT (~every 120 s) — an ADVISORY deep-reorg check, no in-binary off-switch,
+    # that TOLERATES a DNS failure (returns "passed", verified in tari_pulse_service/mod.rs). Point the
+    # resolver at a dead local address so that lookup fails WITHOUT a packet leaving the host — zero
+    # clearnet DNS, no functional impact (#162; #160 decision-4). Trade-off: lose the Pulse deep-reorg
+    # advisory, the same class as monerod's disable-dns-checkpoints (#161).
     dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    dns_search: .
-    dns_opt:
-      - use-vc
+      - 127.0.0.1
     environment:
       - WAIT_FOR_TOR=1
+      # Optional clearnet initial sync (#183/#234): the wrapper entrypoint reads this flag and the
+      # shared marker to decide clearnet-vs-Tor per start. Surfaced here so a flag change recreates
+      # tari (a bind-mount content change alone won't trigger a recreate).
+      - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
     volumes:
       - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config
+      # Read-only view of the shared clearnet-state dir (#234): the wrapper entrypoint reads the
+      # dashboard-written "sync complete" marker to decide clearnet-vs-Tor at startup.
+      - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state:ro
+    # Pithead wrapper (#183/#234): renders the runtime config (clearnet-vs-Tor, marker-gated) from
+    # pithead's canonical Tor config, then chains to the upstream start_tari_app.sh unchanged.
+    entrypoint:
+      - /var/tari/config/entrypoint.sh
     command:
       - --disable-splash-screen
       - --non-interactive
     networks:
       mining_net:
-        ipv4_address: 172.28.0.27
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.27
     depends_on:
       tor:
         condition: service_healthy
@@ -118,12 +173,19 @@ services:
 
   # --- P2Pool Node ---
   p2pool:
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-p2pool:${STACK_VERSION:-dev}
     build: ./build/p2pool
     container_name: p2pool
+    # Memory ceiling (#132 — see monerod). RandomX HugePages are separate; this caps p2pool's own
+    # heap (~0.35 GiB observed).
+    mem_limit: 1g
+    memswap_limit: 1g
     restart: unless-stopped
     logging: *default-logging
-    # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the
-    # RandomX dataset (IPC_LOCK) and raise thread priority (SYS_NICE).
+    # Replaces 'privileged: true'. p2pool only needs to lock HugePages for the RandomX dataset
+    # (IPC_LOCK) and raise thread priority (SYS_NICE). NOTE (#255): the container now runs non-root,
+    # so these caps aren't in the process's effective set — but mlock is covered by the unlimited
+    # memlock ulimit below, and SYS_NICE is best-effort (p2pool warns and continues without it).
     cap_add:
       - IPC_LOCK
       - SYS_NICE
@@ -132,7 +194,7 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - ${P2POOL_DATA_DIR}:/root
+      - ${P2POOL_DATA_DIR}:/home/ubuntu
       - ${P2POOL_DATA_DIR}/stats:/stats
       - /dev/hugepages:/dev/hugepages
     command:
@@ -145,12 +207,12 @@ services:
       - --zmq-port
       - "${MONERO_ZMQ_PORT}"
       - --wallet
-      - ${MONERO_WALLET_ADDRESS} 
+      - ${MONERO_WALLET_ADDRESS}
       - --merge-mine
-      - tari://172.28.0.27:18142
+      - tari://${NETWORK_PREFIX:-172.28.0}.27:18142
       - ${TARI_WALLET_ADDRESS}
       - --onion-address
-      - ${P2POOL_ONION_ADDRESS} 
+      - ${P2POOL_ONION_ADDRESS}
       - --local-api
       - --stratum
       - 0.0.0.0:3333
@@ -158,10 +220,14 @@ services:
       - 0.0.0.0:${P2POOL_PORT}
       - --data-api
       - /stats
-      - ${P2POOL_FLAGS}
+    # P2POOL_FLAGS (pool type + the #165 Tor SOCKS routing) is passed via the environment, not as a
+    # `- ${P2POOL_FLAGS}` command item: Compose passes such an item as a SINGLE argument (no
+    # word-splitting), which mangles a multi-flag value. The entrypoint word-splits this env var.
+    environment:
+      - P2POOL_FLAGS=${P2POOL_FLAGS:-}
     networks:
       mining_net:
-        ipv4_address: 172.28.0.28
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.28
     depends_on:
       # monerod dependency removed to allow remote node operation
       tari:
@@ -180,8 +246,12 @@ services:
 
   # --- XMRig Proxy ---
   xmrig-proxy:
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-xmrig-proxy:${STACK_VERSION:-dev}
     build: ./build/xmrig-proxy
     container_name: xmrig-proxy
+    # Memory ceiling (#132 — see monerod). Tiny in practice (~2 MiB observed).
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     logging: *default-logging
     # Defense-in-depth: this leaf service never needs extra privileges or Linux capabilities
@@ -214,44 +284,77 @@ services:
       - --http-host
       - 0.0.0.0
       - --http-port
-      - ${PROXY_API_PORT}
+      - "${PROXY_API_PORT:?PROXY_API_PORT is empty; run 'pithead apply' (#153)}"
+      # Fail closed (#153): this control API is writable (--http-no-restricted, required for XvB
+      # pool-switching) and reachable on the mining_net bridge + the host, so it must NEVER run
+      # unauthenticated. ':?' makes the stack REFUSE TO START — instead of exposing an open API —
+      # if a hand-edited or pre-token stale .env left PROXY_AUTH_TOKEN empty (note 'pithead up'
+      # does not re-render .env, only setup/apply do). pithead auto-generates the token on apply.
       - --http-access-token
-      - ${PROXY_AUTH_TOKEN}
+      - "${PROXY_AUTH_TOKEN:?PROXY_AUTH_TOKEN is empty; refusing to start an unauthenticated xmrig-proxy control API. Run 'pithead apply' to generate one (#153)}"
       - --http-no-restricted
+      # Optional miner authentication on the stratum port (#152). When p2pool.stratum_password is set,
+      # xmrig-proxy rejects rigs whose stratum 'pass' doesn't match — so only devices that know the
+      # secret can mine through the proxy (this also shrinks the #122 SSRF surface). The ':+' form is
+      # deliberate: when the password is SET this expands to the whole '--access-password=<secret>'
+      # flag; when it's EMPTY (the default) it expands to an empty token that xmrig-proxy ignores —
+      # i.e. NO flag, so any rig may mine, preserving today's open behavior. (A literal
+      # '--access-password=' with an empty value would instead demand an *empty* password and reject
+      # every normal rig — verified against xmrig-proxy 6.26.0.) Cleartext over stratum — pair with a
+      # LAN-only stratum_bind / firewall; this is access control, not encryption.
+      - "${PROXY_STRATUM_PASSWORD:+--access-password=$PROXY_STRATUM_PASSWORD}"
+      # xmrig-proxy dev-fee donation level (#173). Rendered from proxy.donate_level; xmrig-proxy's
+      # own default is 0% (no fee), which we now pass EXPLICITLY so the effective level is visible
+      # and operator-controllable instead of an invisible compiled-in default. NOT the XvB donation.
+      - --donate-level=${PROXY_DONATE_LEVEL:-0}
     networks:
       mining_net:
-        ipv4_address: 172.28.0.29
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.29
     depends_on:
       - p2pool
 
   # --- Monitoring Dashboard ---
   dashboard:
-      build:
-        context: ./build/dashboard
-        # Stack version baked into the image so the dashboard header can show it (Issue #58).
-        # pithead exports these for the build (PITHEAD_VERSION from the top-level VERSION file;
-        # git branch/commit for dev builds — see export_build_provenance); empty defaults keep a
-        # bare `docker compose build` working (the badge then falls back to a generic dev indicator).
-        args:
-          PITHEAD_VERSION: ${PITHEAD_VERSION:-}
-          PITHEAD_GIT_COMMIT: ${PITHEAD_GIT_COMMIT:-}
-          PITHEAD_GIT_BRANCH: ${PITHEAD_GIT_BRANCH:-}
-          PITHEAD_RELEASE: ${PITHEAD_RELEASE:-}
-      container_name: dashboard
-      restart: unless-stopped
-      logging: *default-logging
-      network_mode: "host"
-      # Hardened with no-new-privileges (#90). Deliberately NOT cap_drop: [ALL] like the other
-      # leaf services: the dashboard runs as root and persists its SQLite history into the
-      # ${DASHBOARD_DATA_DIR} bind mount, which pithead creates owned by the host user. Dropping
-      # all capabilities strips CAP_DAC_OVERRIDE, so root could no longer create the SQLite
-      # WAL/journal files in that user-owned directory and history writes would fail.
-      security_opt:
-        - no-new-privileges:true
-      volumes:
-        - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
-        - ${DASHBOARD_DATA_DIR}:/data
-      environment:
+    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION:-dev}
+    build:
+      context: ./build/dashboard
+      # Stack version baked into the image so the dashboard header can show it (Issue #58).
+      # pithead exports these for the build (PITHEAD_VERSION from the top-level VERSION file;
+      # git branch/commit for dev builds — see export_build_provenance); empty defaults keep a
+      # bare `docker compose build` working (the badge then falls back to a generic dev indicator).
+      args:
+        PITHEAD_VERSION: ${PITHEAD_VERSION:-}
+        PITHEAD_GIT_COMMIT: ${PITHEAD_GIT_COMMIT:-}
+        PITHEAD_GIT_BRANCH: ${PITHEAD_GIT_BRANCH:-}
+        PITHEAD_RELEASE: ${PITHEAD_RELEASE:-}
+    container_name: dashboard
+    # Memory ceiling (#132 — see monerod). A small Flask + SQLite app (~0.06 GiB observed); a tight
+    # cap is pure upside — a memory regression OOM-restarts the dashboard, not the revenue services.
+    mem_limit: 512m
+    memswap_limit: 512m
+    restart: unless-stopped
+    logging: *default-logging
+    # Host networking, kept deliberately (#91 P5, evaluated & closed): the dashboard reaches the
+    # local monerod RPC on 127.0.0.1:18081 (Issue #29) plus the host-published proxy/Tor-SOCKS
+    # endpoints, and Caddy proxies it on the host. Moving to the bridge would mean re-plumbing the
+    # monerod address, the dashboard's bind, Caddy's upstream and LAN-worker reachability for a
+    # marginal gain — net negative, so host networking stays. It binds only 127.0.0.1 (HOST_IP).
+    network_mode: "host"
+    # Now runs non-root (uid 1000, #255) and owns ${DASHBOARD_DATA_DIR}, so it no longer needs
+    # root's CAP_DAC_OVERRIDE to write its SQLite history — drop all capabilities like the other
+    # leaf services (#90). no-new-privileges stays as defense-in-depth.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
+      - ${DASHBOARD_DATA_DIR}:/data
+      # Read-WRITE: the supervisor drops the per-chain "clearnet sync complete" marker here once a
+      # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
+      # the same dir read-only. Holds only non-secret state markers.
+      - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
+    environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
       # (`auto` = the host's timezone, auto-detected); pithead renders it to DASHBOARD_TZ in
@@ -265,18 +368,50 @@ services:
       - MONERO_NODE_PASSWORD=${MONERO_NODE_PASSWORD}
       # Whether the local node prunes — shown as Pruned/Full in the Monero panel (Issue #32).
       - MONERO_PRUNE=${MONERO_PRUNE:-true}
+      # Clearnet initial sync (#183/#234): the supervisor watches these flags and, once a clearnet
+      # node is synced, drops a marker in /clearnet-state and restarts it back onto Tor.
+      - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
+      - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
+      - CLEARNET_STATE_DIR=/clearnet-state
+      # Egress-posture panel (#170): the #270 firewall state + p2pool's clearnet toggle, so the
+      # dashboard can show each component's real egress route rather than a guess.
+      - TOR_EGRESS_FIREWALL=${TOR_EGRESS_FIREWALL:-true}
+      - P2POOL_CLEARNET=${P2POOL_CLEARNET:-false}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
       - XVB_ENABLED=${XVB_ENABLED}
       - XVB_POOL_URL=${XVB_POOL_URL}
       - XVB_DONOR_ID=${XVB_DONOR_ID}
+      # Route XvB donation mining over Tor by default (#166); xvb.tor:false opts out.
+      - XVB_TOR_ENABLED=${XVB_TOR_ENABLED:-true}
       - XVB_DONATION_LEVEL=${XVB_DONATION_LEVEL:-auto}
-      - PROXY_HOST=172.28.0.29
+      # XvB raffle auto-registration endpoint (#263). Defaults to the real endpoint (in the dashboard
+      # config) so registration just works. Override here to point at a different/test endpoint, or
+      # set a disable sentinel (off/none/false/disabled) to turn auto-registration off while keeping
+      # XvB on. The call carries the full wallet and is always Tor-routed like the stats fetch.
+      - XVB_SUBMIT_URL=${XVB_SUBMIT_URL:-}
+      - PROXY_HOST=${NETWORK_PREFIX:-172.28.0}.29
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
-      - DOCKER_PROXY_URL=tcp://172.28.0.30:2375
-      - DOCKER_CONTROL_URL=tcp://172.28.0.31:2375
-      - TARI_GRPC_ADDRESS=172.28.0.27:18142
+      # How the dashboard reads each worker's own xmrig /1/summary (config.json: workers.*). One
+      # configured way, no auto-detection. Defaults = stock RigForge worker (open read-only API,
+      # no token, port 8080). api_auth: none (default) | name (Bearer=worker name) | token.
+      - XMRIG_API_PORT=${XMRIG_API_PORT:-8080}
+      - XMRIG_API_AUTH=${XMRIG_API_AUTH:-none}
+      - XMRIG_API_TOKEN=${XMRIG_API_TOKEN}
+      - DOCKER_PROXY_URL=tcp://${NETWORK_PREFIX:-172.28.0}.30:2375
+      - DOCKER_CONTROL_URL=tcp://${NETWORK_PREFIX:-172.28.0}.31:2375
+      - TARI_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
+      # Local monerod bridge IP (local-vs-remote detection), the internal SSRF-guard CIDR, and the
+      # Tor SOCKS endpoint all track the configured subnet prefix (#180).
+      - LOCAL_MONERO_HOST=${NETWORK_PREFIX:-172.28.0}.26
+      - MINING_NET_CIDR=${NETWORK_SUBNET:-172.28.0.0/24}
+      - XVB_TOR_PROXY=socks5h://${NETWORK_PREFIX:-172.28.0}.25:9050
+      # Notify-only new-release check (#224, config.json: dashboard.check_for_updates). Default ON;
+      # the dashboard checks GitHub for a newer release and shows a link badge — routed over the same
+      # bridge Tor SOCKS as XVB_TOR_PROXY so it leaks neither the host IP nor a DNS lookup (safe to
+      # default on). Set dashboard.check_for_updates:false to opt out. See docs/privacy.md.
+      - DASHBOARD_CHECK_UPDATES=${DASHBOARD_CHECK_UPDATES:-true}
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
       # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
       # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the
@@ -301,6 +436,9 @@ services:
   docker-proxy:
     image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     container_name: docker-proxy
+    # Memory ceiling (#132 — see monerod). A tiny socket proxy (~13 MiB observed).
+    mem_limit: 128m
+    memswap_limit: 128m
     restart: unless-stopped
     logging: *default-logging
     security_opt:
@@ -320,7 +458,7 @@ services:
       - LOGS=1
     networks:
       mining_net:
-        ipv4_address: 172.28.0.30
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.30
 
   # --- Docker Control Proxy (start/stop only) ---
   # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
@@ -332,6 +470,9 @@ services:
   docker-control:
     image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     container_name: docker-control
+    # Memory ceiling (#132 — see monerod). A tiny socket proxy (~13 MiB observed).
+    mem_limit: 128m
+    memswap_limit: 128m
     restart: unless-stopped
     logging: *default-logging
     security_opt:
@@ -352,14 +493,17 @@ services:
       - ALLOW_STOP=1
     networks:
       mining_net:
-        ipv4_address: 172.28.0.31
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.31
 
   # --- Caddy Reverse Proxy ---
   # Bridges the local 127.0.0.1 application binding to the LAN
   # Serves HTTPS or HTTP depending on configuration
   caddy:
-    image: caddy:2.11@sha256:cb9d71ad83182011b79355cd57692686374bd78d6fe327efe0ff8507da03ab13
+    image: caddy:2.11.4@sha256:cfeb0b281bc44a5a51fecde39e9e577c60d863c0b6196e6bbdf58fd00960887f
     container_name: caddy
+    # Memory ceiling (#132 — see monerod). Reverse proxy + local TLS only (~13 MiB observed).
+    mem_limit: 128m
+    memswap_limit: 128m
     restart: unless-stopped
     logging: *default-logging
     network_mode: "host"
@@ -384,7 +528,7 @@ services:
 
 # --- Volumes ---
 volumes:
-  caddy_data: 
+  caddy_data:
 
 # --- Network Configuration ---
 networks:
@@ -393,4 +537,4 @@ networks:
     name: mining_net
     ipam:
       config:
-        - subnet: 172.28.0.0/24
+        - subnet: ${NETWORK_SUBNET:-172.28.0.0/24}

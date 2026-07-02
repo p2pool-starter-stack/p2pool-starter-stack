@@ -1,16 +1,18 @@
-import time
-import socket
 import ipaddress
-from mining_dashboard.config.config import TIER_DEFAULTS
+import socket
+import time
+
+from mining_dashboard.config.config import TIER_DEFAULTS, XVB_STATS_STALE_AFTER_S
+
 
 def parse_hashrate(val_str, unit_str=None):
     """
     Converts a numeric string and an optional unit suffix into raw hashes per second (H/s).
-    
+
     Args:
         val_str (str|float): The numeric value (e.g., "1.5").
         unit_str (str, optional): The unit suffix (e.g., "MH/s", "kH/s").
-        
+
     Returns:
         float: The standardized hashrate in H/s. Returns 0.0 on parsing failure.
     """
@@ -18,31 +20,35 @@ def parse_hashrate(val_str, unit_str=None):
         val = float(val_str)
         if not unit_str:
             return val
-        
+
         # Normalize unit string for case-insensitive comparison
         unit = unit_str.lower()
-        
-        if "gh" in unit: return val * 1_000_000_000
-        if "mh" in unit: return val * 1_000_000
-        if "kh" in unit: return val * 1_000
-        
+
+        if "gh" in unit:
+            return val * 1_000_000_000
+        if "mh" in unit:
+            return val * 1_000_000
+        if "kh" in unit:
+            return val * 1_000
+
         return val
     except (ValueError, TypeError):
         return 0.0
 
+
 def format_hashrate(hashrate):
     """
     Formats a raw hashrate value into a human-readable string with appropriate units.
-    
+
     Args:
         hashrate (float): The raw hashrate in H/s.
-        
+
     Returns:
         str: Formatted string (e.g., "1.25 MH/s").
     """
     try:
         val = float(hashrate)
-        
+
         if val >= 1_000_000_000:
             return f"{val / 1_000_000_000:.2f} GH/s"
         elif val >= 1_000_000:
@@ -51,22 +57,23 @@ def format_hashrate(hashrate):
             return f"{val / 1_000:.2f} kH/s"
         else:
             return f"{val:.2f} H/s"
-            
+
     except (ValueError, TypeError):
         return "0 H/s"
+
 
 def format_duration(seconds):
     """
     Formats a duration in seconds into a concise human-readable string.
-    
+
     Format logic:
     - > 1 day: "Xd Xh Xm"
     - > 1 hour: "Xh Xm"
     - < 1 hour: "Xm Xs"
-    
+
     Args:
         seconds (int|float): Duration in seconds.
-        
+
     Returns:
         str: Formatted duration string.
     """
@@ -76,34 +83,75 @@ def format_duration(seconds):
         hours = (seconds // 3600) % 24
         minutes = (seconds // 60) % 60
         secs = seconds % 60
-        
+
         if days > 0:
             return f"{days}d {hours}h {minutes}m"
         if hours > 0:
             return f"{hours}h {minutes}m"
-            
+
         return f"{minutes}m {secs}s"
-        
+
     except (ValueError, TypeError):
         return "0s"
+
 
 def format_time_abs(timestamp):
     """
     Converts a Unix timestamp into a localized time string (HH:MM:SS).
-    
+
     Args:
         timestamp (float): Unix timestamp.
-        
+
     Returns:
         str: Formatted time string or error placeholder.
     """
     if not timestamp:
         return "Never"
-        
+
     try:
-        return time.strftime('%H:%M:%S', time.localtime(timestamp))
+        return time.strftime("%H:%M:%S", time.localtime(timestamp))
     except (ValueError, OSError, TypeError):
         return "Invalid Time"
+
+
+def xvb_stats_are_stale(xvb_stats):
+    """True when the XvB stats fetch has gone quiet long enough that ``avg_1h`` /
+    ``avg_24h`` are no longer trustworthy live readings (#311).
+
+    ``last_update`` bumps ONLY on a genuine xmrvsbeast.com fetch (#136), so its age
+    is the fetch age. A zero ``last_update`` means we've never fetched (cold start) —
+    NOT stale. Shared by the donation controller (which holds its split rather than
+    steering off a frozen number) and the dashboard (which greys the credited figures)
+    so the two never disagree about what "stale" means."""
+    last_update = (xvb_stats or {}).get("last_update", 0) or 0
+    return last_update > 0 and (time.time() - last_update) > XVB_STATS_STALE_AFTER_S
+
+
+# PPLNS window math, shared by metrics (display), the donation controller (routing
+# decisions), and XvB auto-register (eligibility) so the three never drift (#263). Nano
+# sidechain blocks are 30s; Main/Mini are 10s. P2Pool's default window is 2160 blocks.
+PPLNS_BLOCK_TIME_NANO = 30
+PPLNS_BLOCK_TIME_DEFAULT = 10
+DEFAULT_PPLNS_WINDOW = 2160
+
+
+def pplns_block_time(pool_type):
+    """Seconds per sidechain block for the given pool type ("Nano" else Main/Mini)."""
+    return PPLNS_BLOCK_TIME_NANO if pool_type == "Nano" else PPLNS_BLOCK_TIME_DEFAULT
+
+
+def shares_in_pplns_window(shares, pplns_window, block_time, now=None):
+    """Count shares whose timestamp falls within the PPLNS window.
+
+    The window spans ``pplns_window`` blocks of ``block_time`` seconds each; a share with
+    ``ts >= now - pplns_window * block_time`` counts. ``now`` defaults to ``time.time()``
+    and is injectable for tests.
+    """
+    if now is None:
+        now = time.time()
+    cutoff = now - pplns_window * block_time
+    return sum(1 for s in shares if s.get("ts", 0) >= cutoff)
+
 
 def get_tier_info(hashrate, tiers=None):
     """
@@ -123,6 +171,7 @@ def get_tier_info(hashrate, tiers=None):
             return f"{display_name} ({format_hashrate(threshold)}+)", float(threshold)
 
     return "None", 0.0
+
 
 def _configured_tier_threshold(tiers, donation_level):
     """
@@ -153,6 +202,7 @@ def _configured_tier_threshold(tiers, donation_level):
         return float(level)
     except (ValueError, TypeError):
         return float(positive[0])
+
 
 def resolve_target_threshold(tiers, stable_hr, donation_level, max_fraction):
     """

@@ -5,13 +5,17 @@ P2Pool/XvB averages, XvB tier qualification, shares-in-PPLNS-window, worker coun
 sync/down state. The web view layer and future consumers (#45 Telegram, #12 calculator) all
 read these, so the logic is covered thoroughly here rather than through rendered output.
 """
-import time
 
+import time
 from unittest.mock import MagicMock
 
 import mining_dashboard.service.metrics as metrics
-from mining_dashboard.service.metrics import build_metrics, _avg_p2pool_over_window
-from mining_dashboard.config.config import TIER_DEFAULTS
+from mining_dashboard.config.config import TIER_DEFAULTS, XVB_STATS_STALE_AFTER_S
+from mining_dashboard.service.metrics import (
+    _avg_p2pool_over_window,
+    _avg_xvb_over_window,
+    build_metrics,
+)
 
 
 def _mgr(history=None, mode="P2POOL", xvb=None, tiers=None):
@@ -28,7 +32,10 @@ def _mgr(history=None, mode="P2POOL", xvb=None, tiers=None):
 
 def _data(**over):
     d = {
-        "shares": [], "workers": [], "global_sync": False, "total_live_h15": 0,
+        "shares": [],
+        "workers": [],
+        "global_sync": False,
+        "total_live_h15": 0,
         "monero_sync": {"percent": 100, "current": 10, "target": 10},
         "tari_sync": {"percent": 100, "current": 5, "target": 5},
     }
@@ -70,10 +77,51 @@ class TestAvgP2poolOverWindow:
         assert _avg_p2pool_over_window(history, 3600) == 500.0
 
 
+class TestAvgXvbOverWindow:
+    """Routed XvB averaging from v_xvb history — mirrors P2Pool so the two sum to total (#156)."""
+
+    def test_empty_history_returns_zero(self):
+        assert _avg_xvb_over_window([], 3600) == 0.0
+
+    def test_averages_v_xvb_in_window(self):
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+            {"timestamp": now - 60, "v": 500, "v_p2pool": 0, "v_xvb": 500},
+        ]
+        assert _avg_xvb_over_window(history, 3600) == 750.0
+
+    def test_excludes_samples_outside_window(self):
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+            {"timestamp": now - 7200, "v": 200, "v_p2pool": 0, "v_xvb": 200},
+        ]
+        assert _avg_xvb_over_window(history, 3600) == 1000.0
+
+    def test_legacy_rows_read_xvb_zero(self):
+        # Pre-split rows (v>0 but v_p2pool==v_xvb==0) count as P2Pool, so XvB-routed reads 0 there.
+        now = time.time()
+        history = [{"timestamp": now - 30, "v": 800, "v_p2pool": 0, "v_xvb": 0}]
+        assert _avg_xvb_over_window(history, 3600) == 0.0
+
+    def test_complements_p2pool_to_total(self):
+        # Routed XvB + routed P2Pool average over the SAME samples, so they sum to the total avg.
+        now = time.time()
+        history = [
+            {"timestamp": now - 30, "v": 1000, "v_p2pool": 1000, "v_xvb": 0},
+            {"timestamp": now - 60, "v": 1000, "v_p2pool": 0, "v_xvb": 1000},
+        ]
+        assert _avg_xvb_over_window(history, 3600) == 500.0
+        assert _avg_p2pool_over_window(history, 3600) == 500.0  # 500 + 500 == 1000 total
+
+
 class TestHashrate:
     def test_total_and_stratum_passthrough(self):
-        data = _data(total_live_h15=12345,
-                     stratum={"hashrate_15m": 100, "hashrate_1h": 200, "hashrate_24h": 300})
+        data = _data(
+            total_live_h15=12345,
+            stratum={"hashrate_15m": 100, "hashrate_1h": 200, "hashrate_24h": 300},
+        )
         m = build_metrics(data, _mgr())
         assert m.total_h15 == 12345
         assert (m.stratum_h15, m.stratum_h1h, m.stratum_h24h) == (100, 200, 300)
@@ -85,22 +133,26 @@ class TestHashrate:
         assert m.p2pool_1h == 900.0
         assert m.p2pool_24h == 900.0
 
-    def test_xvb_averages_from_stats(self):
+    def test_xvb_credited_averages_from_stats(self):
+        # Credited (XvB API avg_1h/24h) is kept independent — controller input + Advanced card (#156).
         m = build_metrics(_data(), _mgr(xvb={"avg_1h": 2100, "avg_24h": 2300}))
         assert m.xvb_1h == 2100
         assert m.xvb_24h == 2300
 
-    def test_xvb_routed_is_fraction_of_hashrate(self):
-        # Routed = controller's donation fraction * our hashrate (what we send),
-        # distinct from the credited averages XvB reports.
-        m = build_metrics(_data(total_live_h15=40_000),
-                          _mgr(xvb={"avg_1h": 30_000, "donation_fraction": 0.25}))
-        assert m.xvb_routed == 10_000  # 0.25 * 40k
-        assert m.xvb_1h == 30_000      # credited stays independent
+    def test_xvb_routed_averages_from_history(self):
+        # Routed = what the proxy ACTUALLY sent to XvB (v_xvb), time-weighted from DB history — not
+        # the controller's donation_fraction. Credited (avg_1h/24h) stays independent (#156).
+        now = time.time()
+        history = [{"timestamp": now - 30, "v": 1000, "v_p2pool": 600, "v_xvb": 400}]
+        m = build_metrics(_data(), _mgr(history=history, xvb={"avg_1h": 30_000, "avg_24h": 30_000}))
+        assert m.xvb_routed_1h == 400.0
+        assert m.xvb_routed_24h == 400.0
+        assert m.xvb_1h == 30_000  # credited, independent of routed
 
-    def test_xvb_routed_zero_without_fraction(self):
+    def test_xvb_routed_zero_without_history(self):
         m = build_metrics(_data(total_live_h15=40_000), _mgr())
-        assert m.xvb_routed == 0
+        assert m.xvb_routed_1h == 0.0
+        assert m.xvb_routed_24h == 0.0
 
 
 class TestModeAndTiers:
@@ -116,11 +168,20 @@ class TestModeAndTiers:
         assert m.target_tier == "Disabled"
         assert m.low_hr_warning is False
 
-    def test_current_tier_from_xvb_24h(self):
-        # 24h XvB average qualifies the *current* tier.
-        m = build_metrics(_data(), _mgr(xvb={"avg_24h": 50_000_000}))
-        assert m.current_tier != "None"   # some tier qualifies at 50 MH/s
+    def test_current_tier_from_min_1h_24h(self):
+        # Current tier qualifies on the lower of the 1h/24h credited averages (#157) — set both.
+        m = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000_000, "avg_24h": 50_000_000}))
+        assert m.current_tier != "None"  # some tier qualifies at 50 MH/s on both windows
         assert isinstance(m.target_threshold, float)
+
+    def test_current_tier_uses_lower_of_1h_24h_on_drop(self):
+        # The raffle qualifies on BOTH 1h and 24h; on a hashrate drop the 1h falls first while the
+        # laggy 24h still reads the old (now-lost) tier. Current Tier must follow the LOWER avg (#157).
+        high = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000_000, "avg_24h": 50_000_000}))
+        dropped = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000, "avg_24h": 50_000_000}))
+        only_1h = build_metrics(_data(), _mgr(xvb={"avg_1h": 50_000, "avg_24h": 50_000}))
+        assert dropped.current_tier != high.current_tier  # the 1h drop lowered the tier
+        assert dropped.current_tier == only_1h.current_tier  # tier follows the LOWER (1h) average
 
     def test_low_hr_warning_for_unsustainable_explicit_tier(self, monkeypatch):
         monkeypatch.setattr(metrics, "ENABLE_XVB", True)
@@ -144,14 +205,53 @@ class TestModeAndTiers:
         assert m.xvb_fail_count == 4
         assert m.xvb_last_update == 1700000000
 
+    def test_registration_status_surfaced(self):
+        # #263: registered_at + registration_state flow from XvB state to the metrics (badge driver).
+        m = build_metrics(
+            _data(), _mgr(xvb={"registered_at": 1700000500, "registration_state": "registered"})
+        )
+        assert m.xvb_registered_at == 1700000500
+        assert m.xvb_registration_state == "registered"
+
+    def test_registration_status_defaults(self):
+        # Absent from state (older DBs / fresh start) => safe zero/empty defaults, no badge.
+        m = build_metrics(_data(), _mgr(xvb={}))
+        assert m.xvb_registered_at == 0
+        assert m.xvb_registration_state == ""
+
+    def test_xvb_stale_flag_tracks_fetch_age(self, monkeypatch):
+        # #311: surface a stale fetch so the UI can grey the credited figures.
+        monkeypatch.setattr(metrics, "ENABLE_XVB", True)
+        fresh = build_metrics(_data(), _mgr(xvb={"last_update": time.time()}))
+        assert fresh.xvb_stale is False
+        stale = build_metrics(
+            _data(), _mgr(xvb={"last_update": time.time() - XVB_STATS_STALE_AFTER_S - 60})
+        )
+        assert stale.xvb_stale is True
+
+    def test_xvb_stale_never_set_when_disabled(self, monkeypatch):
+        # XvB off => no donation logic, so an old timestamp must not raise a stale flag.
+        monkeypatch.setattr(metrics, "ENABLE_XVB", False)
+        m = build_metrics(
+            _data(), _mgr(xvb={"last_update": time.time() - XVB_STATS_STALE_AFTER_S - 60})
+        )
+        assert m.xvb_stale is False
+
+    def test_xvb_stale_false_on_cold_start(self, monkeypatch):
+        # Never fetched (last_update absent) => cold start, not stale (the ramp regime).
+        monkeypatch.setattr(metrics, "ENABLE_XVB", True)
+        assert build_metrics(_data(), _mgr(xvb={})).xvb_stale is False
+
 
 class TestWorkers:
     def test_counts_online_and_total(self):
-        data = _data(workers=[
-            {"name": "a", "status": "online"},
-            {"name": "b", "status": "offline"},
-            {"name": "c", "status": "online"},
-        ])
+        data = _data(
+            workers=[
+                {"name": "a", "status": "online"},
+                {"name": "b", "status": "offline"},
+                {"name": "c", "status": "online"},
+            ]
+        )
         m = build_metrics(data, _mgr())
         assert m.workers_online == 2
         assert m.workers_total == 3
@@ -165,7 +265,7 @@ class TestSharesWindow:
     def test_counts_recent_within_pplns_window(self):
         now = time.time()
         data = _data(
-            pool={"pool": {"pplns_window": 10}},          # 10 blocks * 10s (Main) = 100s
+            pool={"pool": {"pplns_window": 10}},  # 10 blocks * 10s (Main) = 100s
             shares=[{"ts": now - 5}, {"ts": now - 50}, {"ts": now - 10_000}],
         )
         m = build_metrics(data, _mgr())
@@ -222,8 +322,10 @@ class TestMoneroMode:
 class TestCalculatorInputs:
     def test_pool_and_network_figures(self):
         data = _data(
-            pool={"p2p": {"type": "Mini"},
-                  "pool": {"hashrate": 120_000_000, "difficulty": 250_000_000}},
+            pool={
+                "p2p": {"type": "Mini"},
+                "pool": {"hashrate": 120_000_000, "difficulty": 250_000_000},
+            },
             network={"difficulty": 380_000_000_000, "height": 3210001},
         )
         m = build_metrics(data, _mgr())
@@ -250,11 +352,11 @@ class TestRobustness:
     def test_history_fetched_when_not_passed(self):
         now = time.time()
         sm = _mgr(history=[{"timestamp": now - 10, "v": 500, "v_p2pool": 500, "v_xvb": 0}])
-        m = build_metrics(_data(), sm)   # no history arg -> pulled from state_mgr
+        m = build_metrics(_data(), sm)  # no history arg -> pulled from state_mgr
         sm.get_history.assert_called_once()
         assert m.p2pool_1h == 500.0
 
     def test_passed_history_avoids_refetch(self):
         sm = _mgr()
-        build_metrics(_data(), sm, history=[])   # explicit history -> no get_history call
+        build_metrics(_data(), sm, history=[])  # explicit history -> no get_history call
         sm.get_history.assert_not_called()

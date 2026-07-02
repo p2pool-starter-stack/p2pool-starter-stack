@@ -8,9 +8,11 @@
         "node_password": "",
 
         "prune": true,
+        "clearnet_initial_sync": false,
         "prep_blocks_threads": "auto",
         "rpc_lan_access": false,
         "data_dir": "auto",
+        "mem_limit": "auto",
 
         "remote": {
             "host": "node.remote-monero-host.com",
@@ -21,6 +23,7 @@
 
     "tari": {
         "wallet_address": "your_tari_wallet_address",
+        "clearnet_initial_sync": false,
         "data_dir": "auto",
         "mem_limit": "auto"
     },
@@ -28,14 +31,21 @@
     "p2pool": {
         "pool": "main",
         "stratum_bind": "0.0.0.0",
+        "stratum_password": "",
+        "clearnet": false,
         "data_dir": "auto"
+    },
+
+    "proxy": {
+        "donate_level": 0
     },
 
     "xvb": {
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",
         "donor_id": "auto",
-        "donation_level": "auto"
+        "donation_level": "auto",
+        "tor": true
     },
 
     "tor": {
@@ -47,7 +57,23 @@
         "host": "auto",
         "timezone": "auto",
         "data_dir": "auto",
-        "tari_required": true
+        "tari_required": true,
+        "check_for_updates": true,
+        "auth": {
+            "username": "admin",
+            "password": ""
+        }
+    },
+
+    "workers": {
+        "api_port": 8080,
+        "api_auth": "none",
+        "api_token": ""
+    },
+
+    "network": {
+        "subnet": "172.28.0.0/24",
+        "tor_egress_firewall": true
     },
 
     "healthchecks": {

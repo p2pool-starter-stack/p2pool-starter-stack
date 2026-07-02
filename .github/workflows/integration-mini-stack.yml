@@ -1,0 +1,32 @@
+name: Integration mini-stack
+
+# The fake-daemon docker mini-stack (issue #54, tier 3): brings up the REAL dashboard +
+# docker-control proxy against controllable fake monerod/Tari and asserts the control plane
+# (sync hold/release, node-down reject/readmit) end-to-end. It needs a Docker daemon, so it
+# runs as its own job (not part of the always-on CI matrix), triggered on changes to the
+# integration harness or the dashboard, and on demand.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tests/integration/**"
+      - "build/dashboard/**"
+      - ".github/workflows/integration-mini-stack.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mini-stack:
+    name: Fake-daemon mini-stack (docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # ubuntu-latest ships Docker with the Compose v2 plugin — no setup needed.
+      - name: Run the fake-daemon mini-stack
+        run: bash tests/integration/mini-stack/run-mini-stack.sh
+      - name: Dump dashboard logs on failure
+        if: failure()
+        run: docker compose -f tests/integration/mini-stack/docker-compose.fake.yml logs --no-color || true

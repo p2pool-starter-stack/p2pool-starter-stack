@@ -1,12 +1,15 @@
 import json
 import os
-import time
+
 from mining_dashboard.config.config import (
-    P2P_STATS_PATH, POOL_STATS_PATH, NETWORK_STATS_PATH, 
-    STRATUM_STATS_PATH, TARI_STATS_PATH, SECOND_PER_BLOCK_MAIN,
-    BLOCK_PPLNS_WINDOW_MAIN, BLOCK_PPLNS_WINDOW_MINI, BLOCK_PPLNS_WINDOW_NANO,
-    SECOND_PER_BLOCK_P2POOL_MAIN, SECOND_PER_BLOCK_P2POOL_MINI, SECOND_PER_BLOCK_P2POOL_NANO
+    NETWORK_STATS_PATH,
+    P2P_STATS_PATH,
+    POOL_STATS_PATH,
+    SECOND_PER_BLOCK_MAIN,
+    STRATUM_STATS_PATH,
+    TARI_STATS_PATH,
 )
+
 
 def _read_json(path):
     """
@@ -15,7 +18,7 @@ def _read_json(path):
     """
     if os.path.exists(path):
         try:
-            with open(path, 'r') as f:
+            with open(path) as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             # Fail silently to allow the dashboard to continue running
@@ -23,17 +26,18 @@ def _read_json(path):
             pass
     return {}
 
+
 def detect_pool_type(peers):
     """
     Heuristically detects the P2Pool network type (Main, Mini, Nano) based on peer ports.
-    
+
     Args:
         peers (list): List of peer connection strings (e.g., "1.2.3.4:37889").
     """
     counts = {"Main": 0, "Mini": 0, "Nano": 0}
-    if not peers: 
+    if not peers:
         return "Unknown"
-        
+
     # Match the port exactly (the last colon-segment), not as a substring of the whole peer
     # string — an IP that merely contains the port digits (e.g. "37.88.9.1:18080") would
     # otherwise be miscounted, and pool type drives block_time / the PPLNS-window duration the
@@ -47,13 +51,14 @@ def detect_pool_type(peers):
     winner = max(counts, key=counts.get)
     return winner if counts[winner] > 0 else "Unknown"
 
+
 def get_p2pool_stats():
     """Aggregates P2Pool local statistics and P2P network health data."""
     raw_p2p = _read_json(P2P_STATS_PATH)
     raw_pool = _read_json(POOL_STATS_PATH)
     raw_stratum = _read_json(STRATUM_STATS_PATH)
     pool_stats = raw_pool.get("pool_statistics", {})
-    
+
     pool_type = detect_pool_type(raw_p2p.get("peers", []))
 
     last_share_time = raw_stratum.get("last_share_found_time", 0)
@@ -66,7 +71,7 @@ def get_p2pool_stats():
             "in_peers": raw_p2p.get("incoming_connections", 0),
             "peers_count": raw_p2p.get("peer_list_size", 0),
             "uptime": raw_p2p.get("uptime", 0),
-            "zmq_active": raw_p2p.get("zmq_last_active", 0)
+            "zmq_active": raw_p2p.get("zmq_last_active", 0),
         },
         "pool": {
             "hashrate": pool_stats.get("hashRate", 0),
@@ -81,50 +86,35 @@ def get_p2pool_stats():
             "total_hashes": pool_stats.get("totalHashes", 0),
             "shares_found": shares_total,
             "last_share_time": last_share_time,
-        }
+        },
     }
     return stats
+
 
 def get_network_stats():
     """Retrieves Monero network statistics (Difficulty, Height, Reward)."""
     raw = _read_json(NETWORK_STATS_PATH)
-    
-    diff = raw.get('difficulty', 0)
-    hashrate = raw.get('hash', 'N/A')
-    
+
+    diff = raw.get("difficulty", 0)
+    hashrate = raw.get("hash", "N/A")
+
     # Calculate hashrate if missing (Difficulty / Target Time)
-    if (hashrate == 'N/A' or hashrate == 0) and diff > 0:
+    if (hashrate == "N/A" or hashrate == 0) and diff > 0:
         hashrate = diff / SECOND_PER_BLOCK_MAIN
-        
+
     return {
         "difficulty": diff,
-        "height": raw.get('height', 0),
-        "reward": raw.get('reward', 0),
+        "height": raw.get("height", 0),
+        "reward": raw.get("reward", 0),
         "hash": hashrate,
-        "timestamp": raw.get('timestamp', 0)
+        "timestamp": raw.get("timestamp", 0),
     }
 
-def get_stratum_stats():
-    """
-    Parses local stratum statistics to extract worker configurations.
-    
-    Returns:
-        tuple: (Raw JSON dict, List of worker config dicts)
-    """
-    raw = _read_json(STRATUM_STATS_PATH)
-    
-    worker_configs = []
-    # Iterate through worker entries (Format: "IP, ..., ..., ..., Name, ...")
-    for w_entry in raw.get("workers", []):
-        if isinstance(w_entry, str):
-            parts = w_entry.split(',')
-            if len(parts) >= 1:
-                ip = parts[0].split(':')[0].strip()
-                # Default to "miner" if name field (index 4) is missing
-                name = parts[4].strip() if len(parts) >= 5 else "miner"
-                worker_configs.append({"ip": ip, "name": name, "parts": parts})
 
-    return raw, worker_configs
+def get_stratum_stats():
+    """Returns the raw local stratum statistics JSON dict."""
+    return _read_json(STRATUM_STATS_PATH)
+
 
 def get_tari_stats():
     """Retrieves Tari merge mining status and rewards."""
@@ -132,12 +122,18 @@ def get_tari_stats():
     chains = raw.get("chains", [])
     if chains:
         t = chains[0]
+        # `channel_state` is p2pool's gRPC connectivity state to the Tari node (IDLE/CONNECTING/READY/
+        # TRANSIENT_FAILURE/SHUTDOWN). `active` only means a chain is configured; `connected` means the
+        # channel is actually up — the dashboard must gate the "✔" on the latter, never on `active`,
+        # so a broken channel can't render as "TRANSIENT_FAILURE ✔".
+        state = t.get("channel_state", "UNKNOWN")
         return {
             "active": True,
-            "status": t.get('channel_state', 'UNKNOWN'),
-            "address": t.get('wallet', 'Unknown'),
-            "height": t.get('height', 0),
-            "reward": t.get('reward', 0) / 1_000_000, # Convert uTari to Tari
-            "difficulty": t.get('difficulty', 0)
+            "status": state,
+            "connected": state == "READY",
+            "address": t.get("wallet", "Unknown"),
+            "height": t.get("height", 0),
+            "reward": t.get("reward", 0) / 1_000_000,  # Convert uTari to Tari
+            "difficulty": t.get("difficulty", 0),
         }
     return {"active": False}

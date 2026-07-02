@@ -1,10 +1,66 @@
-import pytest
+import time
 from unittest.mock import patch
+
+from mining_dashboard.config.config import XVB_STATS_STALE_AFTER_S
 from mining_dashboard.helper.utils import (
-    parse_hashrate, format_hashrate, format_duration,
-    format_time_abs, get_tier_info, resolve_target_threshold,
-    is_ip_address, detect_host_ipv4,
+    PPLNS_BLOCK_TIME_DEFAULT,
+    PPLNS_BLOCK_TIME_NANO,
+    detect_host_ipv4,
+    format_duration,
+    format_hashrate,
+    format_time_abs,
+    get_tier_info,
+    is_ip_address,
+    parse_hashrate,
+    pplns_block_time,
+    resolve_target_threshold,
+    shares_in_pplns_window,
+    xvb_stats_are_stale,
 )
+
+
+class TestXvbStatsAreStale:
+    """#311: the shared freshness predicate used by both the controller and the dashboard."""
+
+    def test_cold_start_never_fetched_is_not_stale(self):
+        # No/zero last_update => never fetched => the feedforward-ramp regime, not stale.
+        assert xvb_stats_are_stale({}) is False
+        assert xvb_stats_are_stale({"last_update": 0}) is False
+        assert xvb_stats_are_stale(None) is False
+
+    def test_recent_fetch_is_not_stale(self):
+        assert xvb_stats_are_stale({"last_update": time.time()}) is False
+
+    def test_old_fetch_is_stale(self):
+        assert (
+            xvb_stats_are_stale({"last_update": time.time() - XVB_STATS_STALE_AFTER_S - 1}) is True
+        )
+
+    def test_boundary_just_within_threshold_is_not_stale(self):
+        # Age just under the threshold is still fresh (strict > comparison).
+        assert (
+            xvb_stats_are_stale({"last_update": time.time() - XVB_STATS_STALE_AFTER_S + 5}) is False
+        )
+
+
+class TestPplnsWindow:
+    """#263: shared PPLNS-window math used by metrics, the controller, and XvB auto-register."""
+
+    def test_block_time_by_pool_type(self):
+        assert pplns_block_time("Nano") == PPLNS_BLOCK_TIME_NANO
+        assert pplns_block_time("Main") == PPLNS_BLOCK_TIME_DEFAULT
+        assert pplns_block_time("Mini") == PPLNS_BLOCK_TIME_DEFAULT
+        assert pplns_block_time("anything-else") == PPLNS_BLOCK_TIME_DEFAULT
+
+    def test_counts_only_shares_inside_the_window(self):
+        now = 10_000
+        # window = 2 blocks * 10 s = 20 s => cutoff at now-20
+        shares = [{"ts": now - 5}, {"ts": now - 19}, {"ts": now - 20}, {"ts": now - 21}, {}]
+        # ts >= cutoff counts: -5, -19, -20 (boundary inclusive); -21 and the missing-ts drop out.
+        assert shares_in_pplns_window(shares, 2, 10, now=now) == 3
+
+    def test_empty_shares_is_zero(self):
+        assert shares_in_pplns_window([], 2160, 10, now=10_000) == 0
 
 
 class TestParseHashrate:
@@ -86,8 +142,7 @@ class TestGetTierInfo:
 
 
 class TestResolveTargetThreshold:
-    TIERS = {"donor_mega": 1_000_000, "donor_whale": 100_000,
-             "donor_vip": 10_000, "donor": 1_000}
+    TIERS = {"donor_mega": 1_000_000, "donor_whale": 100_000, "donor_vip": 10_000, "donor": 1_000}
 
     def test_auto_picks_highest_sustainable(self):
         # 15_000 * 0.85 = 12_750 -> VIP (10_000) is the highest we can hold.

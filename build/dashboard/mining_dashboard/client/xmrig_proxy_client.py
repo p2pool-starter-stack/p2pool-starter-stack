@@ -1,32 +1,34 @@
-import requests
 import json
 import logging
+
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
 
 class XMRigProxyClient:
     def __init__(self, host="127.0.0.1", port=8080, access_token=None):
         """
         Initialize the XMRig Proxy Client.
-        
+
         :param host: The hostname or IP address of the xmrig-proxy.
         :param port: The HTTP API port (configured via --http-port).
         :param access_token: The access token (configured via --http-access-token).
         """
         self.logger = logging.getLogger("ProxyClient")
         self.base_url = f"http://{host}:{port}"
-        
+
         # Configure Session with Retries
         self.session = requests.Session()
         retry_strategy = Retry(
             total=3,
-            backoff_factor=1, # Wait 1s, 2s, 4s between retries
+            backoff_factor=1,  # Wait 1s, 2s, 4s between retries
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "PUT", "OPTIONS"]
+            allowed_methods=["HEAD", "GET", "PUT", "OPTIONS"],
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
-        
+
         if access_token:
             self.session.headers.update({"Authorization": f"Bearer {access_token}"})
 
@@ -165,14 +167,15 @@ class XMRigProxyClient:
             return {}
         return response.json()
 
+
 if __name__ == "__main__":
     # Configuration
     # Ensure xmrig-proxy is running with API enabled:
     # ./xmrig-proxy --http-port=8080 --http-access-token=SECRET
-    
+
     HOST = "127.0.0.1"
-    PORT = 8080 
-    TOKEN = "SECRET" 
+    PORT = 8080
+    TOKEN = "SECRET"  # noqa: S105 — placeholder for this __main__ usage example, not a real secret
 
     client = XMRigProxyClient(HOST, PORT, TOKEN)
 
