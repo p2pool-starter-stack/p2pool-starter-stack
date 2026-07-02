@@ -8,6 +8,6 @@
 set -eu
 
 curl -fsS --digest \
-  -u "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
-  -o /dev/null \
-  http://localhost:18081/get_info
+    -u "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
+    -o /dev/null \
+    http://localhost:18081/get_info

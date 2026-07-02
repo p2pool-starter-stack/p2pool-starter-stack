@@ -1,0 +1,24 @@
+# EditorConfig — whitespace/EOL baseline across every file surface (Wave 7 tooling, #280).
+# https://editorconfig.org  ·  Mirrors the formatters: ruff (Python), and the per-surface
+# tools landing in #281 (shfmt -i 4 for shell, Biome 2-space for JS/CSS/JSON).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Web/config surfaces conventionally use 2-space indent.
+[*.{js,mjs,cjs,css,json,jsonc,yml,yaml,toml,proto}]
+indent_size = 2
+
+# Markdown uses two trailing spaces for a hard line break — don't strip them.
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefiles require real tabs.
+[Makefile]
+indent_style = tab

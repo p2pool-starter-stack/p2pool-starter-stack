@@ -32,14 +32,26 @@ concurrency:
   group: release-gate
   cancel-in-progress: false
 
+# Least privilege (#282): this runs on a self-hosted box holding real keys — keep the token read-only.
+permissions:
+  contents: read
+
 jobs:
   release-gate:
     name: Tier-4 live matrix (real nodes)
+    # Only run automatically once a self-hosted runner is actually wired up — set the repo variable
+    # ENABLE_RELEASE_GATE=true when one is registered. Without this guard, every push to main queues
+    # a job no runner can claim, and GitHub auto-cancels it after a 24h timeout — a permanent red ✗
+    # on main. A skipped job is green/neutral instead. A manual workflow_dispatch ALWAYS runs, so a
+    # maintainer can still validate a reviewed ref on a registered runner on demand.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_RELEASE_GATE == 'true' }}
     # Register the server with these labels: `pithead-release` scopes the gate to the dedicated
     # box; prefer an ephemeral / just-in-time runner in its own runner group.
     runs-on: [self-hosted, pithead-release]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Validate against the real synced nodes
         # Inputs go through env (not interpolated into the script) to avoid shell injection.
@@ -64,7 +76,7 @@ jobs:
 
       - name: Upload artifacts (redacted)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-gate-results
           path: tests/integration/results/

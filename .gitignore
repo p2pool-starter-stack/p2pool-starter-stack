@@ -18,9 +18,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 *.egg-info/
 .eggs/
+.venv/
+.ruff_cache/
 
 # Integration test artifacts (manifest, per-scenario logs, captured state)
 /tests/integration/results/

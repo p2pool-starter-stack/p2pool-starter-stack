@@ -8,13 +8,13 @@
 // It only sets the attribute the CSS reacts to; dashboard.js owns the live toggle and keeps
 // localStorage in sync. An unset/unknown value is left alone — the CSS default is "auto"
 // (follow prefers-color-scheme), so nothing to do.
-(function () {
-    try {
-        var t = localStorage.getItem('dashboardTheme');
-        if (t === 'light' || t === 'dark' || t === 'auto') {
-            document.documentElement.setAttribute('data-theme', t);
-        }
-    } catch (e) {
-        /* localStorage blocked (e.g. privacy mode) — fall back to the CSS default (auto). */
+(() => {
+  try {
+    const t = localStorage.getItem("dashboardTheme");
+    if (t === "light" || t === "dark" || t === "auto") {
+      document.documentElement.setAttribute("data-theme", t);
     }
+  } catch {
+    /* localStorage blocked (e.g. privacy mode) — fall back to the CSS default (auto). */
+  }
 })();

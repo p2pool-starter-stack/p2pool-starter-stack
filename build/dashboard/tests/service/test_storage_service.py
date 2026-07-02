@@ -3,8 +3,8 @@ import time
 
 import pytest
 
+from mining_dashboard.config.config import HISTORY_RETENTION_SEC, TIER_DEFAULTS
 from mining_dashboard.service.storage_service import StateManager
-from mining_dashboard.config.config import TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC
 
 
 class TestDefaults:
@@ -77,7 +77,7 @@ class TestSharesAndHistory:
         state_manager.add_shares(3, ts, 500)
         shares = state_manager.get_shares()
         assert len(shares) == 3
-        assert len({s["ts"] for s in shares}) == 3            # all distinct timestamps
+        assert len({s["ts"] for s in shares}) == 3  # all distinct timestamps
         assert max(s["ts"] for s in shares) == pytest.approx(ts)  # most recent stamped at latest_ts
 
     def test_add_shares_count_zero_or_one(self, state_manager):
@@ -106,14 +106,16 @@ class TestSharesAndHistory:
         # The chart's window toggle (#168): each window's (p2pool, xvb) split is stored in its own
         # column and read back; an omitted window defaults to 0.
         state_manager.update_history(
-            1000, p2pool_hr=1000, xvb_hr=0,
+            1000,
+            p2pool_hr=1000,
+            xvb_hr=0,
             windows={"1m": (900, 0), "1h": (1100, 0), "12h": (50, 0)},  # 24h intentionally omitted
         )
         row = state_manager.get_history()[-1]
         assert (row["v_p2pool_1m"], row["v_xvb_1m"]) == (900, 0)
         assert (row["v_p2pool_1h"], row["v_xvb_1h"]) == (1100, 0)
         assert (row["v_p2pool_12h"], row["v_xvb_12h"]) == (50, 0)
-        assert (row["v_p2pool_24h"], row["v_xvb_24h"]) == (0, 0)   # omitted -> default 0
+        assert (row["v_p2pool_24h"], row["v_xvb_24h"]) == (0, 0)  # omitted -> default 0
 
     def test_per_window_splits_survive_reload(self, tmp_path):
         # Persisted to disk and re-read on a fresh StateManager (load() path), not just in-memory.
@@ -140,24 +142,9 @@ class TestDbHealth:
         sm = StateManager(":memory:")
         assert sm.is_db_healthy() is True
         sm._conn.execute("DROP TABLE shares")
-        sm.add_share(time.time(), 500)          # INSERT fails -> caught -> flag flips
+        sm.add_share(time.time(), 500)  # INSERT fails -> caught -> flag flips
         assert sm.is_db_healthy() is False
         sm.close()
-
-
-class TestWorkers:
-    def test_update_and_get_known_workers(self, state_manager):
-        state_manager.update_known_workers([{"name": "rig1", "ip": "10.0.0.1"}])
-        workers = state_manager.get_known_workers()
-        assert workers == [{"name": "rig1", "ip": "10.0.0.1"}]
-
-    def test_worker_without_ip_skipped(self, state_manager):
-        state_manager.update_known_workers([{"name": "rig1"}, {"ip": "10.0.0.2"}])
-        assert state_manager.get_known_workers() == []
-
-    def test_none_list_is_noop(self, state_manager):
-        state_manager.update_known_workers(None)
-        assert state_manager.get_known_workers() == []
 
 
 class TestSnapshot:
@@ -172,25 +159,55 @@ class TestSnapshot:
     def test_load_missing_snapshot_returns_none(self, state_manager):
         assert state_manager.load_snapshot() is None
 
+    def test_unserializable_snapshot_flags_persistence_unhealthy(self, state_manager):
+        # A snapshot json.dumps can't serialize (here a set) is a persistent write failure: the
+        # data is lost and will be lost on restart. Like every other write path it must flip
+        # db_healthy so /api/state raises the #131 badge — not log-and-look-green (regression guard
+        # for save_snapshot's TypeError branch that used to call logger.error directly).
+        assert state_manager.is_db_healthy() is True
+        state_manager.save_snapshot({"workers": {1, 2, 3}})  # set -> TypeError in json.dumps
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.load_snapshot() is None  # nothing was persisted
+
     def test_share_stats_persist_across_instances(self, tmp_path):
         # Issue #82: the per-worker share counts and the proxy /summary totals ride along in the
         # latest_data snapshot, so they survive a dashboard restart (the snapshot is what
         # DataService restores on init). Save with one instance, read back with a fresh one.
         db = str(tmp_path / "state.db")
         sm1 = StateManager(db_path=db)
-        sm1.save_snapshot({
-            "workers": [{"name": "rig1", "ip": "10.0.0.1", "status": "online",
-                         "accepted": 1234, "rejected": 5, "invalid": 0}],
-            "proxy_summary": {"accepted": 12345, "rejected": 67, "invalid": 2,
-                              "expired": 1, "best": 9876543},
-        })
+        sm1.save_snapshot(
+            {
+                "workers": [
+                    {
+                        "name": "rig1",
+                        "ip": "10.0.0.1",
+                        "status": "online",
+                        "accepted": 1234,
+                        "rejected": 5,
+                        "invalid": 0,
+                    }
+                ],
+                "proxy_summary": {
+                    "accepted": 12345,
+                    "rejected": 67,
+                    "invalid": 2,
+                    "expired": 1,
+                    "best": 9876543,
+                },
+            }
+        )
         sm1.close()
 
         snap = StateManager(db_path=db).load_snapshot()  # fresh instance -> reads from disk
         assert snap["workers"][0]["accepted"] == 1234
         assert snap["workers"][0]["rejected"] == 5
-        assert snap["proxy_summary"] == {"accepted": 12345, "rejected": 67, "invalid": 2,
-                                         "expired": 1, "best": 9876543}
+        assert snap["proxy_summary"] == {
+            "accepted": 12345,
+            "rejected": 67,
+            "invalid": 2,
+            "expired": 1,
+            "best": 9876543,
+        }
 
 
 class TestPersistenceAndMigration:
@@ -277,23 +294,64 @@ class TestSchemaMigration:
         now = time.time()
         t1 = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now - 3600))
         conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)")
-        conn.execute("INSERT INTO history VALUES (?, ?, ?, ?, ?)", (t1, 800.0, 800.0, 0.0, now - 3600))
+        conn.execute(
+            "CREATE TABLE history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)"
+        )
+        conn.execute(
+            "INSERT INTO history VALUES (?, ?, ?, ?, ?)", (t1, 800.0, 800.0, 0.0, now - 3600)
+        )
         conn.commit()
         conn.close()
 
         sm = StateManager(db_path=db)
         try:
             cols = {info[1] for info in sm._conn.execute("PRAGMA table_info(history)").fetchall()}
-            for c in ("v_p2pool_1m", "v_xvb_1m", "v_p2pool_1h", "v_xvb_1h",
-                      "v_p2pool_12h", "v_xvb_12h", "v_p2pool_24h", "v_xvb_24h"):
+            for c in (
+                "v_p2pool_1m",
+                "v_xvb_1m",
+                "v_p2pool_1h",
+                "v_xvb_1h",
+                "v_p2pool_12h",
+                "v_xvb_12h",
+                "v_p2pool_24h",
+                "v_xvb_24h",
+            ):
                 assert c in cols, f"migration missing {c}"
             old = sm.get_history()[-1]
-            assert old["v_p2pool"] == 800.0          # original 10m split preserved
-            assert old["v_p2pool_1h"] == 0           # forward-only: no per-window data pre-#168
+            assert old["v_p2pool"] == 800.0  # original 10m split preserved
+            assert old["v_p2pool_1h"] == 0  # forward-only: no per-window data pre-#168
             # a new write after the upgrade fills the per-window columns
             sm.update_history(900, p2pool_hr=900, xvb_hr=0, windows={"1h": (950, 0)})
             assert sm.get_history()[-1]["v_p2pool_1h"] == 950
+        finally:
+            sm.close()
+
+    def test_orphaned_workers_table_dropped_on_upgrade(self, tmp_path):
+        # Intent (#144): the dead known_workers persistence layer was removed, so opening a DB
+        # that still has its orphaned `workers` table drops it in place — tidying old installs
+        # without touching history/shares/kv. The worker list is now sourced live from the
+        # xmrig-proxy, never from the DB. Also asserts the in-memory state key is gone.
+        db = str(tmp_path / "with_workers.db")
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL)"
+        )
+        conn.execute("CREATE TABLE workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
+        conn.execute("INSERT INTO workers VALUES (?, ?, ?)", ("rig1", "10.0.0.1", 123.0))
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)  # __init__ runs _migrate_db -> DROP TABLE IF EXISTS workers
+        try:
+            tables = {
+                r[0]
+                for r in sm._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "workers" not in tables, "orphaned workers table dropped (#144)"
+            assert "known_workers" not in sm.state, "dead known_workers state key removed (#144)"
+            assert {"history", "kv_store", "shares"} <= tables, "core tables left intact"
         finally:
             sm.close()
 
@@ -305,10 +363,15 @@ class TestRetention:
     def test_history_older_than_retention_pruned_from_memory(self, state_manager):
         # Intent: appending a fresh sample drops in-memory points older than the 30-day window
         # (the popleft loop), so the deque can't grow without bound on a long-running dashboard.
-        state_manager.state["hashrate_history"].append({
-            "t": "old", "v": 1.0, "v_p2pool": 0, "v_xvb": 0,
-            "timestamp": time.time() - HISTORY_RETENTION_SEC - 3600,  # 30d + 1h ago
-        })
+        state_manager.state["hashrate_history"].append(
+            {
+                "t": "old",
+                "v": 1.0,
+                "v_p2pool": 0,
+                "v_xvb": 0,
+                "timestamp": time.time() - HISTORY_RETENTION_SEC - 3600,  # 30d + 1h ago
+            }
+        )
         assert len(state_manager.get_history()) == 1
         state_manager.update_history(2000.0)  # a fresh sample at "now"
         hist = state_manager.get_history()
@@ -321,22 +384,14 @@ class TestRetention:
         with state_manager._db_lock:
             state_manager._conn.execute(
                 "INSERT INTO history (t, v, v_p2pool, v_xvb, timestamp) VALUES (?,?,?,?,?)",
-                ("old", 1.0, 0, 0, old_ts))
+                ("old", 1.0, 0, 0, old_ts),
+            )
             state_manager._conn.commit()
         monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
         state_manager.update_history(2000.0)
         with state_manager._db_lock:
             remaining = state_manager._conn.execute(
                 "SELECT COUNT(*) FROM history WHERE timestamp < ?",
-                (time.time() - HISTORY_RETENTION_SEC,)).fetchone()[0]
+                (time.time() - HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
         assert remaining == 0, "expired DB rows are pruned"
-
-    def test_stale_workers_pruned_after_retention_window(self, state_manager):
-        # Intent: a worker not seen within WORKER_RETENTION_SEC (7d) is dropped when any worker
-        # next checks in — so stale name→IP mappings don't linger and leak memory.
-        state_manager.update_known_workers([{"name": "rig1", "ip": "10.0.0.1"}])
-        # Backdate rig1 so it's now older than the retention window.
-        state_manager.state["known_workers"]["rig1"]["last_seen"] = time.time() - WORKER_RETENTION_SEC - 3600
-        state_manager.update_known_workers([{"name": "rig2", "ip": "10.0.0.2"}])  # a fresh check-in
-        names = {w["name"] for w in state_manager.get_known_workers()}
-        assert "rig2" in names and "rig1" not in names

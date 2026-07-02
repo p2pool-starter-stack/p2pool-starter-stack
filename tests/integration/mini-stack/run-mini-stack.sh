@@ -18,9 +18,15 @@ COMPOSE_FILE="$HERE/docker-compose.fake.yml"
 PASS=0
 FAIL=0
 
-c_ok()  { PASS=$((PASS + 1)); printf '  \033[1;32m✓\033[0m %s\n' "$1"; }
-c_bad() { FAIL=$((FAIL + 1)); printf '  \033[1;31m✗\033[0m %s\n      %s\n' "$1" "${2:-}"; }
-log()   { printf '\033[1;36m[mini-stack]\033[0m %s\n' "$1"; }
+c_ok() {
+    PASS=$((PASS + 1))
+    printf '  \033[1;32m✓\033[0m %s\n' "$1"
+}
+c_bad() {
+    FAIL=$((FAIL + 1))
+    printf '  \033[1;31m✗\033[0m %s\n      %s\n' "$1" "${2:-}"
+}
+log() { printf '\033[1;36m[mini-stack]\033[0m %s\n' "$1"; }
 
 if ! docker compose version >/dev/null 2>&1; then
     echo "SKIP: docker compose not available"
@@ -28,13 +34,13 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
-cstate()  { docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || echo "missing"; }
-ctl()     { curl -fsS --max-time 5 "$1" -d "$2" >/dev/null; }   # POST JSON to a fake /control
+cstate() { docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || echo "missing"; }
+ctl() { curl -fsS --max-time 5 "$1" -d "$2" >/dev/null; } # POST JSON to a fake /control
 
 # Poll a container until it reaches an expected state, or time out.
-wait_state() {  # wait_state <container> <expected-state> [timeout_s]
+wait_state() { # wait_state <container> <expected-state> [timeout_s]
     local c="$1" want="$2" timeout="${3:-60}" end
-    end=$(( $(date +%s) + timeout ))
+    end=$(($(date +%s) + timeout))
     while :; do
         [ "$(cstate "$c")" = "$want" ] && return 0
         [ "$(date +%s)" -ge "$end" ] && return 1
@@ -42,7 +48,7 @@ wait_state() {  # wait_state <container> <expected-state> [timeout_s]
     done
 }
 
-assert_state() {  # assert_state <label> <container> <expected> [timeout]
+assert_state() { # assert_state <label> <container> <expected> [timeout]
     if wait_state "$2" "$3" "${4:-60}"; then
         c_ok "$1 ($2 → $3)"
     else
@@ -53,7 +59,7 @@ assert_state() {  # assert_state <label> <container> <expected> [timeout]
 # Assert a container STAYS in a state for a window — proves the gate does NOT release/act
 # prematurely (e.g. holds while only one required chain is synced). At UPDATE_INTERVAL=2 a
 # few seconds spans multiple control-loop cycles.
-assert_stays() {  # assert_stays <label> <container> <state> <seconds>
+assert_stays() { # assert_stays <label> <container> <state> <seconds>
     sleep "$4"
     if [ "$(cstate "$2")" = "$3" ]; then
         c_ok "$1 ($2 stays $3 for ${4}s)"
@@ -65,7 +71,7 @@ assert_stays() {  # assert_stays <label> <container> <state> <seconds>
 # POST a new mode to a fake's /control endpoint with a clear failure label. Host ports are
 # 28081/28152 (namespaced away from a real monerod/dashboard on the same host).
 set_monerod() { ctl "http://127.0.0.1:28081/control" "{\"mode\":\"$1\"}" || c_bad "set monerod $1" "control POST failed"; }
-set_tari()    { ctl "http://127.0.0.1:28152/control" "{\"mode\":\"$1\"}" || c_bad "set tari $1" "control POST failed"; }
+set_tari() { ctl "http://127.0.0.1:28152/control" "{\"mode\":\"$1\"}" || c_bad "set tari $1" "control POST failed"; }
 
 teardown() {
     log "tearing down"
@@ -88,16 +94,63 @@ api_up=0
 for _ in $(seq 1 30); do
     if compose exec -T dashboard python3 -c \
         "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=3)" >/dev/null 2>&1; then
-        api_up=1; break
+        api_up=1
+        break
     fi
     sleep 2
 done
 [ "$api_up" = 1 ] && c_ok "dashboard API is up" || c_bad "dashboard API is up" "no /api/state after ~60s"
 
+# 0. The /api/state payload must carry the #170 Stack Topology & Egress contract, derived live
+#    from config by the REAL dashboard. The pure derivation is unit-tested (tests/service/
+#    test_egress.py); this proves it survives the trip through build_state -> /api/state on a
+#    running server: both sections present, their summary shared verbatim with the map (so the
+#    header badge can't disagree with it), the topology's node set is the canonical one, and every
+#    edge lands on a placeable node (an off-map endpoint would vanish silently from the diagram).
+log "scenario 0: /api/state exposes a well-formed #170 topology + egress contract"
+contract="$(
+    compose exec -T dashboard python3 - <<'PY' 2>&1
+import json
+import urllib.request
+
+NODES = {"rigs", "browser", "xmrig-proxy", "caddy", "dashboard", "p2pool",
+         "monerod", "tari", "docker", "tor", "internet"}
+
+
+def bail(msg):
+    print("FAIL:", msg)
+    raise SystemExit(1)
+
+
+st = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/state", timeout=5))
+eg, topo = st.get("egress"), st.get("topology")
+if not isinstance(eg, dict) or not isinstance(topo, dict):
+    bail("egress/topology section missing")
+if topo.get("summary") != eg.get("summary"):
+    bail("topology and egress summaries disagree")
+ids = {n["id"] for n in topo["nodes"]}
+if ids != NODES:
+    bail("topology node ids %s != canonical set" % sorted(ids))
+for e in topo["edges"]:
+    if e["from"] not in NODES or e["to"] not in NODES:
+        bail("edge endpoint off the map: %s" % e)
+if not any("egress" in b.get("text", "") for b in st.get("badges", [])):
+    bail("no egress header badge in /api/state")
+if not isinstance(st.get("db_healthy"), bool):
+    bail("db_healthy missing or not a bool")
+print("OK level=%s nodes=%d edges=%d db_healthy=%s"
+      % (topo["summary"]["level"], len(ids), len(topo["edges"]), st["db_healthy"]))
+PY
+)"
+case "$contract" in
+OK*) c_ok "/api/state #170 contract — $contract" ;;
+*) c_bad "/api/state #170 topology+egress contract" "$contract" ;;
+esac
+
 # 1. Booting mid-sync → the gate holds both miner containers (stops them). (#35)
 log "scenario 1: holds the miner while both chains sync"
-assert_state "held: itest-p2pool stopped"      itest-p2pool      exited  90
-assert_state "held: itest-xmrig-proxy stopped" itest-xmrig-proxy exited  90
+assert_state "held: itest-p2pool stopped" itest-p2pool exited 90
+assert_state "held: itest-xmrig-proxy stopped" itest-xmrig-proxy exited 90
 
 # 2. Monerod synced but Tari still syncing, Tari REQUIRED → STILL held (the gate needs both).
 log "scenario 2: keeps holding while Tari (required) is still syncing"
@@ -107,7 +160,7 @@ assert_stays "still held on monerod-only" itest-p2pool exited 8
 # 3. Tari synced too → release both. (#35)
 log "scenario 3: releases the miner once both chains are synced"
 set_tari synced
-assert_state "released: itest-p2pool running"      itest-p2pool      running 90
+assert_state "released: itest-p2pool running" itest-p2pool running 90
 assert_state "released: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
 # 4. Tari down while required → reject workers (stop the proxy); itest-p2pool keeps running. (#31)
@@ -138,7 +191,7 @@ for _ in $(seq 1 30); do
         "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=3)" >/dev/null 2>&1 && break
     sleep 2
 done
-assert_stays "itest-p2pool stays up across restart"      itest-p2pool      running 6
+assert_stays "itest-p2pool stays up across restart" itest-p2pool running 6
 assert_stays "itest-xmrig-proxy stays up across restart" itest-xmrig-proxy running 6
 
 echo ""

@@ -21,14 +21,18 @@ CONTAINER="${CONTAINER:-monerod}"
 
 ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 say() { echo "[$(ts)] $*"; }
-set_status() { echo "$1" > "$STATUS"; }
+set_status() { echo "$1" >"$STATUS"; }
 
 say "START build-pruned-chain"
 say "src=$SRC_DIR dst=$DST_DIR"
 mkdir -p "$DST_DIR/lmdb"
 
 src_mdb="$SRC_DIR/lmdb/data.mdb"
-if [ ! -f "$src_mdb" ]; then say "FATAL: source $src_mdb not found"; set_status "FAIL_NO_SRC"; exit 1; fi
+if [ ! -f "$src_mdb" ]; then
+    say "FATAL: source $src_mdb not found"
+    set_status "FAIL_NO_SRC"
+    exit 1
+fi
 say "source size: $(du -h "$src_mdb" | cut -f1)"
 
 set_status "STOPPING"
@@ -48,7 +52,11 @@ set_status "RESTARTING"
 say "starting $CONTAINER (downtime ends)"
 docker start "$CONTAINER" >/dev/null 2>&1 || say "WARN docker start failed"
 
-if [ $rc -ne 0 ]; then say "FATAL: copy failed"; set_status "FAIL_COPY"; exit 1; fi
+if [ $rc -ne 0 ]; then
+    say "FATAL: copy failed"
+    set_status "FAIL_COPY"
+    exit 1
+fi
 
 set_status "PRUNING"
 say "prune begin (full chain is back online; pruning the copy)"
@@ -57,7 +65,11 @@ prune_start=$(date +%s)
 rc=$?
 prune_end=$(date +%s)
 say "prune done rc=$rc in $((prune_end - prune_start))s"
-if [ $rc -ne 0 ]; then say "FATAL: prune failed"; set_status "FAIL_PRUNE"; exit 1; fi
+if [ $rc -ne 0 ]; then
+    say "FATAL: prune failed"
+    set_status "FAIL_PRUNE"
+    exit 1
+fi
 
 say "pruned size: $(du -h "$DST_DIR/lmdb/data.mdb" | cut -f1)"
 set_status "DONE"

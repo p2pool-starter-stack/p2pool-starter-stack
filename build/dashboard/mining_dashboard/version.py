@@ -9,6 +9,7 @@ dashboard ``Dockerfile`` build-args, fed by ``pithead`` from the top-level ``VER
 — the single source of truth — and ``git``). Reading only the environment keeps the
 container self-describing and this resolver a pure, unit-testable function of its inputs.
 """
+
 import os
 
 
@@ -50,7 +51,8 @@ def resolve_version(env=None):
     else:
         text = "dev build"
 
-    detail = ", ".join(p for p in (f"branch {branch}" if branch else "",
-                                   f"commit {commit}" if commit else "") if p)
+    detail = ", ".join(
+        p for p in (f"branch {branch}" if branch else "", f"commit {commit}" if commit else "") if p
+    )
     title = f"Development build ({detail})" if detail else "Development build"
     return {"text": text, "title": title, "dev": True}

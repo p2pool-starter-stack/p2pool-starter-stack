@@ -32,6 +32,7 @@
         "pool": "main",
         "stratum_bind": "0.0.0.0",
         "stratum_password": "",
+        "clearnet": false,
         "data_dir": "auto"
     },
 
@@ -43,7 +44,8 @@
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",
         "donor_id": "auto",
-        "donation_level": "auto"
+        "donation_level": "auto",
+        "tor": true
     },
 
     "tor": {
@@ -63,7 +65,14 @@
         }
     },
 
+    "workers": {
+        "api_port": 8080,
+        "api_auth": "none",
+        "api_token": ""
+    },
+
     "network": {
-        "subnet": "172.28.0.0/24"
+        "subnet": "172.28.0.0/24",
+        "tor_egress_firewall": true
     }
 }

@@ -29,8 +29,12 @@ class NodeHealthMonitor:
     Clock is injectable for tests; defaults to `time.monotonic`.
     """
 
-    def __init__(self, down_after=NODE_DOWN_AFTER_SEC, recovery_after=NODE_RECOVERY_AFTER_SEC,
-                 clock=time.monotonic):
+    def __init__(
+        self,
+        down_after=NODE_DOWN_AFTER_SEC,
+        recovery_after=NODE_RECOVERY_AFTER_SEC,
+        clock=time.monotonic,
+    ):
         self.down_after = down_after
         self.recovery_after = recovery_after
         self._clock = clock
@@ -60,7 +64,11 @@ class NodeHealthMonitor:
             if self._unreachable_since is None:
                 self._unreachable_since = now
             # Only a node that has actually been up can fall DOWN.
-            if self.ever_up and not self.down and (now - self._unreachable_since) >= self.down_after:
+            if (
+                self.ever_up
+                and not self.down
+                and (now - self._unreachable_since) >= self.down_after
+            ):
                 self.down = True
 
         return self.down

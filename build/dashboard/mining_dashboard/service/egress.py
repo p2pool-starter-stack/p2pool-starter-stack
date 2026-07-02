@@ -1,0 +1,272 @@
+"""Egress posture (#170) — for each stack component, its outbound connections and their network
+route (Tor / clearnet / local / inactive), plus a privacy roll-up.
+
+Routes are *derived from the live config*, never hardcoded, so the panel can't drift from reality or
+lie after a regression — the #160 audit's lesson (``--onion-address`` *looked* like Tor but wasn't).
+
+Two backstops matter for whether a clearnet route is actually an IP leak:
+
+* The **#270 egress firewall** (``DOCKER-USER``, fail-closed) DROPs non-Tor egress from the *container*
+  subnet — so a container's clearnet route can't actually leave while it's on.
+* It does **not** cover the **host-networked dashboard** (``network_mode: host``), whose own egress
+  (XvB stats fetch, update check) bypasses ``DOCKER-USER`` entirely. Those rely solely on their
+  SOCKS config — a clearnet route there is a real leak regardless of the firewall.
+
+So a connection is a *leak* only when its route is clearnet AND it isn't neutralised by a backstop.
+"""
+
+from mining_dashboard.config import config
+
+TOR = "tor"
+CLEARNET = "clearnet"
+LOCAL = "local"
+INACTIVE = "inactive"
+
+
+def _xvb_route(xvb_enabled, xvb_tor):
+    if not xvb_enabled:
+        return INACTIVE
+    return TOR if xvb_tor else CLEARNET
+
+
+def compute_egress_posture(
+    *,
+    firewall,
+    p2pool_clearnet,
+    xvb_enabled,
+    xvb_tor,
+    monero_clearnet_sync,
+    tari_clearnet_sync,
+    remote_monero,
+):
+    """Pure derivation of the egress posture from config knobs. Returns ``{components, summary}``."""
+    xvb = _xvb_route(xvb_enabled, xvb_tor)
+
+    # ``firewalled``: is this component's egress on the container subnet the #270 firewall guards?
+    # The dashboard is host-networked, so its own outbound traffic is NOT covered.
+    components = [
+        {
+            "name": "monerod",
+            "firewalled": True,
+            "conns": [
+                {"to": "Monero P2P / tx relay", "route": TOR},
+                *(
+                    [{"to": "initial block download (clearnet sync)", "route": CLEARNET}]
+                    if monero_clearnet_sync
+                    else []
+                ),
+            ],
+        },
+        {
+            "name": "p2pool",
+            "firewalled": True,
+            "conns": [
+                {"to": "sidechain P2P peers", "route": CLEARNET if p2pool_clearnet else TOR},
+                {"to": "monerod RPC/ZMQ", "route": CLEARNET if remote_monero else LOCAL},
+            ],
+        },
+        {
+            "name": "tari",
+            "firewalled": True,
+            "conns": [
+                {"to": "Tari P2P transport", "route": TOR},
+                # dns_seeds=[] (#162); onion peer seeds resolve via Tor — no clearnet DNS.
+                {"to": "DNS resolution", "route": LOCAL},
+                *(
+                    [{"to": "initial sync (clearnet)", "route": CLEARNET}]
+                    if tari_clearnet_sync
+                    else []
+                ),
+            ],
+        },
+        {
+            "name": "xmrig-proxy",
+            "firewalled": True,
+            "conns": [
+                {"to": "upstream pool (local p2pool stratum)", "route": LOCAL},
+                # XvB donation mining dials na.xmrvsbeast.com via the proxy's per-pool socks5 (#166).
+                {"to": "XvB donation pool", "route": xvb},
+                {"to": "dev donation", "route": INACTIVE},  # --donate-level 0 (#166)
+            ],
+        },
+        {
+            "name": "dashboard",
+            "firewalled": False,  # host-networked — bypasses the #270 DOCKER-USER firewall
+            "conns": [
+                {"to": "XvB stats (xmrvsbeast.com)", "route": xvb},  # socks5h when on (#163)
+                {"to": "update check (github)", "route": TOR},  # socks5h, #224
+            ],
+        },
+        {
+            "name": "caddy",
+            "firewalled": True,
+            "conns": [{"to": "TLS (internal CA, no ACME)", "route": LOCAL}],
+        },
+    ]
+
+    leaks = 0  # clearnet egress that actually exposes the host IP
+    blocked = 0  # clearnet route a container is configured for, but the firewall DROPs it
+    for comp in components:
+        for conn in comp["conns"]:
+            if conn["route"] != CLEARNET:
+                continue
+            if comp["firewalled"] and firewall:
+                conn["blocked_by_firewall"] = True
+                blocked += 1
+            else:
+                leaks += 1
+
+    if leaks:
+        label = f"{leaks} clearnet egress path(s) exposing your IP"
+    elif blocked:
+        label = f"All egress via Tor ({blocked} clearnet path(s) blocked by the egress firewall)"
+    else:
+        label = "All egress via Tor"
+
+    return {
+        "components": components,
+        "summary": {
+            "firewall": firewall,
+            "leaks": leaks,
+            "blocked_by_firewall": blocked,
+            "all_tor": leaks == 0,
+            "level": "ok" if leaks == 0 else "warn",
+            "label": label,
+        },
+    }
+
+
+def egress_posture_from_config():
+    """Build the posture from the live dashboard config (values pithead rendered into the env)."""
+    return compute_egress_posture(
+        firewall=config.TOR_EGRESS_FIREWALL,
+        p2pool_clearnet=config.P2POOL_CLEARNET,
+        xvb_enabled=config.ENABLE_XVB,
+        xvb_tor=config.XVB_TOR_ENABLED,
+        monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
+        tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
+        remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+    )
+
+
+# --- Stack topology (#170, trust-boundary view) ----------------------------------------
+# The egress list above answers "is anything leaking?"; the topology answers "how is the whole
+# stack wired?" — every component and the route of each link (ingress, egress, internal). Same
+# config-derived routes, so the two views can never disagree (the summary is shared verbatim).
+
+# Zones, left-to-right by trust: your LAN, the host's container bridge, the Tor hub, the Internet.
+ZONE_LAN = "lan"
+ZONE_HOST = "host"
+ZONE_TOR = "tor"
+ZONE_NET = "internet"
+
+# Nodes bracket the host components with the external actors they actually talk to. ``internal``
+# nodes (the socket proxies) only appear when the operator expands the internal mesh.
+TOPOLOGY_NODES = [
+    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_LAN},
+    {"id": "browser", "label": "Browser", "zone": ZONE_LAN},
+    {"id": "xmrig-proxy", "label": "xmrig-proxy", "zone": ZONE_HOST},
+    {"id": "caddy", "label": "caddy", "zone": ZONE_HOST},
+    {"id": "dashboard", "label": "dashboard", "zone": ZONE_HOST},
+    {"id": "p2pool", "label": "p2pool", "zone": ZONE_HOST},
+    {"id": "monerod", "label": "monerod", "zone": ZONE_HOST},
+    {"id": "tari", "label": "tari", "zone": ZONE_HOST},
+    {"id": "docker", "label": "docker-proxy", "zone": ZONE_HOST, "internal": True},
+    {"id": "tor", "label": "tor", "zone": ZONE_TOR},
+    {"id": "internet", "label": "Tor network", "zone": ZONE_NET},
+]
+
+
+def _edge(src, dst, route, label, kind):
+    return {"from": src, "to": dst, "route": route, "label": label, "kind": kind}
+
+
+def _ext(route):
+    # Where a component's external link lands in the diagram: a Tor-routed link terminates at the
+    # `tor` hub; a clearnet link goes STRAIGHT to the internet node, so a leak visibly bypasses Tor.
+    return "internet" if route == CLEARNET else "tor"
+
+
+def compute_topology(
+    *,
+    firewall,
+    p2pool_clearnet,
+    xvb_enabled,
+    xvb_tor,
+    monero_clearnet_sync,
+    tari_clearnet_sync,
+    remote_monero,
+):
+    """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
+
+    ``kind`` is one of ``ingress`` (inbound from your LAN), ``egress`` (outbound), ``p2p``
+    (bidirectional — egress *and* onion ingress for the P2P daemons), or ``internal`` (host-only
+    plumbing, hidden until expanded). The summary is shared verbatim with the egress list.
+    """
+    posture = compute_egress_posture(
+        firewall=firewall,
+        p2pool_clearnet=p2pool_clearnet,
+        xvb_enabled=xvb_enabled,
+        xvb_tor=xvb_tor,
+        monero_clearnet_sync=monero_clearnet_sync,
+        tari_clearnet_sync=tari_clearnet_sync,
+        remote_monero=remote_monero,
+    )
+    xvb = _xvb_route(xvb_enabled, xvb_tor)
+    sidechain = CLEARNET if p2pool_clearnet else TOR
+    rpc = CLEARNET if remote_monero else LOCAL
+
+    edges = [
+        # Ingress from your LAN — the only listeners actually exposed to the network.
+        _edge("rigs", "xmrig-proxy", LOCAL, "stratum :3333", "ingress"),
+        _edge("browser", "caddy", LOCAL, "https :443", "ingress"),
+        # Daemon P2P: bidirectional (outbound peers + inbound via Tor onion services).
+        _edge("p2pool", _ext(sidechain), sidechain, "sidechain P2P", "p2p"),
+        _edge("monerod", "tor", TOR, "Monero P2P + tx", "p2p"),
+        _edge("tari", "tor", TOR, "Tari P2P", "p2p"),
+        # App-level egress.
+        _edge("xmrig-proxy", _ext(xvb), xvb, "XvB donation", "egress"),
+        _edge("dashboard", "tor", TOR, "update check", "egress"),
+        _edge("dashboard", _ext(xvb), xvb, "XvB stats", "egress"),
+        # The Tor hub to the network: SOCKS egress for every daemon + onion-service ingress.
+        _edge("tor", "internet", TOR, "SOCKS + onion circuits", "p2p"),
+        # Internal mesh (hidden until expanded).
+        _edge("xmrig-proxy", "p2pool", LOCAL, "upstream pool", "internal"),
+        _edge("p2pool", "monerod", rpc, "RPC / ZMQ", "internal"),
+        _edge("p2pool", "tari", LOCAL, "gRPC merge-mine", "internal"),
+        _edge("caddy", "dashboard", LOCAL, "reverse-proxy :8000", "internal"),
+        _edge("dashboard", "monerod", LOCAL, "get_info RPC", "internal"),
+        _edge("dashboard", "xmrig-proxy", LOCAL, "proxy API", "internal"),
+        _edge("dashboard", "tari", LOCAL, "gRPC", "internal"),
+        _edge("dashboard", "docker", LOCAL, "container API", "internal"),
+    ]
+    # Optional clearnet initial-sync paths (#183) bypass the Tor hub straight to the internet.
+    if monero_clearnet_sync:
+        edges.append(_edge("monerod", "internet", CLEARNET, "clearnet IBD", "egress"))
+    if tari_clearnet_sync:
+        edges.append(_edge("tari", "internet", CLEARNET, "clearnet IBD", "egress"))
+
+    # Tag clearnet links as a real leak vs firewall-blocked — same rule as the egress list. Only the
+    # host-networked dashboard escapes the #270 container firewall, so its clearnet links truly leak.
+    for edge in edges:
+        if edge["route"] != CLEARNET:
+            continue
+        if edge["from"] != "dashboard" and firewall:
+            edge["blocked_by_firewall"] = True
+        else:
+            edge["leak"] = True
+
+    return {"nodes": TOPOLOGY_NODES, "edges": edges, "summary": posture["summary"]}
+
+
+def topology_from_config():
+    """Build the topology from the live dashboard config (values pithead rendered into the env)."""
+    return compute_topology(
+        firewall=config.TOR_EGRESS_FIREWALL,
+        p2pool_clearnet=config.P2POOL_CLEARNET,
+        xvb_enabled=config.ENABLE_XVB,
+        xvb_tor=config.XVB_TOR_ENABLED,
+        monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
+        tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
+        remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+    )

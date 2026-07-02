@@ -1,0 +1,49 @@
+# Dependabot (Wave 7 tooling, #282): automated dependency + CVE update PRs across every
+# supply-chain surface. Grouped + weekly to keep PR volume sane.
+version: 2
+updates:
+  # GitHub Actions — keep the SHA-pinned actions (#282) fresh. Dependabot rewrites the SHA and the
+  # `# vX.Y.Z` comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Dashboard Python deps — bumps the hashed uv.lock + pyproject floors (#283).
+  - package-ecosystem: "uv"
+    directory: "/build/dashboard"
+    schedule:
+      interval: "weekly"
+    groups:
+      python:
+        patterns: ["*"]
+    ignore:
+      # protobuf/grpcio are pinned to what the vendored Tari gRPC stubs assert at import time
+      # (see build/dashboard/pyproject.toml); a major bump needs the stubs regenerated first.
+      - dependency-name: "protobuf"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "grpcio"
+        update-types: ["version-update:semver-major"]
+
+  # Base-image digests across every build/* Dockerfile (incl. the uv build image). This is the
+  # mechanism that clears base-distro CVEs — e.g. the openssl point-release accepted in .trivyignore.
+  - package-ecosystem: "docker"
+    directories:
+      - "/build/dashboard"
+      - "/build/monero"
+      - "/build/p2pool"
+      - "/build/tor"
+      - "/build/xmrig-proxy"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      # Major/minor base bumps (e.g. python 3.11->3.14, ubuntu 24.04->26.04) are deliberate
+      # migrations, not security updates — keep Dependabot to digest + patch within the pinned tag.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

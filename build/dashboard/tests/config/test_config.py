@@ -1,11 +1,12 @@
-import os
-import json
 import importlib
+import json
+import os
 from unittest.mock import patch
 
 
 def _reload_config():
     import mining_dashboard.config.config as cfg
+
     return importlib.reload(cfg)
 
 
@@ -16,6 +17,7 @@ class TestConfig:
 
     def test_defaults_load(self):
         import mining_dashboard.config.config as cfg
+
         assert cfg.XMRIG_API_PORT == 8080
         assert cfg.XVB_DONATION_LEVEL == "auto"
         assert cfg.XVB_MAX_DONATION_FRACTION == 0.85
@@ -65,3 +67,20 @@ class TestConfig:
         with patch.dict(os.environ, {"XVB_ENABLED": "true"}):
             cfg = _reload_config()
             assert cfg.ENABLE_XVB is True
+
+    def test_xvb_submit_url_default_is_the_real_endpoint(self):
+        # #263: registration works out of the box — the default is the real submit endpoint.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("XVB_SUBMIT_URL", None)
+            cfg = _reload_config()
+        assert cfg.XVB_SUBMIT_URL == "https://xmrvsbeast.com/cgi-bin/p2pool_bonus_submit_api.cgi"
+
+    def test_xvb_submit_url_explicit_override(self):
+        with patch.dict(os.environ, {"XVB_SUBMIT_URL": "https://test.example/submit.cgi"}):
+            assert _reload_config().XVB_SUBMIT_URL == "https://test.example/submit.cgi"
+
+    def test_xvb_submit_url_disable_sentinels(self):
+        # Turn auto-registration off (keeping XvB on) without knowing the endpoint.
+        for v in ("off", "none", "FALSE", "disabled", "0"):
+            with patch.dict(os.environ, {"XVB_SUBMIT_URL": v}):
+                assert _reload_config().XVB_SUBMIT_URL == "", f"{v!r} should disable"

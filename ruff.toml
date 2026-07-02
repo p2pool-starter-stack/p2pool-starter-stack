@@ -1,0 +1,14 @@
+# Repo-root ruff config (Wave 7 tooling, #280).
+#
+# The dashboard package keeps the canonical ruff rules in build/dashboard/pyproject.toml; this
+# root config `extend`s them so that Python *outside* the package — the integration-test fakes
+# under tests/integration/ — is linted with the SAME rules, and so `ruff`/pre-commit can discover
+# a config from anywhere in the repo (per-file discovery: dashboard files resolve to the package
+# config, repo-level files resolve here).
+extend = "build/dashboard/pyproject.toml"
+extend-exclude = [".venv"]
+
+[lint.per-file-ignores]
+# The contract-test fakes are test infrastructure: bare asserts (S101) and dummy creds (S106)
+# are expected, as is a broad pytest.raises (B017) and os.path use in async bodies (ASYNC240).
+"tests/integration/fakes/**" = ["S101", "S106", "B017", "ASYNC240"]

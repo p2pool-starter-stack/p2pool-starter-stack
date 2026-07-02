@@ -23,6 +23,6 @@ COOKIE_HEX=$(xxd -p -c 256 "$COOKIE_FILE" | tr -d '\n')
 [ -n "$COOKIE_HEX" ] || exit 1
 
 # Authenticate, query bootstrap phase, then close. Healthy only at TAG=done (100%).
-printf 'AUTHENTICATE %s\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' "$COOKIE_HEX" \
-  | nc -w 3 "$CONTROL_HOST" "$CONTROL_PORT" \
-  | grep -q 'TAG=done'
+printf 'AUTHENTICATE %s\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' "$COOKIE_HEX" |
+    nc -w 3 "$CONTROL_HOST" "$CONTROL_PORT" |
+    grep -q 'TAG=done'

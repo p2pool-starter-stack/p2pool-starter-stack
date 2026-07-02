@@ -1,7 +1,5 @@
 import struct
-from unittest.mock import patch, AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import mining_dashboard.collector.logs as logs
 
@@ -71,14 +69,20 @@ class TestRemoteSyncStatus:
         return patch.object(logs.aiofiles, "open", return_value=_AsyncCM(_FakeFile(content)))
 
     async def test_syncing(self):
-        with patch.object(logs.aiofiles, "open",
-                          return_value=_AsyncCM(_FakeFile('{"height": 50, "target_height": 100}'))):
+        with patch.object(
+            logs.aiofiles,
+            "open",
+            return_value=_AsyncCM(_FakeFile('{"height": 50, "target_height": 100}')),
+        ):
             status = await logs._get_remote_monero_sync_status()
         assert status == {"is_syncing": True, "current": 50, "target": 100, "percent": 50}
 
     async def test_synced(self):
-        with patch.object(logs.aiofiles, "open",
-                          return_value=_AsyncCM(_FakeFile('{"height": 100, "target_height": 100}'))):
+        with patch.object(
+            logs.aiofiles,
+            "open",
+            return_value=_AsyncCM(_FakeFile('{"height": 100, "target_height": 100}')),
+        ):
             assert await logs._get_remote_monero_sync_status() == {"is_syncing": False}
 
     async def test_file_not_found(self):
@@ -94,21 +98,28 @@ class TestLogSyncStatus:
     """Log-scraping fallback path (`_get_monero_sync_status_from_logs`)."""
 
     async def test_new_format_top_block_candidate(self):
-        with patch.object(logs, "get_monero_logs",
-                          AsyncMock(return_value=["top block candidate: 100 -> 200 [node]"])):
+        with patch.object(
+            logs,
+            "get_monero_logs",
+            AsyncMock(return_value=["top block candidate: 100 -> 200 [node]"]),
+        ):
             status = await logs._get_monero_sync_status_from_logs()
         assert status["is_syncing"] is True
         assert status["current"] == 100 and status["target"] == 200
         assert status["percent"] == 50
 
     async def test_old_synced_format(self):
-        with patch.object(logs, "get_monero_logs",
-                          AsyncMock(return_value=["Synced 50/100 (50%, ...)"])):
+        with patch.object(
+            logs, "get_monero_logs", AsyncMock(return_value=["Synced 50/100 (50%, ...)"])
+        ):
             assert (await logs._get_monero_sync_status_from_logs())["percent"] == 50
 
     async def test_already_synchronized(self):
-        with patch.object(logs, "get_monero_logs",
-                          AsyncMock(return_value=["You are now synchronized with the network"])):
+        with patch.object(
+            logs,
+            "get_monero_logs",
+            AsyncMock(return_value=["You are now synchronized with the network"]),
+        ):
             assert await logs._get_monero_sync_status_from_logs() == {"is_syncing": False}
 
     async def test_error_logs(self):
@@ -122,8 +133,10 @@ class TestLocalSyncStatus:
     async def test_rpc_result_used_when_available(self):
         # RPC returns a status → use it directly (flagged reachable), never touch the logs.
         rpc_status = {"is_syncing": True, "current": 10, "target": 20, "percent": 50}
-        with patch.object(logs._monero_client, "get_sync_status", return_value=rpc_status), \
-             patch.object(logs, "get_monero_logs", AsyncMock()) as mock_logs:
+        with (
+            patch.object(logs._monero_client, "get_sync_status", return_value=rpc_status),
+            patch.object(logs, "get_monero_logs", AsyncMock()) as mock_logs,
+        ):
             status = await logs._get_local_monero_sync_status()
         assert status["is_syncing"] is True and status["percent"] == 50
         assert status["reachable"] is True
@@ -132,9 +145,12 @@ class TestLocalSyncStatus:
     async def test_falls_back_to_logs_when_rpc_unreachable(self):
         # RPC returns None (node unreachable / creds absent) → scrape logs, flagged not
         # reachable so the down-detector can act (Issue #31).
-        with patch.object(logs._monero_client, "get_sync_status", return_value=None), \
-             patch.object(logs, "get_monero_logs",
-                          AsyncMock(return_value=["Synced 50/100 (50%, ...)"])):
+        with (
+            patch.object(logs._monero_client, "get_sync_status", return_value=None),
+            patch.object(
+                logs, "get_monero_logs", AsyncMock(return_value=["Synced 50/100 (50%, ...)"])
+            ),
+        ):
             status = await logs._get_local_monero_sync_status()
         assert status["is_syncing"] is True and status["percent"] == 50
         assert status["reachable"] is False
@@ -142,13 +158,23 @@ class TestLocalSyncStatus:
 
 class TestDispatch:
     async def test_local_when_default_host(self):
-        with patch.object(logs, "MONERO_NODE_HOST", "172.28.0.26"), \
-             patch.object(logs, "_get_local_monero_sync_status", AsyncMock(return_value={"is_syncing": True})):
+        with (
+            patch.object(logs, "MONERO_NODE_HOST", "172.28.0.26"),
+            patch.object(
+                logs, "_get_local_monero_sync_status", AsyncMock(return_value={"is_syncing": True})
+            ),
+        ):
             assert (await logs.get_monero_sync_status())["is_syncing"] is True
 
     async def test_remote_when_other_host(self):
-        with patch.object(logs, "MONERO_NODE_HOST", "10.0.0.9"), \
-             patch.object(logs, "_get_remote_monero_sync_status", AsyncMock(return_value={"is_syncing": False})):
+        with (
+            patch.object(logs, "MONERO_NODE_HOST", "10.0.0.9"),
+            patch.object(
+                logs,
+                "_get_remote_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False}),
+            ),
+        ):
             # Remote node is reported reachable so reject-workers no-ops for it (Issue #31).
             assert await logs.get_monero_sync_status() == {"is_syncing": False, "reachable": True}
 

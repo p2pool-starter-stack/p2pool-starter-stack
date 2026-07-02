@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# We no longer dynamically fetch the LAN IP here because the dashboard 
+# We no longer dynamically fetch the LAN IP here because the dashboard
 # MUST be bound to localhost (127.0.0.1) to remain secure behind Caddy.
 # The HOST_IP variable is now injected directly via docker-compose.yml.
 

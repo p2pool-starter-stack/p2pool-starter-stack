@@ -1,15 +1,17 @@
+import json
+import logging
+import random
 import sqlite3
 import threading
-import logging
-import json
-import os
 import time
-import random
 from collections import deque
-from typing import Dict, List, Optional, Any
+from typing import Any
+
 from mining_dashboard.config.config import (
-    DB_FILE_PATH, TIER_DEFAULTS, HISTORY_RETENTION_SEC, WORKER_RETENTION_SEC,
+    DB_FILE_PATH,
     HASHRATE_WINDOW_COLUMNS,
+    HISTORY_RETENTION_SEC,
+    TIER_DEFAULTS,
 )
 
 # The 10m window reuses the original v_p2pool/v_xvb pair; every other window in
@@ -27,10 +29,11 @@ _WINDOW_EXTRA_COLUMNS = [
 class StateManager:
     """
     Manages persistent application state including hashrate history and mining mode statistics.
-    
+
     Handles atomic file I/O to prevent data corruption and ensures state consistency
     across application restarts.
     """
+
     def __init__(self, db_path: str = None):
         self.logger = logging.getLogger("StateManager")
         # Default to the configured path; tests inject a temp file or ":memory:".
@@ -40,7 +43,6 @@ class StateManager:
         self.state = {
             "hashrate_history": deque(),
             "shares": [],
-            "known_workers": {}, # Persist worker IPs by name to prevent loss during XvB switching
             "xvb": {
                 "total_donated_time": 0.0,
                 "current_mode": "P2POOL",
@@ -48,16 +50,22 @@ class StateManager:
                 "avg_1h": 0.0,
                 "fail_count": 0,
                 "last_update": 0.0,
+                # Unix ts of the last successful XvB raffle registration (#263); 0.0 until the
+                # wallet is first auto-registered. Lets the UI show "Registered with XvB ✓".
+                "registered_at": 0.0,
+                # Registration status for the dashboard badge (#263): "" (pending), "registered",
+                # "invalid" (endpoint rejected the wallet), or "failing" (endpoint erroring).
+                "registration_state": "",
                 # Fraction of the current cycle routed to XvB, written by the
                 # controller each cycle. Lets the dashboard show what we *send*
                 # (routed) next to what XvB *credits* (avg_1h/24h) — the live
                 # credit-factor signal (Issue #70).
-                "donation_fraction": 0.0
+                "donation_fraction": 0.0,
             },
             # Initialize state with default values from configuration
-            "tiers": TIER_DEFAULTS.copy()
+            "tiers": TIER_DEFAULTS.copy(),
         }
-        
+
         # Initialize persistent DB connection
         # check_same_thread=False allows the connection to be used by multiple threads
         # (serialized via self._db_lock)
@@ -78,7 +86,7 @@ class StateManager:
                 # Enable WAL mode for better concurrency
                 self._conn.execute("PRAGMA journal_mode=WAL")
                 self._conn.execute("PRAGMA synchronous=NORMAL")
-                
+
                 with self._conn:
                     self._create_tables()
                     self._migrate_db()
@@ -104,10 +112,13 @@ class StateManager:
         # Per-window hashrate columns (#168) are appended so a fresh DB starts with them; existing
         # DBs get them via _migrate_db. Same source list (_WINDOW_EXTRA_COLUMNS) for both paths.
         extra = "".join(f", {c} REAL DEFAULT 0" for c in _WINDOW_EXTRA_COLUMNS)
-        self._conn.execute(f"CREATE TABLE IF NOT EXISTS history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL{extra})")
-        self._conn.execute("CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, ip TEXT, last_seen REAL)")
+        self._conn.execute(
+            f"CREATE TABLE IF NOT EXISTS history (t TEXT, v REAL, v_p2pool REAL, v_xvb REAL, timestamp REAL{extra})"
+        )
         self._conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
-        self._conn.execute("CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -118,23 +129,25 @@ class StateManager:
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
         cursor = self._conn.cursor()
-        
+
         # History Table Migrations
         cursor.execute("PRAGMA table_info(history)")
         columns = {info[1] for info in cursor.fetchall()}
-        
-        if 'v_p2pool' not in columns:
+
+        if "v_p2pool" not in columns:
             self.logger.info("Migrating DB: Adding v_p2pool column to history")
             self._conn.execute("ALTER TABLE history ADD COLUMN v_p2pool REAL DEFAULT 0")
 
-        if 'v_xvb' not in columns:
+        if "v_xvb" not in columns:
             self.logger.info("Migrating DB: Adding v_xvb column to history")
             self._conn.execute("ALTER TABLE history ADD COLUMN v_xvb REAL DEFAULT 0")
 
-        if 'timestamp' not in columns:
+        if "timestamp" not in columns:
             self.logger.info("Migrating DB: Adding timestamp column to history")
             self._conn.execute("ALTER TABLE history ADD COLUMN timestamp REAL")
-            self._conn.execute("UPDATE history SET timestamp = CAST(strftime('%s', t) AS REAL) WHERE timestamp IS NULL")
+            self._conn.execute(
+                "UPDATE history SET timestamp = CAST(strftime('%s', t) AS REAL) WHERE timestamp IS NULL"
+            )
             self._conn.execute("UPDATE history SET timestamp = 0 WHERE timestamp IS NULL")
 
         # Per-window hashrate columns (#168) — additive, forward-only. Pre-existing rows keep DEFAULT
@@ -144,13 +157,10 @@ class StateManager:
                 self.logger.info(f"Migrating DB: Adding {col} column to history")
                 self._conn.execute(f"ALTER TABLE history ADD COLUMN {col} REAL DEFAULT 0")
 
-        # Workers Table Migrations
-        cursor.execute("PRAGMA table_info(workers)")
-        w_columns = {info[1] for info in cursor.fetchall()}
-        if 'last_seen' not in w_columns:
-            self.logger.info("Migrating DB: Adding last_seen column to workers")
-            self._conn.execute("ALTER TABLE workers ADD COLUMN last_seen REAL")
-            self._conn.execute("UPDATE workers SET last_seen = ?", (time.time(),))
+        # Drop the orphaned `workers` table (#144). It backed the known_workers persistence layer,
+        # which was dead code — the worker list is sourced live from the xmrig-proxy. Tidies old
+        # DBs; harmless no-op on fresh ones.
+        self._conn.execute("DROP TABLE IF EXISTS workers")
 
     def load(self):
         """
@@ -158,15 +168,22 @@ class StateManager:
         """
         try:
             with self._db_lock:
-                if not self._conn: return
+                if not self._conn:
+                    return
                 cursor = self._conn.cursor()
-                
+
                 with self._lock:
                     # 1. Load History
                     # Limit to retention period to prevent memory bloat
                     history_cutoff = time.time() - HISTORY_RETENTION_SEC
-                    hist_cols = ", ".join(["t", "v", "v_p2pool", "v_xvb", "timestamp"] + _WINDOW_EXTRA_COLUMNS)
-                    cursor.execute(f"SELECT {hist_cols} FROM history WHERE timestamp > ? ORDER BY timestamp ASC", (history_cutoff,))
+                    hist_cols = ", ".join(
+                        ["t", "v", "v_p2pool", "v_xvb", "timestamp"] + _WINDOW_EXTRA_COLUMNS
+                    )
+                    cursor.execute(
+                        # Column list is literals + a module constant, never user input; value is ?-bound.
+                        f"SELECT {hist_cols} FROM history WHERE timestamp > ? ORDER BY timestamp ASC",  # noqa: S608
+                        (history_cutoff,),
+                    )
                     history = []
                     for row in cursor.fetchall():
                         item = dict(row)
@@ -179,29 +196,19 @@ class StateManager:
                         history.append(item)
                     self.state["hashrate_history"] = deque(history)
 
-                    # 2. Load Workers
-                    # Only load workers seen recently
-                    worker_cutoff = time.time() - WORKER_RETENTION_SEC
-                    cursor.execute("SELECT name, ip, last_seen FROM workers WHERE last_seen > ? OR last_seen IS NULL", (worker_cutoff,))
-                    self.state["known_workers"] = {}
-                    for row in cursor.fetchall():
-                        self.state["known_workers"][row["name"]] = {
-                            "ip": row["ip"],
-                            "last_seen": row["last_seen"] if row["last_seen"] is not None else time.time()
-                        }
-
-                    # 3. Load XVB Stats (KV Store)
+                    # 2. Load XVB Stats (KV Store)
                     cursor.execute("SELECT key, value FROM kv_store WHERE key LIKE 'xvb_%'")
                     for row in cursor.fetchall():
-                        key = row["key"]
-                        if key.startswith("xvb_"):
-                            key = key[4:]
-                        
+                        # The query filters to 'xvb_%', so every key carries the prefix; strip it.
+                        key = row["key"][4:]
+
                         val = row["value"]
-                        
+
                         # Migration: Handle legacy keys from previous versions
-                        if key == "1h_avg": key = "avg_1h"
-                        if key == "24h_avg": key = "avg_24h"
+                        if key == "1h_avg":
+                            key = "avg_1h"
+                        if key == "24h_avg":
+                            key = "avg_24h"
 
                         # Enforce schema: Ignore keys not present in the default state
                         if key not in self.state["xvb"]:
@@ -220,15 +227,20 @@ class StateManager:
                         except (ValueError, TypeError):
                             self.logger.warning(f"Skipping corrupted KV pair: {key}={val}")
 
-                    # 4. Load Shares
-                    cursor.execute("SELECT ts, difficulty FROM shares WHERE ts > ? ORDER BY ts ASC", (history_cutoff,))
+                    # 3. Load Shares
+                    cursor.execute(
+                        "SELECT ts, difficulty FROM shares WHERE ts > ? ORDER BY ts ASC",
+                        (history_cutoff,),
+                    )
                     self.state["shares"] = [dict(row) for row in cursor.fetchall()]
-                    
+
                 self.logger.info(f"State successfully loaded from {self.db_path}")
         except sqlite3.Error as e:
             self.logger.error(f"DB Load Error: {e}")
 
-    def update_history(self, hashrate: float, p2pool_hr: float = 0, xvb_hr: float = 0, windows=None):
+    def update_history(
+        self, hashrate: float, p2pool_hr: float = 0, xvb_hr: float = 0, windows=None
+    ):
         """Appends a new hashrate data point to the history buffer.
 
         ``windows`` (Issue #168) is an optional ``{window: (p2pool_hr, xvb_hr)}`` mapping of the
@@ -236,7 +248,7 @@ class StateManager:
         ``p2pool_hr``/``xvb_hr`` pair above). Each is stored in its own column so the chart's window
         toggle can plot a true average per window; an omitted/unknown window defaults to 0.
         """
-        t_str = time.strftime('%Y-%m-%d %H:%M:%S')
+        t_str = time.strftime("%Y-%m-%d %H:%M:%S")
         ts = time.time()
 
         try:
@@ -264,18 +276,23 @@ class StateManager:
 
         with self._lock:
             # 1. Update In-Memory State
-            self.state["hashrate_history"].append({
-                "t": t_str,
-                "v": v_val,
-                "v_p2pool": v_p2p,
-                "v_xvb": v_xvb,
-                "timestamp": ts,
-                **extra,
-            })
+            self.state["hashrate_history"].append(
+                {
+                    "t": t_str,
+                    "v": v_val,
+                    "v_p2pool": v_p2p,
+                    "v_xvb": v_xvb,
+                    "timestamp": ts,
+                    **extra,
+                }
+            )
 
             # Prune in-memory history to enforce retention policy
             cutoff = ts - HISTORY_RETENTION_SEC
-            while self.state["hashrate_history"] and self.state["hashrate_history"][0]["timestamp"] < cutoff:
+            while (
+                self.state["hashrate_history"]
+                and self.state["hashrate_history"][0]["timestamp"] < cutoff
+            ):
                 self.state["hashrate_history"].popleft()
 
         # 2. Persist to DB
@@ -286,14 +303,19 @@ class StateManager:
                 with self._conn:
                     cols = ["t", "v", "v_p2pool", "v_xvb", "timestamp"] + _WINDOW_EXTRA_COLUMNS
                     placeholders = ", ".join("?" * len(cols))
-                    values = (t_str, v_val, v_p2p, v_xvb, ts) + tuple(extra[c] for c in _WINDOW_EXTRA_COLUMNS)
+                    values = (t_str, v_val, v_p2p, v_xvb, ts) + tuple(
+                        extra[c] for c in _WINDOW_EXTRA_COLUMNS
+                    )
                     self._conn.execute(
-                        f"INSERT INTO history ({', '.join(cols)}) VALUES ({placeholders})",
-                        values
+                        # Column/placeholder lists are literals + a module constant, not user input.
+                        f"INSERT INTO history ({', '.join(cols)}) VALUES ({placeholders})",  # noqa: S608
+                        values,
                     )
                     # Prune old history from DB to prevent unbounded growth (Probabilistic pruning to save I/O)
-                    if random.random() < 0.05:
-                        self._conn.execute("DELETE FROM history WHERE timestamp < ?", (ts - HISTORY_RETENTION_SEC,))
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM history WHERE timestamp < ?", (ts - HISTORY_RETENTION_SEC,)
+                        )
         except sqlite3.Error as e:
             self._db_error("History Update Error", e)
 
@@ -301,9 +323,9 @@ class StateManager:
         """Appends a new share to history and persists it to the DB."""
         with self._lock:
             # Check if share already exists to prevent duplicate in-memory appends
-            if not any(s['ts'] == ts for s in self.state.get("shares", [])):
+            if not any(s["ts"] == ts for s in self.state.get("shares", [])):
                 self.state["shares"].append({"ts": ts, "difficulty": difficulty})
-            
+
             # Prune in-memory state based on the 30-day config
             cutoff = time.time() - HISTORY_RETENTION_SEC
             self.state["shares"] = [s for s in self.state["shares"] if s["ts"] >= cutoff]
@@ -311,12 +333,19 @@ class StateManager:
         # Persist to DB
         try:
             with self._db_lock:
-                if not self._conn: return
+                if not self._conn:
+                    return
                 with self._conn:
-                    self._conn.execute("INSERT OR IGNORE INTO shares (ts, difficulty) VALUES (?, ?)", (ts, difficulty))
-                    
-                    if random.random() < 0.05:
-                        self._conn.execute("DELETE FROM shares WHERE ts < ?", (time.time() - HISTORY_RETENTION_SEC,))
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO shares (ts, difficulty) VALUES (?, ?)",
+                        (ts, difficulty),
+                    )
+
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM shares WHERE ts < ?",
+                            (time.time() - HISTORY_RETENTION_SEC,),
+                        )
         except sqlite3.Error as e:
             self._db_error("Share Insert Error", e)
 
@@ -332,22 +361,29 @@ class StateManager:
             # Distinct timestamps ending at latest_ts (1 ms steps back) so the ts PRIMARY KEY keeps all.
             self.add_share(round(latest_ts - 0.001 * (count - 1 - i), 3), difficulty)
 
-    def get_shares(self) -> List[Dict[str, Any]]:
+    def get_shares(self) -> list[dict[str, Any]]:
         """Returns a copy of the shares history."""
         with self._lock:
             return list(self.state.get("shares", []))
 
-    def get_xvb_stats(self) -> Dict[str, Any]:
+    def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""
         with self._lock:
             return self.state["xvb"].copy()
 
-    def update_xvb_stats(self, mode: Optional[str] = None, avg_24h: Optional[float] = None, avg_1h: Optional[float] = None, fail_count: Optional[int] = None, **kwargs):
+    def update_xvb_stats(
+        self,
+        mode: str | None = None,
+        avg_24h: float | None = None,
+        avg_1h: float | None = None,
+        fail_count: int | None = None,
+        **kwargs,
+    ):
         """
         Updates specific fields within the XvB statistics state.
-        
+
         Allows partial updates to decouple mode switching from statistical updates.
-        
+
         Args:
             mode (str, optional): The current mining mode (e.g., "P2POOL", "XVB").
             avg_24h (float, optional): 24-hour average hashrate on XvB.
@@ -407,7 +443,7 @@ class StateManager:
                 ts = time.time()
                 self.state["xvb"]["last_update"] = ts
                 updates["xvb_last_update"] = ts
-            
+
         # Persist to DB
         if updates:
             try:
@@ -415,53 +451,14 @@ class StateManager:
                     if not self._conn:
                         return
                     with self._conn:
-                        self._conn.executemany("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", 
-                                         [(k, str(v)) for k, v in updates.items()])
+                        self._conn.executemany(
+                            "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+                            [(k, str(v)) for k, v in updates.items()],
+                        )
             except sqlite3.Error as e:
                 self._db_error("XVB Update Error", e)
 
-    def update_known_workers(self, workers_list: List[Dict[str, str]]):
-        """
-        Updates the list of known workers.
-        
-        Args:
-            workers_list (list): List of dicts [{'name': '...', 'ip': '...'}, ...]
-        """
-        if workers_list is None:
-            workers_list = []
-        ts = time.time()
-        to_upsert = []
-        
-        with self._lock:
-            for w in workers_list:
-                name = w.get('name')
-                ip = w.get('ip')
-                if name and ip:
-                    # Update memory
-                    self.state["known_workers"][name] = {"ip": ip, "last_seen": ts}
-                    
-                    # Always update DB timestamp for active workers
-                    to_upsert.append((name, ip, ts))
-            
-            # Prune old workers from memory
-            cutoff = ts - WORKER_RETENTION_SEC
-            to_remove = [k for k, v in self.state["known_workers"].items() if v["last_seen"] < cutoff]
-            for k in to_remove:
-                del self.state["known_workers"][k]
-        
-        if to_upsert:
-            try:
-                with self._db_lock:
-                    if not self._conn:
-                        return
-                    with self._conn:
-                        self._conn.executemany("INSERT OR REPLACE INTO workers (name, ip, last_seen) VALUES (?, ?, ?)", to_upsert)
-                        # Prune old workers from DB
-                        self._conn.execute("DELETE FROM workers WHERE last_seen < ?", (ts - WORKER_RETENTION_SEC,))
-            except sqlite3.Error as e:
-                self._db_error("Worker Update Error", e)
-
-    def save_snapshot(self, data: Dict[str, Any]):
+    def save_snapshot(self, data: dict[str, Any]):
         """Persists the full application state snapshot to the KV store."""
         if not data:
             return
@@ -471,14 +468,19 @@ class StateManager:
                 if not self._conn:
                     return
                 with self._conn:
-                    self._conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", 
-                                     ("snapshot_latest_data", json_str))
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+                        ("snapshot_latest_data", json_str),
+                    )
         except sqlite3.Error as e:
             self._db_error("Snapshot Save Error", e)
         except TypeError as e:
-            self.logger.error(f"Snapshot serialization error: {e}")
+            # A non-serializable snapshot is a persistent write failure (data lost on restart),
+            # so flag persistence unhealthy like every other write path — otherwise the #131
+            # badge stays green while snapshots silently never persist.
+            self._db_error("Snapshot Serialization Error", e)
 
-    def load_snapshot(self) -> Optional[Dict[str, Any]]:
+    def load_snapshot(self) -> dict[str, Any] | None:
         """Loads the last persisted application state snapshot."""
         try:
             with self._db_lock:
@@ -493,17 +495,12 @@ class StateManager:
             self.logger.error(f"Snapshot Load Error: {e}")
         return None
 
-    def get_known_workers(self) -> List[Dict[str, str]]:
-        """Returns a list of worker dicts for the collector."""
-        with self._lock:
-            return [{"name": k, "ip": v["ip"]} for k, v in self.state["known_workers"].items()]
-
-    def get_history(self) -> List[Dict[str, Any]]:
+    def get_history(self) -> list[dict[str, Any]]:
         """Returns a copy of the hashrate history."""
         with self._lock:
             return list(self.state["hashrate_history"])
 
-    def get_tiers(self) -> Dict[str, Any]:
+    def get_tiers(self) -> dict[str, Any]:
         """Returns a copy of the donation tiers configuration."""
         with self._lock:
             return self.state["tiers"].copy()

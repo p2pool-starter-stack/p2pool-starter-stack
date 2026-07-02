@@ -19,5 +19,10 @@ RUN wget -O xmrig-proxy.tar.gz https://github.com/xmrig/xmrig-proxy/releases/dow
     && chmod +x /usr/local/bin/xmrig-proxy \
     && rm -rf xmrig-proxy*
 
-WORKDIR /root
+# Run non-root (#255) — the easy win: pure network proxy, no bind-mounts, already cap_drop:[ALL]
+# + no-new-privileges in compose. Reuse ubuntu:24.04's 'ubuntu' user (uid 1000) and give it a
+# writable home as the cwd in case xmrig-proxy drops a config/log there.
+RUN install -d -o ubuntu -g ubuntu /home/ubuntu
+WORKDIR /home/ubuntu
+USER ubuntu
 ENTRYPOINT ["xmrig-proxy"]

@@ -2,32 +2,55 @@ import asyncio
 import logging
 import os
 import time
+
 from aiohttp import ClientSession
 
+from mining_dashboard.client.docker.docker_control import DockerControl
+from mining_dashboard.client.tari.tari_client import TariClient
+from mining_dashboard.client.xmrig_client import XMRigWorkerClient
+from mining_dashboard.client.xvb_client import (
+    REG_INVALID,
+    REG_NOT_ELIGIBLE,
+    REG_OK,
+)
+from mining_dashboard.collector.logs import get_monero_sync_status
+from mining_dashboard.collector.pools import (
+    get_network_stats,
+    get_p2pool_stats,
+    get_stratum_stats,
+    get_tari_stats,
+)
+from mining_dashboard.collector.system import (
+    get_cpu_usage,
+    get_disk_usage,
+    get_hugepages_status,
+    get_load_average,
+    get_memory_usage,
+)
 from mining_dashboard.config.config import (
-    UPDATE_INTERVAL,
-    TARI_REQUIRED,
+    CHECK_FOR_UPDATES,
+    CLEARNET_STATE_DIR,
+    ENABLE_XVB,
+    GITHUB_RELEASES_API,
+    MONERO_CLEARNET_SYNC,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
-    ENABLE_XVB,
-    WORKER_FALLOFF_SEC,
-    CHECK_FOR_UPDATES,
-    GITHUB_RELEASES_API,
-    UPDATE_CHECK_INTERVAL,
-    XVB_TOR_PROXY,
-    MONERO_CLEARNET_SYNC,
     TARI_CLEARNET_SYNC,
-    CLEARNET_STATE_DIR,
+    TARI_REQUIRED,
+    UPDATE_CHECK_INTERVAL,
+    UPDATE_INTERVAL,
+    WORKER_FALLOFF_SEC,
+    XVB_REGISTER_INTERVAL_S,
+    XVB_TOR_PROXY,
 )
-from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient
-from mining_dashboard.client.tari.tari_client import TariClient
-from mining_dashboard.client.docker.docker_control import DockerControl
+from mining_dashboard.helper.utils import (
+    DEFAULT_PPLNS_WINDOW,
+    pplns_block_time,
+    shares_in_pplns_window,
+)
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
-from mining_dashboard.collector.pools import get_p2pool_stats, get_network_stats, get_stratum_stats, get_tari_stats
-from mining_dashboard.collector.logs import get_monero_sync_status
-from mining_dashboard.collector.system import get_disk_usage, get_hugepages_status, get_memory_usage, get_load_average, get_cpu_usage
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
 
@@ -35,20 +58,26 @@ logger = logging.getLogger("DataService")
 # normalization below isn't a wall of magic indices. A row has >= _PX_MIN_FIELDS entries.
 _PX_NAME = 0
 _PX_IP = 1
-_PX_CONNECTIONS = 2     # active connections; 0 means a stale/disconnected worker
-_PX_ACCEPTED = 3        # accepted shares (cumulative)
-_PX_REJECTED = 4        # rejected shares (cumulative)
-_PX_INVALID = 5         # invalid shares (cumulative)
-_PX_LAST_SHARE_MS = 7   # epoch ms of the last accepted share
-_PX_HR_1M = 8           # 1-minute hashrate, kH/s
-_PX_HR_10M = 9          # 10-minute hashrate, kH/s
-_PX_HR_1H = 10          # 1-hour hashrate, kH/s   (#168)
-_PX_HR_12H = 11         # 12-hour hashrate, kH/s  (#168)
-_PX_HR_24H = 12         # 24-hour hashrate, kH/s  (#168)
+_PX_CONNECTIONS = 2  # active connections; 0 means a stale/disconnected worker
+_PX_ACCEPTED = 3  # accepted shares (cumulative)
+_PX_REJECTED = 4  # rejected shares (cumulative)
+_PX_INVALID = 5  # invalid shares (cumulative)
+_PX_LAST_SHARE_MS = 7  # epoch ms of the last accepted share
+_PX_HR_1M = 8  # 1-minute hashrate, kH/s
+_PX_HR_10M = 9  # 10-minute hashrate, kH/s
+_PX_HR_1H = 10  # 1-hour hashrate, kH/s   (#168)
+_PX_HR_12H = 11  # 12-hour hashrate, kH/s  (#168)
+_PX_HR_24H = 12  # 24-hour hashrate, kH/s  (#168)
 _PX_MIN_FIELDS = 13
 
 # xmrig-proxy reports hashrate in kH/s; the dashboard works in H/s.
 _KHS_TO_HS = 1000
+
+# Consecutive XvB-registration failures (while never yet registered) before we raise the dashboard
+# "registration failing" warning (#263). A couple of transient blips during the normal first-share
+# window shouldn't alarm; a configured-but-refusing endpoint should. At one attempt per 10th poll
+# (~5 min) this is ~15 min of sustained failure.
+_XVB_REGISTER_FAIL_ALERT = 3
 
 
 def _parse_proxy_list_worker(w):
@@ -171,23 +200,31 @@ def _merge_direct_stats(workers, results, active_pool_port):
     unreachable (falsy ``extra_stats``) the worker keeps its proxy-derived hashrate/uptime
     and stays online — the proxy already confirmed it's connected and submitting shares —
     rather than dropping out of the hashrate total and reading zero (Fixes #28). Each
-    worker is tagged with ``active_pool`` for the UI badge.
+    worker is tagged with ``active_pool`` for the UI badge, and with ``api_ok`` (True/False) when
+    the worker API was probed so the UI can flag a worker whose direct API is misconfigured /
+    unreachable — distinct from a worker that's simply offline.
     """
     final_workers = []
-    for w, extra_stats in zip(workers, results):
-        if extra_stats:
-            w['uptime'] = extra_stats.get('uptime', w['uptime'])
+    for w, extra_stats in zip(workers, results, strict=False):
+        # api_ok: True (probe succeeded), False (probe failed — surfaced, not swallowed), or unset
+        # (worker we deliberately didn't probe, e.g. an internal/invalid IP per the SSRF guard).
+        api_ok = extra_stats.get("api_ok") if extra_stats else None
+        if api_ok is not None:
+            w["api_ok"] = api_ok
 
-            is_proxy = extra_stats.get('kind') == 'proxy'
+        if api_ok:  # only a successful probe carries uptime + per-miner hashrate
+            w["uptime"] = extra_stats.get("uptime", w["uptime"])
+
+            is_proxy = extra_stats.get("kind") == "proxy"
             hr_scale = _KHS_TO_HS if is_proxy else 1
 
-            hr_total = extra_stats.get('hashrate', {}).get('total', [])
+            hr_total = extra_stats.get("hashrate", {}).get("total", [])
             if isinstance(hr_total, list) and len(hr_total) >= 3:
-                w['h10'] = (hr_total[0] or 0) * hr_scale
-                w['h60'] = (hr_total[1] or 0) * hr_scale
-                w['h15'] = (hr_total[2] or 0) * hr_scale
+                w["h10"] = (hr_total[0] or 0) * hr_scale
+                w["h60"] = (hr_total[1] or 0) * hr_scale
+                w["h15"] = (hr_total[2] or 0) * hr_scale
 
-        w['active_pool'] = active_pool_port
+        w["active_pool"] = active_pool_port
         final_workers.append(w)
     return final_workers
 
@@ -202,14 +239,14 @@ def _aggregate_hashrate(workers):
     total_hr = 0
     total_h10 = 0
     for w in workers:
-        if w.get('status') == 'online':
-            w_hr = w.get('h15', 0)
+        if w.get("status") == "online":
+            w_hr = w.get("h15", 0)
             if w_hr == 0:
-                w_hr = w.get('h60', 0)
+                w_hr = w.get("h60", 0)
             if w_hr == 0:
-                w_hr = w.get('h10', 0)
+                w_hr = w.get("h10", 0)
             total_hr += w_hr
-            total_h10 += w.get('h10', 0)
+            total_h10 += w.get("h10", 0)
     return total_hr, total_h10
 
 
@@ -227,7 +264,7 @@ def _aggregate_window_hashrates(workers):
     """
     totals = {win: 0 for win in _WINDOW_WORKER_KEYS}
     for w in workers:
-        if w.get('status') == 'online':
+        if w.get("status") == "online":
             for win, src in _WINDOW_WORKER_KEYS.items():
                 totals[win] += w.get(src, 0) or 0
     return totals
@@ -260,7 +297,7 @@ class WorkerLifecycle:
       (any positive value is left untouched).
     - ``last_active`` — the last time it was seen online. An offline worker falls off the table once
       it's been inactive longer than ``falloff_sec`` (#182); a reconnect re-adds it. Operates purely
-      on the live proxy-sourced list, never the dead ``known_workers`` path (#144).
+      on the live proxy-sourced worker list.
 
     Pure given (workers, now) plus its accumulated state, so it unit-tests without the data loop.
     Mutates each surviving online worker's ``uptime`` in place and returns the filtered list.
@@ -268,7 +305,7 @@ class WorkerLifecycle:
 
     def __init__(self, falloff_sec):
         self.falloff_sec = falloff_sec
-        self._state = {}   # name -> {"connected_since": float | None, "last_active": float}
+        self._state = {}  # name -> {"connected_since": float | None, "last_active": float}
 
     def update(self, workers, now):
         live = []
@@ -278,18 +315,18 @@ class WorkerLifecycle:
             seen.add(name)
             st = self._state.setdefault(name, {"connected_since": None, "last_active": 0.0})
             if w.get("status") == "online":
-                if st["connected_since"] is None:        # new connection or a reconnect
+                if st["connected_since"] is None:  # new connection or a reconnect
                     st["connected_since"] = now
                 st["last_active"] = now
-                if not w.get("uptime"):                  # no real (direct-API) uptime → track it
+                if not w.get("uptime"):  # no real (direct-API) uptime → track it
                     w["uptime"] = int(now - st["connected_since"])
                 live.append(w)
             else:
-                st["connected_since"] = None             # disconnected — uptime restarts on reconnect
+                st["connected_since"] = None  # disconnected — uptime restarts on reconnect
                 if st["last_active"] == 0.0:
-                    st["last_active"] = now              # first seen already offline
+                    st["last_active"] = now  # first seen already offline
                 if now - st["last_active"] <= self.falloff_sec:
-                    live.append(w)                       # recently-offline rows stay (shown as DOWN)
+                    live.append(w)  # recently-offline rows stay (shown as DOWN)
                 # else: fall off — drop the ghost row
         # Forget ONLY workers the proxy no longer reports at all. A worker that has aged out of the
         # live table but is STILL reported (offline) must be KEPT in state so its `last_active`
@@ -307,6 +344,7 @@ class DataService:
     Core service responsible for aggregating mining statistics from various sources
     (Local collectors, XMRig Proxy, Tari Node, etc.) and maintaining the application state.
     """
+
     def __init__(self, state_manager, proxy_client, xvb_client):
         self.state_manager = state_manager
         self.proxy_client = proxy_client
@@ -321,6 +359,14 @@ class DataService:
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
         )
+        # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
+        # None until the wallet is first entered. Drives the daily re-register cadence below.
+        self._xvb_last_registered = None
+        # Consecutive transient register() failures while never-yet-registered (drives the "failing"
+        # badge), and a latch that stops retrying once the endpoint calls the wallet invalid — a
+        # permanent error that won't fix itself on retry (#263).
+        self._xvb_register_failures = 0
+        self._xvb_invalid_wallet = False
 
         self.latest_data = {
             "workers": [],
@@ -339,7 +385,7 @@ class DataService:
             "workers_rejected": False,
             "miner_released": False,
             "miner_held": False,
-            "timestamp": 0
+            "timestamp": 0,
         }
 
         # Node-down detection + optional worker rejection (Issue #31).
@@ -350,7 +396,8 @@ class DataService:
         # the same docker control proxy as the #31 failover (start/stop only). on_transition surfaces
         # the event into the snapshot so the UI/status can reflect "switched back to Tor".
         self.clearnet_supervisor = ClearnetSyncSupervisor(
-            CLEARNET_STATE_DIR, self.docker_control,
+            CLEARNET_STATE_DIR,
+            self.docker_control,
             on_transition=self._on_clearnet_transition,
         )
         # Per-chain "currently exposed on clearnet" flags, surfaced in the snapshot for the UI/banner.
@@ -401,8 +448,7 @@ class DataService:
         # Readmit only once every node we reject on is confirmed healthy (not merely 'not
         # down'), so a dashboard restart mid-outage doesn't bring workers back to a still-down
         # stack. Tari's health is ignored when it's non-blocking.
-        recovered = self.monero_health.healthy and \
-                    ((not TARI_REQUIRED) or self.tari_health.healthy)
+        recovered = self.monero_health.healthy and ((not TARI_REQUIRED) or self.tari_health.healthy)
         if self.workers_rejected and recovered:
             logger.info(
                 f"Required nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."
@@ -457,12 +503,110 @@ class DataService:
                 f"until synced."
             )
 
+    async def _sync_xvb_stats(self):
+        """
+        Fetch XvB's reported averages (avg_1h/avg_24h/fail_count) over Tor and persist them.
+
+        A failed fetch (Tor timeout, 5xx) returns None — we write NOTHING in that case, leaving the
+        last-good values AND ``last_update`` frozen. That frozen ``last_update`` is exactly what the
+        controller and dashboard read to detect a stale feed and stop steering off a dead number
+        (#311). So "no write on failure" is a correctness precondition, not just an optimisation —
+        if this ever started stamping on failure, the staleness guard would silently never trigger.
+
+        The caller already gated on ENABLE_XVB + the 10th-iteration throttle.
+        """
+        real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
+        if not real_xvb_stats:
+            return  # fetch failed — keep the last reading + last_update frozen so #311 can detect it
+        await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
+        logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)")
+
+    async def _maybe_register_xvb(self, shares, p2pool_stats):
+        """
+        Auto-enter the wallet into the XvB raffle once it's eligible (#263).
+
+        Mining to the XvB pool doesn't enter a wallet — it must be registered against the operator's
+        endpoint, which only takes effect once the wallet has a share in the P2Pool PPLNS window. So
+        we gate on a PPLNS share existing (same window math as the dashboard/algo) and skip silently
+        until then, retrying on the next poll. After the first success we re-register on a daily
+        cadence (XVB_REGISTER_INTERVAL_S): registration is idempotent, and re-running picks up the
+        operator's newer security-token behaviour and re-enters a long-offline miner cleanly.
+
+        The caller already gated on ENABLE_XVB + the 10th-iteration throttle. Edge cases are handled
+        from the endpoint's real contract (see XvbClient.register): "already registered" is the
+        idempotent steady state (success); an invalid wallet is permanent (latch + warn, stop
+        retrying); transient errors escalate to a "failing" badge only after a few attempts.
+        register() routes over Tor.
+        """
+        # Nothing to do if registration is disabled (XVB_SUBMIT_URL off) or the wallet was already
+        # rejected as permanently invalid — both are terminal for this process, skip quietly.
+        if not self.xvb_client.submit_url or self._xvb_invalid_wallet:
+            return
+
+        # PPLNS-share check — mirrors metrics/algo: a share counts if it's within pplns_window
+        # blocks (30s/block on Nano, else 10s) of now.
+        pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
+        pplns_window = p2pool_stats.get("pool", {}).get("pplns_window", DEFAULT_PPLNS_WINDOW)
+        block_time = pplns_block_time(pool_type)
+        if shares_in_pplns_window(shares, pplns_window, block_time) == 0:
+            return  # no eligible share yet — the endpoint would no-op, so don't call it
+
+        now = time.time()
+        if self._xvb_last_registered is not None and (
+            now - self._xvb_last_registered < XVB_REGISTER_INTERVAL_S
+        ):
+            return  # already registered recently; next re-register isn't due yet
+
+        status = await asyncio.to_thread(self.xvb_client.register)
+
+        if status == REG_OK:
+            # Fresh registration OR the idempotent "already registered" steady state — either way the
+            # wallet is in the raffle. Stamp it and clear the transient-failure counter.
+            self._xvb_last_registered = now
+            self._xvb_register_failures = 0
+            await asyncio.to_thread(
+                self.state_manager.update_xvb_stats,
+                registered_at=now,
+                registration_state="registered",
+            )
+            logger.info("External Sync: Registered wallet with XvB raffle ✓")
+        elif status == REG_INVALID:
+            # Permanent: the endpoint won't accept this wallet, and it won't change on retry. Latch
+            # off, warn once, and surface it — don't hammer the endpoint every poll.
+            self._xvb_invalid_wallet = True
+            logger.warning(
+                "XvB registration rejected MONERO_WALLET_ADDRESS as invalid — auto-registration "
+                "disabled. The XvB raffle needs a standard primary Monero address (4…). (#263)"
+            )
+            await asyncio.to_thread(
+                self.state_manager.update_xvb_stats, registration_state="invalid"
+            )
+        elif status == REG_NOT_ELIGIBLE:
+            # The share we see locally hasn't propagated to XvB yet — not a failure, just retry next
+            # poll. Don't count it toward the "failing" escalation.
+            return
+        else:
+            # Transient (network / 5xx / unrecognised). register() already logged specifics. Only
+            # escalate to a dashboard warning once it's *persistently* failing AND we've never
+            # succeeded — a blip while the first share propagates shouldn't alarm. (A failed daily
+            # re-register after a prior success keeps the "registered ✓"; we're still entered.)
+            self._xvb_register_failures += 1
+            if (
+                self._xvb_last_registered is None
+                and self._xvb_register_failures >= _XVB_REGISTER_FAIL_ALERT
+            ):
+                await asyncio.to_thread(
+                    self.state_manager.update_xvb_stats, registration_state="failing"
+                )
+
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
         if ok:
             logger.info("%s returned to Tor after its clearnet initial sync (#234).", name)
         else:
-            logger.warning("%s clearnet→Tor switch did not complete this cycle — will retry (#234).", name)
+            logger.warning(
+                "%s clearnet→Tor switch did not complete this cycle — will retry (#234).", name
+            )
 
     async def run(self):
         """
@@ -470,13 +614,13 @@ class DataService:
         Updates the `latest_data` state and persists historical metrics to the database.
         """
         logger.info("Service Started: Data Collection Loop")
-        
-        iteration_count = 0 
-        
+
+        iteration_count = 0
+
         async with ClientSession() as session:
             worker_client = XMRigWorkerClient(session)
-            tari_client = TariClient(session)
-            
+            tari_client = TariClient()
+
             # P2Pool shares are recorded from the cumulative shares_found counter (#129); None until
             # the first poll baselines it, so we never backfill the whole historical count on startup
             # or re-record what the DB already loaded.
@@ -485,8 +629,8 @@ class DataService:
             while True:
                 try:
                     # 1. Collect Local Statistics (High Frequency Polling)
-                    stratum_raw, worker_configs = get_stratum_stats()
-                    
+                    stratum_raw = get_stratum_stats()
+
                     # 2. Fetch Worker Statistics from XMRig Proxy + normalize the payload.
                     proxy_workers = []
                     try:
@@ -507,13 +651,15 @@ class DataService:
                         logger.error(f"Proxy Summary Fetch Error: {e}")
 
                     # 3. Augment with Direct Worker Stats (Uptime, Hashrate) via Local API
-                    tasks = [worker_client.get_stats(w['ip'], w['name']) for w in proxy_workers]
+                    tasks = [worker_client.get_stats(w["ip"], w["name"]) for w in proxy_workers]
                     worker_results = await asyncio.gather(*tasks)
 
                     current_mode = self.state_manager.get_xvb_stats().get("current_mode", "P2POOL")
                     # Determine active pool port for UI badges based on current Algo mode
                     active_pool_port = "3344" if "XVB" in current_mode else "3333"
-                    final_workers = _merge_direct_stats(proxy_workers, worker_results, active_pool_port)
+                    final_workers = _merge_direct_stats(
+                        proxy_workers, worker_results, active_pool_port
+                    )
                     # 3b. Track per-worker connection lifecycle: fill true uptime for online workers
                     # (#169) and drop stale offline rows past the fall-off window (#182).
                     final_workers = self._lifecycle.update(final_workers, time.time())
@@ -532,10 +678,13 @@ class DataService:
                     current_share_ts = p2pool_stats["pool"].get("last_share_time", 0)
                     current_shares_total = p2pool_stats["pool"].get("shares_found", 0)
                     new_shares, last_known_shares_total = _shares_to_record(
-                        last_known_shares_total, current_shares_total)
+                        last_known_shares_total, current_shares_total
+                    )
                     if new_shares > 0 and current_share_ts > 0:
                         difficulty = p2pool_stats["pool"].get("difficulty", 0)
-                        await asyncio.to_thread(self.state_manager.add_shares, new_shares, current_share_ts, difficulty)
+                        await asyncio.to_thread(
+                            self.state_manager.add_shares, new_shares, current_share_ts, difficulty
+                        )
 
                     monero_sync = await get_monero_sync_status()
                     tari_sync = await tari_client.get_sync_status()
@@ -547,101 +696,107 @@ class DataService:
                     # (that's what #31's node-down handling is for). Reading the raw signal
                     # also avoids a deadlock: the height override is fed by p2pool's stats
                     # file, which reads 0 while p2pool is held — falsely "syncing" forever.
-                    monero_synced = monero_sync.get('reachable', True) and not monero_sync.get('is_syncing', False)
-                    tari_synced = tari_sync.get('reachable', True) and not tari_sync.get('is_syncing', False)
+                    monero_synced = monero_sync.get("reachable", True) and not monero_sync.get(
+                        "is_syncing", False
+                    )
+                    tari_synced = tari_sync.get("reachable", True) and not tari_sync.get(
+                        "is_syncing", False
+                    )
 
                     # Auto-transition a clearnet initial-sync node back to Tor once it's synced
                     # (#234). Reuses the synced signals above; the supervisor writes a persistent
                     # marker + restarts the daemon (which then comes up Tor-only). Returns whether
                     # each chain is still EXPOSED on clearnet, for the UI banner.
                     monero_clearnet_exposed = await self.clearnet_supervisor.maybe_transition(
-                        "monero", "monerod", MONERO_CLEARNET_SYNC, monero_synced)
+                        "monero", "monerod", MONERO_CLEARNET_SYNC, monero_synced
+                    )
                     tari_clearnet_exposed = await self.clearnet_supervisor.maybe_transition(
-                        "tari", "tari", TARI_CLEARNET_SYNC, tari_synced)
+                        "tari", "tari", TARI_CLEARNET_SYNC, tari_synced
+                    )
                     self.clearnet_sync_state = {
                         "monero": monero_clearnet_exposed,
                         "tari": tari_clearnet_exposed,
                         "active": monero_clearnet_exposed or tari_clearnet_exposed,
                     }
 
-                    # Determine effective Tari status for UI display
-                    tari_active = tari_stats.get('active', False)
-                    tari_status_str = tari_stats.get('status', 'Waiting...') if tari_active else 'Waiting...'
-
                     # Apply Sync Logic Overrides
                     # 1. Monero Sync Check
-                    if network_stats.get('height', 0) == 0:
-                        monero_sync['is_syncing'] = True
-                        if 'percent' not in monero_sync:
-                            monero_sync.update({'percent': 0, 'current': 0, 'target': 1})
-                    
+                    if network_stats.get("height", 0) == 0:
+                        monero_sync["is_syncing"] = True
+                        if "percent" not in monero_sync:
+                            monero_sync.update({"percent": 0, "current": 0, "target": 1})
+
                     # 2. Global Sync Logic. monerod always drives the full-screen Sync Mode;
                     # Tari does so only when it's required (Issue #51). A non-blocking Tari
                     # (dashboard.tari_required:false) keeps the operational view and surfaces
                     # its progress in the Tari panel instead of hijacking the whole dashboard.
-                    is_monero_syncing = monero_sync.get('is_syncing', False)
-                    is_tari_syncing = tari_sync.get('is_syncing', False)
+                    is_monero_syncing = monero_sync.get("is_syncing", False)
+                    is_tari_syncing = tari_sync.get("is_syncing", False)
                     global_sync = is_monero_syncing or (is_tari_syncing and TARI_REQUIRED)
                     # True when Tari is syncing but we're staying in the operational view — the
                     # UI shows a "Tari syncing" indicator rather than the takeover screen.
                     tari_syncing_passive = is_tari_syncing and not global_sync
 
                     if global_sync:
-                        if not is_monero_syncing and 'percent' not in monero_sync:
-                            h = network_stats.get('height', 1)
-                            monero_sync.update({'percent': 100, 'current': h, 'target': h})
-                        if not is_tari_syncing and 'percent' not in tari_sync:
-                            h = tari_stats.get('height', 0)
-                            tari_sync.update({'percent': 100, 'current': h, 'target': h})
+                        if not is_monero_syncing and "percent" not in monero_sync:
+                            h = network_stats.get("height", 1)
+                            monero_sync.update({"percent": 100, "current": h, "target": h})
+                        if not is_tari_syncing and "percent" not in tari_sync:
+                            h = tari_stats.get("height", 0)
+                            tari_sync.update({"percent": 100, "current": h, "target": h})
 
                     # 3. Node-down detection + worker rejection (Issue #31). Debounce each
                     # node's live reachability into a stable DOWN flag; monerod-down always
                     # rejects, Tari-down rejects only when required (handled in the helper).
-                    monero_down = self.monero_health.update(monero_sync.get('reachable', True))
-                    tari_down = self.tari_health.update(tari_sync.get('reachable', True))
-                    monero_sync['down'] = monero_down
-                    tari_sync['down'] = tari_down
+                    monero_down = self.monero_health.update(monero_sync.get("reachable", True))
+                    tari_down = self.tari_health.update(tari_sync.get("reachable", True))
+                    monero_sync["down"] = monero_down
+                    tari_sync["down"] = tari_down
 
                     # 4. Sync gate (Issue #35): hold p2pool + xmrig-proxy until the required
                     # chain(s) first sync, then release. monerod must be synced; Tari must be
                     # synced too unless it's non-blocking. #31's runtime failover only applies
                     # once released — before that there are no workers to fail over, and it
                     # keeps the two features from both driving xmrig-proxy.
-                    await self._apply_sync_gate(monero_synced and (tari_synced or not TARI_REQUIRED))
+                    await self._apply_sync_gate(
+                        monero_synced and (tari_synced or not TARI_REQUIRED)
+                    )
                     if self.miner_released:
                         await self._apply_worker_rejection(monero_down, tari_down)
 
                     # Fetch fresh shares list to populate UI
                     shares_list = await asyncio.to_thread(self.state_manager.get_shares)
 
-                    self.latest_data.update({
-                        "workers": final_workers,
-                        "proxy_summary": proxy_summary,
-                        "shares": shares_list,
-                        "total_live_h15": total_hr,
-                        "total_live_h10": total_h10,
-                        "pool": p2pool_stats,
-                        "network": network_stats,
-                        "tari": tari_stats,
-                        "monero_sync": monero_sync,
-                        "tari_sync": tari_sync,
-                        "global_sync": global_sync,
-                        "tari_syncing_passive": tari_syncing_passive,
-                        "workers_rejected": self.workers_rejected,
-                        "miner_released": self.miner_released,
-                        "miner_held": self.miner_held,
-                        "clearnet_sync": self.clearnet_sync_state,
-                        "system": {
-                            "disk": get_disk_usage(),
-                            "hugepages": get_hugepages_status(),
-                            "memory": get_memory_usage(),
-                            "load": get_load_average(),
-                            "cpu_percent": get_cpu_usage()
-                        },
-                        "stratum": stratum_raw,
-                        "timestamp": time.time()
-                    })
-                    
+                    self.latest_data.update(
+                        {
+                            "workers": final_workers,
+                            "proxy_summary": proxy_summary,
+                            "shares": shares_list,
+                            "total_live_h15": total_hr,
+                            "total_live_h10": total_h10,
+                            "pool": p2pool_stats,
+                            "network": network_stats,
+                            "tari": tari_stats,
+                            "monero_sync": monero_sync,
+                            "tari_sync": tari_sync,
+                            "global_sync": global_sync,
+                            "tari_syncing_passive": tari_syncing_passive,
+                            "workers_rejected": self.workers_rejected,
+                            "miner_released": self.miner_released,
+                            "miner_held": self.miner_held,
+                            "clearnet_sync": self.clearnet_sync_state,
+                            "system": {
+                                "disk": get_disk_usage(),
+                                "hugepages": get_hugepages_status(),
+                                "memory": get_memory_usage(),
+                                "load": get_load_average(),
+                                "cpu_percent": get_cpu_usage(),
+                            },
+                            "stratum": stratum_raw,
+                            "timestamp": time.time(),
+                        }
+                    )
+
                     # 6. Persist Historical Data
                     is_xvb = "XVB" in current_mode
                     p2pool_hr = 0 if is_xvb else total_hr
@@ -657,9 +812,13 @@ class DataService:
                     }
 
                     await asyncio.to_thread(
-                        self.state_manager.update_history, total_hr, p2pool_hr, xvb_hr, window_splits
+                        self.state_manager.update_history,
+                        total_hr,
+                        p2pool_hr,
+                        xvb_hr,
+                        window_splits,
                     )
-                    
+
                     # Create a lightweight snapshot (exclude shares entirely as they are safely in DB)
                     snapshot_data = self.latest_data.copy()
                     snapshot_data.pop("shares", None)
@@ -668,17 +827,20 @@ class DataService:
                     # 7. External XvB stats sync over Tor (#163), throttled to every 10th iteration,
                     # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.
                     if ENABLE_XVB and iteration_count % 10 == 0:
-                        real_xvb_stats = await asyncio.to_thread(self.xvb_client.get_stats)
-                        if real_xvb_stats:
-                            await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
-                            logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)")
+                        await self._sync_xvb_stats()
+
+                        # 7b. XvB raffle auto-registration (#263). Rides the same throttle/egress as
+                        # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS
+                        # share existing — before then the endpoint is a no-op, so we just retry.
+                        await self._maybe_register_xvb(shares_list, p2pool_stats)
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to
                     # hourly and returns the cached result; surfaced as state.update for the header badge.
                     if self.update_checker.enabled:
                         self.latest_data["update"] = await asyncio.to_thread(
-                            self.update_checker.maybe_check, time.time())
+                            self.update_checker.maybe_check, time.time()
+                        )
 
                     iteration_count += 1
                 except Exception as e:
