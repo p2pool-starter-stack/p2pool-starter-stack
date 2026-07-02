@@ -71,6 +71,18 @@ assert_num_gt() {
     if [ -n "$2" ] && [ "$2" -gt "$3" ] 2>/dev/null; then it_pass "$1"; else it_fail "$1" "expected > $3, got [$2]"; fi
 }
 
+# Classify bench-verify-egress.sh output: ok | leak | inconclusive.
+# "inconclusive" (neither the OK marker nor a leak line) means the verifier never produced a
+# verdict — e.g. the script wasn't found under a release-bundle --dir. That MUST NOT read as a
+# leak: a privacy check that can't run and a detected leak are different failures.
+egress_verdict() {
+    case "$1" in
+    *"[verify-egress] OK"*) printf 'ok' ;;
+    *LEAK* | *✗*) printf 'leak' ;;
+    *) printf 'inconclusive' ;;
+    esac
+}
+
 # --- Config rendering (pure) ------------------------------------------------
 # Map a space-separated list of `dotted.path=value` overrides into a jq program that applies
 # them to a config.json. Values are typed: true/false -> boolean, integers -> number,

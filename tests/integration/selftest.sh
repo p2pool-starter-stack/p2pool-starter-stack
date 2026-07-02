@@ -215,6 +215,12 @@ assert_eq "state of 'missing none'" "$(svc_state_of 'missing none')" "missing"
 assert_eq "health of 'running unhealthy'" "$(svc_health_of 'running unhealthy')" "unhealthy"
 assert_eq "state of 'exited none'" "$(svc_state_of 'exited none')" "exited"
 
+echo "== egress_verdict: clean / leak / verifier-couldn't-run are distinct =="
+assert_eq "OK marker -> ok" "$(egress_verdict $'poll 1/3\n[verify-egress] OK')" "ok"
+assert_eq "leak line -> leak" "$(egress_verdict $'  ✗ p2pool: 2 PERSISTENT PUBLIC connection(s) — CLEARNET LEAK:')" "leak"
+assert_eq "script-not-found -> inconclusive" "$(egress_verdict $'bash: bench-verify-egress.sh: No such file or directory')" "inconclusive"
+assert_eq "empty output -> inconclusive" "$(egress_verdict '')" "inconclusive"
+
 echo "== assertion helpers: counters behave =="
 _p="$IT_PASS"
 _f="$IT_FAIL"
