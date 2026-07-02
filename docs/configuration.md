@@ -106,7 +106,6 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `workers.api_port` | `8080` | TCP port the worker xmrig API listens on. Change only if your miners expose the API on a non-standard port. |
 | `healthchecks.enabled` | `false` | Turn on the optional [Healthchecks.io dead-man's switch](monitoring.md) — get alerted when your host stops responding (power loss, crash), even when it can't alert you itself. When off, nothing pings. |
 | `healthchecks.ping_url` | _(blank)_ | The ping URL from Healthchecks.io (e.g. `https://hc-ping.com/<uuid>`). Required when `enabled`. Treated as a secret — stored in the owner-only `.env`. See [Monitoring & Alerting](monitoring.md). |
-| `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid rather than a full URL; override it to point at a **self-hosted** Healthchecks instance. |
 | `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (the loop pings at most this often). Keep your Healthchecks **period + grace** comfortably above it. |
 | `healthchecks.tor` | `true` | Route the ping over the stack's Tor SOCKS proxy so `hc-ping.com` sees a Tor exit, not your host IP. Set `false` to ping directly over clearnet — required for a self-hosted instance on your LAN (Tor can't reach a private address). See [Monitoring › Privacy note](monitoring.md#privacy-note). |
 

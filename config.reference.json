@@ -79,7 +79,6 @@
     "healthchecks": {
         "enabled": false,
         "ping_url": "",
-        "base_url": "https://hc-ping.com",
         "interval_seconds": 60,
         "tor": true
     }

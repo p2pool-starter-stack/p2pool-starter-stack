@@ -97,9 +97,9 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   alerting (a node down while the box is up) is out of scope, handled separately by the Telegram
   alerter (#121). The ping is **routed over Tor by default** (`healthchecks.tor`, reusing the
   shared bridge SOCKS) so `hc-ping.com` sees a Tor exit, not your host IP; set
-  `healthchecks.tor: false` for a LAN self-hosted instance. Supports self-hosted instances via
-  `base_url`, and fails silently when offline / Tor down. Manual setup (paste the ping URL; the
-  URL is stored as a secret in the owner-only `.env`). See
+  `healthchecks.tor: false` for a LAN self-hosted instance. Self-hosted instances work the same
+  way — paste their full URL — and it fails silently when offline / Tor down. Manual setup (paste
+  the ping URL; the URL is stored as a secret in the owner-only `.env`). See
   [`docs/monitoring.md`](docs/monitoring.md) (#79).
 - **Optional clearnet initial sync (#183).** A default-off, per-component opt-in
   (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`) that lets a node do its **one-time

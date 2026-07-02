@@ -6,7 +6,7 @@ from unittest.mock import patch
 import requests
 
 import mining_dashboard.service.healthchecks as hc_mod
-from mining_dashboard.service.healthchecks import HealthchecksClient, _resolve_ping_url
+from mining_dashboard.service.healthchecks import HealthchecksClient
 
 
 class _Clock:
@@ -23,46 +23,31 @@ def _client(clock=None, **overrides):
     cfg = dict(
         enabled=True,
         ping_url="https://hc-ping.com/abc",
-        base_url="https://hc-ping.com",
         interval_seconds=60,
     )
     cfg.update(overrides)
     return HealthchecksClient(clock=clock or _Clock(), **cfg)
 
 
-class TestResolvePingUrl:
-    def test_full_https_url_used_as_is(self):
-        assert (
-            _resolve_ping_url("https://hc-ping.com/uuid", "https://hc-ping.com")
-            == "https://hc-ping.com/uuid"
-        )
+class TestUrlResolution:
+    # Paste the full URL Healthchecks.io shows you (hosted or self-hosted); anything that isn't an
+    # http(s) URL is treated as unset (base_url / bare-uuid support was dropped as redundant).
+    def test_full_url_used_as_is(self):
+        assert _client(ping_url="https://hc-ping.com/uuid").url == "https://hc-ping.com/uuid"
 
-    def test_full_http_url_used_as_is(self):
-        assert (
-            _resolve_ping_url("http://hc.local/ping/uuid", "https://hc-ping.com")
-            == "http://hc.local/ping/uuid"
-        )
+    def test_self_hosted_full_url_used_as_is(self):
+        assert _client(ping_url="http://hc.local/ping/uuid").url == "http://hc.local/ping/uuid"
 
     def test_trailing_slash_stripped(self):
-        assert (
-            _resolve_ping_url("https://hc-ping.com/uuid/", "https://hc-ping.com")
-            == "https://hc-ping.com/uuid"
-        )
+        assert _client(ping_url="https://hc-ping.com/uuid/").url == "https://hc-ping.com/uuid"
 
-    def test_bare_uuid_joined_with_default_base(self):
-        assert _resolve_ping_url("abc-123", "https://hc-ping.com") == "https://hc-ping.com/abc-123"
+    def test_blank_or_none_is_unset(self):
+        assert _client(ping_url="").url == ""
+        assert _client(ping_url="   ").url == ""
+        assert _client(ping_url=None).url == ""
 
-    def test_bare_uuid_joined_with_selfhosted_base(self):
-        # base_url override is how a self-hosted instance is supported with a bare uuid.
-        assert (
-            _resolve_ping_url("abc-123", "https://hc.example.com/ping/")
-            == "https://hc.example.com/ping/abc-123"
-        )
-
-    def test_blank_and_none_resolve_to_empty(self):
-        assert _resolve_ping_url("", "https://hc-ping.com") == ""
-        assert _resolve_ping_url("   ", "https://hc-ping.com") == ""
-        assert _resolve_ping_url(None, "https://hc-ping.com") == ""
+    def test_bare_uuid_rejected_as_unset(self):
+        assert _client(ping_url="abc-123").url == ""
 
 
 class TestPingDisabledOrUnconfigured:
@@ -73,7 +58,7 @@ class TestPingDisabledOrUnconfigured:
         get.assert_not_called()
 
     def test_enabled_without_url_warns_once(self, caplog):
-        c = _client(ping_url="", base_url="https://hc-ping.com")
+        c = _client(ping_url="")
         with (
             patch.object(hc_mod.requests, "get") as get,
             caplog.at_level(logging.WARNING, logger="Healthchecks"),
@@ -87,8 +72,8 @@ class TestPingDisabledOrUnconfigured:
 
 class TestPingSuccess:
     def test_healthy_ping_hits_the_url(self):
-        # Pure liveness: every ping hits the base URL (no /fail path — health-aware was dropped;
-        # node-health alerting is the Telegram alerter's job, #121).
+        # Pure liveness: every ping hits the configured URL (no /fail path — health-aware was
+        # dropped; node-health alerting is the Telegram alerter's job, #121).
         c = _client()
         with patch.object(hc_mod.requests, "get") as get:
             assert c.ping() is True
@@ -188,7 +173,6 @@ class TestFromConfig:
         with (
             patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True),
             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
-            patch.object(hc_mod, "HEALTHCHECKS_BASE_URL", "https://hc-ping.com"),
             patch.object(hc_mod, "HEALTHCHECKS_INTERVAL_SEC", 120),
         ):
             c = HealthchecksClient.from_config()

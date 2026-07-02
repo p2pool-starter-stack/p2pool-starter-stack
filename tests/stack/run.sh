@@ -1513,12 +1513,11 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
 
-# Healthchecks.io (#79): absent => disabled with the hosted base_url default.
+# Healthchecks.io (#79): absent => disabled, Tor on by default.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "healthchecks default disabled" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_ENABLED)" "false"
-assert_eq "healthchecks default base_url" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_BASE_URL)" "https://hc-ping.com"
 assert_eq "healthchecks tor on by default" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_TOR)" "true"
 
 # An enabled config propagates the ping URL + tuning knobs verbatim to .env; tor:false opts out.

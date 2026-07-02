@@ -101,8 +101,7 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
 | Key | Default | Description |
 |---|---|---|
 | `healthchecks.enabled` | `false` | Master switch. When off, the stack never pings and logs nothing. |
-| `healthchecks.ping_url` | *(blank)* | The ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>`. A bare uuid/slug is also accepted and is joined onto `base_url`. Treated as a secret (stored in the owner-only `.env`). |
-| `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid (not a full URL). Override it to point at a [self-hosted](#self-hosting-your-own-instance) instance. |
+| `healthchecks.ping_url` | *(blank)* | The full ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>` (or your [self-hosted](#self-hosting-your-own-instance) instance's URL). Treated as a secret (stored in the owner-only `.env`). |
 | `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (default **1 minute**). The loop runs every 30s, so a value below that just pings every cycle. Match your Healthchecks **period** to this and give the **grace** enough slack for a restart (the recommended **1-minute period / 5-minute grace** above). |
 | `healthchecks.tor` | `true` | Route the ping through the stack's **Tor** SOCKS proxy (the same one the XvB fetch uses), so Healthchecks.io sees a Tor exit instead of your host IP. Set `false` for a **self-hosted instance on your LAN** — Tor can't reach a private `192.168.x`/`10.x`/`localhost` address — or if `hc-ping.com` is ever Tor-blocked. See [Privacy note](#privacy-note). |
 
@@ -127,9 +126,6 @@ carries your host, so nothing else is needed:
     }
 }
 ```
-
-Alternatively, store the bare uuid in `ping_url` and set `base_url` to your instance's ping
-prefix (e.g. `https://hc.example.com/ping`).
 
 ---
 

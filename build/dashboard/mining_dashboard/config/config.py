@@ -217,13 +217,10 @@ NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 # Default OFF: with HEALTHCHECKS_ENABLED unset nothing ever pings and there are no errors.
 HEALTHCHECKS_ENABLED = os.environ.get("HEALTHCHECKS_ENABLED", "false").strip().lower() == "true"
 
-# Manual mode (MVP): paste the full ping URL Healthchecks.io shows you, e.g.
-# https://hc-ping.com/<uuid>. A bare uuid/slug is also accepted and is joined onto
-# HEALTHCHECKS_BASE_URL — which is what `base_url` is for: pointing at a *self-hosted*
-# Healthchecks instance instead of the hosted hc-ping.com. No API key is stored (model B
-# auto-provisioning is intentionally out of scope).
+# Manual mode: paste the full ping URL Healthchecks.io shows you, e.g.
+# https://hc-ping.com/<uuid>. A self-hosted instance works the same way — paste its full URL,
+# which already carries the host. No API key is stored (auto-provisioning is out of scope).
 HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
-HEALTHCHECKS_BASE_URL = os.environ.get("HEALTHCHECKS_BASE_URL", "https://hc-ping.com").strip()
 
 # How often to ping. The loop runs every UPDATE_INTERVAL, so this is a throttle floor — a
 # value below UPDATE_INTERVAL just pings every cycle. Set your Healthchecks period + grace

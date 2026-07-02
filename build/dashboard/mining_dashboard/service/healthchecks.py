@@ -28,7 +28,6 @@ import time
 import requests
 
 from mining_dashboard.config.config import (
-    HEALTHCHECKS_BASE_URL,
     HEALTHCHECKS_ENABLED,
     HEALTHCHECKS_INTERVAL_SEC,
     HEALTHCHECKS_PING_URL,
@@ -42,27 +41,6 @@ logger = logging.getLogger("Healthchecks")
 _PING_TIMEOUT_SEC = 10
 
 
-def _resolve_ping_url(ping_url, base_url):
-    """Resolve the configured ping URL into a full success endpoint, or ``""`` if unset.
-
-    Two accepted shapes, so the same config works for hosted and self-hosted instances:
-
-    - A full ``http(s)://...`` URL (what Healthchecks.io shows you) is used as-is. This already
-      carries the host, so self-hosted is supported by pasting the self-hosted URL — no
-      ``base_url`` needed.
-    - A bare uuid/slug is joined onto ``base_url`` (default ``https://hc-ping.com``; override it
-      to point at a self-hosted instance, e.g. ``https://hc.example.com/ping``).
-
-    A trailing slash is stripped so the stored URL is canonical.
-    """
-    ping_url = (ping_url or "").strip()
-    if not ping_url:
-        return ""
-    if ping_url.startswith(("http://", "https://")):
-        return ping_url.rstrip("/")
-    return (base_url or "").rstrip("/") + "/" + ping_url.lstrip("/")
-
-
 class HealthchecksClient:
     """Pings a Healthchecks.io check on a throttle; safe to call every loop cycle."""
 
@@ -70,13 +48,16 @@ class HealthchecksClient:
         self,
         enabled,
         ping_url,
-        base_url,
         interval_seconds,
         tor_proxy=None,
         clock=time.monotonic,
     ):
         self.enabled = bool(enabled)
-        self.url = _resolve_ping_url(ping_url, base_url)
+        # Paste the full ping URL Healthchecks.io shows you (hosted or self-hosted — it already
+        # carries the host). Anything that isn't an http(s) URL is treated as unset, so `ping()`
+        # warns once instead of silently failing on a bad value.
+        url = (ping_url or "").strip()
+        self.url = url.rstrip("/") if url.startswith(("http://", "https://")) else ""
         self.interval = max(0, int(interval_seconds or 0))
         # A requests proxies dict when routing over Tor, else None (direct clearnet ping). Reuses the
         # bridge Tor SOCKS the XvB fetch uses; socks5h so hc-ping.com's host resolves through Tor too.
@@ -98,7 +79,6 @@ class HealthchecksClient:
         return cls(
             enabled=HEALTHCHECKS_ENABLED,
             ping_url=HEALTHCHECKS_PING_URL,
-            base_url=HEALTHCHECKS_BASE_URL,
             interval_seconds=HEALTHCHECKS_INTERVAL_SEC,
             tor_proxy=HEALTHCHECKS_TOR_PROXY,
         )
