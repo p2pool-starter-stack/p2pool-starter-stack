@@ -186,14 +186,14 @@ Use a **separate** check for the host timer if you want to tell "the host is up"
 
 ## Verifying & troubleshooting
 
-- **The check never goes green.** Confirm `enabled` is `true` and you ran `./pithead apply`.
-  Check the dashboard logs (`./pithead logs dashboard`) for a `Healthchecks.io dead-man's
-  switch enabled` line at startup; if you see `Healthchecks enabled but no ping_url
-  configured`, the URL is missing. Ping failures themselves are logged at debug level only.
+- **The check never goes green.** Confirm `ping_url` is set and you ran `./pithead apply`, then
+  check the dashboard logs (`./pithead logs dashboard`) for a `Healthchecks.io dead-man's switch
+  enabled` line at startup — if it's absent, no ping URL is configured. The ping is always over
+  Tor, so a URL your Tor exit can't reach (e.g. a LAN-only self-hosted instance) will never land;
+  ping failures themselves are logged at debug level only.
 - **Test it end to end.** Stop the stack (`./pithead stop`) and wait for the period + grace to
   elapse — you should get the alert. Start it again and the check recovers.
-- **Too many false alarms.** Increase the **period** and/or **grace** on Healthchecks.io, or
-  raise `interval_seconds` if you've set it very low.
+- **Too many false alarms.** Increase the **period** and/or **grace** on Healthchecks.io.
 
 ---
 
