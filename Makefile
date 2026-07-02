@@ -41,7 +41,7 @@ test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml ## Lint/format-check every surface
+lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-proto lint-toml ## Lint/format-check every surface
 
 lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
 	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
@@ -60,6 +60,9 @@ lint-yaml: ## yamllint over all tracked YAML (config: .yamllint)
 
 lint-md: ## markdownlint over all Markdown (config: .markdownlint-cli2.jsonc)
 	npx --yes markdownlint-cli2@0.18.1
+
+lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house voice: docs/STYLE.md)
+	bash scripts/lint-docs-voice.sh
 
 lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
 	cd build/dashboard/mining_dashboard/client/tari/proto && \
