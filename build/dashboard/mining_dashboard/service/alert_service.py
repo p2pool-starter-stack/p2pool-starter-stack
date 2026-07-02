@@ -65,6 +65,8 @@ class AlertService:
     EVT_SYNC_FINISHED = "sync_finished"
     EVT_DISK_SPACE = "disk_space"
     EVT_DB_UNHEALTHY = "db_unhealthy"
+    EVT_XVB_NO_SHARE = "xvb_no_share"
+    EVT_CLEARNET_EXPOSED = "clearnet_exposed"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -85,6 +87,8 @@ class AlertService:
         self._prev_released = None
         self._prev_disk_level = None
         self._prev_db_healthy = None
+        self._prev_xvb_has_share = None
+        self._prev_clearnet_active = None
 
     @property
     def enabled(self):
@@ -101,6 +105,9 @@ class AlertService:
         workers_expected,
         disk_percent=0,
         db_healthy=True,
+        xvb_enabled=False,
+        shares_in_window=0,
+        clearnet_active=False,
         now=None,
     ):
         """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
@@ -143,6 +150,10 @@ class AlertService:
         # --- Host health: data disk filling up, dashboard DB write failing ---
         alerts += self._disk_edges(disk_percent)
         alerts += self._db_edges(db_healthy)
+
+        # --- Revenue / privacy: XvB PPLNS-share gate, clearnet-sync exposure ---
+        alerts += self._xvb_share_edges(xvb_enabled, shares_in_window)
+        alerts += self._clearnet_edges(clearnet_active)
 
         return [(evt, text) for evt, text in alerts if self.notifier.event_enabled(evt)]
 
@@ -212,6 +223,65 @@ class AlertService:
                 )
             ]
         return [(self.EVT_DB_UNHEALTHY, self._fmt("\U0001f7e2 Dashboard DB writes recovered."))]
+
+    def _xvb_share_edges(self, xvb_enabled, shares_in_window):
+        """Alert on losing / regaining the PPLNS share XvB needs to bank a raffle win (#158).
+
+        Only meaningful while XvB is on. A donating rig with **no** share in the PPLNS window has
+        its wins skipped (and accrues a fail) regardless of tier — a make-or-break, revenue-costing
+        state worth a ping."""
+        if not xvb_enabled:
+            # No XvB → the share gate doesn't apply; drop the baseline so turning XvB back on later
+            # doesn't replay a stale edge.
+            self._prev_xvb_has_share = None
+            return []
+        has_share = shares_in_window > 0
+        prev = self._prev_xvb_has_share
+        self._prev_xvb_has_share = has_share
+        if prev is None or has_share == prev:
+            return []
+        if not has_share:
+            return [
+                (
+                    self.EVT_XVB_NO_SHARE,
+                    self._fmt(
+                        "⚠ No PPLNS share — XvB raffle wins are skipped until you land one "
+                        "(donations are wasted meanwhile)."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_XVB_NO_SHARE,
+                self._fmt("\U0001f7e2 PPLNS share restored — XvB raffle wins count again."),
+            )
+        ]
+
+    def _clearnet_edges(self, clearnet_active):
+        """Alert while a node is doing its initial sync over CLEARNET (#183): the host IP is exposed
+        to that chain's P2P network until it finishes (it reverts to Tor automatically, #234)."""
+        prev = self._prev_clearnet_active
+        self._prev_clearnet_active = clearnet_active
+        if prev is None or clearnet_active == prev:
+            return []
+        if clearnet_active:
+            return [
+                (
+                    self.EVT_CLEARNET_EXPOSED,
+                    self._fmt(
+                        "⚠ Clearnet initial sync ACTIVE — this host's IP is exposed to the chain's "
+                        "P2P network until it finishes syncing (reverts to Tor automatically)."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_CLEARNET_EXPOSED,
+                self._fmt(
+                    "\U0001f7e2 Back on Tor-only — clearnet sync finished, host IP no longer exposed."
+                ),
+            )
+        ]
 
     def _fmt(self, text):
         return f"[{self.host_label}] {text}" if self.host_label else text

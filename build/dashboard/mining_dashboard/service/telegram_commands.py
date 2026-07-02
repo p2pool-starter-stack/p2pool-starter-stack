@@ -11,6 +11,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
 )
 from mining_dashboard.helper.utils import format_duration, format_hashrate
+from mining_dashboard.service.earnings import xmr_per_hs_day
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
 
@@ -25,7 +26,7 @@ POLL_ERROR_BACKOFF_SECONDS = 15
 
 # The commands the bot answers. All are read-only status queries — the bot can never change the
 # stack (start/stop/apply live on the CLI), so a leaked chat can at worst read status, not act.
-COMMANDS = ("status", "hashrate", "workers", "sync", "system", "pool", "xvb", "help")
+COMMANDS = ("status", "hashrate", "workers", "sync", "system", "pool", "xvb", "earnings", "help")
 
 HELP_TEXT = (
     "Pithead bot — commands:\n"
@@ -36,6 +37,7 @@ HELP_TEXT = (
     "/system — host disk, RAM, CPU, HugePages\n"
     "/pool — P2Pool sidechain + Monero network\n"
     "/xvb — XvB mode, tier, and raffle eligibility\n"
+    "/earnings — estimated P2Pool XMR per day\n"
     "/help — this message"
 )
 
@@ -203,6 +205,26 @@ def format_xvb(metrics, host_label=""):
     return "\n".join(lines)
 
 
+def format_earnings(metrics, network, host_label=""):
+    """Estimated P2Pool XMR earnings — the answer to '/earnings'. Reuses the same rate the dashboard
+    calculator uses (``xmr_per_hs_day``) applied to the displayed P2Pool 1h-average hashrate; Tari
+    merge-mining earnings are a separate thing and not included (#12)."""
+    reward_atomic = (network or {}).get("reward", 0) or 0
+    coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
+    if coeff_day <= 0:
+        return f"{_prefix(host_label)}\U0001f4b0 Earnings estimate unavailable (waiting on network data)."
+    daily = coeff_day * metrics.p2pool_1h
+    return "\n".join(
+        [
+            f"{_prefix(host_label)}\U0001f4b0 Estimated P2Pool earnings",
+            f"Hashrate (P2Pool 1h): {format_hashrate(metrics.p2pool_1h)}",
+            f"~{daily:.6f} XMR/day",
+            f"~{daily * 30:.5f} XMR/30d",
+            "Estimate only — excludes XvB-donated hashrate and Tari merge-mining.",
+        ]
+    )
+
+
 class TelegramCommandBot:
     """
     On-demand Telegram command interface (Issue #45) — the interactive half of the operator bot.
@@ -288,6 +310,8 @@ class TelegramCommandBot:
             return format_pool(metrics, self.host_label)
         if cmd == "xvb":
             return format_xvb(metrics, self.host_label)
+        if cmd == "earnings":
+            return format_earnings(metrics, data.get("network", {}), self.host_label)
         return None
 
     async def run(self):

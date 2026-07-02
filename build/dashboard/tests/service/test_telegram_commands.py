@@ -78,6 +78,7 @@ def _metrics(**over):
         ("/system", "system"),
         ("/pool", "pool"),
         ("/xvb", "xvb"),
+        ("/earnings", "earnings"),
         ("/status@PitheadBot", "status"),  # group @mention suffix stripped
         ("/workers now please", "workers"),  # only the first word matters
         ("/help", "help"),
@@ -206,6 +207,18 @@ def test_xvb_disabled():
     assert "disabled" in tc.format_xvb(_metrics(xvb_enabled=False))
 
 
+def test_earnings_estimate():
+    # network reward present + a real difficulty → a positive daily figure.
+    out = tc.format_earnings(_metrics(p2pool_1h=8000.0), {"reward": 600_000_000_000})
+    assert "XMR/day" in out
+    assert "XMR/30d" in out
+
+
+def test_earnings_unavailable_without_network_data():
+    out = tc.format_earnings(_metrics(), {})  # no reward → coeff 0
+    assert "unavailable" in out
+
+
 def test_host_label_prefix():
     assert tc.format_sync(_metrics(), host_label="rig-box").startswith("[rig-box] ")
     # The placeholder is never printed.
@@ -254,6 +267,11 @@ def test_reply_for_pool_and_xvb(monkeypatch):
     bot = _bot(monkeypatch, latest_data={}, pool_type="Nano")
     assert "P2Pool Nano" in bot.reply_for("/pool")
     assert "XvB" in bot.reply_for("/xvb")
+
+
+def test_reply_for_earnings(monkeypatch):
+    bot = _bot(monkeypatch, latest_data={"network": {"reward": 600_000_000_000}}, p2pool_1h=8000.0)
+    assert "XMR/day" in bot.reply_for("/earnings")
 
 
 # --- enabled gating -----------------------------------------------------------------------

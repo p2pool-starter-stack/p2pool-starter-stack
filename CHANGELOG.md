@@ -101,10 +101,11 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   owner-only `.env`. See [`docs/monitoring.md`](docs/monitoring.md) (#79).
 - **Telegram operator bot — push alerts + on-demand status** (#121, #45): the dashboard can push a
   high-value set of operational alerts to Telegram — **node down / recovered**, **worker offline /
-  back online**, **new worker joined / left**, **sync finished**, **data disk filling up**, and
-  **dashboard DB write failing** — and answer status commands on demand: **`/status`**,
-  **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**, **`/xvb`**, and
-  **`/help`**. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
+  back online**, **new worker joined / left**, **sync finished**, **data disk filling up**,
+  **dashboard DB write failing**, **no PPLNS share while donating to XvB** (raffle wins skipped), and
+  **a node exposed on clearnet** during initial sync — and answer status commands on demand:
+  **`/status`**, **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**,
+  **`/xvb`**, **`/earnings`**, and **`/help`**. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
   `bot_token`, `chat_id`, per-event `events` toggles, and a `commands.enabled` switch for the
   interactive half). Every alert is **debounced** so a momentary blip won't ping you and you get one
   message per real transition — and each is built by *reusing* what the dashboard already computes:

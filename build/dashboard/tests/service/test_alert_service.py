@@ -38,6 +38,9 @@ def _ev(
     workers_expected=False,
     disk_percent=0,
     db_healthy=True,
+    xvb_enabled=False,
+    shares_in_window=0,
+    clearnet_active=False,
     now=0,
 ):
     return svc.evaluate(
@@ -49,6 +52,9 @@ def _ev(
         workers_expected=workers_expected,
         disk_percent=disk_percent,
         db_healthy=db_healthy,
+        xvb_enabled=xvb_enabled,
+        shares_in_window=shares_in_window,
+        clearnet_active=clearnet_active,
         now=now,
     )
 
@@ -190,6 +196,38 @@ class TestDbEdges:
         assert _ev(svc, db_healthy=False) == []  # no repeat
         _, text = _ev(svc, db_healthy=True)[0]
         assert "recovered" in text
+
+
+class TestXvbShareEdges:
+    def test_no_share_then_restored(self):
+        svc = _svc()
+        assert _ev(svc, xvb_enabled=True, shares_in_window=3) == []  # seed: has a share
+        assert _keys(_ev(svc, xvb_enabled=True, shares_in_window=0)) == [
+            AlertService.EVT_XVB_NO_SHARE
+        ]
+        assert _ev(svc, xvb_enabled=True, shares_in_window=0) == []  # no repeat
+        _, text = _ev(svc, xvb_enabled=True, shares_in_window=1)[0]  # restored
+        assert "restored" in text
+
+    def test_silent_while_xvb_disabled(self):
+        svc = _svc()
+        # XvB off → the share gate doesn't apply, even with zero shares.
+        assert _ev(svc, xvb_enabled=False, shares_in_window=0) == []
+        # Turning XvB on re-seeds silently (no stale replay), then alerts on a real loss.
+        assert _ev(svc, xvb_enabled=True, shares_in_window=2) == []
+        assert _keys(_ev(svc, xvb_enabled=True, shares_in_window=0)) == [
+            AlertService.EVT_XVB_NO_SHARE
+        ]
+
+
+class TestClearnetEdges:
+    def test_exposed_then_reverted(self):
+        svc = _svc()
+        assert _ev(svc, clearnet_active=False) == []  # seed
+        assert _keys(_ev(svc, clearnet_active=True)) == [AlertService.EVT_CLEARNET_EXPOSED]
+        assert _ev(svc, clearnet_active=True) == []  # no repeat
+        _, text = _ev(svc, clearnet_active=False)[0]
+        assert "Tor-only" in text
 
 
 class TestEventFiltering:

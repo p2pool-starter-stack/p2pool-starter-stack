@@ -786,6 +786,16 @@ class DataService:
                     # never raises.
                     disk_usage = get_disk_usage()
                     db_healthy = self.state_manager.is_db_healthy()
+                    # Fetch fresh shares list (also used to populate the UI below) so the PPLNS-share
+                    # gate the XvB alert watches is computed from the same figure the dashboard shows.
+                    shares_list = await asyncio.to_thread(self.state_manager.get_shares)
+                    pool_local = p2pool_stats.get("pool", {})
+                    pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
+                    shares_in_window = shares_in_pplns_window(
+                        shares_list,
+                        pool_local.get("pplns_window", DEFAULT_PPLNS_WINDOW),
+                        pplns_block_time(pool_type),
+                    )
                     await self.alert_service.process(
                         monero_down=monero_down,
                         tari_down=tari_down,
@@ -797,10 +807,10 @@ class DataService:
                         workers_expected=self.miner_released and not self.workers_rejected,
                         disk_percent=(disk_usage or {}).get("percent", 0) or 0,
                         db_healthy=db_healthy,
+                        xvb_enabled=ENABLE_XVB,
+                        shares_in_window=shares_in_window,
+                        clearnet_active=bool(self.clearnet_sync_state.get("active")),
                     )
-
-                    # Fetch fresh shares list to populate UI
-                    shares_list = await asyncio.to_thread(self.state_manager.get_shares)
 
                     self.latest_data.update(
                         {

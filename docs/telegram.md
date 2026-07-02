@@ -30,6 +30,8 @@ transition, not a stream:
 | ✅ **Sync finished** | The initial blockchain sync completed and mining has started — handy on first run, when the sync can take hours. |
 | 🟠 **Disk filling up** | The data disk crossed the warn/critical threshold — a full disk can corrupt the Monero database, so free space before it runs out. |
 | 🔴 **DB write failing** | The dashboard can no longer write to its database; hashrate history, shares, and stats will be lost on restart until it's fixed (usually disk space or permissions). |
+| ⚠ **No PPLNS share (XvB)** | You're donating to XvB but hold no share in the PPLNS window, so raffle wins are **skipped** — donations are wasted until you land one. Only fires when XvB is enabled. |
+| ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
 
 Every message is prefixed with your dashboard hostname (e.g. `[rig-box.lan]`), so if you point
 more than one stack at the same chat you can tell them apart.
@@ -145,6 +147,8 @@ block and set it to `false` — any event you don't list stays on:
 | `sync_finished` | `true` | Initial sync done, mining started |
 | `disk_space` | `true` | Data disk filling up / critical / recovered |
 | `db_unhealthy` | `true` | Dashboard database writes failing / recovered |
+| `xvb_no_share` | `true` | XvB on but no PPLNS share (wins skipped) / restored |
+| `clearnet_exposed` | `true` | A node is syncing over clearnet (IP exposed) / back on Tor |
 
 Run `./pithead apply` after editing.
 
@@ -181,6 +185,7 @@ Run `./pithead apply` after editing. The commands:
 | `/system` | Host resources: disk, RAM, CPU + load, and HugePages. |
 | `/pool` | P2Pool sidechain type, pool hashrate, Monero network height, and PPLNS shares in window. |
 | `/xvb` | XvB mode, current and target tier, hashrate routed to XvB, and raffle eligibility (PPLNS share). |
+| `/earnings` | Estimated P2Pool XMR per day/month from your current hashrate (P2Pool only — excludes XvB-donated hashrate and Tari). |
 | `/help` | The command list. |
 
 The numbers come from the **same source as the dashboard**, so a reply and the web view always

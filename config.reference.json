@@ -93,7 +93,9 @@
             "worker_left": true,
             "sync_finished": true,
             "disk_space": true,
-            "db_unhealthy": true
+            "db_unhealthy": true,
+            "xvb_no_share": true,
+            "clearnet_exposed": true
         },
         "commands": {
             "enabled": false
