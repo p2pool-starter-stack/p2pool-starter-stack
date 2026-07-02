@@ -155,10 +155,10 @@ stops the (already Tor-routed, #163) stats fetch.
 ## Optional clearnet initial sync (off by default)
 
 Routing everything over Tor is correct for ongoing operation, but it makes the one-time initial
-blockchain sync (IBD) painfully slow: Tor circuits are bandwidth-capped and flaky, so a full Monero
-sync can crawl at near-zero blocks/sec and stall for long stretches, and Tari's large chain is no
-better. The standard pattern for Tor-based nodes is to sync once over clearnet (fast), then lock back
-to Tor. This stack supports that as an explicit, default-off opt-in (#183).
+block download (IBD) slow: Tor circuits are bandwidth-capped, so a full Monero sync can drop to
+near-zero blocks/sec and stall for long stretches, and Tari's chain is no faster. The standard
+pattern for Tor-based nodes is to sync once over clearnet, then return to Tor. The stack supports this
+as an explicit, default-off opt-in (#183).
 
 Per-component flags in `config.json`, both `false` by default:
 
@@ -201,12 +201,11 @@ be explicitly opted into.
 
 ### It switches back to Tor automatically (#234)
 
-You don't have to babysit it. The dashboard already tracks each chain's sync state; the first time a
-clearnet node reports fully synced, it switches that node back to Tor for you. It writes a persistent
-"sync complete" marker and restarts the daemon, which comes back up Tor-only. From then on the node
-stays on Tor across restarts, `apply`, and reboots (the marker, not the flag, is the source of truth,
-so a restart can never silently re-expose a synced node). Monero and Tari transition independently,
-each as soon as *it* finishes.
+The dashboard tracks each chain's sync state. The first time a clearnet node reports fully synced, the
+dashboard writes a persistent "sync complete" marker and restarts the daemon, which comes back up
+Tor-only. From then on the node stays on Tor across restarts, `apply`, and reboots (the marker, not
+the flag, is the source of truth, so a restart can never silently re-expose a synced node). Monero and
+Tari transition independently, each as soon as *it* finishes.
 
 You can leave `clearnet_initial_sync: true` in `config.json`; it's effectively spent once the sync
 completes. (To deliberately re-sync over clearnet later, e.g. after wiping a chain, toggle the flag
@@ -214,7 +213,7 @@ off and on again with `./pithead apply`, which re-arms it.)
 
 ### It is loud and always-visible
 
-You can't enable this by accident or miss that it's active:
+The active state is surfaced in four places, so it can't be enabled by accident or missed:
 
 - `./pithead apply` prints a `⚠`-flagged, disruptive-change confirmation describing exactly what
   becomes exposed before it recreates the daemon.
@@ -257,7 +256,7 @@ single-purpose appliance. One consequence is worth recording explicitly:
 
 - [ ] Keep `:3333` off the public internet: firewall it to your LAN, set `p2pool.stratum_bind`,
   and/or require a `p2pool.stratum_password` (`pithead doctor` flags public-IP exposure).
-- [ ] Route P2Pool outbound through Tor by editing its compose `command:` (above) if you accept the latency.
+- [ ] Leave `p2pool.clearnet` off (the default) to keep P2Pool outbound peers on Tor (#165).
 - [ ] Set `xvb.enabled: false` if you don't want any XvB egress.
 - [ ] Leave `monero.clearnet_initial_sync` / `tari.clearnet_initial_sync` off (the default) to keep all node P2P on Tor. If you do use a clearnet sync, the dashboard switches each node back to Tor automatically once it's synced; `pithead doctor` flags it while exposed and clears when done.
 - [ ] Run the initial install/build behind a VPN or `torsocks`.
