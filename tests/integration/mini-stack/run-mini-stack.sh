@@ -10,6 +10,8 @@
 #   2. both chains synced      → dashboard RELEASES them
 #   3. monerod down            → dashboard REJECTS workers (stops itest-xmrig-proxy) (#31)
 #   4. monerod back            → dashboard READMITS workers
+#   +. healthchecks (#79)      → REAL loop fires a heartbeat when healthy, and "/fail" while a
+#                                required node is down (asserted against the fake-hc receiver)
 #
 set -uo pipefail
 
@@ -72,6 +74,25 @@ assert_stays() { # assert_stays <label> <container> <state> <seconds>
 # 28081/28152 (namespaced away from a real monerod/dashboard on the same host).
 set_monerod() { ctl "http://127.0.0.1:28081/control" "{\"mode\":\"$1\"}" || c_bad "set monerod $1" "control POST failed"; }
 set_tari() { ctl "http://127.0.0.1:28152/control" "{\"mode\":\"$1\"}" || c_bad "set tari $1" "control POST failed"; }
+
+# Healthchecks.io e2e (#79): the fake receiver records each ping path to /hc/pings.log. Poll it
+# until an (extended-regex) pattern shows up, proving the REAL dashboard loop fired that request.
+hc_pings() { compose exec -T fake-hc cat /tmp/pings.log 2>/dev/null; }
+wait_hc() { # wait_hc <label> <ere-pattern> [timeout]
+    local label="$1" pat="$2" timeout="${3:-40}" end
+    end=$(($(date +%s) + timeout))
+    while :; do
+        hc_pings | grep -Eq "$pat" && {
+            c_ok "$label"
+            return 0
+        }
+        [ "$(date +%s)" -ge "$end" ] && {
+            c_bad "$label" "no line matching /$pat/ in the ping log (got: $(hc_pings | tr '\n' ' '))"
+            return 1
+        }
+        sleep 1
+    done
+}
 
 teardown() {
     log "tearing down"
@@ -163,6 +184,12 @@ set_tari synced
 assert_state "released: itest-p2pool running" itest-p2pool running 90
 assert_state "released: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
+# 3b. Healthchecks e2e (#79): with both chains reachable, the loop fires a plain HEARTBEAT to the
+#     real ping URL (path "/ph", never "/ph/fail"). Proves the ping is actually wired into the
+#     running loop over a real HTTP call — not just unit-mocked.
+log "scenario 3b: the dashboard fires a real healthchecks heartbeat when healthy"
+wait_hc "healthchecks: real loop fired a heartbeat (no /fail)" '^/ph$' 40
+
 # 4. Tari down while required → reject workers (stop the proxy); itest-p2pool keeps running. (#31)
 #    NOTE: monerod-down failover is deliberately NOT simulated here — the dashboard's monerod
 #    down-path falls back to log-scraping a real `monerod` container, which this fake stack has
@@ -176,6 +203,12 @@ if [ "$(cstate itest-p2pool)" = "running" ]; then
 else
     c_bad "rejection leaves itest-p2pool running" "itest-p2pool is '$(cstate itest-p2pool)'"
 fi
+
+# 4b. Healthchecks health-aware /fail e2e (#79): required Tari is down, so the same predicate that
+#     rejected the proxy also flips the ping to "/ph/fail" — the check goes red on a degraded-but-
+#     alive stack, end to end. This is the health-aware path that unit tests only prove with a mock.
+log "scenario 4b: the dashboard sends healthchecks /fail while required Tari is down"
+wait_hc "healthchecks: /fail sent on required-node-down" '^/ph/fail$' 40
 
 # 5. Tari recovers → readmit (after the recovery-hysteresis window).
 log "scenario 5: readmits workers when Tari recovers"
