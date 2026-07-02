@@ -1,15 +1,15 @@
 # Configuration
 
-`config.json` is the single source of truth for the stack. The interactive `setup` writes a minimal
-one for you. After that, change the stack by editing `config.json` and running `./pithead apply`.
+`config.json` is the stack's only config file. `./pithead setup` writes a minimal one. To change the
+stack afterward, edit `config.json` and run `./pithead apply`.
 
 ## The minimal config
 
-Only your two wallet addresses are required. Every other key is optional and falls back to a default:
-the node runs locally, on the `main` pool, with a secure dashboard, and the local node's RPC
-credentials are auto-generated. Leave a key out unless you want to change it.
+The two wallet addresses are the only required keys. Every other key is optional and falls back to a
+default: the node runs locally, on the `main` pool, with a secure dashboard, and the local node's RPC
+credentials are auto-generated. Omit a key to keep its default.
 
-A fresh `config.json` is just this (see [`config.minimal.json`](../config.minimal.json)):
+A fresh `config.json` is this (see [`config.minimal.json`](../config.minimal.json)):
 
 ```json
 {
@@ -22,12 +22,11 @@ A fresh `config.json` is just this (see [`config.minimal.json`](../config.minima
 }
 ```
 
-For the full shape with every key and its default, see
-[`config.reference.json`](../config.reference.json) and copy in only the keys you
-want to override.
+For every key and its default, see [`config.reference.json`](../config.reference.json) and copy in
+only the keys you want to override.
 
-> The string `"auto"` anywhere means "let the stack pick the default": a default path, the
-> machine's hostname, a derived donor id, and so on.
+> The string `"auto"` means "let the stack pick the default": a default path, the machine's
+> hostname, a derived donor id, and so on.
 
 ---
 
@@ -39,11 +38,9 @@ want to override.
 `apply` is safe to run anytime:
 
 - It previews what will change, diffing your edited `config.json` against the running configuration.
-- It warns before anything disruptive. Switching the Monero node local↔remote, toggling pruning,
-  changing a payout address, exposing the RPC to your LAN, or moving a data directory each trigger a
-  confirmation prompt.
-- It then regenerates the `.env`, Caddy, and Tari configs and recreates only the containers that
-  need it.
+- It prompts to confirm before anything disruptive: switching the Monero node local↔remote, toggling
+  pruning, changing a payout address, exposing the RPC to your LAN, or moving a data directory.
+- It regenerates the `.env`, Caddy, and Tari configs and recreates only the containers that need it.
 - It does not re-provision Tor, touch GRUB, or rotate the proxy token. If nothing changed, it does
   nothing.
 
@@ -160,9 +157,9 @@ and sets ownership automatically (Monero/Tari/P2Pool to your user, Tor to the co
 
 ## Exposing the dashboard safely
 
-The dashboard is built for a trusted private network: the home or office LAN the appliance sits on.
-By default it has no login: anyone who can reach the host can open it. That's the right trade-off
-for a single-user box behind your router, and it stays the default.
+The dashboard targets a trusted private network: the home or office LAN the appliance sits on. By
+default it has no login; anyone who can reach the host can open it. That is the default for a
+single-user box behind your router.
 
 Add a login (and keep HTTPS on) whenever the dashboard is reachable by anyone you don't fully trust.
 For example:
