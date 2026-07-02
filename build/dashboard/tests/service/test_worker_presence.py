@@ -3,6 +3,7 @@ from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
 class _Clock:
     """Manually advanced clock for deterministic debounce tests."""
+
     def __init__(self):
         self.t = 1000.0
 
@@ -15,8 +16,9 @@ class _Clock:
 
 def _monitor(offline_after=300, recovery_after=120, retention=7 * 24 * 3600):
     clock = _Clock()
-    m = WorkerPresenceMonitor(offline_after=offline_after, recovery_after=recovery_after,
-                              retention=retention, clock=clock)
+    m = WorkerPresenceMonitor(
+        offline_after=offline_after, recovery_after=recovery_after, retention=retention, clock=clock
+    )
     return m, clock
 
 
@@ -37,7 +39,7 @@ class TestBaseline:
 class TestOfflineDebounce:
     def test_not_offline_before_threshold(self):
         m, clock = _monitor()
-        m.update({"rig-1"})           # baseline online
+        m.update({"rig-1"})  # baseline online
         clock.advance(30)
         assert m.update(set()) == []  # absence streak starts here (within debounce)
         clock.advance(269)
@@ -46,7 +48,7 @@ class TestOfflineDebounce:
     def test_offline_after_threshold(self):
         m, clock = _monitor()
         m.update({"rig-1"})
-        m.update(set())               # absence streak starts here
+        m.update(set())  # absence streak starts here
         clock.advance(300)
         assert m.update(set()) == [("rig-1", "offline")]
 
@@ -62,8 +64,10 @@ class TestOfflineDebounce:
     def test_brief_drop_does_not_trip(self):
         m, clock = _monitor()
         m.update({"rig-1"})
-        clock.advance(60); assert m.update(set()) == []      # gone 60s
-        clock.advance(30); assert m.update({"rig-1"}) == []  # back well before 300s
+        clock.advance(60)
+        assert m.update(set()) == []  # gone 60s
+        clock.advance(30)
+        assert m.update({"rig-1"}) == []  # back well before 300s
 
 
 class TestRecoveryHysteresis:
@@ -78,16 +82,21 @@ class TestRecoveryHysteresis:
         self._take_offline(m, clock)
         # Reappears, but "back online" holds until it's been present for recovery_after.
         assert m.update({"rig-1"}) == []
-        clock.advance(119); assert m.update({"rig-1"}) == []
-        clock.advance(1); assert m.update({"rig-1"}) == [("rig-1", "recovered")]
+        clock.advance(119)
+        assert m.update({"rig-1"}) == []
+        clock.advance(1)
+        assert m.update({"rig-1"}) == [("rig-1", "recovered")]
 
     def test_flap_during_recovery_does_not_emit(self):
         # A one-cycle reconnect during an outage must not produce a recovered→offline spam.
         m, clock = _monitor()
         self._take_offline(m, clock)
-        clock.advance(30); assert m.update({"rig-1"}) == []   # blink on (still offline)
-        clock.advance(30); assert m.update(set()) == []       # blink off — no recovered, no re-offline
-        clock.advance(30); assert m.update(set()) == []
+        clock.advance(30)
+        assert m.update({"rig-1"}) == []  # blink on (still offline)
+        clock.advance(30)
+        assert m.update(set()) == []  # blink off — no recovered, no re-offline
+        clock.advance(30)
+        assert m.update(set()) == []
 
 
 class TestMultipleWorkers:
@@ -118,9 +127,10 @@ class TestRetention:
         m, clock = _monitor(retention=1000)
         m.update({"rig-1"})
         m.update(set())
-        clock.advance(300); m.update(set())          # offline emitted
+        clock.advance(300)
+        m.update(set())  # offline emitted
         clock.advance(1000)
-        m.update(set())                               # past retention -> pruned
+        m.update(set())  # past retention -> pruned
         assert "rig-1" not in m._workers
         # Returning after retention counts as new: silent baseline, not a recovery.
         assert m.update({"rig-1"}) == []

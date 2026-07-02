@@ -48,10 +48,10 @@ from mining_dashboard.helper.utils import (
     pplns_block_time,
     shares_in_pplns_window,
 )
+from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.node_health import NodeHealthMonitor
-from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
@@ -788,8 +788,9 @@ class DataService:
                         tari_down=tari_down,
                         tari_required=TARI_REQUIRED,
                         miner_released=self.miner_released,
-                        online_workers=[w["name"] for w in final_workers
-                                        if w.get("status") == "online"],
+                        online_workers=[
+                            w["name"] for w in final_workers if w.get("status") == "online"
+                        ],
                         workers_expected=self.miner_released and not self.workers_rejected,
                     )
 

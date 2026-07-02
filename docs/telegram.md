@@ -1,12 +1,15 @@
-# Telegram Alerts
+# Telegram Bot
 
 Pithead can push a small set of **operational alerts** to Telegram, so you find out the moment
-something needs attention — without sitting on the dashboard. It's **off by default**; this guide
-takes you from nothing to a working alert in about five minutes.
+something needs attention — without sitting on the dashboard. It can also answer a few **read-only
+status commands** on demand, so you can check on the stack from your phone. Both are **off by
+default**; this guide takes you from nothing to a working alert in about five minutes, then adds
+commands if you want them.
 
-> **What this is — and isn't.** This is a **notifications-only** push: the stack sends you
-> messages, you don't send it commands. There's no interactive bot, no `/status` command, no
-> remote control. (That's a separate, later feature.) Think of it as a pager, not a chat.
+> **What this is — and isn't.** Alerts are a one-way push (a pager). Commands are **read-only** —
+> `/status`, `/hashrate`, and friends report what the dashboard already knows; **nothing controls
+> the stack over Telegram** (start/stop/`apply` stay on the CLI). So the worst a leaked chat can do
+> is *read* your status, never change anything.
 
 ---
 
@@ -43,9 +46,11 @@ the messages go). Both come from Telegram, in a few taps.
 2. Send `/newbot` and follow the prompts — pick a name and a username (the username must end in
    `bot`, e.g. `my_pithead_bot`).
 3. BotFather replies with a **token** that looks like:
+
    ```
    123456789:AAExampleExampleExampleExampleExample
    ```
+
    This is your `bot_token`. **Treat it like a password** — anyone with it can post as your bot.
 
 ### 2. Pick where alerts go (a group is recommended)
@@ -142,6 +147,45 @@ Run `./pithead apply` after editing.
 
 ---
 
+## Commands
+
+Beyond alerts, the bot can answer **status queries on demand** — ask it how things are and it
+replies with what the dashboard already knows. This is a **separate opt-in** from alerts: turn it on
+by adding a `commands` block.
+
+```json
+"telegram": {
+    "enabled": true,
+    "bot_token": "…",
+    "chat_id": "…",
+    "commands": { "enabled": true }
+}
+```
+
+Run `./pithead apply` after editing. The commands:
+
+| Command | Reply |
+|---|---|
+| `/status` | One-glance health: each node up/down/syncing, whether mining is active, workers online, total hashrate, PPLNS shares in window. |
+| `/hashrate` | Total hashrate plus a per-rig breakdown of everything currently online. |
+| `/workers` | Every rig's online/offline state, with uptime for the ones that are up. |
+| `/sync` | Monero and Tari sync progress (percent and block height). |
+| `/help` | The command list. |
+
+The numbers come from the **same source as the dashboard**, so a reply and the web view always
+agree. In a group, address the bot directly if you like — `/status@your_pithead_bot` works too.
+
+**Only the configured `chat_id` is answered.** A message from any other chat is ignored with no
+reply, so the bot can't be used by anyone you haven't put in that chat. The bot **long-polls**
+Telegram (`getUpdates`) rather than exposing a webhook, so it needs **no inbound port** and rides
+the same outbound path as the alerts — nothing about your host is exposed to receive commands.
+
+> **Tor-only host.** Like alerts, commands reach `api.telegram.org` over clearnet. With no clearnet
+> egress the poll just fails silently and the bot answers nothing — see
+> [Privacy and secrets](#privacy-and-secrets).
+
+---
+
 ## One chat, two bots
 
 Pithead's companion **Healthchecks.io** monitor (a "dead-man's switch" that detects the whole host
@@ -175,11 +219,12 @@ differently.)
 - **The bot token is a secret.** Pithead stores it in `.env`, which is created **owner-only**
   (`chmod 600`) and is **git-ignored**, exactly like the Monero node RPC password. The dashboard
   **never writes the token to a log line** — not even inside an error message.
-- **Telegram is a clearnet service.** The dashboard reaches `api.telegram.org` directly. On a
-  **Tor-only host with no clearnet egress**, the Telegram API is unreachable and sends simply
-  **fail silently** — no errors, no log spam, the rest of the stack is unaffected. (Same applies if
-  your network blocks Telegram.) If you run Tor-only and want these alerts, you'll need clearnet
-  egress for the dashboard, or rely on Healthchecks.io's own delivery.
+- **Telegram is a clearnet service.** The dashboard reaches `api.telegram.org` directly — both to
+  send alerts and (if commands are on) to poll for them. On a **Tor-only host with no clearnet
+  egress**, the Telegram API is unreachable and both **fail silently** — no errors, no log spam, the
+  rest of the stack is unaffected. (Same applies if your network blocks Telegram.) If you run
+  Tor-only and want these, you'll need clearnet egress for the dashboard, or rely on Healthchecks.io's
+  own delivery.
 
 ---
 
@@ -206,7 +251,9 @@ Node-down timing is shared with the existing failover logic (`NODE_DOWN_AFTER_SE
 | Still nothing | Make sure the bot has been **added to the group** (or that you sent it `/start` for a direct chat). A bot can't message a chat it isn't in. |
 | `chat_id` looks wrong | Group ids are **negative** and long (`-100…`). Re-check with `@userinfobot`. |
 | Works for "down" but not a specific alert | Check `telegram.events` — that event may be toggled `false`. |
-| Tor-only host | Expected: Telegram is clearnet, so sends fail silently. See [Privacy and secrets](#privacy-and-secrets). |
+| Alerts work but commands don't | Commands are a **separate** switch: set `telegram.commands.enabled` to `true` and `./pithead apply`. |
+| Bot ignores my commands | It only answers the configured `chat_id`. Send from that exact chat, and check the id with `@userinfobot`. |
+| Tor-only host | Expected: Telegram is clearnet, so both alerts and command polling fail silently. See [Privacy and secrets](#privacy-and-secrets). |
 
 ---
 

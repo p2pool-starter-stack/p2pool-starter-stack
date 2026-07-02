@@ -1,14 +1,13 @@
-import pytest
-
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
 
 class _FakeNotifier:
     """Stand-in transport: records sends, lets tests gate which events are 'enabled'."""
+
     def __init__(self, enabled=True, allow=None):
         self.enabled = enabled
-        self._allow = allow          # None => every event allowed
+        self._allow = allow  # None => every event allowed
         self.sent = []
 
     def event_enabled(self, event):
@@ -28,12 +27,26 @@ def _svc(notifier=None, **kw):
     return AlertService(notifier=notifier, **kw)
 
 
-def _ev(svc, *, monero_down=False, tari_down=False, tari_required=True,
-        miner_released=True, online_workers=(), workers_expected=False, now=0):
+def _ev(
+    svc,
+    *,
+    monero_down=False,
+    tari_down=False,
+    tari_required=True,
+    miner_released=True,
+    online_workers=(),
+    workers_expected=False,
+    now=0,
+):
     return svc.evaluate(
-        monero_down=monero_down, tari_down=tari_down, tari_required=tari_required,
-        miner_released=miner_released, online_workers=list(online_workers),
-        workers_expected=workers_expected, now=now)
+        monero_down=monero_down,
+        tari_down=tari_down,
+        tari_required=tari_required,
+        miner_released=miner_released,
+        online_workers=list(online_workers),
+        workers_expected=workers_expected,
+        now=now,
+    )
 
 
 def _keys(alerts):
@@ -48,9 +61,9 @@ class TestNodeEdges:
 
     def test_down_then_recovered(self):
         svc = _svc()
-        _ev(svc, monero_down=False)                       # seed
+        _ev(svc, monero_down=False)  # seed
         assert _keys(_ev(svc, monero_down=True)) == [AlertService.EVT_NODE_DOWN]
-        assert _ev(svc, monero_down=True) == []           # no repeat while still down
+        assert _ev(svc, monero_down=True) == []  # no repeat while still down
         assert _keys(_ev(svc, monero_down=False)) == [AlertService.EVT_NODE_RECOVERED]
 
     def test_node_text_names_the_chain(self):
@@ -71,10 +84,12 @@ class TestTariGating:
         # replay a down edge for a state we never alerted on.
         svc = _svc()
         _ev(svc, tari_down=False, tari_required=False)
-        _ev(svc, tari_down=True, tari_required=False)     # silently tracked
+        _ev(svc, tari_down=True, tari_required=False)  # silently tracked
         assert _ev(svc, tari_down=True, tari_required=True) == []
         # ...but a genuine recovery from there still fires.
-        assert _keys(_ev(svc, tari_down=False, tari_required=True)) == [AlertService.EVT_NODE_RECOVERED]
+        assert _keys(_ev(svc, tari_down=False, tari_required=True)) == [
+            AlertService.EVT_NODE_RECOVERED
+        ]
 
     def test_required_tari_alerts(self):
         svc = _svc()
@@ -86,9 +101,9 @@ class TestTariGating:
 class TestSyncFinished:
     def test_fires_once_when_gate_opens(self):
         svc = _svc()
-        _ev(svc, miner_released=False)                    # seed: still syncing
+        _ev(svc, miner_released=False)  # seed: still syncing
         assert _keys(_ev(svc, miner_released=True)) == [AlertService.EVT_SYNC_FINISHED]
-        assert _ev(svc, miner_released=True) == []        # one-shot
+        assert _ev(svc, miner_released=True) == []  # one-shot
 
     def test_no_alert_on_restart_after_sync(self):
         svc = _svc()
@@ -101,17 +116,19 @@ class TestWorkerEdges:
         svc = _svc()
         assert _ev(svc, online_workers=["rig-1"], workers_expected=True, now=0) == []
         assert _ev(svc, online_workers=[], workers_expected=True, now=0) == []
-        assert _keys(_ev(svc, online_workers=[], workers_expected=True, now=300)) == \
-            [AlertService.EVT_WORKER_OFFLINE]
+        assert _keys(_ev(svc, online_workers=[], workers_expected=True, now=300)) == [
+            AlertService.EVT_WORKER_OFFLINE
+        ]
         _ev(svc, online_workers=["rig-1"], workers_expected=True, now=300)
-        assert _keys(_ev(svc, online_workers=["rig-1"], workers_expected=True, now=420)) == \
-            [AlertService.EVT_WORKER_RECOVERED]
+        assert _keys(_ev(svc, online_workers=["rig-1"], workers_expected=True, now=420)) == [
+            AlertService.EVT_WORKER_RECOVERED
+        ]
 
     def test_not_expected_resets_and_silences(self):
         svc = _svc()
         _ev(svc, online_workers=["rig-1"], workers_expected=True, now=0)
         _ev(svc, online_workers=[], workers_expected=True, now=0)
-        _ev(svc, online_workers=[], workers_expected=True, now=300)   # rig-1 now offline
+        _ev(svc, online_workers=[], workers_expected=True, now=300)  # rig-1 now offline
         # Proxy intentionally stopped (sync hold / failover): reset, no alert.
         assert _ev(svc, online_workers=[], workers_expected=False, now=330) == []
         # Re-admission re-baselines silently — no spurious "recovered".
@@ -145,8 +162,14 @@ class TestProcess:
     async def test_disabled_notifier_is_noop(self):
         notifier = _FakeNotifier(enabled=False)
         svc = _svc(notifier=notifier)
-        out = await svc.process(monero_down=True, tari_down=False, tari_required=True,
-                                miner_released=True, online_workers=[], workers_expected=False)
+        out = await svc.process(
+            monero_down=True,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            online_workers=[],
+            workers_expected=False,
+        )
         assert out == []
         assert notifier.sent == []
 
@@ -154,9 +177,21 @@ class TestProcess:
         notifier = _FakeNotifier()
         svc = _svc(notifier=notifier)
         # seed
-        await svc.process(monero_down=False, tari_down=False, tari_required=True,
-                          miner_released=True, online_workers=[], workers_expected=False)
-        out = await svc.process(monero_down=True, tari_down=False, tari_required=True,
-                                miner_released=True, online_workers=[], workers_expected=False)
+        await svc.process(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            online_workers=[],
+            workers_expected=False,
+        )
+        out = await svc.process(
+            monero_down=True,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            online_workers=[],
+            workers_expected=False,
+        )
         assert _keys(out) == [AlertService.EVT_NODE_DOWN]
         assert len(notifier.sent) == 1 and "DOWN" in notifier.sent[0]

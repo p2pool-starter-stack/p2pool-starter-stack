@@ -35,9 +35,13 @@ class WorkerPresenceMonitor:
     injectable for deterministic tests.
     """
 
-    def __init__(self, offline_after=WORKER_OFFLINE_AFTER_SEC,
-                 recovery_after=WORKER_RECOVERY_AFTER_SEC,
-                 retention=WORKER_RETENTION_SEC, clock=time.time):
+    def __init__(
+        self,
+        offline_after=WORKER_OFFLINE_AFTER_SEC,
+        recovery_after=WORKER_RECOVERY_AFTER_SEC,
+        retention=WORKER_RETENTION_SEC,
+        clock=time.time,
+    ):
         self.offline_after = offline_after
         self.recovery_after = recovery_after
         self.retention = retention
@@ -61,8 +65,10 @@ class WorkerPresenceMonitor:
             if w is None:
                 # First sighting — baseline as ONLINE, no edge.
                 self._workers[name] = {
-                    "state": "online", "seen_since": now,
-                    "unseen_since": None, "last_present": now,
+                    "state": "online",
+                    "seen_since": now,
+                    "unseen_since": None,
+                    "last_present": now,
                 }
                 continue
             w["last_present"] = now
@@ -98,7 +104,8 @@ class WorkerPresenceMonitor:
 
     def _prune(self, now):
         stale = [
-            name for name, w in self._workers.items()
+            name
+            for name, w in self._workers.items()
             if w["unseen_since"] is not None and (now - w["last_present"]) >= self.retention
         ]
         for name in stale:

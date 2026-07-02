@@ -68,8 +68,17 @@ class AlertService:
     def enabled(self):
         return self.notifier.enabled
 
-    def evaluate(self, *, monero_down, tari_down, tari_required, miner_released,
-                 online_workers, workers_expected, now=None):
+    def evaluate(
+        self,
+        *,
+        monero_down,
+        tari_down,
+        tari_required,
+        miner_released,
+        online_workers,
+        workers_expected,
+        now=None,
+    ):
         """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
         filtered to the events the operator left enabled."""
         alerts = []
@@ -87,8 +96,12 @@ class AlertService:
         if self._prev_released is None:
             self._prev_released = miner_released
         elif miner_released and not self._prev_released:
-            alerts.append((self.EVT_SYNC_FINISHED, self._fmt(
-                "✅ Node ready — required chain(s) synced; mining has started.")))
+            alerts.append(
+                (
+                    self.EVT_SYNC_FINISHED,
+                    self._fmt("✅ Node ready — required chain(s) synced; mining has started."),
+                )
+            )
         self._prev_released = miner_released
 
         # --- Worker offline / back online (debounced) ---
@@ -98,11 +111,16 @@ class AlertService:
         if workers_expected:
             for name, event in self.workers.update(online_workers, now=now):
                 if event == "offline":
-                    alerts.append((self.EVT_WORKER_OFFLINE,
-                                   self._fmt(f"\U0001f534 Worker offline: {name}")))
+                    alerts.append(
+                        (self.EVT_WORKER_OFFLINE, self._fmt(f"\U0001f534 Worker offline: {name}"))
+                    )
                 else:
-                    alerts.append((self.EVT_WORKER_RECOVERED,
-                                   self._fmt(f"\U0001f7e2 Worker back online: {name}")))
+                    alerts.append(
+                        (
+                            self.EVT_WORKER_RECOVERED,
+                            self._fmt(f"\U0001f7e2 Worker back online: {name}"),
+                        )
+                    )
         else:
             self.workers.reset()
 
@@ -114,10 +132,20 @@ class AlertService:
         if prev is None or down == prev:
             return []
         if down:
-            return [(self.EVT_NODE_DOWN, self._fmt(
-                f"\U0001f534 {label} node is DOWN — workers failing over to backup pools."))]
-        return [(self.EVT_NODE_RECOVERED, self._fmt(
-            f"\U0001f7e2 {label} node recovered — workers readmitted."))]
+            return [
+                (
+                    self.EVT_NODE_DOWN,
+                    self._fmt(
+                        f"\U0001f534 {label} node is DOWN — workers failing over to backup pools."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_NODE_RECOVERED,
+                self._fmt(f"\U0001f7e2 {label} node recovered — workers readmitted."),
+            )
+        ]
 
     def _fmt(self, text):
         return f"[{self.host_label}] {text}" if self.host_label else text

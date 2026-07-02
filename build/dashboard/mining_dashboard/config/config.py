@@ -233,6 +233,14 @@ TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "false").strip().lower() =
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
+# Interactive command interface (#45), separate opt-in from the alerts above. When on, the
+# dashboard long-polls Telegram (getUpdates — outbound only, no inbound port) and answers
+# read-only status commands from the configured chat_id. Off by default; the alerter works
+# without it. See telegram_commands.py / docs/telegram.md.
+TELEGRAM_COMMANDS_ENABLED = (
+    os.environ.get("TELEGRAM_COMMANDS_ENABLED", "false").strip().lower() == "true"
+)
+
 
 def _telegram_event_enabled(name, default=True):
     """Read one per-event toggle from TELEGRAM_EVENT_<NAME> (rendered from config.json's

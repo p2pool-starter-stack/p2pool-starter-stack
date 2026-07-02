@@ -29,8 +29,8 @@ class TestEnabledGating:
     def test_event_enabled_respects_toggle_and_enabled(self):
         n = _enabled()
         assert n.event_enabled("node_down") is True
-        assert n.event_enabled("node_recovered") is False   # toggled off
-        assert n.event_enabled("worker_offline") is False   # absent -> off
+        assert n.event_enabled("node_recovered") is False  # toggled off
+        assert n.event_enabled("worker_offline") is False  # absent -> off
         # A disabled notifier reports every event as off.
         assert TelegramNotifier(events={"node_down": True}).event_enabled("node_down") is False
 
@@ -55,8 +55,9 @@ class TestSend:
 
     def test_send_swallows_network_error(self):
         n = _enabled()
-        with patch.object(tg_mod.requests, "post",
-                          side_effect=requests.RequestException("offline")):
+        with patch.object(
+            tg_mod.requests, "post", side_effect=requests.RequestException("offline")
+        ):
             assert n.send("x") is False
 
     def test_send_swallows_http_error(self):
@@ -74,7 +75,8 @@ class TestTokenSecrecy:
         n = _enabled(bot_token="SUPERSECRETTOKEN")
         boom = requests.RequestException(
             "HTTPSConnectionPool failed for url: "
-            "https://api.telegram.org/botSUPERSECRETTOKEN/sendMessage")
+            "https://api.telegram.org/botSUPERSECRETTOKEN/sendMessage"
+        )
         with caplog.at_level("DEBUG"):
             with patch.object(tg_mod.requests, "post", side_effect=boom):
                 n.send("x")

@@ -31,8 +31,15 @@ class TelegramNotifier:
       ``requests`` would otherwise include the full URL).
     """
 
-    def __init__(self, enabled=False, bot_token="", chat_id="", events=None,
-                 timeout=10, api_base=TELEGRAM_API_BASE):
+    def __init__(
+        self,
+        enabled=False,
+        bot_token="",
+        chat_id="",
+        events=None,
+        timeout=10,
+        api_base=TELEGRAM_API_BASE,
+    ):
         self.bot_token = (bot_token or "").strip()
         # chat_id may be a negative integer (Telegram group ids look like -1001234567890);
         # keep it as a string so render/transport never reformat it.
