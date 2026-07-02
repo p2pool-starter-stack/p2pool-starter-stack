@@ -75,7 +75,7 @@ class AlertService:
         tari_down,
         tari_required,
         miner_released,
-        online_workers,
+        workers,
         workers_expected,
         now=None,
     ):
@@ -104,12 +104,13 @@ class AlertService:
             )
         self._prev_released = miner_released
 
-        # --- Worker offline / back online (debounced) ---
+        # --- Worker offline / back online (debounced off the DOWN status) ---
+        # Driven by each rig's status in the same worker rows the dashboard shows (DOWN = offline).
         # Only meaningful while workers are actually expected: when the proxy is intentionally
         # stopped (initial sync hold, or node-down failover) their absence is by design, so we
         # reset the tracker instead of aging every rig into a false "offline".
         if workers_expected:
-            for name, event in self.workers.update(online_workers, now=now):
+            for name, event in self.workers.update(workers, now=now):
                 if event == "offline":
                     alerts.append(
                         (self.EVT_WORKER_OFFLINE, self._fmt(f"\U0001f534 Worker offline: {name}"))

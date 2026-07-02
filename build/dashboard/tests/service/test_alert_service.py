@@ -34,7 +34,7 @@ def _ev(
     tari_down=False,
     tari_required=True,
     miner_released=True,
-    online_workers=(),
+    workers=(),
     workers_expected=False,
     now=0,
 ):
@@ -43,7 +43,7 @@ def _ev(
         tari_down=tari_down,
         tari_required=tari_required,
         miner_released=miner_released,
-        online_workers=list(online_workers),
+        workers=list(workers),
         workers_expected=workers_expected,
         now=now,
     )
@@ -51,6 +51,16 @@ def _ev(
 
 def _keys(alerts):
     return [k for k, _ in alerts]
+
+
+def _on(*names):
+    """Worker rows the proxy reports online."""
+    return [{"name": n, "status": "online"} for n in names]
+
+
+def _down(*names):
+    """Worker rows still listed but disconnected — the DOWN state the dashboard shows."""
+    return [{"name": n, "status": "offline"} for n in names]
 
 
 class TestNodeEdges:
@@ -113,35 +123,36 @@ class TestSyncFinished:
 
 class TestWorkerEdges:
     def test_offline_then_recovered(self):
+        # Offline is driven by the DOWN status the dashboard shows, not by the rig vanishing.
         svc = _svc()
-        assert _ev(svc, online_workers=["rig-1"], workers_expected=True, now=0) == []
-        assert _ev(svc, online_workers=[], workers_expected=True, now=0) == []
-        assert _keys(_ev(svc, online_workers=[], workers_expected=True, now=300)) == [
+        assert _ev(svc, workers=_on("rig-1"), workers_expected=True, now=0) == []
+        assert _ev(svc, workers=_down("rig-1"), workers_expected=True, now=0) == []
+        assert _keys(_ev(svc, workers=_down("rig-1"), workers_expected=True, now=300)) == [
             AlertService.EVT_WORKER_OFFLINE
         ]
-        _ev(svc, online_workers=["rig-1"], workers_expected=True, now=300)
-        assert _keys(_ev(svc, online_workers=["rig-1"], workers_expected=True, now=420)) == [
+        _ev(svc, workers=_on("rig-1"), workers_expected=True, now=300)
+        assert _keys(_ev(svc, workers=_on("rig-1"), workers_expected=True, now=420)) == [
             AlertService.EVT_WORKER_RECOVERED
         ]
 
     def test_not_expected_resets_and_silences(self):
         svc = _svc()
-        _ev(svc, online_workers=["rig-1"], workers_expected=True, now=0)
-        _ev(svc, online_workers=[], workers_expected=True, now=0)
-        _ev(svc, online_workers=[], workers_expected=True, now=300)  # rig-1 now offline
+        _ev(svc, workers=_on("rig-1"), workers_expected=True, now=0)
+        _ev(svc, workers=_down("rig-1"), workers_expected=True, now=0)
+        _ev(svc, workers=_down("rig-1"), workers_expected=True, now=300)  # rig-1 now offline
         # Proxy intentionally stopped (sync hold / failover): reset, no alert.
-        assert _ev(svc, online_workers=[], workers_expected=False, now=330) == []
+        assert _ev(svc, workers=[], workers_expected=False, now=330) == []
         # Re-admission re-baselines silently — no spurious "recovered".
-        assert _ev(svc, online_workers=["rig-1"], workers_expected=True, now=360) == []
+        assert _ev(svc, workers=_on("rig-1"), workers_expected=True, now=360) == []
 
 
 class TestEventFiltering:
     def test_disabled_events_are_dropped(self):
         svc = _svc(notifier=_FakeNotifier(allow={AlertService.EVT_NODE_DOWN}))
-        _ev(svc, online_workers=["rig-1"], workers_expected=True, now=0)
-        _ev(svc, online_workers=[], workers_expected=True, now=0)
+        _ev(svc, workers=_on("rig-1"), workers_expected=True, now=0)
+        _ev(svc, workers=_down("rig-1"), workers_expected=True, now=0)
         # worker_offline is computed but filtered out because it's not in the allow-set.
-        assert _ev(svc, online_workers=[], workers_expected=True, now=300) == []
+        assert _ev(svc, workers=_down("rig-1"), workers_expected=True, now=300) == []
 
 
 class TestHostLabel:
@@ -167,7 +178,7 @@ class TestProcess:
             tari_down=False,
             tari_required=True,
             miner_released=True,
-            online_workers=[],
+            workers=[],
             workers_expected=False,
         )
         assert out == []
@@ -182,7 +193,7 @@ class TestProcess:
             tari_down=False,
             tari_required=True,
             miner_released=True,
-            online_workers=[],
+            workers=[],
             workers_expected=False,
         )
         out = await svc.process(
@@ -190,7 +201,7 @@ class TestProcess:
             tari_down=False,
             tari_required=True,
             miner_released=True,
-            online_workers=[],
+            workers=[],
             workers_expected=False,
         )
         assert _keys(out) == [AlertService.EVT_NODE_DOWN]

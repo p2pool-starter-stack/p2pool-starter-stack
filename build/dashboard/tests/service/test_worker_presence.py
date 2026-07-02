@@ -14,123 +14,148 @@ class _Clock:
         self.t += secs
 
 
-def _monitor(offline_after=300, recovery_after=120, retention=7 * 24 * 3600):
+def _monitor(offline_after=300, recovery_after=120):
     clock = _Clock()
     m = WorkerPresenceMonitor(
-        offline_after=offline_after, recovery_after=recovery_after, retention=retention, clock=clock
+        offline_after=offline_after, recovery_after=recovery_after, clock=clock
     )
     return m, clock
 
 
+def _on(*names):
+    """Worker rows the proxy reports online."""
+    return [{"name": n, "status": "online"} for n in names]
+
+
+def _down(*names):
+    """Worker rows still listed by the proxy but disconnected — the DOWN state the UI shows."""
+    return [{"name": n, "status": "offline"} for n in names]
+
+
 class TestBaseline:
-    def test_first_sighting_is_silent(self):
-        # A brand-new worker is registered ONLINE with no edge — it's not a "recovery".
+    def test_first_sighting_online_is_silent(self):
+        # A brand-new worker is baselined ONLINE with no edge — it's not a "recovery".
         m, _ = _monitor()
-        assert m.update({"rig-1"}) == []
+        assert m.update(_on("rig-1")) == []
+
+    def test_first_sighting_down_is_silent(self):
+        # A rig already DOWN at startup baselines OFFLINE silently — a restart must not replay it.
+        m, _ = _monitor()
+        assert m.update(_down("rig-1")) == []
+        assert m._workers["rig-1"]["state"] == "offline"
 
     def test_steady_online_emits_nothing(self):
         m, clock = _monitor()
-        m.update({"rig-1"})
+        m.update(_on("rig-1"))
         for _ in range(5):
             clock.advance(30)
-            assert m.update({"rig-1"}) == []
+            assert m.update(_on("rig-1")) == []
 
 
 class TestOfflineDebounce:
     def test_not_offline_before_threshold(self):
         m, clock = _monitor()
-        m.update({"rig-1"})  # baseline online
+        m.update(_on("rig-1"))  # baseline online
         clock.advance(30)
-        assert m.update(set()) == []  # absence streak starts here (within debounce)
+        assert m.update(_down("rig-1")) == []  # DOWN streak starts here (within debounce)
         clock.advance(269)
-        assert m.update(set()) == []  # 269s absent — still under the 300s threshold
+        assert m.update(_down("rig-1")) == []  # 269s DOWN — still under the 300s threshold
 
     def test_offline_after_threshold(self):
         m, clock = _monitor()
-        m.update({"rig-1"})
-        m.update(set())  # absence streak starts here
+        m.update(_on("rig-1"))
+        m.update(_down("rig-1"))  # DOWN streak starts here
         clock.advance(300)
-        assert m.update(set()) == [("rig-1", "offline")]
+        assert m.update(_down("rig-1")) == [("rig-1", "offline")]
 
     def test_offline_emitted_once(self):
         m, clock = _monitor()
-        m.update({"rig-1"})
-        m.update(set())
+        m.update(_on("rig-1"))
+        m.update(_down("rig-1"))
         clock.advance(300)
-        assert m.update(set()) == [("rig-1", "offline")]
+        assert m.update(_down("rig-1")) == [("rig-1", "offline")]
         clock.advance(300)
-        assert m.update(set()) == []  # already offline — no repeat
+        assert m.update(_down("rig-1")) == []  # already offline — no repeat
 
-    def test_brief_drop_does_not_trip(self):
+    def test_brief_down_does_not_trip(self):
         m, clock = _monitor()
-        m.update({"rig-1"})
+        m.update(_on("rig-1"))
         clock.advance(60)
-        assert m.update(set()) == []  # gone 60s
+        assert m.update(_down("rig-1")) == []  # DOWN 60s
         clock.advance(30)
-        assert m.update({"rig-1"}) == []  # back well before 300s
+        assert m.update(_on("rig-1")) == []  # back well before 300s
+
+    def test_vanishing_from_table_is_not_offline(self):
+        # A rig the proxy stops listing entirely (fell off the worker table) is forgotten, not
+        # aged to "offline" — the dashboard no longer shows it, so neither does the alerter.
+        m, clock = _monitor()
+        m.update(_on("rig-1"))
+        clock.advance(600)
+        assert m.update([]) == []  # gone from the table, never went DOWN → no alert
+        assert "rig-1" not in m._workers
 
 
 class TestRecoveryHysteresis:
     def _take_offline(self, m, clock):
-        m.update({"rig-1"})
-        m.update(set())
+        m.update(_on("rig-1"))
+        m.update(_down("rig-1"))
         clock.advance(300)
-        assert m.update(set()) == [("rig-1", "offline")]
+        assert m.update(_down("rig-1")) == [("rig-1", "offline")]
 
     def test_recovered_only_after_stable_window(self):
         m, clock = _monitor()
         self._take_offline(m, clock)
-        # Reappears, but "back online" holds until it's been present for recovery_after.
-        assert m.update({"rig-1"}) == []
+        # Reappears online, but "back online" holds until it's been present for recovery_after.
+        assert m.update(_on("rig-1")) == []
         clock.advance(119)
-        assert m.update({"rig-1"}) == []
+        assert m.update(_on("rig-1")) == []
         clock.advance(1)
-        assert m.update({"rig-1"}) == [("rig-1", "recovered")]
+        assert m.update(_on("rig-1")) == [("rig-1", "recovered")]
 
     def test_flap_during_recovery_does_not_emit(self):
         # A one-cycle reconnect during an outage must not produce a recovered→offline spam.
         m, clock = _monitor()
         self._take_offline(m, clock)
         clock.advance(30)
-        assert m.update({"rig-1"}) == []  # blink on (still offline)
+        assert m.update(_on("rig-1")) == []  # blink online (still offline)
         clock.advance(30)
-        assert m.update(set()) == []  # blink off — no recovered, no re-offline
+        assert m.update(_down("rig-1")) == []  # blink DOWN — no recovered, no re-offline
         clock.advance(30)
-        assert m.update(set()) == []
+        assert m.update(_down("rig-1")) == []
 
 
 class TestMultipleWorkers:
     def test_independent_per_worker_state(self):
         m, clock = _monitor()
-        m.update({"rig-1", "rig-2"})
-        # rig-2 stays online; rig-1 drops.
-        m.update({"rig-2"})
+        m.update(_on("rig-1", "rig-2"))
+        # rig-2 stays online; rig-1 goes DOWN.
+        m.update(_on("rig-2") + _down("rig-1"))
         clock.advance(300)
-        assert m.update({"rig-2"}) == [("rig-1", "offline")]
+        assert m.update(_on("rig-2") + _down("rig-1")) == [("rig-1", "offline")]
 
 
 class TestReset:
     def test_reset_clears_state_and_rebaselines_silently(self):
         m, clock = _monitor()
-        m.update({"rig-1"})
-        m.update(set())
+        m.update(_on("rig-1"))
+        m.update(_down("rig-1"))
         clock.advance(300)
-        assert m.update(set()) == [("rig-1", "offline")]
+        assert m.update(_down("rig-1")) == [("rig-1", "offline")]
         m.reset()
         # After a reset (e.g. proxy intentionally stopped), the worker re-appears as a fresh
         # baseline — no "recovered" edge.
-        assert m.update({"rig-1"}) == []
+        assert m.update(_on("rig-1")) == []
 
 
-class TestRetention:
-    def test_long_absent_worker_is_forgotten(self):
-        m, clock = _monitor(retention=1000)
-        m.update({"rig-1"})
-        m.update(set())
+class TestFalloff:
+    def test_worker_forgotten_when_it_leaves_the_table(self):
+        m, clock = _monitor()
+        m.update(_on("rig-1"))
+        m.update(_down("rig-1"))
         clock.advance(300)
-        m.update(set())  # offline emitted
-        clock.advance(1000)
-        m.update(set())  # past retention -> pruned
+        m.update(_down("rig-1"))  # offline emitted
+        # The lifecycle eventually drops the ghost from the worker table (#182).
+        assert m.update([]) == []
         assert "rig-1" not in m._workers
-        # Returning after retention counts as new: silent baseline, not a recovery.
-        assert m.update({"rig-1"}) == []
+        # Returning after that counts as new: silent baseline, not a recovery.
+        assert m.update(_on("rig-1")) == []

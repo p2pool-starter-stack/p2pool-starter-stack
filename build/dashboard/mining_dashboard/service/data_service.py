@@ -788,9 +788,9 @@ class DataService:
                         tari_down=tari_down,
                         tari_required=TARI_REQUIRED,
                         miner_released=self.miner_released,
-                        online_workers=[
-                            w["name"] for w in final_workers if w.get("status") == "online"
-                        ],
+                        # The same worker rows the dashboard shows; the monitor reads each rig's
+                        # status (DOWN = offline) so alerts line up with the on-screen state.
+                        workers=final_workers,
                         workers_expected=self.miner_released and not self.workers_rejected,
                     )
 
