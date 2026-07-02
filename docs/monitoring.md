@@ -80,13 +80,12 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
   process that's already running — no extra container or daemon. If the host dies, the
   dashboard dies with it, the pings stop, and the alert fires. If only the dashboard container
   restarts briefly, the **grace period** absorbs the gap.
-- **Health-aware (optional).** With `signal_fail_on_node_down` on (the default), the stack
-  sends a `/fail` signal — turning the check red immediately — whenever a *required* node is
-  down: monerod always, and Tari only when `dashboard.tari_required` is `true` (the same
-  condition that fails miners over to their backup pools, see
-  [Configuration](configuration.md#configuration-reference)). So the check catches a
-  degraded-but-alive stack too, not just a dead host. Set it to `false` for plain liveness
-  (only a dead host trips the alert).
+- **Liveness only — is the *stack* up.** This is a pure dead-man's switch: it reports that the
+  dashboard loop (and therefore the host) is alive, nothing more. It deliberately does **not** try
+  to say whether a node is synced or a miner is connected. In-stack health — monerod or Tari down
+  while the box is still running — is reported by the [Telegram alerter](https://github.com/p2pool-starter-stack/pithead/issues/121)
+  (#121), which can send a specific, actionable message a single red check can't. Two tools, two
+  jobs: Healthchecks answers "did the whole thing die?", Telegram answers "what's wrong inside it?".
 - **Routed over Tor by default.** The ping goes through the stack's [Tor](architecture.md) SOCKS
   proxy (`healthchecks.tor: true`), so the endpoint sees a Tor exit, not your host IP. Set
   `healthchecks.tor: false` to ping directly over clearnet — needed for a self-hosted instance on
@@ -105,7 +104,6 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
 | `healthchecks.ping_url` | *(blank)* | The ping URL from Healthchecks.io, e.g. `https://hc-ping.com/<uuid>`. A bare uuid/slug is also accepted and is joined onto `base_url`. Treated as a secret (stored in the owner-only `.env`). |
 | `healthchecks.base_url` | `https://hc-ping.com` | Only used when `ping_url` is a bare uuid (not a full URL). Override it to point at a [self-hosted](#self-hosting-your-own-instance) instance. |
 | `healthchecks.interval_seconds` | `60` | Minimum seconds between pings (default **1 minute**). The loop runs every 30s, so a value below that just pings every cycle. Match your Healthchecks **period** to this and give the **grace** enough slack for a restart (the recommended **1-minute period / 5-minute grace** above). |
-| `healthchecks.signal_fail_on_node_down` | `true` | Send `/fail` (red the check now) while a required node is down. `false` = plain liveness only. |
 | `healthchecks.tor` | `true` | Route the ping through the stack's **Tor** SOCKS proxy (the same one the XvB fetch uses), so Healthchecks.io sees a Tor exit instead of your host IP. Set `false` for a **self-hosted instance on your LAN** — Tor can't reach a private `192.168.x`/`10.x`/`localhost` address — or if `hc-ping.com` is ever Tor-blocked. See [Privacy note](#privacy-note). |
 
 > Auto-provisioning the check via the Healthchecks.io Management API (so you wouldn't have to
@@ -210,9 +208,7 @@ Use a **separate** check for the host timer if you want to tell "the host is up"
 
 ## See also
 
-- [Configuration](configuration.md) — the full `config.json` reference, including
-  `dashboard.tari_required`, which governs the `/fail` signal.
-- [Architecture](architecture.md) — the privacy model and the Tor routing this feature sits
-  outside of.
+- [Configuration](configuration.md) — the full `config.json` reference.
+- [Architecture](architecture.md) — the privacy model and the Tor routing this feature rides.
 - [Operations & Maintenance](operations.md) — the `pithead` command reference, logs, and
   troubleshooting.

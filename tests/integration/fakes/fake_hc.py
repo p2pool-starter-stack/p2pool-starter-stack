@@ -1,9 +1,8 @@
 """Fake Healthchecks.io ping receiver for the mini-stack e2e (#79).
 
 Records the request path of every ping to a log file so the runner can assert the REAL
-dashboard loop actually fired a heartbeat — and a ``/fail`` when a required node is down —
-end to end, not against a mocked ``requests.get``. Deliberately tiny: stdlib only, always
-200 OK (like hc-ping.com), never crashes the loop.
+dashboard loop actually fired a liveness heartbeat end to end, not against a mocked
+``requests.get``. Deliberately tiny: stdlib only, always 200 OK (like hc-ping.com).
 """
 
 import argparse

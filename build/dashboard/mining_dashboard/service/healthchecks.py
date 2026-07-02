@@ -9,10 +9,10 @@ panic, NIC death) an in-stack notifier can't report from a dead machine.
 Design notes:
 - **Default off.** A disabled client is a no-op: :meth:`ping` returns immediately, opens no
   socket, and logs nothing.
-- **Fails silently.** A ping that can't reach the endpoint (offline, or a Tor-only host that
-  can't reach clearnet hc-ping.com) is logged at DEBUG only — never WARNING/ERROR — so the
-  log stays quiet, consistent with the stack's offline check discipline (#59). A blank
-  ``ping_url`` while *enabled* is a genuine misconfiguration and warns once.
+- **Fails silently.** A ping that can't reach the endpoint (offline, or Tor momentarily down)
+  is logged at DEBUG only — never WARNING/ERROR — so the log stays quiet, consistent with the
+  stack's offline check discipline (#59). A blank ``ping_url`` while *enabled* is a genuine
+  misconfiguration and warns once.
 - **Throttled.** :data:`interval` is a floor between pings; the loop calls every cycle but we
   only hit the network once per interval. The throttle clock only advances on a *successful*
   send, so while offline we keep retrying every cycle rather than backing off.
@@ -30,7 +30,6 @@ import requests
 from mining_dashboard.config.config import (
     HEALTHCHECKS_BASE_URL,
     HEALTHCHECKS_ENABLED,
-    HEALTHCHECKS_FAIL_ON_NODE_DOWN,
     HEALTHCHECKS_INTERVAL_SEC,
     HEALTHCHECKS_PING_URL,
     HEALTHCHECKS_TOR_PROXY,
@@ -54,7 +53,7 @@ def _resolve_ping_url(ping_url, base_url):
     - A bare uuid/slug is joined onto ``base_url`` (default ``https://hc-ping.com``; override it
       to point at a self-hosted instance, e.g. ``https://hc.example.com/ping``).
 
-    Trailing slashes are normalised so the ``/fail`` and ``/start`` suffixes append cleanly.
+    A trailing slash is stripped so the stored URL is canonical.
     """
     ping_url = (ping_url or "").strip()
     if not ping_url:
@@ -73,14 +72,12 @@ class HealthchecksClient:
         ping_url,
         base_url,
         interval_seconds,
-        fail_on_node_down,
         tor_proxy=None,
         clock=time.monotonic,
     ):
         self.enabled = bool(enabled)
         self.url = _resolve_ping_url(ping_url, base_url)
         self.interval = max(0, int(interval_seconds or 0))
-        self.fail_on_node_down = bool(fail_on_node_down)
         # A requests proxies dict when routing over Tor, else None (direct clearnet ping). Reuses the
         # bridge Tor SOCKS the XvB fetch uses; socks5h so hc-ping.com's host resolves through Tor too.
         self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
@@ -90,9 +87,8 @@ class HealthchecksClient:
 
         if self.enabled and self.url:
             logger.info(
-                "Healthchecks.io dead-man's switch enabled (ping every %ss%s, %s).",
+                "Healthchecks.io dead-man's switch enabled (ping every %ss, %s).",
                 self.interval,
-                ", /fail on required-node-down" if self.fail_on_node_down else "",
                 "over Tor" if self._proxies else "over clearnet",
             )
 
@@ -104,14 +100,8 @@ class HealthchecksClient:
             ping_url=HEALTHCHECKS_PING_URL,
             base_url=HEALTHCHECKS_BASE_URL,
             interval_seconds=HEALTHCHECKS_INTERVAL_SEC,
-            fail_on_node_down=HEALTHCHECKS_FAIL_ON_NODE_DOWN,
             tor_proxy=HEALTHCHECKS_TOR_PROXY,
         )
-
-    @property
-    def active(self):
-        """True only when enabled *and* a usable ping URL is configured."""
-        return self.enabled and bool(self.url)
 
     def _due(self, now):
         """Whether enough time has passed since the last successful ping to send another."""
@@ -119,11 +109,12 @@ class HealthchecksClient:
             return True
         return (now - self._last_ping) >= self.interval
 
-    def ping(self, fail=False):
-        """Send one heartbeat (or ``/fail``) if due. Never raises.
+    def ping(self):
+        """Send one liveness heartbeat if due. Never raises.
 
-        ``fail`` signals a required node is down; it sends ``/fail`` only when
-        ``fail_on_node_down`` is on, otherwise a plain success ping (liveness only).
+        This is a pure dead-man's switch: it only reports that the stack (this dashboard loop) is
+        alive. Node-health alerting — monerod/Tari down while the box is up — is out of scope and
+        handled in-stack by the Telegram alerter (#121), which can say more than a red check can.
 
         Returns ``True`` if a request was sent and accepted, else ``False`` (disabled,
         misconfigured, throttled, or the request failed).
@@ -144,9 +135,8 @@ class HealthchecksClient:
         if not self._due(now):
             return False
 
-        endpoint = self.url + "/fail" if (fail and self.fail_on_node_down) else self.url
         try:
-            requests.get(endpoint, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
+            requests.get(self.url, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
             # Advance the throttle only on success so a transient outage keeps retrying.
             self._last_ping = now
             return True

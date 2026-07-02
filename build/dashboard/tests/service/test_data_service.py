@@ -913,7 +913,7 @@ class TestRunIteration:
                 await svc.run()
 
     async def test_healthchecks_pinged_when_healthy(self):
-        # Both nodes reachable & synced → a plain success ping (fail=False) each cycle.
+        # Enabled + healthy → a plain liveness ping (no args) each cycle.
         svc, sm, proxy = _make_service()
         proxy.get_workers.return_value = {"workers": []}
         svc.healthchecks = MagicMock()
@@ -931,27 +931,23 @@ class TestRunIteration:
             },
             tari_sync={"is_syncing": False, "reachable": True},
         )
-        svc.healthchecks.ping.assert_called_once_with(fail=False)
+        svc.healthchecks.ping.assert_called_once_with()
 
-    async def test_healthchecks_fail_when_required_node_down(self):
-        # A debounced-down required node (monerod) → /fail signal (fail=True).
+    async def test_healthchecks_pinged_even_when_a_node_is_down(self):
+        # Pure dead-man's switch: the heartbeat reports only that the STACK is alive, so a node
+        # being down must NOT change or suppress the ping (that's the Telegram alerter's job, #121).
         svc, sm, proxy = _make_service()
         proxy.get_workers.return_value = {"workers": []}
         svc.healthchecks = MagicMock()
         svc.healthchecks.enabled = True
         svc.healthchecks.ping.return_value = True
-        # Force the debounced node-health verdict to DOWN for this cycle.
-        svc.monero_health = MagicMock()
-        svc.monero_health.update.return_value = True
-        svc.tari_health = MagicMock()
-        svc.tari_health.update.return_value = False
 
         await self._run_one_iteration(
             svc,
-            monero_sync={"is_syncing": False, "reachable": False},
+            monero_sync={"is_syncing": False, "reachable": False},  # monerod down
             tari_sync={"is_syncing": False, "reachable": True},
         )
-        svc.healthchecks.ping.assert_called_once_with(fail=True)
+        svc.healthchecks.ping.assert_called_once_with()
 
     async def test_healthchecks_not_pinged_when_disabled(self):
         # Default: the disabled client is never invoked from the loop (no worker thread).

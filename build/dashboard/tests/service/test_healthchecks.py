@@ -25,7 +25,6 @@ def _client(clock=None, **overrides):
         ping_url="https://hc-ping.com/abc",
         base_url="https://hc-ping.com",
         interval_seconds=60,
-        fail_on_node_down=True,
     )
     cfg.update(overrides)
     return HealthchecksClient(clock=clock or _Clock(), **cfg)
@@ -66,13 +65,6 @@ class TestResolvePingUrl:
         assert _resolve_ping_url(None, "https://hc-ping.com") == ""
 
 
-class TestActive:
-    def test_active_requires_enabled_and_url(self):
-        assert _client().active is True
-        assert _client(enabled=False).active is False
-        assert _client(ping_url="", base_url="https://hc-ping.com").active is False
-
-
 class TestPingDisabledOrUnconfigured:
     def test_disabled_is_a_noop(self):
         c = _client(enabled=False)
@@ -95,23 +87,12 @@ class TestPingDisabledOrUnconfigured:
 
 class TestPingSuccess:
     def test_healthy_ping_hits_the_url(self):
+        # Pure liveness: every ping hits the base URL (no /fail path — health-aware was dropped;
+        # node-health alerting is the Telegram alerter's job, #121).
         c = _client()
         with patch.object(hc_mod.requests, "get") as get:
             assert c.ping() is True
         get.assert_called_once()
-        assert get.call_args.args[0] == "https://hc-ping.com/abc"
-
-    def test_fail_signal_appends_fail(self):
-        c = _client()
-        with patch.object(hc_mod.requests, "get") as get:
-            assert c.ping(fail=True) is True
-        assert get.call_args.args[0] == "https://hc-ping.com/abc/fail"
-
-    def test_fail_signal_ignored_when_disabled_for_node_down(self):
-        # signal_fail_on_node_down off → a node-down still sends a *success* ping (liveness only).
-        c = _client(fail_on_node_down=False)
-        with patch.object(hc_mod.requests, "get") as get:
-            assert c.ping(fail=True) is True
         assert get.call_args.args[0] == "https://hc-ping.com/abc"
 
 
@@ -209,10 +190,8 @@ class TestFromConfig:
             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
             patch.object(hc_mod, "HEALTHCHECKS_BASE_URL", "https://hc-ping.com"),
             patch.object(hc_mod, "HEALTHCHECKS_INTERVAL_SEC", 120),
-            patch.object(hc_mod, "HEALTHCHECKS_FAIL_ON_NODE_DOWN", False),
         ):
             c = HealthchecksClient.from_config()
         assert c.enabled is True
         assert c.url == "https://hc-ping.com/zzz"
         assert c.interval == 120
-        assert c.fail_on_node_down is False

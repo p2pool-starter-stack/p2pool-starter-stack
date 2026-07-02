@@ -80,19 +80,20 @@ XVB_DONOR_ID = os.environ.get("XVB_DONOR_ID", "")
 # Feature Flag: Toggles the XvB algorithmic switching logic
 ENABLE_XVB = os.environ.get("XVB_ENABLED", "true").lower() == "true"
 
-# XvB stats are fetched over Tor so the operator's home IP isn't correlated with the wallet the
-# query carries (#163). socks5h resolves xmrvsbeast.com via Tor too (no local DNS leak). The
-# host-networked dashboard reaches the bridge container's Tor SOCKS at 172.28.0.25:9050.
-XVB_TOR_PROXY = os.environ.get("XVB_TOR_PROXY", "socks5h://172.28.0.25:9050")
+# The bridge container's Tor SOCKS proxy, shared by every dashboard call that must reach clearnet
+# without leaking the host IP: the XvB stats fetch + raffle registration (#163), the update check
+# (#224), and the Healthchecks.io ping (#79). socks5h resolves the target host via Tor too (no local
+# DNS leak). The host-networked dashboard reaches it at 172.28.0.25:9050 (tracks the subnet, #180).
+TOR_SOCKS_PROXY = os.environ.get("TOR_SOCKS_PROXY", "socks5h://172.28.0.25:9050")
 
 # Route XvB DONATION MINING through Tor by default too (#166), not just the stats fetch (#163): while
 # donating, the proxy connects to na.xmrvsbeast.com, which would otherwise expose the host IP. The
 # algo controller sets this host:port as the XvB pool's per-pool `socks5` field (xmrig-proxy resolves
 # that pool's DNS proxy-side). `xvb.tor: false` opts out (direct, for max yield). The host:port is
-# derived from XVB_TOR_PROXY (so a custom subnet, #180, carries through) with the scheme stripped —
+# derived from TOR_SOCKS_PROXY (so a custom subnet, #180, carries through) with the scheme stripped —
 # xmrig wants a bare host:port.
 XVB_TOR_ENABLED = os.environ.get("XVB_TOR_ENABLED", "true").lower() == "true"
-XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
+XVB_TOR_SOCKS5 = TOR_SOCKS_PROXY.split("://", 1)[-1]
 
 # XvB raffle-registration endpoint (#263). Mining to the XvB pool isn't enough to enter the raffle —
 # a wallet is only entered once it's registered against this endpoint (and only if it already has a
@@ -100,7 +101,7 @@ XVB_TOR_SOCKS5 = XVB_TOR_PROXY.split("://", 1)[-1]
 # not to *advertise* this API ("to mitigate abuse"), so don't surface the bare URL in user-facing
 # docs/README — but it ships here as the working default. Override with XVB_SUBMIT_URL (e.g. a test
 # server); set it to a disable sentinel (off/none/false/disabled/0) to turn auto-registration off
-# while keeping XvB on. The call ALWAYS rides Tor (XVB_TOR_PROXY) like the stats fetch (#163) since it
+# while keeping XvB on. The call ALWAYS rides Tor (TOR_SOCKS_PROXY) like the stats fetch (#163) since it
 # carries the full wallet — it is NOT subject to the xvb.tor donation opt-out.
 #
 # Contract — GET ?address=<full wallet>, verified live 2026-06-28:
@@ -234,23 +235,15 @@ except ValueError:
 if HEALTHCHECKS_INTERVAL_SEC < 0:
     HEALTHCHECKS_INTERVAL_SEC = 0
 
-# When true, send Healthchecks a `/fail` (instead of a success ping) while a *required* node
-# is down — i.e. the same condition that rejects workers in #31 (monerod always; Tari only
-# when TARI_REQUIRED). This makes the check health-aware: it goes red on a degraded-but-alive
-# stack, not just a dead host. Set false for plain liveness (only host death trips it).
-HEALTHCHECKS_FAIL_ON_NODE_DOWN = (
-    os.environ.get("HEALTHCHECKS_FAIL_ON_NODE_DOWN", "true").strip().lower() == "true"
-)
-
-# Route the ping through the bridge Tor SOCKS (reusing XVB_TOR_PROXY, #163) so hc-ping.com sees a
-# Tor exit, not the host IP — the ping is otherwise the one clearnet beacon on the box. Default ON,
+# Route the ping through the bridge Tor SOCKS (reusing TOR_SOCKS_PROXY) so hc-ping.com sees a Tor
+# exit, not the host IP — the ping is otherwise the one clearnet beacon on the box. Default ON,
 # consistent with the stack's Tor-first posture and the XvB fetch (socks5h resolves the host via Tor
 # too, no DNS leak). Set false (healthchecks.tor:false) for a self-hosted instance on your LAN —
 # ponytail: RFC1918/localhost is unreachable through Tor, so that case must opt out — or if
 # hc-ping.com is ever Tor-blocked. HEALTHCHECKS_TOR_PROXY is None when off (a direct clearnet ping).
 HEALTHCHECKS_TOR = os.environ.get("HEALTHCHECKS_TOR", "true").strip().lower() == "true"
 HEALTHCHECKS_TOR_PROXY = (
-    os.environ.get("HEALTHCHECKS_TOR_PROXY", XVB_TOR_PROXY) if HEALTHCHECKS_TOR else None
+    os.environ.get("HEALTHCHECKS_TOR_PROXY", TOR_SOCKS_PROXY) if HEALTHCHECKS_TOR else None
 )
 
 # --- Monero Configuration ---

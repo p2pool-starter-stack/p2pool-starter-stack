@@ -3,7 +3,7 @@ import re
 
 import requests
 
-from mining_dashboard.config.config import XVB_SUBMIT_URL, XVB_TOR_PROXY
+from mining_dashboard.config.config import TOR_SOCKS_PROXY, XVB_SUBMIT_URL
 from mining_dashboard.helper.utils import parse_hashrate
 
 # register() outcomes (#263). The endpoint returns plaintext "ERROR: ..." with a 422 for the error
@@ -31,7 +31,7 @@ class XvbClient:
         self.logger = logging.getLogger("XvbClient")
         self.wallet_address = wallet_address
         self.url = "https://xmrvsbeast.com/cgi-bin/p2pool_bonus_history.cgi"
-        self.tor_proxy = tor_proxy if tor_proxy is not None else XVB_TOR_PROXY
+        self.tor_proxy = tor_proxy if tor_proxy is not None else TOR_SOCKS_PROXY
         self.submit_url = submit_url if submit_url is not None else XVB_SUBMIT_URL
 
         # Pre-compile regex patterns
@@ -81,7 +81,7 @@ class XvbClient:
         share in the P2Pool PPLNS window, so callers should gate this on PPLNS-share eligibility;
         before a share lands server-side the call is a harmless no-op and we just retry next poll.
 
-        ALWAYS routes over the SAME Tor SOCKS5 proxy as get_stats (XVB_TOR_PROXY) — the call carries
+        ALWAYS routes over the SAME Tor SOCKS5 proxy as get_stats (TOR_SOCKS_PROXY) — the call carries
         the FULL wallet address, so a clearnet request would correlate the operator's IP with the
         wallet (#163). Like the stats fetch, this is NOT subject to the xvb.tor donation opt-out.
 

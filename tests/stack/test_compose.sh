@@ -209,7 +209,7 @@ sub_check() { # <label> <pattern> <min-count>
 sub_check "custom subnet rebases the bridge network (#180)" "subnet: 10.84.0.0/24" 1
 sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 7
 sub_check "custom subnet rebases the dashboard SSRF CIDR (#180)" "MINING_NET_CIDR: 10.84.0.0/24" 1
-sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "XVB_TOR_PROXY: socks5h://10.84.0.25:9050" 1
+sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "TOR_SOCKS_PROXY: socks5h://10.84.0.25:9050" 1
 
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"

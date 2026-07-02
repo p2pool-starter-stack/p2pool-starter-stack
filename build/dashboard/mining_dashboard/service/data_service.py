@@ -37,11 +37,11 @@ from mining_dashboard.config.config import (
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
     TARI_REQUIRED,
+    TOR_SOCKS_PROXY,
     UPDATE_CHECK_INTERVAL,
     UPDATE_INTERVAL,
     WORKER_FALLOFF_SEC,
     XVB_REGISTER_INTERVAL_S,
-    XVB_TOR_PROXY,
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
@@ -353,9 +353,9 @@ class DataService:
         # Per-worker connection tracking for true uptime (#169) + stale-row fall-off (#182).
         self._lifecycle = WorkerLifecycle(WORKER_FALLOFF_SEC)
         # New-release check (#224): off unless dashboard.check_for_updates is set. Routed over the
-        # bridge Tor SOCKS (reusing XVB_TOR_PROXY) so it can't reveal the host IP to GitHub.
+        # bridge Tor SOCKS (reusing TOR_SOCKS_PROXY) so it can't reveal the host IP to GitHub.
         self.update_checker = UpdateChecker(
-            GitHubReleaseClient(GITHUB_RELEASES_API, XVB_TOR_PROXY),
+            GitHubReleaseClient(GITHUB_RELEASES_API, TOR_SOCKS_PROXY),
             (os.environ.get("PITHEAD_VERSION") or "").strip(),
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
@@ -833,13 +833,12 @@ class DataService:
 
                     # 6b. Healthchecks.io dead-man's switch (Issue #79). Ping each cycle so the
                     # external monitor alerts on the *absence* of a ping if the host ever dies
-                    # (power loss, crash, NIC death). Send /fail instead while a *required* node
-                    # is down — the same predicate as #31's worker rejection: monerod always,
-                    # Tari only when required. The client throttles and fails silently; gate on
-                    # `enabled` so a disabled (default) stack never spawns the worker thread.
+                    # (power loss, crash, NIC death) — a pure "is the stack alive" liveness signal.
+                    # Node-health alerting (a node down while the box is up) is out of scope here;
+                    # that's the Telegram alerter's job (#121). The client throttles and fails
+                    # silently; gate on `enabled` so a disabled (default) stack never pings.
                     if self.healthchecks.enabled:
-                        required_node_down = monero_down or (tari_down and TARI_REQUIRED)
-                        await asyncio.to_thread(self.healthchecks.ping, fail=required_node_down)
+                        await asyncio.to_thread(self.healthchecks.ping)
 
                     # 7. External XvB stats sync over Tor (#163), throttled to every 10th iteration,
                     # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.
