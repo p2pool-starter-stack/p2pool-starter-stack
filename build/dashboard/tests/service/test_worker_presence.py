@@ -85,13 +85,13 @@ class TestOfflineDebounce:
         clock.advance(30)
         assert m.update(_on("rig-1")) == []  # back well before 300s
 
-    def test_vanishing_from_table_is_not_offline(self):
-        # A rig the proxy stops listing entirely (fell off the worker table) is forgotten, not
-        # aged to "offline" — the dashboard no longer shows it, so neither does the alerter.
+    def test_vanishing_from_table_is_left_not_offline(self):
+        # A rig the proxy stops listing entirely (fell off the worker table) is reported as having
+        # LEFT — never aged to "offline", which is reserved for the DOWN-but-still-listed state.
         m, clock = _monitor()
-        m.update(_on("rig-1"))
+        m.update(_on("rig-1"))  # prime + baseline
         clock.advance(600)
-        assert m.update([]) == []  # gone from the table, never went DOWN → no alert
+        assert m.update([]) == [("rig-1", "left")]
         assert "rig-1" not in m._workers
 
 
@@ -154,8 +154,32 @@ class TestFalloff:
         m.update(_down("rig-1"))
         clock.advance(300)
         m.update(_down("rig-1"))  # offline emitted
-        # The lifecycle eventually drops the ghost from the worker table (#182).
-        assert m.update([]) == []
+        # The lifecycle eventually drops the ghost from the worker table (#182) → LEFT edge.
+        assert m.update([]) == [("rig-1", "left")]
         assert "rig-1" not in m._workers
-        # Returning after that counts as new: silent baseline, not a recovery.
-        assert m.update(_on("rig-1")) == []
+        # Returning after that counts as a fresh JOIN.
+        assert m.update(_on("rig-1")) == [("rig-1", "joined")]
+
+
+class TestJoinLeave:
+    def test_first_cycle_baselines_silently(self):
+        # The startup roster is baselined without joined edges — a restart isn't a fleet change.
+        m, _ = _monitor()
+        assert m.update(_on("rig-1", "rig-2")) == []
+
+    def test_new_worker_after_prime_joins(self):
+        m, _ = _monitor()
+        m.update(_on("rig-1"))  # prime
+        assert m.update(_on("rig-1", "rig-2")) == [("rig-2", "joined")]
+
+    def test_worker_leaving_emits_left(self):
+        m, _ = _monitor()
+        m.update(_on("rig-1", "rig-2"))  # prime
+        assert m.update(_on("rig-1")) == [("rig-2", "left")]
+
+    def test_reset_reprimes_without_joins(self):
+        m, _ = _monitor()
+        m.update(_on("rig-1"))  # prime
+        m.reset()  # e.g. proxy stopped for a failover — clears the prime flag
+        # Readmission re-baselines the whole roster silently — no "joined" spam.
+        assert m.update(_on("rig-1", "rig-2")) == []

@@ -259,7 +259,11 @@ TELEGRAM_EVENTS = {
     "node_recovered": _telegram_event_enabled("node_recovered"),
     "worker_offline": _telegram_event_enabled("worker_offline"),
     "worker_recovered": _telegram_event_enabled("worker_recovered"),
+    "worker_joined": _telegram_event_enabled("worker_joined"),
+    "worker_left": _telegram_event_enabled("worker_left"),
     "sync_finished": _telegram_event_enabled("sync_finished"),
+    "disk_space": _telegram_event_enabled("disk_space"),
+    "db_unhealthy": _telegram_event_enabled("db_unhealthy"),
 }
 
 # Worker offline/online debounce (Issue #121). A worker must be unseen this long before it's

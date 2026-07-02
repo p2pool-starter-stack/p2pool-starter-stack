@@ -36,6 +36,8 @@ def _ev(
     miner_released=True,
     workers=(),
     workers_expected=False,
+    disk_percent=0,
+    db_healthy=True,
     now=0,
 ):
     return svc.evaluate(
@@ -45,6 +47,8 @@ def _ev(
         miner_released=miner_released,
         workers=list(workers),
         workers_expected=workers_expected,
+        disk_percent=disk_percent,
+        db_healthy=db_healthy,
         now=now,
     )
 
@@ -144,6 +148,48 @@ class TestWorkerEdges:
         assert _ev(svc, workers=[], workers_expected=False, now=330) == []
         # Re-admission re-baselines silently — no spurious "recovered".
         assert _ev(svc, workers=_on("rig-1"), workers_expected=True, now=360) == []
+
+
+class TestWorkerMembership:
+    def test_joined_after_baseline(self):
+        svc = _svc()
+        _ev(svc, workers=_on("rig-1"), workers_expected=True)  # prime
+        assert _keys(_ev(svc, workers=_on("rig-1", "rig-2"), workers_expected=True)) == [
+            AlertService.EVT_WORKER_JOINED
+        ]
+
+    def test_left_when_rig_drops_off_the_table(self):
+        svc = _svc()
+        _ev(svc, workers=_on("rig-1", "rig-2"), workers_expected=True)  # prime
+        assert _keys(_ev(svc, workers=_on("rig-1"), workers_expected=True)) == [
+            AlertService.EVT_WORKER_LEFT
+        ]
+
+
+class TestDiskEdges:
+    def test_warn_then_critical_then_recover(self):
+        svc = _svc()
+        assert _ev(svc, disk_percent=40) == []  # seed silently
+        assert _keys(_ev(svc, disk_percent=88)) == [AlertService.EVT_DISK_SPACE]  # -> warn
+        assert _ev(svc, disk_percent=90) == []  # still warn, no repeat
+        assert _keys(_ev(svc, disk_percent=97)) == [AlertService.EVT_DISK_SPACE]  # -> critical
+        _, text = _ev(svc, disk_percent=40)[0]  # -> recovered
+        assert "healthy" in text
+
+    def test_seed_high_does_not_replay(self):
+        svc = _svc()
+        # Already-full at startup must not fire (restart semantics).
+        assert _ev(svc, disk_percent=99) == []
+
+
+class TestDbEdges:
+    def test_unhealthy_then_recovered(self):
+        svc = _svc()
+        assert _ev(svc, db_healthy=True) == []  # seed
+        assert _keys(_ev(svc, db_healthy=False)) == [AlertService.EVT_DB_UNHEALTHY]
+        assert _ev(svc, db_healthy=False) == []  # no repeat
+        _, text = _ev(svc, db_healthy=True)[0]
+        assert "recovered" in text
 
 
 class TestEventFiltering:

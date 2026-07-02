@@ -2093,12 +2093,17 @@ render_env() {
     tg_commands=$(jq -r 'if .telegram.commands.enabled != null then .telegram.commands.enabled | tostring else "false" end' "$CONFIG_FILE")
     # One toggle per event, defaulting to true when the key is absent.
     tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
-    local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered tg_ev_sync_finished
+    local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
+    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
     tg_ev_worker_offline=$(tg_event worker_offline)
     tg_ev_worker_recovered=$(tg_event worker_recovered)
+    tg_ev_worker_joined=$(tg_event worker_joined)
+    tg_ev_worker_left=$(tg_event worker_left)
     tg_ev_sync_finished=$(tg_event sync_finished)
+    tg_ev_disk_space=$(tg_event disk_space)
+    tg_ev_db_unhealthy=$(tg_event db_unhealthy)
 
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
@@ -2185,7 +2190,11 @@ TELEGRAM_EVENT_NODE_DOWN=$tg_ev_node_down
 TELEGRAM_EVENT_NODE_RECOVERED=$tg_ev_node_recovered
 TELEGRAM_EVENT_WORKER_OFFLINE=$tg_ev_worker_offline
 TELEGRAM_EVENT_WORKER_RECOVERED=$tg_ev_worker_recovered
+TELEGRAM_EVENT_WORKER_JOINED=$tg_ev_worker_joined
+TELEGRAM_EVENT_WORKER_LEFT=$tg_ev_worker_left
 TELEGRAM_EVENT_SYNC_FINISHED=$tg_ev_sync_finished
+TELEGRAM_EVENT_DISK_SPACE=$tg_ev_disk_space
+TELEGRAM_EVENT_DB_UNHEALTHY=$tg_ev_db_unhealthy
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET

@@ -23,9 +23,13 @@ transition, not a stream:
 |---|---|
 | 🔴 **Node down** | Your Monero (or Tari) node has been unreachable long enough to be considered down — the stack has stopped serving your rigs so they **fail over to their backup pools**. |
 | 🟢 **Node recovered** | The node is back and stable; the stack has readmitted your rigs. |
-| 🔴 **Worker offline** | A rig stopped hashing and hasn't been seen for a few minutes (a reboot, a dropped connection, a dead miner). |
+| 🔴 **Worker offline** | A rig stopped hashing and hasn't been seen for a few minutes (a reboot, a dropped connection, a dead miner) — it's showing **DOWN** on the dashboard. |
 | 🟢 **Worker back online** | A rig that had gone offline is hashing again. |
+| 🟢 **New worker joined** | A rig the stack hasn't seen before connected — a new miner joined the fleet. |
+| ⚪ **Worker left** | A rig dropped off the dashboard entirely (removed from the worker list, not just DOWN). |
 | ✅ **Sync finished** | The initial blockchain sync completed and mining has started — handy on first run, when the sync can take hours. |
+| 🟠 **Disk filling up** | The data disk crossed the warn/critical threshold — a full disk can corrupt the Monero database, so free space before it runs out. |
+| 🔴 **DB write failing** | The dashboard can no longer write to its database; hashrate history, shares, and stats will be lost on restart until it's fixed (usually disk space or permissions). |
 
 Every message is prefixed with your dashboard hostname (e.g. `[rig-box.lan]`), so if you point
 more than one stack at the same chat you can tell them apart.
@@ -134,9 +138,13 @@ block and set it to `false` — any event you don't list stays on:
 |---|---|---|
 | `node_down` | `true` | Monero/Tari node went down |
 | `node_recovered` | `true` | …and came back |
-| `worker_offline` | `true` | A rig dropped off |
+| `worker_offline` | `true` | A rig went DOWN |
 | `worker_recovered` | `true` | …and came back |
+| `worker_joined` | `true` | A new rig joined the fleet |
+| `worker_left` | `true` | A rig dropped off the dashboard entirely |
 | `sync_finished` | `true` | Initial sync done, mining started |
+| `disk_space` | `true` | Data disk filling up / critical / recovered |
+| `db_unhealthy` | `true` | Dashboard database writes failing / recovered |
 
 Run `./pithead apply` after editing.
 
@@ -170,6 +178,9 @@ Run `./pithead apply` after editing. The commands:
 | `/hashrate` | Total hashrate plus a per-rig breakdown of everything currently online. |
 | `/workers` | Every rig's online/offline state, with uptime for the ones that are up. |
 | `/sync` | Monero and Tari sync progress (percent and block height). |
+| `/system` | Host resources: disk, RAM, CPU + load, and HugePages. |
+| `/pool` | P2Pool sidechain type, pool hashrate, Monero network height, and PPLNS shares in window. |
+| `/xvb` | XvB mode, current and target tier, hashrate routed to XvB, and raffle eligibility (PPLNS share). |
 | `/help` | The command list. |
 
 The numbers come from the **same source as the dashboard**, so a reply and the web view always

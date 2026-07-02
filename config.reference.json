@@ -89,7 +89,11 @@
             "node_recovered": true,
             "worker_offline": true,
             "worker_recovered": true,
-            "sync_finished": true
+            "worker_joined": true,
+            "worker_left": true,
+            "sync_finished": true,
+            "disk_space": true,
+            "db_unhealthy": true
         },
         "commands": {
             "enabled": false

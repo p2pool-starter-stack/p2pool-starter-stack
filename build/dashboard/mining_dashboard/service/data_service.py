@@ -778,11 +778,14 @@ class DataService:
                     if self.miner_released:
                         await self._apply_worker_rejection(monero_down, tari_down)
 
-                    # 5. Operator alerts (Issue #121): push debounced node/worker/sync edges to
-                    # Telegram. Consumes the flags computed above; worker presence is only
-                    # tracked while the proxy is actually serving (miner released and not
-                    # rejected) — its intentional absence otherwise must not read as offline.
-                    # No-op unless Telegram is configured; never raises.
+                    # 5. Operator alerts (Issues #121/#45): push debounced node/worker/sync/host
+                    # edges to Telegram. Consumes the flags computed above; worker presence is only
+                    # tracked while the proxy is actually serving (miner released and not rejected) —
+                    # its intentional absence otherwise must not read as offline. Disk usage is read
+                    # once here and reused in the snapshot below. No-op unless Telegram is configured;
+                    # never raises.
+                    disk_usage = get_disk_usage()
+                    db_healthy = self.state_manager.is_db_healthy()
                     await self.alert_service.process(
                         monero_down=monero_down,
                         tari_down=tari_down,
@@ -792,6 +795,8 @@ class DataService:
                         # status (DOWN = offline) so alerts line up with the on-screen state.
                         workers=final_workers,
                         workers_expected=self.miner_released and not self.workers_rejected,
+                        disk_percent=(disk_usage or {}).get("percent", 0) or 0,
+                        db_healthy=db_healthy,
                     )
 
                     # Fetch fresh shares list to populate UI
@@ -816,7 +821,7 @@ class DataService:
                             "miner_held": self.miner_held,
                             "clearnet_sync": self.clearnet_sync_state,
                             "system": {
-                                "disk": get_disk_usage(),
+                                "disk": disk_usage,
                                 "hugepages": get_hugepages_status(),
                                 "memory": get_memory_usage(),
                                 "load": get_load_average(),

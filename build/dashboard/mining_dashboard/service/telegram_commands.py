@@ -25,7 +25,7 @@ POLL_ERROR_BACKOFF_SECONDS = 15
 
 # The commands the bot answers. All are read-only status queries — the bot can never change the
 # stack (start/stop/apply live on the CLI), so a leaked chat can at worst read status, not act.
-COMMANDS = ("status", "hashrate", "workers", "sync", "help")
+COMMANDS = ("status", "hashrate", "workers", "sync", "system", "pool", "xvb", "help")
 
 HELP_TEXT = (
     "Pithead bot — commands:\n"
@@ -33,6 +33,9 @@ HELP_TEXT = (
     "/hashrate — total + per-worker hashrate\n"
     "/workers — each rig's online/offline state\n"
     "/sync — Monero + Tari node sync progress\n"
+    "/system — host disk, RAM, CPU, HugePages\n"
+    "/pool — P2Pool sidechain + Monero network\n"
+    "/xvb — XvB mode, tier, and raffle eligibility\n"
     "/help — this message"
 )
 
@@ -148,6 +151,58 @@ def format_sync(metrics, host_label=""):
     )
 
 
+def format_system(system, host_label=""):
+    """Host resource usage — the answer to '/system'. Reads the ``system`` snapshot the dashboard
+    already collects (disk / RAM / CPU / load / HugePages)."""
+    disk = system.get("disk", {})
+    mem = system.get("memory", {})
+    hp_status, _hp_class, hp_value = system.get("hugepages", ["Unknown", "", "0/0"])
+    return "\n".join(
+        [
+            f"{_prefix(host_label)}\U0001f5a5️ System",
+            f"Disk: {disk.get('used_gb', 0):.1f}/{disk.get('total_gb', 0):.1f} GB "
+            f"({disk.get('percent_str', '0%')})",
+            f"RAM: {mem.get('used_gb', 0):.1f}/{mem.get('total_gb', 0):.1f} GB "
+            f"({mem.get('percent_str', '0%')})",
+            f"CPU: {system.get('cpu_percent', '0%')} · load {system.get('load', 'n/a')}",
+            f"HugePages: {hp_status} ({hp_value})",
+        ]
+    )
+
+
+def format_pool(metrics, host_label=""):
+    """P2Pool sidechain + Monero network figures — the answer to '/pool'."""
+    return "\n".join(
+        [
+            f"{_prefix(host_label)}\U0001f30a Pool & network",
+            f"Sidechain: P2Pool {metrics.pool_type}",
+            f"Pool hashrate: {format_hashrate(metrics.pool_hashrate)}",
+            f"Network height: {metrics.network_height:,}",
+            f"PPLNS shares: {metrics.shares_in_window} in window ({metrics.pplns_window} blocks)",
+        ]
+    )
+
+
+def format_xvb(metrics, host_label=""):
+    """XvB mode / tier / raffle eligibility — the answer to '/xvb'."""
+    prefix = _prefix(host_label)
+    if not metrics.xvb_enabled:
+        return f"{prefix}\U0001f3b0 XvB is disabled."
+    lines = [
+        f"{prefix}\U0001f3b0 XvB",
+        f"Mode: {metrics.mode}",
+        f"Current tier: {metrics.current_tier}",
+        f"Target tier: {metrics.target_tier}",
+        f"Routed to XvB: {format_hashrate(metrics.xvb_routed_1h)} (1h)",
+    ]
+    # The share half of raffle eligibility (#158): no PPLNS share means XvB wins are skipped.
+    if metrics.shares_in_window > 0:
+        lines.append("PPLNS share: \U0001f7e2 held (raffle-eligible)")
+    else:
+        lines.append("PPLNS share: ⚠ none — XvB wins skipped")
+    return "\n".join(lines)
+
+
 class TelegramCommandBot:
     """
     On-demand Telegram command interface (Issue #45) — the interactive half of the operator bot.
@@ -215,6 +270,10 @@ class TelegramCommandBot:
             return f"{_prefix(self.host_label)}Unknown command.\n{HELP_TEXT}"
 
         data = self.data_service.latest_data or {}
+        # /system reads the raw snapshot only — no need to build the full metrics.
+        if cmd == "system":
+            return format_system(data.get("system", {}), self.host_label)
+
         metrics = build_metrics(data, self.data_service.state_manager)
         if cmd == "status":
             mining = bool(data.get("miner_released") and not data.get("workers_rejected"))
@@ -225,6 +284,10 @@ class TelegramCommandBot:
             return format_workers(data.get("workers", []), self.host_label)
         if cmd == "sync":
             return format_sync(metrics, self.host_label)
+        if cmd == "pool":
+            return format_pool(metrics, self.host_label)
+        if cmd == "xvb":
+            return format_xvb(metrics, self.host_label)
         return None
 
     async def run(self):

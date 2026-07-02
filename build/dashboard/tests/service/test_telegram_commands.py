@@ -75,6 +75,9 @@ def _metrics(**over):
         ("/status", "status"),
         ("  /sync  ", "sync"),
         ("/HASHRATE", "hashrate"),
+        ("/system", "system"),
+        ("/pool", "pool"),
+        ("/xvb", "xvb"),
         ("/status@PitheadBot", "status"),  # group @mention suffix stripped
         ("/workers now please", "workers"),  # only the first word matters
         ("/help", "help"),
@@ -166,6 +169,43 @@ def test_sync_line_no_target():
     assert "Monero: ⏳ syncing 12.0%" in tc.format_sync(_metrics(monero=no_target))
 
 
+def test_system_reads_snapshot():
+    system = {
+        "disk": {"used_gb": 120.4, "total_gb": 500.0, "percent_str": "24%"},
+        "memory": {"used_gb": 3.2, "total_gb": 16.0, "percent_str": "20%"},
+        "cpu_percent": "12.5%",
+        "load": "0.50 0.40 0.30",
+        "hugepages": ["Enabled", "status-ok", "3072/3072"],
+    }
+    out = tc.format_system(system)
+    assert "Disk: 120.4/500.0 GB (24%)" in out
+    assert "RAM: 3.2/16.0 GB (20%)" in out
+    assert "CPU: 12.5%" in out
+    assert "HugePages: Enabled (3072/3072)" in out
+
+
+def test_pool_reads_metrics():
+    out = tc.format_pool(_metrics(pool_type="Mini", network_height=3210001))
+    assert "P2Pool Mini" in out
+    assert "Network height: 3,210,001" in out
+    assert "5 in window" in out  # shares_in_window from _BASE
+
+
+def test_xvb_enabled_with_share():
+    out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5))
+    assert "Current tier: Donor" in out
+    assert "raffle-eligible" in out
+
+
+def test_xvb_no_share_warns():
+    out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=0))
+    assert "wins skipped" in out
+
+
+def test_xvb_disabled():
+    assert "disabled" in tc.format_xvb(_metrics(xvb_enabled=False))
+
+
 def test_host_label_prefix():
     assert tc.format_sync(_metrics(), host_label="rig-box").startswith("[rig-box] ")
     # The placeholder is never printed.
@@ -201,6 +241,19 @@ def test_reply_for_workers_reads_snapshot(monkeypatch):
     workers = [{"name": "z", "status": "online", "h15": 1000}]
     bot = _bot(monkeypatch, latest_data={"workers": workers})
     assert "z" in bot.reply_for("/workers")
+
+
+def test_reply_for_system_reads_snapshot_without_metrics():
+    # /system reads only the raw snapshot — build_metrics must not be needed (left unstubbed).
+    ds = SimpleNamespace(latest_data={"system": {"cpu_percent": "9%"}}, state_manager=None)
+    bot = tc.TelegramCommandBot(ds, enabled=True, bot_token="t", chat_id="1", host_label="")
+    assert "CPU: 9%" in bot.reply_for("/system")
+
+
+def test_reply_for_pool_and_xvb(monkeypatch):
+    bot = _bot(monkeypatch, latest_data={}, pool_type="Nano")
+    assert "P2Pool Nano" in bot.reply_for("/pool")
+    assert "XvB" in bot.reply_for("/xvb")
 
 
 # --- enabled gating -----------------------------------------------------------------------
