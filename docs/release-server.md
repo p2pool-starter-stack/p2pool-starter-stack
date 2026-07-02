@@ -1,8 +1,8 @@
 # The Release / Validation Server
 
-This page covers how a build is validated end-to-end before release, why that needs a dedicated
-server, what GitHub Actions does for free on every PR, and how to harden the server. It is the
-operational companion to [Releasing](releasing.md) (the version/promote pipeline) and
+How a build is validated end-to-end before release, why that needs a dedicated server, what
+GitHub Actions runs on every PR, and how to harden the server. Operational companion to
+[Releasing](releasing.md) (the version/promote pipeline) and
 [Integration Testing](integration-testing.md) (the harness it runs).
 
 ## Can GitHub Actions do the full end-to-end? (no)
@@ -33,8 +33,8 @@ So the split is clean:
 | **Tiers 1–3** (logic, wiring, control plane, hardening) | GitHub-hosted runners | free (public repo) | every PR, the merge gate |
 | **Tier 4** (real synced Monero+Tari, real merge-mining, prune/full DB, TLS/Tor, the config matrix, the staging smoke test) | the dedicated server | your hardware | pre-release / on-demand, the release gate |
 
-The hosted runners catch the vast majority of regressions before merge. The dedicated server
-proves the things only reality can, and it's the blocking pre-release gate.
+The hosted runners catch most regressions before merge. The dedicated server proves what only
+real chains can, and it is the blocking pre-release gate.
 
 ## Validating PRs on the dedicated server (possible, but security-loaded)
 
