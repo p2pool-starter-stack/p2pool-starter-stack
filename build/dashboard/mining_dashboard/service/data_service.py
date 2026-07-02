@@ -51,6 +51,7 @@ from mining_dashboard.helper.utils import (
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
@@ -409,6 +410,12 @@ class DataService:
         )
         # Per-chain "currently exposed on clearnet" flags, surfaced in the snapshot for the UI/banner.
         self.clearnet_sync_state = {"monero": False, "tari": False, "active": False}
+
+        # Notifications-only Telegram alerter (Issue #121). Consumes the loop's existing edges
+        # (node down/recovered, sync gate open) plus a debounced per-worker presence tracker.
+        # Disabled unless telegram.enabled + bot_token + chat_id are configured, so this is a
+        # cheap no-op for the default stack.
+        self.alert_service = AlertService()
         # True while we've stopped the proxy to reject workers. Persisted in the snapshot so
         # a dashboard restart mid-outage still readmits workers once the node recovers.
         self.workers_rejected = False
@@ -770,6 +777,21 @@ class DataService:
                     )
                     if self.miner_released:
                         await self._apply_worker_rejection(monero_down, tari_down)
+
+                    # 5. Operator alerts (Issue #121): push debounced node/worker/sync edges to
+                    # Telegram. Consumes the flags computed above; worker presence is only
+                    # tracked while the proxy is actually serving (miner released and not
+                    # rejected) — its intentional absence otherwise must not read as offline.
+                    # No-op unless Telegram is configured; never raises.
+                    await self.alert_service.process(
+                        monero_down=monero_down,
+                        tari_down=tari_down,
+                        tari_required=TARI_REQUIRED,
+                        miner_released=self.miner_released,
+                        online_workers=[w["name"] for w in final_workers
+                                        if w.get("status") == "online"],
+                        workers_expected=self.miner_released and not self.workers_rejected,
+                    )
 
                     # Fetch fresh shares list to populate UI
                     shares_list = await asyncio.to_thread(self.state_manager.get_shares)

@@ -423,6 +423,21 @@ services:
       # Healthchecks.io alerts externally — the one failure mode an in-stack notifier can't
       # report. The ping always rides the bridge Tor SOCKS (TOR_SOCKS_PROXY). See docs/monitoring.md.
       - HEALTHCHECKS_PING_URL=${HEALTHCHECKS_PING_URL:-}
+      # --- Operator alerts: Telegram (Issues #121, #45) ---
+      # Notifications-only push alerter plus an optional on-demand command interface; both
+      # disabled by default. bot_token is a secret sourced from the owner-only .env and is never
+      # logged by the dashboard. On a Tor-only / no-clearnet host the Telegram API is unreachable
+      # and both sends and command polling fail silently. Per-event toggles default on; the
+      # command interface is opt-in via TELEGRAM_COMMANDS_ENABLED. See docs/telegram.md.
+      - TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_EVENT_NODE_DOWN=${TELEGRAM_EVENT_NODE_DOWN:-true}
+      - TELEGRAM_EVENT_NODE_RECOVERED=${TELEGRAM_EVENT_NODE_RECOVERED:-true}
+      - TELEGRAM_EVENT_WORKER_OFFLINE=${TELEGRAM_EVENT_WORKER_OFFLINE:-true}
+      - TELEGRAM_EVENT_WORKER_RECOVERED=${TELEGRAM_EVENT_WORKER_RECOVERED:-true}
+      - TELEGRAM_EVENT_SYNC_FINISHED=${TELEGRAM_EVENT_SYNC_FINISHED:-true}
+      - TELEGRAM_COMMANDS_ENABLED=${TELEGRAM_COMMANDS_ENABLED:-false}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

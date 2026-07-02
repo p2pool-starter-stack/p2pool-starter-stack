@@ -1,0 +1,217 @@
+# Telegram Alerts
+
+Pithead can push a small set of **operational alerts** to Telegram, so you find out the moment
+something needs attention — without sitting on the dashboard. It's **off by default**; this guide
+takes you from nothing to a working alert in about five minutes.
+
+> **What this is — and isn't.** This is a **notifications-only** push: the stack sends you
+> messages, you don't send it commands. There's no interactive bot, no `/status` command, no
+> remote control. (That's a separate, later feature.) Think of it as a pager, not a chat.
+
+---
+
+## What you'll get
+
+When enabled, the stack sends a short message on each of these events. Every alert is
+**debounced** — a momentary blip won't ping you, and you get **one** message per real
+transition, not a stream:
+
+| Alert | When it fires |
+|---|---|
+| 🔴 **Node down** | Your Monero (or Tari) node has been unreachable long enough to be considered down — the stack has stopped serving your rigs so they **fail over to their backup pools**. |
+| 🟢 **Node recovered** | The node is back and stable; the stack has readmitted your rigs. |
+| 🔴 **Worker offline** | A rig stopped hashing and hasn't been seen for a few minutes (a reboot, a dropped connection, a dead miner). |
+| 🟢 **Worker back online** | A rig that had gone offline is hashing again. |
+| ✅ **Sync finished** | The initial blockchain sync completed and mining has started — handy on first run, when the sync can take hours. |
+
+Every message is prefixed with your dashboard hostname (e.g. `[rig-box.lan]`), so if you point
+more than one stack at the same chat you can tell them apart.
+
+Each of these can be **turned off individually** — see [Choosing which alerts you get](#choosing-which-alerts-you-get).
+
+---
+
+## Setup
+
+You need two things: a **bot token** (the credential Pithead uses to send) and a **chat id** (where
+the messages go). Both come from Telegram, in a few taps.
+
+### 1. Create a bot and get its token
+
+1. In Telegram, open a chat with **[@BotFather](https://t.me/BotFather)** (the official bot for
+   making bots).
+2. Send `/newbot` and follow the prompts — pick a name and a username (the username must end in
+   `bot`, e.g. `my_pithead_bot`).
+3. BotFather replies with a **token** that looks like:
+   ```
+   123456789:AAExampleExampleExampleExampleExample
+   ```
+   This is your `bot_token`. **Treat it like a password** — anyone with it can post as your bot.
+
+### 2. Pick where alerts go (a group is recommended)
+
+You can send alerts straight to your own Telegram account, but a **dedicated group** is the
+cleaner choice: it keeps alerts out of your personal chats, lets you mute them with one tap, and
+lets you add other operators (or a second alert source — see
+[One chat, two bots](#one-chat-two-bots)).
+
+1. Create a new Telegram **group** (e.g. "Pithead alerts").
+2. Add your bot to it: open the group → **Add members** → search for your bot's username.
+
+> If you'd rather have alerts come as a normal direct message instead, skip the group and just
+> **send your bot a `/start`** message — that's enough for it to be allowed to message you back.
+
+### 3. Find your chat id
+
+The easiest way:
+
+1. Add **[@userinfobot](https://t.me/userinfobot)** to the same group (or message it directly for a
+   1-to-1 chat). It immediately replies with the chat's **id**.
+2. Note the number. **Group ids are negative** and often long, e.g. `-1001234567890`. A direct
+   chat id is a positive number, e.g. `987654321`.
+3. You can remove `@userinfobot` afterwards.
+
+> **Manual alternative** (no third-party bot): send any message in the group, then open
+> `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and read the `chat.id` field
+> from the JSON. (You may need to send the message *after* adding your bot for it to show up.)
+
+### 4. Put it in `config.json`
+
+Add a `telegram` block to your `config.json`. The minimum to switch it on:
+
+```json
+{
+    "monero":   { "wallet_address": "your_monero_wallet_address" },
+    "tari":     { "wallet_address": "your_tari_wallet_address" },
+
+    "telegram": {
+        "enabled": true,
+        "bot_token": "123456789:AAExampleExampleExampleExampleExample",
+        "chat_id": "-1001234567890"
+    }
+}
+```
+
+`chat_id` can be written as a string (recommended, since group ids are long and negative) or a
+number — both work.
+
+### 5. Apply
+
+```bash
+./pithead apply
+```
+
+`apply` re-renders the stack and restarts the dashboard with the new settings. On the next health
+cycle, alerting is live. To confirm it works end-to-end, you can stop a rig (or briefly stop a
+node) and wait for the offline/down alert — remember the debounce means it's a few minutes, not
+instant, by design.
+
+---
+
+## Choosing which alerts you get
+
+Every event is on by default once Telegram is enabled. To silence one, add it to a `telegram.events`
+block and set it to `false` — any event you don't list stays on:
+
+```json
+"telegram": {
+    "enabled": true,
+    "bot_token": "…",
+    "chat_id": "…",
+    "events": {
+        "worker_offline": false,
+        "worker_recovered": false
+    }
+}
+```
+
+| Event key | Default | Alert |
+|---|---|---|
+| `node_down` | `true` | Monero/Tari node went down |
+| `node_recovered` | `true` | …and came back |
+| `worker_offline` | `true` | A rig dropped off |
+| `worker_recovered` | `true` | …and came back |
+| `sync_finished` | `true` | Initial sync done, mining started |
+
+Run `./pithead apply` after editing.
+
+> **Tari note.** A node-down/recovered alert fires for **Tari only when Tari is treated as
+> required** (`dashboard.tari_required: true`, the default). If you've made Tari non-blocking, a
+> Tari outage doesn't stop your Monero mining, so it isn't alerted as a node-down — matching how
+> the rest of the stack treats a non-blocking Tari. Monero is always alerted.
+
+---
+
+## One chat, two bots
+
+Pithead's companion **Healthchecks.io** monitor (a "dead-man's switch" that detects the whole host
+going dark from *outside* the stack) can deliver its alerts to Telegram too. The two are
+complementary:
+
+- **This (in-stack) alerter** reports everything the host can tell you **while it's alive** — a
+  node down, a rig offline, sync finished.
+- **Healthchecks.io** reports the case this one can't: the **whole host is dead** (power cut,
+  kernel panic, network gone) and therefore can't send anything itself.
+
+The clean setup is to point **both at the same Telegram group** — one place for every alert. They
+necessarily use **two different bots**:
+
+- This alerter uses **your own BotFather bot** (`bot_token` above) posting to your `chat_id`.
+- Healthchecks.io has **its own** Telegram integration bot that you authorize into the chat on the
+  Healthchecks.io side — you never paste a token into Healthchecks.io.
+
+So the thing you share is the **chat**, not the token: create the group, add **both** bots to it,
+and use that group's id here. Each source labels its own messages, so you can always tell which is
+which. (Keeping them in separate chats is fine too — only useful if you want to mute or route them
+differently.)
+
+> Healthchecks.io setup is documented separately under operator monitoring; see
+> [issue #79](https://github.com/p2pool-starter-stack/pithead/issues/79).
+
+---
+
+## Privacy and secrets
+
+- **The bot token is a secret.** Pithead stores it in `.env`, which is created **owner-only**
+  (`chmod 600`) and is **git-ignored**, exactly like the Monero node RPC password. The dashboard
+  **never writes the token to a log line** — not even inside an error message.
+- **Telegram is a clearnet service.** The dashboard reaches `api.telegram.org` directly. On a
+  **Tor-only host with no clearnet egress**, the Telegram API is unreachable and sends simply
+  **fail silently** — no errors, no log spam, the rest of the stack is unaffected. (Same applies if
+  your network blocks Telegram.) If you run Tor-only and want these alerts, you'll need clearnet
+  egress for the dashboard, or rely on Healthchecks.io's own delivery.
+
+---
+
+## Tuning the debounce (advanced)
+
+The defaults err on the side of **not** crying wolf. If you want faster (or quieter) worker alerts,
+override these environment variables for the dashboard container — both are in seconds:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WORKER_OFFLINE_AFTER_SEC` | `300` | A rig must be unseen this long before "offline" fires. |
+| `WORKER_RECOVERY_AFTER_SEC` | `120` | A rig must be back this long before "back online" fires. |
+
+Node-down timing is shared with the existing failover logic (`NODE_DOWN_AFTER_SEC` /
+`NODE_RECOVERY_AFTER_SEC`). These are advanced knobs; most operators never touch them.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| No messages at all | Confirm `telegram.enabled` is `true` **and** both `bot_token` and `chat_id` are set — a missing one keeps alerting **off**. Did you run `./pithead apply`? |
+| Still nothing | Make sure the bot has been **added to the group** (or that you sent it `/start` for a direct chat). A bot can't message a chat it isn't in. |
+| `chat_id` looks wrong | Group ids are **negative** and long (`-100…`). Re-check with `@userinfobot`. |
+| Works for "down" but not a specific alert | Check `telegram.events` — that event may be toggled `false`. |
+| Tor-only host | Expected: Telegram is clearnet, so sends fail silently. See [Privacy and secrets](#privacy-and-secrets). |
+
+---
+
+## See also
+
+- [Configuration](configuration.md) — every `config.json` key, including the `telegram.*` block.
+- [The Dashboard](dashboard.md) — the live view these alerts complement.
+- [Operations & Maintenance](operations.md) — `apply`, upgrades, and troubleshooting.

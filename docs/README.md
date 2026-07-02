@@ -14,6 +14,7 @@ stack. The other guides cover individual topics once you're running.
 | [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, reusing an existing node via data directories, and connecting to a remote Monero node. |
 | [The Dashboard](dashboard.md) | Sync Mode, the live operational view, and how to read every panel. |
 | [Monitoring & Alerting](monitoring.md) | Optional Healthchecks.io dead-man's switch — get alerted when your host goes down (power loss, crash), even when it can't tell you itself. |
+| [Telegram Bot](telegram.md) | Push operator alerts (node down/recovered, worker offline/back, sync finished) to Telegram and query stack status on demand (`/status`, `/hashrate`, `/workers`, `/sync`) — creating a bot, finding your chat id, per-event toggles, and the command list. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
 | [Privacy & Network Egress](privacy.md) | Every connection the stack makes off-box: what's Tor-routed, what's clearnet today, and how to harden each path. |
