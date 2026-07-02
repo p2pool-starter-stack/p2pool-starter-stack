@@ -78,7 +78,7 @@ assert_num_gt() {
 egress_verdict() {
     case "$1" in
     *"[verify-egress] OK"*) printf 'ok' ;;
-    *LEAK*|*✗*) printf 'leak' ;;
+    *LEAK* | *✗*) printf 'leak' ;;
     *) printf 'inconclusive' ;;
     esac
 }

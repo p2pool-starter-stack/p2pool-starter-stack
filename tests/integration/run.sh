@@ -611,9 +611,9 @@ assert_egress_posture() {
     [ "$IT_MODE" = "local" ] && bench="$HERE/benchmarks/bench-verify-egress.sh"
     out="$(rx "bash $(quote_arg "$bench") tor --dir . --prefix '$prefix' --polls 3 --interval 8 2>&1")"
     case "$(egress_verdict "$out")" in
-    ok)   it_pass "no clearnet egress — every app dials via Tor (#274/#270)" ;;
+    ok) it_pass "no clearnet egress — every app dials via Tor (#274/#270)" ;;
     leak) it_fail "no clearnet egress — every app dials via Tor (#274/#270)" "$(printf '%s' "$out" | grep -E 'LEAK|✗' | head -4)" ;;
-    *)    it_fail "egress verifier INCONCLUSIVE — could not run, not a detected leak (#274/#270)" "$(printf '%s' "$out" | tail -4)" ;;
+    *) it_fail "egress verifier INCONCLUSIVE — could not run, not a detected leak (#274/#270)" "$(printf '%s' "$out" | tail -4)" ;;
     esac
 }
 
