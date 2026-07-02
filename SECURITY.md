@@ -1,11 +1,10 @@
 # Security Policy
 
-This is the security policy for Pithead: supported versions, how to report a vulnerability,
+The security policy for Pithead: supported versions, how to report a vulnerability,
 and the stack's default security posture.
 
 Pithead runs a Monero full node, P2Pool, Tari merge mining, and a dashboard on your
-hardware, and it handles wallet payout addresses. We appreciate reports that help keep
-operators safe.
+hardware, and it handles wallet payout addresses.
 
 ## Supported versions
 
@@ -22,24 +21,27 @@ Make sure you're running an up-to-date checkout before reporting an issue.
 **Please do not open a public issue for security problems.**
 
 Use GitHub's private vulnerability reporting instead: go to the **Security** tab and
-click **"Report a vulnerability"**. This opens a private advisory visible only to the
-maintainers, where we can triage and coordinate a fix and disclosure with you.
+click **Report a vulnerability**. This opens a private advisory visible only to the
+maintainers, for triage and coordinated disclosure.
 
-When you report, it helps to include:
+Include:
 
 - A description of the issue and its impact.
 - Steps to reproduce, and the affected component (node, P2Pool, proxy, dashboard, Tor,
   `pithead` script, etc.).
 - Any relevant logs or configuration (redact wallet addresses and secrets).
 
-We aim to acknowledge reports promptly and will keep you posted as we work on a fix.
-
 ## Security posture
 
-The stack is hardened by default: least-privilege containers (every service runs as a **non-root
-user**, not uid 0; leaf services run with `no-new-privileges` and drop all Linux capabilities; the
-internet-facing and Docker-socket-facing ones also use a read-only root filesystem),
-SHA256-verified and version-pinned binaries,
-localhost-only RPC, a LAN-scoped (and narrowable) stratum port, scoped Docker socket proxies,
-and Tor for all node networking. If you find a gap in any of these, that's the kind of
-report we want.
+The stack's defaults:
+
+- Least-privilege containers: every service runs as a non-root user (not uid 0); leaf services
+  run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
+  Docker-socket-facing services also use a read-only root filesystem.
+- SHA256-verified, version-pinned binaries.
+- Localhost-only RPC.
+- LAN-scoped (and narrowable) stratum port.
+- Scoped Docker socket proxies.
+- Tor for all node networking.
+
+Report any gap in these.

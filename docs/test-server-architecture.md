@@ -4,6 +4,8 @@ How the Pithead reference test server (the reference box) is structured, and how
 another box. The synced chains are the slow-to-acquire asset (days to sync); everything else is
 reproducible in minutes from the repo.
 
+See also [Releasing](releasing.md) and [Release / Validation Server](release-server.md).
+
 ## What this server is
 
 A single box that runs the live Pithead stack against real, synced chains and serves three jobs:
@@ -63,15 +65,15 @@ A 1 TB NVMe holds the pruned bench with ~650 GB to spare, room for a full node a
 > The fix is to put the chains on a fast NVMe SSD. Add an m.2 PCIe NVMe and migrate the chains
 > onto it; mount the data dir by UUID via fstab (ext4, `noatime`, `nofail`) and keep the OS on a
 > separate disk. monerod then opens the ~266 GB pruned LMDB in seconds and the full integration
-> matrix runs green. Compaction to ~95 GB is a minutes-long `mdb_copy -c <chain>/lmdb <dest>` if ever
-> wanted (the chain is correctly pruned; the extra size is reclaimable free-page bloat, not a full
-> chain); stage the matching `mdb_copy` (LMDB 0.9.70, from Monero's vendored source) at
-> `~/pithead-testbench/bin/mdb_copy`. CoW snapshots would still need btrfs/zfs on the NVMe (if it's
-> ext4); see below.
+> matrix runs green. Compaction to ~95 GB uses
+> [`compact-chain.sh`](../tests/integration/compact-chain.sh)
+> (`monero-blockchain-prune --copy-pruned-database`) — the chain is correctly pruned; the extra
+> size is reclaimable free-page bloat, not a full chain. Stock `mdb_copy -c` does not work: Monero
+> ships a patched LMDB and stock `mdb_copy` rejects the format (`MDB_VERSION_MISMATCH`). CoW
+> snapshots need btrfs/zfs on the NVMe (if it's ext4); see below.
 
 A second m.2 NVMe (PCIe) with btrfs/zfs additionally enables copy-on-write snapshots: instant,
-near-free chain clones for isolated/parallel test runs, the upgrade that helps a busy multi-agent
-bench.
+near-free chain clones for isolated/parallel test runs.
 
 ## Directory layout
 

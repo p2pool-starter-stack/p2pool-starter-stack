@@ -103,7 +103,7 @@ secret-handling and Tor-reachability notes): [Configuration › reference](confi
 
 > Auto-provisioning the check via the Healthchecks.io Management API (so you wouldn't have to
 > copy the URL by hand) was considered but deliberately left out: it would mean storing a
-> powerful API key in your config. Manual setup keeps it simple, secret-free, and works
+> high-privilege API key in your config. Manual setup keeps it simple, secret-free, and works
 > equally well with a self-hosted instance.
 
 ---

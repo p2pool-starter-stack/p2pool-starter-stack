@@ -1,6 +1,6 @@
 # Operations & Maintenance
 
-Everything you do to the stack runs through `pithead`. Run `./pithead help` to see the full list.
+Command reference for `pithead`, the CLI that manages the stack. Run `./pithead help` for the same list.
 
 ## Command reference
 
@@ -50,22 +50,22 @@ finish their initial sync. Check the dashboard to see which.
 ./pithead restart
 ```
 
-**Change a setting:** edit `config.json`, then `./pithead apply`. See
+**Change a setting:** edit `config.json`, then run `./pithead apply`. See
 [Configuration › Changing settings later](configuration.md#changing-settings-later).
 
-**Reboot resilience:** every service runs with `restart: unless-stopped`, so the whole stack comes
-back on its own after a reboot or power loss, *provided the Docker daemon itself starts at boot*.
-On Ubuntu's packaged Docker that's the default, but a custom/rootless install (or
-`setup --skip-deps`) may leave it disabled. `./pithead doctor` checks this and warns if Docker
-isn't boot-enabled; the fix is `sudo systemctl enable --now docker`.
+**Reboot resilience:** every service runs with `restart: unless-stopped`, so the stack restarts
+after a reboot or power loss, provided the Docker daemon starts at boot. Ubuntu's packaged Docker
+enables this by default; a custom/rootless install (or `setup --skip-deps`) may leave it disabled.
+`./pithead doctor` checks this and warns if Docker isn't boot-enabled. Fix it with
+`sudo systemctl enable --now docker`.
 
 ---
 
 ## Updating the stack
 
-How you update depends on how you installed (see [Getting Started](getting-started.md#2-get-the-code)).
+The update path depends on how you installed (see [Getting Started](getting-started.md#2-get-the-code)).
 
-**Release bundle (the default):** from your install directory, re-download the latest bundle over it,
+**Release bundle (the default):** from the install directory, re-download the latest bundle over it,
 then upgrade. `upgrade` **pulls** the new published images:
 
 ```bash
@@ -82,15 +82,14 @@ git pull
 
 Either way, `upgrade` re-renders the generated config (`.env`, the Caddyfile, and the Tari config) for
 the new release *before* pulling/rebuilding, so a release that changes a config template or adds an
-`.env` var takes effect, not just the new image. Your data directories and `config.json` are untouched,
-so your blockchain sync and settings are preserved across upgrades.
+`.env` var takes effect, not just the new image. Data directories and `config.json` are untouched, so
+blockchain sync and settings survive an upgrade.
 
 ### Switching a source checkout to release images
 
-If you cloned the repo (so the dashboard badge reads `dev · branch @ commit`) and would rather run the
-**published, tested images** (a clean version badge, a working update-checker, and no local build),
-convert the install in place. Your `config.json`, `.env`, Tor onion keys, and data directories are all
-preserved:
+A cloned repo builds `:dev` images locally and shows a `dev · branch @ commit` version badge. To run
+the published images instead (clean version badge, working update-checker, no local build), convert the
+install in place. `config.json`, `.env`, the Tor onion keys, and data directories are preserved:
 
 ```bash
 ./pithead backup -y          # safety snapshot: config.json, .env, onion keys, dashboard db (chains excluded)
@@ -101,11 +100,10 @@ rm -f build/*/Dockerfile     # remove the image Dockerfiles → pithead switches
 ```
 
 `pithead` chooses build-vs-pull by whether the image Dockerfiles are present (`build/<svc>/Dockerfile`).
-Deleting them is what flips it from building `:dev` locally to pulling the published `:vX.Y.Z`. To go
-back to building from source, `git checkout vX.Y.Z` (or `git pull`) restores the Dockerfiles, then
-`./pithead upgrade` rebuilds locally again. The new validation in `upgrade` will refuse to start on a
-non-primary Monero payout address, so confirm yours is a `4…`/95-char address first (see
-[Configuration](configuration.md)).
+Deleting them flips it from building `:dev` locally to pulling the published `:vX.Y.Z`. To go back to
+building from source, `git checkout vX.Y.Z` (or `git pull`) restores the Dockerfiles, then
+`./pithead upgrade` rebuilds locally. `upgrade` refuses to start on a non-primary Monero payout address,
+so confirm yours is a `4…`/95-char address first (see [Configuration](configuration.md)).
 
 > **Moving the install?** Data directories are stored as absolute paths in `.env`, so relocating or
 > copying the stack to a different path (or running a second checkout) points it at a *different,
@@ -117,44 +115,39 @@ non-primary Monero payout address, so confirm yours is a `4…`/95-char address 
 
 ## Backups
 
-Your important state lives in the data directories (by default under `./data/`, or wherever you
-pointed each `*.data_dir`; see [Configuration › Data directories](configuration.md#data-directories)):
+State lives in the data directories (by default under `./data/`, or wherever each `*.data_dir`
+points; see [Configuration › Data directories](configuration.md#data-directories)):
 
-- **`config.json`**: your settings (keep a copy somewhere safe; it's `chmod 600`).
-- **`data/tor/`**: your onion service keys. Back these up if you want to keep the same onion
-  addresses across a rebuild.
-- **`data/monero/`**, **`data/tari/`**: the blockchains. Large, but backing them up saves a
-  re-sync; they can also be re-downloaded from the network if lost.
-- **`data/dashboard/`**: the dashboard's database, your hashrate history and settings. Small but
-  irreplaceable (it doesn't re-sync), so it's part of the default `backup`.
+- **`config.json`**: settings. `chmod 600`; keep a copy off-host.
+- **`data/tor/`**: onion service keys. Back up to keep the same onion addresses across a rebuild.
+- **`data/monero/`**, **`data/tari/`**: the blockchains. Large; backing them up saves a re-sync,
+  but they re-download from the network if lost.
+- **`data/dashboard/`**: the dashboard database (hashrate history and settings). Small and
+  irreplaceable — it does not re-sync — so it is part of the default `backup`.
 
-Stop the stack (`./pithead down`) before copying data directories so files are in a consistent
-state.
+Stop the stack (`./pithead down`) before copying data directories by hand, so files are consistent.
 
 ### `backup` / `restore`
 
-Rather than copying files by hand, let `pithead` do it for you:
+Instead of copying files by hand, run:
 
 ```bash
 ./pithead backup
 ```
 
-That's it. This saves the things you can't get back: your `config.json`, your secrets (`.env`),
-your `Caddyfile` (if you have one), the Tor onion address keys, and the dashboard's database (your
-hashrate history and settings), into a small, timestamped file under `backups/`.
-It's quick and small because your blockchains are **not** included (they just re-sync). The archive
-is locked down to `chmod 600`, and `pithead` prints its path when it's done. Before it writes
-anything, it checks there's room; if free space looks tight, it asks before going ahead so a backup
-can't quietly fill your disk.
+This writes a timestamped `tar.gz` under `backups/` holding the irreplaceable state: `config.json`,
+`.env` (secrets), the `Caddyfile` (if present), the Tor onion keys, and the dashboard database
+(hashrate history and settings). Blockchains are excluded (they re-sync), so the archive is small.
+The archive is `chmod 600`, and `pithead` prints its path when done. Before writing, `backup` checks
+free space and prompts if it looks tight.
 
-If the stack is running, `backup` offers to briefly stop it for a clean copy and start it again
-when it's done. Pass `-y` / `--yes` to skip the prompts (the low-space warning and the
-stop-the-stack question) and just back up.
+If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
+`-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
 
-**Optional extras** (you usually don't need these):
+Include the blockchains (larger, slower) with:
 
 ```bash
-./pithead backup --with-chains   # also include the blockchain data — much bigger and slower
+./pithead backup --with-chains   # also include the blockchain data
 ```
 
 To recover (on a new machine, or after a wipe) copy the archive back and run:
@@ -165,36 +158,33 @@ To recover (on a new machine, or after a wipe) copy the archive back and run:
 ./pithead up
 ```
 
-`restore` always **asks before it overwrites anything**, so you can change your mind (pass
-`-y` / `--yes` to skip that prompt). It puts the files back where they belong and sorts out the
-Tor key ownership for you, so your onion address comes back exactly as it was, and your hashrate
-history and dashboard settings come back too.
+`restore` prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back,
+fixes Tor key ownership so the onion address returns unchanged, and restores hashrate history and
+dashboard settings.
 
-> **Note:** After a restore, the dashboard's HTTPS certificate is regenerated, so your browser
-> may show its "not trusted" warning once. That's expected; accept it as you did on first setup.
+> NOTE: After a restore, Caddy regenerates the dashboard's HTTPS certificate, so the browser shows
+> its "not trusted" warning once. Accept it as on first setup.
 
 ---
 
 ## Troubleshooting
 
 **The dashboard is stuck on Sync Mode.**
-This usually just means a chain is still downloading. Confirm steady progress:
+A chain is still downloading. Confirm steady progress:
 
 ```bash
 ./pithead logs monerod
 ./pithead logs tari
 ```
 
-If a node looks genuinely stalled (no new blocks over a long period), restart it with
-`./pithead restart`. To avoid the wait entirely, point the stack at an existing synced
-blockchain or a remote node. See
+If a node is stalled (no new blocks over a long period), restart it with `./pithead restart`. To
+skip the wait, point the stack at an existing synced blockchain or a remote node. See
 [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
 **Tari shows high memory use.**
-Usually nothing to worry about; most of it is reclaimable disk cache, not a leak. Tari has an
-auto-sized memory limit (`tari.mem_limit`) that keeps a genuine runaway from affecting the rest of
-the stack. Only change it if Tari restarts repeatedly (give it more) or you want to free RAM for
-other apps (give it less), then run `./pithead apply`.
+Most of it is reclaimable disk cache, not a leak. Tari runs under an auto-sized memory limit
+(`tari.mem_limit`) that caps a runaway from affecting the rest of the stack. Change it only if Tari
+restarts repeatedly (raise it) or you need RAM for other apps (lower it), then run `./pithead apply`.
 
 **Browser warns "your connection is not private."**
 Expected with `dashboard.secure: true`: Caddy uses a self-signed certificate. Accept the warning
@@ -205,8 +195,8 @@ Check that each rig points at `YOUR_STACK_IP:3333` and that port `3333` is reach
 worker (firewall on the stack host?). See [Connecting Miners](workers.md).
 
 **Hashrate reads zero or the chart is blank.**
-Give it a minute after a worker connects for stats to populate. Confirm the worker is actually
-hashing (`./pithead logs xmrig-proxy`).
+Stats take about a minute to populate after a worker connects. Confirm the worker is hashing
+(`./pithead logs xmrig-proxy`).
 
 **P2Pool can't connect to a remote node.**
 The node must be set up for mining: **ZMQ publishing enabled** (`zmq-pub`) and its RPC reachable
@@ -217,10 +207,10 @@ by P2Pool. Public "open node" endpoints don't qualify; use a node you run and co
 Persistent HugePages require a GRUB change and a **reboot**. Re-run `./pithead setup` (without
 `--skip-optimize`) and reboot when prompted.
 
-**Something looks broken in the dashboard data and you want a clean slate.**
+**The dashboard data looks broken and you want a clean slate.**
 `./pithead reset-dashboard` wipes and recreates the dashboard and P2Pool data. This is
-**destructive**: you'll lose P2Pool sidechain state and dashboard history (your blockchains and
-wallets are unaffected). Pass `-y` / `--yes` to skip the confirmation prompt.
+**destructive**: it drops P2Pool sidechain state and dashboard history (blockchains and wallets are
+unaffected). Pass `-y` / `--yes` to skip the confirmation prompt.
 
 ---
 

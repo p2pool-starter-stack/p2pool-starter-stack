@@ -1,9 +1,10 @@
 # Testing Guide (for developers)
 
-How to test a change you just made. The [Testing Strategy](testing-strategy.md) explains why the
-tiers exist; the generated [Test Inventory](test-inventory.md) lists what exists today.
+Where to put a test for a change you just made, and how to run it. The
+[Testing Strategy](testing-strategy.md) explains why the tiers exist; the generated
+[Test Inventory](test-inventory.md) lists what exists today.
 
-## Philosophy
+## Principles
 
 - Test the intent, not the line. A test pins down a behavior or contract — "a pruned node
   displays Pruned", "the gate holds until both chains sync", "an old DB migrates without losing
@@ -11,7 +12,7 @@ tiers exist; the generated [Test Inventory](test-inventory.md) lists what exists
   Don't add a test purely to move the coverage number.
 - The 80% coverage gate is a floor, not a target. Uncovered defensive error-handling is fine;
   uncovered behavior (a migration path, a retention rule, a decision branch) is a gap.
-- Tests are real code. They're linted (`shellcheck`), version-controlled with the change they
+- Tests are real code. They are linted (`shellcheck`), version-controlled with the change they
   protect, and listed in the inventory. A CI drift check fails if you add or remove a test without
   regenerating it.
 
@@ -35,7 +36,7 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 | Dashboard logic (a decision, metric, `/api/state` field) | `build/dashboard/tests/**/test_*.py` (pytest) | 1 |
 | Frontend logic (worker sort, formatting) | `build/dashboard/tests/frontend/*.test.mjs` (`node --test`) | 1 |
 | A client that parses a daemon (monerod RPC, Tari gRPC) | `tests/integration/fakes/test_contract.py` (+ extend the fakes) | 2 |
-| The control plane (sync-gate #35, failover #31) | `tests/service/test_data_service.py` (+ a `mini-stack` scenario) | 1 + 3 |
+| The control plane (sync-gate #35, failover #31) | `build/dashboard/tests/service/test_data_service.py` (+ a `mini-stack` scenario) | 1 + 3 |
 | `pithead` CLI behavior | `tests/stack/run.sh` | 1 |
 | A compose **security/hardening** invariant (caps, `no-new-privileges`, no secret in a healthcheck, socket-proxy scope) | the #90 section of `tests/stack/test_compose.sh` | 1 |
 | A new `config.json` axis | one row in `tests/integration/scenarios.sh` | 4 |
@@ -94,7 +95,7 @@ Add a scenario to `tests/integration/mini-stack/run-mini-stack.sh`: drive the fa
 ## Gotchas learned on real hardware
 
 The live harness was first run against a real synced, mining box. These are the calibration lessons
-now baked into the tests. Keep them in mind.
+now baked into the tests.
 
 - A synced local monerod shows `state: "loading"` in `/api/state`, not `"done"` — it has no target
   height once caught up. Assert "synced" via monerod's own `get_info.synchronized` (the harness's

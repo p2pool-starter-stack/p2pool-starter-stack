@@ -1,27 +1,24 @@
 # Releasing
 
-How Pithead is versioned and released. This page documents the agreed process
-([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)). The pipeline it describes
-is implemented as [`scripts/release.sh`](../scripts/release.sh). Run it from the build/test
-server with `make release` (preview a run with `make release ARGS="--dry-run"`). The one
-remaining piece is wiring `${STACK_VERSION}` into `docker-compose.yml` so installs pull the
-published images rather than building; see [Status](#status) below.
+How Pithead is versioned and released
+([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)). The pipeline is
+implemented as [`scripts/release.sh`](../scripts/release.sh). Run it from the build/test
+server with `make release` (preview a run with `make release ARGS="--dry-run"`).
 
 ## One product, one version
 
 Pithead is versioned and released as a single product, not as individual components.
 
 The components are upstream projects pinned and integrated, not authored here: `p2pool`
-(`ARG P2POOL_VERSION`), `xmrig-proxy`, `monerod`, and `tari`
-(`quay.io/tarilabs/minotari_node:vX-mainnet`). The only first-party code is the dashboard
-plus the orchestration (`pithead`, `docker-compose.yml`, configs). The unit of value, and the
-thing the integration matrix validates, is the composed, tested-together set. So a release is
-one artifact with one version, one changelog, one upgrade path, and one "new version available"
-signal.
+(`ARG P2POOL_VERSION`), `xmrig-proxy` (`ARG XMRIG_PROXY_VERSION`), `monerod`
+(`ARG MONERO_VERSION`), and `tari` (`quay.io/tarilabs/minotari_node:v5.3.1-mainnet`,
+pinned by digest in `docker-compose.yml`). The first-party code is the dashboard plus the
+orchestration (`pithead`, `docker-compose.yml`, configs). The integration matrix validates the
+composed set. A release is one artifact with one version, one changelog, one upgrade path, and
+one "new version available" signal.
 
-The one accepted trade-off: hot-swapping a single component to a version not tested together
-isn't supported. Power users can still override an ARG or image tag locally, but that
-combination isn't a supported release.
+Trade-off: swapping a single component to a version not tested together is unsupported. You can
+override an ARG or image tag locally, but that combination is not a supported release.
 
 ## Single source of truth
 
@@ -34,37 +31,37 @@ The product version lives in a top-level [`VERSION`](../VERSION) file: plain tex
 - The dashboard's `pyproject.toml` is kept in lockstep (packaging metadata only); a shell test fails
   if it drifts from `VERSION`.
 
-> NOTE: for the first real release, `VERSION` is `0.1.0`. Bump it to the version you want to
-> publish first (the `pyproject.toml` metadata must match, enforced by the drift-guard test).
+> NOTE: `VERSION` is `1.0.3`. Set it to the version you want to publish; the `pyproject.toml`
+> metadata must match, enforced by the drift-guard test.
 
 ## Component pins = an ingredients manifest
 
-Every component stays pinned (build ARGs and image tags), but the pins are the ingredients
-lockfile of each product release, not independent releases:
+Every component stays pinned (build ARGs and image tags). The pins are the ingredients lockfile
+of each product release, not independent releases:
 
-- Surface them in the dashboard as "what's inside vX.Y.Z" (component info is already shown).
+- The dashboard surfaces them as "what's inside vX.Y.Z" (component info is already shown).
 - Bumping any component, including a security patch such as a `monerod` CVE, is a normal stack
-  release: bump the pin → cut a stack patch → re-run the integration gate → ship. No loss of
-  patch agility; the bundle ships re-tested.
+  release: bump the pin → cut a stack patch → re-run the integration gate → ship. The bundle
+  ships re-tested.
 
 ## Published images: GHCR, single-tag model
 
-Images are published to GitHub Container Registry (`ghcr.io/p2pool-starter-stack/*`), which is
-free for public images: unlimited free pulls and no Docker Hub-style rate limits.
+Images are published to GitHub Container Registry (`ghcr.io/p2pool-starter-stack/*`). Public
+images pull without a Docker Hub-style rate limit.
 
-"One product" doesn't mean one image; the stack is inherently multi-container. Every built image
-(`dashboard`, `p2pool`, `xmrig-proxy`, `monero`, `tor`) is published, all tagged with the single
-stack version, and compose references one `${STACK_VERSION}`. Users `docker compose pull` a
-coherent set with one knob, removing the old "git pull + rebuild" upgrade path. The version is
-the bundle, not the layers.
+The stack is multi-container. Every built image (`pithead-dashboard`, `pithead-p2pool`,
+`pithead-xmrig-proxy`, `pithead-monero`, `pithead-tor`) is published, all tagged with the single
+stack version, and compose references one `${STACK_VERSION}`. `docker compose pull` fetches the
+set with one knob, replacing the "git pull + rebuild" upgrade path. The version is the bundle,
+not the layers.
 
 ## Release process
 
 Releases are cut on a private build/test server that runs the full Monero and full Tari nodes
 (the integration-test environment from
 [#54](https://github.com/p2pool-starter-stack/pithead/issues/54)). A single entry point,
-`make release` (or `pithead release`), runs the whole pipeline. Nothing is promoted or published
-until every gate is green.
+`make release` (or `pithead release`), runs the pipeline. Nothing is promoted or published until
+every gate is green.
 
 > How to provision and harden that server, why end-to-end validation can't run on GitHub-hosted
 > runners (and what does run free on every PR), and the safe self-hosted-runner setup are covered
@@ -119,17 +116,15 @@ a single, validated bundle.
 - Patches: security and component bumps ship as normal patch releases, re-validated through the
   same gate.
 
-## Install & upgrade UX
-
-The goal is one command:
+## Install & upgrade
 
 - Install: download the release's compose bundle (or `git checkout vX.Y.Z`) → `./pithead setup`.
-  Images are pulled from GHCR. No local build, no compile wait.
+  Images are pulled from GHCR; no local build.
 - Upgrade: the dashboard shows "vX.Y.Z available"
-  ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59)) → the user runs
-  `./pithead upgrade` → it pulls the new single-tagged images and recreates only what changed.
-- Trust: every published version is one immutable, #54-validated bundle; release notes list
-  exactly what's inside and what changed.
+  ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59)) → run `./pithead upgrade` →
+  it pulls the new single-tagged images and recreates only what changed.
+- Every published version is one immutable, #54-validated bundle; release notes list what's
+  inside and what changed.
 
 ## Status
 

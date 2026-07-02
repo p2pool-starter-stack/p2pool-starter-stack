@@ -1,8 +1,7 @@
 # FAQ
 
-Common questions about what Pithead is, what it does, and how it compares to wiring the pieces
-together yourself. New here? Start with [Getting Started](getting-started.md); the deeper "why"
-lives in [Architecture](architecture.md).
+Answers to common questions about Pithead, checked against the code. Start with
+[Getting Started](getting-started.md); the design is in [Architecture](architecture.md).
 
 ---
 
@@ -10,10 +9,10 @@ lives in [Architecture](architecture.md).
 
 ### vs. doing it yourself
 
-You can run a private Monero + P2Pool + Tari setup by hand; plenty of people do, and the
-underlying projects ([monerod](https://www.getmonero.org/), [P2Pool](https://github.com/SChernykh/p2pool),
-[XMRig](https://github.com/xmrig/xmrig)) are excellent. Doing it yourself means standing up and
-maintaining each piece and the wiring between them:
+You can run a private Monero + P2Pool + Tari setup by hand on top of
+[monerod](https://www.getmonero.org/), [P2Pool](https://github.com/SChernykh/p2pool), and
+[XMRig](https://github.com/xmrig/xmrig). Doing it yourself means standing up and maintaining each
+piece and the wiring between them:
 
 - A Monero full node with restricted RPC, ZMQ, and Tor transaction broadcasting.
 - P2Pool pointed at that node, with an onion address for inbound peers.
@@ -21,53 +20,45 @@ maintaining each piece and the wiring between them:
 - Each rig configured for the pool, plus a plan for what happens when the node goes down.
 - Some way to see hashrate, sync progress, and your PPLNS window.
 
-Pithead automates that stack in one command and adds the parts that are tedious to build
-yourself:
+Pithead runs that stack from one command and adds the parts that are tedious to build yourself:
 
 - Tor-first networking. A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service
-  (onion) addresses, so there's no public port forwarding and Monero/Tari traffic runs over Tor. A
-  couple of outbound yield paths still use clearnet today; see
+  (onion) addresses, so there is no public port forwarding and Monero/Tari traffic runs over Tor.
+  A couple of outbound yield paths still use clearnet; see
   [Privacy & network egress](privacy.md) for the full map and how to harden them.
 - One endpoint for every rig. All workers point at a single `xmrig-proxy` endpoint on `:3333`.
-  There's nothing per-rig to configure: no wallet address, no pool URL juggling. See
+  Nothing is configured per rig: no wallet address, no pool URL. See
   [Connecting Miners](workers.md).
-- Algorithmic XvB switching. A feedback controller splits your hashrate between P2Pool and
-  XMRvsBeast (XvB) bonus rounds, donating only the minimum needed to hold your target tier and
-  routing the rest to P2Pool. See [Architecture › Algorithmic switching](architecture.md#algorithmic-switching).
-- Node-down worker failover. If monerod goes down, the stack stops `xmrig-proxy` so your miners
-  fail over to their backup pools instead of mining into a void. See
+- Algorithmic XvB switching. A feedback controller splits hashrate between P2Pool and XMRvsBeast
+  (XvB) bonus rounds, donating the minimum needed to hold your target tier and routing the rest to
+  P2Pool. See [Architecture › Algorithmic switching](architecture.md#algorithmic-switching).
+- Node-down worker failover. If monerod goes down, the stack stops `xmrig-proxy` so miners fail
+  over to their backup pools. See
   [Configuration › `dashboard.tari_required`](configuration.md#configuration-reference).
-- A dashboard that tells you things. Live hashrate, sync progress, the PPLNS window, per-worker
-  stats, and your P2Pool/XvB split, served over HTTPS on your LAN. See
-  [The Dashboard](dashboard.md).
+- Dashboard. Live hashrate, sync progress, the PPLNS window, per-worker stats, and the P2Pool/XvB
+  split, served over HTTPS on your LAN. See [The Dashboard](dashboard.md).
 - Hardened defaults. Least-privilege containers, SHA256-verified and version-pinned binaries,
   localhost-only RPC, and split read-only / start-stop Docker socket proxies. See
   [Architecture › Security posture](architecture.md#security-posture).
 
-If you enjoy hand-wiring infrastructure, the manual route is a good learning exercise. If you want
-a private, multi-rig, merge-mining stack running with less of that work, that's what Pithead is
-for.
-
 ### vs. Gupax
 
 [Gupax](https://github.com/gupax-io/gupax) is a desktop GUI for mining Monero on P2Pool. It runs on
-Windows, macOS, and Linux, has a `--daemon` headless mode, and manages more than it used to: P2Pool
-and XMRig by default, plus optional tabs for a local Monero node, a proxy for external miners, and
-XvB hashrate-splitting. If you mine on one machine and want a friendly app to drive it, Gupax is a
-great choice.
+Windows, macOS, and Linux, has a `--daemon` headless mode, and manages P2Pool and XMRig by default,
+plus optional tabs for a local Monero node, a proxy for external miners, and XvB hashrate-splitting.
 
-Pithead is a different form factor — an always-on server stack rather than a desktop app you launch
-on your mining PC. The two overlap more than they once did: both can run your own node, take
-external miners through a proxy, and split hashrate to the XvB raffle. Where Pithead goes further:
+Pithead is an always-on server stack rather than a desktop app. The two overlap — both can run your
+own node, take external miners through a proxy, and split hashrate to the XvB raffle. Where they
+differ:
 
 - **Tor-first by default.** Monero, Tari, and P2Pool reach the network over onion addresses with no
   extra setup. Gupax ships no built-in Tor; a community Docker image adds an optional hidden service.
-- **Tari merge-mining.** A second payout from the same hashes. Gupax doesn't merge-mine Tari.
-- **Built to run unattended.** Nine version-pinned containers on a dedicated Linux box, node-down
-  worker failover, and a LAN web dashboard — not an app you keep open on your desktop.
+- **Tari merge-mining.** A second payout from the same hashes. Gupax does not merge-mine Tari.
+- **Runs unattended.** Nine version-pinned containers on a dedicated Linux box, node-down worker
+  failover, and a LAN web dashboard.
 
-Pick Gupax to mine from one machine. Pick Pithead to run the whole operation yourself — node,
-privacy, dashboard, and a fleet of workers — as a server you set up once.
+Gupax mines from one machine. Pithead runs the node, privacy, dashboard, and a fleet of workers as
+a server you set up once.
 
 ---
 
@@ -75,10 +66,10 @@ privacy, dashboard, and a fleet of workers — as a server you set up once.
 
 ### Is my home IP exposed?
 
-Mostly not. With the Tor defaults, the only time your IP leaves the box is the one-time install.
-A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so inbound
-connections need no port forwarding and don't reveal your IP. Monero and Tari route P2P and
-transaction traffic over Tor, and their old clearnet DNS lookups are closed.
+With the Tor defaults, the only time your IP leaves the box is the one-time install. A built-in
+Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so inbound connections
+need no port forwarding and do not reveal your IP. Monero and Tari route P2P and transaction
+traffic over Tor, and their old clearnet DNS lookups are closed.
 
 The two former clearnet yield paths are Tor-by-default as of v1.1, each with a yield-vs-privacy opt-out:
 
@@ -107,10 +98,10 @@ That's local network traffic, not an internet-facing port. See
 
 ### Is the XvB donation mandatory? Will it cost me?
 
-It's optional, and the engine is designed to minimize what you give up. XvB switching is on by
-default but can be turned off (`xvb.enabled: false`). When it's on, the decision engine donates
-only enough hashrate to hold your target tier and routes everything else to P2Pool. Because the
-XvB raffle picks winners at random, donating above a tier's threshold earns nothing extra. See
+It's optional. XvB switching is on by default and turns off with `xvb.enabled: false`. When on,
+the decision engine donates only enough hashrate to hold your target tier and routes everything
+else to P2Pool. Because the XvB raffle picks winners at random, donating above a tier's threshold
+earns nothing extra. See
 [Architecture › Algorithmic switching](architecture.md#algorithmic-switching) and the `xvb.*`
 keys in [Configuration](configuration.md#configuration-reference).
 

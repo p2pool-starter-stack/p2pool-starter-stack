@@ -2,9 +2,8 @@
 
 Guides for running, configuring, and operating Pithead.
 
-New here? Start with the [Getting Started](getting-started.md) guide. It takes you from a fresh
-Ubuntu machine to a synced, mining stack in a handful of commands. The other guides go deeper on
-individual topics once you're running.
+Start with [Getting Started](getting-started.md): it takes a fresh Ubuntu host to a synced, mining
+stack. The other guides cover individual topics once you're running.
 
 ## Guides
 

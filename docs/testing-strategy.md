@@ -1,12 +1,12 @@
 # Testing Strategy
 
-How Pithead simulates every situation the stack can be in, and which layer proves each one. This
-is the map behind the [integration suite](integration-testing.md); read that for how to run the
-live matrix, and this for what we test where, and why.
+Maps every runtime situation the stack can be in to the tier that proves it. This is the map
+behind the [integration suite](integration-testing.md); read that for how to run the live matrix,
+and this for what is tested where.
 
 The stack's runtime behaviour is a state machine: syncing → held → released; healthy → down →
 rejected → recovered → readmitted; XvB tiers; container health. A healthy, already-synced box only
-ever shows one corner of it, so we simulate the rest at the cheapest layer that can prove each
+shows one corner of it, so the rest is simulated at the cheapest tier that can prove each
 situation honestly.
 
 ## The four tiers
@@ -18,23 +18,22 @@ situation honestly.
 | **3 — Mini-stack** | `tests/integration/mini-stack/` (real dashboard + docker-control vs fake daemons) | The control plane **end-to-end with real containers**: hold/release and reject/readmit actually stopping/starting `p2pool`/`xmrig-proxy`, driven deterministically | CI with Docker (`make test-mini-stack`) |
 | **4 — Live matrix** | `tests/integration/run.sh` against a real, synced box | What only reality proves: real merge-mining, prune/full DB size, Caddy TLS, Tor onions, HugePages, plus fault injection for real container health verdicts | Manual / release gate (`make test-integration`) |
 
-Why this shape, and whether to use stubs: stubs already do most of the work. The dashboard has
-~140 unit tests that drive the hard runtime states with mocked clients. More mocks for the same
-logic would be duplication. What stubs can't prove is wiring: that the real clients parse real
-daemon output (tier 2), that the dashboard's stop/start moves real containers (tier 3), and that
-real daemons sync/merge-mine and real containers go unhealthy (tier 4). So the strategy is stubs
-for logic, controllable fake daemons for the control-plane wiring, and the real box for the
-irreducibly-real. Each situation is tested once, at the lowest tier that's honest.
+Stubs do most of the work. The dashboard unit tests drive the hard runtime states with mocked
+clients; more mocks for the same logic would duplicate them. What stubs can't prove is wiring:
+that the real clients parse real daemon output (tier 2), that the dashboard's stop/start moves
+real containers (tier 3), and that real daemons sync/merge-mine and real containers go unhealthy
+(tier 4). So: stubs for logic, controllable fake daemons for the control-plane wiring, the real
+box for the irreducibly-real. Each situation is tested once, at the lowest tier that is honest.
 
-The fakes are the key enabler. Because the whole control plane is env-configurable
-(`MONERO_RPC_URL`, `TARI_GRPC_ADDRESS`, `DOCKER_CONTROL_URL`, `NODE_DOWN_AFTER_SEC`,
-`UPDATE_INTERVAL`, …), we point the real code at tiny controllable servers and drive the entire
-state machine in seconds, in CI, with no chain and no test box.
+The fakes are the enabler. The whole control plane is env-configurable (`MONERO_RPC_URL`,
+`TARI_GRPC_ADDRESS`, `DOCKER_CONTROL_URL`, `NODE_DOWN_AFTER_SEC`, `UPDATE_INTERVAL`, …), so the
+real code points at small controllable servers and drives the entire state machine in seconds, in
+CI, with no chain and no test box.
 
 ## Scenario catalog
 
-Every situation we care about, what triggers it, and the tier(s) that cover it. ✅ = covered
-today; ▶ = exercised by the live matrix / mini-stack when run.
+Every situation, its trigger, and the tier(s) that cover it. ✅ = covered today; ▶ = exercised by
+the live matrix / mini-stack when run.
 
 ### A. Configuration permutations
 
@@ -126,9 +125,9 @@ make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-in
 
 ## Production-readiness posture
 
-What gates a merge vs. a release, the engineering standards every test holds to, and the gaps we
-know about. The full enumerated coverage is in the generated [Test Inventory](test-inventory.md)
-(kept honest by a CI drift check).
+What gates a merge vs. a release, the standards every test holds to, and the known gaps. The full
+enumerated coverage is in the generated [Test Inventory](test-inventory.md), kept current by a CI
+drift check.
 
 ### What runs where
 
@@ -150,7 +149,7 @@ pre-release gate (see [Releasing](releasing.md)) because it needs the real synce
 
 ### Engineering standards
 
-Every scenario, at every tier, holds to the same discipline.
+Every scenario, at every tier, holds to the same rules.
 
 - Deterministic, no sleep-and-hope. Wait on real readiness signals — container health,
   `pithead status`, dashboard sync %, miner-released — with timeouts. The only fixed sleeps are
@@ -171,13 +170,12 @@ Every scenario, at every tier, holds to the same discipline.
 ### Flake policy
 
 Integration scenarios quarantine, never blind-retry. A scenario that fails intermittently is
-marked and investigated, not wrapped in a retry loop that hides a real race. The waiters have
-generous timeouts so a slow-but-correct stack passes while a genuinely broken one fails fast with
-artifacts.
+marked and investigated, not wrapped in a retry loop that hides a real race. The waiters have wide
+timeouts so a slow-but-correct stack passes while a broken one fails fast with artifacts.
 
-### Known gaps (honest)
+### Known gaps
 
-These are deliberately not yet covered and are the road to full production confidence.
+Not yet covered. The road to full production confidence.
 
 - First green run on real hardware. ✅ Two of the three real-environment tiers are green: the live
   harness `--check` (tier 4 read path, 22/22 against a synced, mining box) and the fake-daemon

@@ -8,8 +8,7 @@ gate described in [Releasing](releasing.md) (issue
 The other suites are client-side and never touch a daemon: the `pithead` shell tests stub out
 `docker`/`sudo`, the compose test only checks `docker compose config` interpolation, and the
 dashboard pytest mocks its clients. They prove the code is correct. They can't prove that a
-real `apply → sync-gate → mine → status` flow works on a real host. That's what this suite is
-for.
+real `apply → sync-gate → mine → status` flow works on a real host. This suite proves that.
 
 > This live matrix is tier 4 of a four-tier plan. The runtime situations a healthy box can't
 > show (cold sync, node-down, unhealthy containers, XvB tiers) are simulated more cheaply at
@@ -31,9 +30,9 @@ The suite lives under [`tests/integration/`](../tests/integration/):
 
 ## How it works
 
-The suite assumes the box is already deployed and synced with miners connected. The point of a
-dedicated test server is that the full Monero and Tari nodes are synced once and reused, so each
-scenario runs in minutes instead of waiting days for a chain sync.
+The suite assumes the box is already deployed and synced with miners connected. A dedicated test
+server syncs the full Monero and Tari nodes once and reuses them, so each scenario runs in minutes
+instead of waiting days for a chain sync.
 
 Given that, the harness moves between matrix scenarios with non-interactive `pithead apply -y`,
 which:
