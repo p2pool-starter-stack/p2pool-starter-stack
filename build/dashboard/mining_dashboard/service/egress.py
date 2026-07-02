@@ -38,6 +38,7 @@ def compute_egress_posture(
     monero_clearnet_sync,
     tari_clearnet_sync,
     remote_monero,
+    healthchecks_enabled,
 ):
     """Pure derivation of the egress posture from config knobs. Returns ``{components, summary}``."""
     xvb = _xvb_route(xvb_enabled, xvb_tor)
@@ -95,6 +96,8 @@ def compute_egress_posture(
             "conns": [
                 {"to": "XvB stats (xmrvsbeast.com)", "route": xvb},  # socks5h when on (#163)
                 {"to": "update check (github)", "route": TOR},  # socks5h, #224
+                # Healthchecks.io dead-man's-switch ping — always over Tor when a URL is set (#79).
+                {"to": "Healthchecks.io ping", "route": TOR if healthchecks_enabled else INACTIVE},
             ],
         },
         {
@@ -146,6 +149,7 @@ def egress_posture_from_config():
         monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
         remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+        healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
     )
 
 
@@ -196,6 +200,7 @@ def compute_topology(
     monero_clearnet_sync,
     tari_clearnet_sync,
     remote_monero,
+    healthchecks_enabled,
 ):
     """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
 
@@ -211,6 +216,7 @@ def compute_topology(
         monero_clearnet_sync=monero_clearnet_sync,
         tari_clearnet_sync=tari_clearnet_sync,
         remote_monero=remote_monero,
+        healthchecks_enabled=healthchecks_enabled,
     )
     xvb = _xvb_route(xvb_enabled, xvb_tor)
     sidechain = CLEARNET if p2pool_clearnet else TOR
@@ -228,6 +234,14 @@ def compute_topology(
         _edge("xmrig-proxy", _ext(xvb), xvb, "XvB donation", "egress"),
         _edge("dashboard", "tor", TOR, "update check", "egress"),
         _edge("dashboard", _ext(xvb), xvb, "XvB stats", "egress"),
+        # Healthchecks.io ping — always over Tor when a URL is set (#79).
+        _edge(
+            "dashboard",
+            "tor",
+            TOR if healthchecks_enabled else INACTIVE,
+            "Healthchecks ping",
+            "egress",
+        ),
         # The Tor hub to the network: SOCKS egress for every daemon + onion-service ingress.
         _edge("tor", "internet", TOR, "SOCKS + onion circuits", "p2p"),
         # Internal mesh (hidden until expanded).
@@ -269,4 +283,5 @@ def topology_from_config():
         monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
         remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+        healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
     )

@@ -14,6 +14,7 @@ individual topics once you're running.
 | [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network, OS), plus lighter-footprint options. (Miner hardware lives in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, reusing an existing node via data directories, and connecting to a remote Monero node. |
 | [The Dashboard](dashboard.md) | Sync Mode, the live operational view, and how to read every panel. |
+| [Monitoring & Alerting](monitoring.md) | Optional Healthchecks.io dead-man's switch — get alerted when your host goes down (power loss, crash), even when it can't tell you itself. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
 | [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
 | [Privacy & Network Egress](privacy.md) | Every connection the stack makes off-box: what's Tor-routed, what's clearnet today, and how to harden each path. |
@@ -32,5 +33,6 @@ individual topics once you're running.
 - **Will my machine handle it?** → [Hardware Requirements](hardware.md)
 - **Change a setting?** → [Configuration › Changing settings later](configuration.md#changing-settings-later)
 - **Already have a synced Monero node?** → [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node)
+- **Want to be alerted if the host dies?** → [Monitoring & Alerting](monitoring.md)
 - **Worried about your IP / what leaves the box?** → [Privacy & Network Egress](privacy.md)
 - **Something's not working?** → [Operations › Troubleshooting](operations.md#troubleshooting)

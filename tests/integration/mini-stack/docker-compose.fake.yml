@@ -58,7 +58,13 @@ services:
       UPDATE_INTERVAL: "2"
       NODE_DOWN_AFTER_SEC: "4"
       NODE_RECOVERY_AFTER_SEC: "3"
-    depends_on: [fake-monerod, fake-tari, docker-control, docker-proxy, p2pool, xmrig-proxy]
+      # Healthchecks.io dead-man's switch (#79), pointed at the fake receiver so the e2e proves the
+      # REAL loop fires a heartbeat over a real HTTP call (not a mock). The ping URL is the on switch;
+      # the first ping fires immediately (throttle starts unarmed). There's no Tor container here, so
+      # blank the shared TOR_SOCKS_PROXY — the client then pings the fake receiver directly.
+      HEALTHCHECKS_PING_URL: "http://fake-hc:9000/ph"
+      TOR_SOCKS_PROXY: ""
+    depends_on: [fake-monerod, fake-tari, docker-control, docker-proxy, p2pool, xmrig-proxy, fake-hc]
 
   fake-monerod:
     image: *fake_image
@@ -92,6 +98,18 @@ services:
     container_name: itest-xmrig-proxy
     networks: [itestnet]
     command: ["sh", "-c", "while true; do sleep 30; done"]
+
+  # Fake Healthchecks.io ping receiver (#79 e2e): records each ping path to a file the runner greps
+  # via `compose exec`. Logs to /tmp (world-writable — the image runs non-root, uid 1000 #255, so a
+  # root-owned named volume wouldn't be writable). Shares the dashboard image; stdlib-only, no deps.
+  fake-hc:
+    image: *fake_image
+    container_name: itest-fake-hc
+    networks: [itestnet]
+    entrypoint: []
+    command: ["python3", "/fakes/fake_hc.py", "--port", "9000", "--log", "/tmp/pings.log"]
+    volumes:
+      - "../fakes:/fakes:ro"
 
   # Read-only socket proxy (stats/logs) — mirrors the production docker-proxy.
   docker-proxy:
