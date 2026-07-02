@@ -77,9 +77,7 @@
     },
 
     "healthchecks": {
-        "enabled": false,
         "ping_url": "",
-        "interval_seconds": 60,
-        "tor": true
+        "interval_seconds": 60
     }
 }

@@ -836,7 +836,8 @@ class DataService:
                     # (power loss, crash, NIC death) — a pure "is the stack alive" liveness signal.
                     # Node-health alerting (a node down while the box is up) is out of scope here;
                     # that's the Telegram alerter's job (#121). The client throttles and fails
-                    # silently; gate on `enabled` so a disabled (default) stack never pings.
+                    # silently; `enabled` is just "a ping URL is set", so an unconfigured stack
+                    # never pings.
                     if self.healthchecks.enabled:
                         await asyncio.to_thread(self.healthchecks.ping)
 

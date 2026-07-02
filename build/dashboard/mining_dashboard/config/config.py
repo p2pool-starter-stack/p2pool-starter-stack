@@ -210,16 +210,13 @@ NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
 NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 
 # --- Healthchecks.io dead-man's switch (Issue #79) ---
-# Optional external liveness monitor. When enabled, the dashboard loop pings a unique URL
-# every cycle; if the whole host dies (power loss, kernel panic, NIC death) the dashboard
-# dies with it, the pings stop, and Healthchecks.io alerts the operator on the *absence* of
-# a ping — the one failure mode an in-stack notifier (#45) structurally can't report.
-# Default OFF: with HEALTHCHECKS_ENABLED unset nothing ever pings and there are no errors.
-HEALTHCHECKS_ENABLED = os.environ.get("HEALTHCHECKS_ENABLED", "false").strip().lower() == "true"
-
-# Manual mode: paste the full ping URL Healthchecks.io shows you, e.g.
-# https://hc-ping.com/<uuid>. A self-hosted instance works the same way — paste its full URL,
-# which already carries the host. No API key is stored (auto-provisioning is out of scope).
+# Optional external liveness monitor. Set a ping URL and the dashboard loop pings it every cycle;
+# if the whole host dies (power loss, kernel panic, NIC death) the dashboard dies with it, the pings
+# stop, and Healthchecks.io alerts the operator on the *absence* of a ping — the one failure mode an
+# in-stack notifier (#45) structurally can't report. Off until configured: a blank ping URL is the
+# off switch (nothing pings, no errors). The ping always rides Tor (TOR_SOCKS_PROXY), so it's never
+# a clearnet beacon — paste a Tor-reachable URL (hosted hc-ping.com, or a self-hosted onion/public
+# instance; a LAN-only self-hosted address is unreachable through Tor).
 HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
 
 # How often to ping. The loop runs every UPDATE_INTERVAL, so this is a throttle floor — a
@@ -231,17 +228,6 @@ except ValueError:
     HEALTHCHECKS_INTERVAL_SEC = 60
 if HEALTHCHECKS_INTERVAL_SEC < 0:
     HEALTHCHECKS_INTERVAL_SEC = 0
-
-# Route the ping through the bridge Tor SOCKS (reusing TOR_SOCKS_PROXY) so hc-ping.com sees a Tor
-# exit, not the host IP — the ping is otherwise the one clearnet beacon on the box. Default ON,
-# consistent with the stack's Tor-first posture and the XvB fetch (socks5h resolves the host via Tor
-# too, no DNS leak). Set false (healthchecks.tor:false) for a self-hosted instance on your LAN —
-# ponytail: RFC1918/localhost is unreachable through Tor, so that case must opt out — or if
-# hc-ping.com is ever Tor-blocked. HEALTHCHECKS_TOR_PROXY is None when off (a direct clearnet ping).
-HEALTHCHECKS_TOR = os.environ.get("HEALTHCHECKS_TOR", "true").strip().lower() == "true"
-HEALTHCHECKS_TOR_PROXY = (
-    os.environ.get("HEALTHCHECKS_TOR_PROXY", TOR_SOCKS_PROXY) if HEALTHCHECKS_TOR else None
-)
 
 # --- Monero Configuration ---
 # Used to determine if the node is local (Docker) or remote

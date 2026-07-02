@@ -7,19 +7,20 @@ of a ping — evaluated on *their* servers, so it survives the very outage (powe
 panic, NIC death) an in-stack notifier can't report from a dead machine.
 
 Design notes:
-- **Default off.** A disabled client is a no-op: :meth:`ping` returns immediately, opens no
-  socket, and logs nothing.
+- **Off until configured.** No ``ping_url`` → the client is a no-op: :meth:`ping` returns
+  immediately, opens no socket, and logs nothing. Setting a URL is what turns it on.
+- **Always over Tor.** The ping rides the bridge Tor SOCKS proxy so the endpoint sees a Tor
+  exit, not the host IP — it's never a clearnet beacon.
 - **Fails silently.** A ping that can't reach the endpoint (offline, or Tor momentarily down)
   is logged at DEBUG only — never WARNING/ERROR — so the log stays quiet, consistent with the
-  stack's offline check discipline (#59). A blank ``ping_url`` while *enabled* is a genuine
-  misconfiguration and warns once.
+  stack's offline check discipline (#59).
 - **Throttled.** :data:`interval` is a floor between pings; the loop calls every cycle but we
   only hit the network once per interval. The throttle clock only advances on a *successful*
   send, so while offline we keep retrying every cycle rather than backing off.
 
-Manual setup only (MVP): the operator pastes the ping URL from Healthchecks.io. Auto-
-provisioning via the Management API (which would mean storing a powerful API key) is
-intentionally left out — see ``docs/monitoring.md``.
+Manual setup: the operator pastes the full ping URL from Healthchecks.io (hosted or a
+Tor-reachable self-hosted instance). Auto-provisioning via the Management API (which would
+mean storing a powerful API key) is intentionally left out — see ``docs/monitoring.md``.
 """
 
 import logging
@@ -28,10 +29,9 @@ import time
 import requests
 
 from mining_dashboard.config.config import (
-    HEALTHCHECKS_ENABLED,
     HEALTHCHECKS_INTERVAL_SEC,
     HEALTHCHECKS_PING_URL,
-    HEALTHCHECKS_TOR_PROXY,
+    TOR_SOCKS_PROXY,
 )
 
 logger = logging.getLogger("Healthchecks")
@@ -46,41 +46,38 @@ class HealthchecksClient:
 
     def __init__(
         self,
-        enabled,
         ping_url,
         interval_seconds,
         tor_proxy=None,
         clock=time.monotonic,
     ):
-        self.enabled = bool(enabled)
-        # Paste the full ping URL Healthchecks.io shows you (hosted or self-hosted — it already
-        # carries the host). Anything that isn't an http(s) URL is treated as unset, so `ping()`
-        # warns once instead of silently failing on a bad value.
+        # A ping URL is the on/off switch: paste the full URL Healthchecks.io shows you (hosted or a
+        # Tor-reachable self-hosted instance) to enable; leave it blank to keep the switch off.
+        # Anything that isn't an http(s) URL is treated as unset (a no-op), never a silent bad ping.
         url = (ping_url or "").strip()
         self.url = url.rstrip("/") if url.startswith(("http://", "https://")) else ""
+        self.enabled = bool(self.url)
         self.interval = max(0, int(interval_seconds or 0))
-        # A requests proxies dict when routing over Tor, else None (direct clearnet ping). Reuses the
-        # bridge Tor SOCKS the XvB fetch uses; socks5h so hc-ping.com's host resolves through Tor too.
+        # Route the ping over the bridge Tor SOCKS (socks5h, so the host resolves through Tor too),
+        # so the endpoint sees a Tor exit, not the host IP. tor_proxy is a test seam; from_config
+        # always injects it.
         self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
         self._clock = clock
         self._last_ping = None  # monotonic time of the last *successful* send
-        self._warned_misconfig = False
 
-        if self.enabled and self.url:
+        if self.enabled:
             logger.info(
-                "Healthchecks.io dead-man's switch enabled (ping every %ss, %s).",
+                "Healthchecks.io dead-man's switch enabled (ping every %ss, over Tor).",
                 self.interval,
-                "over Tor" if self._proxies else "over clearnet",
             )
 
     @classmethod
     def from_config(cls):
         """Build a client from the module-level config (env-backed) values."""
         return cls(
-            enabled=HEALTHCHECKS_ENABLED,
             ping_url=HEALTHCHECKS_PING_URL,
             interval_seconds=HEALTHCHECKS_INTERVAL_SEC,
-            tor_proxy=HEALTHCHECKS_TOR_PROXY,
+            tor_proxy=TOR_SOCKS_PROXY,
         )
 
     def _due(self, now):
@@ -96,19 +93,10 @@ class HealthchecksClient:
         alive. Node-health alerting — monerod/Tari down while the box is up — is out of scope and
         handled in-stack by the Telegram alerter (#121), which can say more than a red check can.
 
-        Returns ``True`` if a request was sent and accepted, else ``False`` (disabled,
-        misconfigured, throttled, or the request failed).
+        Returns ``True`` if a request was sent and accepted, else ``False`` (not configured,
+        throttled, or the request failed).
         """
-        if not self.enabled:
-            return False
         if not self.url:
-            # Enabled but nothing to ping — surface the misconfig once, then stay quiet.
-            if not self._warned_misconfig:
-                logger.warning(
-                    "Healthchecks enabled but no ping_url configured — not pinging. "
-                    "Set healthchecks.ping_url in config.json."
-                )
-                self._warned_misconfig = True
             return False
 
         now = self._clock()

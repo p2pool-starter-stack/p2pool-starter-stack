@@ -2054,17 +2054,12 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
-    # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor; default off.
-    # Manual mode only — the operator pastes the ping URL Healthchecks.io shows them. The ping
-    # URL is a capability secret, so it lives in the owner-only .env (chmod 600 below) alongside
-    # the other secrets, never in a world-readable file. See docs/monitoring.md.
-    local hc_enabled hc_ping_url hc_interval hc_tor
-    hc_enabled=$(jq -r 'if .healthchecks.enabled != null then .healthchecks.enabled | tostring else "false" end' "$CONFIG_FILE")
+    # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor: a ping URL is the
+    # on/off switch (blank = off), and the ping always rides Tor. The URL is a capability secret, so
+    # it lives in the owner-only .env (chmod 600 below), never a world-readable file. docs/monitoring.md.
+    local hc_ping_url hc_interval
     hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
     hc_interval=$(jq -r '.healthchecks.interval_seconds // 60' "$CONFIG_FILE")
-    # Route the ping over the bridge Tor SOCKS by default (#79) — the ping is the one clearnet beacon
-    # otherwise; set healthchecks.tor:false for a LAN self-hosted instance (Tor can't reach RFC1918).
-    hc_tor=$(jq -r 'if .healthchecks.tor != null then .healthchecks.tor | tostring else "true" end' "$CONFIG_FILE")
 
     # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
     # a header badge linking to it (notify-only — no upgrade). On by default because the check is
@@ -2162,10 +2157,8 @@ XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
-HEALTHCHECKS_ENABLED=$hc_enabled
 HEALTHCHECKS_PING_URL=$hc_ping_url
 HEALTHCHECKS_INTERVAL_SECONDS=$hc_interval
-HEALTHCHECKS_TOR=$hc_tor
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -2668,15 +2661,16 @@ describe_change() {
     MONERO_PREP_THREADS)
         msg="Monero block-prep threads: $old → $new."
         ;;
-    HEALTHCHECKS_ENABLED)
-        msg="Healthchecks.io dead-man's switch → $([ "$new" == "true" ] && echo ENABLED || echo disabled) (#79) — the dashboard container is recreated."
-        ;;
     HEALTHCHECKS_PING_URL)
-        # The ping URL is a capability secret — report the change without printing it.
-        msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
-        ;;
-    HEALTHCHECKS_TOR)
-        msg="Healthchecks.io ping now routed over $([ "$new" == "true" ] && echo "Tor (host IP hidden from hc-ping.com)" || echo "CLEARNET (host IP visible to hc-ping.com)") (#79) — the dashboard container is recreated."
+        # The ping URL is both the on/off switch and a capability secret — report the change
+        # (enable/disable/update) WITHOUT printing the value.
+        if [ -z "$new" ]; then
+            msg="Healthchecks.io dead-man's switch DISABLED (#79) — ping URL cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="Healthchecks.io dead-man's switch ENABLED (#79) — ping URL set (pings over Tor); the dashboard container is recreated."
+        else
+            msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
+        fi
         ;;
     HEALTHCHECKS_INTERVAL_SECONDS)
         msg="Healthchecks.io setting ($key): $old → $new (#79) — the dashboard container is recreated."

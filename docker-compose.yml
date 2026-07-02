@@ -418,15 +418,12 @@ services:
       # miner waits for Tari's sync, and whether a Tari-only sync takes over the dashboard
       # (Issue #51). Set dashboard.tari_required:false to make Tari non-blocking.
       - TARI_REQUIRED=${TARI_REQUIRED:-true}
-      # Healthchecks.io dead-man's switch (#79). Optional, default off: when enabled the
-      # dashboard pings a unique URL each loop, so if the host dies the pings stop and
+      # Healthchecks.io dead-man's switch (#79). A ping URL is the on/off switch (blank = off);
+      # when set, the dashboard pings it each loop, so if the host dies the pings stop and
       # Healthchecks.io alerts externally — the one failure mode an in-stack notifier can't
-      # report. Manual setup (paste the ping URL); see docs/monitoring.md. The dashboard runs
-      # network_mode: host, so it reaches hc-ping.com over the host's network.
-      - HEALTHCHECKS_ENABLED=${HEALTHCHECKS_ENABLED:-false}
+      # report. The ping always rides the bridge Tor SOCKS (TOR_SOCKS_PROXY). See docs/monitoring.md.
       - HEALTHCHECKS_PING_URL=${HEALTHCHECKS_PING_URL:-}
       - HEALTHCHECKS_INTERVAL_SECONDS=${HEALTHCHECKS_INTERVAL_SECONDS:-60}
-      - HEALTHCHECKS_TOR=${HEALTHCHECKS_TOR:-true}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

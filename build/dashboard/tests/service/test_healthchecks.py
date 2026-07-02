@@ -21,7 +21,6 @@ class _Clock:
 
 def _client(clock=None, **overrides):
     cfg = dict(
-        enabled=True,
         ping_url="https://hc-ping.com/abc",
         interval_seconds=60,
     )
@@ -49,25 +48,24 @@ class TestUrlResolution:
     def test_bare_uuid_rejected_as_unset(self):
         assert _client(ping_url="abc-123").url == ""
 
+    def test_enabled_is_derived_from_the_url(self):
+        # No separate on/off flag: a URL means on, blank means off.
+        assert _client(ping_url="https://hc-ping.com/abc").enabled is True
+        assert _client(ping_url="").enabled is False
 
-class TestPingDisabledOrUnconfigured:
-    def test_disabled_is_a_noop(self):
-        c = _client(enabled=False)
-        with patch.object(hc_mod.requests, "get") as get:
-            assert c.ping() is False
-        get.assert_not_called()
 
-    def test_enabled_without_url_warns_once(self, caplog):
+class TestPingUnconfigured:
+    def test_no_url_is_a_silent_noop(self, caplog):
+        # A blank ping URL is simply "off" — ping() does nothing, opens no socket, logs nothing.
         c = _client(ping_url="")
         with (
             patch.object(hc_mod.requests, "get") as get,
-            caplog.at_level(logging.WARNING, logger="Healthchecks"),
+            caplog.at_level(logging.DEBUG, logger="Healthchecks"),
         ):
             assert c.ping() is False
             assert c.ping() is False
         get.assert_not_called()
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1  # warned once, then stayed quiet
+        assert not caplog.records
 
 
 class TestPingSuccess:
@@ -82,26 +80,19 @@ class TestPingSuccess:
 
 
 class TestTorRouting:
-    def test_ping_over_tor_passes_socks_proxies(self):
-        # tor_proxy set → the ping rides the bridge Tor SOCKS (host IP hidden from hc-ping.com).
+    def test_ping_passes_socks_proxies(self):
+        # tor_proxy set → the ping rides the bridge Tor SOCKS (host IP hidden from the endpoint).
         proxy = "socks5h://172.28.0.25:9050"
         c = _client(tor_proxy=proxy)
         with patch.object(hc_mod.requests, "get") as get:
             assert c.ping() is True
         assert get.call_args.kwargs["proxies"] == {"http": proxy, "https": proxy}
 
-    def test_ping_without_tor_sends_no_proxies(self):
-        # Default (no tor_proxy) → direct clearnet ping, proxies=None.
-        c = _client()
-        with patch.object(hc_mod.requests, "get") as get:
-            assert c.ping() is True
-        assert get.call_args.kwargs["proxies"] is None
-
-    def test_from_config_wires_the_tor_proxy(self):
+    def test_from_config_always_routes_over_tor(self):
+        # from_config wires the bridge Tor SOCKS unconditionally — there is no clearnet mode.
         with (
-            patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True),
             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
-            patch.object(hc_mod, "HEALTHCHECKS_TOR_PROXY", "socks5h://172.28.0.25:9050"),
+            patch.object(hc_mod, "TOR_SOCKS_PROXY", "socks5h://172.28.0.25:9050"),
         ):
             c = HealthchecksClient.from_config()
         with patch.object(hc_mod.requests, "get") as get:
@@ -166,16 +157,15 @@ class TestPingFailsSilently:
 
 class TestFromConfig:
     def test_defaults_to_disabled(self):
-        # Real config defaults: feature is off out of the box.
+        # Real config defaults: no ping URL out of the box → off.
         assert HealthchecksClient.from_config().enabled is False
 
     def test_reads_config_values(self):
         with (
-            patch.object(hc_mod, "HEALTHCHECKS_ENABLED", True),
             patch.object(hc_mod, "HEALTHCHECKS_PING_URL", "https://hc-ping.com/zzz"),
             patch.object(hc_mod, "HEALTHCHECKS_INTERVAL_SEC", 120),
         ):
             c = HealthchecksClient.from_config()
-        assert c.enabled is True
+        assert c.enabled is True  # a URL is configured
         assert c.url == "https://hc-ping.com/zzz"
         assert c.interval == 120
