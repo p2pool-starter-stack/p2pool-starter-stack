@@ -1,6 +1,6 @@
 # Launch assets
 
-Marketing/launch visuals for the Pithead dashboard (Issue #80). Static views ship in dark and light
+Launch visuals for the Pithead dashboard (Issue #80). Static views ship in dark and light
 themes (`*-light.png`), so docs can serve a theme-adaptive `<picture>`.
 
 | Asset | Files | What |
