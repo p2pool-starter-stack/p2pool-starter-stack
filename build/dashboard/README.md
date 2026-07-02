@@ -25,12 +25,14 @@ Everything is served from `/static`: the vendored Preact, htm and Chart.js (`sta
 the app modules and `dashboard.css`. Nothing is inlined and the libraries are eval-free, so the
 page runs under a strict Content-Security-Policy with no `'unsafe-inline'`/`'unsafe-eval'`.
 
-Testing: the Python API, where all the logic and formatting live, is fully unit-tested. The pure
-client logic (worker sort, tooltip formatting, hero-KPI selection in `static/logic.mjs`) is
-unit-tested with Node's built-in runner
-(`node --test build/dashboard/tests/frontend/*.test.mjs`) — no
-`package.json`/`node_modules`/build step, so the repo stays Node-free. Component rendering has no
-unit tests by design; it's covered by a manual browser smoke test.
+Testing: the Python API, where the logic and formatting live, is unit-tested. The client-side
+tests run under Node's built-in runner (`node --test build/dashboard/tests/frontend/`) — no
+`package.json`/`node_modules`/build step, so the repo stays Node-free. They cover the pure logic
+(`logic.test.mjs`: worker sort, tooltip formatting, hero-KPI selection), the chart helpers
+(`chart.test.mjs`: `withAlpha`, `padYAxis`), the topology geometry (`topology.test.mjs`), and
+component rendering (`components.test.mjs`: every card driven through `App` against a real
+`build_state()` fixture, via a DOM-free vnode walker). The DOM-bound wiring (Chart.js canvas,
+the SVG topology component) needs a browser and is left to a manual smoke test.
 
 ## Layout
 
@@ -42,6 +44,7 @@ mining_dashboard/
 ├── collector/         # local stats collectors (pools, system, docker logs)
 ├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite),
 │                      #   metrics (typed computed domain values consumed by the view layer)
+├── sim/               # donation_model (the XvB donation simulator; property-tested, #284)
 ├── web/               # server.py (transport: / shell + /api/state + middleware),
 │                      #   views.py (build_state: the JSON state object), templates/index.html
 │                      #   (static shell), static/ (Preact app + dashboard.css + vendored libs)
@@ -64,8 +67,8 @@ uv sync --extra test
 pytest                                   # quick run
 pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail-under=80
 
-# pure client logic (needs only Node >= 18, no install):
-node --test tests/frontend/*.test.mjs
+# client-side tests (needs only Node >= 18, no install):
+node --test tests/frontend/
 ```
 
 Or from the repo root: `make test-dashboard`. The same Python suite runs in the Docker test stage:
