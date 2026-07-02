@@ -1,7 +1,7 @@
 # Getting Started
 
-This guide takes a fresh machine to a synced, mining stack. One script, `pithead`, drives the
-process; most of it runs on its own.
+Install and first-run setup, from a fresh Ubuntu host to a synced, mining stack. The `pithead`
+script drives every step.
 
 > **TL;DR**
 >
