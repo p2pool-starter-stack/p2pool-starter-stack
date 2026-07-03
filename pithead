@@ -2096,7 +2096,7 @@ render_env() {
     local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
     local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
-    local tg_ev_daily_summary tg_summary_time
+    local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
     tg_ev_worker_offline=$(tg_event worker_offline)
@@ -2112,6 +2112,7 @@ render_env() {
     tg_ev_new_release=$(tg_event new_release)
     tg_ev_stack_online=$(tg_event stack_online)
     tg_ev_daily_summary=$(tg_event daily_summary)
+    tg_ev_hashrate_low=$(tg_event hashrate_low)
     # Local time (HH:MM) for the daily digest; default 08:00.
     tg_summary_time=$(jq -r '.telegram.daily_summary_time // "08:00"' "$CONFIG_FILE")
 
@@ -2211,6 +2212,7 @@ TELEGRAM_EVENT_XVB_REGISTRATION=$tg_ev_xvb_registration
 TELEGRAM_EVENT_NEW_RELEASE=$tg_ev_new_release
 TELEGRAM_EVENT_STACK_ONLINE=$tg_ev_stack_online
 TELEGRAM_EVENT_DAILY_SUMMARY=$tg_ev_daily_summary
+TELEGRAM_EVENT_HASHRATE_LOW=$tg_ev_hashrate_low
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333

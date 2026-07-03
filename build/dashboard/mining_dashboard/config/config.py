@@ -270,6 +270,7 @@ TELEGRAM_EVENTS = {
     "new_release": _telegram_event_enabled("new_release"),
     "stack_online": _telegram_event_enabled("stack_online"),
     "daily_summary": _telegram_event_enabled("daily_summary"),
+    "hashrate_low": _telegram_event_enabled("hashrate_low"),
 }
 # ponytail: daily_summary is a scheduled push, not an edge — it lives in the events dict only so it
 # gets a per-event on/off toggle like the rest; its time is TELEGRAM_DAILY_SUMMARY_TIME below.

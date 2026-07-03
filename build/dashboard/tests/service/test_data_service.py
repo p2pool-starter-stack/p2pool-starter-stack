@@ -777,6 +777,9 @@ class TestRunIteration:
         proxy.get_workers.return_value = {"workers": []}
         svc._apply_worker_rejection = AsyncMock()
         svc.alert_service = MagicMock()
+        # Disabled → the loop skips the per-cycle build_metrics (a MagicMock state_manager can't feed
+        # it); process()/maybe_daily_summary are still called every cycle regardless.
+        svc.alert_service.enabled = False
         svc.alert_service.process = AsyncMock()
         svc.alert_service.maybe_daily_summary = AsyncMock()
 
@@ -832,6 +835,7 @@ class TestRunIteration:
             "clearnet_active",
             "xvb_registration_state",
             "update_available",
+            "low_hr_warning",
         }
         # ...sourced from the real computed values, not placeholders.
         assert kw["db_healthy"] is True  # from state_manager.is_db_healthy()

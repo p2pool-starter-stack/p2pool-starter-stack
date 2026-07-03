@@ -99,7 +99,8 @@
             "xvb_registration": true,
             "new_release": true,
             "stack_online": true,
-            "daily_summary": true
+            "daily_summary": true,
+            "hashrate_low": true
         },
         "daily_summary_time": "08:00",
         "commands": {

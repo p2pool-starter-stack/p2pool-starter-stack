@@ -36,6 +36,17 @@ def parse_hashrate(val_str, unit_str=None):
         return 0.0
 
 
+def effective_hashrate(worker):
+    """The single figure a worker contributes to the live headline total.
+
+    Prefers the 10-minute average (the ``h15`` field — legacy name, it's the proxy's 10m rate),
+    falling back to the 1-minute rate (``h60`` then ``h10``) when a rig hasn't accumulated 10
+    minutes yet, so a freshly-connected worker reads its real live rate instead of 0. Defined once
+    here so the aggregate total and every per-worker display use the *same* value and can't drift.
+    """
+    return worker.get("h15", 0) or worker.get("h60", 0) or worker.get("h10", 0) or 0
+
+
 def format_hashrate(hashrate):
     """
     Formats a raw hashrate value into a human-readable string with appropriate units.

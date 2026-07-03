@@ -23,6 +23,7 @@ SAFE = {
     "tari_clearnet_sync": False,
     "remote_monero": False,
     "healthchecks_enabled": False,
+    "telegram_enabled": False,
 }
 
 
@@ -91,6 +92,14 @@ def test_healthchecks_ping_is_tor_when_configured_inactive_otherwise():
     assert _conn(on, "dashboard", "Healthchecks")["route"] == TOR
     # It's over Tor, so it never counts as a leak even though the dashboard bypasses the firewall.
     assert on["summary"]["leaks"] == 0
+
+
+def test_telegram_bot_is_tor_when_enabled_inactive_otherwise():
+    # Enabling Telegram adds a dashboard Tor egress (#121/#340); off → inactive, never a leak.
+    assert _conn(_posture(telegram_enabled=False), "dashboard", "Telegram")["route"] == INACTIVE
+    on = _posture(telegram_enabled=True, firewall=True)
+    assert _conn(on, "dashboard", "Telegram")["route"] == TOR
+    assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
 
 
 def test_remote_monerod_rpc_is_clearnet():
@@ -226,6 +235,7 @@ _KNOBS = (
     "tari_clearnet_sync",
     "remote_monero",
     "healthchecks_enabled",
+    "telegram_enabled",
 )
 
 

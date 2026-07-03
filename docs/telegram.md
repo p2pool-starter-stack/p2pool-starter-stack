@@ -33,6 +33,7 @@ transition, not a stream:
 | ⚠ **No PPLNS share (XvB)** | You're donating to XvB but hold no share in the PPLNS window, so raffle wins are **skipped** — donations are wasted until you land one. Only fires when XvB is enabled. |
 | ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
 | 🎰 **XvB registration** | XvB auto-registration was rejected (bad payout address) or is failing — raffle wins won't count until it recovers. Only fires when XvB is enabled. |
+| 📉 **Hashrate low for tier** | You picked a fixed XvB donation tier your hashrate can't sustain — lower the tier or add hashrate. Fires on the transition and clears when it recovers. |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
 | 📅 **Daily summary** | A once-a-day roll-up (nodes, mining, workers, hashrate, shares, disk) pushed at a set local time — **08:00** by default, set `telegram.daily_summary_time` to change it. |
@@ -157,6 +158,7 @@ block and set it to `false` — any event you don't list stays on:
 | `new_release` | `true` | A newer Pithead release is available |
 | `stack_online` | `true` | One-shot "dashboard is up" heartbeat on start |
 | `daily_summary` | `true` | Once-a-day status roll-up (time set by `telegram.daily_summary_time`, default `08:00`) |
+| `hashrate_low` | `true` | Hashrate can't sustain the chosen XvB tier / recovered |
 
 Run `./pithead apply` after editing.
 

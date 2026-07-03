@@ -11,7 +11,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TOR_SOCKS_PROXY,
 )
-from mining_dashboard.helper.utils import format_duration, format_hashrate
+from mining_dashboard.helper.utils import effective_hashrate, format_duration, format_hashrate
 from mining_dashboard.service.earnings import xmr_per_hs_day
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
@@ -101,7 +101,12 @@ def format_status(metrics, mining_active, host_label=""):
 
 
 def format_hashrate_reply(metrics, workers, host_label=""):
-    """Total + per-online-worker hashrate — the answer to '/hashrate'."""
+    """Total + per-online-worker hashrate — the answer to '/hashrate'.
+
+    Both the total and each per-worker figure use the same :func:`effective_hashrate` (10m average,
+    1m fallback for a rig without 10m history yet), so the per-worker lines add up to the total —
+    a just-connected worker reads its real live rate, not 0.
+    """
     lines = [
         f"{_prefix(host_label)}⚡ Hashrate",
         f"Total: {format_hashrate(metrics.total_h15)} (10m avg)",
@@ -109,8 +114,8 @@ def format_hashrate_reply(metrics, workers, host_label=""):
     online = [w for w in workers if w.get("status") == "online"]
     if not online:
         lines.append("No workers online.")
-    for w in sorted(online, key=lambda w: w.get("h15", 0) or 0, reverse=True):
-        lines.append(f"• {w.get('name', '?')}: {format_hashrate(w.get('h15', 0))}")
+    for w in sorted(online, key=effective_hashrate, reverse=True):
+        lines.append(f"• {w.get('name', '?')}: {format_hashrate(effective_hashrate(w))}")
     return "\n".join(lines)
 
 
@@ -126,7 +131,7 @@ def format_workers(workers, host_label=""):
             up = w.get("uptime") or 0
             tail = f" · up {format_duration(up)}" if up else ""
             lines.append(
-                f"\U0001f7e2 {w.get('name', '?')} — {format_hashrate(w.get('h15', 0))}{tail}"
+                f"\U0001f7e2 {w.get('name', '?')} — {format_hashrate(effective_hashrate(w))}{tail}"
             )
         else:
             lines.append(f"\U0001f534 {w.get('name', '?')} — offline")
@@ -243,7 +248,7 @@ def format_daily_summary(metrics, data, host_label=""):
     else:
         lines.append("⛏️ Mining: \U0001f534 not mining")
     lines.append(f"\U0001f477 Workers: {metrics.workers_online}/{metrics.workers_total} online")
-    lines.append(f"⚡ Hashrate: {format_hashrate(metrics.total_h15)}")
+    lines.append(f"⚡ Hashrate: {format_hashrate(metrics.total_h15)} (10m avg)")
     lines.append(f"\U0001f3b0 PPLNS shares: {metrics.shares_in_window} in window")
     lines.append(f"\U0001f4be Disk: {disk.get('percent_str', 'n/a')} used")
     return "\n".join(lines)

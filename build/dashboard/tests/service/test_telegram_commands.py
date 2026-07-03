@@ -135,6 +135,20 @@ def test_hashrate_no_online_workers():
     assert "No workers online." in out
 
 
+def test_hashrate_uses_effective_rate_for_fresh_worker():
+    # A just-connected rig has no 10m (h15) history yet but is mining — it must show its live 1m
+    # rate (the same value the total counts), never 0.00. (This was the reported inconsistency.)
+    workers = [{"name": "fresh", "status": "online", "h15": 0, "h60": 42000, "h10": 42000}]
+    out = tc.format_hashrate_reply(_metrics(), workers)
+    assert "42.00 kH/s" in out
+    assert "0.00 H/s" not in out
+
+
+def test_workers_hashrate_uses_effective_rate():
+    workers = [{"name": "fresh", "status": "online", "h15": 0, "h60": 5000, "h10": 5000}]
+    assert "5.00 kH/s" in tc.format_workers(workers)
+
+
 def test_workers_online_first_with_offline_flagged():
     workers = [
         {"name": "off-1", "status": "offline", "h15": 0},

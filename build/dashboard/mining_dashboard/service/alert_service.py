@@ -86,6 +86,7 @@ class AlertService:
     EVT_NEW_RELEASE = "new_release"
     EVT_STACK_ONLINE = "stack_online"
     EVT_DAILY_SUMMARY = "daily_summary"
+    EVT_HASHRATE_LOW = "hashrate_low"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -121,6 +122,7 @@ class AlertService:
         self._prev_clearnet_active = None
         self._prev_xvb_reg = None
         self._prev_update_available = None
+        self._prev_hashrate_low = None
         # One-shot "stack is online" ping, sent on the first cycle after the dashboard starts.
         self._announced_online = False
 
@@ -144,6 +146,7 @@ class AlertService:
         clearnet_active=False,
         xvb_registration_state="",
         update_available=False,
+        low_hr_warning=False,
         now=None,
     ):
         """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
@@ -204,6 +207,7 @@ class AlertService:
         # --- XvB auto-registration health, and a new Pithead release being available ---
         alerts += self._registration_edges(xvb_enabled, xvb_registration_state)
         alerts += self._release_edges(update_available)
+        alerts += self._hashrate_low_edges(low_hr_warning)
 
         return [(evt, text) for evt, text in alerts if self.notifier.event_enabled(evt)]
 
@@ -401,6 +405,30 @@ class AlertService:
                 self._fmt(
                     "\U0001f195 A new Pithead release is available — see the dashboard header."
                 ),
+            )
+        ]
+
+    def _hashrate_low_edges(self, low_hr_warning):
+        """Alert when a manually-chosen XvB tier can't be sustained by the current hashrate (#158),
+        and when it recovers. Edge-only (fires on the transition, not every cycle)."""
+        prev = self._prev_hashrate_low
+        self._prev_hashrate_low = bool(low_hr_warning)
+        if prev is None or bool(low_hr_warning) == prev:
+            return []
+        if low_hr_warning:
+            return [
+                (
+                    self.EVT_HASHRATE_LOW,
+                    self._fmt(
+                        "⚠️ \U0001f4c9 Hashrate too low for the chosen XvB tier — it can't be "
+                        "sustained; lower the tier or add hashrate."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_HASHRATE_LOW,
+                self._fmt("\U0001f7e2 \U0001f4c8 Hashrate back above the chosen XvB tier."),
             )
         ]
 

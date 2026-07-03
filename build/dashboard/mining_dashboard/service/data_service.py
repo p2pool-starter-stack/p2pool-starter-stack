@@ -46,6 +46,7 @@ from mining_dashboard.config.config import (
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
+    effective_hashrate,
     pplns_block_time,
     shares_in_pplns_window,
 )
@@ -245,12 +246,7 @@ def _aggregate_hashrate(workers):
     total_h10 = 0
     for w in workers:
         if w.get("status") == "online":
-            w_hr = w.get("h15", 0)
-            if w_hr == 0:
-                w_hr = w.get("h60", 0)
-            if w_hr == 0:
-                w_hr = w.get("h10", 0)
-            total_hr += w_hr
+            total_hr += effective_hashrate(w)
             total_h10 += w.get("h10", 0)
     return total_hr, total_h10
 
@@ -799,6 +795,14 @@ class DataService:
                         pool_local.get("pplns_window", DEFAULT_PPLNS_WINDOW),
                         pplns_block_time(pool_type),
                     )
+                    # Build the domain metrics once per cycle for the alerter — but only when the
+                    # bot is actually on, so the default (Telegram-off) stack pays nothing. Reused
+                    # for the hashrate-low edge and the daily digest.
+                    alert_metrics = (
+                        build_metrics(self.latest_data, self.state_manager)
+                        if self.alert_service.enabled
+                        else None
+                    )
                     await self.alert_service.process(
                         monero_down=monero_down,
                         tari_down=tari_down,
@@ -821,15 +825,14 @@ class DataService:
                         update_available=bool(
                             (self.latest_data.get("update") or {}).get("available")
                         ),
+                        low_hr_warning=bool(alert_metrics and alert_metrics.low_hr_warning),
                     )
-                    # Once-daily status digest (built lazily, only when a send is actually due).
+                    # Once-daily status digest, reusing the metrics built above (only when the bot
+                    # is on, which is also the only time maybe_daily_summary would send).
                     await self.alert_service.maybe_daily_summary(
                         time.time(),
-                        lambda: format_daily_summary(
-                            build_metrics(self.latest_data, self.state_manager),
-                            self.latest_data,
-                            HOST_IP,
-                        ),
+                        # bind this cycle's metrics (the provider runs within this iteration).
+                        lambda m=alert_metrics: format_daily_summary(m, self.latest_data, HOST_IP),
                     )
 
                     self.latest_data.update(
