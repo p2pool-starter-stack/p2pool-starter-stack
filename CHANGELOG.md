@@ -107,8 +107,10 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   low for the chosen XvB tier**, **a node exposed on clearnet** during initial sync, and **a new
   release being available** — and answer status commands on demand: **`/status`**, **`/hashrate`**,
   **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**, **`/xvb`**, **`/earnings`**, and
-  **`/help`**. It also pushes a **📅 once-a-day status digest** at a configurable local time
-  (`telegram.daily_summary_time`, default **08:00**). The Telegram bot appears in the dashboard's
+  **`/help`**. It also pushes a **📅 once-a-day retrospective** at a configurable local time
+  (`telegram.daily_summary_time`, default **08:00**) — the last 24h across the fleet: 24h hashrate
+  with the P2Pool/XvB split, shares found in the day, an estimated daily-earnings figure, and a
+  per-machine 24h breakdown. The Telegram bot appears in the dashboard's
   **network-egress panel** (#170) as a Tor-routed path alongside Healthchecks/XvB/update-check. All
   traffic is **routed over Tor** (the same bridge SOCKS as Healthchecks/XvB), so the bot never
   exposes the host IP to Telegram. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,

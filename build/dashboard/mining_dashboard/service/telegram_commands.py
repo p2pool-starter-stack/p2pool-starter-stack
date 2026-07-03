@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 import requests
 
@@ -231,25 +232,46 @@ def format_earnings(metrics, network, host_label=""):
     )
 
 
-def format_daily_summary(metrics, data, host_label=""):
-    """The once-a-day status digest pushed by the alerter — an at-a-glance roll-up built from the
-    same domain values as /status. ``data`` is the latest snapshot (for the disk figure + the
-    mining-active flag the metrics layer doesn't carry)."""
-    mining = bool(data.get("miner_released") and not data.get("workers_rejected"))
+def format_daily_summary(metrics, data, host_label="", now=None):
+    """The once-a-day retrospective pushed by the alerter — **what happened across the fleet over
+    the last 24h**, not a live snapshot. Reuses the same domain values the dashboard shows.
+
+    Consistency by construction: the fleet 24h figure is the sum of each rig's 24h average, and the
+    XvB split is that total apportioned by the day's routing fraction — so the per-rig lines add up
+    to the headline and P2Pool + XvB equals it. ``now`` is injectable for tests; it stamps the
+    message and bounds the 24h share count.
+    """
+    now = time.time() if now is None else now
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
+    online = [w for w in data.get("workers", []) if w.get("status") == "online"]
+    fleet_24h = sum(w.get("h24h", 0) or 0 for w in online)
+    shares_24h = sum(1 for s in data.get("shares", []) if s.get("ts", 0) >= now - 86400)
+
+    lines = [f"{_prefix(host_label)}\U0001f4c5 Daily summary — {stamp}"]
+    lines.append(f"⚡ 24h hashrate: {format_hashrate(fleet_24h)}")
+    if metrics.xvb_enabled:
+        routed = (metrics.p2pool_24h or 0) + (metrics.xvb_routed_24h or 0)
+        xvb_frac = (metrics.xvb_routed_24h or 0) / routed if routed else 0
+        xvb_hr = fleet_24h * xvb_frac
+        lines.append(
+            f"   \U0001f535 P2Pool {format_hashrate(fleet_24h - xvb_hr)} · "
+            f"\U0001f3b2 XvB {format_hashrate(xvb_hr)} ({xvb_frac * 100:.0f}% to XvB)"
+        )
+        lines.append(f"\U0001f3b0 XvB tier: {metrics.current_tier}")
+    lines.append(f"\U0001f3af Shares (24h): {shares_24h}")
+
+    reward = (data.get("network", {}) or {}).get("reward", 0) or 0
+    coeff = xmr_per_hs_day(reward, metrics.network_difficulty)
+    if coeff > 0:
+        lines.append(
+            f"\U0001f4b0 Est. earnings: ~{coeff * (metrics.p2pool_24h or 0):.6f} XMR/day (P2Pool)"
+        )
+
+    lines.append(f"\U0001f477 Miners: {metrics.workers_online}/{metrics.workers_total} online")
+    for w in sorted(online, key=lambda w: w.get("h24h", 0) or 0, reverse=True):
+        lines.append(f"   • {w.get('name', '?')}: {format_hashrate(w.get('h24h', 0))}")
+
     disk = (data.get("system", {}) or {}).get("disk", {}) or {}
-    lines = [
-        f"{_prefix(host_label)}\U0001f4c5 Daily summary",
-        f"⛓️ Monero: {_node_state(metrics.monero)} · Tari: {_node_state(metrics.tari)}",
-    ]
-    if metrics.global_syncing:
-        lines.append("⛏️ Mining: ⏳ holding — chain(s) syncing")
-    elif mining:
-        lines.append(f"⛏️ Mining: \U0001f7e2 active ({metrics.mode})")
-    else:
-        lines.append("⛏️ Mining: \U0001f534 not mining")
-    lines.append(f"\U0001f477 Workers: {metrics.workers_online}/{metrics.workers_total} online")
-    lines.append(f"⚡ Hashrate: {format_hashrate(metrics.total_h15)} (10m avg)")
-    lines.append(f"\U0001f3b0 PPLNS shares: {metrics.shares_in_window} in window")
     lines.append(f"\U0001f4be Disk: {disk.get('percent_str', 'n/a')} used")
     return "\n".join(lines)
 

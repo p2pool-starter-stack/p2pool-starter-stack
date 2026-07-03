@@ -233,17 +233,50 @@ def test_earnings_unavailable_without_network_data():
     assert "unavailable" in out
 
 
-def test_daily_summary_rolls_up_status():
+def test_daily_summary_is_a_24h_retrospective():
+    now = 1_000_000
     data = {
-        "miner_released": True,
-        "workers_rejected": False,
+        "workers": [
+            {"name": "miner-0", "status": "online", "h24h": 30000},
+            {"name": "miner-1", "status": "online", "h24h": 20000},
+            {"name": "old", "status": "offline", "h24h": 0},
+        ],
+        # 2 shares within 24h, 1 older.
+        "shares": [{"ts": now - 100}, {"ts": now - 90000}, {"ts": now - 200}],
         "system": {"disk": {"percent_str": "42%"}},
+        "network": {"reward": 600_000_000_000},
     }
-    out = tc.format_daily_summary(_metrics(mode="P2POOL", workers_online=3, workers_total=3), data)
-    assert "Daily summary" in out
-    assert "Mining: 🟢 active (P2POOL)" in out
-    assert "Workers: 3/3 online" in out
+    out = tc.format_daily_summary(
+        _metrics(
+            xvb_enabled=True,
+            p2pool_24h=40000,
+            xvb_routed_24h=10000,
+            current_tier="Donor",
+            workers_online=2,
+            workers_total=3,
+        ),
+        data,
+        now=now,
+    )
+    assert "Daily summary — " in out  # date+time stamped
+    assert "24h hashrate: 50.00 kH/s" in out  # sum of per-rig h24h (30k + 20k)
+    assert "20% to XvB" in out  # 10k / (40k + 10k)
+    assert "P2Pool 40.00 kH/s" in out and "XvB 10.00 kH/s" in out  # apportioned, sums to fleet
+    assert "XvB tier: Donor" in out
+    assert "Shares (24h): 2" in out
+    assert "Est. earnings" in out
+    assert "miner-0: 30.00 kH/s" in out
+    assert "old" not in out  # offline rig excluded
     assert "Disk: 42% used" in out
+    # The retrospective drops live-status lines like node sync.
+    assert "synced" not in out.lower()
+
+
+def test_daily_summary_without_xvb_omits_split():
+    data = {"workers": [{"name": "m", "status": "online", "h24h": 5000}], "shares": []}
+    out = tc.format_daily_summary(_metrics(xvb_enabled=False), data, now=0)
+    assert "24h hashrate: 5.00 kH/s" in out
+    assert "to XvB" not in out
 
 
 def test_host_label_prefix():
