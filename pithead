@@ -2167,12 +2167,20 @@ onion_client_key() {
         error "The dashboard onion isn't fully provisioned yet — run '$0 apply' first."
     cat <<EOF
 Tor onion client-auth for the dashboard (#343) — KEEP THIS PRIVATE, it is a secret key.
-Add this one line to a file in your Tor client's ClientOnionAuthDir
-(e.g. /var/lib/tor/onion_auth/dashboard.auth_private, the dir set by ClientOnionAuthDir, mode 0700):
+Dashboard onion address:  http://$onion
 
-  ${onion%.onion}:descriptor:x25519:${privkey}
+Pick whichever Tor client you use to reach it:
 
-Then reach the dashboard at:  http://$onion
+• Tor Browser (easiest): open  http://$onion  — it prompts for the onion's
+  private key. Paste JUST this key:
+
+    $privkey
+
+• System Tor / Orbot (persistent): put this one line in a file (e.g.
+  dashboard.auth_private) inside the directory set by ClientOnionAuthDir in your
+  torrc (create it mode 0700), then reload Tor:
+
+    ${onion%.onion}:descriptor:x25519:$privkey
 EOF
 }
 

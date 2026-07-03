@@ -1504,7 +1504,8 @@ DASHBOARD_ONION_CLIENT_PRIVKEY=UNITTESTPRIVKEYBASE32
 EOF
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
 assert_rc "onion-client-key succeeds when client-auth on" "$?" "0"
-assert_contains "onion-client-key prints the descriptor line" "$out" "abcd234:descriptor:x25519:UNITTESTPRIVKEYBASE32"
+assert_contains "onion-client-key prints the descriptor line (system Tor)" "$out" "abcd234:descriptor:x25519:UNITTESTPRIVKEYBASE32"
+assert_contains "onion-client-key offers the Tor Browser path" "$out" "Tor Browser"
 cat >"$V/.env" <<EOF
 DEPLOYMENT_COMPLETED=true
 DASHBOARD_ONION_ENABLED=true

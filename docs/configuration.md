@@ -243,17 +243,23 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
 After `apply`, read the address from `pithead status` (printed only to that local output). Treat the
 `.onion` as a secret: anyone who has it can _attempt_ the login (and, without client-auth, reach it).
 
-**Setting up client authorization on your device.** Run `pithead onion-client-key` — it prints a
-single line containing your client PRIVATE key (kept out of `status`, which is a shareable report):
+**Connecting with client authorization.** With `client_auth: true` the onion won't answer at all
+until your Tor client presents the private key. Run `pithead onion-client-key` on the host — it
+prints the address and the key in both forms you might need (it's kept out of `status`, which is a
+shareable report). Then pick your client:
 
-```text
-<address>:descriptor:x25519:<private-key>
-```
+- **Tor Browser (easiest).** Open `http://<address>.onion`. Tor Browser prompts for the onion's
+  private key — paste the bare key (the value after `x25519:`) and continue. Nothing else to set up.
+- **System Tor or Orbot (persistent).** Add a line to your `torrc`:
+  `ClientOnionAuthDir /var/lib/tor/onion_auth` (any dir you own, mode `0700`). Inside it, create
+  `dashboard.auth_private` containing the one-line form
+  `<address>:descriptor:x25519:<private-key>`, then reload Tor. Now any Tor-aware client on that
+  machine can reach the onion.
 
-Save that line into a file (e.g. `dashboard.auth_private`) inside your local Tor client's
-`ClientOnionAuthDir`, then reach the dashboard at `http://<address>.onion`. Without it, the onion is
-invisible. Set `client_auth: false` for a deliberately password-only onion (weaker — the address
-becomes online-guessable, so lean on the password).
+After that, browse to `http://<address>.onion` and log in with your dashboard username/password.
+Without the client key the onion is invisible — that's the point. Set `client_auth: false` for a
+deliberately password-only onion (weaker: the address becomes online-guessable, so lean on the
+password).
 
 **Rotation.** A leaked `.onion` address or client key is otherwise permanent. Run
 `pithead rotate-dashboard-onion` to mint a fresh address and client key; the old ones stop working
