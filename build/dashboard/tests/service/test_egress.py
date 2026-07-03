@@ -12,7 +12,8 @@ from mining_dashboard.service.egress import (
     compute_topology,
 )
 
-# The privacy-safe resting config: firewall on, p2pool over Tor, XvB over Tor, local node, no sync.
+# The privacy-safe resting config: firewall on, p2pool over Tor, XvB over Tor, local node, no sync,
+# healthchecks off (no ping URL configured).
 SAFE = {
     "firewall": True,
     "p2pool_clearnet": False,
@@ -21,6 +22,8 @@ SAFE = {
     "monero_clearnet_sync": False,
     "tari_clearnet_sync": False,
     "remote_monero": False,
+    "healthchecks_enabled": False,
+    "telegram_enabled": False,
 }
 
 
@@ -77,7 +80,26 @@ def test_xvb_disabled_routes_are_inactive():
     p = _posture(xvb_enabled=False)
     assert _conn(p, "dashboard", "XvB stats")["route"] == INACTIVE
     assert _conn(p, "xmrig-proxy", "XvB donation")["route"] == INACTIVE
-    assert p["summary"]["leaks"] == 0
+
+
+def test_healthchecks_ping_is_tor_when_configured_inactive_otherwise():
+    # A configured ping URL adds a dashboard Tor egress (#79); no URL → inactive, never a leak.
+    assert (
+        _conn(_posture(healthchecks_enabled=False), "dashboard", "Healthchecks")["route"]
+        == INACTIVE
+    )
+    on = _posture(healthchecks_enabled=True, firewall=True)
+    assert _conn(on, "dashboard", "Healthchecks")["route"] == TOR
+    # It's over Tor, so it never counts as a leak even though the dashboard bypasses the firewall.
+    assert on["summary"]["leaks"] == 0
+
+
+def test_telegram_bot_is_tor_when_enabled_inactive_otherwise():
+    # Enabling Telegram adds a dashboard Tor egress (#121/#340); off → inactive, never a leak.
+    assert _conn(_posture(telegram_enabled=False), "dashboard", "Telegram")["route"] == INACTIVE
+    on = _posture(telegram_enabled=True, firewall=True)
+    assert _conn(on, "dashboard", "Telegram")["route"] == TOR
+    assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
 
 
 def test_remote_monerod_rpc_is_clearnet():
@@ -212,11 +234,13 @@ _KNOBS = (
     "monero_clearnet_sync",
     "tari_clearnet_sync",
     "remote_monero",
+    "healthchecks_enabled",
+    "telegram_enabled",
 )
 
 
 def _all_configs():
-    """Every one of the 2**7 combinations of the boolean knobs."""
+    """Every one of the 2**len(_KNOBS) combinations of the boolean knobs."""
     for combo in itertools.product((False, True), repeat=len(_KNOBS)):
         yield dict(zip(_KNOBS, combo, strict=True))
 

@@ -1,20 +1,19 @@
 # Connecting Miners
 
-How to point miners at the stack. Every miner you own connects to one endpoint, and the stack routes
-their combined hashrate: pool selection, payouts, and the P2Pool/XvB split are handled centrally.
-Miners stay simple; all the coordination lives here.
+How to point miners at the stack. Every miner connects to one endpoint; the stack handles pool
+selection, payouts, and the P2Pool/XvB split centrally.
 
 The endpoint is the `xmrig-proxy` service on port `3333`.
 
-> You do not put a wallet address in your miner config. Payouts are managed by the P2Pool service on
-> the stack. Miners only need to know where the stack is.
+> Do not put a wallet address in your miner config. The P2Pool service on the stack handles payouts.
+> Miners only need to know where the stack is.
 
 ---
 
 ## Already have miners? Connect them
 
 If you already run [XMRig](https://github.com/xmrig/xmrig) (or any RandomX miner), point it at the
-stack and you're done. Use the machine running the stack as the host, on port `3333`:
+stack host on port `3333`:
 
 ```json
 {
@@ -27,19 +26,18 @@ stack and you're done. Use the machine running the stack as the host, on port `3
 }
 ```
 
-That's the whole pool config. Start the miner and it appears in the dashboard's Workers Alive table
+That is the whole pool config. Start the miner; it appears in the dashboard's Workers Alive table
 within a few seconds.
 
-- `user` is just a label for the rig. Use its hostname so you can tell workers apart on the
-  dashboard. (No wallet address; see above.)
-- Point all your rigs at the same `YOUR_STACK_IP:3333`. The stack aggregates them; there's nothing
-  per-rig to configure beyond the label.
+- `user` is a label for the rig. Use its hostname to tell workers apart on the dashboard. (No wallet
+  address; see above.)
+- Point every rig at the same `YOUR_STACK_IP:3333`. The stack aggregates them; nothing per-rig to
+  configure beyond the label.
 - `YOUR_STACK_IP` is the stack host's IP or a DNS-resolvable hostname. For a stable address on a home
   LAN, set a DHCP reservation (or a static IP) for the stack host.
-- Add a backup pool for automatic failover. List a second entry in `pools` (a public pool, or another
-  stack). If your Monero node goes down or is still syncing, the stack briefly stops accepting work so
-  your rigs fail over to the backup automatically, then switch back the moment it recovers. You never
-  sit idle on a stalled node.
+- Add a backup pool for failover. List a second entry in `pools` (a public pool, or another stack).
+  If the Monero node goes down or is still syncing, the stack stops accepting work so rigs fail over
+  to the backup, then switch back when it recovers.
 
 ### Miner version & compatibility
 
@@ -176,12 +174,12 @@ URL, status, and likely fix, so a misconfigured API reads differently from an of
 
 ## New to mining? Start with RigForge
 
-If you don't have miners set up yet, or you want the best hashrate without hand-tuning, use
+If you don't have miners set up yet, use
 [RigForge](https://github.com/p2pool-starter-stack/rigforge), the companion miner kit for this stack.
 
-RigForge turns a fresh machine into a tuned worker in one command: it builds XMRig from source,
-applies CPU- and kernel-level tuning (HugePages, MSR, NUMA), and runs it as a managed service. During
-setup it asks for your stack's hostname and wires up the `3333` connection for you.
+RigForge builds XMRig from source, applies CPU- and kernel-level tuning (HugePages, MSR, NUMA), and
+runs it as a managed service. During setup it asks for your stack's hostname and configures the
+`3333` connection.
 
 ```bash
 git clone https://github.com/p2pool-starter-stack/rigforge.git

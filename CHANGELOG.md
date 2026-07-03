@@ -9,6 +9,65 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.2.0] - 2026-07-03
+
+**Operator-visibility release — the stack can now tell you when something is wrong, and let you reach
+it from anywhere over Tor.** A Telegram operator bot pushes a curated set of alerts and answers
+on-demand status commands; an optional Healthchecks.io dead-man's switch catches a whole-host death
+that an in-stack notifier structurally can't report; and the dashboard can publish an optional Tor
+onion so you can reach it remotely without a port-forward or public IP. All three run over Tor. This
+minor also isolates the Docker socket proxies onto their own network, off the mining bridge.
+
+**Upgrade note:** every new surface is opt-in and off by default — enable them in `config.json`
+(`telegram`, `healthchecks.ping_url`, `dashboard.onion`). Pick the changes up with `./pithead upgrade`
+(or re-download the bundle); your `config.json` and preserved secrets (Tor onions, RPC credentials,
+proxy token) are untouched.
+
+### Added
+
+- **Telegram operator bot (#121, #45).** Opt-in. Pushes a curated set of operational edges — node
+  down/recovered, worker offline/joined/left, sync finished, disk filling, database unhealthy, host
+  advisories (HugePages off, low RAM), a hashrate-drop detector, XvB no-share and registration
+  problems, clearnet exposure, and a once-a-day digest — and answers read-only on-demand commands
+  (`/status`, `/hashrate`, `/workers`, `/sync`, `/system`, `/pool`, `/xvb`, `/earnings`, `/info`,
+  `/help`) from a single configured chat. Alerts and commands are separate opt-ins, every event has a
+  toggle, and both the sends and the command poll ride the bridge Tor SOCKS (#340), so Telegram sees a
+  Tor exit and not your host IP. See [`docs/telegram.md`](docs/telegram.md).
+- **Healthchecks.io dead-man's switch (#79).** Opt-in. Set `healthchecks.ping_url` and the dashboard
+  pings it every cycle; if the whole host dies the pings stop and Healthchecks.io alerts you on the
+  *absence* of a ping — the one failure mode an in-stack notifier can't report. The ping always rides
+  Tor, so it is never a clearnet beacon; the URL must be Tor-reachable (hosted `hc-ping.com`, or a
+  self-hosted onion/public instance).
+- **Optional Tor onion for the remote dashboard (#343).** Opt-in (`dashboard.onion.enabled`, default
+  off). Publishes a fourth onion that fronts the authenticated Caddy login, so you can reach the
+  dashboard remotely over Tor with no port-forward and no public IP. It defaults to Tor v3 client
+  authorization (the onion does not respond without your client key), and `pithead` refuses to publish
+  it unless the dashboard password is at least 16 characters. This is inbound access and does not
+  change the egress posture. See
+  [Remote access over Tor](docs/configuration.md#remote-access-over-tor-onion-service).
+
+### Changed
+
+- **Docker socket proxies isolated off the mining bridge (#345).** The read-only and start/stop socket
+  proxies now sit on their own network, published only to the host loopback, so no mining container
+  can reach the Docker API even through the proxies. The host-networked dashboard reaches them at
+  `127.0.0.1`; the dashboard's SSRF guard rejects the proxy addresses as before.
+
+### Fixed
+
+- **xmrig-proxy no longer renders a stray empty command argument (#347).** With no stratum password
+  set (the default), the optional `--access-password` compose item rendered a literal empty argument
+  and xmrig-proxy logged `unsupported non-option argument ''` on startup. The flag now passes through a
+  wrapper entrypoint from an env var, so an unset password appends nothing. It was harmless, but the
+  warning is gone.
+
+### Documentation & tests
+
+- A house-voice and factual-accuracy pass across the prose docs (#334), with the banned-word voice
+  check and the testing-tier guidance enforced as CI guardrails (#335). Added coverage for flagged
+  edge cases (#330), the Tor-onion container entrypoint and the daily-digest time parser (#348), and
+  made the integration egress verifier survive a release-bundle `--dir` (#332).
+
 ## [1.1.0] - 2026-07-01
 
 **Privacy release — the stack is now Tor-first by default and fail-closed.** Outbound P2Pool sidechain
@@ -175,6 +234,65 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
 
 ### Added
 
+- **Healthchecks.io dead-man's switch** (`healthchecks.ping_url` in `config.json`, **off until
+  set**): an optional external liveness monitor. Set a ping URL and the dashboard loop pings it
+  every cycle; if the host dies (power loss, kernel panic, NIC death) the pings stop and
+  Healthchecks.io alerts you — the one failure mode an in-stack notifier can't report from a dead
+  machine. It's a **pure "is the stack alive" signal** — in-stack node-health alerting (a node down
+  while the box is up) is out of scope, handled separately by the Telegram alerter (#121). The ping
+  **always rides Tor** (the shared bridge SOCKS) so the endpoint sees a Tor exit, not your host IP,
+  so paste a Tor-reachable URL (hosted `hc-ping.com`, or a self-hosted onion/public instance). Fails
+  silently when offline / Tor down. The URL is the on/off switch and is stored as a secret in the
+  owner-only `.env`. See [`docs/monitoring.md`](docs/monitoring.md) (#79).
+- **Telegram operator bot — push alerts + on-demand status** (#121, #45): the dashboard can push a
+  high-value set of operational alerts to Telegram — a **🚀 "Pithead online"** heartbeat on start,
+  **node down / recovered**, **worker offline / back online**, **new worker joined / left**, **sync
+  finished**, **data disk filling up**, **dashboard DB write failing**, **no PPLNS share while
+  donating to XvB** (raffle wins skipped), **XvB registration rejected / failing**, **hashrate too
+  low for the chosen XvB tier**, **a node exposed on clearnet** during initial sync, and **a new
+  release being available** — and answer status commands on demand: **`/status`**, **`/info`**
+  (version + update availability, Monero DB mode, P2Pool sidechain, and Tor-only/clearnet privacy
+  posture), **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**, **`/xvb`**,
+  **`/earnings`**, and **`/help`**. It also pushes a **📅 once-a-day retrospective** at a configurable local time
+  (`telegram.daily_summary_time`, default **08:00**) — the last 24h across the fleet: an incident
+  roll-up (what went wrong during the day, or an all-clear), 24h hashrate with the P2Pool/XvB split,
+  shares found in the day, an estimated daily-earnings figure, and a per-machine 24h breakdown. The Telegram bot appears in the dashboard's
+  **network-egress panel** (#170) as a Tor-routed path alongside Healthchecks/XvB/update-check. All
+  traffic is **routed over Tor** (the same bridge SOCKS as Healthchecks/XvB), so the bot never
+  exposes the host IP to Telegram. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
+  `bot_token`, `chat_id`, per-event `events` toggles, and a `commands.enabled` switch for the
+  interactive half). Every alert is **debounced** so a momentary blip won't ping you and you get one
+  message per real transition — and each is built by *reusing* what the dashboard already computes:
+  worker offline/joined/left keys off the same per-rig **DOWN** status the UI shows, and the disk /
+  DB alerts cross the same thresholds as the dashboard's own low-disk and DB-health badges. Commands
+  **long-poll** (`getUpdates`) so they need no inbound port and ride the same Tor egress as the
+  alerts, are **read-only** (they never change the stack), and only the configured `chat_id` is
+  answered — every other update is ignored. The `bot_token` is treated as a secret (owner-only
+  `.env`, never logged), and both sends and polling **fail silently** on a Tor-only / offline host.
+  Messages are prefixed with the dashboard hostname so multiple stacks can share one chat. Full
+  walkthrough — creating a bot, finding your chat id, the command list, and the "one chat, two bots"
+  pattern for sharing a chat with the Healthchecks.io monitor (#79) — in
+  [`docs/telegram.md`](docs/telegram.md).
+- **Host & performance warning badges + alerts** (#104): the top bar now surfaces the persistent
+  host conditions `setup` warns about, derived from **live** metrics (so they self-correct): **⚠
+  HugePages off** (RandomX capped until reserved), **⚠ Low RAM** (under 16 GB — Tari can OOM during
+  sync), and **⚠ No AVX2** (slow RandomX). The first two also push a Telegram alert (`hugepages`,
+  `low_ram`) the first time they're seen — unlike the transient edge alerts, a stable bad state
+  fires on first detection, and HugePages clears with a recovery ping once a reboot applies them.
+  AVX2 is **badge-only** by design: a fixed hardware fact with nothing to act on at runtime doesn't
+  warrant a push. The bot's **`/status`** reply now ends with any active warning/error badges (the
+  same catalog the top bar draws) or an explicit "✅ No warnings."
+- **Hashrate-drop detector — chart markers + `hashrate_loss` alert** (#99): the dashboard now flags a
+  **sustained, significant fall** in total fleet hashrate — a rig gone dark, a network cut, a stalled
+  miner — separately from the existing "too low for your XvB tier" warning. It tracks a slow moving
+  average as the "normal" level (frozen while degraded so an outage can't quietly redefine normal),
+  and fires once the total stays below **`dashboard.hashrate_drop_threshold`** percent of that
+  baseline for **`dashboard.hashrate_drop_minutes`** (defaults: **50%** for **10 min**), with a
+  matching recovery edge. Each edge drops a **diamond marker on the hashrate chart** (amber for the
+  drop, green for the recovery; hover for the size) that is **persisted**, so an overnight drop is
+  still visible in the morning, and — when Telegram is on — pushes a **`hashrate_loss`** alert and
+  counts toward the daily incident roll-up. Both knobs are documented in
+  [`docs/configuration.md`](docs/configuration.md); the alert in [`docs/telegram.md`](docs/telegram.md).
 - **Optional clearnet initial sync (#183).** A default-off, per-component opt-in
   (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`) that lets a node do its **one-time
   initial block download over clearnet** — much faster than over bandwidth-capped Tor circuits, which

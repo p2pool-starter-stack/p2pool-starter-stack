@@ -51,6 +51,12 @@ address): monerod, Tari, and P2Pool each get one from the built-in Tor daemon. S
   setup`/`doctor` warn if your host has a public IP. Lock it down with `p2pool.stratum_bind`, a
   firewall, and/or an optional `p2pool.stratum_password` that requires each rig to authenticate.
   See [Connecting miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
+- The **dashboard** can get a fourth, optional onion (`dashboard.onion.enabled`, default off) so you
+  can reach it remotely over Tor without a port-forward or public IP. It fronts the authenticated
+  Caddy login, defaults to Tor v3 client authorization (the onion won't respond without your client
+  key), and pithead refuses to publish it without a 16-character password. This is **inbound** access
+  over Tor and does not change the egress table below. See
+  [Remote access over Tor](configuration.md#remote-access-over-tor-onion-service).
 
 ---
 
@@ -72,8 +78,8 @@ What the running stack sends to the internet, connection by connection.
 | **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` via Tor | — | ✅ **Tor** (per-pool `socks5`, DNS proxy-side) by default (#166) | on while donating | opt out with `xvb.tor: false` (exposes IP for max yield); `xvb.enabled: false` stops it entirely |
 | Dashboard **update check** (#224) | `api.github.com` | nothing about you — GitHub sees a **Tor exit**, not your IP | ✅ Tor (`socks5h`) | **on** | `dashboard.check_for_updates: false` to opt out; cached, fails silently offline |
 | **Caddy** TLS (dashboard HTTPS) | local only | — | n/a — `tls internal`, **no ACME / no external CA** | on | clean (no egress) |
-| **Telegram** alerts (#121) | Telegram API | your IP | ❌ | **off** | opt-in only |
-| **Healthchecks** pings (#79) | external | your IP | ❌ | **off** | opt-in only |
+| **Telegram** bot (#121) | `api.telegram.org` | nothing about you — Telegram sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`, #340) | **off** | opt-in; both the alert sends and the command poll ride Tor |
+| Dashboard **Healthchecks** ping (#79) | `hc-ping.com` (or self-hosted) | nothing about you — the endpoint sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`) | opt-in (set `healthchecks.ping_url`; off until set) | the ping URL must be Tor-reachable (hosted, public, or an onion self-hosted instance) — there is no clearnet mode |
 
 `socks5h` (used for the XvB stats fetch) routes DNS resolution through Tor too, so the hostname isn't
 resolved on the clearnet either. The host-networked dashboard reaches the bridge's Tor SOCKS at
@@ -155,10 +161,10 @@ stops the (already Tor-routed, #163) stats fetch.
 ## Optional clearnet initial sync (off by default)
 
 Routing everything over Tor is correct for ongoing operation, but it makes the one-time initial
-blockchain sync (IBD) painfully slow: Tor circuits are bandwidth-capped and flaky, so a full Monero
-sync can crawl at near-zero blocks/sec and stall for long stretches, and Tari's large chain is no
-better. The standard pattern for Tor-based nodes is to sync once over clearnet (fast), then lock back
-to Tor. This stack supports that as an explicit, default-off opt-in (#183).
+block download (IBD) slow: Tor circuits are bandwidth-capped, so a full Monero sync can drop to
+near-zero blocks/sec and stall for long stretches, and Tari's chain is no faster. The standard
+pattern for Tor-based nodes is to sync once over clearnet, then return to Tor. The stack supports this
+as an explicit, default-off opt-in (#183).
 
 Per-component flags in `config.json`, both `false` by default:
 
@@ -201,12 +207,11 @@ be explicitly opted into.
 
 ### It switches back to Tor automatically (#234)
 
-You don't have to babysit it. The dashboard already tracks each chain's sync state; the first time a
-clearnet node reports fully synced, it switches that node back to Tor for you. It writes a persistent
-"sync complete" marker and restarts the daemon, which comes back up Tor-only. From then on the node
-stays on Tor across restarts, `apply`, and reboots (the marker, not the flag, is the source of truth,
-so a restart can never silently re-expose a synced node). Monero and Tari transition independently,
-each as soon as *it* finishes.
+The dashboard tracks each chain's sync state. The first time a clearnet node reports fully synced, the
+dashboard writes a persistent "sync complete" marker and restarts the daemon, which comes back up
+Tor-only. From then on the node stays on Tor across restarts, `apply`, and reboots (the marker, not
+the flag, is the source of truth, so a restart can never silently re-expose a synced node). Monero and
+Tari transition independently, each as soon as *it* finishes.
 
 You can leave `clearnet_initial_sync: true` in `config.json`; it's effectively spent once the sync
 completes. (To deliberately re-sync over clearnet later, e.g. after wiping a chain, toggle the flag
@@ -214,7 +219,7 @@ off and on again with `./pithead apply`, which re-arms it.)
 
 ### It is loud and always-visible
 
-You can't enable this by accident or miss that it's active:
+The active state is surfaced in four places, so it can't be enabled by accident or missed:
 
 - `./pithead apply` prints a `⚠`-flagged, disruptive-change confirmation describing exactly what
   becomes exposed before it recreates the daemon.
@@ -257,11 +262,11 @@ single-purpose appliance. One consequence is worth recording explicitly:
 
 - [ ] Keep `:3333` off the public internet: firewall it to your LAN, set `p2pool.stratum_bind`,
   and/or require a `p2pool.stratum_password` (`pithead doctor` flags public-IP exposure).
-- [ ] Route P2Pool outbound through Tor by editing its compose `command:` (above) if you accept the latency.
+- [ ] Leave `p2pool.clearnet` off (the default) to keep P2Pool outbound peers on Tor (#165).
 - [ ] Set `xvb.enabled: false` if you don't want any XvB egress.
 - [ ] Leave `monero.clearnet_initial_sync` / `tari.clearnet_initial_sync` off (the default) to keep all node P2P on Tor. If you do use a clearnet sync, the dashboard switches each node back to Tor automatically once it's synced; `pithead doctor` flags it while exposed and clears when done.
 - [ ] Run the initial install/build behind a VPN or `torsocks`.
-- [ ] Leave Telegram (#121) and Healthchecks (#79) off unless you accept the inherent IP exposure.
+- [ ] Telegram (#121) and Healthchecks (#79) both always run over Tor (Telegram sees only a Tor exit, #340), so either is safe to enable — for Healthchecks, make sure its ping URL is Tor-reachable (hosted `hc-ping.com`, or an onion/public self-hosted instance).
 - [ ] Run `pithead doctor`; it surfaces the public-IP exposure check among its diagnostics.
 
 ---

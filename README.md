@@ -11,9 +11,9 @@
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Tor](https://img.shields.io/badge/Networking-Tor--first-7D4698?logo=torproject&logoColor=white)
 
-Pithead is a containerized stack for running a private [Monero](https://www.getmonero.org/) full
-node, [P2Pool](https://github.com/SChernykh/p2pool), and [Tari](https://www.tari.com/) merge mining.
-An interactive setup script takes you from clone to mining in a few minutes.
+Docker Compose stack for Monero + Tari merge mining on [P2Pool](https://github.com/SChernykh/p2pool),
+with a [Monero](https://www.getmonero.org/) full node, [Tari](https://www.tari.com/) base node, and
+a Tor daemon. The `pithead` script renders config, provisions Tor, and drives docker-compose.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
@@ -26,25 +26,28 @@ An interactive setup script takes you from clone to mining in a few minutes.
 
 ## What it does
 
-- ⛏️ **Zero-fee, decentralized payouts.** Mines Monero on [P2Pool](https://p2pool.io/): no pool
-  operator, no fees, rewards paid straight to your own wallet. Every hash also merge-mines Tari at
-  no extra power or config cost.
-- 🧠 **XvB yield optimizer.** An algorithmic engine watches the XMRvsBeast raffle and shifts
-  hashrate to catch bonus rounds. It donates only the minimum needed to hold your tier and returns
-  every spare cycle to your own P2Pool payouts.
-- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses,
-  so your router stays closed and your home IP is never advertised to an inbound peer. Two outbound
-  yield paths still touch clearnet in v1.0; the [privacy guide](docs/privacy.md) maps every
-  connection and how to harden it.
-- 🔌 **One endpoint for every rig.** Point all your workers at a single address. Wallets and per-rig
-  pool config stay out of the miner; the stack routes the hashrate.
-- 📊 **Live dashboard.** Shows hashrate, your P2Pool/XvB split, the PPLNS window, and every worker
-  update, served over HTTPS on your LAN.
-- 🚀 **Interactive setup.** A script handles dependencies, config, Tor, and (on Linux) RandomX
-  kernel tuning. It asks before touching GRUB, then offers to start the stack.
-- 🔒 **Hardened defaults.** Least-privilege containers, SHA256-verified binaries, pinned versions,
-  localhost-only RPC, and least-privilege Docker socket proxies (a read-only one for stats, plus a
-  separate start/stop-only one for node-down worker failover).
+- ⛏️ **P2Pool payouts, Tari merge mined.** Mines Monero on [P2Pool](https://p2pool.io/): no pool
+  operator, no fee, rewards paid to your own wallet. Every hash merge-mines Tari on the same work.
+- 🧠 **XvB switching engine.** Watches the XMRvsBeast raffle and shifts hashrate to hold your tier,
+  donating the minimum needed and routing the rest to your P2Pool payouts.
+- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses;
+  a host firewall drops any direct clearnet dial from the stack. Two outbound paths still touch
+  clearnet in v1.0 — the [privacy guide](docs/privacy.md) maps every connection and how to harden it.
+- 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
+  address in the miner config; the stack routes the hashrate.
+- 📊 **Live dashboard.** Hashrate, the P2Pool/XvB split, the PPLNS window, and per-worker updates,
+  served over HTTPS on your LAN.
+- 📟 **Telegram operator bot.** Opt-in alerts for a downed node, a worker that dropped off, sync
+  finishing, low disk, a clearnet leak, or a sustained hashrate drop — plus a daily digest and
+  read-only commands (`/status`, `/hashrate`, `/workers`, `/earnings`). Routed over Tor. See the
+  [Telegram guide](docs/telegram.md).
+- 🔔 **Dead-man's switch.** An optional [Healthchecks.io](https://healthchecks.io/) ping tells you
+  when the whole box goes dark — the one failure a monitor running *on* that box can never report.
+- 🚀 **Interactive setup.** `pithead setup` checks dependencies, writes config, provisions Tor, and
+  (on Linux) tunes HugePages for RandomX. It prompts before any GRUB change, then offers to start.
+- 🔒 **Hardened defaults.** Non-root containers, SHA256-verified binaries, pinned image digests,
+  localhost-only RPC, and two scoped Docker socket proxies: a read-only one for stats and a
+  separate start/stop-only one for node-down worker failover.
 
 ---
 
@@ -66,16 +69,15 @@ cp config.minimal.json config.json   # then set your Monero + Tari payout addres
 > payout addresses. Full sizing in [Hardware Requirements](docs/hardware.md).
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
-addresses, provisions Tor, tunes the kernel for RandomX, and offers to start the stack. Then:
+addresses, provisions Tor, tunes HugePages for RandomX, and offers to start the stack. Then:
 
 1. Open the dashboard at `https://<your-hostname>` (the script prints the exact URL).
-2. Let it sync. On first boot the dashboard shows Sync Mode while your Monero and Tari nodes catch
-   up to the network, then switches to the live view automatically once synced. p2pool and the
-   proxy stay parked until then, so the sync logs stay clean.
-3. Connect your miners by pointing any [XMRig](https://github.com/xmrig/xmrig) rig at
-   `YOUR_STACK_IP:3333` (no wallet address needed). New to mining?
-   [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a tuned worker in one
-   command.
+2. Wait for the initial sync. On first boot the dashboard shows Sync Mode while the Monero and Tari
+   nodes catch up, then switches to the live view once both are synced. p2pool and the proxy stay
+   parked until then.
+3. Point any [XMRig](https://github.com/xmrig/xmrig) rig at `YOUR_STACK_IP:3333` — no wallet
+   address in the miner. [RigForge](https://github.com/p2pool-starter-stack/rigforge) provisions a
+   tuned worker in one command.
 
 <div align="center">
   <img src="./images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">

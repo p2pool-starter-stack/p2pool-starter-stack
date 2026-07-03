@@ -79,3 +79,30 @@ class TestHugepages:
     def test_unknown_when_missing(self):
         with patch("builtins.open", _fake_open("SomethingElse: 1\n")):
             assert system.get_hugepages_status() == ("Unknown", "status-warn", "0/0")
+
+
+class TestCpuAvx2:
+    def setup_method(self):
+        system._avx2_supported = None  # clear the process-lifetime cache between cases
+
+    def test_flag_present(self):
+        cpuinfo = "processor\t: 0\nflags\t\t: fpu vme avx avx2 sse4_2\n"
+        with patch("builtins.open", _fake_open(cpuinfo)):
+            assert system.get_cpu_avx2() is True
+
+    def test_flag_absent(self):
+        cpuinfo = "processor\t: 0\nflags\t\t: fpu vme avx sse4_2\n"  # avx but not avx2
+        with patch("builtins.open", _fake_open(cpuinfo)):
+            assert system.get_cpu_avx2() is False
+
+    def test_unreadable_is_unknown(self):
+        with patch("builtins.open", side_effect=OSError):
+            assert system.get_cpu_avx2() is None
+
+    def test_result_is_cached(self):
+        cpuinfo = "flags\t\t: avx2\n"
+        with patch("builtins.open", _fake_open(cpuinfo)):
+            assert system.get_cpu_avx2() is True
+        # Second call must not re-read (open would now raise) — the cached value stands.
+        with patch("builtins.open", side_effect=AssertionError("should not re-read")):
+            assert system.get_cpu_avx2() is True

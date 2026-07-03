@@ -14,6 +14,7 @@ from mining_dashboard.config.config import (
 from mining_dashboard.service.algo_service import AlgoService
 from mining_dashboard.service.data_service import DataService
 from mining_dashboard.service.storage_service import StateManager
+from mining_dashboard.service.telegram_commands import TelegramCommandBot
 from mining_dashboard.web.server import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -33,17 +34,24 @@ def build_app() -> web.Application:
     xvb_client = XvbClient(wallet_address=MONERO_WALLET_ADDRESS)
     data_service = DataService(state_manager, proxy_client, xvb_client)
     algo_service = AlgoService(state_manager, proxy_client, data_service)
+    # On-demand Telegram command interface (#45). Reads the snapshot data_service already collects;
+    # a no-op unless telegram.enabled + telegram.commands.enabled + bot_token + chat_id are set.
+    telegram_bot = TelegramCommandBot(data_service)
 
     async def start_background_tasks(app):
         """Initializes background services upon web application startup."""
         app["data_task"] = asyncio.create_task(data_service.run())
         app["algo_task"] = asyncio.create_task(algo_service.run())
+        app["telegram_task"] = asyncio.create_task(telegram_bot.run())
 
     async def cleanup_background_tasks(app):
         """Stops background tasks and closes resources on shutdown."""
         app["data_task"].cancel()
         app["algo_task"].cancel()
-        await asyncio.gather(app["data_task"], app["algo_task"], return_exceptions=True)
+        app["telegram_task"].cancel()
+        await asyncio.gather(
+            app["data_task"], app["algo_task"], app["telegram_task"], return_exceptions=True
+        )
         if "state_manager" in app:
             app["state_manager"].close()
 

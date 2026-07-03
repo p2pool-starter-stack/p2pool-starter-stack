@@ -250,6 +250,25 @@ assert_contains "wallet is DEST" "$(run_sourced "$SANDBOX" describe_change MONER
 assert_contains "xvb url is INFO" "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)" "INFO"
 assert_contains "data_dir is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)" "DEST"
 assert_contains "tari mem is INFO" "$(run_sourced "$SANDBOX" describe_change TARI_MEM_LIMIT 2048m 4g)" "INFO"
+# Healthchecks.io (#79): the ping URL is the on/off switch AND a capability secret. Setting it says
+# ENABLED, clearing it says DISABLED — and the value must NEVER be echoed into the apply preview.
+assert_contains "hc enable is INFO" "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_PING_URL "" https://hc-ping.com/SECRET)" "INFO"
+assert_contains "hc set says ENABLED" "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_PING_URL "" https://hc-ping.com/SECRET)" "ENABLED"
+assert_contains "hc clear says DISABLED" "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_PING_URL https://hc-ping.com/SECRET "")" "DISABLED"
+case "$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_PING_URL "" https://hc-ping.com/SECRET)$(run_sourced "$SANDBOX" describe_change HEALTHCHECKS_PING_URL https://hc-ping.com/OLD https://hc-ping.com/NEW)" in
+*SECRET* | *OLD* | *NEW*) bad "hc ping_url not printed" "leaked the ping URL into the preview" ;;
+*) ok "hc ping_url not printed" ;;
+esac
+# Telegram (#121): toggles/events are a brief dashboard restart (INFO); the bot token is a secret,
+# so its change line must NOT echo the old/new value.
+assert_contains "telegram enable is INFO" "$(run_sourced "$SANDBOX" describe_change TELEGRAM_ENABLED false true)" "INFO"
+assert_contains "telegram event is INFO" "$(run_sourced "$SANDBOX" describe_change TELEGRAM_EVENT_NODE_DOWN true false)" "INFO"
+tg_tok_msg="$(run_sourced "$SANDBOX" describe_change TELEGRAM_BOT_TOKEN oldsecret newsecret)"
+assert_contains "telegram token change noted" "$tg_tok_msg" "Telegram bot token updated"
+case "$tg_tok_msg" in
+*oldsecret* | *newsecret*) bad "telegram token value not leaked in preview" "leaked: $tg_tok_msg" ;;
+*) ok "telegram token value not leaked in preview" ;;
+esac
 assert_contains "monero mem is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "INFO"
 assert_contains "monero mem recreate note" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "monerod container is recreated"
 # Clearnet initial sync (#183): enabling OR disabling is DEST (the daemon is recreated), and enabling
@@ -646,6 +665,14 @@ INFO*) ok "dash login fingerprint stays silent (no preview line)" ;;
 *) bad "dash login fingerprint stays silent" "unexpected message emitted" ;;
 esac
 
+# Dashboard onion (#343): enabling is DEST (tor+caddy recreated); the client PRIVATE key must never
+# surface in the change preview, even though a fresh key co-changes with the toggle.
+assert_contains "onion enable is DEST" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_ONION_ENABLED false true)" "DEST"
+case "$(run_sourced "$SANDBOX" describe_change DASHBOARD_ONION_CLIENT_PRIVKEY OLDPRIVKEYVALUE NEWPRIVKEYVALUE)" in
+*OLDPRIVKEYVALUE* | *NEWPRIVKEYVALUE*) bad "onion client privkey hidden in preview" "the client private key leaked into the change preview" ;;
+*) ok "onion client privkey hidden in preview (no value shown)" ;;
+esac
+
 # New-release check toggle (#224): enabling/disabling is INFO, and the message names GitHub + Tor.
 assert_contains "update-check enable is INFO" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "INFO"
 assert_contains "update-check enable mentions GitHub/Tor" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "GitHub"
@@ -702,6 +729,106 @@ case "$caddy_http" in
 *"tls internal"*) bad "caddyfile insecure has no TLS" "'tls internal' present on a plain-HTTP site" ;;
 *) ok "caddyfile insecure has no TLS" ;;
 esac
+
+echo "== unit: generate_caddyfile onion vhost (#343) =="
+# With the dashboard onion enabled, generate_caddyfile appends a SECOND site bound to the bridge
+# gateway (NETWORK_PREFIX.1) — reachable only from the tor container, never the LAN — serving plain
+# HTTP (Tor is the transport) and carrying the SAME basic_auth block as the LAN site.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "onion vhost bound to the bridge gateway" "$caddy_onion" "http://172.28.0.1 {"
+assert_contains "onion vhost carries basic_auth" "$caddy_onion" "basic_auth"
+# The onion site (everything after the gateway address) must not get a TLS directive.
+onion_site="${caddy_onion#*172.28.0.1}"
+case "$onion_site" in
+*"tls internal"*) bad "onion vhost is plain HTTP" "'tls internal' present on the onion site" ;;
+*) ok "onion vhost is plain HTTP (no tls internal)" ;;
+esac
+# Fail-closed belt: onion enabled but NO auth hash -> generate_caddyfile must refuse (rc 1).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+)
+assert_rc "onion without a login refuses to render" "$?" "1"
+# Onion OFF -> no gateway vhost appears at all.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_noonion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=false NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_not_contains "no onion vhost when disabled" "$caddy_noonion" "172.28.0.1"
+
+echo "== unit: onion client-auth crypto (#343) =="
+# Portable base32 (RFC 4648 vectors) — no external `base32` binary (absent on macOS).
+assert_eq "b32encode_hex('f') = MY" "$(run_sourced "$SANDBOX" b32encode_hex 66)" "MY"
+assert_eq "b32encode_hex('foobar') = MZXW6YTBOI" "$(run_sourced "$SANDBOX" b32encode_hex 666f6f626172)" "MZXW6YTBOI"
+# x25519 client-auth keypair: two distinct 52-char base32 keys.
+kp="$(run_sourced "$SANDBOX" generate_onion_client_keypair)"
+set -- $kp
+assert_eq "client pubkey is 52-char base32" "${#1}" "52"
+assert_eq "client privkey is 52-char base32" "${#2}" "52"
+if [ "$1" != "$2" ]; then ok "client pub != priv"; else bad "client pub != priv" "identical keys generated"; fi
+case "$1$2" in *[!A-Z2-7]*) bad "client keys use the base32 alphabet" "non-base32 char present" ;; *) ok "client keys use the base32 alphabet" ;; esac
+
+# provision_onion_client_auth writes the authorized_clients descriptor into the hidden-service dir.
+ac_root="$SANDBOX/tor-ac"
+rm -rf "$ac_root"
+mkdir -p "$ac_root"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    ensure_owner() { :; } # skip the sudo chown in the unit sandbox
+    set +e
+    DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION_CLIENT_AUTH=true \
+        DASHBOARD_ONION_CLIENT_PUBKEY=placeholder TOR_DATA_DIR="$ac_root" \
+        APP_UID=$(id -u) APP_GID=$(id -g) provision_onion_client_auth >/dev/null 2>&1
+)
+ac_file="$ac_root/dashboard/authorized_clients/dashboard.auth"
+if [ -f "$ac_file" ]; then ok "authorized_clients/dashboard.auth is written"; else bad "authorized_clients/dashboard.auth is written" "file missing"; fi
+assert_contains "authorized_clients carries a v3 descriptor" "$(cat "$ac_file" 2>/dev/null)" "descriptor:x25519:"
+# With client-auth OFF, an existing authorized_clients dir is cleared (onion falls back to password-only).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION_CLIENT_AUTH=false TOR_DATA_DIR="$ac_root" \
+        provision_onion_client_auth >/dev/null 2>&1
+)
+if [ -d "$ac_root/dashboard/authorized_clients" ]; then bad "client-auth off clears authorized_clients" "dir still present"; else ok "client-auth off clears authorized_clients"; fi
+
+echo "== unit: ensure_onion_password auto-generates (#343) =="
+# Onion on + no password -> generate a strong one into config.json (login stays admin), so the
+# fail-closed onion is usable without the operator inventing a 16+ char secret. CONFIG_FILE is
+# readonly (config.json in the cwd), so drive it via a dedicated dir rather than an override.
+autopw_dir="$SANDBOX/onion-autopw"
+mkdir -p "$autopw_dir"
+autopw_cfg="$autopw_dir/config.json"
+printf '{"dashboard":{"onion":{"enabled":true}}}' >"$autopw_cfg"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+genpw="$(jq -r '.dashboard.auth.password // ""' "$autopw_cfg")"
+if [ "${#genpw}" -ge 16 ]; then ok "ensure_onion_password writes a >=16-char password"; else bad "ensure_onion_password writes a >=16-char password" "length ${#genpw}"; fi
+# Idempotent: a second run leaves an already-set password alone (no churn).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+assert_eq "ensure_onion_password leaves an existing password alone" "$(jq -r '.dashboard.auth.password' "$autopw_cfg")" "$genpw"
+# No-op when the onion is off — never touches config.json.
+printf '{"dashboard":{}}' >"$autopw_cfg"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+assert_eq "ensure_onion_password no-op when onion off" "$(jq -r '.dashboard.auth.password // "none"' "$autopw_cfg")" "none"
 
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
@@ -1343,6 +1470,52 @@ rc=$?
 assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
 assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.password"
 
+# Dashboard onion (#343): a weak (LAN-acceptable but <16-char) password is rejected once the onion is on. This case
+# passes the length regex and so reaches the bcrypt step, which reads docker-compose.yml for the
+# pinned Caddy image — make sure it's present here (it's copied for later tests further down too).
+cp "$ROOT/docker-compose.yml" "$V/docker-compose.yml"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"shortish12"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "onion with a <16-char password rejected" "$rc" "1"
+assert_contains "onion strong-password message" "$out" "at least 16 characters"
+# Weak-password denylist: even at 16+ chars, a single repeated character or a well-known pattern is
+# rejected once the onion is on.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"aaaaaaaaaaaaaaaa"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "onion repeated-character password rejected" "$?" "1"
+assert_contains "repeated-character message" "$out" "single repeated character"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"changemechangeme"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "onion well-known-weak password rejected" "$?" "1"
+assert_contains "well-known-weak message" "$out" "well-known weak pattern"
+
+# onion-client-key (#343): prints the client descriptor line when client-auth is on; errors when off.
+# The line the operator pastes is "<addr-without-.onion>:descriptor:x25519:<privkey>".
+cat >"$V/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_ONION_ENABLED=true
+DASHBOARD_ONION_CLIENT_AUTH=true
+DASHBOARD_ONION_ADDRESS=abcd234.onion
+DASHBOARD_ONION_CLIENT_PRIVKEY=UNITTESTPRIVKEYBASE32
+EOF
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
+assert_rc "onion-client-key succeeds when client-auth on" "$?" "0"
+assert_contains "onion-client-key prints the descriptor line (system Tor)" "$out" "abcd234:descriptor:x25519:UNITTESTPRIVKEYBASE32"
+assert_contains "onion-client-key offers the Tor Browser path" "$out" "Tor Browser"
+cat >"$V/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_ONION_ENABLED=true
+DASHBOARD_ONION_CLIENT_AUTH=false
+DASHBOARD_ONION_ADDRESS=abcd234.onion
+EOF
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
+assert_rc "onion-client-key errors when client-auth off" "$?" "1"
+assert_contains "onion-client-key off message" "$out" "password-only"
+
 # Wallet-type hard-fail (#250): p2pool pays via coinbase, which CANNOT reach a subaddress or an
 # integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is
 # unit-tested in isolation; these prove parse_and_validate_config actually ABORTS apply on each,
@@ -1496,11 +1669,85 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "check_for_updates opt-out propagated false" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_CHECK_UPDATES)" "false"
 
+# Telegram defaults (#121): no telegram block => disabled, per-event toggles default on.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "telegram disabled by default" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_ENABLED)" "false"
+assert_eq "telegram event defaults on" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_EVENT_NODE_DOWN)" "true"
+
+# Telegram enabled: token/chat_id + per-event toggles propagate from config.json into .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","events":{"worker_offline":false}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "telegram enabled propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_ENABLED)" "true"
+assert_eq "telegram token propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_BOT_TOKEN)" "BOTSECRET"
+assert_eq "telegram chat_id propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_CHAT_ID)" "-100123"
+assert_eq "telegram per-event override off" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_EVENT_WORKER_OFFLINE)" "false"
+assert_eq "telegram unset event stays on" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_EVENT_NODE_DOWN)" "true"
+# The bot token is a secret: the apply preview must not print it.
+case "$out" in
+*BOTSECRET*) bad "telegram token not printed by apply" "leaked in: $out" ;;
+*) ok "telegram token not printed by apply" ;;
+esac
+
+# Interactive command interface (#45): off by default, opt-in via telegram.commands.enabled.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "telegram commands off by default" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_COMMANDS_ENABLED)" "false"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","commands":{"enabled":true}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "telegram commands opt-in propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_COMMANDS_ENABLED)" "true"
+
+# Daily-summary time (#121): defaults to 08:00; an explicit telegram.daily_summary_time propagates.
+assert_eq "daily summary time defaults to 08:00" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "08:00"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","daily_summary_time":"21:30"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "daily summary time propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "21:30"
+
+# Hashrate-loss detector knobs (#99): default 50% over 10 min; explicit dashboard overrides propagate.
+assert_eq "hashrate drop threshold default 50" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "50"
+assert_eq "hashrate drop minutes default 10" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_MINUTES)" "10"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","hashrate_drop_threshold":40,"hashrate_drop_minutes":5} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "hashrate drop threshold override propagated" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "40"
+assert_eq "hashrate drop minutes override propagated" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_MINUTES)" "5"
+
+# Event-set consistency (#121/#45): every telegram.events.* key in config.reference.json must be
+# rendered by pithead into .env AND declared in docker-compose.yml — so adding an alert event in one
+# surface but forgetting another fails here. (The Python side — AlertService.EVT_* vs config.py's
+# TELEGRAM_EVENTS — is guarded by a dashboard unit test.) The .env above has all events at their
+# default (no events overrides in that config), so each should render "true".
+compose_text="$(cat "$ROOT/docker-compose.yml")"
+while IFS= read -r ev; do
+    up=$(printf '%s' "$ev" | tr '[:lower:]' '[:upper:]')
+    assert_eq "telegram event '$ev' rendered to .env" \
+        "$(run_sourced "$V" env_get_file "$V/.env" "TELEGRAM_EVENT_$up")" "true"
+    assert_contains "telegram event '$ev' declared in docker-compose.yml" \
+        "$compose_text" "TELEGRAM_EVENT_$up="
+done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
+
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
+
+# Healthchecks.io (#79): absent => no ping URL (off).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "healthchecks off by default (no ping URL)" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" ""
+
+# A ping URL propagates verbatim to .env (the URL is the on switch; Tor is always used).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"ping_url":"https://hc-ping.com/abc"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "healthchecks ping_url propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
 
 echo "== black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level) =="
 # stratum_password "auto" generates + persists a stable secret and surfaces it for rigs; an explicit
@@ -1988,6 +2235,48 @@ else
     ok "tar --no-xattrs yields an xattr-free bundle"
 fi
 rm -rf "$RELTMP"
+
+# xmrig-proxy wrapper entrypoint: optional stratum access-password (#152). The flag moved out of the
+# compose command (a `${VAR:+--flag}` list element rendered a stray '' positional arg when the password
+# was unset — xmrig-proxy warns `unsupported non-option argument ''`) into this wrapper, which appends
+# it only when PROXY_STRATUM_PASSWORD is set. Exercise the real script with a stub xmrig-proxy on PATH
+# that echoes its argv, so the set/unset branch is actually run.
+XP_ENTRY="$ROOT/build/xmrig-proxy/entrypoint.sh"
+xp_argv() { # <password value> -> the argv the wrapper would exec
+    local d
+    d="$(mktemp -d)"
+    printf '#!/bin/sh\nfor a in "$@"; do printf "[%%s]" "$a"; done\n' >"$d/xmrig-proxy"
+    chmod +x "$d/xmrig-proxy"
+    PATH="$d:$PATH" PROXY_STRATUM_PASSWORD="$1" sh "$XP_ENTRY" --http-no-restricted --donate-level=0
+    rm -rf "$d"
+}
+assert_eq "xmrig-proxy entrypoint: unset password appends no flag (#152)" \
+    "$(xp_argv '')" "[--http-no-restricted][--donate-level=0]"
+assert_eq "xmrig-proxy entrypoint: set password appends --access-password (#152)" \
+    "$(xp_argv 's3cret')" "[--http-no-restricted][--donate-level=0][--access-password=s3cret]"
+
+# tor wrapper entrypoint: opt-in dashboard hidden service (#343). The HiddenService block is appended
+# to the rendered torrc ONLY when DASHBOARD_ONION_ENABLED=true, targeting the bridge gateway
+# (NETWORK_PREFIX.1) where Caddy binds the auth-gated onion vhost. pithead's caddy/client-auth side is
+# covered above; this exercises the real container entrypoint's branch + the .1 substitution with a
+# stub `tor` on PATH and the repo torrc.template (via the TORRC_TEMPLATE seam).
+TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
+tor_torrc() { # <DASHBOARD_ONION_ENABLED> -> the torrc the entrypoint would hand to `tor -f`
+    local d
+    d="$(mktemp -d)"
+    printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
+    chmod +x "$d/tor"
+    PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" NETWORK_PREFIX=10.9.0 \
+        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
+    rm -rf "$d"
+}
+tor_onion_on="$(tor_torrc true)"
+assert_contains "tor entrypoint: dashboard HiddenService appended when enabled (#343)" \
+    "$tor_onion_on" "HiddenServiceDir /var/lib/tor/dashboard/"
+assert_contains "tor entrypoint: onion vhost targets the bridge gateway .1 (#343)" \
+    "$tor_onion_on" "HiddenServicePort 80 10.9.0.1:80"
+assert_not_contains "tor entrypoint: no dashboard onion when disabled (default off) (#343)" \
+    "$(tor_torrc false)" "Dashboard Hidden Service"
 
 # ---------------------------------------------------------------------------
 echo ""

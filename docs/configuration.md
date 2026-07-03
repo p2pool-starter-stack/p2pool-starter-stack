@@ -1,15 +1,15 @@
 # Configuration
 
-`config.json` is the single source of truth for the stack. The interactive `setup` writes a minimal
-one for you. After that, change the stack by editing `config.json` and running `./pithead apply`.
+`config.json` is the stack's only config file. `./pithead setup` writes a minimal one. To change the
+stack afterward, edit `config.json` and run `./pithead apply`.
 
 ## The minimal config
 
-Only your two wallet addresses are required. Every other key is optional and falls back to a default:
-the node runs locally, on the `main` pool, with a secure dashboard, and the local node's RPC
-credentials are auto-generated. Leave a key out unless you want to change it.
+The two wallet addresses are the only required keys. Every other key is optional and falls back to a
+default: the node runs locally, on the `main` pool, with a secure dashboard, and the local node's RPC
+credentials are auto-generated. Omit a key to keep its default.
 
-A fresh `config.json` is just this (see [`config.minimal.json`](../config.minimal.json)):
+A fresh `config.json` is this (see [`config.minimal.json`](../config.minimal.json)):
 
 ```json
 {
@@ -22,12 +22,11 @@ A fresh `config.json` is just this (see [`config.minimal.json`](../config.minima
 }
 ```
 
-For the full shape with every key and its default, see
-[`config.reference.json`](../config.reference.json) and copy in only the keys you
-want to override.
+For every key and its default, see [`config.reference.json`](../config.reference.json) and copy in
+only the keys you want to override.
 
-> The string `"auto"` anywhere means "let the stack pick the default": a default path, the
-> machine's hostname, a derived donor id, and so on.
+> The string `"auto"` means "let the stack pick the default": a default path, the machine's
+> hostname, a derived donor id, and so on.
 
 ---
 
@@ -39,11 +38,9 @@ want to override.
 `apply` is safe to run anytime:
 
 - It previews what will change, diffing your edited `config.json` against the running configuration.
-- It warns before anything disruptive. Switching the Monero node local↔remote, toggling pruning,
-  changing a payout address, exposing the RPC to your LAN, or moving a data directory each trigger a
-  confirmation prompt.
-- It then regenerates the `.env`, Caddy, and Tari configs and recreates only the containers that
-  need it.
+- It prompts to confirm before anything disruptive: switching the Monero node local↔remote, toggling
+  pruning, changing a payout address, exposing the RPC to your LAN, or moving a data directory.
+- It regenerates the `.env`, Caddy, and Tari configs and recreates only the containers that need it.
 - It does not re-provision Tor, touch GRUB, or rotate the proxy token. If nothing changed, it does
   nothing.
 
@@ -69,7 +66,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `monero.wallet_address` | _required_ | Your Monero payout address. Must be a primary/standard address (starts with `4`, 95 chars). Subaddresses (`8…`) and integrated addresses are not supported: p2pool pays via coinbase, which can't send to them, and XvB credits by this address. A wrong type mines but is never paid. `setup`/`apply` reject the wrong type, and `doctor` flags it. |
 | `monero.node_username` / `node_password` | _auto (local)_ | Credentials for the local node's RPC, used only inside the stack (monerod, p2pool, and the dashboard, which reads the node's `get_info` for sync status). Leave them blank. On `setup` and on every `apply`, the stack fills in anything missing (username `admin`, a random alphanumeric password) and writes the values back into `config.json`, so they stay stable and you can see what was set. Set these yourself only for a remote node that requires RPC auth. |
 | `monero.prune` | `true` | Prune the Monero blockchain to save disk space. The dashboard's Monero panel shows the resulting Pruned/Full mode and the node's on-disk DB size, so you can spot a config-vs-data mismatch when reusing a chain. |
-| `monero.clearnet_initial_sync` | `false` | Privacy-relevant, default off. `true` makes monerod do its initial block download over clearnet (much faster than Tor) by dropping the Tor P2P `proxy=` and lowering `out-peers` to 16. Transaction broadcast stays on Tor and wallets are never exposed. Your node's IP becomes visible to the Monero P2P network while it's on, and `pithead` warns loudly (apply/status/doctor/up) the whole time. The dashboard switches monerod back to Tor automatically once the chain is synced (#234) and keeps it there, so you can leave this `true`. Full threat model: [Privacy › Optional clearnet initial sync](privacy.md#optional-clearnet-initial-sync-off-by-default). |
+| `monero.clearnet_initial_sync` | `false` | Privacy-relevant, default off. `true` makes monerod do its initial block download over clearnet (much faster than Tor) by dropping the Tor P2P `proxy=` and lowering `out-peers` to 32. Transaction broadcast stays on Tor and wallets are never exposed. Your node's IP becomes visible to the Monero P2P network while it's on, and `pithead` warns loudly (apply/status/doctor/up) the whole time. The dashboard switches monerod back to Tor automatically once the chain is synced (#234) and keeps it there, so you can leave this `true`. Full threat model: [Privacy › Optional clearnet initial sync](privacy.md#optional-clearnet-initial-sync-off-by-default). |
 | `monero.prep_blocks_threads` | `auto` | Block-verification threads during sync. `auto` = host cores − 2, clamped to 4–8. |
 | `monero.rpc_lan_access` | `false` | `true` publishes the node's RPC on the LAN (`0.0.0.0`) for wallets on other machines; default is localhost-only. |
 | `monero.remote.host` / `rpc_port` / `zmq_port` | — / `18081` / `18083` | Remote node connection details (used when `mode` is `remote`). |
@@ -95,15 +92,26 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `dashboard.auth.username` | `admin` | Login name for the dashboard when a password is set (see below). Letters, digits, and `. _ @ -`, 1–64 chars. Ignored while `dashboard.auth.password` is empty. |
 | `dashboard.auth.password` | `""` _(off)_ | Optional password to open the dashboard. Turns on a Caddy [HTTP basic-auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth) prompt in front of every page. `""` (default) = no login, anyone who can reach the dashboard sees it (fine for a private LAN appliance). Any 8–128-character string (no double-quotes) turns the prompt on. The plaintext lives only in your owner-only `config.json`; pithead bcrypt-hashes it with the pinned Caddy image and stores only the hash in `.env`, so the password itself is never persisted in rendered state. Basic-auth credentials travel in cleartext over HTTP, so keep `dashboard.secure: true` (the default); pithead warns if you set a password with `secure: false`. See [Exposing the dashboard safely](#exposing-the-dashboard-safely). |
+| `dashboard.onion.enabled` | `false` _(off)_ | Privacy-relevant, default off. `true` publishes the dashboard as a Tor v3 onion service so you can reach it remotely over Tor — no port-forward, no VPN, no public IP. It fronts the authenticated Caddy login on the internal bridge, never the LAN. pithead **fails closed**: if no `dashboard.auth.password` is set it generates a strong one (saved to `config.json`, login `admin`); a password you set yourself must be at least 16 characters. See [Remote access over Tor](#remote-access-over-tor-onion-service). |
+| `dashboard.onion.client_auth` | `true` _(on)_ | Only applies when `dashboard.onion.enabled` is `true`. Keeps Tor v3 **client authorization** on: the onion does not respond at all without your client key, so the address can't be scanned or brute-forced — the password becomes a second factor behind it. pithead generates the keypair and prints the client line via `pithead onion-client-key`. Set to `false` for a deliberately password-only onion. |
 | `dashboard.timezone` | `auto` | Timezone for the dashboard's timestamps and charts. `auto` = the host machine's timezone (auto-detected, falling back to `Etc/UTC`); set an IANA name (e.g. `America/Chicago`) to override. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
 | `dashboard.check_for_updates` | `true` _(on)_ | The dashboard periodically asks GitHub whether a newer Pithead release exists and, if so, shows a header badge linking to it (e.g. "New release v1.4.0 available"). Notify-only: it never updates anything; you upgrade with `./pithead upgrade` on your own terms. On by default because the check is routed over Tor (the same bridge SOCKS as the XvB fetch, `socks5h` so the DNS lookup goes through Tor too), so GitHub sees a Tor exit, not your IP. It's cached (hourly) and fails silently offline. Set to `false` to opt out entirely. See [Privacy › Runtime egress](privacy.md#runtime-egress). |
+| `dashboard.hashrate_drop_threshold` | `50` | Percent below the recent normal that counts as a hashrate drop for the `hashrate_loss` alert and its chart marker. `50` = fire when total fleet hashrate falls to half its baseline. Raise it to catch smaller dips, lower it to only flag near-total outages. |
+| `dashboard.hashrate_drop_minutes` | `10` | How many minutes the hashrate must stay below the threshold before the drop is reported — the debounce that keeps a brief blip from pinging you. |
 | `dashboard.tari_required` | `true` | How much a Tari problem holds up the rest of the stack. Monero is required to mine, so its behavior isn't configurable: a monerod outage always rejects workers (stops `xmrig-proxy` so miners fail over to their backup pools), and the miner is always held until monerod finishes syncing. Tari is only needed for merge mining, so this one flag decides how much it blocks. `true` (default): a Tari outage also rejects workers, the miner waits for Tari's initial sync too, and a Tari-only (re)sync shows the full-screen Sync view. `false` (non-blocking): keep mining Monero through a Tari outage, start mining as soon as Monero is synced (Tari finishes in the background), and keep the normal dashboard, with a `Tari syncing` indicator, instead of the takeover screen. |
 | `network.subnet` | `172.28.0.0/24` | The private Docker bridge the stack's containers run on. Change it only if install fails with `Pool overlaps with other one on this address space`, i.e. your host already uses `172.28.0.0/24` for another Docker network or interface. Must be a free `X.Y.Z.0/24` block (e.g. `"172.30.0.0/24"`); the services keep their fixed host octets (`.25`–`.31`) within it, so the structured addressing the dashboard and the worker SSRF guard rely on is preserved. |
 | `network.tor_egress_firewall` | `true` _(on)_ | Privacy-relevant, default on. Enforces "behind Tor" fail-closed: at `up`/`apply`, `pithead` installs host firewall rules (Docker's `DOCKER-USER` chain) that drop any direct clearnet dial from the mining containers (monerod/p2pool/tari/xmrig-proxy). Only the Tor container reaches the internet, so a misconfigured or buggy daemon can't leak your IP. Needs root (like the GRUB/HugePages steps); removed at `down`. Set `false` to skip it and rely on per-app Tor config only (e.g. a host where you manage egress yourself, or where `iptables` isn't available). Full detail: [Privacy › Enforced fail-closed](privacy.md#enforced-fail-closed-not-just-configured-270). |
 | `workers.api_auth` | `none` | How the dashboard reads each worker's xmrig API. Beyond what the proxy reports, the dashboard probes every connected miner's own xmrig HTTP API (`/1/summary`) for uptime and per-miner hashrate, one configured way, no auto-detection. `none` (default) expects an open, read-only API (xmrig `http.restricted` with no `access-token`), which is what a stock RigForge worker exposes. `name` sends the worker's stratum name as the Bearer token (for miners whose `access-token` equals their name). `token` sends a single shared `workers.api_token` for every worker. A worker whose probe fails isn't dropped: it keeps its proxy-reported hashrate and is flagged `api ⚠` on the dashboard, with one log line explaining why (so a misconfigured API is distinct from an offline miner). Upgrading from a build whose miners set an `access-token`? Set this to `name` (or reprovision the miners to drop the token), otherwise the default no-auth probe `401`s and every worker shows `api ⚠`. |
 | `workers.api_token` | `""` | The single shared Bearer token used when `workers.api_auth` is `token`. Ignored otherwise. |
 | `workers.api_port` | `8080` | TCP port the worker xmrig API listens on. Change only if your miners expose the API on a non-standard port. |
+| `healthchecks.ping_url` | _(blank)_ | The full ping URL from Healthchecks.io (e.g. `https://hc-ping.com/<uuid>`) — the optional [dead-man's switch](monitoring.md) that alerts you when your host stops responding. **Setting it turns the monitor on; blank keeps it off.** Always pinged over Tor (every 60s), so it must be Tor-reachable (see [Monitoring › Privacy note](monitoring.md#privacy-note)). Treated as a secret — stored in the owner-only `.env`. |
+| `telegram.enabled` | `false` | Push operational alerts (node down/recovered, worker offline/back, sync finished) to Telegram. Off by default. Requires `bot_token` + `chat_id` to actually send. Full walkthrough: [Telegram Bot](telegram.md). |
+| `telegram.bot_token` | `""` | Your BotFather bot token. A secret — stored owner-only in `.env`, git-ignored, and never logged. Get one from [@BotFather](https://t.me/BotFather). |
+| `telegram.chat_id` | `""` | Where alerts are sent and the only chat the command interface answers. A Telegram group id (negative, e.g. `-1001234567890`) or a personal chat id. See [how to find it](telegram.md#3-find-your-chat-id). |
+| `telegram.events.*` | all `true` | Per-event toggles: `stack_online`, `node_down`, `node_recovered`, `worker_offline`, `worker_recovered`, `worker_joined`, `worker_left`, `sync_finished`, `disk_space`, `db_unhealthy`, `xvb_no_share`, `xvb_registration`, `clearnet_exposed`, `new_release`, `daily_summary`, `hashrate_low`, `hashrate_loss`, `hugepages`, `low_ram`. Each defaults to on once Telegram is enabled; set one `false` to silence just that alert. Full list: [Telegram Bot](telegram.md#choosing-which-alerts-you-get). |
+| `telegram.daily_summary_time` | `08:00` | Local time (24-hour `HH:MM`) to push the once-a-day status digest, when the `daily_summary` event is on. Uses the dashboard's timezone (`dashboard.timezone`). A malformed value disables the digest. |
+| `telegram.commands.enabled` | `false` | Turn on the interactive command interface — the bot answers `/status`, `/hashrate`, `/workers`, `/sync`, and `/help` from the configured `chat_id` (every other chat is ignored). Off by default; alerts work without it. Long-polls over Tor, so it needs no inbound port. See [Telegram › Commands](telegram.md#commands). |
 
 ---
 
@@ -160,9 +168,9 @@ and sets ownership automatically (Monero/Tari/P2Pool to your user, Tor to the co
 
 ## Exposing the dashboard safely
 
-The dashboard is built for a trusted private network: the home or office LAN the appliance sits on.
-By default it has no login: anyone who can reach the host can open it. That's the right trade-off
-for a single-user box behind your router, and it stays the default.
+The dashboard targets a trusted private network: the home or office LAN the appliance sits on. By
+default it has no login; anyone who can reach the host can open it. That is the default for a
+single-user box behind your router.
 
 Add a login (and keep HTTPS on) whenever the dashboard is reachable by anyone you don't fully trust.
 For example:
@@ -197,11 +205,68 @@ How it works and what to keep in mind:
   port miners connect to is a separate surface; gate that with
   [`p2pool.stratum_password`](#configuration-reference) and `p2pool.stratum_bind`.
 - Exposing to the public internet is still discouraged. A password plus HTTPS is the right baseline,
-  but the safest remote-access path remains a VPN / SSH tunnel / Tailscale back to the LAN rather than
-  a forwarded port. Basic-auth has no rate-limiting or lockout on its own.
+  but for reaching the dashboard from outside the LAN, publish it as a Tor onion service (below)
+  rather than forwarding a port. Basic-auth has no rate-limiting or lockout on its own.
 
 To remove the login again, clear the password (`"password": ""`) and `apply`. pithead drops the
 `basic_auth` block and the dashboard is open on the LAN as before.
+
+### Remote access over Tor (onion service)
+
+Set `dashboard.onion.enabled: true` to publish the dashboard as a Tor v3 hidden service. You then
+reach it from anywhere over Tor — no port-forward, no VPN, no public IP, no inbound firewall hole.
+The stack already runs Tor for the mining traffic; this rides the same daemon.
+
+```json
+"dashboard": {
+    "secure": true,
+    "onion": { "enabled": true, "client_auth": true },
+    "auth": { "username": "admin", "password": "a long passphrase you choose" }
+}
+```
+
+Because a published `.onion` puts a control panel at a stable address, pithead **fails closed**:
+
+- If you enable the onion without a `dashboard.auth.password`, pithead **generates a strong one**,
+  saves it to `config.json`, and uses `admin` as the login — so the onion is never published without
+  a password. If you set the password yourself it must be at least 16 characters, and pithead rejects
+  obviously weak choices (a single repeated character, well-known patterns). A published address is
+  reachable by anyone who learns it, and per-request rate-limiting is meaningless over Tor — every
+  request arrives from the local Tor daemon, so there is no source IP to throttle. Use a passphrase.
+- **Client authorization is on by default** (`client_auth: true`). A client-auth'd onion does not
+  respond at all without your client key, so the address cannot be scanned or brute-forced — the
+  password becomes a second factor behind it. This is the strong primary gate.
+- The onion serves plain HTTP inside the Tor tunnel (Tor encrypts the transport), fronted by the
+  same login as the LAN path. It is bound to the internal Docker bridge, not the LAN, so it is
+  reachable only through Tor.
+
+After `apply`, read the address from `pithead status` (printed only to that local output). Treat the
+`.onion` as a secret: anyone who has it can _attempt_ the login (and, without client-auth, reach it).
+
+**Connecting with client authorization.** With `client_auth: true` the onion won't answer at all
+until your Tor client presents the private key. Run `pithead onion-client-key` on the host — it
+prints the address and the key in both forms you might need (it's kept out of `status`, which is a
+shareable report). Then pick your client:
+
+- **Tor Browser (easiest).** Open `http://<address>.onion`. Tor Browser prompts for the onion's
+  private key — paste the bare key (the value after `x25519:`) and continue. Nothing else to set up.
+- **System Tor or Orbot (persistent).** Add a line to your `torrc`:
+  `ClientOnionAuthDir /var/lib/tor/onion_auth` (any dir you own, mode `0700`). Inside it, create
+  `dashboard.auth_private` containing the one-line form
+  `<address>:descriptor:x25519:<private-key>`, then reload Tor. Now any Tor-aware client on that
+  machine can reach the onion.
+
+After that, browse to `http://<address>.onion` and log in with your dashboard username/password.
+Without the client key the onion is invisible — that's the point. Set `client_auth: false` for a
+deliberately password-only onion (weaker: the address becomes online-guessable, so lean on the
+password).
+
+**Rotation.** A leaked `.onion` address or client key is otherwise permanent. Run
+`pithead rotate-dashboard-onion` to mint a fresh address and client key; the old ones stop working
+immediately, and the command prints the new client line.
+
+Prefer a mesh VPN like Tailscale instead? Point it at the LAN yourself — the stack does not ship a
+profile for it, and the onion service is the supported remote path.
 
 ---
 

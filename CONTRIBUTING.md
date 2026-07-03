@@ -1,22 +1,20 @@
 # Contributing to Pithead
 
-This guide covers the workflow for contributing bug fixes, docs changes, and features.
+The workflow for contributing bug fixes, docs changes, and features.
 
 ## Before you start
 
-- **Found a bug or have an idea?** Open an issue first. For anything beyond a small fix,
-  discuss it in an issue before writing code. It saves time and avoids
-  surprises at review.
-- Check the [open issues](https://github.com/p2pool-starter-stack/pithead/issues) to see
-  if someone's already on it.
+- Open an issue before writing code for anything beyond a small fix. Discuss the approach
+  there first.
+- Check the [open issues](https://github.com/p2pool-starter-stack/pithead/issues) for existing
+  work on the same thing.
 
 ## Dev environment
 
 The dashboard uses [uv](https://docs.astral.sh/uv/) for dependency management; a hashed
-`uv.lock` pins every transitive dependency so installs are reproducible build-to-build. Its
-Python tooling ([`ruff`](https://docs.astral.sh/ruff/) lint + format,
-[`pre-commit`](https://pre-commit.com/)) lives in the `dev` extra. Install uv, then from the
-repo root:
+`uv.lock` pins every transitive dependency for reproducible installs. Its Python tooling
+([`ruff`](https://docs.astral.sh/ruff/) lint + format, [`pre-commit`](https://pre-commit.com/))
+lives in the `dev` extra. Install uv, then from the repo root:
 
 ```bash
 uv sync --project build/dashboard --extra dev    # deps + tooling into build/dashboard/.venv, from the lock
@@ -24,12 +22,13 @@ uv run --project build/dashboard pre-commit install
 ```
 
 `make test` and `make lint-py` run through uv automatically (no venv to activate); `pre-commit`
-then runs `ruff` (plus a few hygiene hooks) on your changed files. If you change dependencies in
+runs `ruff` (plus a few hygiene hooks) on your changed files. If you change dependencies in
 `build/dashboard/pyproject.toml`, run `uv lock` and commit the updated `uv.lock`.
 
 ## Development workflow
 
-1. Fork the repo and create a branch off `main`.
+1. Fork the repo and create a branch off `develop` (the integration branch; `main` holds released
+   commits only).
 2. Make your change. Keep it focused: one logical change per PR.
 3. Run the full test suite locally:
 
@@ -58,7 +57,7 @@ then runs `ruff` (plus a few hygiene hooks) on your changed files. If you change
    Bigger, infra-dependent suites run separately: `make test-mini-stack` (tier-3 docker) and
    `make test-integration` (tier-4 live, against a real box; start with `--check`).
 
-4. **Add or update tests** for your change. Cover the *intent* (a behavior/contract), not just
+4. Add or update tests for your change. Cover the *intent* (a behavior/contract), not just
    the line. The [Testing Guide](docs/testing-guide.md) has per-change recipes; the
    [Testing Strategy](docs/testing-strategy.md) explains the tiers.
 5. Update the docs in [`docs/`](docs/) (and the README, if relevant) for any
@@ -66,10 +65,10 @@ then runs `ruff` (plus a few hygiene hooks) on your changed files. If you change
 
 ## Opening a pull request
 
-- Target the `main` branch and fill out the PR template.
+- Target the `develop` branch and fill out the PR template.
 - Link the issue your PR addresses (e.g. `Closes #123`).
 - Make sure `make test` passes; CI runs the same checks.
-- PRs require review before merging; the right reviewers are requested automatically via
+- PRs require review before merging; reviewers are requested automatically via
   [CODEOWNERS](.github/CODEOWNERS).
 
 ## Style

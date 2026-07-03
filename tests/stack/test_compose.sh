@@ -143,6 +143,18 @@ jq_assert "docker-control is start/stop only (no exec/image ops)" \
 # Both proxies mount the Docker socket read-only.
 jq_assert "docker socket mounted read-only in both proxies" \
     '[.services["docker-proxy"], .services["docker-control"]] | all((.volumes // []) | any((.source == "/var/run/docker.sock") and (.read_only == true)))'
+# Socket-proxy isolation (#345): neither proxy is on the mining bridge, and each is published ONLY to
+# the host loopback — so no mining container (monerod/tari/p2pool/xmrig-proxy) can reach the Docker
+# API to read secrets (inspect) or start/stop containers.
+jq_assert "docker-proxy is off mining_net (proxy_net only)" \
+    '(.services["docker-proxy"].networks | keys) == ["proxy_net"]'
+jq_assert "docker-control is off mining_net (proxy_net only)" \
+    '(.services["docker-control"].networks | keys) == ["proxy_net"]'
+jq_assert "both socket proxies publish only to the host loopback" \
+    '[.services["docker-proxy"], .services["docker-control"]] | all((.ports | length > 0) and (.ports | all(.host_ip == "127.0.0.1")))'
+# No mining service may sit on proxy_net (keep the isolation one-directional).
+jq_assert "mining services are not on proxy_net" \
+    '[.services["monerod"], .services["tari"], .services["p2pool"], .services["xmrig-proxy"]] | all((.networks // {} | keys) | any(. == "proxy_net") | not)'
 # The Tari probe uses the [m] bracket so grep can't match its own argv (a false-healthy bug).
 jq_assert "tari healthcheck uses the [m]inotari self-match guard" \
     '(.services.tari.healthcheck.test | tostring) | contains("[m]inotari")'
@@ -167,25 +179,31 @@ else
     echo "  ✓ empty PROXY_AUTH_TOKEN makes the stack refuse to start (#153)"
 fi
 
-# xmrig-proxy config knobs (#152 stratum access-password, #173 dev-fee donate-level): both flags
-# render as a single '=' token carrying the value from .env.
-jq_assert "xmrig-proxy stratum access-password rendered (#152)" \
-    '.services["xmrig-proxy"].command | any(. == "--access-password=hunter2")'
+# xmrig-proxy config knobs (#152 stratum access-password, #173 dev-fee donate-level). donate-level is
+# a plain command item. The access-password flag is instead applied by the wrapper entrypoint from the
+# PROXY_STRATUM_PASSWORD env var — NOT a command item — because a compose command LIST can't drop an
+# empty element: a `${VAR:+--flag}` item rendered a stray '' positional arg when the password was unset
+# (xmrig-proxy warns `unsupported non-option argument ''`). So assert the env var is plumbed with the
+# value, and the command carries NO --access-password and NO empty element. The entrypoint's set/unset
+# append logic is covered by tests/stack/run.sh.
+jq_assert "xmrig-proxy stratum password plumbed via env (#152)" \
+    '.services["xmrig-proxy"].environment["PROXY_STRATUM_PASSWORD"] == "hunter2"'
+jq_assert "xmrig-proxy command has no empty arg or --access-password item (#152)" \
+    '.services["xmrig-proxy"].command | (any(. == "") | not) and (any(startswith("--access-password")) | not)'
 jq_assert "xmrig-proxy dev-fee donate-level rendered (#173)" \
     '.services["xmrig-proxy"].command | any(. == "--donate-level=1")'
-# Default-off path: an EMPTY PROXY_STRATUM_PASSWORD and a MISSING PROXY_DONATE_LEVEL (a stale .env
-# from before these keys) must render NO --access-password flag at all — the ':+' form drops it so
-# any rig may still mine (a literal empty '--access-password=' would demand an empty password and
-# reject every rig, the bug this guards). donate-level falls back to '0' (no dev fee).
+# Default-off path: an EMPTY PROXY_STRATUM_PASSWORD and a MISSING PROXY_DONATE_LEVEL (a stale .env from
+# before these keys) must leave the env var empty (the entrypoint then appends no flag, so any rig may
+# still mine) and fall back to --donate-level=0 (no dev fee).
 OFF_ENV="$(mktemp)"
 grep -vE '^PROXY_STRATUM_PASSWORD=|^PROXY_DONATE_LEVEL=' "$ENV_FILE" >"$OFF_ENV"
 echo 'PROXY_STRATUM_PASSWORD=' >>"$OFF_ENV"
 OFF_JSON="$(docker compose --env-file "$OFF_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 rm -f "$OFF_ENV"
-if printf '%s' "$OFF_JSON" | jq -e '.services["xmrig-proxy"].command | ((any(startswith("--access-password")) | not) and any(. == "--donate-level=0"))' >/dev/null 2>&1; then
-    echo "  ✓ default-off omits --access-password (any rig may mine) + --donate-level=0 (#152/#173)"
+if printf '%s' "$OFF_JSON" | jq -e '.services["xmrig-proxy"] | (.environment["PROXY_STRATUM_PASSWORD"] == "") and (.command | any(. == "--donate-level=0"))' >/dev/null 2>&1; then
+    echo "  ✓ default-off: empty stratum password + --donate-level=0 (#152/#173)"
 else
-    echo "  ✗ default-off must omit --access-password and render --donate-level=0"
+    echo "  ✗ default-off must leave PROXY_STRATUM_PASSWORD empty and render --donate-level=0"
     fails=$((fails + 1))
 fi
 
@@ -207,9 +225,11 @@ sub_check() { # <label> <pattern> <min-count>
     fi
 }
 sub_check "custom subnet rebases the bridge network (#180)" "subnet: 10.84.0.0/24" 1
-sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 7
+# Five static mining-bridge IPs (tor .25, monerod .26, tari .27, p2pool .28, dashboard-reach .29);
+# the two socket proxies moved off mining_net to loopback-published proxy_net (#345), so no longer 7.
+sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 5
 sub_check "custom subnet rebases the dashboard SSRF CIDR (#180)" "MINING_NET_CIDR: 10.84.0.0/24" 1
-sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "XVB_TOR_PROXY: socks5h://10.84.0.25:9050" 1
+sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "TOR_SOCKS_PROXY: socks5h://10.84.0.25:9050" 1
 
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"

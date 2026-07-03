@@ -1,21 +1,21 @@
 # Architecture
 
-This doc describes the nine containerized services the stack runs under Docker Compose and how they
-fit together.
+The stack runs nine containerized services under Docker Compose. This doc lists each service and how
+they connect.
 
-Together they give you a private Monero full node, decentralized P2Pool mining, Tari merge mining, a
-single worker endpoint, and a monitoring dashboard. Everything runs behind Tor, with no public port
-forwarding required.
+The services provide a Monero full node, P2Pool sidechain mining, Tari merge mining, a single worker
+endpoint, and a monitoring dashboard. All node P2P and transaction traffic routes over Tor; no public
+port forwarding is required.
 
 ## The services
 
 | # | Service | Role |
 |---|---|---|
 | 1 | **Monerod** | The Monero daemon (full node). Configured for restricted RPC and Tor transaction broadcasting. |
-| 2 | **P2Pool** | The decentralized mining sidechain, with support for Main, Mini, and Nano pools. |
+| 2 | **P2Pool** | The mining sidechain. Supports Main, Mini, and Nano pools. |
 | 3 | **Tari Base Node** | The Minotari node, merge-mined alongside Monero. |
-| 4 | **XMRig Proxy** | A single connection point for all your mining hardware; the switching engine reconfigures it on the fly. |
-| 5 | **Tor** | A centralized anonymity layer providing SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
+| 4 | **XMRig Proxy** | The single stratum endpoint (`:3333`) all mining hardware connects to; the switching engine reconfigures it at runtime. |
+| 5 | **Tor** | Provides SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
 | 6 | **Dashboard** | The web monitoring UI and the algorithmic switching engine. |
 | 7 | **Docker Proxy** | A **read-only** proxy onto the Docker socket so the dashboard can read container stats/logs — no write access. |
 | 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31), hold p2pool + xmrig-proxy until the chains finish syncing (Issue #35), and switch a clearnet-syncing node back to Tor once it's synced (Issue #234). Kept separate so its write grant can't widen the read-only proxy. |
@@ -28,8 +28,13 @@ flowchart TB
     %% ── External actors ──
     You(["👤 You · Browser"])
     Workers(["⛏️ XMRig Workers"])
-    XvB(["🎲 XMRvsBeast Pool"])
     Net(["🌐 Tor Network / Internet"])
+
+    %% ── External services the dashboard calls out to (each labeled with its route) ──
+    Telegram(["✈️ Telegram<br/>alerts + commands"])
+    HC(["🩺 Healthchecks.io<br/>dead-man's switch"])
+    XvB(["🎲 XMRvsBeast<br/>pool + stats"])
+    GitHub(["🐙 GitHub<br/>release check"])
 
     subgraph stack ["🐳 Pithead"]
         direction TB
@@ -52,27 +57,40 @@ flowchart TB
     Caddy --> Dashboard
     Workers ==>|"Stratum 3333"| Proxy
 
+    %% Dashboard internal control + monitoring (never leaves the box)
     Dashboard -.->|controls| Proxy
     Dashboard -.->|monitors| DockerProxy
     Dashboard -.->|"reads stats & sync"| core
 
+    %% ── Dashboard egress — every outbound call is routed through Tor (🟢), so none leak the host IP ──
+    Dashboard ==>|"🚨 alerts + commands · 🟢 Tor"| Tor
+    Dashboard ==>|"🩺 liveness ping · 🟢 Tor"| Tor
+    Dashboard ==>|"📈 XvB stats · 🟢 Tor"| Tor
+    Dashboard ==>|"🆕 update check · 🟢 Tor"| Tor
+
     Proxy ==>|hashrate| P2Pool
-    Proxy ==>|hashrate| XvB
+    Proxy ==>|"hashrate · 🟢 Tor"| Tor
 
     P2Pool <-->|"RPC / ZMQ"| Monerod
     P2Pool -->|merge-mine| Tari
 
-    Monerod <-->|tx broadcast| Tor
-    Tari <-->|P2P| Tor
-    P2Pool <-->|P2P| Tor
+    Monerod <-->|"tx + P2P · 🟢 Tor"| Tor
+    Tari <-->|"P2P · 🟢 Tor"| Tor
+    P2Pool <-->|"P2P · 🟢 Tor"| Tor
     Tor <--> Net
+
+    %% Tor exit reaches each external service
+    Net -.-> Telegram
+    Net -.-> HC
+    Net -.-> XvB
+    Net -.-> GitHub
 
     classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
     classDef ctrl fill:#1d4ed8,stroke:#93c5fd,color:#eff6ff;
     classDef priv fill:#6d28d9,stroke:#c4b5fd,color:#f5f3ff;
     classDef mine fill:#047857,stroke:#6ee7b7,color:#ecfdf5;
 
-    class You,Workers,XvB,Net ext;
+    class You,Workers,Net,Telegram,HC,XvB,GitHub ext;
     class Caddy,Dashboard ctrl;
     class Tor,DockerProxy priv;
     class Proxy,P2Pool,Monerod,Tari mine;
@@ -81,26 +99,35 @@ flowchart TB
     style core stroke:#10b981,stroke-width:1px,stroke-dasharray:5 4;
 ```
 
-Reading the diagram: thick arrows carry mining hashrate and inbound connections, dotted arrows are
-the dashboard's control and monitoring, and solid arrows are internal service data and anonymized
-network traffic. Node colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy
-and isolation (Tor, Docker socket proxy), and 🟩 the mining core. In remote-node mode the bundled 🟠
-Monero node isn't started, and P2Pool talks to your external node instead.
+Reading the diagram: thick arrows carry inbound connections and every path that **leaves the box** —
+each egress edge is tagged with its route, and **🟢 Tor** means it exits through the Tor daemon (a Tor
+exit IP, never your host's). Dotted arrows are the dashboard's internal control and monitoring, which
+never leave the machine. The dashboard makes four outbound calls — the **Telegram** bot (alerts +
+commands), the **Healthchecks.io** liveness ping, the **XvB** stats fetch, and the **GitHub** release
+check — and all four are Tor-routed, so enabling any of them never reveals where your stack runs. Node
+colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy and isolation (Tor,
+Docker socket proxies), and 🟩 the mining core. In remote-node mode the bundled 🟠 Monero node isn't
+started, and P2Pool talks to your external node instead.
+
+> The one exception is **optional clearnet initial sync** (`monero.clearnet_initial_sync` /
+> `tari.clearnet_initial_sync`, default **off**): while active, that node's P2P leaves Tor to sync
+> faster and its IP is exposed until it finishes, after which it reverts to Tor automatically (#234).
+> The Telegram bot alerts you the whole time it's exposed. See [Privacy](privacy.md).
 
 ## Privacy by design
 
-The stack is Tor-first. A dedicated Tor daemon provides hidden services (onion addresses) for
-Monero, Tari, and P2Pool, so inbound connectivity needs no public IPv4 port forwarding. Monero and
-Tari route their P2P and transaction traffic over Tor, and the clearnet DNS lookups those nodes used
-to leak are closed (monerod checkpoints/blocklist/update-check, Tari DNS seeds + Pulse). The node's
-RPC is bound to localhost by default; opt into LAN access explicitly via `monero.rpc_lan_access`.
+The stack is Tor-first. The Tor daemon provides hidden services (onion addresses) for Monero, Tari,
+and P2Pool, so inbound connectivity needs no public IPv4 port forwarding. Monero and Tari route their
+P2P and transaction traffic over Tor, and the clearnet DNS lookups those nodes formerly leaked are
+closed (monerod checkpoints/blocklist/update-check, Tari DNS seeds + Pulse). The node's RPC binds to
+`127.0.0.1` by default; set `monero.rpc_lan_access: true` for LAN access.
 
-Two outbound yield paths used clearnet in v1.0 and could reveal your home IP: P2Pool's outbound
-sidechain peers and XvB donation mining. As of v1.1 both are Tor by default, each with a documented
-opt-out for operators who'd trade privacy for yield (measured at ~10 % of yield on `mini`; see the
-[Tor-vs-clearnet benchmark](benchmarks/tor-vs-clearnet.md)). Install and image pulls still reveal
-your IP once. See [Privacy & network egress](privacy.md) for the complete connection-by-connection
-map and how to lock down the rest.
+Two outbound yield paths used clearnet in v1.0 and exposed the host IP: P2Pool's outbound sidechain
+peers and XvB donation mining. As of v1.1 both route over Tor by default, each with an opt-out
+(measured cost ~10 % of yield on `mini`; see the
+[Tor-vs-clearnet benchmark](benchmarks/tor-vs-clearnet.md)). The one-time install and image pulls
+reveal the host IP once. See [Privacy & network egress](privacy.md) for the connection-by-connection
+map and the remaining lock-down steps.
 
 ## Security posture
 
@@ -127,7 +154,11 @@ map and how to lock down the rest.
   Docker only through socket proxies, never the raw socket: a read-only one for stats/logs, and a
   separate control proxy scoped to `start`/`stop` only (its ruleset denies create/kill/exec and all
   reads). Splitting them means the write grant needed for node-down worker failover can't widen the
-  read-only proxy's access. General Docker write access stays off.
+  read-only proxy's access. General Docker write access stays off. Both proxies are **isolated off
+  the mining bridge** (#345): they sit on their own network and are published only to the host
+  loopback, so the host-networked dashboard reaches them but no mining container can — a compromised
+  `monerod`/`tari`/`p2pool`/`xmrig-proxy` cannot read other containers' env (inspect) or start/stop
+  the stack through them.
 - **Locked-down config.** `config.json` is created `chmod 600` (owner-only), and the internal RPC
   proxy token is generated once and preserved across re-runs.
 
@@ -135,12 +166,10 @@ map and how to lock down the rest.
 
 ## Algorithmic switching
 
-The stack plays the XvB raffle for you, with no per-rig pool juggling. Rather than asking you to
-configure each rig for a different pool, it manages hashrate distribution centrally: all your
-workers connect to a single endpoint, the `xmrig-proxy` service on port `3333`, and the dashboard's
-decision engine continuously reallocates that hashrate between P2Pool (your own zero-fee Monero +
-Tari payouts) and XMRvsBeast (XvB) bonus rounds. It donates only the minimum needed to hold your
-target tier and hands every spare cycle back to P2Pool, so you don't over-donate.
+The dashboard distributes hashrate centrally rather than requiring per-rig pool configuration. All
+workers connect to one endpoint, the `xmrig-proxy` service on port `3333`, and the decision engine
+reallocates that hashrate between P2Pool (zero-fee Monero + Tari payouts) and XMRvsBeast (XvB) bonus
+rounds. It donates the minimum needed to hold the target tier and routes the rest to P2Pool.
 
 ### How the engine decides
 
@@ -177,9 +206,8 @@ target tier and hands every spare cycle back to P2Pool, so you don't over-donate
    to P2Pool. The controller edits the proxy config only; your workers keep their existing connection
    to `3333` and need no changes.
 
-You stay in your chosen XvB tier with minimal donation, and every spare cycle mines Monero + Tari on
-P2Pool. The dashboard's hashrate chart shades the P2Pool/XvB split over time so you can watch the
-controller work.
+The result: the chosen XvB tier holds with minimal donation, and remaining hashrate mines Monero +
+Tari on P2Pool. The dashboard's hashrate chart shades the P2Pool/XvB split over time.
 
 ---
 

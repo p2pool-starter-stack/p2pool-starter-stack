@@ -133,12 +133,12 @@ class TestRegister:
 
     def test_routes_through_configured_tor_proxy_by_default(self):
         # #163: the call carries the full wallet, so it ALWAYS rides the bridge Tor SOCKS like
-        # get_stats — a default-constructed client (as main.py builds it) uses XVB_TOR_PROXY.
+        # get_stats — a default-constructed client (as main.py builds it) uses TOR_SOCKS_PROXY.
         client = XvbClient("49abc", submit_url=_SUBMIT)  # no tor_proxy => the configured default
         with patch.object(xvb_mod.requests, "get", return_value=_resp(200, "OK")) as mock_get:
             client.register()
         proxies = mock_get.call_args.kwargs["proxies"]
-        assert proxies["https"] == xvb_mod.XVB_TOR_PROXY
+        assert proxies["https"] == xvb_mod.TOR_SOCKS_PROXY
         assert proxies["https"].startswith("socks5h://")  # resolves the host over Tor too
         assert proxies["http"] == proxies["https"]
 

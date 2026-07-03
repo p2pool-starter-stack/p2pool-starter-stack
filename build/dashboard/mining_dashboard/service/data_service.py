@@ -21,6 +21,7 @@ from mining_dashboard.collector.pools import (
     get_tari_stats,
 )
 from mining_dashboard.collector.system import (
+    get_cpu_avx2,
     get_cpu_usage,
     get_disk_usage,
     get_hugepages_status,
@@ -32,24 +33,35 @@ from mining_dashboard.config.config import (
     CLEARNET_STATE_DIR,
     ENABLE_XVB,
     GITHUB_RELEASES_API,
+    HASHRATE_DROP_MINUTES,
+    HASHRATE_DROP_THRESHOLD_PCT,
+    HOST_IP,
+    LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
     TARI_REQUIRED,
+    TOR_SOCKS_PROXY,
     UPDATE_CHECK_INTERVAL,
     UPDATE_INTERVAL,
     WORKER_FALLOFF_SEC,
     XVB_REGISTER_INTERVAL_S,
-    XVB_TOR_PROXY,
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
+    effective_hashrate,
+    format_hashrate,
     pplns_block_time,
     shares_in_pplns_window,
 )
+from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
+from mining_dashboard.service.degradation import DegradationMonitor
+from mining_dashboard.service.healthchecks import HealthchecksClient
+from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.telegram_commands import format_daily_summary
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
@@ -240,12 +252,7 @@ def _aggregate_hashrate(workers):
     total_h10 = 0
     for w in workers:
         if w.get("status") == "online":
-            w_hr = w.get("h15", 0)
-            if w_hr == 0:
-                w_hr = w.get("h60", 0)
-            if w_hr == 0:
-                w_hr = w.get("h10", 0)
-            total_hr += w_hr
+            total_hr += effective_hashrate(w)
             total_h10 += w.get("h10", 0)
     return total_hr, total_h10
 
@@ -352,9 +359,9 @@ class DataService:
         # Per-worker connection tracking for true uptime (#169) + stale-row fall-off (#182).
         self._lifecycle = WorkerLifecycle(WORKER_FALLOFF_SEC)
         # New-release check (#224): off unless dashboard.check_for_updates is set. Routed over the
-        # bridge Tor SOCKS (reusing XVB_TOR_PROXY) so it can't reveal the host IP to GitHub.
+        # bridge Tor SOCKS (reusing TOR_SOCKS_PROXY) so it can't reveal the host IP to GitHub.
         self.update_checker = UpdateChecker(
-            GitHubReleaseClient(GITHUB_RELEASES_API, XVB_TOR_PROXY),
+            GitHubReleaseClient(GITHUB_RELEASES_API, TOR_SOCKS_PROXY),
             (os.environ.get("PITHEAD_VERSION") or "").strip(),
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
@@ -392,6 +399,12 @@ class DataService:
         self.docker_control = DockerControl()
         self.monero_health = NodeHealthMonitor()
         self.tari_health = NodeHealthMonitor()
+
+        # Healthchecks.io dead-man's switch (Issue #79). Disabled by default — when off this is
+        # a no-op. When on, each cycle pings a unique URL; the alert fires externally on the
+        # *absence* of a ping, so it survives a host death the in-stack notifier can't report.
+        self.healthchecks = HealthchecksClient.from_config()
+
         # Auto-transition a clearnet initial-sync node back to Tor once it's synced (#234). Reuses
         # the same docker control proxy as the #31 failover (start/stop only). on_transition surfaces
         # the event into the snapshot so the UI/status can reflect "switched back to Tor".
@@ -402,6 +415,19 @@ class DataService:
         )
         # Per-chain "currently exposed on clearnet" flags, surfaced in the snapshot for the UI/banner.
         self.clearnet_sync_state = {"monero": False, "tari": False, "active": False}
+
+        # Notifications-only Telegram alerter (Issue #121). Consumes the loop's existing edges
+        # (node down/recovered, sync gate open) plus a debounced per-worker presence tracker.
+        # Disabled unless telegram.enabled + bot_token + chat_id are configured, so this is a
+        # cheap no-op for the default stack.
+        self.alert_service = AlertService()
+        # Hashrate-degradation detector (Issue #99): flags a sustained total-hashrate drop and its
+        # recovery. Runs every cycle (cheap, self-contained EMA baseline) so it can mark the chart
+        # even with Telegram off; a loss also drives a hashrate_loss alert.
+        self.degradation = DegradationMonitor(
+            threshold_frac=HASHRATE_DROP_THRESHOLD_PCT / 100,
+            sustained_sec=HASHRATE_DROP_MINUTES * 60,
+        )
         # True while we've stopped the proxy to reject workers. Persisted in the snapshot so
         # a dashboard restart mid-outage still readmits workers once the node recovers.
         self.workers_rejected = False
@@ -764,8 +790,96 @@ class DataService:
                     if self.miner_released:
                         await self._apply_worker_rejection(monero_down, tari_down)
 
-                    # Fetch fresh shares list to populate UI
+                    # 5. Operator alerts (Issues #121/#45): push debounced node/worker/sync/host
+                    # edges to Telegram. Consumes the flags computed above; worker presence is only
+                    # tracked while the proxy is actually serving (miner released and not rejected) —
+                    # its intentional absence otherwise must not read as offline. Disk usage is read
+                    # once here and reused in the snapshot below. No-op unless Telegram is configured;
+                    # never raises.
+                    disk_usage = get_disk_usage()
+                    # Host-perf snapshot (#104), read once and reused for both the alerts and the
+                    # system panel below. Cheap /proc reads.
+                    hugepages = get_hugepages_status()
+                    memory = get_memory_usage()
+                    avx2 = get_cpu_avx2()
+                    db_healthy = self.state_manager.is_db_healthy()
+                    # Fetch fresh shares list (also used to populate the UI below) so the PPLNS-share
+                    # gate the XvB alert watches is computed from the same figure the dashboard shows.
                     shares_list = await asyncio.to_thread(self.state_manager.get_shares)
+                    pool_local = p2pool_stats.get("pool", {})
+                    pool_type = p2pool_stats.get("p2p", {}).get("type", "Main")
+                    shares_in_window = shares_in_pplns_window(
+                        shares_list,
+                        pool_local.get("pplns_window", DEFAULT_PPLNS_WINDOW),
+                        pplns_block_time(pool_type),
+                    )
+                    # Build the domain metrics once per cycle for the alerter — but only when the
+                    # bot is actually on, so the default (Telegram-off) stack pays nothing. Reused
+                    # for the hashrate-low edge and the daily digest.
+                    alert_metrics = (
+                        build_metrics(self.latest_data, self.state_manager)
+                        if self.alert_service.enabled
+                        else None
+                    )
+                    await self.alert_service.process(
+                        monero_down=monero_down,
+                        tari_down=tari_down,
+                        tari_required=TARI_REQUIRED,
+                        miner_released=self.miner_released,
+                        # The same worker rows the dashboard shows; the monitor reads each rig's
+                        # status (DOWN = offline) so alerts line up with the on-screen state.
+                        workers=final_workers,
+                        workers_expected=self.miner_released and not self.workers_rejected,
+                        disk_percent=(disk_usage or {}).get("percent", 0) or 0,
+                        db_healthy=db_healthy,
+                        xvb_enabled=ENABLE_XVB,
+                        shares_in_window=shares_in_window,
+                        clearnet_active=bool(self.clearnet_sync_state.get("active")),
+                        xvb_registration_state=(self.state_manager.get_xvb_stats() or {}).get(
+                            "registration_state", ""
+                        ),
+                        # From the previous cycle's snapshot (the update check writes it below); a
+                        # one-cycle lag is fine for a one-shot "new release" ping.
+                        update_available=bool(
+                            (self.latest_data.get("update") or {}).get("available")
+                        ),
+                        low_hr_warning=bool(alert_metrics and alert_metrics.low_hr_warning),
+                        # Persistent host-perf conditions (#104). HugePages "Disabled" = not
+                        # reserved (recoverable via reboot); low_ram compares live total to the
+                        # threshold. avx2 is badge-only (no alert), so it isn't passed here.
+                        hugepages_reserved=(hugepages[0] != "Disabled"),
+                        low_ram=(0 < (memory.get("total_gb") or 0) < LOW_RAM_GB),
+                    )
+                    # Once-daily status digest, reusing the metrics built above (only when the bot
+                    # is on, which is also the only time maybe_daily_summary would send).
+                    await self.alert_service.maybe_daily_summary(
+                        time.time(),
+                        # bind this cycle's metrics (the provider runs within this iteration); drain
+                        # the day's incident tally into the digest (#342).
+                        lambda m=alert_metrics: format_daily_summary(
+                            m,
+                            self.latest_data,
+                            HOST_IP,
+                            incidents=self.alert_service.drain_incidents(),
+                        ),
+                    )
+                    # 6. Degradation detector (#99): a sustained total-hashrate drop / recovery is
+                    # persisted as a chart event marker and pushed as a hashrate_loss alert.
+                    deg_edge = self.degradation.update(total_hr)
+                    if deg_edge:
+                        kind, drop_frac, _baseline, current = deg_edge
+                        if kind == "loss":
+                            ev_type = "hashrate_loss"
+                            detail = (
+                                f"Hashrate −{drop_frac * 100:.0f}% ({format_hashrate(current)})"
+                            )
+                        else:
+                            ev_type = "hashrate_recovered"
+                            detail = f"Hashrate recovered ({format_hashrate(current)})"
+                        await asyncio.to_thread(
+                            self.state_manager.add_event, time.time(), ev_type, detail
+                        )
+                        await self.alert_service.degradation_alert(kind, drop_frac)
 
                     self.latest_data.update(
                         {
@@ -786,9 +900,10 @@ class DataService:
                             "miner_held": self.miner_held,
                             "clearnet_sync": self.clearnet_sync_state,
                             "system": {
-                                "disk": get_disk_usage(),
-                                "hugepages": get_hugepages_status(),
-                                "memory": get_memory_usage(),
+                                "disk": disk_usage,
+                                "hugepages": hugepages,
+                                "memory": memory,
+                                "avx2": avx2,
                                 "load": get_load_average(),
                                 "cpu_percent": get_cpu_usage(),
                             },
@@ -823,6 +938,16 @@ class DataService:
                     snapshot_data = self.latest_data.copy()
                     snapshot_data.pop("shares", None)
                     await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
+
+                    # 6b. Healthchecks.io dead-man's switch (Issue #79). Ping each cycle so the
+                    # external monitor alerts on the *absence* of a ping if the host ever dies
+                    # (power loss, crash, NIC death) — a pure "is the stack alive" liveness signal.
+                    # Node-health alerting (a node down while the box is up) is out of scope here;
+                    # that's the Telegram alerter's job (#121). The client throttles and fails
+                    # silently; `enabled` is just "a ping URL is set", so an unconfigured stack
+                    # never pings.
+                    if self.healthchecks.enabled:
+                        await asyncio.to_thread(self.healthchecks.ping)
 
                     # 7. External XvB stats sync over Tor (#163), throttled to every 10th iteration,
                     # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.

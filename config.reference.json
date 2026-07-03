@@ -59,9 +59,15 @@
         "data_dir": "auto",
         "tari_required": true,
         "check_for_updates": true,
+        "hashrate_drop_threshold": 50,
+        "hashrate_drop_minutes": 10,
         "auth": {
             "username": "admin",
             "password": ""
+        },
+        "onion": {
+            "enabled": false,
+            "client_auth": true
         }
     },
 
@@ -74,5 +80,40 @@
     "network": {
         "subnet": "172.28.0.0/24",
         "tor_egress_firewall": true
+    },
+
+    "healthchecks": {
+        "ping_url": ""
+    },
+
+    "telegram": {
+        "enabled": false,
+        "bot_token": "",
+        "chat_id": "",
+        "events": {
+            "node_down": true,
+            "node_recovered": true,
+            "worker_offline": true,
+            "worker_recovered": true,
+            "worker_joined": true,
+            "worker_left": true,
+            "sync_finished": true,
+            "disk_space": true,
+            "db_unhealthy": true,
+            "xvb_no_share": true,
+            "clearnet_exposed": true,
+            "xvb_registration": true,
+            "new_release": true,
+            "stack_online": true,
+            "daily_summary": true,
+            "hashrate_low": true,
+            "hashrate_loss": true,
+            "hugepages": true,
+            "low_ram": true
+        },
+        "daily_summary_time": "08:00",
+        "commands": {
+            "enabled": false
+        }
     }
 }

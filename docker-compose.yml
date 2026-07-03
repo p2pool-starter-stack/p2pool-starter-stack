@@ -29,6 +29,12 @@ services:
     environment:
       # Subnet prefix (#180): the entrypoint envsubst's it into the rendered torrc's bridge IPs.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
+      # Dashboard onion (#343): opt-in, default off. When true the entrypoint appends a hidden
+      # service for the dashboard (fronting Caddy on the bridge gateway, never the LAN).
+      - DASHBOARD_ONION_ENABLED=${DASHBOARD_ONION_ENABLED:-false}
+      # Client-auth toggle (#343): the entrypoint doesn't read it, but listing it here means a change
+      # recreates tor so it re-reads authorized_clients/ (pithead writes/clears that before recreate).
+      - DASHBOARD_ONION_CLIENT_AUTH=${DASHBOARD_ONION_CLIENT_AUTH:-false}
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     networks:
@@ -269,6 +275,11 @@ services:
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
+      # Optional stratum-miner auth (#152). Passed as an env var — NOT a `- ${VAR:+--flag}` command
+      # item — because a compose command LIST can't drop an empty element: when the password is unset
+      # that item renders a stray '' positional arg (xmrig-proxy warns `unsupported non-option
+      # argument ''`). The wrapper entrypoint appends the flag only when this is non-empty.
+      - PROXY_STRATUM_PASSWORD=${PROXY_STRATUM_PASSWORD:-}
     command:
       - -o
       - ${P2POOL_URL}
@@ -293,16 +304,12 @@ services:
       - --http-access-token
       - "${PROXY_AUTH_TOKEN:?PROXY_AUTH_TOKEN is empty; refusing to start an unauthenticated xmrig-proxy control API. Run 'pithead apply' to generate one (#153)}"
       - --http-no-restricted
-      # Optional miner authentication on the stratum port (#152). When p2pool.stratum_password is set,
-      # xmrig-proxy rejects rigs whose stratum 'pass' doesn't match — so only devices that know the
-      # secret can mine through the proxy (this also shrinks the #122 SSRF surface). The ':+' form is
-      # deliberate: when the password is SET this expands to the whole '--access-password=<secret>'
-      # flag; when it's EMPTY (the default) it expands to an empty token that xmrig-proxy ignores —
-      # i.e. NO flag, so any rig may mine, preserving today's open behavior. (A literal
-      # '--access-password=' with an empty value would instead demand an *empty* password and reject
-      # every normal rig — verified against xmrig-proxy 6.26.0.) Cleartext over stratum — pair with a
+      # Optional miner authentication on the stratum port (#152) is applied by the wrapper entrypoint
+      # from $PROXY_STRATUM_PASSWORD (see the environment block above) — NOT as a command item here,
+      # because a compose command LIST can't omit an empty element. When the password is set,
+      # xmrig-proxy rejects rigs whose stratum 'pass' doesn't match, so only devices that know the
+      # secret can mine (this also shrinks the #122 SSRF surface). Cleartext over stratum — pair with a
       # LAN-only stratum_bind / firewall; this is access control, not encryption.
-      - "${PROXY_STRATUM_PASSWORD:+--access-password=$PROXY_STRATUM_PASSWORD}"
       # xmrig-proxy dev-fee donation level (#173). Rendered from proxy.donate_level; xmrig-proxy's
       # own default is 0% (no fee), which we now pass EXPLICITLY so the effective level is visible
       # and operator-controllable instead of an invisible compiled-in default. NOT the XvB donation.
@@ -399,17 +406,19 @@ services:
       - XMRIG_API_PORT=${XMRIG_API_PORT:-8080}
       - XMRIG_API_AUTH=${XMRIG_API_AUTH:-none}
       - XMRIG_API_TOKEN=${XMRIG_API_TOKEN}
-      - DOCKER_PROXY_URL=tcp://${NETWORK_PREFIX:-172.28.0}.30:2375
-      - DOCKER_CONTROL_URL=tcp://${NETWORK_PREFIX:-172.28.0}.31:2375
+      # Socket proxies are isolated on proxy_net and published only to the host loopback (#345), so
+      # the host-networked dashboard reaches them here — mining containers cannot.
+      - DOCKER_PROXY_URL=tcp://127.0.0.1:12375
+      - DOCKER_CONTROL_URL=tcp://127.0.0.1:12376
       - TARI_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
       # Local monerod bridge IP (local-vs-remote detection), the internal SSRF-guard CIDR, and the
       # Tor SOCKS endpoint all track the configured subnet prefix (#180).
       - LOCAL_MONERO_HOST=${NETWORK_PREFIX:-172.28.0}.26
       - MINING_NET_CIDR=${NETWORK_SUBNET:-172.28.0.0/24}
-      - XVB_TOR_PROXY=socks5h://${NETWORK_PREFIX:-172.28.0}.25:9050
+      - TOR_SOCKS_PROXY=socks5h://${NETWORK_PREFIX:-172.28.0}.25:9050
       # Notify-only new-release check (#224, config.json: dashboard.check_for_updates). Default ON;
       # the dashboard checks GitHub for a newer release and shows a link badge — routed over the same
-      # bridge Tor SOCKS as XVB_TOR_PROXY so it leaks neither the host IP nor a DNS lookup (safe to
+      # bridge Tor SOCKS as TOR_SOCKS_PROXY so it leaks neither the host IP nor a DNS lookup (safe to
       # default on). Set dashboard.check_for_updates:false to opt out. See docs/privacy.md.
       - DASHBOARD_CHECK_UPDATES=${DASHBOARD_CHECK_UPDATES:-true}
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
@@ -418,6 +427,44 @@ services:
       # miner waits for Tari's sync, and whether a Tari-only sync takes over the dashboard
       # (Issue #51). Set dashboard.tari_required:false to make Tari non-blocking.
       - TARI_REQUIRED=${TARI_REQUIRED:-true}
+      # Healthchecks.io dead-man's switch (#79). A ping URL is the on/off switch (blank = off);
+      # when set, the dashboard pings it each loop, so if the host dies the pings stop and
+      # Healthchecks.io alerts externally — the one failure mode an in-stack notifier can't
+      # report. The ping always rides the bridge Tor SOCKS (TOR_SOCKS_PROXY). See docs/monitoring.md.
+      - HEALTHCHECKS_PING_URL=${HEALTHCHECKS_PING_URL:-}
+      # --- Operator alerts: Telegram (Issues #121, #45) ---
+      # Notifications-only push alerter plus an optional on-demand command interface; both
+      # disabled by default. bot_token is a secret sourced from the owner-only .env and is never
+      # logged by the dashboard. On a Tor-only / no-clearnet host the Telegram API is unreachable
+      # and both sends and command polling fail silently. Per-event toggles default on; the
+      # command interface is opt-in via TELEGRAM_COMMANDS_ENABLED. See docs/telegram.md.
+      - TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_EVENT_NODE_DOWN=${TELEGRAM_EVENT_NODE_DOWN:-true}
+      - TELEGRAM_EVENT_NODE_RECOVERED=${TELEGRAM_EVENT_NODE_RECOVERED:-true}
+      - TELEGRAM_EVENT_WORKER_OFFLINE=${TELEGRAM_EVENT_WORKER_OFFLINE:-true}
+      - TELEGRAM_EVENT_WORKER_RECOVERED=${TELEGRAM_EVENT_WORKER_RECOVERED:-true}
+      - TELEGRAM_EVENT_WORKER_JOINED=${TELEGRAM_EVENT_WORKER_JOINED:-true}
+      - TELEGRAM_EVENT_WORKER_LEFT=${TELEGRAM_EVENT_WORKER_LEFT:-true}
+      - TELEGRAM_EVENT_SYNC_FINISHED=${TELEGRAM_EVENT_SYNC_FINISHED:-true}
+      - TELEGRAM_EVENT_DISK_SPACE=${TELEGRAM_EVENT_DISK_SPACE:-true}
+      - TELEGRAM_EVENT_DB_UNHEALTHY=${TELEGRAM_EVENT_DB_UNHEALTHY:-true}
+      - TELEGRAM_EVENT_XVB_NO_SHARE=${TELEGRAM_EVENT_XVB_NO_SHARE:-true}
+      - TELEGRAM_EVENT_CLEARNET_EXPOSED=${TELEGRAM_EVENT_CLEARNET_EXPOSED:-true}
+      - TELEGRAM_EVENT_XVB_REGISTRATION=${TELEGRAM_EVENT_XVB_REGISTRATION:-true}
+      - TELEGRAM_EVENT_NEW_RELEASE=${TELEGRAM_EVENT_NEW_RELEASE:-true}
+      - TELEGRAM_EVENT_STACK_ONLINE=${TELEGRAM_EVENT_STACK_ONLINE:-true}
+      - TELEGRAM_EVENT_DAILY_SUMMARY=${TELEGRAM_EVENT_DAILY_SUMMARY:-true}
+      - TELEGRAM_EVENT_HASHRATE_LOW=${TELEGRAM_EVENT_HASHRATE_LOW:-true}
+      - TELEGRAM_EVENT_HASHRATE_LOSS=${TELEGRAM_EVENT_HASHRATE_LOSS:-true}
+      - TELEGRAM_EVENT_HUGEPAGES=${TELEGRAM_EVENT_HUGEPAGES:-true}
+      - TELEGRAM_EVENT_LOW_RAM=${TELEGRAM_EVENT_LOW_RAM:-true}
+      - TELEGRAM_DAILY_SUMMARY_TIME=${TELEGRAM_DAILY_SUMMARY_TIME:-08:00}
+      # Hashrate-degradation detector (#99).
+      - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}
+      - HASHRATE_DROP_MINUTES=${HASHRATE_DROP_MINUTES:-10}
+      - TELEGRAM_COMMANDS_ENABLED=${TELEGRAM_COMMANDS_ENABLED:-false}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.
@@ -446,9 +493,16 @@ services:
     environment:
       - CONTAINERS=1
       - LOGS=1
+    # Isolated from the mining bridge (#345): on its own `proxy_net`, reachable ONLY via a port
+    # published to the host loopback — the host-networked dashboard reaches it at 127.0.0.1:12375,
+    # but no mining container (monerod/tari/p2pool/xmrig-proxy) can. Inspect (`/containers/<id>/json`
+    # → Config.Env → secrets) is thus unreachable from a compromised mining container. The dashboard
+    # itself only calls `GET /containers/<id>/logs`; fully closing inspect against the dashboard would
+    # need a logs-only shim (see #345).
+    ports:
+      - "127.0.0.1:12375:2375"
     networks:
-      mining_net:
-        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.30
+      - proxy_net
 
   # --- Docker Control Proxy (start/stop only) ---
   # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
@@ -481,9 +535,14 @@ services:
       - POST=1
       - ALLOW_START=1
       - ALLOW_STOP=1
+    # Isolated from the mining bridge (#345): same posture as docker-proxy. The tecnativa ruleset
+    # can't scope start/stop to specific containers, so keeping this proxy off `mining_net` and only
+    # on the host loopback is what stops a compromised mining container from start/stopping the whole
+    # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy.
+    ports:
+      - "127.0.0.1:12376:2375"
     networks:
-      mining_net:
-        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.31
+      - proxy_net
 
   # --- Caddy Reverse Proxy ---
   # Bridges the local 127.0.0.1 application binding to the LAN
@@ -528,3 +587,12 @@ networks:
     ipam:
       config:
         - subnet: ${NETWORK_SUBNET:-172.28.0.0/24}
+  # Socket-proxy isolation (#345): the two Docker-socket proxies live here, off the mining bridge, so
+  # no mining container can reach them. The dashboard (host networking) reaches them via their
+  # loopback-published ports, not this network. NOT `internal` — Docker doesn't set up port
+  # publishing on internal networks, and the loopback publish is how the dashboard reaches them. The
+  # proxies never dial out (pinned tecnativa image, cap_drop ALL, read-only rootfs), so proxy_net not
+  # being under the #270 egress firewall is not a leak surface. Docker auto-assigns the subnet.
+  proxy_net:
+    driver: bridge
+    name: proxy_net
