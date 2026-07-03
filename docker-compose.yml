@@ -275,6 +275,11 @@ services:
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
+      # Optional stratum-miner auth (#152). Passed as an env var — NOT a `- ${VAR:+--flag}` command
+      # item — because a compose command LIST can't drop an empty element: when the password is unset
+      # that item renders a stray '' positional arg (xmrig-proxy warns `unsupported non-option
+      # argument ''`). The wrapper entrypoint appends the flag only when this is non-empty.
+      - PROXY_STRATUM_PASSWORD=${PROXY_STRATUM_PASSWORD:-}
     command:
       - -o
       - ${P2POOL_URL}
@@ -299,16 +304,12 @@ services:
       - --http-access-token
       - "${PROXY_AUTH_TOKEN:?PROXY_AUTH_TOKEN is empty; refusing to start an unauthenticated xmrig-proxy control API. Run 'pithead apply' to generate one (#153)}"
       - --http-no-restricted
-      # Optional miner authentication on the stratum port (#152). When p2pool.stratum_password is set,
-      # xmrig-proxy rejects rigs whose stratum 'pass' doesn't match — so only devices that know the
-      # secret can mine through the proxy (this also shrinks the #122 SSRF surface). The ':+' form is
-      # deliberate: when the password is SET this expands to the whole '--access-password=<secret>'
-      # flag; when it's EMPTY (the default) it expands to an empty token that xmrig-proxy ignores —
-      # i.e. NO flag, so any rig may mine, preserving today's open behavior. (A literal
-      # '--access-password=' with an empty value would instead demand an *empty* password and reject
-      # every normal rig — verified against xmrig-proxy 6.26.0.) Cleartext over stratum — pair with a
+      # Optional miner authentication on the stratum port (#152) is applied by the wrapper entrypoint
+      # from $PROXY_STRATUM_PASSWORD (see the environment block above) — NOT as a command item here,
+      # because a compose command LIST can't omit an empty element. When the password is set,
+      # xmrig-proxy rejects rigs whose stratum 'pass' doesn't match, so only devices that know the
+      # secret can mine (this also shrinks the #122 SSRF surface). Cleartext over stratum — pair with a
       # LAN-only stratum_bind / firewall; this is access control, not encryption.
-      - "${PROXY_STRATUM_PASSWORD:+--access-password=$PROXY_STRATUM_PASSWORD}"
       # xmrig-proxy dev-fee donation level (#173). Rendered from proxy.donate_level; xmrig-proxy's
       # own default is 0% (no fee), which we now pass EXPLICITLY so the effective level is visible
       # and operator-controllable instead of an invisible compiled-in default. NOT the XvB donation.
