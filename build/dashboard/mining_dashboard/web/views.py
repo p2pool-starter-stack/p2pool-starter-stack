@@ -151,7 +151,9 @@ def build_raffle_eligibility(metrics):
 # --------------------------------------------------------------------------------------
 
 
-def build_chart(history, shares, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
+def build_chart(
+    history, shares, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW, events=None
+):
     """Build the Chart.js datasets from history. Each point carries its real timestamp as the
     x value (epoch ms) so a linear time axis spaces points to scale; runs of missing samples
     (outages) are split by a ``null`` break so the line doesn't connect across the gap.
@@ -188,6 +190,7 @@ def build_chart(history, shares, range_arg, window=None, avg_window=DEFAULT_HASH
         "p2pool": p2pool,
         "xvb": xvb,
         "shares": _share_points(filtered_history, filtered_shares),
+        "events": _event_points(_filter_events(events or [], range_arg, window)),
         "tension": _chart_tension(duration_s),
     }
 
@@ -212,6 +215,21 @@ def _filter_range(history, shares, range_arg, window=None):
         [x for x in history if x["timestamp"] >= cutoff],
         [s for s in shares if s["ts"] >= cutoff],
     )
+
+
+def _filter_events(events, range_arg, window=None):
+    """Restrict degradation events (#99) to the selected window — same bounds as ``_filter_range``,
+    but for the ``ts``-keyed events list."""
+    if window is not None:
+        lo, hi = window
+        return [e for e in events if lo <= e["ts"] <= hi]
+    if range_arg == "all":
+        return events
+    secs = _RANGE_SECONDS.get(range_arg, 0)
+    if secs <= 0:
+        return events
+    cutoff = time.time() - secs
+    return [e for e in events if e["ts"] >= cutoff]
 
 
 def _window_duration(filtered_history, range_arg, window):
@@ -337,6 +355,26 @@ def _share_points(filtered_history, filtered_shares):
             }
         )
     return points
+
+
+# Event markers ride just below the share rug on their own hidden 0–1 axis (#99), so a "something
+# went wrong" marker sits at the event's real time without touching the hashrate y-range.
+_EVENT_MARKER_Y = 0.82
+
+
+def _event_points(filtered_events):
+    """Sparse degradation/recovery markers (#99): one point per event at its timestamp, carrying the
+    tooltip ``label`` and ``kind`` (e.g. ``hashrate_loss`` vs ``hashrate_recovered``) so the client
+    can colour a loss vs a recovery."""
+    return [
+        {
+            "x": int(e["ts"] * 1000),
+            "y": _EVENT_MARKER_Y,
+            "kind": e.get("type", ""),
+            "label": e.get("detail") or e.get("type", "event"),
+        }
+        for e in filtered_events
+    ]
 
 
 # --------------------------------------------------------------------------------------
@@ -933,7 +971,14 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "proxy_summary": build_proxy_summary(data),
         "egress": egress,
         "topology": topology,
-        "chart": build_chart(history, data.get("shares", []), range_arg, window, avg_window),
+        "chart": build_chart(
+            history,
+            data.get("shares", []),
+            range_arg,
+            window,
+            avg_window,
+            events=state_mgr.get_events(),
+        ),
     }
 
 

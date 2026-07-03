@@ -127,6 +127,17 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   walkthrough — creating a bot, finding your chat id, the command list, and the "one chat, two bots"
   pattern for sharing a chat with the Healthchecks.io monitor (#79) — in
   [`docs/telegram.md`](docs/telegram.md).
+- **Hashrate-drop detector — chart markers + `hashrate_loss` alert** (#99): the dashboard now flags a
+  **sustained, significant fall** in total fleet hashrate — a rig gone dark, a network cut, a stalled
+  miner — separately from the existing "too low for your XvB tier" warning. It tracks a slow moving
+  average as the "normal" level (frozen while degraded so an outage can't quietly redefine normal),
+  and fires once the total stays below **`dashboard.hashrate_drop_threshold`** percent of that
+  baseline for **`dashboard.hashrate_drop_minutes`** (defaults: **50%** for **10 min**), with a
+  matching recovery edge. Each edge drops a **diamond marker on the hashrate chart** (amber for the
+  drop, green for the recovery; hover for the size) that is **persisted**, so an overnight drop is
+  still visible in the morning, and — when Telegram is on — pushes a **`hashrate_loss`** alert and
+  counts toward the daily incident roll-up. Both knobs are documented in
+  [`docs/configuration.md`](docs/configuration.md); the alert in [`docs/telegram.md`](docs/telegram.md).
 - **Optional clearnet initial sync (#183).** A default-off, per-component opt-in
   (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`) that lets a node do its **one-time
   initial block download over clearnet** — much faster than over bandwidth-capped Tor circuits, which

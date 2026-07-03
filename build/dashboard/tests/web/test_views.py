@@ -246,7 +246,13 @@ class TestChart:
         assert len(build_chart(history, [], "bogus")["p2pool"]) == 3
 
     def test_empty_history(self):
-        assert build_chart([], [], "all") == {"p2pool": [], "xvb": [], "shares": [], "tension": 0.0}
+        assert build_chart([], [], "all") == {
+            "p2pool": [],
+            "xvb": [],
+            "shares": [],
+            "events": [],
+            "tension": 0.0,
+        }
 
     # --- Issue #47: custom zoom window + duration-adaptive resolution/smoothing ---------
 
@@ -1313,3 +1319,41 @@ class TestRaffleEligible:
             "eligible": False,
             "label": "N/A (XvB off)",
         }
+
+
+class TestChartEvents:
+    """Degradation/recovery markers (#99) flow through build_chart's new `events` kwarg: shaped as
+    xy points on the hidden 0-1 event axis, carrying kind+label, and window-filtered like history."""
+
+    def _hist(self, now):
+        return [{"timestamp": now, "v": 800, "v_p2pool": 800, "v_xvb": 0, "t": "a"}]
+
+    def test_absent_events_default_to_empty(self):
+        now = time.time()
+        assert build_chart(self._hist(now), [], "all")["events"] == []
+
+    def test_event_point_shape(self):
+        now = time.time()
+        events = [{"ts": now, "type": "loss", "detail": "-62%"}]
+        pt = build_chart(self._hist(now), [], "all", events=events)["events"]
+        assert pt == [
+            {"x": int(now * 1000), "y": views._EVENT_MARKER_Y, "kind": "loss", "label": "-62%"}
+        ]
+
+    def test_label_falls_back_to_type(self):
+        now = time.time()
+        events = [{"ts": now, "type": "recovered", "detail": ""}]
+        assert build_chart(self._hist(now), [], "all", events=events)["events"][0]["label"] == (
+            "recovered"
+        )
+
+    def test_events_filtered_by_range(self):
+        now = time.time()
+        events = [
+            {"ts": now - 7200, "type": "loss", "detail": "old"},  # 2h ago
+            {"ts": now - 60, "type": "recovered", "detail": "recent"},
+        ]
+        labels = [
+            e["label"] for e in build_chart(self._hist(now), [], "1h", events=events)["events"]
+        ]
+        assert labels == ["recent"]  # the 2h-old marker is outside the 1h window

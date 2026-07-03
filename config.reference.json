@@ -59,6 +59,8 @@
         "data_dir": "auto",
         "tari_required": true,
         "check_for_updates": true,
+        "hashrate_drop_threshold": 50,
+        "hashrate_drop_minutes": 10,
         "auth": {
             "username": "admin",
             "password": ""
@@ -100,7 +102,8 @@
             "new_release": true,
             "stack_online": true,
             "daily_summary": true,
-            "hashrate_low": true
+            "hashrate_low": true,
+            "hashrate_loss": true
         },
         "daily_summary_time": "08:00",
         "commands": {

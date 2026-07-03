@@ -87,6 +87,7 @@ class AlertService:
     EVT_STACK_ONLINE = "stack_online"
     EVT_DAILY_SUMMARY = "daily_summary"
     EVT_HASHRATE_LOW = "hashrate_low"
+    EVT_HASHRATE_LOSS = "hashrate_loss"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -473,6 +474,24 @@ class AlertService:
         for _evt, text in alerts:
             await asyncio.to_thread(self.notifier.send, text)
         return alerts
+
+    async def degradation_alert(self, kind, drop_frac):
+        """Push a hashrate-loss / recovery alert for a :class:`DegradationMonitor` edge (#99). The
+        detector owns the debounce + thresholds; this only formats and sends (and records the loss
+        as an incident for the daily log). No-op when the event is toggled off."""
+        if kind == "loss":
+            self._record_incident(self.EVT_HASHRATE_LOSS)
+        if not self.notifier.event_enabled(self.EVT_HASHRATE_LOSS):
+            return None
+        if kind == "loss":
+            text = self._fmt(
+                f"⚠️ \U0001f4c9 Hashrate dropped ~{drop_frac * 100:.0f}% — possible outage or a rig "
+                "gone dark."
+            )
+        else:
+            text = self._fmt("\U0001f7e2 \U0001f4c8 Hashrate recovered.")
+        await asyncio.to_thread(self.notifier.send, text)
+        return text
 
     async def maybe_daily_summary(self, now, summary_provider):
         """Push a once-daily status digest at the configured local time.

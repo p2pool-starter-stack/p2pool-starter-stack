@@ -34,6 +34,7 @@ transition, not a stream:
 | ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
 | 🎰 **XvB registration** | XvB auto-registration was rejected (bad payout address) or is failing — raffle wins won't count until it recovers. Only fires when XvB is enabled. |
 | 📉 **Hashrate low for tier** | You picked a fixed XvB donation tier your hashrate can't sustain — lower the tier or add hashrate. Fires on the transition and clears when it recovers. |
+| ⚠️ **Hashrate drop** | Total fleet hashrate fell sharply below its recent normal and **stayed down** — a rig gone dark, a network cut, or a stalled miner. The dashboard also drops a marker on the hashrate chart at the moment it happened. Fires once on the drop and again on recovery. Thresholds are tunable (`dashboard.hashrate_drop_threshold`, `dashboard.hashrate_drop_minutes`). |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
 | 📅 **Daily summary** | A once-a-day retrospective of the last 24h across your whole fleet — date/time, an **incident roll-up** (what went wrong during the day, or an all-clear), **24h hashrate** with the **P2Pool / XvB split**, **shares found in the day**, an **estimated daily earnings** figure, and a **per-machine 24h breakdown** — pushed at a set local time (**08:00** by default; `telegram.daily_summary_time`). |
@@ -282,6 +283,10 @@ override these environment variables for the dashboard container — both are in
 
 Node-down timing is shared with the existing failover logic (`NODE_DOWN_AFTER_SEC` /
 `NODE_RECOVERY_AFTER_SEC`). These are advanced knobs; most operators never touch them.
+
+The **hashrate-drop** alert has its own two `config.json` knobs (not env vars):
+`dashboard.hashrate_drop_threshold` (percent below the recent normal that counts as a drop, default
+`50`) and `dashboard.hashrate_drop_minutes` (how long it must stay down before firing, default `10`).
 
 ---
 

@@ -242,6 +242,7 @@ _INCIDENT_LABELS = {
     "xvb_registration": "XvB registration",
     "clearnet_exposed": "clearnet exposure",
     "hashrate_low": "hashrate low",
+    "hashrate_loss": "hashrate drop",
 }
 
 

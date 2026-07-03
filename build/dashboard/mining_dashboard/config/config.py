@@ -271,6 +271,7 @@ TELEGRAM_EVENTS = {
     "stack_online": _telegram_event_enabled("stack_online"),
     "daily_summary": _telegram_event_enabled("daily_summary"),
     "hashrate_low": _telegram_event_enabled("hashrate_low"),
+    "hashrate_loss": _telegram_event_enabled("hashrate_loss"),
 }
 # ponytail: daily_summary is a scheduled push, not an edge — it lives in the events dict only so it
 # gets a per-event on/off toggle like the rest; its time is TELEGRAM_DAILY_SUMMARY_TIME below.
@@ -279,6 +280,13 @@ TELEGRAM_EVENTS = {
 # on. Uses the dashboard container's timezone (dashboard.timezone), so "08:00" means 8am wherever
 # the box is. Rendered from config.json telegram.daily_summary_time.
 TELEGRAM_DAILY_SUMMARY_TIME = os.environ.get("TELEGRAM_DAILY_SUMMARY_TIME", "08:00").strip()
+
+# Hashrate-degradation detector (Issue #99). Flags a sustained drop in total hashrate below
+# HASHRATE_DROP_THRESHOLD_PCT of its trailing baseline for HASHRATE_DROP_MINUTES minutes — surfaced
+# as a chart event marker (always on) and, when telegram.events.hashrate_loss is on, an alert.
+# Rendered from config.json dashboard.hashrate_drop_threshold / dashboard.hashrate_drop_minutes.
+HASHRATE_DROP_THRESHOLD_PCT = int(float(os.environ.get("HASHRATE_DROP_THRESHOLD_PCT", 50)))
+HASHRATE_DROP_MINUTES = int(float(os.environ.get("HASHRATE_DROP_MINUTES", 10)))
 
 # Worker offline/online debounce (Issue #121). A worker must be unseen this long before it's
 # reported OFFLINE, and seen continuously this long before "back online" — so a brief miner

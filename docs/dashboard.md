@@ -130,6 +130,12 @@ progress until it catches up and merge mining resumes.
 A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch without
 reloading. Shaded bands show the P2Pool/XvB split over time.
 
+Diamond markers along the top flag **hashrate events** (#99): an amber one where total hashrate
+dropped sharply and stayed down (an outage or a rig gone dark), a green one where it recovered.
+Hover for the size of the drop. They mark the same transitions as the `hashrate_loss` Telegram
+alert and survive a dashboard restart, so a drop that happened overnight is still on the chart in the
+morning.
+
 An **Avg** control picks the hashrate-averaging window the chart plots: `1 Min` / `10 Min` /
 `1 Hr` / `12 Hr` / `24 Hr` (the native windows xmrig-proxy reports). It is independent of the Range
 control: the range sets how much *time* the x-axis spans; the averaging window sets how *smooth* each

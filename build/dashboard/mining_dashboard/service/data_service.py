@@ -32,6 +32,8 @@ from mining_dashboard.config.config import (
     CLEARNET_STATE_DIR,
     ENABLE_XVB,
     GITHUB_RELEASES_API,
+    HASHRATE_DROP_MINUTES,
+    HASHRATE_DROP_THRESHOLD_PCT,
     HOST_IP,
     MONERO_CLEARNET_SYNC,
     REJECT_WORKERS_CONTAINER,
@@ -47,11 +49,13 @@ from mining_dashboard.config.config import (
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
     effective_hashrate,
+    format_hashrate,
     pplns_block_time,
     shares_in_pplns_window,
 )
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
+from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.node_health import NodeHealthMonitor
@@ -415,6 +419,13 @@ class DataService:
         # Disabled unless telegram.enabled + bot_token + chat_id are configured, so this is a
         # cheap no-op for the default stack.
         self.alert_service = AlertService()
+        # Hashrate-degradation detector (Issue #99): flags a sustained total-hashrate drop and its
+        # recovery. Runs every cycle (cheap, self-contained EMA baseline) so it can mark the chart
+        # even with Telegram off; a loss also drives a hashrate_loss alert.
+        self.degradation = DegradationMonitor(
+            threshold_frac=HASHRATE_DROP_THRESHOLD_PCT / 100,
+            sustained_sec=HASHRATE_DROP_MINUTES * 60,
+        )
         # True while we've stopped the proxy to reject workers. Persisted in the snapshot so
         # a dashboard restart mid-outage still readmits workers once the node recovers.
         self.workers_rejected = False
@@ -840,6 +851,23 @@ class DataService:
                             incidents=self.alert_service.drain_incidents(),
                         ),
                     )
+                    # 6. Degradation detector (#99): a sustained total-hashrate drop / recovery is
+                    # persisted as a chart event marker and pushed as a hashrate_loss alert.
+                    deg_edge = self.degradation.update(total_hr)
+                    if deg_edge:
+                        kind, drop_frac, _baseline, current = deg_edge
+                        if kind == "loss":
+                            ev_type = "hashrate_loss"
+                            detail = (
+                                f"Hashrate −{drop_frac * 100:.0f}% ({format_hashrate(current)})"
+                            )
+                        else:
+                            ev_type = "hashrate_recovered"
+                            detail = f"Hashrate recovered ({format_hashrate(current)})"
+                        await asyncio.to_thread(
+                            self.state_manager.add_event, time.time(), ev_type, detail
+                        )
+                        await self.alert_service.degradation_alert(kind, drop_frac)
 
                     self.latest_data.update(
                         {

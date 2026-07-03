@@ -708,6 +708,55 @@ class TestRunIteration:
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
 
+    async def test_degradation_edge_records_event_and_alerts(self):
+        # #99 wiring: when the detector reports an edge, the loop persists a chart marker and pushes
+        # the hashrate_loss alert. Stub the detector so a single iteration produces a deterministic
+        # edge (the debounce itself is unit-tested in test_degradation.py).
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        proxy.get_summary.return_value = {"results": {}}
+        svc.degradation = MagicMock()
+        svc.degradation.update.return_value = ("loss", 0.6, 1000.0, 400.0)
+        svc.alert_service.degradation_alert = AsyncMock()
+
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False})
+        tari_client.close = AsyncMock()
+
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False, "percent": 100}),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+        assert sm.add_event.call_args.args[1] == "hashrate_loss"
+        svc.alert_service.degradation_alert.assert_awaited_once_with("loss", 0.6)
+
     async def test_run_holds_miner_while_syncing(self):
         # A syncing Monero node → gate holds p2pool + xmrig-proxy and #31's failover stays
         # dormant (no workers to fail over before we've even started mining).
