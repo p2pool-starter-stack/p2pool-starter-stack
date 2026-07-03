@@ -203,11 +203,46 @@ How it works and what to keep in mind:
   port miners connect to is a separate surface; gate that with
   [`p2pool.stratum_password`](#configuration-reference) and `p2pool.stratum_bind`.
 - Exposing to the public internet is still discouraged. A password plus HTTPS is the right baseline,
-  but the safest remote-access path remains a VPN / SSH tunnel / Tailscale back to the LAN rather than
-  a forwarded port. Basic-auth has no rate-limiting or lockout on its own.
+  but for reaching the dashboard from outside the LAN, publish it as a Tor onion service (below)
+  rather than forwarding a port. Basic-auth has no rate-limiting or lockout on its own.
 
 To remove the login again, clear the password (`"password": ""`) and `apply`. pithead drops the
 `basic_auth` block and the dashboard is open on the LAN as before.
+
+### Remote access over Tor (onion service)
+
+Set `dashboard.onion.enabled: true` to publish the dashboard as a Tor v3 hidden service. You then
+reach it from anywhere over Tor — no port-forward, no VPN, no public IP, no inbound firewall hole.
+The stack already runs Tor for the mining traffic; this rides the same daemon.
+
+```json
+"dashboard": {
+    "secure": true,
+    "onion": { "enabled": true },
+    "auth": { "username": "admin", "password": "a long passphrase you choose" }
+}
+```
+
+Because a published `.onion` puts a control panel at a stable address, pithead **fails closed**:
+
+- It refuses to render the onion unless `dashboard.auth.password` is set, and requires at least 16
+  characters for it — a published address is reachable by anyone who learns it, and per-request
+  rate-limiting is meaningless over Tor (every request arrives from the local Tor daemon, so there
+  is no source IP to throttle). Use a passphrase.
+- The onion serves plain HTTP inside the Tor tunnel (Tor encrypts the transport), fronted by the
+  same login as the LAN path. It is bound to the internal Docker bridge, not the LAN, so it is
+  reachable only through Tor.
+
+After `apply`, read the generated address from `pithead status` (it is printed only to that local
+output). Treat the `.onion` as a secret: anyone who has it can reach the login.
+
+> The password is currently the only lock on the onion. It is therefore online-guessable by anyone
+> with the address — which is why the 16-character floor is enforced. Stronger Tor v3 client
+> authorization (the service does not respond at all without a client key) is planned; track it in
+> [#343](https://github.com/p2pool-starter-stack/pithead/issues/343).
+
+Prefer a mesh VPN like Tailscale instead? Point it at the LAN yourself — the stack does not ship a
+profile for it, and the onion service is the supported remote path.
 
 ---
 

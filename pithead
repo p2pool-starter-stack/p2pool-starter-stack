@@ -752,6 +752,16 @@ doctor() {
                 dr_ok "$k set."
             fi
         done
+        # Dashboard onion (#343): only meaningful when opted in. Print the actual address — it is the
+        # capability an operator needs to reach the panel — but only to this local status output.
+        if [ "$(env_get DASHBOARD_ONION_ENABLED)" == "true" ]; then
+            onion=$(env_get DASHBOARD_ONION_ADDRESS)
+            if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
+                dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run 'pithead setup' or 'pithead apply'."
+            else
+                dr_ok "Dashboard onion: http://$onion (login required)"
+            fi
+        fi
     fi
 
     # --- Containers (best-effort) ---
@@ -1817,9 +1827,27 @@ parse_and_validate_config() {
             DASHBOARD_AUTH_HASH_B64=$(caddy_hash_password_b64 "$dash_pw") ||
                 error "Could not hash dashboard.auth.password (is Docker running and the Caddy image pulled? Run '$0 setup' first)."
         fi
-        # basic_auth credentials are only safe over TLS; warn (don't fail) on plain HTTP.
-        if [ "$DASHBOARD_SECURE" != "true" ]; then
+        # basic_auth credentials are only safe over TLS; warn (don't fail) on plain HTTP. This is
+        # about the LAN vhost — the onion vhost (#343) serves plain HTTP by design (Tor is the
+        # transport), so it is exempt and does not trip this.
+        if [ "$DASHBOARD_SECURE" != "true" ] && [ "$(config_bool '.dashboard.onion.enabled' false)" != "true" ]; then
             warn "dashboard.auth is set but dashboard.secure is false — login credentials would travel over plain HTTP. Set dashboard.secure: true for HTTPS."
+        fi
+    fi
+
+    # Optional dashboard onion (#343). Opt-in, default off. When on, pithead publishes the dashboard
+    # as a Tor v3 hidden service — reachable from anywhere over Tor, no exposed ports, no public IP.
+    # Because that puts a CONTROL PANEL at a stable address, FAIL CLOSED: refuse to enable it without
+    # a login, and demand a stronger password than the LAN 8-char floor — a published .onion is
+    # online-brute-forceable (per-IP throttling is meaningless over Tor; every request arrives from
+    # the local tor daemon, so there is no source IP to rate-limit against).
+    DASHBOARD_ONION_ENABLED=$(normalize_bool "$(config_bool '.dashboard.onion.enabled' false)")
+    if [ "$DASHBOARD_ONION_ENABLED" == "true" ]; then
+        if [ -z "$dash_pw" ]; then
+            error "dashboard.onion.enabled is true but dashboard.auth.password is empty. Publishing the dashboard as a Tor onion exposes a control panel at a stable address — it must sit behind a login. Set a strong dashboard.auth.password (16+ characters) and re-run."
+        fi
+        if [ "$(printf '%s' "$dash_pw" | wc -c)" -lt 16 ]; then
+            error "dashboard.auth.password must be at least 16 characters when dashboard.onion.enabled is true (a published .onion is online-brute-forceable and per-IP throttling is meaningless over Tor). Use a passphrase."
         fi
     fi
 }
@@ -1832,12 +1860,14 @@ load_preserved_state() {
     MONERO_ONION=$(env_get MONERO_ONION_ADDRESS)
     TARI_ONION=$(env_get TARI_ONION_ADDRESS)
     P2POOL_ONION=$(env_get P2POOL_ONION_ADDRESS)
+    DASHBOARD_ONION=$(env_get DASHBOARD_ONION_ADDRESS)
     PRESERVED_HOST_IP=$(env_get HOST_IP)
 
     [ -n "$PROXY_AUTH_TOKEN" ] || PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
     [ -n "$MONERO_ONION" ] || MONERO_ONION="placeholder"
     [ -n "$TARI_ONION" ] || TARI_ONION="placeholder"
     [ -n "$P2POOL_ONION" ] || P2POOL_ONION="placeholder"
+    [ -n "$DASHBOARD_ONION" ] || DASHBOARD_ONION="placeholder"
     return 0
 }
 
@@ -1956,6 +1986,27 @@ provision_tor() {
     MONERO_ONION=$(docker exec tor cat /var/lib/tor/monero/hostname)
     TARI_ONION=$(docker exec tor cat /var/lib/tor/tari/hostname)
     P2POOL_ONION=$(docker exec tor cat /var/lib/tor/p2pool/hostname)
+    provision_dashboard_onion # #343: reads the dashboard onion too, but only when it's enabled
+}
+
+# Read the dashboard onion hostname from the running tor container into DASHBOARD_ONION (#343).
+# No-op unless the onion is enabled. Its HiddenServiceDir is rendered conditionally
+# (build/tor/entrypoint.sh), so poll for the hostname — Tor publishes it a few seconds after
+# (re)start. Used by both first-time setup (provision_tor) and a later `apply` that turns it on.
+provision_dashboard_onion() {
+    [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] || return 0
+    log "Waiting for the dashboard Tor hidden service..."
+    local elapsed=0 timeout=60
+    until docker exec tor test -f /var/lib/tor/dashboard/hostname; do
+        if [ "$elapsed" -ge "$timeout" ]; then
+            # Non-fatal: the onion still serves; the address just isn't captured for `status` yet.
+            warn "Timed out after ${timeout}s waiting for the dashboard Tor hidden-service hostname; run 'pithead status' later to see the address."
+            return 1
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    DASHBOARD_ONION=$(docker exec tor cat /var/lib/tor/dashboard/hostname)
 }
 
 # Single writer for the env file. Derives every value from the parsed config plus the preserved
@@ -2188,6 +2239,7 @@ TARI_WALLET_ADDRESS=$TARI_WALLET
 MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
+DASHBOARD_ONION_ADDRESS=$DASHBOARD_ONION
 P2POOL_FLAGS=$p2pool_flags
 P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
@@ -2250,6 +2302,7 @@ MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
+DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
 DASHBOARD_TZ=$DASHBOARD_TZ
 DASHBOARD_AUTH_USER=$DASHBOARD_AUTH_USER
 DASHBOARD_AUTH_HASH_B64=$DASHBOARD_AUTH_HASH_B64
@@ -2329,6 +2382,25 @@ EOF
         log "Generating Caddyfile for HTTP ($HOST_IP)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >"Caddyfile"
 http://$HOST_IP {
+$auth
+    reverse_proxy 127.0.0.1:8000
+}
+EOF
+    fi
+
+    # Onion vhost (#343): a second site reachable ONLY from the tor container, via the bridge gateway
+    # (NETWORK_PREFIX.1 — the /24's first host, where host-networked Caddy binds and bridge containers
+    # route out). It is never on the LAN. Plain HTTP: Tor provides the transport encryption inside the
+    # tunnel, so no `tls internal` here. It MUST carry the same auth block — refuse to publish an
+    # unauthenticated control panel (config validation already fails closed; this is belt-and-suspenders).
+    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ]; then
+        if [ -z "$auth" ]; then
+            error "Refusing to render the dashboard onion vhost without a login: dashboard.onion.enabled is on but no auth hash is set."
+        fi
+        log "Adding onion vhost for the dashboard (${NETWORK_PREFIX}.1, login required)..."
+        cat <<EOF >>"Caddyfile"
+
+http://${NETWORK_PREFIX}.1 {
 $auth
     reverse_proxy 127.0.0.1:8000
 }
@@ -2826,7 +2898,7 @@ apply() {
         for key in "${changed[@]}"; do
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
-            case "$key" in HOST_IP | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64) caddy_changed=1 ;; esac
+            case "$key" in HOST_IP | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED) caddy_changed=1 ;; esac
             line=$(describe_change "$key" "$old" "$new")
             flag=${line%%$'\t'*}
             msg=${line#*$'\t'}
@@ -2884,6 +2956,12 @@ apply() {
     # Caddy mounts the Caddyfile read-only, so a content change alone won't recreate it.
     if [ "$caddy_changed" -eq 1 ]; then
         docker compose restart caddy
+    fi
+    # If the dashboard onion was just turned on, the recreated tor container generated its hostname;
+    # read it back into .env so `pithead status` can surface the address (#343). The onion already
+    # serves via Caddy regardless — this only makes the address visible to the operator.
+    if [ "$DASHBOARD_ONION_ENABLED" == "true" ] && { [ -z "$DASHBOARD_ONION" ] || [ "$DASHBOARD_ONION" == "placeholder" ]; }; then
+        provision_dashboard_onion && render_env
     fi
     rm -f "$apply_marker"
     log "Configuration applied."

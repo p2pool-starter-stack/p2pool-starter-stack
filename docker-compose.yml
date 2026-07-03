@@ -29,6 +29,9 @@ services:
     environment:
       # Subnet prefix (#180): the entrypoint envsubst's it into the rendered torrc's bridge IPs.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
+      # Dashboard onion (#343): opt-in, default off. When true the entrypoint appends a hidden
+      # service for the dashboard (fronting Caddy on the bridge gateway, never the LAN).
+      - DASHBOARD_ONION_ENABLED=${DASHBOARD_ONION_ENABLED:-false}
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     networks:

@@ -9,4 +9,17 @@ set -eu
 
 sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" /etc/tor/torrc.template >/tmp/torrc
 
+# Dashboard hidden service (#343): opt-in, default off. Appended only when pithead sets the flag, so
+# the default stack publishes exactly the three mining onions and nothing else. The target is the
+# bridge gateway (NETWORK_PREFIX.1), where host-networked Caddy binds the auth-gated onion vhost —
+# NOT the dashboard's raw :8000 (which has no auth of its own). Tor supplies the transport encryption.
+if [ "${DASHBOARD_ONION_ENABLED:-false}" = "true" ]; then
+    cat >>/tmp/torrc <<EOF
+
+# Dashboard Hidden Service (#343)
+HiddenServiceDir /var/lib/tor/dashboard/
+HiddenServicePort 80 ${NETWORK_PREFIX}.1:80
+EOF
+fi
+
 exec tor -f /tmp/torrc

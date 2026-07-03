@@ -722,6 +722,46 @@ case "$caddy_http" in
 *) ok "caddyfile insecure has no TLS" ;;
 esac
 
+echo "== unit: generate_caddyfile onion vhost (#343) =="
+# With the dashboard onion enabled, generate_caddyfile appends a SECOND site bound to the bridge
+# gateway (NETWORK_PREFIX.1) — reachable only from the tor container, never the LAN — serving plain
+# HTTP (Tor is the transport) and carrying the SAME basic_auth block as the LAN site.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "onion vhost bound to the bridge gateway" "$caddy_onion" "http://172.28.0.1 {"
+assert_contains "onion vhost carries basic_auth" "$caddy_onion" "basic_auth"
+# The onion site (everything after the gateway address) must not get a TLS directive.
+onion_site="${caddy_onion#*172.28.0.1}"
+case "$onion_site" in
+*"tls internal"*) bad "onion vhost is plain HTTP" "'tls internal' present on the onion site" ;;
+*) ok "onion vhost is plain HTTP (no tls internal)" ;;
+esac
+# Fail-closed belt: onion enabled but NO auth hash -> generate_caddyfile must refuse (rc 1).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+)
+assert_rc "onion without a login refuses to render" "$?" "1"
+# Onion OFF -> no gateway vhost appears at all.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_noonion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=false NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_not_contains "no onion vhost when disabled" "$caddy_noonion" "172.28.0.1"
+
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
 # 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).
@@ -1361,6 +1401,25 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
 assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.password"
+
+# Dashboard onion (#343): FAIL CLOSED. Enabling the onion without a login must abort apply — a
+# published .onion is a control panel at a stable address and cannot be unauthenticated.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "onion without a password rejected" "$rc" "1"
+assert_contains "onion-needs-login message" "$out" "dashboard.auth.password is empty"
+# And a weak (LAN-acceptable but <16-char) password is rejected once the onion is on. This case
+# passes the length regex and so reaches the bcrypt step, which reads docker-compose.yml for the
+# pinned Caddy image — make sure it's present here (it's copied for later tests further down too).
+cp "$ROOT/docker-compose.yml" "$V/docker-compose.yml"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"shortish12"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "onion with a <16-char password rejected" "$rc" "1"
+assert_contains "onion strong-password message" "$out" "at least 16 characters"
 
 # Wallet-type hard-fail (#250): p2pool pays via coinbase, which CANNOT reach a subaddress or an
 # integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is
