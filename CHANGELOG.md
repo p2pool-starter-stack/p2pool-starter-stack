@@ -105,9 +105,10 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   finished**, **data disk filling up**, **dashboard DB write failing**, **no PPLNS share while
   donating to XvB** (raffle wins skipped), **XvB registration rejected / failing**, **hashrate too
   low for the chosen XvB tier**, **a node exposed on clearnet** during initial sync, and **a new
-  release being available** — and answer status commands on demand: **`/status`**, **`/hashrate`**,
-  **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**, **`/xvb`**, **`/earnings`**, and
-  **`/help`**. It also pushes a **📅 once-a-day retrospective** at a configurable local time
+  release being available** — and answer status commands on demand: **`/status`**, **`/info`**
+  (version + update availability, Monero DB mode, P2Pool sidechain, and Tor-only/clearnet privacy
+  posture), **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**, **`/xvb`**,
+  **`/earnings`**, and **`/help`**. It also pushes a **📅 once-a-day retrospective** at a configurable local time
   (`telegram.daily_summary_time`, default **08:00**) — the last 24h across the fleet: an incident
   roll-up (what went wrong during the day, or an all-clear), 24h hashrate with the P2Pool/XvB split,
   shares found in the day, an estimated daily-earnings figure, and a per-machine 24h breakdown. The Telegram bot appears in the dashboard's

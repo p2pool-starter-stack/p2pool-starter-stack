@@ -14,8 +14,10 @@ from mining_dashboard.config.config import (
 )
 from mining_dashboard.helper.utils import effective_hashrate, format_duration, format_hashrate
 from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
+from mining_dashboard.version import resolve_version
 from mining_dashboard.web.views import build_badges
 
 logger = logging.getLogger("TelegramCommands")
@@ -29,11 +31,23 @@ POLL_ERROR_BACKOFF_SECONDS = 15
 
 # The commands the bot answers. All are read-only status queries — the bot can never change the
 # stack (start/stop/apply live on the CLI), so a leaked chat can at worst read status, not act.
-COMMANDS = ("status", "hashrate", "workers", "sync", "system", "pool", "xvb", "earnings", "help")
+COMMANDS = (
+    "status",
+    "info",
+    "hashrate",
+    "workers",
+    "sync",
+    "system",
+    "pool",
+    "xvb",
+    "earnings",
+    "help",
+)
 
 HELP_TEXT = (
     "Pithead bot — commands:\n"
     "/status — stack health at a glance\n"
+    "/info — version, updates, DB mode, privacy posture\n"
     "/hashrate — total + per-worker hashrate\n"
     "/workers — each rig's online/offline state\n"
     "/sync — Monero + Tari node sync progress\n"
@@ -109,6 +123,33 @@ def format_status(metrics, mining_active, host_label="", warnings=None):
     else:
         lines.append("")
         lines.append("✅ No warnings.")
+    return "\n".join(lines)
+
+
+def format_info(version, update, metrics, egress_summary, host_label=""):
+    """The 'about this stack' card — the answer to '/info'. Folds the build version, whether an
+    upgrade is available, the Monero DB mode, the P2Pool sidechain, and the privacy (egress) posture
+    into one glance. Static-ish facts, kept out of /status (which is live health)."""
+    lines = [f"{_prefix(host_label)}\U0001f4df Pithead info"]
+
+    ver = (version or {}).get("text", "unknown")
+    lines.append(f"Version: {ver}{' (dev build)' if (version or {}).get('dev') else ''}")
+
+    update = update or {}
+    if update.get("available") and update.get("latest"):
+        lines.append(f"Updates: \U0001f195 {update['latest']} available — ./pithead upgrade")
+    else:
+        lines.append("Updates: ✅ Up to date")
+
+    mode = metrics.monero_mode
+    lines.append(f"Monero DB: {mode}" if mode in ("Pruned", "Full") else "Monero DB: unknown")
+    lines.append(f"Sidechain: P2Pool {metrics.pool_type}")
+
+    egress_summary = egress_summary or {}
+    if egress_summary.get("all_tor", True):
+        lines.append("Egress: \U0001f9c5 Tor-only")
+    else:
+        lines.append(f"Egress: ⚠️ {egress_summary.get('label', 'clearnet exposure')}")
     return "\n".join(lines)
 
 
@@ -412,6 +453,14 @@ class TelegramCommandBot:
                 data, metrics, self.data_service.state_manager.is_db_healthy()
             )
             return format_status(metrics, mining, self.host_label, warnings=warnings)
+        if cmd == "info":
+            return format_info(
+                resolve_version(),
+                data.get("update"),
+                metrics,
+                egress_posture_from_config()["summary"],
+                self.host_label,
+            )
         if cmd == "hashrate":
             return format_hashrate_reply(metrics, data.get("workers", []), self.host_label)
         if cmd == "workers":
