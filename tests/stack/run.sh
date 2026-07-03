@@ -2236,6 +2236,25 @@ else
 fi
 rm -rf "$RELTMP"
 
+# xmrig-proxy wrapper entrypoint: optional stratum access-password (#152). The flag moved out of the
+# compose command (a `${VAR:+--flag}` list element rendered a stray '' positional arg when the password
+# was unset — xmrig-proxy warns `unsupported non-option argument ''`) into this wrapper, which appends
+# it only when PROXY_STRATUM_PASSWORD is set. Exercise the real script with a stub xmrig-proxy on PATH
+# that echoes its argv, so the set/unset branch is actually run.
+XP_ENTRY="$ROOT/build/xmrig-proxy/entrypoint.sh"
+xp_argv() { # <password value> -> the argv the wrapper would exec
+    local d
+    d="$(mktemp -d)"
+    printf '#!/bin/sh\nfor a in "$@"; do printf "[%%s]" "$a"; done\n' >"$d/xmrig-proxy"
+    chmod +x "$d/xmrig-proxy"
+    PATH="$d:$PATH" PROXY_STRATUM_PASSWORD="$1" sh "$XP_ENTRY" --http-no-restricted --donate-level=0
+    rm -rf "$d"
+}
+assert_eq "xmrig-proxy entrypoint: unset password appends no flag (#152)" \
+    "$(xp_argv '')" "[--http-no-restricted][--donate-level=0]"
+assert_eq "xmrig-proxy entrypoint: set password appends --access-password (#152)" \
+    "$(xp_argv 's3cret')" "[--http-no-restricted][--donate-level=0][--access-password=s3cret]"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

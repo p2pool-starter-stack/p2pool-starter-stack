@@ -179,25 +179,31 @@ else
     echo "  ✓ empty PROXY_AUTH_TOKEN makes the stack refuse to start (#153)"
 fi
 
-# xmrig-proxy config knobs (#152 stratum access-password, #173 dev-fee donate-level): both flags
-# render as a single '=' token carrying the value from .env.
-jq_assert "xmrig-proxy stratum access-password rendered (#152)" \
-    '.services["xmrig-proxy"].command | any(. == "--access-password=hunter2")'
+# xmrig-proxy config knobs (#152 stratum access-password, #173 dev-fee donate-level). donate-level is
+# a plain command item. The access-password flag is instead applied by the wrapper entrypoint from the
+# PROXY_STRATUM_PASSWORD env var — NOT a command item — because a compose command LIST can't drop an
+# empty element: a `${VAR:+--flag}` item rendered a stray '' positional arg when the password was unset
+# (xmrig-proxy warns `unsupported non-option argument ''`). So assert the env var is plumbed with the
+# value, and the command carries NO --access-password and NO empty element. The entrypoint's set/unset
+# append logic is covered by tests/stack/run.sh.
+jq_assert "xmrig-proxy stratum password plumbed via env (#152)" \
+    '.services["xmrig-proxy"].environment["PROXY_STRATUM_PASSWORD"] == "hunter2"'
+jq_assert "xmrig-proxy command has no empty arg or --access-password item (#152)" \
+    '.services["xmrig-proxy"].command | (any(. == "") | not) and (any(startswith("--access-password")) | not)'
 jq_assert "xmrig-proxy dev-fee donate-level rendered (#173)" \
     '.services["xmrig-proxy"].command | any(. == "--donate-level=1")'
-# Default-off path: an EMPTY PROXY_STRATUM_PASSWORD and a MISSING PROXY_DONATE_LEVEL (a stale .env
-# from before these keys) must render NO --access-password flag at all — the ':+' form drops it so
-# any rig may still mine (a literal empty '--access-password=' would demand an empty password and
-# reject every rig, the bug this guards). donate-level falls back to '0' (no dev fee).
+# Default-off path: an EMPTY PROXY_STRATUM_PASSWORD and a MISSING PROXY_DONATE_LEVEL (a stale .env from
+# before these keys) must leave the env var empty (the entrypoint then appends no flag, so any rig may
+# still mine) and fall back to --donate-level=0 (no dev fee).
 OFF_ENV="$(mktemp)"
 grep -vE '^PROXY_STRATUM_PASSWORD=|^PROXY_DONATE_LEVEL=' "$ENV_FILE" >"$OFF_ENV"
 echo 'PROXY_STRATUM_PASSWORD=' >>"$OFF_ENV"
 OFF_JSON="$(docker compose --env-file "$OFF_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 rm -f "$OFF_ENV"
-if printf '%s' "$OFF_JSON" | jq -e '.services["xmrig-proxy"].command | ((any(startswith("--access-password")) | not) and any(. == "--donate-level=0"))' >/dev/null 2>&1; then
-    echo "  ✓ default-off omits --access-password (any rig may mine) + --donate-level=0 (#152/#173)"
+if printf '%s' "$OFF_JSON" | jq -e '.services["xmrig-proxy"] | (.environment["PROXY_STRATUM_PASSWORD"] == "") and (.command | any(. == "--donate-level=0"))' >/dev/null 2>&1; then
+    echo "  ✓ default-off: empty stratum password + --donate-level=0 (#152/#173)"
 else
-    echo "  ✗ default-off must omit --access-password and render --donate-level=0"
+    echo "  ✗ default-off must leave PROXY_STRATUM_PASSWORD empty and render --donate-level=0"
     fails=$((fails + 1))
 fi
 
