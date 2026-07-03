@@ -32,6 +32,9 @@ services:
       # Dashboard onion (#343): opt-in, default off. When true the entrypoint appends a hidden
       # service for the dashboard (fronting Caddy on the bridge gateway, never the LAN).
       - DASHBOARD_ONION_ENABLED=${DASHBOARD_ONION_ENABLED:-false}
+      # Client-auth toggle (#343): the entrypoint doesn't read it, but listing it here means a change
+      # recreates tor so it re-reads authorized_clients/ (pithead writes/clears that before recreate).
+      - DASHBOARD_ONION_CLIENT_AUTH=${DASHBOARD_ONION_CLIENT_AUTH:-false}
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     networks:

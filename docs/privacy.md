@@ -53,8 +53,9 @@ address): monerod, Tari, and P2Pool each get one from the built-in Tor daemon. S
   See [Connecting miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
 - The **dashboard** can get a fourth, optional onion (`dashboard.onion.enabled`, default off) so you
   can reach it remotely over Tor without a port-forward or public IP. It fronts the authenticated
-  Caddy login, and pithead refuses to publish it without a 16-character password. This is **inbound**
-  access over Tor and does not change the egress table below. See
+  Caddy login, defaults to Tor v3 client authorization (the onion won't respond without your client
+  key), and pithead refuses to publish it without a 16-character password. This is **inbound** access
+  over Tor and does not change the egress table below. See
   [Remote access over Tor](configuration.md#remote-access-over-tor-onion-service).
 
 ---

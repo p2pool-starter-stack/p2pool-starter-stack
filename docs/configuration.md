@@ -92,6 +92,8 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `dashboard.auth.username` | `admin` | Login name for the dashboard when a password is set (see below). Letters, digits, and `. _ @ -`, 1–64 chars. Ignored while `dashboard.auth.password` is empty. |
 | `dashboard.auth.password` | `""` _(off)_ | Optional password to open the dashboard. Turns on a Caddy [HTTP basic-auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth) prompt in front of every page. `""` (default) = no login, anyone who can reach the dashboard sees it (fine for a private LAN appliance). Any 8–128-character string (no double-quotes) turns the prompt on. The plaintext lives only in your owner-only `config.json`; pithead bcrypt-hashes it with the pinned Caddy image and stores only the hash in `.env`, so the password itself is never persisted in rendered state. Basic-auth credentials travel in cleartext over HTTP, so keep `dashboard.secure: true` (the default); pithead warns if you set a password with `secure: false`. See [Exposing the dashboard safely](#exposing-the-dashboard-safely). |
+| `dashboard.onion.enabled` | `false` _(off)_ | Privacy-relevant, default off. `true` publishes the dashboard as a Tor v3 onion service so you can reach it remotely over Tor — no port-forward, no VPN, no public IP. It fronts the authenticated Caddy login on the internal bridge, never the LAN. pithead **fails closed**: it refuses to enable the onion without a `dashboard.auth.password` and requires that password to be at least 16 characters. See [Remote access over Tor](#remote-access-over-tor-onion-service). |
+| `dashboard.onion.client_auth` | `true` _(on)_ | Only applies when `dashboard.onion.enabled` is `true`. Keeps Tor v3 **client authorization** on: the onion does not respond at all without your client key, so the address can't be scanned or brute-forced — the password becomes a second factor behind it. pithead generates the keypair and prints the client line via `pithead onion-client-key`. Set to `false` for a deliberately password-only onion. |
 | `dashboard.timezone` | `auto` | Timezone for the dashboard's timestamps and charts. `auto` = the host machine's timezone (auto-detected, falling back to `Etc/UTC`); set an IANA name (e.g. `America/Chicago`) to override. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
 | `dashboard.check_for_updates` | `true` _(on)_ | The dashboard periodically asks GitHub whether a newer Pithead release exists and, if so, shows a header badge linking to it (e.g. "New release v1.4.0 available"). Notify-only: it never updates anything; you upgrade with `./pithead upgrade` on your own terms. On by default because the check is routed over Tor (the same bridge SOCKS as the XvB fetch, `socks5h` so the DNS lookup goes through Tor too), so GitHub sees a Tor exit, not your IP. It's cached (hourly) and fails silently offline. Set to `false` to opt out entirely. See [Privacy › Runtime egress](privacy.md#runtime-egress). |
@@ -218,28 +220,43 @@ The stack already runs Tor for the mining traffic; this rides the same daemon.
 ```json
 "dashboard": {
     "secure": true,
-    "onion": { "enabled": true },
+    "onion": { "enabled": true, "client_auth": true },
     "auth": { "username": "admin", "password": "a long passphrase you choose" }
 }
 ```
 
 Because a published `.onion` puts a control panel at a stable address, pithead **fails closed**:
 
-- It refuses to render the onion unless `dashboard.auth.password` is set, and requires at least 16
-  characters for it — a published address is reachable by anyone who learns it, and per-request
-  rate-limiting is meaningless over Tor (every request arrives from the local Tor daemon, so there
-  is no source IP to throttle). Use a passphrase.
+- It refuses to render the onion unless `dashboard.auth.password` is set, requires at least 16
+  characters, and rejects obviously weak choices (a single repeated character, well-known patterns).
+  A published address is reachable by anyone who learns it, and per-request rate-limiting is
+  meaningless over Tor — every request arrives from the local Tor daemon, so there is no source IP
+  to throttle. Use a passphrase.
+- **Client authorization is on by default** (`client_auth: true`). A client-auth'd onion does not
+  respond at all without your client key, so the address cannot be scanned or brute-forced — the
+  password becomes a second factor behind it. This is the strong primary gate.
 - The onion serves plain HTTP inside the Tor tunnel (Tor encrypts the transport), fronted by the
   same login as the LAN path. It is bound to the internal Docker bridge, not the LAN, so it is
   reachable only through Tor.
 
-After `apply`, read the generated address from `pithead status` (it is printed only to that local
-output). Treat the `.onion` as a secret: anyone who has it can reach the login.
+After `apply`, read the address from `pithead status` (printed only to that local output). Treat the
+`.onion` as a secret: anyone who has it can _attempt_ the login (and, without client-auth, reach it).
 
-> The password is currently the only lock on the onion. It is therefore online-guessable by anyone
-> with the address — which is why the 16-character floor is enforced. Stronger Tor v3 client
-> authorization (the service does not respond at all without a client key) is planned; track it in
-> [#343](https://github.com/p2pool-starter-stack/pithead/issues/343).
+**Setting up client authorization on your device.** Run `pithead onion-client-key` — it prints a
+single line containing your client PRIVATE key (kept out of `status`, which is a shareable report):
+
+```text
+<address>:descriptor:x25519:<private-key>
+```
+
+Save that line into a file (e.g. `dashboard.auth_private`) inside your local Tor client's
+`ClientOnionAuthDir`, then reach the dashboard at `http://<address>.onion`. Without it, the onion is
+invisible. Set `client_auth: false` for a deliberately password-only onion (weaker — the address
+becomes online-guessable, so lean on the password).
+
+**Rotation.** A leaked `.onion` address or client key is otherwise permanent. Run
+`pithead rotate-dashboard-onion` to mint a fresh address and client key; the old ones stop working
+immediately, and the command prints the new client line.
 
 Prefer a mesh VPN like Tailscale instead? Point it at the LAN yourself — the stack does not ship a
 profile for it, and the onion service is the supported remote path.

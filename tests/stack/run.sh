@@ -665,6 +665,14 @@ INFO*) ok "dash login fingerprint stays silent (no preview line)" ;;
 *) bad "dash login fingerprint stays silent" "unexpected message emitted" ;;
 esac
 
+# Dashboard onion (#343): enabling is DEST (tor+caddy recreated); the client PRIVATE key must never
+# surface in the change preview, even though a fresh key co-changes with the toggle.
+assert_contains "onion enable is DEST" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_ONION_ENABLED false true)" "DEST"
+case "$(run_sourced "$SANDBOX" describe_change DASHBOARD_ONION_CLIENT_PRIVKEY OLDPRIVKEYVALUE NEWPRIVKEYVALUE)" in
+*OLDPRIVKEYVALUE* | *NEWPRIVKEYVALUE*) bad "onion client privkey hidden in preview" "the client private key leaked into the change preview" ;;
+*) ok "onion client privkey hidden in preview (no value shown)" ;;
+esac
+
 # New-release check toggle (#224): enabling/disabling is INFO, and the message names GitHub + Tor.
 assert_contains "update-check enable is INFO" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "INFO"
 assert_contains "update-check enable mentions GitHub/Tor" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "GitHub"
@@ -761,6 +769,44 @@ caddy_noonion="$(
     cat Caddyfile
 )"
 assert_not_contains "no onion vhost when disabled" "$caddy_noonion" "172.28.0.1"
+
+echo "== unit: onion client-auth crypto (#343) =="
+# Portable base32 (RFC 4648 vectors) — no external `base32` binary (absent on macOS).
+assert_eq "b32encode_hex('f') = MY" "$(run_sourced "$SANDBOX" b32encode_hex 66)" "MY"
+assert_eq "b32encode_hex('foobar') = MZXW6YTBOI" "$(run_sourced "$SANDBOX" b32encode_hex 666f6f626172)" "MZXW6YTBOI"
+# x25519 client-auth keypair: two distinct 52-char base32 keys.
+kp="$(run_sourced "$SANDBOX" generate_onion_client_keypair)"
+set -- $kp
+assert_eq "client pubkey is 52-char base32" "${#1}" "52"
+assert_eq "client privkey is 52-char base32" "${#2}" "52"
+if [ "$1" != "$2" ]; then ok "client pub != priv"; else bad "client pub != priv" "identical keys generated"; fi
+case "$1$2" in *[!A-Z2-7]*) bad "client keys use the base32 alphabet" "non-base32 char present" ;; *) ok "client keys use the base32 alphabet" ;; esac
+
+# provision_onion_client_auth writes the authorized_clients descriptor into the hidden-service dir.
+ac_root="$SANDBOX/tor-ac"
+rm -rf "$ac_root"
+mkdir -p "$ac_root"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    ensure_owner() { :; } # skip the sudo chown in the unit sandbox
+    set +e
+    DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION_CLIENT_AUTH=true \
+        DASHBOARD_ONION_CLIENT_PUBKEY=placeholder TOR_DATA_DIR="$ac_root" \
+        APP_UID=$(id -u) APP_GID=$(id -g) provision_onion_client_auth >/dev/null 2>&1
+)
+ac_file="$ac_root/dashboard/authorized_clients/dashboard.auth"
+if [ -f "$ac_file" ]; then ok "authorized_clients/dashboard.auth is written"; else bad "authorized_clients/dashboard.auth is written" "file missing"; fi
+assert_contains "authorized_clients carries a v3 descriptor" "$(cat "$ac_file" 2>/dev/null)" "descriptor:x25519:"
+# With client-auth OFF, an existing authorized_clients dir is cleared (onion falls back to password-only).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION_CLIENT_AUTH=false TOR_DATA_DIR="$ac_root" \
+        provision_onion_client_auth >/dev/null 2>&1
+)
+if [ -d "$ac_root/dashboard/authorized_clients" ]; then bad "client-auth off clears authorized_clients" "dir still present"; else ok "client-auth off clears authorized_clients"; fi
 
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
@@ -1420,6 +1466,40 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "onion with a <16-char password rejected" "$rc" "1"
 assert_contains "onion strong-password message" "$out" "at least 16 characters"
+# Weak-password denylist: even at 16+ chars, a single repeated character or a well-known pattern is
+# rejected once the onion is on.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"aaaaaaaaaaaaaaaa"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "onion repeated-character password rejected" "$?" "1"
+assert_contains "repeated-character message" "$out" "single repeated character"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"changemechangeme"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "onion well-known-weak password rejected" "$?" "1"
+assert_contains "well-known-weak message" "$out" "well-known weak pattern"
+
+# onion-client-key (#343): prints the client descriptor line when client-auth is on; errors when off.
+# The line the operator pastes is "<addr-without-.onion>:descriptor:x25519:<privkey>".
+cat >"$V/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_ONION_ENABLED=true
+DASHBOARD_ONION_CLIENT_AUTH=true
+DASHBOARD_ONION_ADDRESS=abcd234.onion
+DASHBOARD_ONION_CLIENT_PRIVKEY=UNITTESTPRIVKEYBASE32
+EOF
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
+assert_rc "onion-client-key succeeds when client-auth on" "$?" "0"
+assert_contains "onion-client-key prints the descriptor line" "$out" "abcd234:descriptor:x25519:UNITTESTPRIVKEYBASE32"
+cat >"$V/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_ONION_ENABLED=true
+DASHBOARD_ONION_CLIENT_AUTH=false
+DASHBOARD_ONION_ADDRESS=abcd234.onion
+EOF
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
+assert_rc "onion-client-key errors when client-auth off" "$?" "1"
+assert_contains "onion-client-key off message" "$out" "password-only"
 
 # Wallet-type hard-fail (#250): p2pool pays via coinbase, which CANNOT reach a subaddress or an
 # integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is

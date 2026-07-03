@@ -752,12 +752,15 @@ doctor() {
                 dr_ok "$k set."
             fi
         done
-        # Dashboard onion (#343): only meaningful when opted in. Print the actual address — it is the
-        # capability an operator needs to reach the panel — but only to this local status output.
+        # Dashboard onion (#343): only meaningful when opted in. Print the address — the operator needs
+        # it to reach the panel — but never the client PRIVATE key: this status is a paste-able report,
+        # so the key lives behind the explicit 'onion-client-key' command instead.
         if [ "$(env_get DASHBOARD_ONION_ENABLED)" == "true" ]; then
             onion=$(env_get DASHBOARD_ONION_ADDRESS)
             if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
                 dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run 'pithead setup' or 'pithead apply'."
+            elif [ "$(env_get DASHBOARD_ONION_CLIENT_AUTH)" == "true" ]; then
+                dr_ok "Dashboard onion: http://$onion (client-auth ON + login; get your client key with '$0 onion-client-key')"
             else
                 dr_ok "Dashboard onion: http://$onion (login required)"
             fi
@@ -1102,6 +1105,15 @@ Maintenance:
                             dashboard's database from a backup archive (prompts before
                             overwriting; fixes Tor ownership).
                               -y, --yes        restore without the confirmation prompt.
+
+  onion-client-key          Print the Tor client-auth line for the dashboard onion (#343) —
+                            the client PRIVATE key, kept out of 'status'. Add it to your Tor
+                            client's ClientOnionAuthDir to reach a client-auth'd onion.
+
+  rotate-dashboard-onion [-y|--yes]
+                            Mint a fresh dashboard .onion address and client-auth key (#343);
+                            the old address and any client keys you handed out stop working.
+                              -y, --yes        skip the confirmation prompt.
 
   help, -h, --help          Show this message.
 
@@ -1502,6 +1514,57 @@ generate_node_password() {
     printf '%s' "${raw:0:32}"
 }
 
+# --- Tor v3 onion client authorization (#343) ---
+# Base32-encode a hex string (RFC 4648, no padding, uppercase) — the encoding Tor wants for its
+# x25519 client-auth keys. Implemented in awk so it needs no `base32` binary (absent on macOS),
+# which keeps it portable and unit-testable everywhere. Input: an even-length hex string.
+b32encode_hex() {
+    awk -v hex="$1" 'BEGIN {
+        alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        bits = ""
+        n = length(hex)
+        for (i = 1; i <= n; i++) {
+            v = index("0123456789abcdef", tolower(substr(hex, i, 1))) - 1
+            if (v < 0) { exit 1 }
+            for (j = 3; j >= 0; j--) bits = bits ((int(v / (2 ^ j)) % 2))
+        }
+        out = ""
+        for (i = 1; i + 4 <= length(bits); i += 5) {
+            val = 0
+            for (j = 0; j < 5; j++) val = val * 2 + substr(bits, i + j, 1)
+            out = out substr(alpha, val + 1, 1)
+        }
+        rem = length(bits) % 5
+        if (rem > 0) {
+            chunk = substr(bits, length(bits) - rem + 1, rem)
+            for (k = rem; k < 5; k++) chunk = chunk "0"
+            val = 0
+            for (j = 1; j <= 5; j++) val = val * 2 + substr(chunk, j, 1)
+            out = out substr(alpha, val + 1, 1)
+        }
+        print out
+    }'
+}
+
+# Generate an x25519 keypair for Tor v3 onion client auth. Echoes "PUBKEY PRIVKEY", both base32
+# (unpadded, uppercase) — the form tor's authorized_clients/ and ClientOnionAuthDir want. The raw
+# 32-byte keys are the trailing 32 bytes of the DER encoding (the documented extraction). Returns
+# non-zero if openssl lacks x25519. Runs on the host at setup/apply/rotate.
+generate_onion_client_keypair() {
+    command -v openssl >/dev/null 2>&1 || return 1
+    local tmp priv_hex pub_hex
+    tmp=$(mktemp) || return 1
+    if ! openssl genpkey -algorithm x25519 -out "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        return 1
+    fi
+    priv_hex=$(openssl pkey -in "$tmp" -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
+    pub_hex=$(openssl pkey -in "$tmp" -pubout -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
+    rm -f "$tmp"
+    [ "${#priv_hex}" -eq 64 ] && [ "${#pub_hex}" -eq 64 ] || return 1
+    printf '%s %s' "$(b32encode_hex "$pub_hex")" "$(b32encode_hex "$priv_hex")"
+}
+
 # A stored local-node credential needs (re)generating when it is empty or still the shipped
 # template placeholder (an instruction string, not a real secret). Used in `if` conditions.
 cred_needs_generating() {
@@ -1842,13 +1905,29 @@ parse_and_validate_config() {
     # online-brute-forceable (per-IP throttling is meaningless over Tor; every request arrives from
     # the local tor daemon, so there is no source IP to rate-limit against).
     DASHBOARD_ONION_ENABLED=$(normalize_bool "$(config_bool '.dashboard.onion.enabled' false)")
+    # Tor v3 client authorization (#343): the strong PRIMARY gate. Default ON whenever the onion is
+    # on — a client-auth'd onion does not respond at all without the operator's client key, which
+    # defeats address-scanning and brute force entirely (the password becomes a second factor behind
+    # it). Set dashboard.onion.client_auth:false only for a deliberately password-only onion.
+    DASHBOARD_ONION_CLIENT_AUTH=false
     if [ "$DASHBOARD_ONION_ENABLED" == "true" ]; then
+        DASHBOARD_ONION_CLIENT_AUTH=$(normalize_bool "$(config_bool '.dashboard.onion.client_auth' true)")
         if [ -z "$dash_pw" ]; then
             error "dashboard.onion.enabled is true but dashboard.auth.password is empty. Publishing the dashboard as a Tor onion exposes a control panel at a stable address — it must sit behind a login. Set a strong dashboard.auth.password (16+ characters) and re-run."
         fi
         if [ "$(printf '%s' "$dash_pw" | wc -c)" -lt 16 ]; then
             error "dashboard.auth.password must be at least 16 characters when dashboard.onion.enabled is true (a published .onion is online-brute-forceable and per-IP throttling is meaningless over Tor). Use a passphrase."
         fi
+        # Reject obviously weak 16+ char choices the length floor alone would pass: a single repeated
+        # character, or a well-known weak pattern. Not a full dictionary — the floor handles the rest.
+        if [ "$(printf '%s' "$dash_pw" | fold -w1 | sort -u | wc -l | tr -d ' ')" -eq 1 ]; then
+            error "dashboard.auth.password is a single repeated character — choose a real passphrase."
+        fi
+        case "$(printf '%s' "$dash_pw" | tr 'A-Z' 'a-z')" in
+        *passwordpassword* | *0123456789* | *qwertyuiop* | *changeme* | *letmein*)
+            error "dashboard.auth.password contains a well-known weak pattern — choose a real passphrase (16+ characters)."
+            ;;
+        esac
     fi
 }
 
@@ -1861,6 +1940,8 @@ load_preserved_state() {
     TARI_ONION=$(env_get TARI_ONION_ADDRESS)
     P2POOL_ONION=$(env_get P2POOL_ONION_ADDRESS)
     DASHBOARD_ONION=$(env_get DASHBOARD_ONION_ADDRESS)
+    DASHBOARD_ONION_CLIENT_PUBKEY=$(env_get DASHBOARD_ONION_CLIENT_PUBKEY)
+    DASHBOARD_ONION_CLIENT_PRIVKEY=$(env_get DASHBOARD_ONION_CLIENT_PRIVKEY)
     PRESERVED_HOST_IP=$(env_get HOST_IP)
 
     [ -n "$PROXY_AUTH_TOKEN" ] || PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
@@ -1868,6 +1949,8 @@ load_preserved_state() {
     [ -n "$TARI_ONION" ] || TARI_ONION="placeholder"
     [ -n "$P2POOL_ONION" ] || P2POOL_ONION="placeholder"
     [ -n "$DASHBOARD_ONION" ] || DASHBOARD_ONION="placeholder"
+    [ -n "$DASHBOARD_ONION_CLIENT_PUBKEY" ] || DASHBOARD_ONION_CLIENT_PUBKEY="placeholder"
+    [ -n "$DASHBOARD_ONION_CLIENT_PRIVKEY" ] || DASHBOARD_ONION_CLIENT_PRIVKEY="placeholder"
     return 0
 }
 
@@ -1968,6 +2051,8 @@ resolve_dashboard_host() {
 
 provision_tor() {
     log "Initializing Tor service to generate Onion addresses..."
+    # Client-auth keys must be in place before tor starts, since it reads authorized_clients then (#343).
+    provision_onion_client_auth
     docker compose up --pull "$(resolve_pull_policy)" -d tor
     # Poll for the three hidden-service hostname files instead of a fixed sleep — Tor can take
     # more or less than 15s to publish them, especially on first run.
@@ -1989,6 +2074,39 @@ provision_tor() {
     provision_dashboard_onion # #343: reads the dashboard onion too, but only when it's enabled
 }
 
+# Prepare Tor v3 client authorization for the dashboard onion (#343). Generates the client keypair
+# once (preserved across applies) and writes the PUBLIC key into the hidden service's
+# authorized_clients/ dir, so the onion is unreachable without the matching private key. MUST run
+# BEFORE the tor container (re)starts — tor reads authorized_clients at startup. No-op unless the
+# onion is on. When the onion is on but client-auth is off, it clears any prior authorized_clients so
+# the onion falls back to password-only.
+provision_onion_client_auth() {
+    [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] || return 0
+    local hs_dir="$TOR_DATA_DIR/dashboard"
+    if [ "${DASHBOARD_ONION_CLIENT_AUTH:-false}" != "true" ]; then
+        if [ -d "$hs_dir/authorized_clients" ]; then
+            log "Disabling Tor onion client-auth for the dashboard — the onion becomes password-only (#343)."
+            sudo rm -rf "$hs_dir/authorized_clients" 2>/dev/null ||
+                rm -rf "$hs_dir/authorized_clients" 2>/dev/null || true
+        fi
+        return 0
+    fi
+    if [ -z "$DASHBOARD_ONION_CLIENT_PUBKEY" ] || [ "$DASHBOARD_ONION_CLIENT_PUBKEY" == "placeholder" ]; then
+        local kp
+        kp=$(generate_onion_client_keypair) ||
+            error "Could not generate the Tor onion client-auth keypair (need openssl built with x25519, plus od + awk)."
+        DASHBOARD_ONION_CLIENT_PUBKEY="${kp%% *}"
+        DASHBOARD_ONION_CLIENT_PRIVKEY="${kp##* }"
+        log "Generated a Tor onion client-auth key for the dashboard (#343)."
+    fi
+    mkdir -p "$hs_dir/authorized_clients"
+    printf 'descriptor:x25519:%s\n' "$DASHBOARD_ONION_CLIENT_PUBKEY" >"$hs_dir/authorized_clients/dashboard.auth"
+    # Tor refuses a HiddenServiceDir that is group/other-accessible or owned by another user.
+    chmod 700 "$hs_dir" "$hs_dir/authorized_clients" 2>/dev/null || true
+    chmod 600 "$hs_dir/authorized_clients/dashboard.auth" 2>/dev/null || true
+    ensure_owner "$hs_dir" "$APP_UID" "$APP_GID"
+}
+
 # Read the dashboard onion hostname from the running tor container into DASHBOARD_ONION (#343).
 # No-op unless the onion is enabled. Its HiddenServiceDir is rendered conditionally
 # (build/tor/entrypoint.sh), so poll for the hostname — Tor publishes it a few seconds after
@@ -2007,6 +2125,74 @@ provision_dashboard_onion() {
         elapsed=$((elapsed + 2))
     done
     DASHBOARD_ONION=$(docker exec tor cat /var/lib/tor/dashboard/hostname)
+}
+
+# `onion-client-key` (#343): print the operator's Tor client-auth line for the dashboard onion. Its
+# own command — deliberately NOT part of `status`, which is a shareable report — because it prints
+# the client PRIVATE key. The operator drops this line into their Tor client's ClientOnionAuthDir.
+onion_client_key() {
+    require_env
+    [ "$(env_get DASHBOARD_ONION_ENABLED)" == "true" ] ||
+        error "The dashboard onion is not enabled (set dashboard.onion.enabled: true, then '$0 apply')."
+    [ "$(env_get DASHBOARD_ONION_CLIENT_AUTH)" == "true" ] ||
+        error "Client authorization is off for the dashboard onion (dashboard.onion.client_auth: false) — it is password-only, so there is no client key."
+    local onion privkey
+    onion=$(env_get DASHBOARD_ONION_ADDRESS)
+    privkey=$(env_get DASHBOARD_ONION_CLIENT_PRIVKEY)
+    { [ -n "$onion" ] && [ "$onion" != "placeholder" ] && [ -n "$privkey" ] && [ "$privkey" != "placeholder" ]; } ||
+        error "The dashboard onion isn't fully provisioned yet — run '$0 apply' first."
+    echo "Tor onion client-auth for the dashboard (#343) — KEEP THIS PRIVATE, it is a secret key."
+    echo "Add this one line to a file in your Tor client's ClientOnionAuthDir"
+    echo "(e.g. /var/lib/tor/onion_auth/dashboard.auth_private, the dir set by ClientOnionAuthDir, mode 0700):"
+    echo ""
+    echo "  ${onion%.onion}:descriptor:x25519:${privkey}"
+    echo ""
+    echo "Then reach the dashboard at:  http://$onion"
+}
+
+# `rotate-dashboard-onion` (#343): mint a fresh .onion address and a fresh client-auth key. A leaked
+# address or client key is otherwise permanent. Wipes only the dashboard hidden-service dir (the
+# mining onions are untouched), then re-provisions and restarts caddy.
+rotate_dashboard_onion() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        *) error "Unknown option for rotate-dashboard-onion: $arg. Run '$0 help'." ;;
+        esac
+    done
+    require_env
+    parse_and_validate_config
+    load_preserved_state
+    [ "$DASHBOARD_ONION_ENABLED" == "true" ] ||
+        error "The dashboard onion is not enabled — nothing to rotate."
+    warn "This regenerates the dashboard's .onion ADDRESS and its client-auth key. The old address and any client keys you handed out stop working immediately."
+    if [ "$assume_yes" -eq 0 ]; then
+        read -r -p "Rotate the dashboard onion now? (y/N): " CONFIRM || true
+        [[ "$CONFIRM" =~ ^[Yy] ]] || {
+            log "Rotation cancelled."
+            return 0
+        }
+    fi
+    local hs_dir="$TOR_DATA_DIR/dashboard"
+    [ -n "$TOR_DATA_DIR" ] && [ "${hs_dir##*/}" == "dashboard" ] ||
+        error "Refusing to wipe an unexpected path (\"$hs_dir\")."
+    log "Stopping tor and wiping the dashboard hidden service..."
+    docker compose stop tor >/dev/null 2>&1 || true
+    sudo rm -rf "$hs_dir" 2>/dev/null || rm -rf "$hs_dir" 2>/dev/null || true
+    # Force fresh keys + address on the next provision.
+    DASHBOARD_ONION="placeholder"
+    DASHBOARD_ONION_CLIENT_PUBKEY="placeholder"
+    DASHBOARD_ONION_CLIENT_PRIVKEY="placeholder"
+    provision_tor # rewrites authorized_clients (fresh key), starts tor, reads the new address
+    render_env    # persist the new address + keys
+    docker compose restart caddy >/dev/null 2>&1 || true
+    log "Dashboard onion rotated."
+    if [ "$DASHBOARD_ONION_CLIENT_AUTH" == "true" ]; then
+        onion_client_key
+    else
+        log "New dashboard onion: http://$(env_get DASHBOARD_ONION_ADDRESS)"
+    fi
 }
 
 # Single writer for the env file. Derives every value from the parsed config plus the preserved
@@ -2240,6 +2426,8 @@ MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
 DASHBOARD_ONION_ADDRESS=$DASHBOARD_ONION
+DASHBOARD_ONION_CLIENT_PUBKEY=$DASHBOARD_ONION_CLIENT_PUBKEY
+DASHBOARD_ONION_CLIENT_PRIVKEY=$DASHBOARD_ONION_CLIENT_PRIVKEY
 P2POOL_FLAGS=$p2pool_flags
 P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
@@ -2303,6 +2491,7 @@ MONERO_ZMQ_PORT=$zmq_port
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
+DASHBOARD_ONION_CLIENT_AUTH=$DASHBOARD_ONION_CLIENT_AUTH
 DASHBOARD_TZ=$DASHBOARD_TZ
 DASHBOARD_AUTH_USER=$DASHBOARD_AUTH_USER
 DASHBOARD_AUTH_HASH_B64=$DASHBOARD_AUTH_HASH_B64
@@ -2795,6 +2984,25 @@ describe_change() {
         # carries the user-facing message. Emit no message so the preview shows one line, not two.
         msg=""
         ;;
+    DASHBOARD_ONION_ENABLED)
+        flag=DEST
+        if [ "$new" == "true" ]; then
+            msg="Dashboard Tor onion ENABLED (#343) — the dashboard is published as a hidden service reachable over Tor; tor and caddy are recreated."
+        else
+            msg="Dashboard Tor onion DISABLED (#343) — the onion is withdrawn; tor and caddy are recreated."
+        fi
+        ;;
+    DASHBOARD_ONION_CLIENT_AUTH)
+        msg="Dashboard onion client-auth → $([ "$new" == "true" ] && echo ON || echo OFF) (#343)$([ "$new" == "true" ] && echo " — the onion won't respond without your client key" || echo " — the onion is password-only")."
+        ;;
+    DASHBOARD_ONION_ADDRESS | DASHBOARD_ONION_CLIENT_PUBKEY)
+        # Provisioned values that co-change with the toggle above; keep the preview to one line.
+        msg=""
+        ;;
+    DASHBOARD_ONION_CLIENT_PRIVKEY)
+        # Secret client key — never echo it into the change preview / logs.
+        msg=""
+        ;;
     HOST_IP)
         msg="Dashboard hostname: $old → $new."
         ;;
@@ -2934,6 +3142,10 @@ apply() {
         warn "A previous apply updated the config but did not finish recreating containers — retrying."
     fi
 
+    # Client-auth keys must be written before tor is recreated below, so an onion just turned on (or a
+    # client-auth toggle) takes effect on this apply rather than the next (#343).
+    provision_onion_client_auth
+
     log "Updating containers..."
     migrate_compose_project
     # (Re)assert the Tor-only egress firewall BEFORE compose recreates anything — same ordering as
@@ -2960,7 +3172,7 @@ apply() {
     # If the dashboard onion was just turned on, the recreated tor container generated its hostname;
     # read it back into .env so `pithead status` can surface the address (#343). The onion already
     # serves via Caddy regardless — this only makes the address visible to the operator.
-    if [ "$DASHBOARD_ONION_ENABLED" == "true" ] && { [ -z "$DASHBOARD_ONION" ] || [ "$DASHBOARD_ONION" == "placeholder" ]; }; then
+    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
         provision_dashboard_onion && render_env
     fi
     rm -f "$apply_marker"
@@ -3026,6 +3238,8 @@ main() {
         ;;
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
+    onion-client-key) onion_client_key ;;
+    rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;
     esac
