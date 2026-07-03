@@ -2080,6 +2080,50 @@ render_env() {
     worker_api_auth=$(jq -r '.workers.api_auth // "none"' "$CONFIG_FILE")
     worker_api_token=$(jq -r '.workers.api_token // ""' "$CONFIG_FILE")
 
+    # Telegram operator bot (#121 alerts, #45 commands). Disabled by default. bot_token is a
+    # secret: it lives only in this owner-only .env (chmod 600 below) and the dashboard never logs
+    # it. Per-event toggles default to on, so enabling Telegram turns on the full set and an
+    # operator only opts *out* of the noisy ones. The interactive command interface is a separate
+    # opt-in (telegram.commands.enabled, default false). A blank chat_id/bot_token keeps everything
+    # off even if enabled=true (the dashboard guards that too). See docs/telegram.md.
+    local tg_enabled tg_token tg_chat tg_commands
+    tg_enabled=$(jq -r 'if .telegram.enabled != null then .telegram.enabled | tostring else "false" end' "$CONFIG_FILE")
+    tg_token=$(jq -r '.telegram.bot_token // empty' "$CONFIG_FILE")
+    tg_chat=$(jq -r '.telegram.chat_id // empty' "$CONFIG_FILE")
+    tg_commands=$(jq -r 'if .telegram.commands.enabled != null then .telegram.commands.enabled | tostring else "false" end' "$CONFIG_FILE")
+    # One toggle per event, defaulting to true when the key is absent.
+    tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
+    local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
+    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
+    local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
+    local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
+    local tg_ev_hugepages tg_ev_low_ram
+    local hr_drop_threshold hr_drop_minutes
+    tg_ev_node_down=$(tg_event node_down)
+    tg_ev_node_recovered=$(tg_event node_recovered)
+    tg_ev_worker_offline=$(tg_event worker_offline)
+    tg_ev_worker_recovered=$(tg_event worker_recovered)
+    tg_ev_worker_joined=$(tg_event worker_joined)
+    tg_ev_worker_left=$(tg_event worker_left)
+    tg_ev_sync_finished=$(tg_event sync_finished)
+    tg_ev_disk_space=$(tg_event disk_space)
+    tg_ev_db_unhealthy=$(tg_event db_unhealthy)
+    tg_ev_xvb_no_share=$(tg_event xvb_no_share)
+    tg_ev_clearnet_exposed=$(tg_event clearnet_exposed)
+    tg_ev_xvb_registration=$(tg_event xvb_registration)
+    tg_ev_new_release=$(tg_event new_release)
+    tg_ev_stack_online=$(tg_event stack_online)
+    tg_ev_daily_summary=$(tg_event daily_summary)
+    tg_ev_hashrate_low=$(tg_event hashrate_low)
+    tg_ev_hashrate_loss=$(tg_event hashrate_loss)
+    tg_ev_hugepages=$(tg_event hugepages)
+    tg_ev_low_ram=$(tg_event low_ram)
+    # Degradation detector (#99): drop-below-% and sustained-minutes; defaults 50 / 10.
+    hr_drop_threshold=$(jq -r '.dashboard.hashrate_drop_threshold // 50' "$CONFIG_FILE")
+    hr_drop_minutes=$(jq -r '.dashboard.hashrate_drop_minutes // 10' "$CONFIG_FILE")
+    # Local time (HH:MM) for the daily digest; default 08:00.
+    tg_summary_time=$(jq -r '.telegram.daily_summary_time // "08:00"' "$CONFIG_FILE")
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -2157,6 +2201,32 @@ TARI_REQUIRED=$tari_required
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
 HEALTHCHECKS_PING_URL=$hc_ping_url
+TELEGRAM_ENABLED=$tg_enabled
+TELEGRAM_BOT_TOKEN=$tg_token
+TELEGRAM_CHAT_ID=$tg_chat
+TELEGRAM_COMMANDS_ENABLED=$tg_commands
+TELEGRAM_EVENT_NODE_DOWN=$tg_ev_node_down
+TELEGRAM_EVENT_NODE_RECOVERED=$tg_ev_node_recovered
+TELEGRAM_EVENT_WORKER_OFFLINE=$tg_ev_worker_offline
+TELEGRAM_EVENT_WORKER_RECOVERED=$tg_ev_worker_recovered
+TELEGRAM_EVENT_WORKER_JOINED=$tg_ev_worker_joined
+TELEGRAM_EVENT_WORKER_LEFT=$tg_ev_worker_left
+TELEGRAM_EVENT_SYNC_FINISHED=$tg_ev_sync_finished
+TELEGRAM_EVENT_DISK_SPACE=$tg_ev_disk_space
+TELEGRAM_EVENT_DB_UNHEALTHY=$tg_ev_db_unhealthy
+TELEGRAM_EVENT_XVB_NO_SHARE=$tg_ev_xvb_no_share
+TELEGRAM_EVENT_CLEARNET_EXPOSED=$tg_ev_clearnet_exposed
+TELEGRAM_EVENT_XVB_REGISTRATION=$tg_ev_xvb_registration
+TELEGRAM_EVENT_NEW_RELEASE=$tg_ev_new_release
+TELEGRAM_EVENT_STACK_ONLINE=$tg_ev_stack_online
+TELEGRAM_EVENT_DAILY_SUMMARY=$tg_ev_daily_summary
+TELEGRAM_EVENT_HASHRATE_LOW=$tg_ev_hashrate_low
+TELEGRAM_EVENT_HASHRATE_LOSS=$tg_ev_hashrate_loss
+TELEGRAM_EVENT_HUGEPAGES=$tg_ev_hugepages
+TELEGRAM_EVENT_LOW_RAM=$tg_ev_low_ram
+HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
+HASHRATE_DROP_MINUTES=$hr_drop_minutes
+TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -2669,6 +2739,25 @@ describe_change() {
         else
             msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
         fi
+        ;;
+    TELEGRAM_ENABLED)
+        msg="Telegram operator bot → $([ "$new" == "true" ] && echo on || echo off) (#121) — the dashboard container is recreated."
+        ;;
+    TELEGRAM_BOT_TOKEN)
+        # Secret — never echo the token value into the change preview / logs.
+        msg="Telegram bot token updated (#121) — the dashboard container is recreated."
+        ;;
+    TELEGRAM_CHAT_ID)
+        msg="Telegram chat id: $old → $new (#121)."
+        ;;
+    TELEGRAM_COMMANDS_ENABLED)
+        msg="Telegram command interface → $([ "$new" == "true" ] && echo on || echo off) (#45) — the bot $([ "$new" == "true" ] && echo "now answers" || echo "no longer answers") /status, /hashrate, /workers, /sync from the configured chat; the dashboard container is recreated."
+        ;;
+    TELEGRAM_EVENT_*)
+        msg="Telegram alert toggle ($key): $old → $new (#121)."
+        ;;
+    TELEGRAM_DAILY_SUMMARY_TIME)
+        msg="Telegram daily summary time: $old → $new (local time; #121)."
         ;;
     MONERO_CLEARNET_SYNC)
         flag=DEST

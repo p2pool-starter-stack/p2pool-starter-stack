@@ -99,6 +99,55 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   so paste a Tor-reachable URL (hosted `hc-ping.com`, or a self-hosted onion/public instance). Fails
   silently when offline / Tor down. The URL is the on/off switch and is stored as a secret in the
   owner-only `.env`. See [`docs/monitoring.md`](docs/monitoring.md) (#79).
+- **Telegram operator bot — push alerts + on-demand status** (#121, #45): the dashboard can push a
+  high-value set of operational alerts to Telegram — a **🚀 "Pithead online"** heartbeat on start,
+  **node down / recovered**, **worker offline / back online**, **new worker joined / left**, **sync
+  finished**, **data disk filling up**, **dashboard DB write failing**, **no PPLNS share while
+  donating to XvB** (raffle wins skipped), **XvB registration rejected / failing**, **hashrate too
+  low for the chosen XvB tier**, **a node exposed on clearnet** during initial sync, and **a new
+  release being available** — and answer status commands on demand: **`/status`**, **`/info`**
+  (version + update availability, Monero DB mode, P2Pool sidechain, and Tor-only/clearnet privacy
+  posture), **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**, **`/pool`**, **`/xvb`**,
+  **`/earnings`**, and **`/help`**. It also pushes a **📅 once-a-day retrospective** at a configurable local time
+  (`telegram.daily_summary_time`, default **08:00**) — the last 24h across the fleet: an incident
+  roll-up (what went wrong during the day, or an all-clear), 24h hashrate with the P2Pool/XvB split,
+  shares found in the day, an estimated daily-earnings figure, and a per-machine 24h breakdown. The Telegram bot appears in the dashboard's
+  **network-egress panel** (#170) as a Tor-routed path alongside Healthchecks/XvB/update-check. All
+  traffic is **routed over Tor** (the same bridge SOCKS as Healthchecks/XvB), so the bot never
+  exposes the host IP to Telegram. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
+  `bot_token`, `chat_id`, per-event `events` toggles, and a `commands.enabled` switch for the
+  interactive half). Every alert is **debounced** so a momentary blip won't ping you and you get one
+  message per real transition — and each is built by *reusing* what the dashboard already computes:
+  worker offline/joined/left keys off the same per-rig **DOWN** status the UI shows, and the disk /
+  DB alerts cross the same thresholds as the dashboard's own low-disk and DB-health badges. Commands
+  **long-poll** (`getUpdates`) so they need no inbound port and ride the same Tor egress as the
+  alerts, are **read-only** (they never change the stack), and only the configured `chat_id` is
+  answered — every other update is ignored. The `bot_token` is treated as a secret (owner-only
+  `.env`, never logged), and both sends and polling **fail silently** on a Tor-only / offline host.
+  Messages are prefixed with the dashboard hostname so multiple stacks can share one chat. Full
+  walkthrough — creating a bot, finding your chat id, the command list, and the "one chat, two bots"
+  pattern for sharing a chat with the Healthchecks.io monitor (#79) — in
+  [`docs/telegram.md`](docs/telegram.md).
+- **Host & performance warning badges + alerts** (#104): the top bar now surfaces the persistent
+  host conditions `setup` warns about, derived from **live** metrics (so they self-correct): **⚠
+  HugePages off** (RandomX capped until reserved), **⚠ Low RAM** (under 16 GB — Tari can OOM during
+  sync), and **⚠ No AVX2** (slow RandomX). The first two also push a Telegram alert (`hugepages`,
+  `low_ram`) the first time they're seen — unlike the transient edge alerts, a stable bad state
+  fires on first detection, and HugePages clears with a recovery ping once a reboot applies them.
+  AVX2 is **badge-only** by design: a fixed hardware fact with nothing to act on at runtime doesn't
+  warrant a push. The bot's **`/status`** reply now ends with any active warning/error badges (the
+  same catalog the top bar draws) or an explicit "✅ No warnings."
+- **Hashrate-drop detector — chart markers + `hashrate_loss` alert** (#99): the dashboard now flags a
+  **sustained, significant fall** in total fleet hashrate — a rig gone dark, a network cut, a stalled
+  miner — separately from the existing "too low for your XvB tier" warning. It tracks a slow moving
+  average as the "normal" level (frozen while degraded so an outage can't quietly redefine normal),
+  and fires once the total stays below **`dashboard.hashrate_drop_threshold`** percent of that
+  baseline for **`dashboard.hashrate_drop_minutes`** (defaults: **50%** for **10 min**), with a
+  matching recovery edge. Each edge drops a **diamond marker on the hashrate chart** (amber for the
+  drop, green for the recovery; hover for the size) that is **persisted**, so an overnight drop is
+  still visible in the morning, and — when Telegram is on — pushes a **`hashrate_loss`** alert and
+  counts toward the daily incident roll-up. Both knobs are documented in
+  [`docs/configuration.md`](docs/configuration.md); the alert in [`docs/telegram.md`](docs/telegram.md).
 - **Optional clearnet initial sync (#183).** A default-off, per-component opt-in
   (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`) that lets a node do its **one-time
   initial block download over clearnet** — much faster than over bandwidth-capped Tor circuits, which

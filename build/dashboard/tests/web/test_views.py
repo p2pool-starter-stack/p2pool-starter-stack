@@ -246,7 +246,13 @@ class TestChart:
         assert len(build_chart(history, [], "bogus")["p2pool"]) == 3
 
     def test_empty_history(self):
-        assert build_chart([], [], "all") == {"p2pool": [], "xvb": [], "shares": [], "tension": 0.0}
+        assert build_chart([], [], "all") == {
+            "p2pool": [],
+            "xvb": [],
+            "shares": [],
+            "events": [],
+            "tension": 0.0,
+        }
 
     # --- Issue #47: custom zoom window + duration-adaptive resolution/smoothing ---------
 
@@ -621,6 +627,46 @@ class TestBadges:
         # No system/disk data (e.g. an early poll) must not emit a spurious or crashing badge.
         out = build_badges({}, _metrics(), "ok")
         assert not any("Disk" in b["text"] for b in out)
+
+    # --- Host-perf badges (#104): AVX2 / HugePages / low RAM, from live metrics -------------
+    def test_hugepages_disabled_badge(self):
+        out = build_badges(
+            {"system": {"hugepages": ["Disabled", "status-bad", "0/0"]}}, _metrics(), "ok"
+        )
+        assert any(b["variant"] == "warn" and "HugePages off" in b["text"] for b in out)
+
+    def test_no_hugepages_badge_when_reserved(self):
+        for status in ("Allocated", "Enabled", "Unknown"):  # only "Disabled" is a problem
+            out = build_badges({"system": {"hugepages": [status, "", "1/2"]}}, _metrics(), "ok")
+            assert not any("HugePages" in b["text"] for b in out), status
+
+    def test_low_ram_badge(self):
+        out = build_badges({"system": {"memory": {"total_gb": 8}}}, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "Low RAM (8 GB)" in b["text"] for b in out)
+
+    def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self):
+        assert not any(
+            "Low RAM" in b["text"]
+            for b in build_badges({"system": {"memory": {"total_gb": 16}}}, _metrics(), "ok")
+        )
+        # total 0 = couldn't read /proc/meminfo (not "0 GB of RAM") — no false badge.
+        assert not any(
+            "Low RAM" in b["text"]
+            for b in build_badges({"system": {"memory": {"total_gb": 0}}}, _metrics(), "ok")
+        )
+
+    def test_avx2_missing_badge(self):
+        out = build_badges({"system": {"avx2": False}}, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "No AVX2" in b["text"] for b in out)
+
+    def test_no_avx2_badge_when_present_or_unknown(self):
+        assert not any(
+            "AVX2" in b["text"] for b in build_badges({"system": {"avx2": True}}, _metrics(), "ok")
+        )
+        # None = couldn't determine (non-Linux / unreadable) — stay silent, don't cry wolf.
+        assert not any(
+            "AVX2" in b["text"] for b in build_badges({"system": {"avx2": None}}, _metrics(), "ok")
+        )
 
 
 # --- System (presentation thresholds) -------------------------------------------------
@@ -1313,3 +1359,41 @@ class TestRaffleEligible:
             "eligible": False,
             "label": "N/A (XvB off)",
         }
+
+
+class TestChartEvents:
+    """Degradation/recovery markers (#99) flow through build_chart's new `events` kwarg: shaped as
+    xy points on the hidden 0-1 event axis, carrying kind+label, and window-filtered like history."""
+
+    def _hist(self, now):
+        return [{"timestamp": now, "v": 800, "v_p2pool": 800, "v_xvb": 0, "t": "a"}]
+
+    def test_absent_events_default_to_empty(self):
+        now = time.time()
+        assert build_chart(self._hist(now), [], "all")["events"] == []
+
+    def test_event_point_shape(self):
+        now = time.time()
+        events = [{"ts": now, "type": "loss", "detail": "-62%"}]
+        pt = build_chart(self._hist(now), [], "all", events=events)["events"]
+        assert pt == [
+            {"x": int(now * 1000), "y": views._EVENT_MARKER_Y, "kind": "loss", "label": "-62%"}
+        ]
+
+    def test_label_falls_back_to_type(self):
+        now = time.time()
+        events = [{"ts": now, "type": "recovered", "detail": ""}]
+        assert build_chart(self._hist(now), [], "all", events=events)["events"][0]["label"] == (
+            "recovered"
+        )
+
+    def test_events_filtered_by_range(self):
+        now = time.time()
+        events = [
+            {"ts": now - 7200, "type": "loss", "detail": "old"},  # 2h ago
+            {"ts": now - 60, "type": "recovered", "detail": "recent"},
+        ]
+        labels = [
+            e["label"] for e in build_chart(self._hist(now), [], "1h", events=events)["events"]
+        ]
+        assert labels == ["recent"]  # the 2h-old marker is outside the 1h window

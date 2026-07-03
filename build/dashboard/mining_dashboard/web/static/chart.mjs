@@ -76,10 +76,18 @@ function paletteColors() {
     accent,
     purple,
     shares: v("--bad", "#da3633"),
+    evtLoss: v("--warn", "#d29922"), // degradation event marker (#99)
+    evtOk: v("--ok", "#3fb950"), // recovery event marker
     grid: v("--border", "#30363d"),
     ticks: v("--text-muted", "#8b949e"),
     band: withAlpha(accent, "26"), // drag-to-zoom selection band (≈ 0.15 alpha)
   };
+}
+
+// Per-point colour for the degradation event markers (#99): green for a recovery, warn/red for a
+// loss. Returns one colour per point so a single dataset can show both.
+export function eventColors(events, c) {
+  return (events || []).map((e) => (e.kind === "hashrate_recovered" ? c.evtOk : c.evtLoss));
 }
 
 // Area-fill gradient stops (Issue #145): strong near the line, fading toward the axis, so a flat
@@ -214,6 +222,20 @@ export class ChartCard extends Component {
             pointHitRadius: 100,
             showLine: false,
           },
+          // Degradation/recovery markers (#99) on their own hidden axis, just below the share rug.
+          // A diamond per event, red for a loss and green for a recovery; tooltip carries the label.
+          {
+            label: "Events",
+            data: d.events || [],
+            yAxisID: "events",
+            pointStyle: "rectRot",
+            pointRadius: 7,
+            pointHoverRadius: 10,
+            pointHitRadius: 100,
+            showLine: false,
+            pointBackgroundColor: eventColors(d.events, c),
+            pointBorderColor: eventColors(d.events, c),
+          },
         ],
       },
       options: {
@@ -232,6 +254,7 @@ export class ChartCard extends Component {
               label(context) {
                 if (context.dataset.label === "Shares")
                   return self.shareCounts[context.dataIndex] + " Shares";
+                if (context.dataset.label === "Events") return context.raw.label;
                 let label = context.dataset.label || "";
                 if (label) label += ": ";
                 if (context.parsed.y !== null) label += context.parsed.y + " H/s";
@@ -276,6 +299,8 @@ export class ChartCard extends Component {
           // Hidden 0–1 axis the Shares scatter rides on; markers pin near the top (0.93,
           // set server-side) so they never affect the hashrate y-range (Issue #145).
           shares: { type: "linear", display: false, min: 0, max: 1 },
+          // Hidden 0–1 axis the degradation event markers ride on (#99), pinned near the top.
+          events: { type: "linear", display: false, min: 0, max: 1 },
         },
       },
     });
@@ -310,6 +335,9 @@ export class ChartCard extends Component {
     ds[2].borderColor = c.shares;
     ds[2].backgroundColor = c.shares;
     ds[2].pointRadius = d.shares.map((s) => s.r);
+    ds[3].data = d.events || [];
+    ds[3].pointBackgroundColor = eventColors(d.events, c);
+    ds[3].pointBorderColor = eventColors(d.events, c);
     this.chart.options.scales.y.grid.color = c.grid;
     this.chart.options.scales.y.ticks.color = c.ticks;
     this.applyVisibility();

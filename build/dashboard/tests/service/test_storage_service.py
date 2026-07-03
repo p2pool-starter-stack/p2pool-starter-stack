@@ -395,3 +395,52 @@ class TestRetention:
                 (time.time() - HISTORY_RETENTION_SEC,),
             ).fetchone()[0]
         assert remaining == 0, "expired DB rows are pruned"
+
+
+class TestChartEvents:
+    """Degradation/recovery markers for the chart (#99): in-memory tally, disk persistence, and
+    tolerance of a pre-migration DB with no events table."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_event(t0, "loss", "-62%")
+        state_manager.add_event(t0 + 100, "recovered", "")
+        evs = state_manager.get_events()
+        assert [e["type"] for e in evs] == ["loss", "recovered"]
+        assert evs[0] == {"ts": t0, "type": "loss", "detail": "-62%"}
+        # returns a copy — mutating it doesn't corrupt stored state
+        evs.clear()
+        assert len(state_manager.get_events()) == 2
+
+    def test_old_events_pruned_from_memory(self, state_manager):
+        state_manager.add_event(1.0, "loss", "ancient")  # ts well before the retention cutoff
+        state_manager.add_event(time.time(), "recovered", "fresh")
+        details = [e["detail"] for e in state_manager.get_events()]
+        assert details == ["fresh"]
+
+    def test_events_survive_reload(self, tmp_path):
+        db = str(tmp_path / "events.db")
+        sm = StateManager(db_path=db)
+        sm.add_event(time.time(), "loss", "-50%")
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            evs = sm2.get_events()
+            assert len(evs) == 1 and evs[0]["type"] == "loss"
+        finally:
+            sm2.close()
+
+    def test_load_tolerates_missing_events_table(self, tmp_path):
+        # Upgrade path: a DB written by a pre-#99 build has no events table. Opening it must not
+        # crash and must report no events. (StateManager creates the table on open, so load() then
+        # finds it empty; the sqlite3.Error guard in load() is defence-in-depth for that ordering.)
+        db = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+        conn.commit()
+        conn.close()
+        sm = StateManager(db_path=db)
+        try:
+            assert sm.get_events() == []
+        finally:
+            sm.close()

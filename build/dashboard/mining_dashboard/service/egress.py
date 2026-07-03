@@ -9,8 +9,9 @@ Two backstops matter for whether a clearnet route is actually an IP leak:
 * The **#270 egress firewall** (``DOCKER-USER``, fail-closed) DROPs non-Tor egress from the *container*
   subnet — so a container's clearnet route can't actually leave while it's on.
 * It does **not** cover the **host-networked dashboard** (``network_mode: host``), whose own egress
-  (XvB stats fetch, update check) bypasses ``DOCKER-USER`` entirely. Those rely solely on their
-  SOCKS config — a clearnet route there is a real leak regardless of the firewall.
+  (XvB stats fetch, update check, Healthchecks ping, Telegram bot) bypasses ``DOCKER-USER`` entirely.
+  Those rely solely on their SOCKS config — a clearnet route there is a real leak regardless of the
+  firewall. (All four are Tor-routed by default, so none leak.)
 
 So a connection is a *leak* only when its route is clearnet AND it isn't neutralised by a backstop.
 """
@@ -39,6 +40,7 @@ def compute_egress_posture(
     tari_clearnet_sync,
     remote_monero,
     healthchecks_enabled,
+    telegram_enabled,
 ):
     """Pure derivation of the egress posture from config knobs. Returns ``{components, summary}``."""
     xvb = _xvb_route(xvb_enabled, xvb_tor)
@@ -98,6 +100,8 @@ def compute_egress_posture(
                 {"to": "update check (github)", "route": TOR},  # socks5h, #224
                 # Healthchecks.io dead-man's-switch ping — always over Tor when a URL is set (#79).
                 {"to": "Healthchecks.io ping", "route": TOR if healthchecks_enabled else INACTIVE},
+                # Telegram bot (alerts + command long-poll) — always over Tor when on (#121/#340).
+                {"to": "Telegram bot", "route": TOR if telegram_enabled else INACTIVE},
             ],
         },
         {
@@ -150,6 +154,7 @@ def egress_posture_from_config():
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
         remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
+        telegram_enabled=config.TELEGRAM_ENABLED,
     )
 
 
@@ -201,6 +206,7 @@ def compute_topology(
     tari_clearnet_sync,
     remote_monero,
     healthchecks_enabled,
+    telegram_enabled,
 ):
     """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
 
@@ -217,6 +223,7 @@ def compute_topology(
         tari_clearnet_sync=tari_clearnet_sync,
         remote_monero=remote_monero,
         healthchecks_enabled=healthchecks_enabled,
+        telegram_enabled=telegram_enabled,
     )
     xvb = _xvb_route(xvb_enabled, xvb_tor)
     sidechain = CLEARNET if p2pool_clearnet else TOR
@@ -240,6 +247,14 @@ def compute_topology(
             "tor",
             TOR if healthchecks_enabled else INACTIVE,
             "Healthchecks ping",
+            "egress",
+        ),
+        # Telegram bot (alerts + command long-poll) — always over Tor when on (#121/#340).
+        _edge(
+            "dashboard",
+            "tor",
+            TOR if telegram_enabled else INACTIVE,
+            "Telegram bot",
             "egress",
         ),
         # The Tor hub to the network: SOCKS egress for every daemon + onion-service ingress.
@@ -284,4 +299,5 @@ def topology_from_config():
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
         remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
+        telegram_enabled=config.TELEGRAM_ENABLED,
     )

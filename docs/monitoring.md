@@ -40,9 +40,10 @@ pings and nothing is logged.
 ### 2. Choose where alerts go
 
 On the check's **Integrations** tab, point it at however you want to be notified — **email**,
-**Telegram**, Slack, Discord, a webhook, and more. If you already use Telegram for other
-alerts, you can route Healthchecks.io to the **same** Telegram chat, so host-down alerts and
-in-stack events land in one place.
+**Telegram**, Slack, Discord, a webhook, and more. If you already run the [Telegram
+bot](telegram.md), route Healthchecks.io to the **same** Telegram group, so host-down alerts and
+in-stack events land in one place — step-by-step in
+[Telegram › Adding Healthchecks.io to the same group](telegram.md#adding-healthchecksio-to-the-same-group).
 
 ### 3. Paste the ping URL into `config.json`
 

@@ -43,6 +43,7 @@ class StateManager:
         self.state = {
             "hashrate_history": deque(),
             "shares": [],
+            "events": [],  # degradation / recovery markers for the chart (#99)
             "xvb": {
                 "total_donated_time": 0.0,
                 "current_mode": "P2POOL",
@@ -119,6 +120,9 @@ class StateManager:
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS shares (ts REAL PRIMARY KEY, difficulty REAL)"
         )
+        # Degradation / recovery event markers for the chart (#99). No PK — two events can share a
+        # timestamp; type is "hashrate_loss"|"hashrate_recovered"|... and detail is the tooltip text.
+        self._conn.execute("CREATE TABLE IF NOT EXISTS events (ts REAL, type TEXT, detail TEXT)")
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -233,6 +237,17 @@ class StateManager:
                         (history_cutoff,),
                     )
                     self.state["shares"] = [dict(row) for row in cursor.fetchall()]
+
+                    # 4. Load chart events (#99) — the events table is additive, so guard against a
+                    # pre-migration DB that predates it.
+                    try:
+                        cursor.execute(
+                            "SELECT ts, type, detail FROM events WHERE ts > ? ORDER BY ts ASC",
+                            (history_cutoff,),
+                        )
+                        self.state["events"] = [dict(row) for row in cursor.fetchall()]
+                    except sqlite3.Error:
+                        self.state["events"] = []
 
                 self.logger.info(f"State successfully loaded from {self.db_path}")
         except sqlite3.Error as e:
@@ -365,6 +380,37 @@ class StateManager:
         """Returns a copy of the shares history."""
         with self._lock:
             return list(self.state.get("shares", []))
+
+    def add_event(self, ts: float, event_type: str, detail: str = ""):
+        """Record a chart event marker (#99) — a degradation/recovery point the chart draws and the
+        history window prunes, mirroring shares. Persisted so it survives a dashboard restart."""
+        with self._lock:
+            self.state.setdefault("events", []).append(
+                {"ts": ts, "type": event_type, "detail": detail}
+            )
+            cutoff = time.time() - HISTORY_RETENTION_SEC
+            self.state["events"] = [e for e in self.state["events"] if e["ts"] >= cutoff]
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT INTO events (ts, type, detail) VALUES (?, ?, ?)",
+                        (ts, event_type, detail),
+                    )
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM events WHERE ts < ?",
+                            (time.time() - HISTORY_RETENTION_SEC,),
+                        )
+        except sqlite3.Error as e:
+            self._db_error("Event Insert Error", e)
+
+    def get_events(self) -> list[dict[str, Any]]:
+        """Returns a copy of the chart events (#99)."""
+        with self._lock:
+            return list(self.state.get("events", []))
 
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

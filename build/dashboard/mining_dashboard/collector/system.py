@@ -6,6 +6,26 @@ from mining_dashboard.config.config import DISK_PATH
 BYTES_IN_GB = 1024**3
 
 _last_cpu_times = None
+_avx2_supported = None  # cached: the CPU flag can't change while the process runs
+
+
+def get_cpu_avx2():
+    """Whether the CPU advertises AVX2 (#104). RandomX runs far slower without it, so setup warns on
+    it — surface the same persistent fact as a live badge. Reads /proc/cpuinfo (host CPU flags are
+    visible inside the container); cached, since the flag is fixed for the life of the process.
+    Returns True/False, or None when it can't be determined (non-Linux / unreadable)."""
+    global _avx2_supported
+    if _avx2_supported is not None:
+        return _avx2_supported
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    _avx2_supported = "avx2" in line.split()
+                    return _avx2_supported
+    except OSError:
+        pass
+    return None  # unknown — don't cache, and callers treat None as "can't judge" (no badge/alert)
 
 
 def get_disk_usage():
