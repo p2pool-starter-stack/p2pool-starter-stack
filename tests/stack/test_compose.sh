@@ -143,6 +143,18 @@ jq_assert "docker-control is start/stop only (no exec/image ops)" \
 # Both proxies mount the Docker socket read-only.
 jq_assert "docker socket mounted read-only in both proxies" \
     '[.services["docker-proxy"], .services["docker-control"]] | all((.volumes // []) | any((.source == "/var/run/docker.sock") and (.read_only == true)))'
+# Socket-proxy isolation (#345): neither proxy is on the mining bridge, and each is published ONLY to
+# the host loopback — so no mining container (monerod/tari/p2pool/xmrig-proxy) can reach the Docker
+# API to read secrets (inspect) or start/stop containers.
+jq_assert "docker-proxy is off mining_net (proxy_net only)" \
+    '(.services["docker-proxy"].networks | keys) == ["proxy_net"]'
+jq_assert "docker-control is off mining_net (proxy_net only)" \
+    '(.services["docker-control"].networks | keys) == ["proxy_net"]'
+jq_assert "both socket proxies publish only to the host loopback" \
+    '[.services["docker-proxy"], .services["docker-control"]] | all((.ports | length > 0) and (.ports | all(.host_ip == "127.0.0.1")))'
+# No mining service may sit on proxy_net (keep the isolation one-directional).
+jq_assert "mining services are not on proxy_net" \
+    '[.services["monerod"], .services["tari"], .services["p2pool"], .services["xmrig-proxy"]] | all((.networks // {} | keys) | any(. == "proxy_net") | not)'
 # The Tari probe uses the [m] bracket so grep can't match its own argv (a false-healthy bug).
 jq_assert "tari healthcheck uses the [m]inotari self-match guard" \
     '(.services.tari.healthcheck.test | tostring) | contains("[m]inotari")'
@@ -207,7 +219,9 @@ sub_check() { # <label> <pattern> <min-count>
     fi
 }
 sub_check "custom subnet rebases the bridge network (#180)" "subnet: 10.84.0.0/24" 1
-sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 7
+# Five static mining-bridge IPs (tor .25, monerod .26, tari .27, p2pool .28, dashboard-reach .29);
+# the two socket proxies moved off mining_net to loopback-published proxy_net (#345), so no longer 7.
+sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 5
 sub_check "custom subnet rebases the dashboard SSRF CIDR (#180)" "MINING_NET_CIDR: 10.84.0.0/24" 1
 sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "TOR_SOCKS_PROXY: socks5h://10.84.0.25:9050" 1
 

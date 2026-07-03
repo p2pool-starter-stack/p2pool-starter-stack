@@ -57,9 +57,11 @@ API_TIMEOUT = 1  # Connection timeout (seconds) for worker API calls
 # The stack's internal docker bridge subnet. The dashboard runs network_mode: host and a connecting
 # miner fully controls its worker name/ip via stratum, yet per-worker stats are fetched at a host
 # derived from that input. A worker "ip" inside this range is the stack's OWN infrastructure (the
-# socket proxies 172.28.0.30/.31, Tor, monerod) — never a real miner — so probing it would be the
+# Tor, monerod, p2pool) — never a real miner — so probing it would be the
 # SSRF primitive in #122. Worker probes are therefore restricted to real external miner addresses;
-# this range (plus loopback, link-local, etc.) is rejected. Override only if you changed the subnet.
+# this range (plus loopback, link-local, etc.) is rejected. The Docker-socket proxies are no longer
+# on this bridge (#345) — they sit on an isolated network published only to the host loopback, which
+# this guard also rejects. Override only if you changed the subnet.
 MINING_NET_CIDR = os.environ.get("MINING_NET_CIDR", "172.28.0.0/16")
 try:
     # main data-loop period (s); lowered in integration tests. Tolerate a malformed override
@@ -166,12 +168,15 @@ PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 PROXY_API_PORT = int(os.environ.get("PROXY_API_PORT", 3344))
 
 # --- Docker Proxy Configuration ---
+# Both socket proxies are isolated on their own network and published only to the host loopback
+# (#345), so the host-networked dashboard reaches them here while no mining container can. Compose
+# sets these explicitly; the loopback defaults keep a bare run working.
 # Read-only socket proxy: container stats/logs only (no write access).
-DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://172.28.0.30:2375")
+DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "tcp://127.0.0.1:12375")
 # Control socket proxy: start/stop only, used to reject/readmit workers on node-down
 # (Issue #31). A separate proxy so opening POST for start/stop can't widen the read-only
 # proxy's access. See docker-compose.yml `docker-control`.
-DOCKER_CONTROL_URL = os.environ.get("DOCKER_CONTROL_URL", "tcp://172.28.0.31:2375")
+DOCKER_CONTROL_URL = os.environ.get("DOCKER_CONTROL_URL", "tcp://127.0.0.1:12376")
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 

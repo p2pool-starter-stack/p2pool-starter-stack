@@ -399,8 +399,10 @@ services:
       - XMRIG_API_PORT=${XMRIG_API_PORT:-8080}
       - XMRIG_API_AUTH=${XMRIG_API_AUTH:-none}
       - XMRIG_API_TOKEN=${XMRIG_API_TOKEN}
-      - DOCKER_PROXY_URL=tcp://${NETWORK_PREFIX:-172.28.0}.30:2375
-      - DOCKER_CONTROL_URL=tcp://${NETWORK_PREFIX:-172.28.0}.31:2375
+      # Socket proxies are isolated on proxy_net and published only to the host loopback (#345), so
+      # the host-networked dashboard reaches them here — mining containers cannot.
+      - DOCKER_PROXY_URL=tcp://127.0.0.1:12375
+      - DOCKER_CONTROL_URL=tcp://127.0.0.1:12376
       - TARI_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
       # Local monerod bridge IP (local-vs-remote detection), the internal SSRF-guard CIDR, and the
       # Tor SOCKS endpoint all track the configured subnet prefix (#180).
@@ -484,9 +486,16 @@ services:
     environment:
       - CONTAINERS=1
       - LOGS=1
+    # Isolated from the mining bridge (#345): on its own `proxy_net`, reachable ONLY via a port
+    # published to the host loopback — the host-networked dashboard reaches it at 127.0.0.1:12375,
+    # but no mining container (monerod/tari/p2pool/xmrig-proxy) can. Inspect (`/containers/<id>/json`
+    # → Config.Env → secrets) is thus unreachable from a compromised mining container. The dashboard
+    # itself only calls `GET /containers/<id>/logs`; fully closing inspect against the dashboard would
+    # need a logs-only shim (see #345).
+    ports:
+      - "127.0.0.1:12375:2375"
     networks:
-      mining_net:
-        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.30
+      - proxy_net
 
   # --- Docker Control Proxy (start/stop only) ---
   # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
@@ -519,9 +528,14 @@ services:
       - POST=1
       - ALLOW_START=1
       - ALLOW_STOP=1
+    # Isolated from the mining bridge (#345): same posture as docker-proxy. The tecnativa ruleset
+    # can't scope start/stop to specific containers, so keeping this proxy off `mining_net` and only
+    # on the host loopback is what stops a compromised mining container from start/stopping the whole
+    # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy.
+    ports:
+      - "127.0.0.1:12376:2375"
     networks:
-      mining_net:
-        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.31
+      - proxy_net
 
   # --- Caddy Reverse Proxy ---
   # Bridges the local 127.0.0.1 application binding to the LAN
@@ -566,3 +580,12 @@ networks:
     ipam:
       config:
         - subnet: ${NETWORK_SUBNET:-172.28.0.0/24}
+  # Socket-proxy isolation (#345): the two Docker-socket proxies live here, off the mining bridge, so
+  # no mining container can reach them. The dashboard (host networking) reaches them via their
+  # loopback-published ports, not this network. NOT `internal` — Docker doesn't set up port
+  # publishing on internal networks, and the loopback publish is how the dashboard reaches them. The
+  # proxies never dial out (pinned tecnativa image, cap_drop ALL, read-only rootfs), so proxy_net not
+  # being under the #270 egress firewall is not a leak surface. Docker auto-assigns the subnet.
+  proxy_net:
+    driver: bridge
+    name: proxy_net
