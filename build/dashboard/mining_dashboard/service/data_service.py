@@ -32,6 +32,7 @@ from mining_dashboard.config.config import (
     CLEARNET_STATE_DIR,
     ENABLE_XVB,
     GITHUB_RELEASES_API,
+    HOST_IP,
     MONERO_CLEARNET_SYNC,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
@@ -51,7 +52,9 @@ from mining_dashboard.helper.utils import (
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.healthchecks import HealthchecksClient
+from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.telegram_commands import format_daily_summary
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
@@ -817,6 +820,15 @@ class DataService:
                         # one-cycle lag is fine for a one-shot "new release" ping.
                         update_available=bool(
                             (self.latest_data.get("update") or {}).get("available")
+                        ),
+                    )
+                    # Once-daily status digest (built lazily, only when a send is actually due).
+                    await self.alert_service.maybe_daily_summary(
+                        time.time(),
+                        lambda: format_daily_summary(
+                            build_metrics(self.latest_data, self.state_manager),
+                            self.latest_data,
+                            HOST_IP,
                         ),
                     )
 

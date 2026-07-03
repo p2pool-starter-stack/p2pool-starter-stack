@@ -106,8 +106,10 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   donating to XvB** (raffle wins skipped), **XvB registration rejected / failing**, **a node exposed
   on clearnet** during initial sync, and **a new release being available** — and answer status
   commands on demand: **`/status`**, **`/hashrate`**, **`/workers`**, **`/sync`**, **`/system`**,
-  **`/pool`**, **`/xvb`**, **`/earnings`**, and **`/help`**. All traffic is **routed over Tor** (the
-  same bridge SOCKS as Healthchecks/XvB), so the bot never exposes the host IP to Telegram. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
+  **`/pool`**, **`/xvb`**, **`/earnings`**, and **`/help`**. It also pushes a **📅 once-a-day status
+  digest** at a configurable local time (`telegram.daily_summary_time`, default **08:00**). All
+  traffic is **routed over Tor** (the same bridge SOCKS as Healthchecks/XvB), so the bot never
+  exposes the host IP to Telegram. Off by default; enable it with a `telegram` block in `config.json` (`enabled`,
   `bot_token`, `chat_id`, per-event `events` toggles, and a `commands.enabled` switch for the
   interactive half). Every alert is **debounced** so a momentary blip won't ping you and you get one
   message per real transition — and each is built by *reusing* what the dashboard already computes:

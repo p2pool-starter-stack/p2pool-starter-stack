@@ -219,6 +219,19 @@ def test_earnings_unavailable_without_network_data():
     assert "unavailable" in out
 
 
+def test_daily_summary_rolls_up_status():
+    data = {
+        "miner_released": True,
+        "workers_rejected": False,
+        "system": {"disk": {"percent_str": "42%"}},
+    }
+    out = tc.format_daily_summary(_metrics(mode="P2POOL", workers_online=3, workers_total=3), data)
+    assert "Daily summary" in out
+    assert "Mining: 🟢 active (P2POOL)" in out
+    assert "Workers: 3/3 online" in out
+    assert "Disk: 42% used" in out
+
+
 def test_host_label_prefix():
     assert tc.format_sync(_metrics(), host_label="rig-box").startswith("[rig-box] ")
     # The placeholder is never printed.

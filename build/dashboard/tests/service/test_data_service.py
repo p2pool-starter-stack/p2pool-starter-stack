@@ -768,6 +768,78 @@ class TestRunIteration:
         assert svc.miner_released is False
         assert svc.latest_data["miner_held"] is True
 
+    async def test_run_wires_computed_signals_into_the_alerter(self):
+        # Wiring guard: the unit tests prove each signal → the right alert in isolation; this proves
+        # the data loop actually hands the alerter the full contract each cycle (so a dropped/renamed
+        # kwarg, or forgetting the daily-summary call, fails here rather than silently going dark).
+        svc, sm, proxy = _make_service()
+        sm.is_db_healthy.return_value = True
+        proxy.get_workers.return_value = {"workers": []}
+        svc._apply_worker_rejection = AsyncMock()
+        svc.alert_service = MagicMock()
+        svc.alert_service.process = AsyncMock()
+        svc.alert_service.maybe_daily_summary = AsyncMock()
+
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(
+            return_value={"is_syncing": False, "reachable": True}
+        )
+        tari_client.close = AsyncMock()
+
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(ds_mod, "get_tari_stats", return_value={"active": True, "height": 3}),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False, "reachable": True}),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={"percent": 42}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+        svc.alert_service.process.assert_awaited_once()
+        kw = svc.alert_service.process.await_args.kwargs
+        # The full signal contract the AlertService.evaluate() unit tests rely on.
+        assert set(kw) >= {
+            "monero_down",
+            "tari_down",
+            "tari_required",
+            "miner_released",
+            "workers",
+            "workers_expected",
+            "disk_percent",
+            "db_healthy",
+            "xvb_enabled",
+            "shares_in_window",
+            "clearnet_active",
+            "xvb_registration_state",
+            "update_available",
+        }
+        # ...sourced from the real computed values, not placeholders.
+        assert kw["db_healthy"] is True  # from state_manager.is_db_healthy()
+        assert kw["disk_percent"] == 42  # from get_disk_usage()
+        assert isinstance(kw["workers"], list)
+        # The once-daily digest is wired in too.
+        svc.alert_service.maybe_daily_summary.assert_awaited_once()
+
     async def test_run_releases_despite_height_override(self):
         # Both nodes are synced per their RPC/gRPC, but p2pool is held so its stats file is
         # empty → get_network_stats height 0 trips the UI "syncing" override. The gate must

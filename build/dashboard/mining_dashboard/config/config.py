@@ -269,7 +269,15 @@ TELEGRAM_EVENTS = {
     "xvb_registration": _telegram_event_enabled("xvb_registration"),
     "new_release": _telegram_event_enabled("new_release"),
     "stack_online": _telegram_event_enabled("stack_online"),
+    "daily_summary": _telegram_event_enabled("daily_summary"),
 }
+# ponytail: daily_summary is a scheduled push, not an edge — it lives in the events dict only so it
+# gets a per-event on/off toggle like the rest; its time is TELEGRAM_DAILY_SUMMARY_TIME below.
+
+# Local time (HH:MM, 24-hour) to push the once-daily status digest, when the daily_summary event is
+# on. Uses the dashboard container's timezone (dashboard.timezone), so "08:00" means 8am wherever
+# the box is. Rendered from config.json telegram.daily_summary_time.
+TELEGRAM_DAILY_SUMMARY_TIME = os.environ.get("TELEGRAM_DAILY_SUMMARY_TIME", "08:00").strip()
 
 # Worker offline/online debounce (Issue #121). A worker must be unseen this long before it's
 # reported OFFLINE, and seen continuously this long before "back online" — so a brief miner

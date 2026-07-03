@@ -226,6 +226,29 @@ def format_earnings(metrics, network, host_label=""):
     )
 
 
+def format_daily_summary(metrics, data, host_label=""):
+    """The once-a-day status digest pushed by the alerter — an at-a-glance roll-up built from the
+    same domain values as /status. ``data`` is the latest snapshot (for the disk figure + the
+    mining-active flag the metrics layer doesn't carry)."""
+    mining = bool(data.get("miner_released") and not data.get("workers_rejected"))
+    disk = (data.get("system", {}) or {}).get("disk", {}) or {}
+    lines = [
+        f"{_prefix(host_label)}\U0001f4c5 Daily summary",
+        f"⛓️ Monero: {_node_state(metrics.monero)} · Tari: {_node_state(metrics.tari)}",
+    ]
+    if metrics.global_syncing:
+        lines.append("⛏️ Mining: ⏳ holding — chain(s) syncing")
+    elif mining:
+        lines.append(f"⛏️ Mining: \U0001f7e2 active ({metrics.mode})")
+    else:
+        lines.append("⛏️ Mining: \U0001f534 not mining")
+    lines.append(f"\U0001f477 Workers: {metrics.workers_online}/{metrics.workers_total} online")
+    lines.append(f"⚡ Hashrate: {format_hashrate(metrics.total_h15)}")
+    lines.append(f"\U0001f3b0 PPLNS shares: {metrics.shares_in_window} in window")
+    lines.append(f"\U0001f4be Disk: {disk.get('percent_str', 'n/a')} used")
+    return "\n".join(lines)
+
+
 class TelegramCommandBot:
     """
     On-demand Telegram command interface (Issue #45) — the interactive half of the operator bot.

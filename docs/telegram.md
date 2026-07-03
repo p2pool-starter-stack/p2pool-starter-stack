@@ -35,6 +35,7 @@ transition, not a stream:
 | 🎰 **XvB registration** | XvB auto-registration was rejected (bad payout address) or is failing — raffle wins won't count until it recovers. Only fires when XvB is enabled. |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
+| 📅 **Daily summary** | A once-a-day roll-up (nodes, mining, workers, hashrate, shares, disk) pushed at a set local time — **08:00** by default, set `telegram.daily_summary_time` to change it. |
 
 Every message is prefixed with your dashboard hostname (e.g. `[rig-box.lan]`), so if you point
 more than one stack at the same chat you can tell them apart.
@@ -155,6 +156,7 @@ block and set it to `false` — any event you don't list stays on:
 | `xvb_registration` | `true` | XvB auto-registration rejected / failing / recovered |
 | `new_release` | `true` | A newer Pithead release is available |
 | `stack_online` | `true` | One-shot "dashboard is up" heartbeat on start |
+| `daily_summary` | `true` | Once-a-day status roll-up (time set by `telegram.daily_summary_time`, default `08:00`) |
 
 Run `./pithead apply` after editing.
 

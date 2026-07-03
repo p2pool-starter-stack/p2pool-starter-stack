@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from mining_dashboard.config.config import (
     DISK_CRITICAL_PERCENT,
@@ -7,6 +8,7 @@ from mining_dashboard.config.config import (
     HOST_IP,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
+    TELEGRAM_DAILY_SUMMARY_TIME,
     TELEGRAM_ENABLED,
     TELEGRAM_EVENTS,
 )
@@ -24,6 +26,19 @@ def build_default_notifier():
         chat_id=TELEGRAM_CHAT_ID,
         events=TELEGRAM_EVENTS,
     )
+
+
+def _parse_hhmm(value):
+    """Parse a 'HH:MM' 24-hour string to minutes-since-midnight, or None if malformed (which
+    disables the daily digest rather than guessing a time)."""
+    try:
+        hh, mm = (value or "").strip().split(":")
+        h, m = int(hh), int(mm)
+        if 0 <= h < 24 and 0 <= m < 60:
+            return h * 60 + m
+    except (ValueError, AttributeError):
+        pass
+    return None
 
 
 class AlertService:
@@ -70,6 +85,7 @@ class AlertService:
     EVT_XVB_REGISTRATION = "xvb_registration"
     EVT_NEW_RELEASE = "new_release"
     EVT_STACK_ONLINE = "stack_online"
+    EVT_DAILY_SUMMARY = "daily_summary"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -79,9 +95,20 @@ class AlertService:
         "left": (EVT_WORKER_LEFT, "\U0001f44b Worker left: {name}"),
     }
 
-    def __init__(self, notifier=None, worker_monitor=None, host_label=HOST_IP):
+    def __init__(
+        self,
+        notifier=None,
+        worker_monitor=None,
+        host_label=HOST_IP,
+        daily_time=TELEGRAM_DAILY_SUMMARY_TIME,
+    ):
         self.notifier = notifier if notifier is not None else build_default_notifier()
         self.workers = worker_monitor if worker_monitor is not None else WorkerPresenceMonitor()
+        # Once-daily digest: target local minute-of-day (HH:MM → h*60+m), and the day we last sent
+        # (so it fires once per day). A malformed time disables it.
+        self._daily_target_min = _parse_hhmm(daily_time)
+        self._daily_last = None
+        self._daily_seeded = False
         # "Unknown Host" is config.py's placeholder when HOST_IP isn't set — don't prefix with it.
         self.host_label = "" if host_label in (None, "", "Unknown Host") else host_label
         # None = "not yet observed": the first cycle seeds the baseline without emitting.
@@ -394,3 +421,36 @@ class AlertService:
         for _evt, text in alerts:
             await asyncio.to_thread(self.notifier.send, text)
         return alerts
+
+    async def maybe_daily_summary(self, now, summary_provider):
+        """Push a once-daily status digest at the configured local time.
+
+        ``summary_provider()`` builds the digest text and is called **only when a send is actually
+        due**, so it isn't run every cycle. No-op when the ``daily_summary`` event is off, the time
+        is malformed, or the digest has already gone out today. On a startup that's already past
+        today's time it waits for tomorrow rather than firing a stale digest immediately. Returns the
+        text sent (handy for tests), else ``None``.
+        """
+        if self._daily_target_min is None or not self.notifier.event_enabled(
+            self.EVT_DAILY_SUMMARY
+        ):
+            return None
+        lt = time.localtime(now)
+        today = (lt.tm_year, lt.tm_yday)
+        now_min = lt.tm_hour * 60 + lt.tm_min
+        if not self._daily_seeded:
+            self._daily_seeded = True
+            # Started after today's send time → don't replay it now; wait for tomorrow.
+            if now_min >= self._daily_target_min:
+                self._daily_last = today
+        if self._daily_last == today or now_min < self._daily_target_min:
+            return None
+        self._daily_last = today
+        try:
+            text = summary_provider()
+        except Exception as exc:  # a bad summary build must not wedge the loop
+            logger.debug("Daily summary build failed (%s)", type(exc).__name__)
+            return None
+        if text:
+            await asyncio.to_thread(self.notifier.send, text)
+        return text
