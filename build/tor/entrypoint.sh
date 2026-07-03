@@ -6,8 +6,11 @@
 set -eu
 
 : "${NETWORK_PREFIX:=172.28.0}"
+# TORRC_TEMPLATE is a test seam so the shell suite can render against build/tor/torrc.template; the
+# container always uses the baked-in default.  # ponytail: default unchanged, only overridden in tests
+: "${TORRC_TEMPLATE:=/etc/tor/torrc.template}"
 
-sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" /etc/tor/torrc.template >/tmp/torrc
+sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" "$TORRC_TEMPLATE" >/tmp/torrc
 
 # Dashboard hidden service (#343): opt-in, default off. Appended only when pithead sets the flag, so
 # the default stack publishes exactly the three mining onions and nothing else. The target is the
