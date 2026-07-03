@@ -198,14 +198,14 @@ Run `./pithead apply` after editing. The commands:
 
 | Command | Reply |
 |---|---|
-| `/status` | One-glance health: each node up/down/syncing, whether mining is active, workers online, total hashrate, PPLNS shares in window — followed by any active **warning/error badges** (the same ones the dashboard's top bar shows), or an explicit "✅ No warnings." |
+| `/status` | One-glance health: each node up/down/syncing, the **Tari merge-mine link** (gRPC connected — distinct from the node being synced), whether mining is active, workers online, total hashrate, PPLNS shares in window — followed by any active **warning/error badges** (the same ones the dashboard's top bar shows), or an explicit "✅ No warnings." |
 | `/info` | About this stack: the running **version** (and whether a newer release is available), the Monero **DB mode** (pruned / full), the P2Pool **sidechain** (Mini / Main), and the **privacy posture** (Tor-only, or how many clearnet paths are exposed). |
 | `/hashrate` | Total hashrate plus a per-rig breakdown of everything currently online. |
 | `/workers` | Every rig's online/offline state, with uptime for the ones that are up. |
 | `/sync` | Monero and Tari sync progress (percent and block height). |
 | `/system` | Host resources: disk, RAM, CPU + load, and HugePages. |
-| `/pool` | P2Pool sidechain type, pool hashrate, Monero network height, and PPLNS shares in window. |
-| `/xvb` | XvB mode, current and target tier, hashrate routed to XvB, and raffle eligibility (PPLNS share). |
+| `/pool` | P2Pool sidechain type, pool hashrate, Monero network height + difficulty, PPLNS shares in window, **sidechain blocks found**, **share acceptance** (accepted/rejected + reject %), and the **best share** difficulty found. |
+| `/xvb` | XvB mode, current and target tier, hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
 | `/earnings` | Estimated P2Pool XMR per day/month from your current hashrate (P2Pool only — excludes XvB-donated hashrate and Tari). |
 | `/help` | The command list. |
 

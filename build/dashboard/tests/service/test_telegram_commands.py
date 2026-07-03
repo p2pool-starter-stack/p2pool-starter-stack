@@ -200,17 +200,64 @@ def test_system_reads_snapshot():
     assert "HugePages: Enabled (3072/3072)" in out
 
 
+@pytest.mark.parametrize(
+    "n,expected",
+    [
+        (0, "0"),
+        (42, "42"),
+        (999, "999"),
+        (1500, "1.50 K"),
+        (380e9, "380.00 G"),
+        (2.5e12, "2.50 T"),
+        (3e18, "3.00 E"),  # beyond peta — the fallback branch
+    ],
+)
+def test_human_count(n, expected):
+    assert tc._human_count(n) == expected
+
+
 def test_pool_reads_metrics():
-    out = tc.format_pool(_metrics(pool_type="Mini", network_height=3210001))
+    out = tc.format_pool(
+        _metrics(pool_type="Mini", network_height=3210001, network_difficulty=380e9)
+    )
     assert "P2Pool Mini" in out
-    assert "Network height: 3,210,001" in out
+    assert "height 3,210,001" in out
+    assert "diff 380.00 G" in out
     assert "5 in window" in out  # shares_in_window from _BASE
 
 
+def test_pool_share_health_and_best_when_present():
+    # Proxy /summary + found blocks enrich /pool (#82): acceptance rate, best share, blocks.
+    data = {
+        "pool": {"pool": {"blocks_found": 3}},
+        "proxy_summary": {"accepted": 125_000, "rejected": 40, "best": 2_345_678},
+    }
+    out = tc.format_pool(_metrics(), data)
+    assert "Blocks found: 3" in out
+    assert "125,000 ✓ / 40 ✗ (0.03% rejects)" in out
+    assert "Best share: 💎 2,345,678" in out
+
+
+def test_pool_omits_share_lines_before_first_poll():
+    # No proxy data yet (fresh start) → no zeroed share/best/blocks lines, just the core figures.
+    out = tc.format_pool(_metrics(), {})
+    assert "Shares to pool" not in out
+    assert "Best share" not in out
+    assert "Blocks found" not in out
+
+
 def test_xvb_enabled_with_share():
-    out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5))
+    out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5, xvb_1h=2100, xvb_24h=2300))
     assert "Current tier: Donor" in out
     assert "raffle-eligible" in out
+    # Credited averages (what XvB measures → sets the tier) are shown alongside routed.
+    assert "Credited by XvB: 2.10 kH/s (1h) · 2.30 kH/s (24h)" in out
+
+
+def test_xvb_stale_warns():
+    out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5, xvb_stale=True))
+    assert "stale" in out
+    assert "stale" not in tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5))
 
 
 def test_xvb_no_share_warns():
@@ -220,6 +267,15 @@ def test_xvb_no_share_warns():
 
 def test_xvb_disabled():
     assert "disabled" in tc.format_xvb(_metrics(xvb_enabled=False))
+
+
+def test_status_merge_mining_line():
+    linked = tc.format_status(_metrics(), True, merge_mining=True)
+    assert "Merge-mining: 🟢 Tari linked" in linked
+    down = tc.format_status(_metrics(), True, merge_mining=False)
+    assert "Merge-mining: ⏸ Tari not linked" in down
+    # None (Tari not yet polled / not in play) omits the line entirely.
+    assert "Merge-mining" not in tc.format_status(_metrics(), True)
 
 
 def test_earnings_estimate():
@@ -322,6 +378,22 @@ def test_reply_for_status_uses_mining_flag(monkeypatch):
     # Rejected workers (node-down failover) reads as not mining even when released.
     bot2 = _bot(monkeypatch, latest_data={"miner_released": True, "workers_rejected": True})
     assert "🔴 not mining" in bot2.reply_for("/status")
+
+
+def test_reply_for_status_merge_mining_from_tari_snapshot(monkeypatch):
+    # gRPC linked = connected AND active (the #313 rule) → the "linked" line.
+    bot = _bot(monkeypatch, latest_data={"tari": {"connected": True, "active": True}})
+    assert "Merge-mining: 🟢 Tari linked" in bot.reply_for("/status")
+    # Node up but gRPC not ready (the exact gap that hid #313) → "not linked".
+    bot2 = _bot(monkeypatch, latest_data={"tari": {"connected": False, "active": True}})
+    assert "Merge-mining: ⏸ Tari not linked" in bot2.reply_for("/status")
+
+
+def test_reply_for_pool_reads_share_snapshot(monkeypatch):
+    data = {"proxy_summary": {"accepted": 999, "rejected": 1, "best": 555}}
+    bot = _bot(monkeypatch, latest_data=data, pool_type="Mini")
+    out = bot.reply_for("/pool")
+    assert "Best share: 💎 555" in out and "999 ✓ / 1 ✗" in out
 
 
 def test_reply_for_workers_reads_snapshot(monkeypatch):

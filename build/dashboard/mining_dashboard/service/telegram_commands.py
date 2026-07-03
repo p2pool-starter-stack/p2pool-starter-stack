@@ -96,15 +96,30 @@ def _node_state(sync):
     return f"⏳ syncing {sync.percent:.1f}%"
 
 
-def format_status(metrics, mining_active, host_label="", warnings=None):
+def _human_count(n):
+    """Compact SI-suffixed number for large figures like network difficulty (380_000_000_000 →
+    '380.00 G'). Small values pass through as a plain integer."""
+    n = float(n or 0)
+    for unit in ("", "K", "M", "G", "T", "P"):
+        if abs(n) < 1000:
+            return f"{n:.2f} {unit}".strip() if unit else f"{int(n)}"
+        n /= 1000
+    return f"{n:.2f} E"
+
+
+def format_status(metrics, mining_active, host_label="", warnings=None, merge_mining=None):
     """Overall stack health — the answer to '/status'. Pure: folds a :class:`Metrics` (plus the
-    mining-active flag the loop derives from the sync gate, and any active warning/error badges)
-    into text; no I/O."""
+    mining-active flag the loop derives from the sync gate, any active warning/error badges, and the
+    Tari merge-mine link state) into text; no I/O. ``merge_mining`` is the gRPC-connected flag — a
+    distinct signal from a synced Tari node (the link can be down while the node is up), or ``None``
+    to omit the line (Tari not in play)."""
     lines = [
         f"{_prefix(host_label)}\U0001f4ca Pithead status",
         f"Monero node: {_node_state(metrics.monero)}",
         f"Tari node: {_node_state(metrics.tari)}",
     ]
+    if merge_mining is not None:
+        lines.append(f"Merge-mining: {'🟢 Tari linked' if merge_mining else '⏸ Tari not linked'}")
     if metrics.global_syncing:
         lines.append("Mining: ⏳ holding — chain(s) syncing")
     elif mining_active:
@@ -243,17 +258,36 @@ def format_system(system, host_label=""):
     )
 
 
-def format_pool(metrics, host_label=""):
-    """P2Pool sidechain + Monero network figures — the answer to '/pool'."""
-    return "\n".join(
-        [
-            f"{_prefix(host_label)}\U0001f30a Pool & network",
-            f"Sidechain: P2Pool {metrics.pool_type}",
-            f"Pool hashrate: {format_hashrate(metrics.pool_hashrate)}",
-            f"Network height: {metrics.network_height:,}",
-            f"PPLNS shares: {metrics.shares_in_window} in window ({metrics.pplns_window} blocks)",
-        ]
+def format_pool(metrics, data=None, host_label=""):
+    """P2Pool sidechain + Monero network figures — the answer to '/pool'. Enriched with the share
+    submission health and best share the proxy tracks, and the node's found blocks (#82)."""
+    data = data or {}
+    lines = [
+        f"{_prefix(host_label)}\U0001f30a Pool & network",
+        f"Sidechain: P2Pool {metrics.pool_type}",
+        f"Pool hashrate: {format_hashrate(metrics.pool_hashrate)}",
+    ]
+    blocks = (data.get("pool", {}) or {}).get("pool", {}).get("blocks_found")
+    if blocks:
+        lines.append(f"Blocks found: {blocks:,}")
+    lines.append(
+        f"Network: height {metrics.network_height:,} · diff {_human_count(metrics.network_difficulty)}"
     )
+    lines.append(
+        f"PPLNS shares: {metrics.shares_in_window} in window ({metrics.pplns_window} blocks)"
+    )
+    # Share submission health from the xmrig-proxy /summary (#82): accepted/rejected + best found.
+    summary = data.get("proxy_summary", {}) or {}
+    accepted = summary.get("accepted", 0) or 0
+    rejected = summary.get("rejected", 0) or 0
+    if accepted or rejected:
+        total = accepted + rejected
+        reject_pct = (rejected / total * 100) if total else 0.0
+        lines.append(f"Shares to pool: {accepted:,} ✓ / {rejected:,} ✗ ({reject_pct:.2f}% rejects)")
+    best = summary.get("best", 0) or 0
+    if best:
+        lines.append(f"Best share: \U0001f48e {int(best):,}")
+    return "\n".join(lines)
 
 
 def format_xvb(metrics, host_label=""):
@@ -267,12 +301,18 @@ def format_xvb(metrics, host_label=""):
         f"Current tier: {metrics.current_tier}",
         f"Target tier: {metrics.target_tier}",
         f"Routed to XvB: {format_hashrate(metrics.xvb_routed_1h)} (1h)",
+        # Credited averages are what XvB itself measures — the figures that actually set your tier
+        # (routed above is what we send; credited is what counts). Showing both explains the tier.
+        f"Credited by XvB: {format_hashrate(metrics.xvb_1h)} (1h) · "
+        f"{format_hashrate(metrics.xvb_24h)} (24h)",
     ]
     # The share half of raffle eligibility (#158): no PPLNS share means XvB wins are skipped.
     if metrics.shares_in_window > 0:
         lines.append("PPLNS share: \U0001f7e2 held (raffle-eligible)")
     else:
         lines.append("PPLNS share: ⚠ none — XvB wins skipped")
+    if metrics.xvb_stale:
+        lines.append("⚠ XvB stats are stale — showing last-known values.")
     return "\n".join(lines)
 
 
@@ -452,7 +492,13 @@ class TelegramCommandBot:
             warnings = status_warnings(
                 data, metrics, self.data_service.state_manager.is_db_healthy()
             )
-            return format_status(metrics, mining, self.host_label, warnings=warnings)
+            # Merge-mine link = the Tari gRPC being READY (not merely the node being up) — the same
+            # rule the dashboard's ✔ uses (#313). Omitted until Tari has been polled at all.
+            tari = data.get("tari")
+            merge = (bool(tari.get("connected")) and bool(tari.get("active"))) if tari else None
+            return format_status(
+                metrics, mining, self.host_label, warnings=warnings, merge_mining=merge
+            )
         if cmd == "info":
             return format_info(
                 resolve_version(),
@@ -468,7 +514,7 @@ class TelegramCommandBot:
         if cmd == "sync":
             return format_sync(metrics, self.host_label)
         if cmd == "pool":
-            return format_pool(metrics, self.host_label)
+            return format_pool(metrics, data, self.host_label)
         if cmd == "xvb":
             return format_xvb(metrics, self.host_label)
         if cmd == "earnings":
