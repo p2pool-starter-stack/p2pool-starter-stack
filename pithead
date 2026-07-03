@@ -2100,11 +2100,15 @@ provision_tor() {
 provision_onion_client_auth() {
     [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] || return 0
     local hs_dir="$TOR_DATA_DIR/dashboard"
+    # TOR_DATA_DIR is owned by the tor container's own uid (100 in the Alpine tor image, NOT the
+    # first-party APP_UID). If we can't write it directly, elevate — the same sudo ensure_owner uses.
+    # (Tests point TOR_DATA_DIR at a user-owned temp dir, so `run` stays empty and no sudo is used.)
+    local run=""
+    [ -w "$TOR_DATA_DIR" ] || run="sudo"
     if [ "${DASHBOARD_ONION_CLIENT_AUTH:-false}" != "true" ]; then
-        if [ -d "$hs_dir/authorized_clients" ]; then
+        if $run test -d "$hs_dir/authorized_clients"; then
             log "Disabling Tor onion client-auth for the dashboard — the onion becomes password-only (#343)."
-            sudo rm -rf "$hs_dir/authorized_clients" 2>/dev/null ||
-                rm -rf "$hs_dir/authorized_clients" 2>/dev/null || true
+            $run rm -rf "$hs_dir/authorized_clients"
         fi
         return 0
     fi
@@ -2116,12 +2120,15 @@ provision_onion_client_auth() {
         DASHBOARD_ONION_CLIENT_PRIVKEY="${kp##* }"
         log "Generated a Tor onion client-auth key for the dashboard (#343)."
     fi
-    mkdir -p "$hs_dir/authorized_clients"
-    printf 'descriptor:x25519:%s\n' "$DASHBOARD_ONION_CLIENT_PUBKEY" >"$hs_dir/authorized_clients/dashboard.auth"
-    # Tor refuses a HiddenServiceDir that is group/other-accessible or owned by another user.
-    chmod 700 "$hs_dir" "$hs_dir/authorized_clients" 2>/dev/null || true
-    chmod 600 "$hs_dir/authorized_clients/dashboard.auth" 2>/dev/null || true
-    ensure_owner "$hs_dir" "$APP_UID" "$APP_GID"
+    $run mkdir -p "$hs_dir/authorized_clients"
+    printf 'descriptor:x25519:%s\n' "$DASHBOARD_ONION_CLIENT_PUBKEY" | $run tee "$hs_dir/authorized_clients/dashboard.auth" >/dev/null
+    # Tor refuses a HiddenServiceDir that is group/other-accessible; keep it 0700/0600 and owned by
+    # whatever uid already owns the tor data dir, so tor can read authorized_clients.
+    $run chmod 700 "$hs_dir" "$hs_dir/authorized_clients"
+    $run chmod 600 "$hs_dir/authorized_clients/dashboard.auth"
+    local owner
+    owner=$($run stat -c '%u:%g' "$TOR_DATA_DIR" 2>/dev/null) || owner=""
+    [ -n "$owner" ] && $run chown -R "$owner" "$hs_dir"
 }
 
 # Read the dashboard onion hostname from the running tor container into DASHBOARD_ONION (#343).
