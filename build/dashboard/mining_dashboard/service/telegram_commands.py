@@ -176,7 +176,7 @@ def status_warnings(data, metrics, db_healthy):
     out = []
     for b in build_badges(data, metrics, "", db_healthy=db_healthy):
         if b["variant"] == "bad" or b["text"].startswith("⚠"):
-            out.append(b["text"].lstrip("⚠ ").strip())
+            out.append(b["text"].removeprefix("⚠ "))
     return out
 
 
