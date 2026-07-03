@@ -2255,6 +2255,29 @@ assert_eq "xmrig-proxy entrypoint: unset password appends no flag (#152)" \
 assert_eq "xmrig-proxy entrypoint: set password appends --access-password (#152)" \
     "$(xp_argv 's3cret')" "[--http-no-restricted][--donate-level=0][--access-password=s3cret]"
 
+# tor wrapper entrypoint: opt-in dashboard hidden service (#343). The HiddenService block is appended
+# to the rendered torrc ONLY when DASHBOARD_ONION_ENABLED=true, targeting the bridge gateway
+# (NETWORK_PREFIX.1) where Caddy binds the auth-gated onion vhost. pithead's caddy/client-auth side is
+# covered above; this exercises the real container entrypoint's branch + the .1 substitution with a
+# stub `tor` on PATH and the repo torrc.template (via the TORRC_TEMPLATE seam).
+TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
+tor_torrc() { # <DASHBOARD_ONION_ENABLED> -> the torrc the entrypoint would hand to `tor -f`
+    local d
+    d="$(mktemp -d)"
+    printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
+    chmod +x "$d/tor"
+    PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" NETWORK_PREFIX=10.9.0 \
+        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
+    rm -rf "$d"
+}
+tor_onion_on="$(tor_torrc true)"
+assert_contains "tor entrypoint: dashboard HiddenService appended when enabled (#343)" \
+    "$tor_onion_on" "HiddenServiceDir /var/lib/tor/dashboard/"
+assert_contains "tor entrypoint: onion vhost targets the bridge gateway .1 (#343)" \
+    "$tor_onion_on" "HiddenServicePort 80 10.9.0.1:80"
+assert_not_contains "tor entrypoint: no dashboard onion when disabled (default off) (#343)" \
+    "$(tor_torrc false)" "Dashboard Hidden Service"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

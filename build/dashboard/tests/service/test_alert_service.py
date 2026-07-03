@@ -481,6 +481,12 @@ class TestDailySummary:
         monkeypatch.setattr(alert_mod.time, "localtime", _fake_localtime(8, 0))
         assert await svc.maybe_daily_summary(0, lambda: "x") is None
 
+    def test_out_of_range_time_parses_to_none(self):
+        # Well-formed HH:MM but out of the 24h/60m range must disable the digest, not wrap around to a
+        # bogus fire time — "25:00" would otherwise never match localtime and silently never fire.
+        for bad in ("25:00", "12:60", "12", "-1:00"):
+            assert alert_mod._parse_hhmm(bad) is None, bad
+
     async def test_gated_off_by_event_toggle(self, monkeypatch):
         # daily_summary not in the allow-set → the notifier reports it disabled.
         svc = _daily_svc(notifier=_FakeNotifier(allow=set()))
