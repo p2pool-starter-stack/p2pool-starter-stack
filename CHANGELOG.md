@@ -9,6 +9,151 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.2.0] - 2026-07-03
+
+**Operator-visibility release — the stack can now tell you when something is wrong, and let you reach
+it from anywhere over Tor.** A Telegram operator bot pushes a curated set of alerts and answers
+on-demand status commands; an optional Healthchecks.io dead-man's switch catches a whole-host death
+that an in-stack notifier structurally can't report; and the dashboard can publish an optional Tor
+onion so you can reach it remotely without a port-forward or public IP. All three run over Tor. This
+minor also isolates the Docker socket proxies onto their own network, off the mining bridge.
+
+**Upgrade note:** every new surface is opt-in and off by default — enable them in `config.json`
+(`telegram`, `healthchecks.ping_url`, `dashboard.onion`). Pick the changes up with `./pithead upgrade`
+(or re-download the bundle); your `config.json` and preserved secrets (Tor onions, RPC credentials,
+proxy token) are untouched.
+
+### Added
+
+- **Telegram operator bot (#121, #45).** Opt-in. Pushes a curated set of operational edges — node
+  down/recovered, worker offline/joined/left, sync finished, disk filling, database unhealthy, host
+  advisories (HugePages off, low RAM), a hashrate-drop detector, XvB no-share and registration
+  problems, clearnet exposure, and a once-a-day digest — and answers read-only on-demand commands
+  (`/status`, `/hashrate`, `/workers`, `/sync`, `/system`, `/pool`, `/xvb`, `/earnings`, `/info`,
+  `/help`) from a single configured chat. Alerts and commands are separate opt-ins, every event has a
+  toggle, and both the sends and the command poll ride the bridge Tor SOCKS (#340), so Telegram sees a
+  Tor exit and not your host IP. See [`docs/telegram.md`](docs/telegram.md).
+- **Healthchecks.io dead-man's switch (#79).** Opt-in. Set `healthchecks.ping_url` and the dashboard
+  pings it every cycle; if the whole host dies the pings stop and Healthchecks.io alerts you on the
+  *absence* of a ping — the one failure mode an in-stack notifier can't report. The ping always rides
+  Tor, so it is never a clearnet beacon; the URL must be Tor-reachable (hosted `hc-ping.com`, or a
+  self-hosted onion/public instance).
+- **Optional Tor onion for the remote dashboard (#343).** Opt-in (`dashboard.onion.enabled`, default
+  off). Publishes a fourth onion that fronts the authenticated Caddy login, so you can reach the
+  dashboard remotely over Tor with no port-forward and no public IP. It defaults to Tor v3 client
+  authorization (the onion does not respond without your client key), and `pithead` refuses to publish
+  it unless the dashboard password is at least 16 characters. This is inbound access and does not
+  change the egress posture. See
+  [Remote access over Tor](docs/configuration.md#remote-access-over-tor-onion-service).
+
+### Changed
+
+- **Docker socket proxies isolated off the mining bridge (#345).** The read-only and start/stop socket
+  proxies now sit on their own network, published only to the host loopback, so no mining container
+  can reach the Docker API even through the proxies. The host-networked dashboard reaches them at
+  `127.0.0.1`; the dashboard's SSRF guard rejects the proxy addresses as before.
+
+### Fixed
+
+- **xmrig-proxy no longer renders a stray empty command argument (#347).** With no stratum password
+  set (the default), the optional `--access-password` compose item rendered a literal empty argument
+  and xmrig-proxy logged `unsupported non-option argument ''` on startup. The flag now passes through a
+  wrapper entrypoint from an env var, so an unset password appends nothing. It was harmless, but the
+  warning is gone.
+
+### Documentation & tests
+
+- A house-voice and factual-accuracy pass across the prose docs (#334), with the banned-word voice
+  check and the testing-tier guidance enforced as CI guardrails (#335). Added coverage for flagged
+  edge cases (#330), the Tor-onion container entrypoint and the daily-digest time parser (#348), and
+  made the integration egress verifier survive a release-bundle `--dir` (#332).
+
+## [1.1.0] - 2026-07-01
+
+**Privacy release — the stack is now Tor-first by default and fail-closed.** Outbound P2Pool sidechain
+peers (#165) and XvB donation mining (#166) route over Tor out of the box, a host firewall enforces
+**Tor-only egress fail-closed** (#270) so a misconfiguration can't silently leak your IP, and every
+container now runs **non-root** (#255/#91). Plus XvB raffle auto-registration, a Stack Topology panel,
+and a large supply-chain / CI hardening wave. This is the first minor release on top of the 1.0.x line;
+upgrade in place with `./pithead upgrade` (or re-download the bundle).
+
+**Upgrade note:** the Tor-by-default routing and the fail-closed egress firewall are picked up
+automatically on `upgrade`. The two config example files were renamed for clarity —
+**`config.minimal.json`** (the quick-start: just the two wallet addresses) and
+**`config.reference.json`** (all options); your own `config.json` and preserved secrets (Tor onions,
+RPC credentials, proxy token) are untouched.
+
+### Added
+
+- **Tor-by-default outbound routing.** P2Pool's outbound sidechain P2P (#165) and XvB donation mining
+  (#166) now ride Tor by default, closing the two clearnet yield paths that were left open in v1.0.
+  The local monerod RPC/ZMQ path stays **direct** via a loopback bridge so mining is unaffected (see
+  Fixed, #278).
+- **Tor-only egress enforced fail-closed by a host firewall (#270).** A `DOCKER-USER` firewall installed
+  before the containers start (#276) blocks any non-Tor egress, so a bad flag or a stale image can't
+  leak your IP — it fails closed instead of leaking. The integration harness carries a **standing
+  no-clearnet-leak egress gate** (#274) so a regression is caught in CI.
+- **XvB raffle auto-registration (#263).** Miners are registered with the XMRvsBeast raffle
+  automatically — no manual signup — so donations count toward the raffle without an extra step.
+- **Stack Topology panel on the dashboard (#170).** A full wiring map of the stack: every ingress,
+  egress, and internal hop, labelled Tor vs clearnet, so you can see at a glance what talks to what
+  and over which transport.
+- **One config-driven worker-API probe, default no-auth (#171, #172).** The dashboard's per-worker
+  stats probe is now a single, config-driven request that defaults to no authentication (matching
+  RigForge's open-by-default worker API), eliminating the spurious `401` log noise; auth is opt-in via
+  `workers.api_auth` / an access token.
+- **Autonomous Tor-vs-clearnet benchmark harness (#256).** A self-driving benchmark that measures the
+  yield cost of running over Tor; the finalized methodology and results ship in `docs/privacy.md`
+  (Tor costs ~10% P2Pool yield on a mini node, with zero extra rejects — so Tor stays the default).
+- **Third-party attribution + GPLv3 source pointers (#259).** The bundled upstream components
+  (P2Pool, Monero, XMRig-proxy, Tari, Caddy, …) are now attributed with license and source pointers.
+
+### Changed
+
+- **All containers run non-root (uid 1000) (#255, #91).** Every first-party image declares a non-root
+  `USER`; data moved from `/root` to the user's home, and `pithead` chowns the data dirs to match on
+  `apply`/`upgrade`/`restore`. The dashboard now owns its volume, so it can finally `cap_drop: [ALL]`.
+  The migration handles an install upgraded from the root-container era (root-owned files under a
+  user-owned dir are chowned to the container uid).
+- **Config example files renamed** to `config.minimal.json` and `config.reference.json` (#326) — clearer
+  than the old names; the quick start and `setup` guidance point at the minimal one.
+- **Reproducible Python builds** with `uv` + a committed `uv.lock` (#283).
+
+### Fixed
+
+- **Tari merge-mining works under Tor (#313).** The Tor default silently killed Tari merge-mining —
+  p2pool dialled the merge-mine gRPC at a private Docker IP through Tor, which rejects RFC1918, so the
+  channel stuck at `TRANSIENT_FAILURE`. Fixed with a loopback bridge (mirroring #278), and the
+  dashboard "✔" is now gated on the channel actually being `READY`, not just configured.
+- **P2Pool ↔ monerod stays direct under Tor (#278).** #165's `--socks5` also proxied p2pool's *local*
+  monerod RPC/ZMQ, which p2pool only exempts for loopback — so with Tor on, p2pool couldn't fetch block
+  templates and mining stopped. The entrypoint now bridges `127.0.0.1` → the real node with `socat`, so
+  the node stays direct while the sidechain still rides Tor.
+- **Fail loud when a stale p2pool image drops the Tor flags (#273).** A compose↔image mismatch that
+  would have silently disabled Tor routing now fails the start instead of running clearnet unnoticed.
+- **Tor-egress firewall installed before compose on `upgrade` (#291)** and before containers start on
+  first bring-up (#276) — closing the startup window where a container could reach clearnet before the
+  firewall was in place.
+- **Tari clearnet peer dials now route through Tor SOCKS (#271).**
+- **XvB controller guarded against a stale/frozen stats fetch (#311).** A frozen XvB stats response no
+  longer steers the donation controller off stale data; the stale state is surfaced instead.
+- **Snapshot persistence-health bug (#330).**
+
+### Security
+
+- **Supply-chain & secrets hardening (#282).** gitleaks secret-scanning, Trivy image/filesystem
+  scanning, Dependabot scoped to safe updates, all GitHub Actions SHA-pinned, and zizmor for workflow
+  auditing — with `develop` branch protection wiring the checks in as required gates.
+- Non-root containers (#255) and Tor-only fail-closed egress (#270) are themselves the release's two
+  biggest security wins (see Changed / Added).
+
+### Internal
+
+- Repo-wide **ruff** lint + format (#280), per-surface linters (shfmt, Biome, yamllint, markdownlint,
+  buf, taplo) (#281), Hypothesis property tests over the money/numeric logic (#284), diff-cover patch
+  coverage adopted from RigForge (#286), and expanded live-validation coverage for the security
+  features (#206, #295, #170). Dev-facing only; no runtime change.
+
 ## [1.0.3] - 2026-06-14
 
 Hotfix — **validate the Monero payout address is a primary address**, so nobody silently mines to an
