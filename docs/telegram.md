@@ -235,8 +235,24 @@ and use that group's id here. Each source labels its own messages, so you can al
 which. (Keeping them in separate chats is fine too — only useful if you want to mute or route them
 differently.)
 
-> Healthchecks.io setup is documented separately under operator monitoring; see
-> [issue #79](https://github.com/p2pool-starter-stack/pithead/issues/79).
+### Adding Healthchecks.io to the same group
+
+Once your Pithead bot is posting to the group, add Healthchecks.io's bot to it as well. You do
+**not** paste any token into Healthchecks.io — you authorize its bot from their side:
+
+1. In Telegram, **add [@HealthchecksBot](https://t.me/HealthchecksBot) to your alerts group** (the
+   same group the Pithead bot posts to). It joins as a member with no access to group messages.
+2. In the group, send **`/start@HealthchecksBot`**. Use the **`@HealthchecksBot`** suffix, not a
+   bare `/start` — your Pithead bot is already in the group, so a plain `/start` is ambiguous and
+   won't reach the right bot.
+3. HealthchecksBot replies with a **confirmation link**. Tap it — Healthchecks.io opens in your
+   browser.
+4. **Select the project** your ping URL belongs to and click **"Connect Telegram"**. Done — host-down
+   alerts now land in the same group as your Pithead bot's alerts.
+
+Full walkthrough on their site: **<https://healthchecks.io/integrations/add_telegram/>**. For the
+rest of the Healthchecks.io setup (creating the check, the ping URL, `config.json`), see
+[Monitoring & Alerting](monitoring.md).
 
 ---
 
