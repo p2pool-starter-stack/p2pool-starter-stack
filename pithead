@@ -2097,6 +2097,7 @@ render_env() {
     local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
+    local tg_ev_hugepages tg_ev_low_ram
     local hr_drop_threshold hr_drop_minutes
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
@@ -2115,6 +2116,8 @@ render_env() {
     tg_ev_daily_summary=$(tg_event daily_summary)
     tg_ev_hashrate_low=$(tg_event hashrate_low)
     tg_ev_hashrate_loss=$(tg_event hashrate_loss)
+    tg_ev_hugepages=$(tg_event hugepages)
+    tg_ev_low_ram=$(tg_event low_ram)
     # Degradation detector (#99): drop-below-% and sustained-minutes; defaults 50 / 10.
     hr_drop_threshold=$(jq -r '.dashboard.hashrate_drop_threshold // 50' "$CONFIG_FILE")
     hr_drop_minutes=$(jq -r '.dashboard.hashrate_drop_minutes // 10' "$CONFIG_FILE")
@@ -2219,6 +2222,8 @@ TELEGRAM_EVENT_STACK_ONLINE=$tg_ev_stack_online
 TELEGRAM_EVENT_DAILY_SUMMARY=$tg_ev_daily_summary
 TELEGRAM_EVENT_HASHRATE_LOW=$tg_ev_hashrate_low
 TELEGRAM_EVENT_HASHRATE_LOSS=$tg_ev_hashrate_loss
+TELEGRAM_EVENT_HUGEPAGES=$tg_ev_hugepages
+TELEGRAM_EVENT_LOW_RAM=$tg_ev_low_ram
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time

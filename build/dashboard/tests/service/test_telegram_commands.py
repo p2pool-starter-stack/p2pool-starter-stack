@@ -300,9 +300,10 @@ def test_host_label_prefix():
 # --- reply_for routing --------------------------------------------------------------------
 
 
-def _bot(monkeypatch, latest_data=None, **over):
+def _bot(monkeypatch, latest_data=None, db_healthy=True, **over):
     monkeypatch.setattr(tc, "build_metrics", lambda data, sm: _metrics(**over))
-    ds = SimpleNamespace(latest_data=latest_data or {}, state_manager=object())
+    sm = SimpleNamespace(is_db_healthy=lambda: db_healthy)
+    ds = SimpleNamespace(latest_data=latest_data or {}, state_manager=sm)
     return tc.TelegramCommandBot(ds, enabled=True, bot_token="tok", chat_id="42", host_label="")
 
 
@@ -533,3 +534,39 @@ async def test_run_backs_off_on_poll_error(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await bot.run()
     assert slept == [tc.POLL_ERROR_BACKOFF_SECONDS]
+
+
+class TestStatusWarnings:
+    """/status surfaces the same warning/error badges as the dashboard top bar (#104), reusing
+    build_badges so the two never drift; informational states ('Syncing…') are excluded."""
+
+    def test_bad_and_flagged_warn_badges_included_stripped(self):
+        # Low RAM (⚠ warn) + DB failing (bad) both surface; the leading ⚠ is stripped for the list.
+        warnings = tc.status_warnings(
+            {"system": {"memory": {"total_gb": 8}}}, _metrics(), db_healthy=False
+        )
+        assert "Low RAM (8 GB)" in warnings
+        assert "DB write failing" in warnings
+        assert not any(w.startswith("⚠") for w in warnings)
+
+    def test_informational_states_excluded(self):
+        # 'Syncing…' / 'Miner held' are warn-variant but informational (no ⚠) — not warnings.
+        warnings = tc.status_warnings(
+            {"miner_held": True}, _metrics(global_syncing=True), db_healthy=True
+        )
+        assert warnings == []
+
+    def test_healthy_is_empty(self):
+        assert tc.status_warnings({}, _metrics(), db_healthy=True) == []
+
+    def test_format_status_lists_warnings(self):
+        text = tc.format_status(
+            _metrics(), True, warnings=["Low RAM (8 GB)", "HugePages not reserved"]
+        )
+        assert "⚠️ Warnings:" in text
+        assert "• Low RAM (8 GB)" in text
+        assert "• HugePages not reserved" in text
+
+    def test_format_status_all_clear(self):
+        text = tc.format_status(_metrics(), True, warnings=[])
+        assert "✅ No warnings." in text

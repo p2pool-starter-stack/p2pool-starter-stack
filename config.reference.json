@@ -103,7 +103,9 @@
             "stack_online": true,
             "daily_summary": true,
             "hashrate_low": true,
-            "hashrate_loss": true
+            "hashrate_loss": true,
+            "hugepages": true,
+            "low_ram": true
         },
         "daily_summary_time": "08:00",
         "commands": {

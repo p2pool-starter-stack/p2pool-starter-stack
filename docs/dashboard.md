@@ -89,6 +89,21 @@ to the version badge, linking to the GitHub release. It never updates anything; 
 your IP. Turn it off with `dashboard.check_for_updates: false` (see
 [Configuration](configuration.md#configuration-reference)).
 
+### Host & performance warnings
+
+The top bar also surfaces the persistent host conditions that `setup` warns about, derived from
+**live** metrics so they self-correct rather than going stale:
+
+| Badge | Means | Fix |
+|---|---|---|
+| `⚠ HugePages off` | HugePages aren't reserved — RandomX hashrate is capped. | Run setup's tuning (or edit GRUB) and reboot; the badge clears once they're reserved. |
+| `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
+| `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
+
+The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
+on; AVX2 is badge-only (see [Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active
+warning badges are echoed in the bot's `/status` reply.
+
 ### Hero band
 
 A strip of headline KPIs sits below the top bar:

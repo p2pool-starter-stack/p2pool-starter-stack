@@ -16,6 +16,7 @@ from mining_dashboard.helper.utils import effective_hashrate, format_duration, f
 from mining_dashboard.service.earnings import xmr_per_hs_day
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
+from mining_dashboard.web.views import build_badges
 
 logger = logging.getLogger("TelegramCommands")
 
@@ -81,9 +82,10 @@ def _node_state(sync):
     return f"⏳ syncing {sync.percent:.1f}%"
 
 
-def format_status(metrics, mining_active, host_label=""):
+def format_status(metrics, mining_active, host_label="", warnings=None):
     """Overall stack health — the answer to '/status'. Pure: folds a :class:`Metrics` (plus the
-    mining-active flag the loop derives from the sync gate) into text; no I/O."""
+    mining-active flag the loop derives from the sync gate, and any active warning/error badges)
+    into text; no I/O."""
     lines = [
         f"{_prefix(host_label)}\U0001f4ca Pithead status",
         f"Monero node: {_node_state(metrics.monero)}",
@@ -98,7 +100,28 @@ def format_status(metrics, mining_active, host_label=""):
     lines.append(f"Workers: {metrics.workers_online}/{metrics.workers_total} online")
     lines.append(f"Hashrate: {format_hashrate(metrics.total_h15)} (10m avg)")
     lines.append(f"PPLNS shares: {metrics.shares_in_window} in window")
+    # Surface the same warning/error badges the dashboard's top bar shows (#104), so /status is a
+    # one-glance "anything wrong?" — or an explicit all-clear.
+    if warnings:
+        lines.append("")
+        lines.append("⚠️ Warnings:")
+        lines.extend(f"• {w}" for w in warnings)
+    else:
+        lines.append("")
+        lines.append("✅ No warnings.")
     return "\n".join(lines)
+
+
+def status_warnings(data, metrics, db_healthy):
+    """The active warning/error badges for /status: every ``bad`` badge plus the ``⚠``-flagged
+    ``warn`` badges (which the informational states — 'Syncing…', 'Miner held' — deliberately lack),
+    reusing :func:`build_badges` so this never drifts from the dashboard's own top bar. The leading
+    ``⚠`` is stripped since the section already has one header."""
+    out = []
+    for b in build_badges(data, metrics, "", db_healthy=db_healthy):
+        if b["variant"] == "bad" or b["text"].startswith("⚠"):
+            out.append(b["text"].lstrip("⚠ ").strip())
+    return out
 
 
 def format_hashrate_reply(metrics, workers, host_label=""):
@@ -385,7 +408,10 @@ class TelegramCommandBot:
         metrics = build_metrics(data, self.data_service.state_manager)
         if cmd == "status":
             mining = bool(data.get("miner_released") and not data.get("workers_rejected"))
-            return format_status(metrics, mining, self.host_label)
+            warnings = status_warnings(
+                data, metrics, self.data_service.state_manager.is_db_healthy()
+            )
+            return format_status(metrics, mining, self.host_label, warnings=warnings)
         if cmd == "hashrate":
             return format_hashrate_reply(metrics, data.get("workers", []), self.host_label)
         if cmd == "workers":

@@ -628,6 +628,46 @@ class TestBadges:
         out = build_badges({}, _metrics(), "ok")
         assert not any("Disk" in b["text"] for b in out)
 
+    # --- Host-perf badges (#104): AVX2 / HugePages / low RAM, from live metrics -------------
+    def test_hugepages_disabled_badge(self):
+        out = build_badges(
+            {"system": {"hugepages": ["Disabled", "status-bad", "0/0"]}}, _metrics(), "ok"
+        )
+        assert any(b["variant"] == "warn" and "HugePages off" in b["text"] for b in out)
+
+    def test_no_hugepages_badge_when_reserved(self):
+        for status in ("Allocated", "Enabled", "Unknown"):  # only "Disabled" is a problem
+            out = build_badges({"system": {"hugepages": [status, "", "1/2"]}}, _metrics(), "ok")
+            assert not any("HugePages" in b["text"] for b in out), status
+
+    def test_low_ram_badge(self):
+        out = build_badges({"system": {"memory": {"total_gb": 8}}}, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "Low RAM (8 GB)" in b["text"] for b in out)
+
+    def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self):
+        assert not any(
+            "Low RAM" in b["text"]
+            for b in build_badges({"system": {"memory": {"total_gb": 16}}}, _metrics(), "ok")
+        )
+        # total 0 = couldn't read /proc/meminfo (not "0 GB of RAM") — no false badge.
+        assert not any(
+            "Low RAM" in b["text"]
+            for b in build_badges({"system": {"memory": {"total_gb": 0}}}, _metrics(), "ok")
+        )
+
+    def test_avx2_missing_badge(self):
+        out = build_badges({"system": {"avx2": False}}, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "No AVX2" in b["text"] for b in out)
+
+    def test_no_avx2_badge_when_present_or_unknown(self):
+        assert not any(
+            "AVX2" in b["text"] for b in build_badges({"system": {"avx2": True}}, _metrics(), "ok")
+        )
+        # None = couldn't determine (non-Linux / unreadable) — stay silent, don't cry wolf.
+        assert not any(
+            "AVX2" in b["text"] for b in build_badges({"system": {"avx2": None}}, _metrics(), "ok")
+        )
+
 
 # --- System (presentation thresholds) -------------------------------------------------
 

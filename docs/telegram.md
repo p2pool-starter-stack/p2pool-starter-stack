@@ -35,6 +35,8 @@ transition, not a stream:
 | 🎰 **XvB registration** | XvB auto-registration was rejected (bad payout address) or is failing — raffle wins won't count until it recovers. Only fires when XvB is enabled. |
 | 📉 **Hashrate low for tier** | You picked a fixed XvB donation tier your hashrate can't sustain — lower the tier or add hashrate. Fires on the transition and clears when it recovers. |
 | ⚠️ **Hashrate drop** | Total fleet hashrate fell sharply below its recent normal and **stayed down** — a rig gone dark, a network cut, or a stalled miner. The dashboard also drops a marker on the hashrate chart at the moment it happened. Fires once on the drop and again on recovery. Thresholds are tunable (`dashboard.hashrate_drop_threshold`, `dashboard.hashrate_drop_minutes`). |
+| 🧠 **HugePages not reserved** | RandomX runs capped until HugePages are reserved. Fires when the dashboard first sees them missing and again once a reboot applies them — so you know the tuning took. |
+| 💾 **Low RAM** | This host has less RAM than the stack wants (syncing is memory-heavy; Tari can OOM). Sent once when first detected — a heads-up that instability may be under-provisioning, not a bug. |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
 | 📅 **Daily summary** | A once-a-day retrospective of the last 24h across your whole fleet — date/time, an **incident roll-up** (what went wrong during the day, or an all-clear), **24h hashrate** with the **P2Pool / XvB split**, **shares found in the day**, an **estimated daily earnings** figure, and a **per-machine 24h breakdown** — pushed at a set local time (**08:00** by default; `telegram.daily_summary_time`). |
@@ -160,8 +162,15 @@ block and set it to `false` — any event you don't list stays on:
 | `stack_online` | `true` | One-shot "dashboard is up" heartbeat on start |
 | `daily_summary` | `true` | Once-a-day status roll-up (time set by `telegram.daily_summary_time`, default `08:00`) |
 | `hashrate_low` | `true` | Hashrate can't sustain the chosen XvB tier / recovered |
+| `hashrate_loss` | `true` | Total hashrate dropped sharply and stayed down (outage / rig dark) / recovered |
+| `hugepages` | `true` | HugePages not reserved (RandomX capped) / reserved after a reboot |
+| `low_ram` | `true` | Host has less RAM than the stack wants (one-shot heads-up) |
 
 Run `./pithead apply` after editing.
+
+> The dashboard also shows an **AVX2-missing** badge when the CPU lacks AVX2, but it has **no
+> alert** — it's a fixed hardware fact with nothing to do at runtime, so it stays a badge (and shows
+> in `/status`) rather than a push you can't act on.
 
 > **Tari note.** A node-down/recovered alert fires for **Tari only when Tari is treated as
 > required** (`dashboard.tari_required: true`, the default). If you've made Tari non-blocking, a
@@ -189,7 +198,7 @@ Run `./pithead apply` after editing. The commands:
 
 | Command | Reply |
 |---|---|
-| `/status` | One-glance health: each node up/down/syncing, whether mining is active, workers online, total hashrate, PPLNS shares in window. |
+| `/status` | One-glance health: each node up/down/syncing, whether mining is active, workers online, total hashrate, PPLNS shares in window — followed by any active **warning/error badges** (the same ones the dashboard's top bar shows), or an explicit "✅ No warnings." |
 | `/hashrate` | Total hashrate plus a per-rig breakdown of everything currently online. |
 | `/workers` | Every rig's online/offline state, with uptime for the ones that are up. |
 | `/sync` | Monero and Tari sync progress (percent and block height). |

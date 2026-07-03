@@ -688,6 +688,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -749,6 +750,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -805,6 +807,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -862,6 +865,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -885,6 +889,8 @@ class TestRunIteration:
             "xvb_registration_state",
             "update_available",
             "low_hr_warning",
+            "hugepages_reserved",
+            "low_ram",
         }
         # ...sourced from the real computed values, not placeholders.
         assert kw["db_healthy"] is True  # from state_manager.is_db_healthy()
@@ -934,6 +940,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -993,6 +1000,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -1032,6 +1040,7 @@ class TestRunIteration:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):
@@ -1159,6 +1168,7 @@ class TestControlPlaneComposition:
             patch.object(ds_mod, "get_memory_usage", return_value={}),
             patch.object(ds_mod, "get_load_average", return_value="0"),
             patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
         ):
             with pytest.raises(StopAsyncIteration):

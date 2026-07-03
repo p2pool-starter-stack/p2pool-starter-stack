@@ -127,6 +127,15 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   walkthrough — creating a bot, finding your chat id, the command list, and the "one chat, two bots"
   pattern for sharing a chat with the Healthchecks.io monitor (#79) — in
   [`docs/telegram.md`](docs/telegram.md).
+- **Host & performance warning badges + alerts** (#104): the top bar now surfaces the persistent
+  host conditions `setup` warns about, derived from **live** metrics (so they self-correct): **⚠
+  HugePages off** (RandomX capped until reserved), **⚠ Low RAM** (under 16 GB — Tari can OOM during
+  sync), and **⚠ No AVX2** (slow RandomX). The first two also push a Telegram alert (`hugepages`,
+  `low_ram`) the first time they're seen — unlike the transient edge alerts, a stable bad state
+  fires on first detection, and HugePages clears with a recovery ping once a reboot applies them.
+  AVX2 is **badge-only** by design: a fixed hardware fact with nothing to act on at runtime doesn't
+  warrant a push. The bot's **`/status`** reply now ends with any active warning/error badges (the
+  same catalog the top bar draws) or an explicit "✅ No warnings."
 - **Hashrate-drop detector — chart markers + `hashrate_loss` alert** (#99): the dashboard now flags a
   **sustained, significant fall** in total fleet hashrate — a rig gone dark, a network cut, a stalled
   miner — separately from the existing "too low for your XvB tier" warning. It tracks a slow moving

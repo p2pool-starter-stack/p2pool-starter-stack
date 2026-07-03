@@ -21,6 +21,7 @@ from mining_dashboard.collector.pools import (
     get_tari_stats,
 )
 from mining_dashboard.collector.system import (
+    get_cpu_avx2,
     get_cpu_usage,
     get_disk_usage,
     get_hugepages_status,
@@ -35,6 +36,7 @@ from mining_dashboard.config.config import (
     HASHRATE_DROP_MINUTES,
     HASHRATE_DROP_THRESHOLD_PCT,
     HOST_IP,
+    LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
@@ -795,6 +797,11 @@ class DataService:
                     # once here and reused in the snapshot below. No-op unless Telegram is configured;
                     # never raises.
                     disk_usage = get_disk_usage()
+                    # Host-perf snapshot (#104), read once and reused for both the alerts and the
+                    # system panel below. Cheap /proc reads.
+                    hugepages = get_hugepages_status()
+                    memory = get_memory_usage()
+                    avx2 = get_cpu_avx2()
                     db_healthy = self.state_manager.is_db_healthy()
                     # Fetch fresh shares list (also used to populate the UI below) so the PPLNS-share
                     # gate the XvB alert watches is computed from the same figure the dashboard shows.
@@ -837,6 +844,11 @@ class DataService:
                             (self.latest_data.get("update") or {}).get("available")
                         ),
                         low_hr_warning=bool(alert_metrics and alert_metrics.low_hr_warning),
+                        # Persistent host-perf conditions (#104). HugePages "Disabled" = not
+                        # reserved (recoverable via reboot); low_ram compares live total to the
+                        # threshold. avx2 is badge-only (no alert), so it isn't passed here.
+                        hugepages_reserved=(hugepages[0] != "Disabled"),
+                        low_ram=(0 < (memory.get("total_gb") or 0) < LOW_RAM_GB),
                     )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).
@@ -889,8 +901,9 @@ class DataService:
                             "clearnet_sync": self.clearnet_sync_state,
                             "system": {
                                 "disk": disk_usage,
-                                "hugepages": get_hugepages_status(),
-                                "memory": get_memory_usage(),
+                                "hugepages": hugepages,
+                                "memory": memory,
+                                "avx2": avx2,
                                 "load": get_load_average(),
                                 "cpu_percent": get_cpu_usage(),
                             },

@@ -62,6 +62,8 @@ def _ev(
     xvb_registration_state="",
     update_available=False,
     low_hr_warning=False,
+    hugepages_reserved=True,
+    low_ram=False,
     now=0,
 ):
     return svc.evaluate(
@@ -79,6 +81,8 @@ def _ev(
         xvb_registration_state=xvb_registration_state,
         update_available=update_available,
         low_hr_warning=low_hr_warning,
+        hugepages_reserved=hugepages_reserved,
+        low_ram=low_ram,
         now=now,
     )
 
@@ -496,6 +500,44 @@ class TestDailySummary:
         # Marked done for today even though the build failed → no retry storm.
         monkeypatch.setattr(alert_mod.time, "localtime", _fake_localtime(8, 5))
         assert await svc.maybe_daily_summary(0, lambda: "digest") is None
+
+
+class TestHostAdvisories:
+    """Persistent host-perf advisories (#104): unlike the transient edges, these fire on the FIRST
+    observation of the problem (a stable bad box would never 'transition'), stay quiet while it
+    persists, and — for HugePages — clear when fixed. They are not tallied as daily incidents."""
+
+    def test_hugepages_not_reserved_fires_once_then_recovers(self):
+        svc = _svc()
+        # First cycle already bad → fires (not seed-silent).
+        assert _keys(_ev(svc, hugepages_reserved=False)) == [AlertService.EVT_HUGEPAGES]
+        # Persists → silent.
+        assert _keys(_ev(svc, hugepages_reserved=False)) == []
+        # Reboot applied HugePages → one recovery edge.
+        assert _keys(_ev(svc, hugepages_reserved=True)) == [AlertService.EVT_HUGEPAGES]
+        assert _keys(_ev(svc, hugepages_reserved=True)) == []
+
+    def test_healthy_hugepages_never_fires(self):
+        svc = _svc()
+        assert _keys(_ev(svc, hugepages_reserved=True)) == []
+        assert _keys(_ev(svc, hugepages_reserved=True)) == []
+
+    def test_low_ram_fires_once_no_recovery(self):
+        svc = _svc()
+        assert _keys(_ev(svc, low_ram=True)) == [AlertService.EVT_LOW_RAM]
+        assert _keys(_ev(svc, low_ram=True)) == []  # persists, silent
+        # RAM "recovering" (unlikely at runtime) is silent — no false good-news ping.
+        assert _keys(_ev(svc, low_ram=False)) == []
+
+    def test_advisories_not_counted_as_incidents(self):
+        # Static host facts shouldn't inflate the daily incident roll-up (#342).
+        svc = _svc()
+        _ev(svc, hugepages_reserved=False, low_ram=True)
+        assert svc.drain_incidents() == {}
+
+    def test_gated_off_by_toggle(self):
+        svc = _svc(notifier=_FakeNotifier(allow={AlertService.EVT_NODE_DOWN}))
+        assert _keys(_ev(svc, hugepages_reserved=False, low_ram=True)) == []
 
 
 class TestDegradationAlert:

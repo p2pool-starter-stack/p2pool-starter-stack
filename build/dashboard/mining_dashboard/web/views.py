@@ -23,6 +23,7 @@ from mining_dashboard.config.config import (
     HASHRATE_WINDOW_COLUMNS,
     HASHRATE_WINDOWS,
     HOST_IP,
+    LOW_RAM_GB,
     UPDATE_INTERVAL,
 )
 from mining_dashboard.helper.utils import (
@@ -831,6 +832,36 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
                 "text": f"Disk {disk_percent:.0f}% full",
                 "variant": "warn",
                 "title": "The data disk is filling up — free space or move a data_dir before it runs out.",
+            }
+        )
+
+    # Persistent host/performance conditions (#104), derived from live metrics so they self-correct
+    # (HugePages appear after a reboot, etc.). These mirror the thresholds setup/doctor pre-flight on.
+    system = data.get("system", {}) or {}
+    hp_status = (system.get("hugepages") or ["Unknown"])[0]
+    if hp_status == "Disabled":
+        badges.append(
+            {
+                "text": "⚠ HugePages off",
+                "variant": "warn",
+                "title": "HugePages aren't reserved — RandomX hashrate is capped until they are. Run setup's tuning (or edit GRUB) and reboot to apply.",
+            }
+        )
+    ram_total = (system.get("memory") or {}).get("total_gb", 0) or 0
+    if 0 < ram_total < LOW_RAM_GB:
+        badges.append(
+            {
+                "text": f"⚠ Low RAM ({ram_total:.0f} GB)",
+                "variant": "warn",
+                "title": f"Under {LOW_RAM_GB} GB of RAM — syncing (Tari especially) is memory-heavy and can OOM. Add RAM for a stable node.",
+            }
+        )
+    if system.get("avx2") is False:
+        badges.append(
+            {
+                "text": "⚠ No AVX2",
+                "variant": "warn",
+                "title": "This CPU lacks AVX2 — RandomX mining will be significantly slower. A hardware limit; nothing to change at runtime.",
             }
         )
 

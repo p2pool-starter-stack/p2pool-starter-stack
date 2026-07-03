@@ -63,7 +63,9 @@ class AlertService:
       keeps serving but history/shares/stats stop persisting.
 
     Edge state is seeded silently on the first observation (``None`` baselines), so a dashboard
-    restart can't replay a stale transition as a fresh alert.
+    restart can't replay a stale transition as a fresh alert. The exception is the persistent
+    host-perf advisories (HugePages not reserved, low RAM — #104): a stable bad state never
+    "transitions", so those fire on first observation instead of seeding silently.
 
     :meth:`evaluate` is pure (folds signals into the alert list, no I/O) so it's fully
     unit-testable; :meth:`process` calls it and dispatches each message off-thread so a slow or
@@ -88,6 +90,8 @@ class AlertService:
     EVT_DAILY_SUMMARY = "daily_summary"
     EVT_HASHRATE_LOW = "hashrate_low"
     EVT_HASHRATE_LOSS = "hashrate_loss"
+    EVT_HUGEPAGES = "hugepages"
+    EVT_LOW_RAM = "low_ram"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -124,6 +128,12 @@ class AlertService:
         self._prev_xvb_reg = None
         self._prev_update_available = None
         self._prev_hashrate_low = None
+        # Persistent host-perf advisories (#104): unlike the transient edges above, these fire on the
+        # FIRST observation of the problem (a stable low-RAM box would never "transition"), so their
+        # baseline is "no problem" (False) rather than None — a problem present on the first cycle is
+        # a real edge and alerts once.
+        self._prev_hugepages_problem = False
+        self._prev_low_ram = False
         # Tally of problem-state transitions since the last daily digest drained it (#342). Keyed by
         # event, counted at the exact edge so recoveries / steady state don't inflate it.
         self._incidents = {}
@@ -151,6 +161,8 @@ class AlertService:
         xvb_registration_state="",
         update_available=False,
         low_hr_warning=False,
+        hugepages_reserved=True,
+        low_ram=False,
         now=None,
     ):
         """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
@@ -214,6 +226,23 @@ class AlertService:
         alerts += self._registration_edges(xvb_enabled, xvb_registration_state)
         alerts += self._release_edges(update_available)
         alerts += self._hashrate_low_edges(low_hr_warning)
+
+        # --- Persistent host-perf advisories (#104): HugePages not reserved, low RAM ---
+        alerts += self._advisory_edge(
+            not hugepages_reserved,
+            "_prev_hugepages_problem",
+            self.EVT_HUGEPAGES,
+            "\U0001f7e0 \U0001f9e0 HugePages not reserved — RandomX hashrate is capped. Apply "
+            "setup's tuning (or edit GRUB) and reboot.",
+            recovery_text="\U0001f7e2 \U0001f9e0 HugePages now reserved — RandomX is unthrottled.",
+        )
+        alerts += self._advisory_edge(
+            low_ram,
+            "_prev_low_ram",
+            self.EVT_LOW_RAM,
+            "\U0001f7e0 \U0001f4be Low RAM for this stack — syncing is memory-heavy (Tari can OOM). "
+            "Add RAM for a stable node.",
+        )
 
         return [(evt, text) for evt, text in alerts if self.notifier.event_enabled(evt)]
 
@@ -446,6 +475,20 @@ class AlertService:
                 self._fmt("\U0001f7e2 \U0001f4c8 Hashrate back above the chosen XvB tier."),
             )
         ]
+
+    def _advisory_edge(self, problem, attr, event, problem_text, recovery_text=None):
+        """Persistent host-perf advisory (#104): fires once when ``problem`` is first observed true
+        (including on the first cycle — a stable bad state must still alert, unlike the seed-silent
+        transient edges), stays quiet while it persists, and — if ``recovery_text`` is given — fires
+        once when it clears. These are static host facts, not transient incidents, so they aren't
+        tallied in the daily incident log."""
+        prev = getattr(self, attr)
+        setattr(self, attr, problem)
+        if problem == prev:
+            return []
+        if problem:
+            return [(event, self._fmt(problem_text))]
+        return [(event, self._fmt(recovery_text))] if recovery_text else []
 
     def _record_incident(self, key):
         """Tally one problem-state transition for the daily incident log (#342)."""
