@@ -808,6 +808,28 @@ assert_contains "authorized_clients carries a v3 descriptor" "$(cat "$ac_file" 2
 )
 if [ -d "$ac_root/dashboard/authorized_clients" ]; then bad "client-auth off clears authorized_clients" "dir still present"; else ok "client-auth off clears authorized_clients"; fi
 
+echo "== unit: ensure_onion_password auto-generates (#343) =="
+# Onion on + no password -> generate a strong one into config.json (login stays admin), so the
+# fail-closed onion is usable without the operator inventing a 16+ char secret. CONFIG_FILE is
+# readonly (config.json in the cwd), so drive it via a dedicated dir rather than an override.
+autopw_dir="$SANDBOX/onion-autopw"
+mkdir -p "$autopw_dir"
+autopw_cfg="$autopw_dir/config.json"
+printf '{"dashboard":{"onion":{"enabled":true}}}' >"$autopw_cfg"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+genpw="$(jq -r '.dashboard.auth.password // ""' "$autopw_cfg")"
+if [ "${#genpw}" -ge 16 ]; then ok "ensure_onion_password writes a >=16-char password"; else bad "ensure_onion_password writes a >=16-char password" "length ${#genpw}"; fi
+# Idempotent: a second run leaves an already-set password alone (no churn).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+assert_eq "ensure_onion_password leaves an existing password alone" "$(jq -r '.dashboard.auth.password' "$autopw_cfg")" "$genpw"
+# No-op when the onion is off — never touches config.json.
+printf '{"dashboard":{}}' >"$autopw_cfg"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+assert_eq "ensure_onion_password no-op when onion off" "$(jq -r '.dashboard.auth.password // "none"' "$autopw_cfg")" "none"
+
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
 # 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).
@@ -1448,15 +1470,7 @@ rc=$?
 assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
 assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.password"
 
-# Dashboard onion (#343): FAIL CLOSED. Enabling the onion without a login must abort apply — a
-# published .onion is a control panel at a stable address and cannot be unauthenticated.
-seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true}} }\n' "$WALLET" >"$V/config.json"
-out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-rc=$?
-assert_rc "onion without a password rejected" "$rc" "1"
-assert_contains "onion-needs-login message" "$out" "dashboard.auth.password is empty"
-# And a weak (LAN-acceptable but <16-char) password is rejected once the onion is on. This case
+# Dashboard onion (#343): a weak (LAN-acceptable but <16-char) password is rejected once the onion is on. This case
 # passes the length regex and so reaches the bcrypt step, which reads docker-compose.yml for the
 # pinned Caddy image — make sure it's present here (it's copied for later tests further down too).
 cp "$ROOT/docker-compose.yml" "$V/docker-compose.yml"

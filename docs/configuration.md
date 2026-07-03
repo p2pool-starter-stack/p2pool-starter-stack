@@ -92,7 +92,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
 | `dashboard.auth.username` | `admin` | Login name for the dashboard when a password is set (see below). Letters, digits, and `. _ @ -`, 1–64 chars. Ignored while `dashboard.auth.password` is empty. |
 | `dashboard.auth.password` | `""` _(off)_ | Optional password to open the dashboard. Turns on a Caddy [HTTP basic-auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth) prompt in front of every page. `""` (default) = no login, anyone who can reach the dashboard sees it (fine for a private LAN appliance). Any 8–128-character string (no double-quotes) turns the prompt on. The plaintext lives only in your owner-only `config.json`; pithead bcrypt-hashes it with the pinned Caddy image and stores only the hash in `.env`, so the password itself is never persisted in rendered state. Basic-auth credentials travel in cleartext over HTTP, so keep `dashboard.secure: true` (the default); pithead warns if you set a password with `secure: false`. See [Exposing the dashboard safely](#exposing-the-dashboard-safely). |
-| `dashboard.onion.enabled` | `false` _(off)_ | Privacy-relevant, default off. `true` publishes the dashboard as a Tor v3 onion service so you can reach it remotely over Tor — no port-forward, no VPN, no public IP. It fronts the authenticated Caddy login on the internal bridge, never the LAN. pithead **fails closed**: it refuses to enable the onion without a `dashboard.auth.password` and requires that password to be at least 16 characters. See [Remote access over Tor](#remote-access-over-tor-onion-service). |
+| `dashboard.onion.enabled` | `false` _(off)_ | Privacy-relevant, default off. `true` publishes the dashboard as a Tor v3 onion service so you can reach it remotely over Tor — no port-forward, no VPN, no public IP. It fronts the authenticated Caddy login on the internal bridge, never the LAN. pithead **fails closed**: if no `dashboard.auth.password` is set it generates a strong one (saved to `config.json`, login `admin`); a password you set yourself must be at least 16 characters. See [Remote access over Tor](#remote-access-over-tor-onion-service). |
 | `dashboard.onion.client_auth` | `true` _(on)_ | Only applies when `dashboard.onion.enabled` is `true`. Keeps Tor v3 **client authorization** on: the onion does not respond at all without your client key, so the address can't be scanned or brute-forced — the password becomes a second factor behind it. pithead generates the keypair and prints the client line via `pithead onion-client-key`. Set to `false` for a deliberately password-only onion. |
 | `dashboard.timezone` | `auto` | Timezone for the dashboard's timestamps and charts. `auto` = the host machine's timezone (auto-detected, falling back to `Etc/UTC`); set an IANA name (e.g. `America/Chicago`) to override. |
 | `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
@@ -227,11 +227,12 @@ The stack already runs Tor for the mining traffic; this rides the same daemon.
 
 Because a published `.onion` puts a control panel at a stable address, pithead **fails closed**:
 
-- It refuses to render the onion unless `dashboard.auth.password` is set, requires at least 16
-  characters, and rejects obviously weak choices (a single repeated character, well-known patterns).
-  A published address is reachable by anyone who learns it, and per-request rate-limiting is
-  meaningless over Tor — every request arrives from the local Tor daemon, so there is no source IP
-  to throttle. Use a passphrase.
+- If you enable the onion without a `dashboard.auth.password`, pithead **generates a strong one**,
+  saves it to `config.json`, and uses `admin` as the login — so the onion is never published without
+  a password. If you set the password yourself it must be at least 16 characters, and pithead rejects
+  obviously weak choices (a single repeated character, well-known patterns). A published address is
+  reachable by anyone who learns it, and per-request rate-limiting is meaningless over Tor — every
+  request arrives from the local Tor daemon, so there is no source IP to throttle. Use a passphrase.
 - **Client authorization is on by default** (`client_auth: true`). A client-auth'd onion does not
   respond at all without your client key, so the address cannot be scanned or brute-forced — the
   password becomes a second factor behind it. This is the strong primary gate.

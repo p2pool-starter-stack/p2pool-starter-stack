@@ -1704,6 +1704,23 @@ monero_address_type() {
     esac
 }
 
+# When the dashboard onion is enabled but no password is set, generate a strong one and save it to
+# config.json (#343). Keeps the fail-closed onion usable without forcing the operator to invent a
+# 16+ char secret; the plaintext lives in owner-only config.json, exactly like a hand-set password
+# (login stays "admin"). Runs only on the config-writing paths (setup/apply), before parse validates
+# — never on read-only commands, which must not mutate config.json.
+ensure_onion_password() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    [ "$(config_bool '.dashboard.onion.enabled' false)" == "true" ] || return 0
+    [ -z "$(jq -r '.dashboard.auth.password // ""' "$CONFIG_FILE")" ] || return 0
+    local gen tmp
+    gen=$(generate_node_password) # 32 alnum chars: clears the >=16 floor, no quotes, no weak pattern
+    tmp=$(mktemp) || error "Could not create a temp file to save the generated dashboard password."
+    jq --arg p "$gen" '.dashboard.auth.password = $p' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE" ||
+        error "Could not save the generated dashboard password to $CONFIG_FILE."
+    log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
+}
+
 parse_and_validate_config() {
     log "Parsing configuration..."
     if ! jq -e . "$CONFIG_FILE" >/dev/null 2>&1; then
@@ -2141,13 +2158,15 @@ onion_client_key() {
     privkey=$(env_get DASHBOARD_ONION_CLIENT_PRIVKEY)
     { [ -n "$onion" ] && [ "$onion" != "placeholder" ] && [ -n "$privkey" ] && [ "$privkey" != "placeholder" ]; } ||
         error "The dashboard onion isn't fully provisioned yet — run '$0 apply' first."
-    echo "Tor onion client-auth for the dashboard (#343) — KEEP THIS PRIVATE, it is a secret key."
-    echo "Add this one line to a file in your Tor client's ClientOnionAuthDir"
-    echo "(e.g. /var/lib/tor/onion_auth/dashboard.auth_private, the dir set by ClientOnionAuthDir, mode 0700):"
-    echo ""
-    echo "  ${onion%.onion}:descriptor:x25519:${privkey}"
-    echo ""
-    echo "Then reach the dashboard at:  http://$onion"
+    cat <<EOF
+Tor onion client-auth for the dashboard (#343) — KEEP THIS PRIVATE, it is a secret key.
+Add this one line to a file in your Tor client's ClientOnionAuthDir
+(e.g. /var/lib/tor/onion_auth/dashboard.auth_private, the dir set by ClientOnionAuthDir, mode 0700):
+
+  ${onion%.onion}:descriptor:x25519:${privkey}
+
+Then reach the dashboard at:  http://$onion
+EOF
 }
 
 # `rotate-dashboard-onion` (#343): mint a fresh .onion address and a fresh client-auth key. A leaked
@@ -2845,6 +2864,7 @@ setup() {
 
     check_prerequisites
     ensure_config_exists
+    ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one
     parse_and_validate_config
     preflight_resources          # WARN-only: low disk/RAM heads-up before committing to a sync (#87)
     check_stratum_exposure setup # WARN-only: public-IP host => unauthenticated stratum :3333 exposed (#113)
@@ -3072,6 +3092,7 @@ apply() {
     done
 
     require_env
+    ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one
     parse_and_validate_config
     load_preserved_state
     if [ "$MONERO_ONION" == "placeholder" ] || ! is_deployed; then
