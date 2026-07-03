@@ -155,10 +155,10 @@ map and the remaining lock-down steps.
   separate control proxy scoped to `start`/`stop` only (its ruleset denies create/kill/exec and all
   reads). Splitting them means the write grant needed for node-down worker failover can't widen the
   read-only proxy's access. General Docker write access stays off. Both proxies are **isolated off
-  the mining bridge** (#345): they sit on their own `internal` network and are published only to the
-  host loopback, so the host-networked dashboard reaches them but no mining container can — a
-  compromised `monerod`/`tari`/`p2pool`/`xmrig-proxy` cannot read other containers' env (inspect) or
-  start/stop the stack through them.
+  the mining bridge** (#345): they sit on their own network and are published only to the host
+  loopback, so the host-networked dashboard reaches them but no mining container can — a compromised
+  `monerod`/`tari`/`p2pool`/`xmrig-proxy` cannot read other containers' env (inspect) or start/stop
+  the stack through them.
 - **Locked-down config.** `config.json` is created `chmod 600` (owner-only), and the internal RPC
   proxy token is generated once and preserved across re-runs.
 

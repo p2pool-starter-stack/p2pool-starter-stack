@@ -582,10 +582,10 @@ networks:
         - subnet: ${NETWORK_SUBNET:-172.28.0.0/24}
   # Socket-proxy isolation (#345): the two Docker-socket proxies live here, off the mining bridge, so
   # no mining container can reach them. The dashboard (host networking) reaches them via their
-  # loopback-published ports, not this network. `internal: true` gives it no route to the internet
-  # (fail-closed, like the #270 egress firewall does for the mining bridge) — the proxies never dial
-  # out; published ports (host->container) still work. Docker auto-assigns a non-overlapping subnet.
+  # loopback-published ports, not this network. NOT `internal` — Docker doesn't set up port
+  # publishing on internal networks, and the loopback publish is how the dashboard reaches them. The
+  # proxies never dial out (pinned tecnativa image, cap_drop ALL, read-only rootfs), so proxy_net not
+  # being under the #270 egress firewall is not a leak surface. Docker auto-assigns the subnet.
   proxy_net:
     driver: bridge
     name: proxy_net
-    internal: true
