@@ -204,9 +204,9 @@ Run `./pithead apply` after editing. The commands:
 | `/workers` | Every rig's online/offline state, with uptime for the ones that are up. |
 | `/sync` | Monero and Tari sync progress (percent and block height). |
 | `/system` | Host resources: disk, RAM, CPU + load, and HugePages. |
-| `/pool` | P2Pool sidechain type, pool hashrate, Monero network height + difficulty, PPLNS shares in window, **sidechain blocks found**, **share acceptance** (accepted/rejected + reject %), and the **best share** difficulty found. |
+| `/pool` | P2Pool sidechain type, pool hashrate, Monero network height + difficulty, PPLNS shares in window, current **effort** (luck indicator), **sidechain blocks found**, **share acceptance** (accepted/rejected + reject %), and the **best share** difficulty found. |
 | `/xvb` | XvB mode, current and target tier, hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
-| `/earnings` | Estimated P2Pool XMR per day/month from your current hashrate (P2Pool only — excludes XvB-donated hashrate and Tari). |
+| `/earnings` | Estimated P2Pool XMR per day/month, from both your **1h** and (once available) steadier **24h** average hashrate (P2Pool only — excludes XvB-donated hashrate and Tari). |
 | `/help` | The command list. |
 
 The numbers come from the **same source as the dashboard**, so a reply and the web view always

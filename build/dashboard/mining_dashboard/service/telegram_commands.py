@@ -276,6 +276,10 @@ def format_pool(metrics, data=None, host_label=""):
     lines.append(
         f"PPLNS shares: {metrics.shares_in_window} in window ({metrics.pplns_window} blocks)"
     )
+    # Current share effort — a luck indicator (<100% = finding shares faster than average).
+    stratum = data.get("stratum", {}) or {}
+    if "current_effort" in stratum:
+        lines.append(f"Effort: {stratum['current_effort']:.1f}%")
     # Share submission health from the xmrig-proxy /summary (#82): accepted/rejected + best found.
     summary = data.get("proxy_summary", {}) or {}
     accepted = summary.get("accepted", 0) or 0
@@ -324,16 +328,23 @@ def format_earnings(metrics, network, host_label=""):
     coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
     if coeff_day <= 0:
         return f"{_prefix(host_label)}\U0001f4b0 Earnings estimate unavailable (waiting on network data)."
-    daily = coeff_day * metrics.p2pool_1h
-    return "\n".join(
-        [
-            f"{_prefix(host_label)}\U0001f4b0 Estimated P2Pool earnings",
-            f"Hashrate (P2Pool 1h): {format_hashrate(metrics.p2pool_1h)}",
-            f"~{daily:.6f} XMR/day",
-            f"~{daily * 30:.5f} XMR/30d",
-            "Estimate only — excludes XvB-donated hashrate and Tari merge-mining.",
-        ]
-    )
+    daily_1h = coeff_day * metrics.p2pool_1h
+    lines = [
+        f"{_prefix(host_label)}\U0001f4b0 Estimated P2Pool earnings",
+        f"1h avg {format_hashrate(metrics.p2pool_1h)} → ~{daily_1h:.6f} XMR/day",
+    ]
+    # The 24h average smooths the variance a 1h window carries, so it's the steadier projection —
+    # shown (and used for the 30-day figure) only once there's a day of history to average.
+    if metrics.p2pool_24h > 0:
+        daily_24h = coeff_day * metrics.p2pool_24h
+        lines.append(
+            f"24h avg {format_hashrate(metrics.p2pool_24h)} → ~{daily_24h:.6f} XMR/day "
+            f"· ~{daily_24h * 30:.5f} XMR/30d"
+        )
+    else:
+        lines.append(f"~{daily_1h * 30:.5f} XMR/30d")
+    lines.append("Estimate only — excludes XvB-donated hashrate and Tari merge-mining.")
+    return "\n".join(lines)
 
 
 # Friendly labels for the daily incident log (#342), keyed by AlertService event.

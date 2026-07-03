@@ -244,6 +244,15 @@ def test_pool_omits_share_lines_before_first_poll():
     assert "Shares to pool" not in out
     assert "Best share" not in out
     assert "Blocks found" not in out
+    assert "Effort" not in out  # no stratum data → no effort line
+
+
+def test_pool_effort_when_stratum_present():
+    # Effort is a luck indicator; shown only once stratum has been polled (the key is present).
+    out = tc.format_pool(_metrics(), {"stratum": {"current_effort": 87.3}})
+    assert "Effort: 87.3%" in out
+    # Effort right after a block can legitimately be 0.0 — still shown (key present), not hidden.
+    assert "Effort: 0.0%" in tc.format_pool(_metrics(), {"stratum": {"current_effort": 0.0}})
 
 
 def test_xvb_enabled_with_share():
@@ -280,8 +289,20 @@ def test_status_merge_mining_line():
 
 def test_earnings_estimate():
     # network reward present + a real difficulty → a positive daily figure.
-    out = tc.format_earnings(_metrics(p2pool_1h=8000.0), {"reward": 600_000_000_000})
-    assert "XMR/day" in out
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0, p2pool_24h=8100.0), {"reward": 600_000_000_000}
+    )
+    assert "1h avg" in out and "XMR/day" in out
+    # The 24h average is shown once available and drives the steadier 30d projection.
+    assert "24h avg" in out and "XMR/30d" in out
+
+
+def test_earnings_falls_back_to_1h_30d_without_24h_history():
+    # A fresh node with no 24h average yet still gets a 30d figure (from the 1h rate).
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0, p2pool_24h=0.0), {"reward": 600_000_000_000}
+    )
+    assert "24h avg" not in out
     assert "XMR/30d" in out
 
 
