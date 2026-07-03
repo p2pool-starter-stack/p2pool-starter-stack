@@ -279,6 +279,18 @@ def test_daily_summary_without_xvb_omits_split():
     assert "to XvB" not in out
 
 
+def test_daily_summary_incident_log():
+    m, data = _metrics(xvb_enabled=False), {"workers": [], "shares": []}
+    # Incidents present → a roll-up line, highest count first.
+    out = tc.format_daily_summary(m, data, now=0, incidents={"worker_offline": 3, "node_down": 1})
+    assert "Incidents (24h): 3× worker offline · 1× node down" in out
+    # Empty tally → an explicit all-clear.
+    assert "No incidents in the last 24h" in tc.format_daily_summary(m, data, now=0, incidents={})
+    # Not tracked (None) → no incident line at all.
+    none = tc.format_daily_summary(m, data, now=0, incidents=None)
+    assert "Incidents" not in none and "No incidents" not in none
+
+
 def test_host_label_prefix():
     assert tc.format_sync(_metrics(), host_label="rig-box").startswith("[rig-box] ")
     # The placeholder is never printed.

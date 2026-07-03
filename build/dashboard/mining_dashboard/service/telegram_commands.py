@@ -232,7 +232,34 @@ def format_earnings(metrics, network, host_label=""):
     )
 
 
-def format_daily_summary(metrics, data, host_label="", now=None):
+# Friendly labels for the daily incident log (#342), keyed by AlertService event.
+_INCIDENT_LABELS = {
+    "node_down": "node down",
+    "worker_offline": "worker offline",
+    "disk_space": "disk warning",
+    "db_unhealthy": "DB write fail",
+    "xvb_no_share": "XvB no-share",
+    "xvb_registration": "XvB registration",
+    "clearnet_exposed": "clearnet exposure",
+    "hashrate_low": "hashrate low",
+}
+
+
+def _incident_line(incidents):
+    """One-line roll-up of the day's problems, or an all-clear. ``incidents`` is a {event: count}
+    dict (from ``AlertService.drain_incidents``); ``None`` means the caller didn't track any."""
+    if incidents is None:
+        return None
+    if not incidents:
+        return "\U0001f7e2 No incidents in the last 24h"
+    parts = [
+        f"{n}× {_INCIDENT_LABELS.get(k, k)}"
+        for k, n in sorted(incidents.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    return "\U0001f6a8 Incidents (24h): " + " · ".join(parts)
+
+
+def format_daily_summary(metrics, data, host_label="", now=None, incidents=None):
     """The once-a-day retrospective pushed by the alerter — **what happened across the fleet over
     the last 24h**, not a live snapshot. Reuses the same domain values the dashboard shows.
 
@@ -248,6 +275,9 @@ def format_daily_summary(metrics, data, host_label="", now=None):
     shares_24h = sum(1 for s in data.get("shares", []) if s.get("ts", 0) >= now - 86400)
 
     lines = [f"{_prefix(host_label)}\U0001f4c5 Daily summary — {stamp}"]
+    incident_line = _incident_line(incidents)
+    if incident_line:
+        lines.append(incident_line)
     lines.append(f"⚡ 24h hashrate: {format_hashrate(fleet_24h)}")
     if metrics.xvb_enabled:
         routed = (metrics.p2pool_24h or 0) + (metrics.xvb_routed_24h or 0)

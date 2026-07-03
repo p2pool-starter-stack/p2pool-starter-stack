@@ -831,8 +831,14 @@ class DataService:
                     # is on, which is also the only time maybe_daily_summary would send).
                     await self.alert_service.maybe_daily_summary(
                         time.time(),
-                        # bind this cycle's metrics (the provider runs within this iteration).
-                        lambda m=alert_metrics: format_daily_summary(m, self.latest_data, HOST_IP),
+                        # bind this cycle's metrics (the provider runs within this iteration); drain
+                        # the day's incident tally into the digest (#342).
+                        lambda m=alert_metrics: format_daily_summary(
+                            m,
+                            self.latest_data,
+                            HOST_IP,
+                            incidents=self.alert_service.drain_incidents(),
+                        ),
                     )
 
                     self.latest_data.update(

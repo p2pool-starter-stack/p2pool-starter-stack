@@ -123,6 +123,9 @@ class AlertService:
         self._prev_xvb_reg = None
         self._prev_update_available = None
         self._prev_hashrate_low = None
+        # Tally of problem-state transitions since the last daily digest drained it (#342). Keyed by
+        # event, counted at the exact edge so recoveries / steady state don't inflate it.
+        self._incidents = {}
         # One-shot "stack is online" ping, sent on the first cycle after the dashboard starts.
         self._announced_online = False
 
@@ -192,6 +195,8 @@ class AlertService:
         if workers_expected:
             for name, event in self.workers.update(workers, now=now):
                 evt, template = self._WORKER_EDGES[event]
+                if event == "offline":
+                    self._record_incident(self.EVT_WORKER_OFFLINE)
                 alerts.append((evt, self._fmt(template.format(name=name))))
         else:
             self.workers.reset()
@@ -217,6 +222,7 @@ class AlertService:
         if prev is None or down == prev:
             return []
         if down:
+            self._record_incident(self.EVT_NODE_DOWN)
             return [
                 (
                     self.EVT_NODE_DOWN,
@@ -246,6 +252,8 @@ class AlertService:
         if prev is None or level == prev:
             return []
         pct = f"{disk_percent:.0f}%"
+        if level in ("critical", "warn"):
+            self._record_incident(self.EVT_DISK_SPACE)
         if level == "critical":
             return [
                 (
@@ -277,6 +285,7 @@ class AlertService:
         if prev is None or db_healthy == prev:
             return []
         if not db_healthy:
+            self._record_incident(self.EVT_DB_UNHEALTHY)
             return [
                 (
                     self.EVT_DB_UNHEALTHY,
@@ -310,6 +319,7 @@ class AlertService:
         if prev is None or has_share == prev:
             return []
         if not has_share:
+            self._record_incident(self.EVT_XVB_NO_SHARE)
             return [
                 (
                     self.EVT_XVB_NO_SHARE,
@@ -336,6 +346,7 @@ class AlertService:
         if prev is None or clearnet_active == prev:
             return []
         if clearnet_active:
+            self._record_incident(self.EVT_CLEARNET_EXPOSED)
             return [
                 (
                     self.EVT_CLEARNET_EXPOSED,
@@ -365,6 +376,8 @@ class AlertService:
         self._prev_xvb_reg = state
         if prev is None or state == prev:
             return []
+        if state in ("invalid", "failing"):
+            self._record_incident(self.EVT_XVB_REGISTRATION)
         if state == "invalid":
             return [
                 (
@@ -416,6 +429,7 @@ class AlertService:
         if prev is None or bool(low_hr_warning) == prev:
             return []
         if low_hr_warning:
+            self._record_incident(self.EVT_HASHRATE_LOW)
             return [
                 (
                     self.EVT_HASHRATE_LOW,
@@ -431,6 +445,16 @@ class AlertService:
                 self._fmt("\U0001f7e2 \U0001f4c8 Hashrate back above the chosen XvB tier."),
             )
         ]
+
+    def _record_incident(self, key):
+        """Tally one problem-state transition for the daily incident log (#342)."""
+        self._incidents[key] = self._incidents.get(key, 0) + 1
+
+    def drain_incidents(self):
+        """Return the incidents tallied since the last drain and reset the counter. Called by the
+        daily digest so the count spans ~the last day (since the previous digest)."""
+        incidents, self._incidents = self._incidents, {}
+        return incidents
 
     def _fmt(self, text):
         return f"[{self.host_label}] {text}" if self.host_label else text

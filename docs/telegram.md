@@ -36,7 +36,7 @@ transition, not a stream:
 | 📉 **Hashrate low for tier** | You picked a fixed XvB donation tier your hashrate can't sustain — lower the tier or add hashrate. Fires on the transition and clears when it recovers. |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
-| 📅 **Daily summary** | A once-a-day retrospective of the last 24h across your whole fleet — date/time, **24h hashrate** with the **P2Pool / XvB split**, **shares found in the day**, an **estimated daily earnings** figure, and a **per-machine 24h breakdown** — pushed at a set local time (**08:00** by default; `telegram.daily_summary_time`). |
+| 📅 **Daily summary** | A once-a-day retrospective of the last 24h across your whole fleet — date/time, an **incident roll-up** (what went wrong during the day, or an all-clear), **24h hashrate** with the **P2Pool / XvB split**, **shares found in the day**, an **estimated daily earnings** figure, and a **per-machine 24h breakdown** — pushed at a set local time (**08:00** by default; `telegram.daily_summary_time`). |
 
 Every message is prefixed with your dashboard hostname (e.g. `[rig-box.lan]`), so if you point
 more than one stack at the same chat you can tell them apart.
