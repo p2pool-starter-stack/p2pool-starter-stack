@@ -665,6 +665,14 @@ INFO*) ok "dash login fingerprint stays silent (no preview line)" ;;
 *) bad "dash login fingerprint stays silent" "unexpected message emitted" ;;
 esac
 
+# Dashboard onion (#343): enabling is DEST (tor+caddy recreated); the client PRIVATE key must never
+# surface in the change preview, even though a fresh key co-changes with the toggle.
+assert_contains "onion enable is DEST" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_ONION_ENABLED false true)" "DEST"
+case "$(run_sourced "$SANDBOX" describe_change DASHBOARD_ONION_CLIENT_PRIVKEY OLDPRIVKEYVALUE NEWPRIVKEYVALUE)" in
+*OLDPRIVKEYVALUE* | *NEWPRIVKEYVALUE*) bad "onion client privkey hidden in preview" "the client private key leaked into the change preview" ;;
+*) ok "onion client privkey hidden in preview (no value shown)" ;;
+esac
+
 # New-release check toggle (#224): enabling/disabling is INFO, and the message names GitHub + Tor.
 assert_contains "update-check enable is INFO" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "INFO"
 assert_contains "update-check enable mentions GitHub/Tor" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_CHECK_UPDATES false true)" "GitHub"
@@ -721,6 +729,106 @@ case "$caddy_http" in
 *"tls internal"*) bad "caddyfile insecure has no TLS" "'tls internal' present on a plain-HTTP site" ;;
 *) ok "caddyfile insecure has no TLS" ;;
 esac
+
+echo "== unit: generate_caddyfile onion vhost (#343) =="
+# With the dashboard onion enabled, generate_caddyfile appends a SECOND site bound to the bridge
+# gateway (NETWORK_PREFIX.1) — reachable only from the tor container, never the LAN — serving plain
+# HTTP (Tor is the transport) and carrying the SAME basic_auth block as the LAN site.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "onion vhost bound to the bridge gateway" "$caddy_onion" "http://172.28.0.1 {"
+assert_contains "onion vhost carries basic_auth" "$caddy_onion" "basic_auth"
+# The onion site (everything after the gateway address) must not get a TLS directive.
+onion_site="${caddy_onion#*172.28.0.1}"
+case "$onion_site" in
+*"tls internal"*) bad "onion vhost is plain HTTP" "'tls internal' present on the onion site" ;;
+*) ok "onion vhost is plain HTTP (no tls internal)" ;;
+esac
+# Fail-closed belt: onion enabled but NO auth hash -> generate_caddyfile must refuse (rc 1).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+)
+assert_rc "onion without a login refuses to render" "$?" "1"
+# Onion OFF -> no gateway vhost appears at all.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_noonion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=false NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_not_contains "no onion vhost when disabled" "$caddy_noonion" "172.28.0.1"
+
+echo "== unit: onion client-auth crypto (#343) =="
+# Portable base32 (RFC 4648 vectors) — no external `base32` binary (absent on macOS).
+assert_eq "b32encode_hex('f') = MY" "$(run_sourced "$SANDBOX" b32encode_hex 66)" "MY"
+assert_eq "b32encode_hex('foobar') = MZXW6YTBOI" "$(run_sourced "$SANDBOX" b32encode_hex 666f6f626172)" "MZXW6YTBOI"
+# x25519 client-auth keypair: two distinct 52-char base32 keys.
+kp="$(run_sourced "$SANDBOX" generate_onion_client_keypair)"
+set -- $kp
+assert_eq "client pubkey is 52-char base32" "${#1}" "52"
+assert_eq "client privkey is 52-char base32" "${#2}" "52"
+if [ "$1" != "$2" ]; then ok "client pub != priv"; else bad "client pub != priv" "identical keys generated"; fi
+case "$1$2" in *[!A-Z2-7]*) bad "client keys use the base32 alphabet" "non-base32 char present" ;; *) ok "client keys use the base32 alphabet" ;; esac
+
+# provision_onion_client_auth writes the authorized_clients descriptor into the hidden-service dir.
+ac_root="$SANDBOX/tor-ac"
+rm -rf "$ac_root"
+mkdir -p "$ac_root"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    ensure_owner() { :; } # skip the sudo chown in the unit sandbox
+    set +e
+    DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION_CLIENT_AUTH=true \
+        DASHBOARD_ONION_CLIENT_PUBKEY=placeholder TOR_DATA_DIR="$ac_root" \
+        APP_UID=$(id -u) APP_GID=$(id -g) provision_onion_client_auth >/dev/null 2>&1
+)
+ac_file="$ac_root/dashboard/authorized_clients/dashboard.auth"
+if [ -f "$ac_file" ]; then ok "authorized_clients/dashboard.auth is written"; else bad "authorized_clients/dashboard.auth is written" "file missing"; fi
+assert_contains "authorized_clients carries a v3 descriptor" "$(cat "$ac_file" 2>/dev/null)" "descriptor:x25519:"
+# With client-auth OFF, an existing authorized_clients dir is cleared (onion falls back to password-only).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION_CLIENT_AUTH=false TOR_DATA_DIR="$ac_root" \
+        provision_onion_client_auth >/dev/null 2>&1
+)
+if [ -d "$ac_root/dashboard/authorized_clients" ]; then bad "client-auth off clears authorized_clients" "dir still present"; else ok "client-auth off clears authorized_clients"; fi
+
+echo "== unit: ensure_onion_password auto-generates (#343) =="
+# Onion on + no password -> generate a strong one into config.json (login stays admin), so the
+# fail-closed onion is usable without the operator inventing a 16+ char secret. CONFIG_FILE is
+# readonly (config.json in the cwd), so drive it via a dedicated dir rather than an override.
+autopw_dir="$SANDBOX/onion-autopw"
+mkdir -p "$autopw_dir"
+autopw_cfg="$autopw_dir/config.json"
+printf '{"dashboard":{"onion":{"enabled":true}}}' >"$autopw_cfg"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+genpw="$(jq -r '.dashboard.auth.password // ""' "$autopw_cfg")"
+if [ "${#genpw}" -ge 16 ]; then ok "ensure_onion_password writes a >=16-char password"; else bad "ensure_onion_password writes a >=16-char password" "length ${#genpw}"; fi
+# Idempotent: a second run leaves an already-set password alone (no churn).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+assert_eq "ensure_onion_password leaves an existing password alone" "$(jq -r '.dashboard.auth.password' "$autopw_cfg")" "$genpw"
+# No-op when the onion is off — never touches config.json.
+printf '{"dashboard":{}}' >"$autopw_cfg"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+(cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
+assert_eq "ensure_onion_password no-op when onion off" "$(jq -r '.dashboard.auth.password // "none"' "$autopw_cfg")" "none"
 
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
@@ -1361,6 +1469,52 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
 assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.password"
+
+# Dashboard onion (#343): a weak (LAN-acceptable but <16-char) password is rejected once the onion is on. This case
+# passes the length regex and so reaches the bcrypt step, which reads docker-compose.yml for the
+# pinned Caddy image — make sure it's present here (it's copied for later tests further down too).
+cp "$ROOT/docker-compose.yml" "$V/docker-compose.yml"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"shortish12"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "onion with a <16-char password rejected" "$rc" "1"
+assert_contains "onion strong-password message" "$out" "at least 16 characters"
+# Weak-password denylist: even at 16+ chars, a single repeated character or a well-known pattern is
+# rejected once the onion is on.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"aaaaaaaaaaaaaaaa"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "onion repeated-character password rejected" "$?" "1"
+assert_contains "repeated-character message" "$out" "single repeated character"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"changemechangeme"}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "onion well-known-weak password rejected" "$?" "1"
+assert_contains "well-known-weak message" "$out" "well-known weak pattern"
+
+# onion-client-key (#343): prints the client descriptor line when client-auth is on; errors when off.
+# The line the operator pastes is "<addr-without-.onion>:descriptor:x25519:<privkey>".
+cat >"$V/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_ONION_ENABLED=true
+DASHBOARD_ONION_CLIENT_AUTH=true
+DASHBOARD_ONION_ADDRESS=abcd234.onion
+DASHBOARD_ONION_CLIENT_PRIVKEY=UNITTESTPRIVKEYBASE32
+EOF
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
+assert_rc "onion-client-key succeeds when client-auth on" "$?" "0"
+assert_contains "onion-client-key prints the descriptor line (system Tor)" "$out" "abcd234:descriptor:x25519:UNITTESTPRIVKEYBASE32"
+assert_contains "onion-client-key offers the Tor Browser path" "$out" "Tor Browser"
+cat >"$V/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_ONION_ENABLED=true
+DASHBOARD_ONION_CLIENT_AUTH=false
+DASHBOARD_ONION_ADDRESS=abcd234.onion
+EOF
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
+assert_rc "onion-client-key errors when client-auth off" "$?" "1"
+assert_contains "onion-client-key off message" "$out" "password-only"
 
 # Wallet-type hard-fail (#250): p2pool pays via coinbase, which CANNOT reach a subaddress or an
 # integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is
