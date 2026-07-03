@@ -274,6 +274,25 @@ def test_reply_for_earnings(monkeypatch):
     assert "XMR/day" in bot.reply_for("/earnings")
 
 
+def test_reply_for_hashrate_and_sync(monkeypatch):
+    workers = [{"name": "z", "status": "online", "h15": 1000}]
+    bot = _bot(monkeypatch, latest_data={"workers": workers})
+    assert "Hashrate" in bot.reply_for("/hashrate")
+    assert "Sync status" in bot.reply_for("/sync")
+
+
+def test_safe_reply_for_swallows_errors(monkeypatch):
+    # A formatting/read bug in reply_for must never kill the poll loop — it just goes quiet.
+    ds = SimpleNamespace(latest_data={}, state_manager=object())
+    bot = tc.TelegramCommandBot(ds, enabled=True, bot_token="t", chat_id="1")
+
+    def boom(_text):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(bot, "reply_for", boom)
+    assert bot._safe_reply_for("/status") is None
+
+
 # --- enabled gating -----------------------------------------------------------------------
 
 

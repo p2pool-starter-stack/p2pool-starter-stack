@@ -1,5 +1,15 @@
+from mining_dashboard.config.config import TELEGRAM_EVENTS
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
+
+
+def test_every_alert_event_has_a_config_toggle():
+    # The canonical event set (AlertService.EVT_*) must line up 1:1 with the per-event toggles in
+    # config.py TELEGRAM_EVENTS — so adding an alert but forgetting its toggle (or vice versa) fails
+    # here instead of silently shipping an un-toggleable / dead event. The config-surface side
+    # (config.reference.json, docker-compose.yml, pithead render) is guarded in tests/stack/run.sh.
+    evt_values = {v for k, v in vars(AlertService).items() if k.startswith("EVT_")}
+    assert evt_values == set(TELEGRAM_EVENTS)
 
 
 class _FakeNotifier:
@@ -272,6 +282,12 @@ class TestXvbRegistration:
         svc = _svc()
         assert _ev(svc, xvb_enabled=False, xvb_registration_state="invalid") == []
 
+    def test_benign_transition_is_silent(self):
+        # A change that isn't into invalid/failing (nor recovering from one) doesn't alert.
+        svc = _svc()
+        _ev(svc, xvb_enabled=True, xvb_registration_state="registered")  # seed
+        assert _ev(svc, xvb_enabled=True, xvb_registration_state="") == []
+
 
 class TestNewRelease:
     def test_fires_once_on_rising_edge(self):
@@ -341,3 +357,21 @@ class TestProcess:
         )
         assert _keys(out) == [AlertService.EVT_NODE_DOWN]
         assert len(notifier.sent) == 1 and "DOWN" in notifier.sent[0]
+
+    async def test_process_swallows_evaluate_error(self, monkeypatch):
+        # A bug in evaluate() must never break the data loop — process() catches, logs, returns [].
+        svc = _svc(notifier=_FakeNotifier())
+
+        def boom(**_kw):
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(svc, "evaluate", boom)
+        out = await svc.process(
+            monero_down=True,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+        )
+        assert out == []

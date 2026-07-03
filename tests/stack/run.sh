@@ -1547,6 +1547,20 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "telegram commands opt-in propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_COMMANDS_ENABLED)" "true"
 
+# Event-set consistency (#121/#45): every telegram.events.* key in config.reference.json must be
+# rendered by pithead into .env AND declared in docker-compose.yml — so adding an alert event in one
+# surface but forgetting another fails here. (The Python side — AlertService.EVT_* vs config.py's
+# TELEGRAM_EVENTS — is guarded by a dashboard unit test.) The .env above has all events at their
+# default (no events overrides in that config), so each should render "true".
+compose_text="$(cat "$ROOT/docker-compose.yml")"
+while IFS= read -r ev; do
+    up=$(printf '%s' "$ev" | tr '[:lower:]' '[:upper:]')
+    assert_eq "telegram event '$ev' rendered to .env" \
+        "$(run_sourced "$V" env_get_file "$V/.env" "TELEGRAM_EVENT_$up")" "true"
+    assert_contains "telegram event '$ev' declared in docker-compose.yml" \
+        "$compose_text" "TELEGRAM_EVENT_$up="
+done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
+
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
