@@ -9,6 +9,21 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.2.1] - 2026-07-03
+
+Patch — surface the remote-access **dashboard onion URL in `pithead status`**. The running stack
+images are unchanged from 1.2.0; the fix is in the `pithead` CLI, so re-download the bundle or run
+`./pithead upgrade` to pick it up.
+
+### Fixed
+
+- **`pithead status` now prints the dashboard onion address (#343, #352).** With the remote-access
+  onion enabled, its `.onion` URL — plus a pointer to `pithead onion-client-key` for the client key —
+  now shows in `pithead status`, where an operator looks first. Previously only `pithead doctor`
+  printed it, even though the docs pointed at `status`. The client **private key** is never shown in
+  either report (it stays behind `onion-client-key`), and `status` and `doctor` now share one resolver
+  so they can't drift. The docs are corrected to name both commands.
+
 ## [1.2.0] - 2026-07-03
 
 **Operator-visibility release — the stack can now tell you when something is wrong, and let you reach
