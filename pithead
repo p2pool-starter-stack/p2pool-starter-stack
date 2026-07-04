@@ -2201,8 +2201,9 @@ Dashboard onion address:  http://$onion
 
 Pick whichever Tor client you use to reach it:
 
-• Tor Browser (easiest): open  http://$onion  — it prompts for the onion's
-  private key. Paste JUST this key:
+• Tor Browser (easiest): open  http://$onion  (Tor Browser upgrades it to https;
+  accept the one-time self-signed-cert prompt, same as the LAN dashboard). It
+  prompts for the onion's private key. Paste JUST this key:
 
     $privkey
 
@@ -2664,6 +2665,24 @@ $auth
     reverse_proxy 127.0.0.1:8000
 }
 EOF
+        # Also serve HTTPS on the .onion name so Tor Browser's default http->https upgrade lands on a
+        # working :443 instead of a refused connection (#343). The cert is self-signed (Caddy's internal
+        # CA) for the .onion — a .onion can't get a browser-trusted cert without a manual CA process, and
+        # Tor already encrypts the tunnel, so the browser shows a one-time "accept the risk" prompt. SNI
+        # (the .onion name) routes this apart from the LAN vhost, both on host-networked :443. Rendered
+        # only once the address is provisioned; a fresh enable serves HTTP now and adds HTTPS on the next
+        # apply once the address is captured.
+        if [ -n "${DASHBOARD_ONION:-}" ] && [ "${DASHBOARD_ONION:-}" != "placeholder" ]; then
+            log "Adding HTTPS onion vhost (self-signed cert for the .onion)..."
+            cat <<EOF >>"Caddyfile"
+
+https://${DASHBOARD_ONION} {
+    tls internal
+$auth
+    reverse_proxy 127.0.0.1:8000
+}
+EOF
+        fi
     fi
 }
 
