@@ -240,8 +240,9 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
   same login as the LAN path. It is bound to the internal Docker bridge, not the LAN, so it is
   reachable only through Tor.
 
-After `apply`, read the address from `pithead status` (printed only to that local output). Treat the
-`.onion` as a secret: anyone who has it can _attempt_ the login (and, without client-auth, reach it).
+After `apply`, read the address from `pithead status` or `pithead doctor` (printed only to that local
+output). Treat the `.onion` as a secret: anyone who has it can _attempt_ the login (and, without
+client-auth, reach it).
 
 **Connecting with client authorization.** With `client_auth: true` the onion won't answer at all
 until your Tor client presents the private key. Run `pithead onion-client-key` on the host — it
