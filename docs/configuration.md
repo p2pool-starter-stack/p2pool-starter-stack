@@ -262,6 +262,13 @@ Without the client key the onion is invisible — that's the point. Set `client_
 deliberately password-only onion (weaker: the address becomes online-guessable, so lean on the
 password).
 
+**Use `http://`, not `https://`.** The onion is served as plain HTTP — the Tor circuit already
+encrypts it end to end, and a `.onion` is a secure context, so there is no TLS certificate (adding
+one would only trade this for a self-signed-cert warning). If Tor Browser shows "Unable to connect"
+or "connection refused", it almost certainly auto-upgraded the address to `https://` (its default
+HTTPS-Only Mode), which the onion doesn't serve. Choose **"Continue to HTTP Site"** on the warning
+page, or turn it off under **Settings → Privacy & Security → HTTPS-Only Mode**.
+
 **Rotation.** A leaked `.onion` address or client key is otherwise permanent. Run
 `pithead rotate-dashboard-onion` to mint a fresh address and client key; the old ones stop working
 immediately, and the command prints the new client line.

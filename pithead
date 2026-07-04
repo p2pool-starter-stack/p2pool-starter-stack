@@ -2201,6 +2201,10 @@ Pick whichever Tor client you use to reach it:
   torrc (create it mode 0700), then reload Tor:
 
     ${onion%.onion}:descriptor:x25519:$privkey
+
+Use http://, not https:// — the onion is plain HTTP (the Tor circuit already encrypts it).
+If Tor Browser can't connect, it likely auto-upgraded to https (HTTPS-Only Mode): choose
+"Continue to HTTP Site", or turn it off in Settings → Privacy & Security → HTTPS-Only Mode.
 EOF
 }
 
