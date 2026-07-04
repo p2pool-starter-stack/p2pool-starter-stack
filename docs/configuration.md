@@ -265,9 +265,16 @@ password).
 **Use `http://`, not `https://`.** The onion is served as plain HTTP — the Tor circuit already
 encrypts it end to end, and a `.onion` is a secure context, so there is no TLS certificate (adding
 one would only trade this for a self-signed-cert warning). If Tor Browser shows "Unable to connect"
-or "connection refused", it almost certainly auto-upgraded the address to `https://` (its default
-HTTPS-Only Mode), which the onion doesn't serve. Choose **"Continue to HTTP Site"** on the warning
-page, or turn it off under **Settings → Privacy & Security → HTTPS-Only Mode**.
+or "connection refused", it auto-upgraded the address to `https://`, which the onion doesn't serve.
+Tor Browser has **two** upgrade settings, and turning off only the first is not enough:
+
+1. **Settings → Privacy & Security → HTTPS-Only Mode → "Don't enable"**.
+2. In **`about:config`**, set **`dom.security.https_first`** to **`false`** (this is the silent
+   "HTTPS-First" upgrade that stays on even after you disable HTTPS-Only Mode — it's the "may still
+   upgrade some connections" caveat). Also confirm `dom.security.https_only_mode` is `false`.
+
+Then use **"Forget About This Site"** (History) on the onion so a cached upgrade doesn't linger, and
+retype the `http://…onion` URL fresh rather than picking the auto-completed `https://` one.
 
 **Rotation.** A leaked `.onion` address or client key is otherwise permanent. Run
 `pithead rotate-dashboard-onion` to mint a fresh address and client key; the old ones stop working

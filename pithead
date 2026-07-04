@@ -2203,8 +2203,9 @@ Pick whichever Tor client you use to reach it:
     ${onion%.onion}:descriptor:x25519:$privkey
 
 Use http://, not https:// — the onion is plain HTTP (the Tor circuit already encrypts it).
-If Tor Browser can't connect, it likely auto-upgraded to https (HTTPS-Only Mode): choose
-"Continue to HTTP Site", or turn it off in Settings → Privacy & Security → HTTPS-Only Mode.
+If Tor Browser can't connect, it auto-upgraded to https. Turn off BOTH: Settings → Privacy &
+Security → HTTPS-Only Mode → "Don't enable", AND in about:config set dom.security.https_first
+to false (the silent upgrade that survives the first toggle). Then retype the http:// URL.
 EOF
 }
 
