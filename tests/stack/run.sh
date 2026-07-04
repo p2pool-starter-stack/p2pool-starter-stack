@@ -830,6 +830,38 @@ printf '{"dashboard":{}}' >"$autopw_cfg"
 (cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
 assert_eq "ensure_onion_password no-op when onion off" "$(jq -r '.dashboard.auth.password // "none"' "$autopw_cfg")" "none"
 
+echo "== unit: dashboard_onion_status surfaces the onion URL for status/doctor (#343) =="
+# The shared resolver behind both `pithead status` and `pithead doctor`: it returns the onion URL +
+# reach-it hint ONLY when the onion is enabled AND provisioned, and NEVER the client private key.
+onion_env_dir() { # <enabled> <address> <client_auth> -> a dir whose .env carries those keys
+    local d
+    d="$(mktemp -d)"
+    {
+        echo "DASHBOARD_ONION_ENABLED=$1"
+        echo "DASHBOARD_ONION_ADDRESS=$2"
+        echo "DASHBOARD_ONION_CLIENT_AUTH=$3"
+    } >"$d/.env"
+    echo "$d"
+}
+od_on="$(onion_env_dir true abcd.onion true)"
+# Enabled + provisioned + client-auth: URL plus the pointer to onion-client-key (assert the stable
+# prefix — the trailing "'<path> onion-client-key'" varies with $0).
+assert_contains "status onion: URL + client-key pointer when client-auth on" \
+    "$(run_sourced "$od_on" dashboard_onion_status)" "http://abcd.onion (client-auth ON + login; get your client key with"
+# And it must NOT leak a client private key.
+assert_not_contains "status onion: never prints a client key" \
+    "$(run_sourced "$od_on" dashboard_onion_status)" "descriptor:x25519:"
+od_noauth="$(onion_env_dir true abcd.onion false)"
+assert_eq "status onion: login-required line when client-auth off" \
+    "$(run_sourced "$od_noauth" dashboard_onion_status)" "http://abcd.onion (login required)"
+od_unprov="$(onion_env_dir true placeholder true)"
+assert_eq "status onion: nothing while unprovisioned (placeholder)" \
+    "$(run_sourced "$od_unprov" dashboard_onion_status)" ""
+od_off="$(onion_env_dir false abcd.onion true)"
+assert_eq "status onion: nothing when the onion is disabled" \
+    "$(run_sourced "$od_off" dashboard_onion_status)" ""
+rm -rf "$od_on" "$od_noauth" "$od_unprov" "$od_off"
+
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
 # 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).

@@ -354,6 +354,22 @@ print_clearnet_banner() {
     echo -e "${C_YELLOW}========================================================================${C_RESET}" >&2
 }
 
+# The dashboard onion (#343) as a single human line for `status`/`doctor`: the URL plus how to reach
+# it. Prints nothing and returns non-zero when the onion is off or not yet provisioned. NEVER includes
+# the client PRIVATE key — that lives behind the explicit 'onion-client-key' command, since these
+# reports are meant to be paste-able.
+dashboard_onion_status() {
+    [ "$(env_get DASHBOARD_ONION_ENABLED)" == "true" ] || return 1
+    local onion
+    onion=$(env_get DASHBOARD_ONION_ADDRESS)
+    { [ -n "$onion" ] && [ "$onion" != "placeholder" ]; } || return 1
+    if [ "$(env_get DASHBOARD_ONION_CLIENT_AUTH)" == "true" ]; then
+        printf "http://%s (client-auth ON + login; get your client key with '%s onion-client-key')" "$onion" "$0"
+    else
+        printf 'http://%s (login required)' "$onion"
+    fi
+}
+
 # Show the compose table, then health-check every service we expect to be running and warn
 # about anything that isn't. Returns non-zero if any service needs attention (handy for cron).
 # Profile-aware (the bundled monerod only counts in local-node mode), and aware that a stopped
@@ -453,6 +469,12 @@ stack_status() {
     # A clearnet initial sync (#183) is a privacy-relevant state, not a fault — surface it
     # prominently every time the operator checks status, separate from the service verdict.
     print_clearnet_banner
+    # When the remote-access onion (#343) is on, show its URL here too — `status` is where an operator
+    # looks first, not just `doctor`. The client key stays behind 'onion-client-key'.
+    local onion_line
+    if onion_line=$(dashboard_onion_status); then
+        log "Dashboard onion (remote access): $onion_line"
+    fi
     if [ "$problems" -eq 0 ]; then
         log "All expected services are up."
     else
@@ -756,13 +778,11 @@ doctor() {
         # it to reach the panel — but never the client PRIVATE key: this status is a paste-able report,
         # so the key lives behind the explicit 'onion-client-key' command instead.
         if [ "$(env_get DASHBOARD_ONION_ENABLED)" == "true" ]; then
-            onion=$(env_get DASHBOARD_ONION_ADDRESS)
-            if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
-                dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run 'pithead setup' or 'pithead apply'."
-            elif [ "$(env_get DASHBOARD_ONION_CLIENT_AUTH)" == "true" ]; then
-                dr_ok "Dashboard onion: http://$onion (client-auth ON + login; get your client key with '$0 onion-client-key')"
+            local onion_line
+            if onion_line=$(dashboard_onion_status); then
+                dr_ok "Dashboard onion: $onion_line"
             else
-                dr_ok "Dashboard onion: http://$onion (login required)"
+                dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run 'pithead setup' or 'pithead apply'."
             fi
         fi
     fi
