@@ -769,6 +769,36 @@ caddy_noonion="$(
     cat Caddyfile
 )"
 assert_not_contains "no onion vhost when disabled" "$caddy_noonion" "172.28.0.1"
+# Once the .onion address is provisioned, ALSO render an HTTPS onion vhost (self-signed cert for the
+# .onion name) so Tor Browser's default http->https upgrade lands on a working :443 (#343). Both the
+# http (:80, bridge IP) and https (:443, .onion name) onion sites must be present.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion_https="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION=abcd234onionname.onion NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "onion HTTP vhost still present with the address set (#343)" "$caddy_onion_https" "http://172.28.0.1 {"
+assert_contains "onion HTTPS vhost on the .onion name (#343)" "$caddy_onion_https" "https://abcd234onionname.onion {"
+https_site="${caddy_onion_https#*https://abcd234onionname.onion}"
+case "$https_site" in
+*"tls internal"*) ok "onion HTTPS vhost uses a self-signed cert (tls internal)" ;;
+*) bad "onion HTTPS vhost uses tls internal" "no 'tls internal' on the https onion site" ;;
+esac
+assert_contains "onion HTTPS vhost carries the same basic_auth (#343)" "$https_site" "basic_auth"
+# Not yet provisioned (placeholder address) -> HTTP onion vhost only, no HTTPS one (a later apply adds it).
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion_ph="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION=placeholder NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "onion HTTP vhost renders even before the address is captured (#343)" "$caddy_onion_ph" "http://172.28.0.1 {"
+assert_not_contains "no HTTPS onion vhost until the .onion address is provisioned (#343)" "$caddy_onion_ph" "https://placeholder"
 
 echo "== unit: onion client-auth crypto (#343) =="
 # Portable base32 (RFC 4648 vectors) — no external `base32` binary (absent on macOS).
@@ -2307,6 +2337,8 @@ assert_contains "tor entrypoint: dashboard HiddenService appended when enabled (
     "$tor_onion_on" "HiddenServiceDir /var/lib/tor/dashboard/"
 assert_contains "tor entrypoint: onion vhost targets the bridge gateway .1 (#343)" \
     "$tor_onion_on" "HiddenServicePort 80 10.9.0.1:80"
+assert_contains "tor entrypoint: onion also exposes :443 for the Tor-Browser https upgrade (#343)" \
+    "$tor_onion_on" "HiddenServicePort 443 10.9.0.1:443"
 assert_not_contains "tor entrypoint: no dashboard onion when disabled (default off) (#343)" \
     "$(tor_torrc false)" "Dashboard Hidden Service"
 
