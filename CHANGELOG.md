@@ -9,6 +9,33 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.2.2] - 2026-07-04
+
+Patch — the dashboard Tor onion (#343) now works with a stock Tor Browser, plus two provisioning
+fixes found running the onion on a live box. Re-download the bundle or run `./pithead upgrade` to pick
+it up; enabling the onion (`dashboard.onion.enabled`) is unchanged.
+
+### Added
+
+- **The dashboard onion serves HTTPS as well as HTTP (#343).** Tor Browser upgrades `http://` to
+  `https://` by default, and the onion previously served only plain HTTP, so the upgraded request hit
+  a refused `:443` and dead-ended — you had to disable the upgrade in `about:config` to reach the
+  dashboard. The onion now also serves HTTPS (a second `HiddenServicePort` and a Caddy vhost with a
+  self-signed cert for the `.onion`, the same one-time "accept the risk" the LAN dashboard already
+  uses, since a `.onion` can't obtain a browser-trusted cert). Stock Tor Browser now reaches it with
+  no settings changes.
+
+### Fixed
+
+- **`pithead upgrade` auto-generates the onion password like `apply`/`setup` do (#355).** Enabling the
+  onion without a `dashboard.auth.password` is meant to generate a strong one; `upgrade` validated
+  before generating, so it errored instead. It now generates first, matching the other commands.
+- **`pithead rotate-dashboard-onion` no longer crashes, and `upgrade` captures the onion address
+  (#356).** `rotate-dashboard-onion` aborted on an unbound `HOST_IP` and reset the deployment flag;
+  both are fixed. Separately, enabling the onion via `upgrade` now reads the generated `.onion`
+  address back into `.env` so `pithead status` / `onion-client-key` show it (previously only `apply`
+  captured it).
+
 ## [1.2.1] - 2026-07-03
 
 Patch — surface the remote-access **dashboard onion URL in `pithead status`**. The running stack
