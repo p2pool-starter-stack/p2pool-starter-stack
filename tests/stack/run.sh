@@ -460,6 +460,36 @@ upg_order=$(
 )
 assert_eq "upgrade applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$upg_order")" "firewall,compose,"
 
+# #355: `upgrade` must run ensure_onion_password BEFORE parse_and_validate_config, so enabling the
+# dashboard onion (#343) with no password auto-generates one (login: admin) instead of failing the
+# "onion needs a 16+ char password" validation. setup/apply already do; upgrade didn't (prod hit it).
+# This exercises the command-flow ORDER — the wiring the unit test of ensure_onion_password can't see.
+upg_onion_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { echo onionpw; }
+    parse_and_validate_config() { echo validate; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    compose_up_checked() { :; }
+    stack_upgrade
+)
+assert_eq "upgrade runs ensure_onion_password before config validation (#355)" \
+    "$(printf '%s\n' "$upg_onion_order" | grep -xE 'onionpw|validate' | tr '\n' ',')" "onionpw,validate,"
+
 # apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
 # the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
 # diff (env_changed_keys returns nothing; a pre-seeded .apply-incomplete marker forces the retry).
