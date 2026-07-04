@@ -2191,8 +2191,9 @@ Dashboard onion address:  http://$onion
 
 Pick whichever Tor client you use to reach it:
 
-• Tor Browser (easiest): open  http://$onion  — it prompts for the onion's
-  private key. Paste JUST this key:
+• Tor Browser (easiest): open  http://$onion  (Tor Browser upgrades it to https;
+  accept the one-time self-signed-cert prompt, same as the LAN dashboard). It
+  prompts for the onion's private key. Paste JUST this key:
 
     $privkey
 
