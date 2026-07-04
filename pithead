@@ -283,6 +283,9 @@ stack_upgrade() {
     # setup/apply (#128). Mirrors apply's render preamble; renders to a temp + swaps so preserved
     # secrets (Tor onions, RPC creds, proxy token) survive.
     require_env
+    ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one —
+    # MUST run before parse_and_validate_config, which rejects an onion enabled with an empty password
+    # (mirrors setup/apply; without this, enabling the onion via `upgrade` errored instead of #355).
     parse_and_validate_config
     load_preserved_state
     ensure_directories
@@ -317,6 +320,13 @@ stack_upgrade() {
         compose_up_checked -d --build || error "Upgrade failed during 'docker compose up' — see the error above."
     else
         PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
+    fi
+    # #356: if the dashboard onion (#343) was just turned on, the recreated tor generated its hostname —
+    # read it back into .env so `status`/`onion-client-key` show the address (mirrors apply's capture at
+    # the end of a change). No-op when the onion is off or already captured. Without this, enabling the
+    # onion via `upgrade` left the address uncaptured (apply's capture only runs when config changed).
+    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
+        provision_dashboard_onion && render_env
     fi
     log "Stack upgraded."
 }
@@ -2239,8 +2249,14 @@ rotate_dashboard_onion() {
     DASHBOARD_ONION="placeholder"
     DASHBOARD_ONION_CLIENT_PUBKEY="placeholder"
     DASHBOARD_ONION_CLIENT_PRIVKEY="placeholder"
-    provision_tor # rewrites authorized_clients (fresh key), starts tor, reads the new address
-    render_env    # persist the new address + keys
+    provision_tor          # rewrites authorized_clients (fresh key), starts tor, reads the new address
+    resolve_dashboard_host # #356: sets HOST_IP for render_env — rotate skipped it, so render_env died
+    # on the unbound HOST_IP under `set -u` (setup/apply/upgrade all resolve the host before rendering).
+    # #356: render_env writes DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false} and load_preserved_state
+    # doesn't carry it, so preserve the current value — otherwise rotate silently reset the flag to false
+    # and the next apply/upgrade errored "Stack is not fully provisioned. Run setup first."
+    DEPLOYMENT_COMPLETED=$(env_get DEPLOYMENT_COMPLETED)
+    render_env # persist the new address + keys
     docker compose restart caddy >/dev/null 2>&1 || true
     log "Dashboard onion rotated."
     if [ "$DASHBOARD_ONION_CLIENT_AUTH" == "true" ]; then

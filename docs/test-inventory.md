@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 796 dashboard unit tests · 12 contract tests · 66 frontend
-tests · 56 `pithead` shell sections · 18 harness self-test sections ·
+tests · 58 `pithead` shell sections · 18 harness self-test sections ·
 9 live config scenarios (17 axis values) · 8 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 56 `pithead` shell sections · 18 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 796 |
 | 1 — Unit | frontend (node --test) | 66 |
-| 1 — Unit | `pithead` shell suite | 56 sections |
+| 1 — Unit | `pithead` shell suite | 58 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 8 |
@@ -959,7 +959,7 @@ tests · 56 `pithead` shell sections · 18 harness self-test sections ·
 - edgePath: column-crossing edges route orthogonally through a clear lane
 - route palette + names cover every route the server can emit
 
-### `pithead` shell suite (tests/stack/run.sh) — 56 sections
+### `pithead` shell suite (tests/stack/run.sh) — 58 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -985,6 +985,8 @@ tests · 56 `pithead` shell sections · 18 harness self-test sections ·
 - unit: generate_caddyfile onion vhost (#343)
 - unit: onion client-auth crypto (#343)
 - unit: ensure_onion_password auto-generates (#343)
+- black-box: rotate-dashboard-onion command flow (#356)
+- black-box: upgrade captures a just-enabled dashboard onion address (#356)
 - unit: dashboard_onion_status surfaces the onion URL for status/doctor (#343)
 - unit: host detection (#140)
 - unit: release.sh pure logic (#44)
@@ -1177,5 +1179,5 @@ tests · 56 `pithead` shell sections · 18 harness self-test sections ·
 
 ---
 
-_Grand total: **965** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **967** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

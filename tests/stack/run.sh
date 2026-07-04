@@ -460,6 +460,36 @@ upg_order=$(
 )
 assert_eq "upgrade applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$upg_order")" "firewall,compose,"
 
+# #355: `upgrade` must run ensure_onion_password BEFORE parse_and_validate_config, so enabling the
+# dashboard onion (#343) with no password auto-generates one (login: admin) instead of failing the
+# "onion needs a 16+ char password" validation. setup/apply already do; upgrade didn't (prod hit it).
+# This exercises the command-flow ORDER — the wiring the unit test of ensure_onion_password can't see.
+upg_onion_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { echo onionpw; }
+    parse_and_validate_config() { echo validate; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    compose_up_checked() { :; }
+    stack_upgrade
+)
+assert_eq "upgrade runs ensure_onion_password before config validation (#355)" \
+    "$(printf '%s\n' "$upg_onion_order" | grep -xE 'onionpw|validate' | tr '\n' ',')" "onionpw,validate,"
+
 # apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
 # the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
 # diff (env_changed_keys returns nothing; a pre-seeded .apply-incomplete marker forces the retry).
@@ -859,6 +889,69 @@ printf '{"dashboard":{}}' >"$autopw_cfg"
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 (cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
 assert_eq "ensure_onion_password no-op when onion off" "$(jq -r '.dashboard.auth.password // "none"' "$autopw_cfg")" "none"
+
+echo "== black-box: rotate-dashboard-onion command flow (#356) =="
+# The rotate command reprovisions the onion then persists via render_env. It must (a) resolve the host
+# so HOST_IP is set for render_env — rotate skipped that and crashed on the unbound var under set -u —
+# and (b) preserve DEPLOYMENT_COMPLETED, which render_env would otherwise reset to false, breaking the
+# next apply/upgrade. Drive the real command with stubs; render_env reports the two values it would write.
+rot_out=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    export DASHBOARD_ONION_ENABLED=true
+    export DASHBOARD_ONION_CLIENT_AUTH=false
+    TOR_DATA_DIR="$SANDBOX/rot-tor"
+    mkdir -p "$TOR_DATA_DIR/dashboard"
+    warn() { :; }
+    log() { :; }
+    docker() { :; }
+    sudo() { :; }
+    env_get() { [ "$1" = "DEPLOYMENT_COMPLETED" ] && echo true || echo "x.onion"; }
+    resolve_dashboard_host() { HOST_IP="host.set"; }
+    provision_tor() { :; }
+    render_env() { echo "HOST_IP=${HOST_IP-UNSET} DC=${DEPLOYMENT_COMPLETED-UNSET}"; }
+    onion_client_key() { :; }
+    rotate_dashboard_onion -y
+)
+assert_contains "rotate resolves the host before render_env — no unbound HOST_IP (#356)" "$rot_out" "HOST_IP=host.set"
+assert_contains "rotate preserves DEPLOYMENT_COMPLETED across render_env (#356)" "$rot_out" "DC=true"
+
+echo "== black-box: upgrade captures a just-enabled dashboard onion address (#356) =="
+# Enabling the onion via `upgrade` must read the freshly-generated .onion back into .env; apply's
+# capture only runs when the config changed, so an upgrade-based enable left the address uncaptured.
+upg_capture() { # <onion_enabled> <current_onion> -> prints "captured" if provision_dashboard_onion ran
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    compose_up_checked() { :; }
+    provision_dashboard_onion() { echo captured; }
+    export DASHBOARD_ONION_ENABLED="$1"
+    export DASHBOARD_ONION="$2"
+    stack_upgrade
+}
+assert_contains "upgrade captures the onion address when enabled + uncaptured (#356)" "$(upg_capture true '')" "captured"
+assert_not_contains "upgrade skips capture when the onion is disabled (#356)" "$(upg_capture false '')" "captured"
 
 echo "== unit: dashboard_onion_status surfaces the onion URL for status/doctor (#343) =="
 # The shared resolver behind both `pithead status` and `pithead doctor`: it returns the onion URL +
