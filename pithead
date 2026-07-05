@@ -283,6 +283,7 @@ stack_upgrade() {
     # setup/apply (#128). Mirrors apply's render preamble; renders to a temp + swaps so preserved
     # secrets (Tor onions, RPC creds, proxy token) survive.
     require_env
+    ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one (same as setup/apply)
     parse_and_validate_config
     load_preserved_state
     ensure_directories
