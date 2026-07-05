@@ -16,12 +16,15 @@ sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" "$TORRC_TEMPLATE" >/tmp/torrc
 # the default stack publishes exactly the three mining onions and nothing else. The target is the
 # bridge gateway (NETWORK_PREFIX.1), where host-networked Caddy binds the auth-gated onion vhost —
 # NOT the dashboard's raw :8000 (which has no auth of its own). Tor supplies the transport encryption.
+# Two ports: 80 (plain HTTP) and 443 (HTTPS, self-signed) — Caddy serves both, so Tor Browser's
+# default http->https upgrade lands on the working :443 instead of a refused connection (#343).
 if [ "${DASHBOARD_ONION_ENABLED:-false}" = "true" ]; then
     cat >>/tmp/torrc <<EOF
 
 # Dashboard Hidden Service (#343)
 HiddenServiceDir /var/lib/tor/dashboard/
 HiddenServicePort 80 ${NETWORK_PREFIX}.1:80
+HiddenServicePort 443 ${NETWORK_PREFIX}.1:443
 EOF
 fi
 

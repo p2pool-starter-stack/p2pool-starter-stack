@@ -236,9 +236,13 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
 - **Client authorization is on by default** (`client_auth: true`). A client-auth'd onion does not
   respond at all without your client key, so the address cannot be scanned or brute-forced — the
   password becomes a second factor behind it. This is the strong primary gate.
-- The onion serves plain HTTP inside the Tor tunnel (Tor encrypts the transport), fronted by the
-  same login as the LAN path. It is bound to the internal Docker bridge, not the LAN, so it is
-  reachable only through Tor.
+- The onion is served over **both HTTP and HTTPS**, fronted by the same login as the LAN path, and
+  bound to the internal Docker bridge (not the LAN), so it is reachable only through Tor. Tor Browser
+  upgrades `http://` to `https://` by default, so it lands on the HTTPS side automatically — no
+  browser tweaks needed. The HTTPS cert is **self-signed** (Caddy's internal CA, for the `.onion`
+  name), exactly like the LAN dashboard's cert: a `.onion` can't obtain a browser-trusted certificate
+  without a manual CA process, and Tor already encrypts the transport, so the browser shows a one-time
+  "accept the risk" prompt — the same click you make for the LAN dashboard.
 
 After `apply`, read the address from `pithead status` or `pithead doctor` (printed only to that local
 output). Treat the `.onion` as a secret: anyone who has it can _attempt_ the login (and, without
@@ -249,18 +253,20 @@ until your Tor client presents the private key. Run `pithead onion-client-key` o
 prints the address and the key in both forms you might need (it's kept out of `status`, which is a
 shareable report). Then pick your client:
 
-- **Tor Browser (easiest).** Open `http://<address>.onion`. Tor Browser prompts for the onion's
-  private key — paste the bare key (the value after `x25519:`) and continue. Nothing else to set up.
+- **Tor Browser (easiest).** Open `http://<address>.onion` (Tor Browser upgrades it to `https://`
+  automatically). Accept the one-time self-signed-cert prompt ("Advanced" → "Accept the Risk and
+  Continue" — the same as the LAN dashboard). Tor Browser then prompts for the onion's private key —
+  paste the bare key (the value after `x25519:`) and continue. Nothing else to set up.
 - **System Tor or Orbot (persistent).** Add a line to your `torrc`:
   `ClientOnionAuthDir /var/lib/tor/onion_auth` (any dir you own, mode `0700`). Inside it, create
   `dashboard.auth_private` containing the one-line form
   `<address>:descriptor:x25519:<private-key>`, then reload Tor. Now any Tor-aware client on that
   machine can reach the onion.
 
-After that, browse to `http://<address>.onion` and log in with your dashboard username/password.
-Without the client key the onion is invisible — that's the point. Set `client_auth: false` for a
-deliberately password-only onion (weaker: the address becomes online-guessable, so lean on the
-password).
+After that, browse to `http://<address>.onion` (it becomes `https://` — accept the self-signed cert
+once) and log in with your dashboard username/password. Without the client key the onion is invisible
+— that's the point. Set `client_auth: false` for a deliberately password-only onion (weaker: the
+address becomes online-guessable, so lean on the password).
 
 **Rotation.** A leaked `.onion` address or client key is otherwise permanent. Run
 `pithead rotate-dashboard-onion` to mint a fresh address and client key; the old ones stop working
