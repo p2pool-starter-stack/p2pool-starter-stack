@@ -890,6 +890,39 @@ printf '{"dashboard":{}}' >"$autopw_cfg"
 (cd "$autopw_dir" && source "$STACK" 2>/dev/null && ensure_onion_password >/dev/null 2>&1)
 assert_eq "ensure_onion_password no-op when onion off" "$(jq -r '.dashboard.auth.password // "none"' "$autopw_cfg")" "none"
 
+# Regression: stack_upgrade must run ensure_onion_password BEFORE parse_and_validate_config (as
+# setup/apply do), so enabling the onion with no password on a deployed stack auto-generates one
+# instead of erroring at the validation gate. Drive the REAL ensure_onion_password through
+# stack_upgrade with everything downstream stubbed; onion-on + no password must end with a >=16-char pw.
+upg_autopw_dir="$SANDBOX/upgrade-onion-autopw"
+mkdir -p "$upg_autopw_dir"
+printf '{"dashboard":{"onion":{"enabled":true}}}' >"$upg_autopw_dir/config.json"
+(
+    cd "$upg_autopw_dir" || exit
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    # NB: mv is left REAL — ensure_onion_password uses it to commit the generated password. The only
+    # other mv here (.env.new swap) is a harmless no-op on the stubbed-away .env.new.
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    migrate_compose_project() { :; }
+    apply_tor_egress_firewall() { :; }
+    compose_up_checked() { :; }
+    is_source_checkout() { return 1; }
+    docker() { :; }
+    log() { :; }
+    stack_upgrade >/dev/null 2>&1
+)
+upg_genpw="$(jq -r '.dashboard.auth.password // ""' "$upg_autopw_dir/config.json")"
+if [ "${#upg_genpw}" -ge 16 ]; then ok "upgrade auto-generates the onion password (not an error)"; else bad "upgrade auto-generates the onion password (not an error)" "length ${#upg_genpw}"; fi
+
 echo "== black-box: rotate-dashboard-onion command flow (#356) =="
 # The rotate command reprovisions the onion then persists via render_env. It must (a) resolve the host
 # so HOST_IP is set for render_env — rotate skipped that and crashed on the unbound var under set -u —
