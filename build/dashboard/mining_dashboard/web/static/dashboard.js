@@ -11,6 +11,11 @@ import { html, render } from "./preact.mjs";
 
 const root = document.getElementById("app");
 const REFRESH_MS = 30000;
+// Abort a poll that hasn't answered before the next tick would fire. Without this a hung
+// connection (a dropped Tor circuit hangs rather than fails) never rejects, and the `inflight`
+// guard then blocks every later tick — the page freezes on stale data with no banner (#382).
+// Sized just under REFRESH_MS: far above a healthy Tor round-trip, so it only trips on dead links.
+const FETCH_TIMEOUT_MS = 25000;
 
 // A manual-zoom window {from, to} (epoch seconds) read from ?from=&to= so a zoomed URL is
 // shareable and survives reload (Issue #47); null/garbage falls back to the preset range.
@@ -77,7 +82,10 @@ async function tick() {
       ? "from=" + ui.window.from + "&to=" + ui.window.to
       : "range=" + encodeURIComponent(ui.range);
     const qs = base + "&avg=" + encodeURIComponent(ui.avg);
-    const res = await fetch("/api/state?" + qs, { headers: { "X-Requested-With": "fetch" } });
+    const res = await fetch("/api/state?" + qs, {
+      headers: { "X-Requested-With": "fetch" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) throw new Error("HTTP " + res.status);
     state = await res.json();
     connected = true;
