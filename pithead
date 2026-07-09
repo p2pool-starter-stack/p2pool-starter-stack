@@ -682,6 +682,8 @@ doctor() {
     echo ""
     echo "Network:"
     check_stratum_exposure doctor
+    check_stratum_listening
+    check_egress_firewall_installed
     # Clearnet initial sync (#183): a deliberate, privacy-relevant opt-in. Warn whenever it's on so
     # an operator who forgot to switch back after syncing is reminded their node IP is exposed.
     if [ -f "$ENV_FILE" ] && clearnet_sync_active; then
@@ -815,6 +817,7 @@ doctor() {
         else
             dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run 'pithead up') or run from a different directory."
         fi
+        check_dashboard_answers
     fi
 
     # --- Summary ---
@@ -1391,6 +1394,84 @@ check_stratum_exposure() {
         if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
     else
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :3333 isn't directly internet-exposed."
+    fi
+    return 0
+}
+
+# True if the named container is currently running. State only, no sudo — safe for doctor.
+container_is_running() { # <name>
+    [ -n "$(docker ps -q --filter "name=^${1}$" --filter status=running 2>/dev/null)" ]
+}
+
+# doctor (#383): verify the #270 fail-closed egress rules are ACTUALLY installed while the stack
+# runs. `down` removes them, and a host reboot silently drops them while `restart: unless-stopped`
+# brings every container back — that reboot gap is the state this catches. Read-only: `sudo -n`
+# never prompts; every can't-check path degrades to an info line, only a confirmed absence FAILs.
+check_egress_firewall_installed() {
+    local enabled rules
+    enabled=$(env_get TOR_EGRESS_FIREWALL 2>/dev/null)
+    [ -n "$enabled" ] || enabled=true
+    if [ "$(normalize_bool "$enabled")" != "true" ]; then
+        dr_info "Tor-egress firewall check skipped — opted out (network.tor_egress_firewall=false)."
+        return 0
+    fi
+    if ! container_is_running tor; then
+        dr_info "Tor-egress firewall check skipped — the stack isn't running (rules are removed at 'down')."
+        return 0
+    fi
+    if ! command -v iptables >/dev/null 2>&1; then
+        dr_info "Tor-egress firewall check skipped — no iptables."
+        return 0
+    fi
+    if ! rules=$(sudo -n iptables -S DOCKER-USER 2>/dev/null); then
+        dr_info "Tor-egress firewall check skipped — reading iptables needs passwordless sudo. Verify manually: 'sudo iptables -S DOCKER-USER | grep $TOR_EGRESS_TAG'."
+        return 0
+    fi
+    if printf '%s\n' "$rules" | grep -qF -- "$TOR_EGRESS_TAG"; then
+        dr_ok "Tor-only egress firewall rules are installed (#270) — clearnet dials from the stack are fail-closed."
+    else
+        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run 'pithead up' to reinstall them (#270)."
+    fi
+    return 0
+}
+
+# doctor (#383): something must actually LISTEN on the stratum port while xmrig-proxy runs — the
+# top documented "workers don't show up" cause. check_stratum_exposure answers "who can reach
+# :3333"; this answers "is it there at all". A held miner (sync hold, #35) isn't running, so the
+# check never fires against an intentional hold.
+check_stratum_listening() {
+    if ! container_is_running xmrig-proxy; then
+        dr_info "Stratum listen check skipped — xmrig-proxy isn't running (normal during a sync hold, #35)."
+        return 0
+    fi
+    if ! command -v ss >/dev/null 2>&1; then
+        dr_info "Stratum listen check skipped — no 'ss' command (Linux-only)."
+        return 0
+    fi
+    if ss -Hltn 2>/dev/null | grep -q ':3333 '; then
+        dr_ok "Stratum :3333 is listening — workers can connect."
+    else
+        dr_fail "xmrig-proxy is running but NOTHING is listening on :3333 — workers can't connect. Check 'pithead logs xmrig-proxy' and docs/workers.md."
+    fi
+    return 0
+}
+
+# doctor (#383): a "running" dashboard container doesn't mean the app inside answers. Probe the
+# app where it binds (127.0.0.1:8000 — Caddy fronts it, but the app is the part that wedges).
+# WARN not FAIL: the stack mines fine without the panel.
+check_dashboard_answers() {
+    if ! container_is_running dashboard; then
+        dr_info "Dashboard probe skipped — the dashboard container isn't running."
+        return 0
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        dr_info "Dashboard probe skipped — no curl."
+        return 0
+    fi
+    if curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:8000/api/state" 2>/dev/null; then
+        dr_ok "Dashboard app answers on 127.0.0.1:8000."
+    else
+        dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check 'pithead logs dashboard'."
     fi
     return 0
 }
