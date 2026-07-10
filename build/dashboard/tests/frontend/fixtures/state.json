@@ -27,7 +27,16 @@
       "variant": "ok"
     }
   ],
+  "cadence": {
+    "available": false,
+    "last_block": "Never",
+    "luck": "\u2014",
+    "since_block": "\u2014",
+    "tts": "\u2014",
+    "weight": "0"
+  },
   "chart": {
+    "events": [],
     "p2pool": [
       {
         "x": 1735689000000,
@@ -135,6 +144,14 @@
           {
             "route": "tor",
             "to": "update check (github)"
+          },
+          {
+            "route": "inactive",
+            "to": "Healthchecks.io ping"
+          },
+          {
+            "route": "inactive",
+            "to": "Telegram bot"
           }
         ],
         "firewalled": false,
@@ -354,6 +371,20 @@
         "kind": "egress",
         "label": "XvB stats",
         "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "Healthchecks ping",
+        "route": "inactive",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "Telegram bot",
+        "route": "inactive",
         "to": "tor"
       },
       {

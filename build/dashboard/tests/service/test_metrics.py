@@ -278,6 +278,66 @@ class TestSharesWindow:
         assert build_metrics(data, _mgr()).block_time == 30
 
 
+class TestCadenceAndLuck:
+    """#84: pool cadence & luck — expected time-to-share, luck %, own PPLNS weight, last block."""
+
+    @staticmethod
+    def _hist(rate):
+        # Two fresh samples at a constant v_p2pool so p2pool_1h averages to exactly `rate`.
+        now = time.time()
+        return [
+            {"timestamp": now - 30, "v": rate, "v_p2pool": rate, "v_xvb": 0},
+            {"timestamp": now - 60, "v": rate, "v_p2pool": rate, "v_xvb": 0},
+        ]
+
+    def test_expected_share_sec_is_diff_over_hashrate(self):
+        data = _data(pool={"pool": {"difficulty": 100_000}})
+        m = build_metrics(data, _mgr(history=self._hist(1000)))
+        assert m.expected_share_sec == 100.0  # 100_000 H·s / 1000 H/s
+
+    def test_zero_hashrate_or_difficulty_reads_zero(self):
+        # A fresh start (no history → p2pool_1h == 0) or an unknown pool difficulty must read 0.0
+        # so the view layer hides luck/tts instead of showing inf/0s.
+        no_hist = build_metrics(_data(pool={"pool": {"difficulty": 100_000}}), _mgr())
+        no_diff = build_metrics(_data(), _mgr(history=self._hist(1000)))
+        for m in (no_hist, no_diff):
+            assert m.expected_share_sec == 0.0
+            assert m.luck_pct == 0.0
+
+    def test_luck_at_exactly_expected_is_100(self):
+        # expected = 1000 H/s * (2160 * 10 s) / 21_600_000 H·s = 1 share; 1 actual share => 100 %.
+        now = time.time()
+        data = _data(
+            pool={"pool": {"difficulty": 21_600_000}},
+            shares=[{"ts": now - 5, "difficulty": 50}],
+        )
+        m = build_metrics(data, _mgr(history=self._hist(1000)))
+        assert m.luck_pct == 100.0
+
+    def test_no_shares_is_luck_zero(self):
+        data = _data(pool={"pool": {"difficulty": 21_600_000}})
+        assert build_metrics(data, _mgr(history=self._hist(1000))).luck_pct == 0.0
+
+    def test_own_weight_sums_share_difficulty_in_window(self):
+        now = time.time()
+        data = _data(
+            pool={"pool": {"pplns_window": 10}},  # 10 blocks * 10 s = 100 s window
+            shares=[
+                {"ts": now - 5, "difficulty": 100.0},
+                {"ts": now - 50, "difficulty": 200.0},
+                {"ts": now - 10_000, "difficulty": 999.0},  # outside the window
+            ],
+        )
+        assert build_metrics(data, _mgr()).own_pplns_weight == 300.0
+
+    def test_last_block_ts_passthrough_and_default(self):
+        assert (
+            build_metrics(_data(pool={"pool": {"last_block_ts": 1700000000}}), _mgr()).last_block_ts
+            == 1700000000
+        )
+        assert build_metrics(_data(), _mgr()).last_block_ts == 0
+
+
 class TestSyncMetrics:
     def test_loading_when_no_target(self):
         m = build_metrics(_data(monero_sync={"percent": 0, "target": 0}), _mgr())

@@ -209,6 +209,7 @@ Run `./pithead apply` after editing. The commands:
 | `/pool` | P2Pool sidechain type, pool hashrate, Monero network height + difficulty, PPLNS shares in window, current **effort** (luck indicator), **sidechain blocks found**, **share acceptance** (accepted/rejected + reject %), and the **best share** difficulty found. |
 | `/xvb` | XvB mode, current and target tier, hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
 | `/earnings` | Estimated P2Pool XMR per day/month, from both your **1h** and (once available) steadier **24h** average hashrate (P2Pool only — excludes XvB-donated hashrate and Tari). |
+| `/luck` | Pool cadence: time since the pool's last block (pool-wide, not your payout), estimated **time-to-share** for your hashrate, **luck** (actual vs. expected shares in the PPLNS window — over 100 % = running lucky), and **your PPLNS weight** (the sum of your share difficulty in the window). The same figures as the dashboard's Pool Cadence & Luck card. |
 | `/help` | The command list. |
 
 The numbers come from the **same source as the dashboard**, so a reply and the web view always
