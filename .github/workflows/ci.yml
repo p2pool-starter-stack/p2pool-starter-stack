@@ -10,10 +10,17 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs of the same PR; never cancel push runs on main/develop (they set the
+# diff-cover baseline and are required checks on the protected branch). #415.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   dashboard:
     name: Dashboard tests (pytest + coverage)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UV_PYTHON_DOWNLOADS: never  # use the setup-python 3.11; don't fetch another interpreter
     steps:
@@ -44,6 +51,7 @@ jobs:
   frontend:
     name: Frontend logic tests (node --test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -60,6 +68,7 @@ jobs:
   dashboard-image:
     name: Dashboard image (Docker test stage)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -75,6 +84,7 @@ jobs:
     # broken image doesn't hide the others; empty build-args keep the dashboard build working bare.
     name: Build image (${{ matrix.service }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -100,6 +110,7 @@ jobs:
   hadolint:
     name: Dockerfile lint (hadolint)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -116,6 +127,7 @@ jobs:
   python-lint:
     name: Python lint + format (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UV_PYTHON_DOWNLOADS: never
     steps:
@@ -138,6 +150,7 @@ jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -154,6 +167,7 @@ jobs:
   zizmor:
     name: Workflow audit (zizmor)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UV_PYTHON_DOWNLOADS: never
     steps:
@@ -174,6 +188,7 @@ jobs:
   shell:
     name: Shell tests (shellcheck + pithead suite)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -206,14 +221,11 @@ jobs:
         # coverage, redaction). The LIVE matrix (tests/integration/run.sh) needs a real test
         # server and runs as a gated/manual release gate (#54), not on every PR.
         run: bash tests/integration/selftest.sh
-      - name: Check the test inventory is up to date
-        # docs/test-inventory.md is generated from the suites; fail if a test was added/removed
-        # without regenerating it (run `make test-inventory`).
-        run: make test-inventory-check
 
   compose:
     name: Compose config + security hardening
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -224,6 +236,7 @@ jobs:
   lint-surfaces:
     name: Lint per-surface (biome, yaml, markdown, proto, toml)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UV_PYTHON_DOWNLOADS: never
     steps:

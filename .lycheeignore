@@ -5,3 +5,6 @@ https?://localhost.*
 https?://0\.0\.0\.0.*
 https?://example\.(com|org).*
 .*\.onion.*
+# gitlab.torproject.org returns 403 to non-browser clients (the link is valid — verified by hand
+# 2026-07). Ignore the host, not a global --accept 403 that would mask real dead links. #415.
+https://gitlab\.torproject\.org.*

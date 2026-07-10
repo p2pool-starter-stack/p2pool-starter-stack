@@ -129,9 +129,9 @@ make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-in
 
 ## Production-readiness posture
 
-What gates a merge vs. a release, the standards every test holds to, and the known gaps. The full
-enumerated coverage is in the generated [Test Inventory](test-inventory.md), kept current by a CI
-drift check.
+What gates a merge vs. a release, the standards every test holds to, and the known gaps. For the
+full enumerated coverage, `make test-inventory` generates the list on demand (git-ignored — read it
+locally).
 
 ### What runs where
 

@@ -75,7 +75,9 @@ extend-exclude = ["mining_dashboard/client/tari/generated"]
 [tool.ruff.lint]
 # E/F/W pycodestyle+pyflakes · I import-sort · B bugbear · UP pyupgrade ·
 # ASYNC flake8-async (the aiohttp/asyncio event loop + Tor SOCKS paths) ·
-# S flake8-bandit (security). Annotation rules (ANN) are deferred to #284.
+# S flake8-bandit (security). Annotation rules (ANN) and a type-checker gate are deliberately not
+# adopted (#284, closed): only a small share of defs are annotated, so a gate would be all noise.
+# Revisit if the package gets meaningfully annotated.
 select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S"]
 ignore = [
   "E501", # line length is owned by `ruff format`

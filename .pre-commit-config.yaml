@@ -1,18 +1,7 @@
 # Pre-commit hooks (Wave 7 tooling, #280). Local == CI: these mirror `make lint` + the CI lint
 # jobs, so issues are caught before they reach a PR. Set up once with:
 #   uv sync --project build/dashboard --extra dev && uv run --project build/dashboard pre-commit install
-# Later Wave 7 children add more hooks here (#281 shfmt/Biome/yamllint/markdownlint). Keep the
-# ruff `rev` in lockstep with the `dev` extra's ruff pin in build/dashboard/pyproject.toml.
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.17
-    hooks:
-      # Lints all repo Python; ruff discovers the right config per file (the dashboard package's
-      # pyproject.toml, or the root ruff.toml for the integration-test fakes).
-      - id: ruff-check
-        args: [--fix]
-      - id: ruff-format
-
   # Secret scanning (#282) — stop a key reaching history in the first place. Uses .gitleaks.toml.
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
@@ -37,6 +26,21 @@ repos:
   # tools available (shellcheck, shfmt, node/npx, uv, docker) — see CONTRIBUTING.md.
   - repo: local
     hooks:
+      # ruff via the locked dev extra — the pin lives ONLY in build/dashboard/pyproject.toml, so
+      # local, pre-commit, and CI all run one version and Dependabot's uv updates cover it (#415).
+      # A pinned ruff-pre-commit `rev` used to drift against the pyproject pin on every release.
+      # --force-exclude keeps extend-exclude (generated Tari stubs) effective when pre-commit
+      # passes explicit filenames.
+      - id: ruff-check
+        name: ruff check (locked dev-extra pin)
+        entry: uv run --locked --project build/dashboard --extra dev ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format (locked dev-extra pin)
+        entry: uv run --locked --project build/dashboard --extra dev ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
       - id: lint-sh
         name: shellcheck + shfmt
         entry: make lint-sh
@@ -61,6 +65,12 @@ repos:
         language: system
         types: [markdown]
         pass_filenames: false
+      - id: lint-docs-voice
+        name: docs voice (banned marketing words)
+        entry: make lint-docs-voice
+        language: system
+        types: [markdown]
+        pass_filenames: false
       - id: lint-proto
         name: buf (proto)
         entry: make lint-proto
@@ -72,13 +82,4 @@ repos:
         entry: make lint-toml
         language: system
         types: [toml]
-        pass_filenames: false
-      # Keep docs/test-inventory.md in lockstep with the suites (#54). The CI shell job already
-      # FAILS on drift (test-inventory-check); this hook regenerates it locally so a test add/remove
-      # never reaches CI stale — same auto-fix UX as ruff-format. Static grep, no test run, so cheap.
-      - id: test-inventory
-        name: test inventory (regenerate docs/test-inventory.md)
-        entry: make test-inventory
-        language: system
-        files: '^(build/dashboard/tests/|tests/(stack|integration)/|tests/inventory\.sh)'
         pass_filenames: false
