@@ -65,7 +65,10 @@ Once both nodes are synced, the dashboard shows the operational view.
 </picture>
 
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
-position, the worker-table sort column, and the chart stay put between updates.
+position, the worker-table sort column, and the chart stay put between updates. A poll that fails —
+or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
+timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
+successful refresh.
 
 ### Top bar
 
@@ -99,10 +102,12 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | `⚠ HugePages off` | HugePages aren't reserved — RandomX hashrate is capped. | Run setup's tuning (or edit GRUB) and reboot; the badge clears once they're reserved. |
 | `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
+| `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
 
 The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
-on; AVX2 is badge-only (see [Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active
-warning badges are echoed in the bot's `/status` reply.
+on; the wallet badge pairs with the `wallet_changed` alert; AVX2 is badge-only (see
+[Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active warning badges are echoed in
+the bot's `/status` reply.
 
 ### Hero band
 
@@ -190,7 +195,9 @@ and 10m windows — the same 10m window the chart's averaging toggle and Telegra
 for spotting a rig that has dropped off or is underperforming. A
 worker whose direct API is unreachable still counts (with proxy-derived hashrate); a worker whose
 miner has stopped drops out of the total. On a narrow screen the table scrolls sideways within its
-card so columns stay readable.
+card so columns stay readable. Until the first worker ever connects, the card shows a connect hint
+("point each rig at `<host-ip>:3333`") in place of the empty table; see
+[Connecting Miners](workers.md).
 
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
