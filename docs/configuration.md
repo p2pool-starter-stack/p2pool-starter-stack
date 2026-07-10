@@ -244,7 +244,7 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
   without a manual CA process, and Tor already encrypts the transport, so the browser shows a one-time
   "accept the risk" prompt — the same click you make for the LAN dashboard.
 
-After `apply`, read the address from `pithead status` or `pithead doctor` (printed only to that local
+After `apply`, read the address from `./pithead status` or `./pithead doctor` (printed only to that local
 output). Treat the `.onion` as a secret: anyone who has it can _attempt_ the login (and, without
 client-auth, reach it).
 
