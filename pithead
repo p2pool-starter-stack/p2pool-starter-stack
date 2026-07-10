@@ -49,6 +49,9 @@ readonly OS_TYPE
 # live config.json. Everything else (the .env, generated files) still belongs to this checkout.
 readonly CONFIG_FILE="${PITHEAD_CONFIG_FILE:-config.json}"
 readonly ENV_FILE=".env"
+# Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
+# so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
+readonly FIRST_RUN_MARKER=".pithead-first-run-done"
 readonly REAL_USER="${SUDO_USER:-$USER}"
 
 # Non-root uid:gid the BUILT images run their main process as (#255). pithead owns the data dirs,
@@ -184,6 +187,20 @@ stack_up() {
     # Remind the operator at start-time if a node is coming up on clearnet (#183).
     print_clearnet_banner
     announce_dashboard_url
+    print_first_run_epilogue
+}
+
+# One-time onboarding after the stack first comes up (#384): explain that mining doesn't start until
+# both chains finish their initial sync, and where to watch progress. Keyed on a marker file beside
+# .env so it shows once (fresh setup/up) and not on every restart of an already-running box. The
+# dashboard itself drives the sync-then-mine handoff (#35) — this is just the "what happens next".
+print_first_run_epilogue() {
+    [ -f "$FIRST_RUN_MARKER" ] && return 0
+    : >"$FIRST_RUN_MARKER" 2>/dev/null || true
+    log "What happens next:"
+    log "  The miner is held until Monero and Tari finish their first sync, then starts automatically (#35)."
+    log "  Watch progress with '$0 status' or live on the dashboard."
+    log "  First-time sync of both chains can take several hours to a few days, depending on disk and network."
 }
 
 stack_down() {
@@ -384,6 +401,41 @@ dashboard_onion_status() {
     fi
 }
 
+# Re-render the dashboard's live per-chain initial-sync progress (#384) as human lines for `status`,
+# so a held miner shows real numbers instead of only "check the dashboard". Reads the same /api/state
+# the UI does (127.0.0.1:8000 — host-local, no auth) and prints one line per chain that isn't synced
+# yet. No ETA: the block rate isn't sampled here, so 'remaining' blocks is the honest figure. Prints
+# nothing and returns non-zero when every chain is done, the dashboard app isn't answering yet (stack
+# still starting, or down), or jq is missing — so `status` degrades quietly.
+dashboard_sync_progress() {
+    command -v jq >/dev/null 2>&1 || return 1
+    local body rows
+    body=$(curl -fsS --max-time 3 "http://127.0.0.1:8000/api/state" 2>/dev/null) || return 1
+    rows=$(printf '%s' "$body" | jq -r '
+        (.sync // {}) | to_entries[]
+        | select(.value.state != "done")
+        | [.key,
+           (.value.state // "loading"),
+           (.value.percent // 0),
+           (.value.current // 0),
+           (.value.target // 0),
+           (.value.remaining // 0)]
+        | @tsv' 2>/dev/null) || return 1
+    [ -n "$rows" ] || return 1
+    log "Chain sync in progress — the miner is held until it completes (#35):"
+    local chain state percent current target remaining
+    while IFS=$'\t' read -r chain state percent current target remaining; do
+        [ -z "$chain" ] && continue
+        if [ "$state" = "syncing" ]; then
+            printf '  %b…%b %-13s %s%% (%s / %s blocks, %s to go)\n' \
+                "$C_YELLOW" "$C_RESET" "$chain" "$percent" "$current" "$target" "$remaining"
+        else
+            printf '  %b…%b %-13s discovering the target height…\n' \
+                "$C_YELLOW" "$C_RESET" "$chain"
+        fi
+    done <<<"$rows"
+}
+
 # Show the compose table, then health-check every service we expect to be running and warn
 # about anything that isn't. Returns non-zero if any service needs attention (handy for cron).
 # Profile-aware (the bundled monerod only counts in local-node mode), and aware that a stopped
@@ -479,6 +531,10 @@ stack_status() {
         printf '  %b⚠%b %-13s %s — likely intentional: %s\n' "$C_YELLOW" "$C_RESET" "$name" "$st" "$why"
     done
 
+    # Turn "check the dashboard" into real numbers (#384): re-render the dashboard's own per-chain
+    # sync progress from /api/state. Self-skips when both chains are synced or the app isn't up yet.
+    dashboard_sync_progress || true
+
     echo ""
     # A clearnet initial sync (#183) is a privacy-relevant state, not a fault — surface it
     # prominently every time the operator checks status, separate from the service verdict.
@@ -567,6 +623,7 @@ doctor() {
 
     log "Running pithead diagnostics (read-only)..."
     echo "  Host: ${OS_PRETTY:-$OS_TYPE}"
+    echo "  Version: $(show_version)"
     echo ""
 
     # --- Dependencies ---
@@ -1129,6 +1186,7 @@ Inspection:
                             (warns about anything down; non-zero exit if so).
   doctor                    Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk,
                             .env/onion state, and container status — a paste-able health report.
+  version, -V, --version    Print the installed stack version (offline; no update check).
 
 Maintenance:
   reset-dashboard [-y|--yes]
@@ -1168,6 +1226,19 @@ Maintenance:
 
 Workflow: edit config.json, then run '$0 apply'.
 EOF
+}
+
+# One-line, greppable version identity for support threads (#386). Reads the provenance
+# export_build_provenance already computed this invocation — never re-reads VERSION or calls git,
+# so a release bundle (no .git) works and the values can't drift. `unknown` when VERSION is absent.
+show_version() {
+    local ver="unknown"
+    [ -n "$PITHEAD_VERSION" ] && ver="v$PITHEAD_VERSION"
+    if is_source_checkout; then
+        echo "pithead dev (${PITHEAD_GIT_BRANCH:-unknown} @ ${PITHEAD_GIT_COMMIT:-unknown}, VERSION ${PITHEAD_VERSION:-unknown})"
+    else
+        echo "pithead $ver (release images $STACK_VERSION)"
+    fi
 }
 
 # --- Small Utilities ---
@@ -3957,6 +4028,7 @@ main() {
         ;;
     onion-client-key) onion_client_key ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
+    version | -V | --version) show_version ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;
     esac

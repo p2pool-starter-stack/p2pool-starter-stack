@@ -1117,6 +1117,48 @@ assert_eq "status onion: nothing when the onion is disabled" \
     "$(run_sourced "$od_off" dashboard_onion_status)" ""
 rm -rf "$od_on" "$od_noauth" "$od_unprov" "$od_off"
 
+echo "== unit: dashboard_sync_progress re-renders per-chain sync from /api/state (#384) =="
+# The one-curl re-render behind `pithead status`: read the dashboard's own /api/state (host-local,
+# no auth) and print per-chain progress, skipping synced chains and degrading quietly when the app
+# isn't up. Stub curl to serve a canned body — real jq parses it, matching the dashboard's shape.
+SP="$(mktemp -d)"
+mkdir -p "$SP/bin"
+cat >"$SP/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+[ -n "${CURL_BODY:-}" ] && printf '%s' "$CURL_BODY"
+exit "${CURL_RC:-0}"
+EOF
+chmod +x "$SP/bin/curl"
+# Monero mid-sync + Tari still discovering its target height: both surface, monero with numbers.
+sp_body='{"sync":{"monero":{"state":"syncing","percent":87,"current":2451000,"target":2810000,"remaining":359000},"tari":{"state":"loading","percent":0,"current":0,"target":0,"remaining":0}}}'
+out="$(CURL_BODY="$sp_body" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)"
+assert_contains "sync progress: monero syncing shows percent + blocks-to-go" "$out" "87% (2451000 / 2810000 blocks, 359000 to go)"
+assert_contains "sync progress: no-target chain reads as discovering" "$out" "discovering the target height"
+assert_contains "sync progress: header names the #35 hold" "$out" "held until it completes"
+# Both synced: nothing to say (steady-state status stays quiet), non-zero return.
+sp_done='{"sync":{"monero":{"state":"done","percent":100,"current":10,"target":10,"remaining":0},"tari":{"state":"done","percent":100,"current":5,"target":5,"remaining":0}}}'
+assert_eq "sync progress: both synced -> silent" \
+    "$(CURL_BODY="$sp_done" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)" ""
+# Only monero still syncing: the synced tari is omitted (not listed as done).
+sp_partial='{"sync":{"monero":{"state":"syncing","percent":42,"current":100,"target":238,"remaining":138},"tari":{"state":"done","percent":100,"current":5,"target":5,"remaining":0}}}'
+out="$(CURL_BODY="$sp_partial" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)"
+assert_contains "sync progress: partial -> monero listed" "$out" "monero"
+assert_not_contains "sync progress: partial -> synced tari omitted" "$out" "tari"
+# Dashboard app not answering yet (curl fails): quiet, non-zero — graceful during startup.
+assert_eq "sync progress: dashboard down -> silent" \
+    "$(CURL_RC=22 PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)" ""
+rm -rf "$SP"
+
+echo "== unit: first-run epilogue shows once after up (#384) =="
+# The "what happens next" onboarding note: prints on the first up in a fresh deploy dir, drops a
+# marker beside .env, and stays silent on every later restart.
+FR="$(mktemp -d)"
+out="$(run_sourced "$FR" print_first_run_epilogue 2>&1)"
+assert_contains "first-run: epilogue explains the sync-then-mine hold" "$out" "held until Monero and Tari finish their first sync"
+assert_eq "first-run: silent on the second up (marker respected)" \
+    "$(run_sourced "$FR" print_first_run_epilogue 2>&1)" ""
+rm -rf "$FR"
+
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
 # 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).
@@ -1343,6 +1385,83 @@ for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "
         bad "XvB $t_name tier docs match TIER_DEFAULTS" "config $t_val / doc '$t_human' out of sync"
     fi
 done
+
+echo "== unit: release.sh registry read retries GHCR read-after-push lag (#429) =="
+# manifest_digest reads a tag GHCR just accepted, which can 404 for a few seconds (read-after-push
+# lag) — this killed stage-4 digest capture twice on v1.3.1. retry_registry_read must retry until the
+# read resolves. Stub buildx_inspect to fail the first two calls (empty + rc 1) then succeed; a counter
+# file survives the retries. Backoff forced to 0 keeps the test instant.
+RETRY_CNT="$SANDBOX/inspect.count"
+# shellcheck disable=SC1090,SC2034  # dynamic source; REGISTRY_READ_* are read by the sourced retry helper
+retry_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    REGISTRY_READ_BACKOFF=0
+    printf 0 >"$RETRY_CNT"
+    buildx_inspect() {
+        local n
+        n=$(($(cat "$RETRY_CNT") + 1))
+        printf '%s' "$n" >"$RETRY_CNT"
+        [ "$n" -lt 3 ] && return 1                  # attempts 1 and 2 fail (tag not yet readable)
+        printf 'Name: x\nDigest: sha256:deadbeef\n' # attempt 3 resolves
+    }
+    printf 'DIGEST=%s ATTEMPTS=%s\n' "$(manifest_digest some:tag)" "$(cat "$RETRY_CNT")"
+)"
+assert_contains "manifest_digest resolves after transient GHCR failures" "$retry_out" "DIGEST=sha256:deadbeef"
+assert_contains "retried until the read succeeded (3 attempts)" "$retry_out" "ATTEMPTS=3"
+# Genuinely-missing image: after the retries exhaust, manifest_digest stays empty so the caller's
+# `[ -n "$digest" ] || die` still stops the release (a missing image must not silently pass).
+# shellcheck disable=SC1090,SC2034  # dynamic source; REGISTRY_READ_* are read by the sourced retry helper
+exhaust_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    REGISTRY_READ_BACKOFF=0
+    REGISTRY_READ_RETRIES=3
+    buildx_inspect() { return 1; } # GHCR never makes it readable
+    digest="$(manifest_digest gone:tag)"
+    [ -n "$digest" ] || echo "DIED-EMPTY"
+)"
+assert_contains "exhausted retries -> empty digest (caller dies)" "$exhaust_out" "DIED-EMPTY"
+# The smoke stage's raw manifest read has the same read-after-push exposure — wire it through the retry.
+assert_contains "smoke stage reads the manifest via retry_registry_read (#429)" \
+    "$(cat "$REL")" "retry_registry_read buildx_inspect \"\$repo:\$STAGING_TAG\" --raw"
+
+echo "== unit: release.sh preflight checks the lint toolchain (#426) =="
+# A reimaged release box loses shellcheck/shfmt/node/uv — the v1.3.0 cut died ~1 min in mid-gate with a
+# bare `shellcheck: not found`. check_release_toolchain must fail fast BEFORE building, naming the tool
+# and the provisioning doc. Point PATH at a sandbox of stub tools so the host's real PATH doesn't decide.
+RTB="$SANDBOX/release-tools"
+mkdir -p "$RTB"
+for t in shellcheck shfmt node npx uv uvx; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$RTB/$t"
+    chmod +x "$RTB/$t"
+done
+# shellcheck disable=SC1090
+(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    PATH="$RTB" check_release_toolchain >/dev/null 2>&1
+)
+assert_rc "full toolchain present -> preflight passes" "$?" "0"
+rm -f "$RTB/shfmt" # simulate a reimaged box missing one tool
+# shellcheck disable=SC1090
+tc_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    PATH="$RTB" check_release_toolchain 2>&1
+)"
+tc_rc=$?
+assert_rc "missing tool -> preflight fails fast (rc 1)" "$tc_rc" "1"
+assert_contains "the missing tool is named" "$tc_out" "shfmt"
+assert_contains "error points at the provisioning doc" "$tc_out" "release-server.md"
 
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
@@ -2437,11 +2556,37 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$DOC/bin/sudo"
 chmod +x "$DOC/bin/docker" "$DOC/bin/sudo"
+printf '9.9.9\n' >"$DOC/VERSION" # #386: doctor's header must carry the stack version
 out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"
 rc=$?
 assert_contains "doctor runs to the summary" "$out" "Diagnostics summary"
 assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
 assert_rc "doctor exits 1 on a critical FAIL" "$rc" "1"
+assert_contains "doctor header carries the version (#386)" "$out" "Version: pithead v9.9.9"
+
+echo "== black-box: version subcommand (#386) =="
+# The version identity must print offline and exit 0 before any setup, on both a release bundle
+# (VERSION present, no Dockerfile) and a source checkout (Dockerfile marker), and read the value
+# export_build_provenance computed — no VERSION file falls back to `unknown`, still exit 0.
+VER="$SANDBOX/version"
+mkdir -p "$VER"
+cp "$STACK" "$VER/pithead"
+printf '9.9.9\n' >"$VER/VERSION"
+out="$(cd "$VER" && ./pithead version)"
+rc=$?
+assert_rc "version: exits 0" "$rc" "0"
+assert_contains "version: prints the VERSION contents" "$out" "v9.9.9"
+assert_contains "version: -V alias" "$(cd "$VER" && ./pithead -V)" "v9.9.9"
+assert_contains "version: --version alias" "$(cd "$VER" && ./pithead --version)" "v9.9.9"
+mkdir -p "$VER/build/dashboard"
+: >"$VER/build/dashboard/Dockerfile"
+assert_contains "version: source checkout reads dev" "$(cd "$VER" && ./pithead version)" "pithead dev"
+rm -rf "$VER/build"
+rm -f "$VER/VERSION"
+out="$(cd "$VER" && ./pithead version)"
+rc=$?
+assert_rc "version: no VERSION still exits 0" "$rc" "0"
+assert_contains "version: no VERSION -> unknown" "$out" "unknown"
 
 echo "== black-box: backup -> restore round-trip (#140) =="
 # backup/restore touch irreplaceable state (onion keys, the dashboard DB) and have fiddly logic

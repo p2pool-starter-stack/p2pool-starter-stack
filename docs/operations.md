@@ -18,6 +18,7 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
+| `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
@@ -40,7 +41,11 @@ running (and healthy) service, and a ⚠/✗ for anything unhealthy, restarting,
 It exits non-zero when something needs attention, so you can wire it into a cron/monitoring check.
 A stopped `p2pool`/`xmrig-proxy` is reported as intentional, not an error: the dashboard stops it
 either to fail workers over a node-down outage or while the miner is held until the required chains
-finish their initial sync. Check the dashboard to see which.
+finish their initial sync. When a chain is still syncing, `status` reads the dashboard's own
+`/api/state` and prints its progress inline — a line per chain with the percent and the number of
+blocks left, so you don't have to open the dashboard to see how far off release is. No ETA is
+shown: block rate isn't sampled, so the blocks-remaining count is the honest figure. The lines are
+skipped once both chains are synced, or when the dashboard app isn't answering yet.
 
 **Start / stop / restart:**
 
@@ -121,6 +126,8 @@ Either way, `upgrade` re-renders the generated config (`.env`, the Caddyfile, an
 the new release *before* pulling/rebuilding, so a release that changes a config template or adds an
 `.env` var takes effect, not just the new image. Data directories and `config.json` are untouched, so
 blockchain sync and settings survive an upgrade.
+
+Run `./pithead version` to see what is currently installed before and after an upgrade.
 
 ### Switching a source checkout to release images
 

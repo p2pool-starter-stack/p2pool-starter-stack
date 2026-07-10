@@ -19,7 +19,7 @@ dependencies = [
   # grpcio/protobuf floors are dictated by the checked-in Tari gRPC stubs
   # (mining_dashboard/client/tari/generated/*_pb2*.py), which assert these at
   # import time. Do not resolve lower; regenerate the stubs if bumping.
-  "grpcio>=1.82.0",
+  "grpcio>=1.82.1",
   "protobuf>=6.31.1,<7",
   "aiofiles>=24.1",
 ]
