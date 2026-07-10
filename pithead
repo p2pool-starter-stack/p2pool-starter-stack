@@ -2343,8 +2343,11 @@ provision_onion_client_auth() {
     $run chmod 700 "$hs_dir" "$hs_dir/authorized_clients"
     $run chmod 600 "$hs_dir/authorized_clients/dashboard.auth"
     local owner
-    owner=$($run stat -c '%u:%g' "$TOR_DATA_DIR" 2>/dev/null) || owner=""
-    [ -n "$owner" ] && $run chown -R "$owner" "$hs_dir"
+    # GNU stat first, BSD fallback (macOS dev checkouts). With neither, skip the chown — and do it
+    # with `if`, not `[ ] &&`, so an empty owner doesn't become the function's (nonzero) return
+    # value and abort the whole apply under set -e after .env is already committed.
+    owner=$($run stat -c '%u:%g' "$TOR_DATA_DIR" 2>/dev/null || $run stat -f '%u:%g' "$TOR_DATA_DIR" 2>/dev/null) || owner=""
+    if [ -n "$owner" ]; then $run chown -R "$owner" "$hs_dir"; fi
 }
 
 # Read the dashboard onion hostname from the running tor container into DASHBOARD_ONION (#343).
@@ -3597,25 +3600,52 @@ apply() {
 
 # Approval gate for a commit (#33). The client-side typed-APPLY modal is NOT a security control:
 # a compromised/XSS'd container writes the request spool directly and never renders that modal, so
-# the only trustworthy gate is here, host-side. FAIL CLOSED: a DESTRUCTIVE change (wallet address,
-# Tor egress firewall off, clearnet sync on, password/auth changes — anything describe_change flags
-# DEST) is REFUSED from the dashboard; non-destructive changes proceed. Out-of-band approval with
-# deny-on-timeout is #338 (Telegram approve/deny) — it drops in here, replacing the refusal with a
-# real second factor. Until then, destructive config edits must be made from the host CLI.
+# the only trustworthy gate is here, host-side. FAIL CLOSED, two independent checks:
 #
-# Destructiveness is re-derived from the staged config via the SAME dry-run/describe path a preview
-# runs (not trusted from the container's result), so a forged "destructive:false" cannot slip a
-# wallet swap through. Echoes a reason on stdout when it refuses.
+#   1. DEFAULT-DENY on security-sensitive keys: a commit that changes ANY key in
+#      CONTROL_SENSITIVE_KEYS — in EITHER direction (enable, change, or DISABLE) — is refused.
+#      Deliberately decoupled from describe_change's cosmetic INFO/DEST flag: that flag labels only
+#      the disruptive direction (enabling auth is DEST, disabling is INFO), so a compromised
+#      container could otherwise switch security controls OFF with zero DEST rows.
+#   2. Anything describe_change still flags DEST (pruning, data dirs, node-mode switch, ...) is
+#      refused as disruptive.
+#
+# Both checks re-derive the changed keys from the staged config via the SAME dry-run path a preview
+# runs — nothing is trusted from the container's request or its (host-written but container-visible)
+# result file — so a forged "destructive:false" cannot slip a wallet swap or an auth-disable
+# through. Out-of-band approval with deny-on-timeout is #338 (Telegram approve/deny) — it drops in
+# here, replacing the refusal with a real second factor. Until then, these edits must be made from
+# the host CLI. Echoes a reason on stdout when it refuses.
+
+# The security-sensitive env keys, default-denied from the dashboard: dashboard auth + onion
+# exposure + the control channel itself, payout wallets, Tor egress firewall, clearnet initial
+# sync, the stratum access password, RPC/stratum bind interfaces, and the Telegram bot credentials
+# (the alert — and future #338 approval — channel an attacker must not repoint). Extend HERE, not
+# via describe_change flags. Space-separated exact env-key names.
+CONTROL_SENSITIVE_KEYS='DASHBOARD_AUTH_USER DASHBOARD_AUTH_HASH_B64 DASHBOARD_AUTH_PW_FP
+    DASHBOARD_ONION_ENABLED DASHBOARD_ONION_CLIENT_AUTH DASHBOARD_CONTROL_ENABLED
+    MONERO_WALLET_ADDRESS TARI_WALLET_ADDRESS TOR_EGRESS_FIREWALL
+    MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC PROXY_STRATUM_PASSWORD
+    MONERO_RPC_BIND STRATUM_BIND TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID'
+
 control_approval_gate() { # <staged-file>
     local staged="$1" porcelain
-    # Fail closed if we cannot re-derive destructiveness (the staged config was validated at
+    # Fail closed if we cannot re-derive the change set (the staged config was validated at
     # preview, so a dry-run failure here means something changed — refuse).
     if ! porcelain=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>/dev/null); then
         printf 'could not re-validate the staged change host-side — refusing to commit'
         return 1
     fi
+    # Default-deny: refuse if any changed env key is security-sensitive, whatever its flag says.
+    local sensitive_re hit
+    sensitive_re=$(printf '%s' "$CONTROL_SENSITIVE_KEYS" | tr -s ' \n' '|')
+    hit=$(printf '%s\n' "$porcelain" | cut -f2 | grep -m1 -xE "$sensitive_re" || true)
+    if [ -n "$hit" ]; then
+        printf 'this change alters a security-sensitive setting (%s) and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$hit" "$0"
+        return 1
+    fi
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
-        printf 'this change is destructive (wallet, egress firewall, clearnet sync, or auth) and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
+        printf 'this change is destructive and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
         return 1
     fi
     return 0
@@ -3639,12 +3669,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "rejected"
         return 0
     fi
-    jq '.config' "$file" >"$staged"
     # The staged copy carries the operator's MERGED secrets (the dashboard re-inserted real values
     # for unchanged sentinels before submitting). It lives in host-only staged/ — never mounted —
     # but pin it owner-only anyway so a co-tenant on the host can't read secrets from it (#33
     # hardening; the config.json bind-mount, not this file, is the real secret trust boundary —
-    # see SECURITY.md).
+    # see SECURITY.md). Created under umask 077 so it is never even briefly world-readable
+    # (create-then-chmod race); the chmod stays as belt-and-suspenders.
+    (umask 077 && jq '.config' "$file" >"$staged")
     chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '

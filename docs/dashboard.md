@@ -347,9 +347,17 @@ The flow mirrors the CLI's `apply`:
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own
    error message; nothing is applied.
-3. Confirm. If any change is disruptive (pool switch, wallet change, prune toggle, local↔remote
-   node switch), you must type `APPLY` first. The commit runs `pithead apply -y` on the host and
-   recreates only the containers whose config changed.
+3. Confirm. If the preview flags any change disruptive (⚠), you must type `APPLY` first. The
+   commit runs `pithead apply -y` on the host and recreates only the containers whose config
+   changed.
+
+Security-sensitive settings cannot be committed from the dashboard at all — the host-side runner
+default-denies any change, in any direction, to the dashboard login and onion settings, the
+control channel itself, payout wallets, the Tor egress firewall, clearnet initial sync, the
+stratum password, RPC/stratum bind addresses, and the Telegram bot credentials — and likewise
+refuses anything the preview flags disruptive (⚠). Apply those from the host with
+`./pithead apply`; out-of-band approval from the dashboard is tracked in
+[#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
 
 A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new
 sidechain and your PPLNS window (and XvB shares) reset.

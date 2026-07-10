@@ -2755,6 +2755,8 @@ assert_eq "preview result status" "$(jq -r '.status' "$RESULTS/$UUID1.json" 2>/d
 assert_contains "preview result carries the change row" "$(jq -r '.changes[].msg' "$RESULTS/$UUID1.json" 2>/dev/null)" "P2Pool sidechain changing"
 assert_eq "pool switch alone is not destructive" "$(jq -r '.destructive' "$RESULTS/$UUID1.json" 2>/dev/null)" "false"
 [ -f "$STAGED/$UUID1.json" ] && ok "candidate staged host-side" || bad "candidate staged host-side" "missing"
+# The staged copy carries merged secrets — it must land owner-only (#33 re-review).
+assert_eq "staged candidate is mode 600" "$(file_mode "$STAGED/$UUID1.json")" "600"
 assert_contains "preview audited" "$(cat "$AUDIT" 2>/dev/null)" "\"action\":\"preview\",\"status\":\"previewed\""
 
 # Malformed id: it would become a filename, so the request is discarded with no result at all.
@@ -2763,6 +2765,14 @@ out="$(run_pending)"
 assert_rc "runner exits 0 on a malformed id" "$?" "0"
 assert_contains "malformed id is called out" "$out" "malformed id"
 assert_eq "no result file for a malformed id" "$(ls "$RESULTS" | wc -l | tr -d ' ')" "1"
+
+# Well-formed but non-v4 id (version nibble 1): the loose old regex accepted any hex uuid shape;
+# the tightened gate (#438) pins version 4 + RFC variant, so this must be discarded too.
+printf '{"id":"11111111-1111-1111-1111-111111111111","action":"preview","actor":"x","config":{}}\n' >"$REQS/nonv4.json"
+out="$(run_pending)"
+assert_contains "non-v4 uuid id is discarded" "$out" "malformed id"
+[ ! -f "$RESULTS/11111111-1111-1111-1111-111111111111.json" ] &&
+    ok "no result file for a non-v4 id" || bad "no result file for a non-v4 id" "result written"
 
 # Unknown action / extra keys / invalid candidate config → rejected results, nothing staged.
 printf '{"id":"%s","action":"exec","actor":"x"}\n' "$UUID2" >"$REQS/$UUID2.json"
@@ -2898,6 +2908,89 @@ run_pending >/dev/null
 assert_eq "non-destructive commit still applies through the gate" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "applied"
 assert_eq "non-destructive change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "nano"
 
+echo "== black-box: approval gate default-denies security-control changes (#33 re-review) =="
+# describe_change flags only the ENABLE/CHANGE direction of security controls as DEST — disabling
+# dashboard auth, downgrading onion client-auth, clearing the stratum password or repointing the
+# Telegram bot are all INFO rows. The gate must refuse those on the explicit sensitive-key set,
+# independent of the DEST flag; a non-security change must still pass.
+UUID5="55555555-5555-4555-8555-555555555555"
+# Baseline: nano pool + stratum password + telegram bot + control, applied from the host CLI.
+jq -n --arg w "$WALLET" \
+    '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+    tari:{wallet_address:"T"}, p2pool:{pool:"nano",stratum_password:"s3cretpw"},
+    telegram:{enabled:true,bot_token:"123456:legit-ABC_def",chat_id:"1111"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},
+               control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+gate_try() { # <candidate-json-file> — preview then commit via the spool; result lands in $RESULTS/$UUID5.json
+    jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$1" >"$REQS/$UUID5.json"
+    run_pending >/dev/null
+    printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+    run_pending >/dev/null
+}
+
+# Disable the dashboard login (auth.password:"" needs control:false to pass validation): the
+# preview flags destructive:false — proof the DEST path alone would wave it through — and the
+# commit must still be refused, config untouched.
+jq '.dashboard.auth={username:"admin"} | .dashboard.control={enabled:false}' "$C/config.json" >"$C/cand.json"
+jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$C/cand.json" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "auth-disable previews destructive:false (DEST alone would allow it)" \
+    "$(jq -r '.destructive' "$RESULTS/$UUID5.json" 2>/dev/null)" "false"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "dashboard-login disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "auth-disable refusal names the sensitive-key gate" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "security-sensitive"
+assert_eq "config.json keeps the dashboard password" "$(jq -r '.dashboard.auth.password' "$C/config.json")" "a control passphrase"
+assert_eq "config.json keeps control enabled" "$(jq -r '.dashboard.control.enabled' "$C/config.json")" "true"
+
+# Clear the stratum access password (disable direction is an INFO row) — refused.
+jq 'del(.p2pool.stratum_password)' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "stratum-password disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps the stratum password" "$(jq -r '.p2pool.stratum_password' "$C/config.json")" "s3cretpw"
+
+# Repoint the Telegram bot (token change is an INFO row; the bot is the future #338 approval
+# channel, so an attacker must not swap it) — refused.
+jq '.telegram.bot_token="654321:evil-XYZ_abc"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "telegram bot_token repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps the original bot token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "123456:legit-ABC_def"
+
+# Downgrade the onion to password-only (client_auth:false is an INFO row in every direction).
+# Baseline first: onion on + client_auth on (the only combo valid with control on), applied.
+jq '.dashboard.onion={enabled:true,client_auth:true}' "$C/config.json" >"$C/cand.json" && mv "$C/cand.json" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+assert_contains "onion baseline applied (client_auth on)" "$(cat "$C/.env")" "DASHBOARD_ONION_CLIENT_AUTH=true"
+jq '.dashboard.onion.client_auth=false | .dashboard.control.enabled=false' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "onion client-auth downgrade commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps onion client-auth on" "$(jq -r '.dashboard.onion.client_auth' "$C/config.json")" "true"
+
+# Forged-flag bypass: the container tampers its visible copy of the preview result to
+# destructive:false AND sends a commit request carrying its own destructive:false field. The
+# extra request key is rejected outright; a clean follow-up commit is still refused because the
+# gate re-derives the change set host-side from the STAGED config — it never reads either flag.
+jq '.telegram.bot_token="999999:forged-token"' "$C/config.json" >"$C/cand.json"
+jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$C/cand.json" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+printf '{"status":"previewed","changes":[],"destructive":false,"ts":0}\n' >"$RESULTS/$UUID5.json"
+printf '{"id":"%s","action":"commit","actor":"admin","destructive":false}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_contains "commit request smuggling a destructive flag is rejected" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "unexpected keys"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "commit after result-file tampering is still refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "tampered-flag refusal comes from the host-side re-derivation" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "security-sensitive"
+assert_eq "config.json keeps the untampered bot token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "123456:legit-ABC_def"
+
+# Sensitive keys PRESENT but UNCHANGED must not trip the gate: a plain pool-tier change on the
+# same baseline (auth + onion + stratum password + telegram all set) still applies.
+jq '.p2pool.pool="mini"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "non-security change on a security-laden config still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "pool tier change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+
 echo "== black-box: spool intake cap + symlink refusal + stale sweep (#33 hardening) =="
 UUID4="44444444-4444-4444-8444-444444444444"
 # Oversized intent: refused BEFORE jq parses it (bounded root-runner DoS), no result addressed.
@@ -2927,6 +3020,17 @@ touch -t 202001010000 "$REQS/stale-req.json"
 run_pending >/dev/null
 [ ! -f "$STAGED/stale.json" ] && ok "aged staged file swept" || bad "aged staged file swept" "still present"
 [ ! -f "$REQS/stale-req.json" ] && ok "aged request file swept" || bad "aged request file swept" "still present"
+# Per-run intake cap: 60 pending intents → one run claims exactly 50 and LEAVES the remainder in
+# requests/ for the next path-unit fire (deterministic overflow — nothing is dropped). Invalid
+# JSON bodies keep each of the 60 on the cheap discard path; they still count against the cap.
+for i in $(seq 1 60); do printf 'notjson' >"$REQS/cap-$i.json"; done
+out="$(run_pending)"
+assert_contains "per-run cap announced after 50 intents" "$out" "per-run cap"
+assert_contains "exactly 50 intents processed in one run" "$out" "Processed 50 control request(s)"
+assert_eq "overflow intents left for the next run" "$(ls "$REQS" | wc -l | tr -d ' ')" "10"
+out="$(run_pending)"
+assert_contains "next run drains the remainder" "$out" "Processed 10 control request(s)"
+assert_eq "spool empty after the second run" "$(ls "$REQS" | wc -l | tr -d ' ')" "0"
 
 # The runner refuses to run at all when the channel is off (fail-closed).
 control_config main

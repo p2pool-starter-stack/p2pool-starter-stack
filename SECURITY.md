@@ -49,9 +49,14 @@ The stack's defaults:
   read-only. A root systemd unit re-validates every intent with pithead's own config validation
   and dispatches exactly two fixed actions (`apply --dry-run`, `apply -y`); no string from the
   container is ever executed. Enabling the channel without a dashboard password is a validation
-  error, on a published onion it additionally requires Tor client authorization, destructive edits
-  (wallet, egress firewall, clearnet sync, auth) are refused from the dashboard and must be applied
-  from the host CLI, and every mutation is audited host-side.
+  error, on a published onion it additionally requires Tor client authorization, and every
+  mutation is audited host-side. Commits are default-denied on an explicit security-sensitive key
+  set — dashboard auth and onion exposure, the control channel itself, payout wallets, the Tor
+  egress firewall, clearnet initial sync, the stratum password, RPC/stratum bind addresses, and
+  the Telegram bot credentials — in every direction (enabling, changing, or disabling), plus
+  anything the change preview flags destructive. Those edits must be applied from the host CLI;
+  out-of-band approval is tracked in
+  [#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
 
 ### Secret trust boundary for dashboard config editing
 
