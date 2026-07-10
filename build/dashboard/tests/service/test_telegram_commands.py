@@ -336,6 +336,25 @@ def test_earnings_unavailable_without_network_data():
     assert "unavailable" in out
 
 
+def test_earnings_includes_tari_line_when_merge_mining():
+    # #117: live Tari figures → a second line from the SAME 1h-average hashrate (merge-mined
+    # alongside the XMR), at the same rate the dashboard calculator publishes.
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        {"reward": 600_000_000_000},
+    )
+    expected = 8000.0 * (13_000.0 / 420_000_000_000 * 86_400)
+    assert f"Tari (merge-mined alongside): ~{expected:.2f} XTM/day" in out
+    assert "excludes XvB-donated hashrate" in out  # Tari no longer listed as excluded
+
+
+def test_earnings_omits_tari_line_without_tari_figures():
+    # Tari inactive / still syncing (reward+difficulty at 0) → no phantom XTM line.
+    out = tc.format_earnings(_metrics(p2pool_1h=8000.0), {"reward": 600_000_000_000})
+    assert "XTM" not in out
+    assert "XMR/day" in out  # the XMR estimate is unaffected
+
+
 def test_luck_reads_the_cadence_metrics():
     # #84: the four figures come straight off Metrics — the same fields the dashboard card shows.
     out = tc.format_luck(

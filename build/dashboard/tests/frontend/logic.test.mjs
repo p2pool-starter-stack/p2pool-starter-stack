@@ -16,7 +16,7 @@ import {
     SERIES_KEYS, normalizeSeries,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, fmtHashrate, computeEarnings, formatXmr, formatTimeToShare,
+    parseHashrate, fmtHashrate, computeEarnings, formatXmr, formatXtm, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -206,11 +206,35 @@ test('computeEarnings: scales the daily rate to day/month/year + time-to-share',
 
 test('computeEarnings: returns nulls when unavailable or hashrate is non-positive', () => {
     const ok = { available: true, coeff_day: 1e-7, pool_difficulty: 1 };
-    assert.deepEqual(computeEarnings(0, ok), { day: null, month: null, year: null, timeToShareSec: null });
-    assert.deepEqual(computeEarnings(null, ok), { day: null, month: null, year: null, timeToShareSec: null });
+    const allNull = { day: null, month: null, year: null, timeToShareSec: null,
+                      tariDay: null, tariMonth: null, tariYear: null };
+    assert.deepEqual(computeEarnings(0, ok), allNull);
+    assert.deepEqual(computeEarnings(null, ok), allNull);
     // available:false (network stats missing) -> graceful "—" path even with a valid hashrate.
     assert.equal(computeEarnings(50_000, { available: false, coeff_day: 1e-7 }).day, null);
     assert.equal(computeEarnings(50_000, null).day, null);
+});
+
+test('computeEarnings: Tari figures scale with the same what-if input (#117)', () => {
+    const earnings = { available: true, coeff_day: 1e-7, pool_difficulty: 1,
+                       tari_available: true, tari_coeff_day: 2e-3 };
+    const est = computeEarnings(50_000, earnings);
+    assert.equal(est.tariDay, 50_000 * 2e-3);
+    assert.equal(est.tariMonth, est.tariDay * DAYS_PER_MONTH);
+    assert.equal(est.tariYear, est.tariDay * DAYS_PER_YEAR);
+    // Doubling the hashrate doubles the XTM figures — one input drives both estimates.
+    assert.equal(computeEarnings(100_000, earnings).tariDay, 2 * est.tariDay);
+});
+
+test('computeEarnings: Tari figures are null when merge-mining is unavailable (#117)', () => {
+    const est = computeEarnings(50_000, {
+        available: true, coeff_day: 1e-7, pool_difficulty: 1,
+        tari_available: false, tari_coeff_day: 0,
+    });
+    assert.equal(est.tariDay, null);
+    assert.equal(est.tariMonth, null);
+    assert.equal(est.tariYear, null);
+    assert.ok(est.day > 0);   // the XMR estimate is unaffected
 });
 
 test('computeEarnings: no time-to-share when share difficulty is unknown', () => {
@@ -226,6 +250,12 @@ test('formatXmr: precision scales with magnitude; "—" for null/invalid', () =>
     assert.equal(formatXmr(0), '0 XMR');
     assert.equal(formatXmr(null), '—');
     assert.equal(formatXmr(Infinity), '—');
+});
+
+test('formatXtm: same adaptive precision with the XTM unit; "—" for null (#117)', () => {
+    assert.equal(formatXtm(2.5), '2.5000 XTM');
+    assert.equal(formatXtm(0), '0 XTM');
+    assert.equal(formatXtm(null), '—');   // the Tari-unavailable "—" state
 });
 
 test('formatTimeToShare: formats seconds, "—" for null / non-positive', () => {

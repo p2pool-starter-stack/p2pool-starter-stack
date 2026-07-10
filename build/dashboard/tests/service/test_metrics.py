@@ -399,6 +399,22 @@ class TestCalculatorInputs:
         assert build_metrics(_data(tari={"active": True}), _mgr()).tari_mining is True
         assert build_metrics(_data(tari={"active": False}), _mgr()).tari_mining is False
 
+    def test_tari_earnings_inputs(self):
+        # #117: the Tari aux-chain difficulty and XTM block reward come off the collected tari
+        # snapshot (p2pool's merge-mine stats, already µT→XTM converted by the collector).
+        m = build_metrics(
+            _data(tari={"active": True, "difficulty": 420_000_000_000, "reward": 13_000.5}),
+            _mgr(),
+        )
+        assert m.tari_difficulty == 420_000_000_000
+        assert m.tari_reward == 13_000.5
+
+    def test_tari_earnings_inputs_zero_when_absent(self):
+        # Tari inactive / still syncing: no tari snapshot → safe zeros (the "unavailable" signal).
+        m = build_metrics(_data(), _mgr())
+        assert m.tari_difficulty == 0
+        assert m.tari_reward == 0
+
 
 class TestRobustness:
     def test_empty_snapshot_does_not_crash(self):
