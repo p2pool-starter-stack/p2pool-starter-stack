@@ -9,7 +9,13 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-09
+
+v1.3 makes the stack remember and reason. The dashboard used to fetch telemetry, render it live, and
+throw it away — you got a last value, never a trend. This release persists the share-health series it
+was discarding, detects block and payout events, and turns both into panels, calculators, and alerts.
+Around that arc: a payout-wallet tamper tripwire, three new `doctor` runtime checks, a Prometheus
+`/metrics` endpoint, and a batch of accuracy and tooling fixes. Run `./pithead upgrade` to pick it up.
 
 ### Added
 
