@@ -96,6 +96,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | sync state loading/syncing/done; pruned/full/unknown; db_size | metrics | 1 ✅ |
 | badges (node-down, workers-rejected, miner-held, passive-Tari, pruned/full, low-HR) | metrics | 1 ✅ |
 | system levels (cpu/mem/disk/hugepages), worker pool/online, chart outage breaks | metrics | 1 ✅ |
+| dashboard DB writes failing → `db_healthy:false` (#131) | data dir read-only | 1 ✅ (flag logic) · 4 ▶ (`--fault-injection`, #202) |
 | Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
 
 ### G. CLI lifecycle (`pithead`)

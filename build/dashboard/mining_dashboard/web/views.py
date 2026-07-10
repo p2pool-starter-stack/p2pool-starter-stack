@@ -460,6 +460,27 @@ def build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok):
     }
 
 
+def build_cadence(metrics):
+    """Pool cadence & luck display values (#84). Formatting only — the figures live on Metrics.
+
+    Durations (not localtime stamps) for the "since" figure so no timezone appears; ``available``
+    gates luck/time-to-share, which are meaningless until there is hashrate history AND a pool
+    difficulty (0 for the first samples after a wipe — never show inf/0s). ``weight`` is the
+    miner's OWN PPLNS share-weight, not p2pool's pool-wide ``pplnsWeight``.
+    """
+    available = metrics.expected_share_sec > 0
+    return {
+        "last_block": format_time_abs(metrics.last_block_ts),
+        "since_block": format_duration(time.time() - metrics.last_block_ts)
+        if metrics.last_block_ts
+        else "—",
+        "tts": format_duration(metrics.expected_share_sec) if available else "—",
+        "luck": f"{metrics.luck_pct:.0f}%" if available else "—",
+        "weight": f"{metrics.own_pplns_weight:,.0f}",
+        "available": available,
+    }
+
+
 def build_pool_network(data, metrics):
     """P2Pool / Stratum / Monero-network display values (computed bits come from Metrics)."""
     stratum = data.get("stratum", {})
@@ -870,7 +891,7 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
             {
                 "text": label,
                 "variant": "warn",
-                "title": "Tari is still syncing — merge mining resumes when it catches up; Monero mining continues",
+                "title": "Tari is still syncing — merge-mining resumes when it catches up; Monero mining continues",
             }
         )
     # Monero pruned/full badge (Issue #32) — only when known (local node).
@@ -1048,9 +1069,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
 
     return {
         "syncing": metrics.global_syncing,
-        "page_title": "Mining Dashboard - Syncing"
+        "page_title": "Pithead Dashboard - Syncing"
         if metrics.global_syncing
-        else "Mining Dashboard",
+        else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
@@ -1070,6 +1091,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "network": pool_net["network"],
         "monero": pool_net["monero"],
         "shares_window": pool_net["shares_window"],
+        "cadence": build_cadence(metrics),
         "raffle_eligible": build_raffle_eligibility(metrics),
         "proxy_workers": metrics.workers_online,
         "earnings": build_earnings(data, metrics),

@@ -41,6 +41,7 @@ COMMANDS = (
     "pool",
     "xvb",
     "earnings",
+    "luck",
     "help",
 )
 
@@ -55,6 +56,7 @@ HELP_TEXT = (
     "/pool — P2Pool sidechain + Monero network\n"
     "/xvb — XvB mode, tier, and raffle eligibility\n"
     "/earnings — estimated P2Pool XMR per day\n"
+    "/luck — pool cadence: time-to-share, luck, PPLNS weight\n"
     "/help — this message"
 )
 
@@ -107,6 +109,15 @@ def _human_count(n):
     return f"{n:.2f} E"
 
 
+def _xvb_split_frac(p2pool_24h, xvb_routed_24h):
+    """Fraction of the last 24h routed to XvB, or ``None`` when there is no routed history yet.
+    Shared by ``format_status`` and ``format_daily_summary`` so the two can never disagree (#365)."""
+    total = (p2pool_24h or 0) + (xvb_routed_24h or 0)
+    if not total:
+        return None
+    return (xvb_routed_24h or 0) / total
+
+
 def format_status(metrics, mining_active, host_label="", warnings=None, merge_mining=None):
     """Overall stack health — the answer to '/status'. Pure: folds a :class:`Metrics` (plus the
     mining-active flag the loop derives from the sync gate, any active warning/error badges, and the
@@ -129,6 +140,13 @@ def format_status(metrics, mining_active, host_label="", warnings=None, merge_mi
     lines.append(f"Workers: {metrics.workers_online}/{metrics.workers_total} online")
     lines.append(f"Hashrate: {format_hashrate(metrics.total_h15)} (10m avg)")
     lines.append(f"PPLNS shares: {metrics.shares_in_window} in window")
+    if metrics.xvb_enabled:
+        frac = _xvb_split_frac(metrics.p2pool_24h, metrics.xvb_routed_24h)
+        if frac is not None:
+            lines.append(
+                f"24h split: \U0001f535 P2Pool {format_hashrate(metrics.p2pool_24h)} · "
+                f"\U0001f3b2 XvB {format_hashrate(metrics.xvb_routed_24h)} ({frac * 100:.0f}% to XvB)"
+            )
     # Surface the same warning/error badges the dashboard's top bar shows (#104), so /status is a
     # one-glance "anything wrong?" — or an explicit all-clear.
     if warnings:
@@ -294,6 +312,28 @@ def format_pool(metrics, data=None, host_label=""):
     return "\n".join(lines)
 
 
+def format_luck(metrics, host_label=""):
+    """Pool cadence & luck — the answer to '/luck' (#84). Reads the same Metrics fields the
+    dashboard's cadence card renders: time since the pool's last block (pool-wide, not a payout),
+    expected time-to-share for this miner's hashrate, luck (actual vs expected shares in the PPLNS
+    window; >100% = lucky), and the miner's own PPLNS share-weight."""
+    prefix = _prefix(host_label)
+    lines = [f"{prefix}\U0001f340 Pool cadence & luck"]
+    if metrics.last_block_ts:
+        since = format_duration(time.time() - metrics.last_block_ts)
+        lines.append(f"Since pool's last block: {since}")
+    else:
+        lines.append("Since pool's last block: n/a")
+    if metrics.expected_share_sec > 0:
+        lines.append(f"Est. time to a share: {format_duration(metrics.expected_share_sec)}")
+        lines.append(f"Luck: {metrics.luck_pct:.0f}% (actual vs expected shares in PPLNS window)")
+    else:
+        lines.append("Est. time to a share: n/a (waiting on hashrate history)")
+        lines.append("Luck: n/a")
+    lines.append(f"Your PPLNS weight: {metrics.own_pplns_weight:,.0f}")
+    return "\n".join(lines)
+
+
 def format_xvb(metrics, host_label=""):
     """XvB mode / tier / raffle eligibility — the answer to '/xvb'."""
     prefix = _prefix(host_label)
@@ -396,8 +436,7 @@ def format_daily_summary(metrics, data, host_label="", now=None, incidents=None)
         lines.append(incident_line)
     lines.append(f"⚡ 24h hashrate: {format_hashrate(fleet_24h)}")
     if metrics.xvb_enabled:
-        routed = (metrics.p2pool_24h or 0) + (metrics.xvb_routed_24h or 0)
-        xvb_frac = (metrics.xvb_routed_24h or 0) / routed if routed else 0
+        xvb_frac = _xvb_split_frac(metrics.p2pool_24h, metrics.xvb_routed_24h) or 0
         xvb_hr = fleet_24h * xvb_frac
         lines.append(
             f"   \U0001f535 P2Pool {format_hashrate(fleet_24h - xvb_hr)} · "
@@ -530,6 +569,8 @@ class TelegramCommandBot:
             return format_xvb(metrics, self.host_label)
         if cmd == "earnings":
             return format_earnings(metrics, data.get("network", {}), self.host_label)
+        if cmd == "luck":
+            return format_luck(metrics, self.host_label)
         return None
 
     async def run(self):

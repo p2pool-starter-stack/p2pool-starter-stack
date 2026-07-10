@@ -28,7 +28,7 @@ else
 fi
 readonly C_RESET C_GREEN C_YELLOW C_RED
 
-log() { echo -e "${C_GREEN}[STACK]${C_RESET} $1"; }
+log() { echo -e "${C_GREEN}[pithead]${C_RESET} $1"; }
 warn() { echo -e "${C_YELLOW}[WARNING]${C_RESET} $1" >&2; }
 error() {
     echo -e "${C_RED}[ERROR]${C_RESET} $1" >&2
@@ -637,7 +637,7 @@ doctor() {
         if [ -n "$_mw" ] && [ "$_mw" != "your_monero_wallet_address" ]; then
             case "$(monero_address_type "$_mw")" in
             primary) dr_ok "Monero payout address is a primary address (p2pool/XvB can pay it)." ;;
-            subaddress) dr_fail "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run 'pithead apply'." ;;
+            subaddress) dr_fail "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run './pithead apply'." ;;
             integrated) dr_fail "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." ;;
             *) dr_warn "Monero payout address doesn't look like a primary address (expected 95 chars starting with 4)." ;;
             esac
@@ -658,7 +658,7 @@ doctor() {
         elif [ "$huge_total" -gt 0 ] 2>/dev/null; then
             dr_ok "HugePages reserved: ${huge_total} total, ${huge_free:-?} free (RandomX uses these)."
         else
-            dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run 'pithead setup' (kernel optimization) to reserve them."
+            dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them."
         fi
 
         # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
@@ -709,7 +709,7 @@ doctor() {
         case "$_p2args" in
         "") : ;;
         *--socks5*) dr_ok "p2pool routes outbound sidechain P2P via Tor (#165)." ;;
-        *) dr_fail "p2pool is NOT routing over Tor despite p2pool.clearnet=false — its sidechain P2P would hit CLEARNET (exposing your IP). Almost certainly a STALE p2pool image not applying P2POOL_FLAGS (#165/#273): run 'pithead upgrade' to rebuild it. (#270's egress firewall blocks the dial meanwhile, so p2pool can't peer until you do.)" ;;
+        *) dr_fail "p2pool is NOT routing over Tor despite p2pool.clearnet=false — its sidechain P2P would hit CLEARNET (exposing your IP). Almost certainly a STALE p2pool image not applying P2POOL_FLAGS (#165/#273): run './pithead upgrade' to rebuild it. (#270's egress firewall blocks the dial meanwhile, so p2pool can't peer until you do.)" ;;
         esac
     fi
 
@@ -765,13 +765,13 @@ doctor() {
     echo ""
     echo "Deployment:"
     if [ ! -f "$ENV_FILE" ]; then
-        dr_warn "No $ENV_FILE found — the stack has not been set up. Run 'pithead setup'. (Skipping env-dependent checks.)"
+        dr_warn "No $ENV_FILE found — the stack has not been set up. Run './pithead setup'. (Skipping env-dependent checks.)"
     else
         dr_ok "$ENV_FILE present."
         if [ "$(env_get DEPLOYMENT_COMPLETED)" == "true" ]; then
             dr_ok "DEPLOYMENT_COMPLETED=true — setup finished."
         else
-            dr_warn "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run 'pithead setup'."
+            dr_warn "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run './pithead setup'."
         fi
 
         # --- Tor onion addresses ---
@@ -781,7 +781,7 @@ doctor() {
         for k in MONERO_ONION_ADDRESS TARI_ONION_ADDRESS P2POOL_ONION_ADDRESS; do
             onion=$(env_get "$k")
             if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
-                dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run 'pithead setup' to generate Tor hidden services."
+                dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services."
             else
                 dr_ok "$k set."
             fi
@@ -794,7 +794,7 @@ doctor() {
             if onion_line=$(dashboard_onion_status); then
                 dr_ok "Dashboard onion: $onion_line"
             else
-                dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run 'pithead setup' or 'pithead apply'."
+                dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run './pithead setup' or './pithead apply'."
             fi
         fi
     fi
@@ -815,7 +815,7 @@ doctor() {
             done
             dr_ok "Read container status from 'docker compose ps' (review the table above)."
         else
-            dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run 'pithead up') or run from a different directory."
+            dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run './pithead up') or run from a different directory."
         fi
         check_dashboard_answers
     fi
@@ -1430,7 +1430,7 @@ check_egress_firewall_installed() {
     if printf '%s\n' "$rules" | grep -qF -- "$TOR_EGRESS_TAG"; then
         dr_ok "Tor-only egress firewall rules are installed (#270) — clearnet dials from the stack are fail-closed."
     else
-        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run 'pithead up' to reinstall them (#270)."
+        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them (#270)."
     fi
     return 0
 }
@@ -1451,7 +1451,7 @@ check_stratum_listening() {
     if ss -Hltn 2>/dev/null | grep -q ':3333 '; then
         dr_ok "Stratum :3333 is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :3333 — workers can't connect. Check 'pithead logs xmrig-proxy' and docs/workers.md."
+        dr_fail "xmrig-proxy is running but NOTHING is listening on :3333 — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
     fi
     return 0
 }
@@ -1471,7 +1471,7 @@ check_dashboard_answers() {
     if curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:8000/api/state" 2>/dev/null; then
         dr_ok "Dashboard app answers on 127.0.0.1:8000."
     else
-        dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check 'pithead logs dashboard'."
+        dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'."
     fi
     return 0
 }
@@ -2178,7 +2178,7 @@ resolve_dashboard_host() {
 }
 
 provision_tor() {
-    log "Initializing Tor service to generate Onion addresses..."
+    log "Initializing Tor service to generate onion addresses..."
     # Client-auth keys must be in place before tor starts, since it reads authorized_clients then (#343).
     provision_onion_client_auth
     docker compose up --pull "$(resolve_pull_policy)" -d tor
@@ -2253,7 +2253,7 @@ provision_dashboard_onion() {
     until docker exec tor test -f /var/lib/tor/dashboard/hostname; do
         if [ "$elapsed" -ge "$timeout" ]; then
             # Non-fatal: the onion still serves; the address just isn't captured for `status` yet.
-            warn "Timed out after ${timeout}s waiting for the dashboard Tor hidden-service hostname; run 'pithead status' later to see the address."
+            warn "Timed out after ${timeout}s waiting for the dashboard Tor hidden-service hostname; run './pithead status' later to see the address."
             return 1
         fi
         sleep 2
@@ -3091,7 +3091,7 @@ describe_change() {
             msg="Stratum access-password DISABLED (#152) — any rig that can reach :3333 may mine again."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Stratum access-password ENABLED (#152) — rigs must now send the matching 'pass' (find it in .env / 'pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            msg="Stratum access-password ENABLED (#152) — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
         else
             flag=DEST
             msg="Stratum access-password CHANGED (#152) — update every rig's 'pass' to match or they're rejected; the xmrig-proxy container is recreated."

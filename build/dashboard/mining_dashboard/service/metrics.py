@@ -26,6 +26,7 @@ from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
     get_tier_info,
     pplns_block_time,
+    pplns_weight_in_window,
     resolve_target_threshold,
     shares_in_pplns_window,
     xvb_stats_are_stale,
@@ -95,6 +96,14 @@ class Metrics:
     # True when the xmrvsbeast.com fetch has gone quiet (#311) — credited 1h/24h are frozen,
     # so the UI greys them and the controller holds its split. Same predicate as the controller.
     xvb_stale: bool = False
+    # Pool cadence & luck (#84). Defaulted so direct Metrics(...) constructors needn't set them.
+    own_pplns_weight: float = 0.0  # sum of YOUR share difficulty in the window (not pool-wide)
+    last_block_ts: float = 0.0  # epoch secs of the pool's last found block; 0.0 = unknown
+    expected_share_sec: float = 0.0  # pool_difficulty / p2pool_1h; 0.0 when either is unknown
+    # Luck % = actual vs expected shares in the PPLNS window:
+    # expected = p2pool_1h * (pplns_window * block_time) / pool_difficulty;
+    # luck_pct = shares_in_window / expected * 100. >100% = running lucky. 0.0 when unknowable.
+    luck_pct: float = 0.0
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -161,6 +170,20 @@ def build_metrics(latest_data, state_mgr, history=None):
     block_time = pplns_block_time(pool_type)
     pplns_window = local_pool.get("pplns_window", DEFAULT_PPLNS_WINDOW)
     shares_in_window = shares_in_pplns_window(data.get("shares", []), pplns_window, block_time)
+    own_pplns_weight = pplns_weight_in_window(data.get("shares", []), pplns_window, block_time)
+
+    # Cadence & luck (#84). Sidechain share difficulty is H·s, so diff/hashrate = expected seconds
+    # per share (the same formula the client's earnings calculator uses for time-to-share). Both
+    # figures need a real p2pool_1h (0 for the first samples after a wipe) and a real pool
+    # difficulty — otherwise they stay 0.0 and the view layer hides them.
+    pool_difficulty = local_pool.get("difficulty", 0) or 0
+    if pool_difficulty > 0 and p2pool_1h > 0:
+        expected_share_sec = pool_difficulty / p2pool_1h
+        expected_shares = p2pool_1h * (pplns_window * block_time) / pool_difficulty
+        luck_pct = shares_in_window / expected_shares * 100
+    else:
+        expected_share_sec = 0.0
+        luck_pct = 0.0
 
     workers = data.get("workers", [])
     workers_online = sum(1 for w in workers if w.get("status") == "online")
@@ -192,7 +215,7 @@ def build_metrics(latest_data, state_mgr, history=None):
         block_time=block_time,
         pool_type=pool_type,
         pool_hashrate=local_pool.get("hashrate", 0) or 0,
-        pool_difficulty=local_pool.get("difficulty", 0) or 0,
+        pool_difficulty=pool_difficulty,
         network_difficulty=network.get("difficulty", 0) or 0,
         network_height=network.get("height", 0) or 0,
         global_syncing=bool(data.get("global_sync", False)),
@@ -203,6 +226,10 @@ def build_metrics(latest_data, state_mgr, history=None):
         xvb_registered_at=xvb_stats.get("registered_at", 0) or 0,
         xvb_registration_state=xvb_stats.get("registration_state", "") or "",
         xvb_stale=bool(ENABLE_XVB and xvb_stats_are_stale(xvb_stats)),
+        own_pplns_weight=own_pplns_weight,
+        last_block_ts=local_pool.get("last_block_ts", 0) or 0,
+        expected_share_sec=expected_share_sec,
+        luck_pct=luck_pct,
     )
 
 

@@ -24,6 +24,7 @@ from mining_dashboard.web.views import (
     _target_points,
     _window_reject_pct,
     build_badges,
+    build_cadence,
     build_chart,
     build_earnings,
     build_hashrate,
@@ -1115,6 +1116,37 @@ class TestPoolNetwork:
         assert pn["monero"]["db_size"] == "—"
 
 
+# --- Pool cadence & luck (#84) ---------------------------------------------------------
+
+
+class TestCadence:
+    def test_formats_available_figures(self):
+        c = build_cadence(
+            _metrics(
+                last_block_ts=time.time() - 90,
+                expected_share_sec=3600.0,
+                luck_pct=123.4,
+                own_pplns_weight=1_234_567.0,
+            )
+        )
+        assert c["available"] is True
+        assert c["since_block"] == "1m 30s"
+        assert c["tts"] == "1h 0m"
+        assert c["luck"] == "123%"
+        assert c["weight"] == "1,234,567"
+
+    def test_dash_fallbacks_when_unavailable(self):
+        # No hashrate history / pool difficulty yet (#84 pitfall): everything reads "—", never
+        # inf/0s, and available gates the card's luck + time-to-share.
+        c = build_cadence(_metrics())  # _BASE leaves the cadence fields at their 0.0 defaults
+        assert c["available"] is False
+        assert c["since_block"] == "—"
+        assert c["tts"] == "—"
+        assert c["luck"] == "—"
+        assert c["weight"] == "0"
+        assert c["last_block"] == "Never"
+
+
 # --- Host address beside the hostname (Issue #119) ------------------------------------
 
 
@@ -1249,6 +1281,7 @@ class TestBuildState:
             "network",
             "monero",
             "shares_window",
+            "cadence",
             "proxy_workers",
             "earnings",
             "tari",
@@ -1319,7 +1352,7 @@ class TestBuildState:
     def test_syncing_flag_and_title(self):
         st = build_state(_data(global_sync=True), _state_mgr(), "all")
         assert st["syncing"] is True
-        assert st["page_title"] == "Mining Dashboard - Syncing"
+        assert st["page_title"] == "Pithead Dashboard - Syncing"
 
     def test_proxy_workers_from_metrics(self):
         data = _data(

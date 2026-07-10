@@ -9,6 +9,17 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **Pool Cadence & Luck card + Telegram `/luck` command (#84).** A read-only Advanced-view card
+  showing time since the pool's last block (pool-wide), the estimated time for your hashrate to
+  find a sidechain share, luck (actual vs. expected shares in the PPLNS window — over 100 % =
+  running lucky), and your own PPLNS share-weight (the sum of your share difficulty in the window,
+  distinct from the pool-wide PPLNS weight). `/luck` answers with the same four figures. Everything
+  derives from the per-share difficulty the dashboard already stores — no new data captured.
+
 ## [1.2.2] - 2026-07-04
 
 Patch — the dashboard Tor onion (#343) now works with a stock Tor Browser, plus two provisioning
