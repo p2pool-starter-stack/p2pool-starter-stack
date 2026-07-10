@@ -92,7 +92,9 @@ on, and remove them when it is off:
 The spool lives under `./data/control/`: `requests/` (the only directory the dashboard container
 can write), `staged/` (host-only), and `results/` + `audit/` (container read-only).
 `audit/control.log` records one JSON line per handled request — timestamp, the logged-in dashboard
-user, action, outcome — and the container cannot rewrite it.
+user, action, outcome, and the names of the changed settings (never their values) — and the
+container cannot rewrite it. The writer trims the log to its newest 2000 entries once it passes
+512 KiB, so it never grows unbounded.
 
 To disable the channel, set `dashboard.control.enabled: false` and run `./pithead apply`: the
 units are disabled and removed, the routes disappear from the dashboard (404), and the spool
@@ -100,6 +102,37 @@ directory is left in place. To inspect or drain the queue by hand, run
 `./pithead control-run-pending`. A commit keeps the previous config at `config.json.bak-control`;
 a failed apply names it in the result and retries container recreation on the next apply, same as
 the CLI.
+
+---
+
+## Watching for intruders
+
+Caddy writes a JSON access log — one line per dashboard request, with timestamp, HTTP status,
+method, path, and the authenticated user — to `./data/caddy-logs/access.log`
+([#349](https://github.com/p2pool-starter-stack/pithead/issues/349)). It is always on. Caddy
+redacts credential headers by default, so no password material lands in it, and Caddy's native
+rolling caps it at 4 MiB per file, the current file plus two rolled ones (~12 MiB worst case).
+The dashboard's Configuration view surfaces the same data:
+[recent accesses and a failed-login count](dashboard.md#access-log-and-recent-config-changes).
+
+How to read it, given the dashboard is reachable over a Tor onion
+([#343](https://github.com/p2pool-starter-stack/pithead/issues/343)): every request arrives via
+the local Tor daemon, so there is **no source IP** to trace or block — the attack signal is the
+rate and pattern of failures, not identity.
+
+- **A burst of 401s** means someone who can already reach the dashboard — they have the onion
+  address, and the client-auth key if `dashboard.onion.client_auth` is on (the default) — is
+  guessing the password. Rotate it: set a new `dashboard.auth.password` in `config.json` and run
+  `./pithead apply`.
+- **Unexplained traffic on a client-auth-off onion** means the address itself has leaked (it is
+  online-guessable in that mode). Rotate the address: `./pithead rotate-dashboard-onion` mints a
+  fresh onion and client key; the old ones stop working immediately
+  ([details](configuration.md#remote-access-over-tor-onion-service)).
+
+Config tampering shows in the other log: `./data/control/audit/control.log` (above) names every
+change staged through the dashboard and who committed it. A change you didn't make is the same
+rotate-now signal. Secret rotation beyond the dashboard password is tracked in
+[#378](https://github.com/p2pool-starter-stack/pithead/issues/378).
 
 ---
 

@@ -2113,10 +2113,13 @@ parse_and_validate_config() {
     # container ro). Fixed under ./data like CLEARNET_STATE_DIR — not a user-facing data dir.
     # Deliberately NOT inside DASHBOARD_DIR, which is mounted rw wholesale into the container.
     CONTROL_DIR="$PWD/data/control"
+    # Caddy access log (#349): Caddy (rw) writes access.log here, the dashboard mounts it
+    # read-only. Fixed under ./data like the spool above — internal, not a user-facing data dir.
+    CADDY_LOG_DIR="$PWD/data/caddy-logs"
 
     # Guard every data dir against catastrophic chown -R / rm -rf targets before we touch them.
     local d
-    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR"; do
+    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR" "$CADDY_LOG_DIR"; do
         assert_safe_dir "$d"
     done
 
@@ -2270,6 +2273,11 @@ prepare_directories() {
 prepare_control_dirs() {
     mkdir -p "$CONTROL_DIR/requests" "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
     ensure_owner "$CONTROL_DIR/requests" "$APP_UID" "$APP_GID"
+    # Caddy access-log dir (#349): root-owned so the capability-stripped caddy container (uid 0,
+    # no CAP_DAC_OVERRIDE) can write it; the dashboard (uid 1000) reads it via a ro mount — the
+    # Caddyfile's `mode 0644` keeps the files readable.
+    mkdir -p "$CADDY_LOG_DIR"
+    ensure_owner "$CADDY_LOG_DIR" 0 0
 }
 
 # List "*_DATA_DIR=path" lines from .env whose directory is MISSING — the signature of a relocated
@@ -2844,6 +2852,7 @@ DASHBOARD_AUTH_HASH_B64=$DASHBOARD_AUTH_HASH_B64
 DASHBOARD_AUTH_PW_FP=$DASHBOARD_AUTH_PW_FP
 DASHBOARD_CONTROL_ENABLED=$DASHBOARD_CONTROL_ENABLED
 CONTROL_DIR=$CONTROL_DIR
+CADDY_LOG_DIR=$CADDY_LOG_DIR
 HOST_IP=$HOST_IP
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
@@ -2912,12 +2921,29 @@ generate_caddyfile() {
         hash=$(printf '%s' "$DASHBOARD_AUTH_HASH_B64" | openssl base64 -d -A)
         auth=$(printf '    basic_auth {\n        %s %s\n    }' "$DASHBOARD_AUTH_USER" "$hash")
     fi
+    # Access log (#349): every vhost writes a JSON line per request (timestamp, status, method,
+    # URI, authenticated user) to one shared file under the host-mounted CADDY_LOG_DIR; the
+    # dashboard tails it read-only, and repeated 401s there are the operator's "someone is
+    # guessing the password" signal. Caddy redacts credential headers (Authorization, Cookie)
+    # unless the log_credentials global option is set — it never is here — so no password material
+    # lands in the log. Growth is bounded by Caddy's native rolling: 4 MiB per file, the current
+    # file plus 2 rolled ones. mode 0644 lets the non-root dashboard read what root-run Caddy
+    # writes (Caddy's default is 0600).
+    local logblk='    log {
+        output file /var/log/caddy/access.log {
+            roll_size 4MiB
+            roll_keep 2
+            mode 0644
+        }
+        format json
+    }'
     if [ "$DASHBOARD_SECURE" == "true" ]; then
         log "Generating Caddyfile for automatic HTTPS ($HOST_IP)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >"Caddyfile"
 https://$HOST_IP {
     tls internal
 $auth
+$logblk
     reverse_proxy 127.0.0.1:8000 {
         header_up X-Auth-User {http.auth.user.id}
     }
@@ -2928,6 +2954,7 @@ EOF
         cat <<EOF >"Caddyfile"
 http://$HOST_IP {
 $auth
+$logblk
     reverse_proxy 127.0.0.1:8000 {
         header_up X-Auth-User {http.auth.user.id}
     }
@@ -2949,6 +2976,7 @@ EOF
 
 http://${NETWORK_PREFIX}.1 {
 $auth
+$logblk
     reverse_proxy 127.0.0.1:8000 {
         header_up X-Auth-User {http.auth.user.id}
     }
@@ -2968,6 +2996,7 @@ EOF
 https://${DASHBOARD_ONION} {
     tls internal
 $auth
+$logblk
     reverse_proxy 127.0.0.1:8000 {
         header_up X-Auth-User {http.auth.user.id}
     }
@@ -3374,8 +3403,8 @@ describe_change() {
             msg="Dashboard configuration editing disabled (#33) — the control runner units are removed; the dashboard container is recreated."
         fi
         ;;
-    CONTROL_DIR)
-        # Fixed spool path under ./data — internal, changes only when the checkout moves.
+    CONTROL_DIR | CADDY_LOG_DIR)
+        # Fixed paths under ./data — internal, change only when the checkout moves.
         msg=""
         ;;
     DASHBOARD_ONION_ENABLED)
@@ -3739,6 +3768,9 @@ control_approval_gate() { # <staged-file>
         printf 'this change is destructive and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
         return 1
     fi
+    # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
+    # (#349) without a third dry-run. Names only, never values.
+    porcelain_keys "$porcelain"
     return 0
 }
 
@@ -3746,9 +3778,27 @@ control_write_result() { # <results-dir> <id> <json>
     printf '%s\n' "$3" >"$1/.$2.tmp" && mv "$1/.$2.tmp" "$1/$2.json"
 }
 
-control_audit() { # <audit-file> <id> <actor> <action> <status>
-    printf '{"ts":"%s","id":"%s","actor":"%s","action":"%s","status":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "$3" "$4" "$5" >>"$1"
+# One JSON line per handled request. `keys` (optional 6th arg) is the space-separated list of
+# changed env-key NAMES from the same dry-run porcelain the approval gate re-derives — names only,
+# NEVER values: several allowlist-adjacent keys are secrets host-side, and the audit log is mounted
+# into the (semi-trusted) dashboard container. The charset strip is the JSON-injection guard for
+# that field; id/actor are validated upstream and action/status are fixed strings.
+control_audit() { # <audit-file> <id> <actor> <action> <status> [keys]
+    # Size bound (#349, same posture as #123): once the log passes 512 KiB, keep the newest 2000
+    # entries. Trim-before-append, so the file is complete JSONL at all times and the entry being
+    # written is never the one trimmed.
+    if [ -f "$1" ] && [ "$(wc -c <"$1" | tr -d ' ')" -gt 524288 ]; then
+        tail -n 2000 "$1" >"$1.tmp" && mv "$1.tmp" "$1"
+    fi
+    printf '{"ts":"%s","id":"%s","actor":"%s","action":"%s","status":"%s","keys":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "$3" "$4" "$5" \
+        "$(printf '%s' "${6:-}" | tr -cd 'A-Z0-9_ ')" >>"$1"
+}
+
+# The unique changed env-key names in a dry-run porcelain, one space-separated line (for the
+# audit `keys` field). Key NAMES only — the porcelain MSG column is dropped here.
+porcelain_keys() {
+    printf '%s' "$1" | awk -F'\t' 'NF' | cut -f2 | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
 # Preview: stage the candidate config host-side, dry-run it, report the describe_change rows.
@@ -3773,7 +3823,7 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
             [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
             | {status: "previewed", changes: ., destructive: (map(.flag == "DEST") | any), ts: (now | floor)}')
         control_write_result "$cdir/results" "$id" "$result"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "previewed"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "previewed" "$(porcelain_keys "$out")"
     else
         # Validation failed — reject with pithead's own error tail; nothing stays staged.
         control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$(tail -c 2000 "$errf")" '{status:"rejected",error:$e,ts:(now|floor)}')"
@@ -3799,14 +3849,17 @@ control_commit() { # <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
         return 0
     fi
-    local gate_reason
-    if ! gate_reason=$(control_approval_gate "$staged"); then
-        [ -n "$gate_reason" ] || gate_reason="approval denied"
-        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$gate_reason" '{status:"rejected",error:$e,ts:(now|floor)}')"
+    # On refusal the gate's stdout is the reason; on approval it is the changed key names, which
+    # the audit entries below record — WHAT changed, by name only (#349).
+    local gate_out keys=""
+    if ! gate_out=$(control_approval_gate "$staged"); then
+        [ -n "$gate_out" ] || gate_out="approval denied"
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$gate_out" '{status:"rejected",error:$e,ts:(now|floor)}')"
         rm -f "$staged"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
         return 0
     fi
+    keys="$gate_out"
     # Keep a pre-change backup; on failure it is named in the result and left in place. cp (not mv)
     # keeps config.json's inode stable — the container bind-mounts the file read-only for prefill.
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-control"
@@ -3814,12 +3867,12 @@ control_commit() { # <id> <actor> <control-dir>
     "$0" apply -y >"$logf" 2>&1 || rc=$?
     if [ "$rc" -eq 0 ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"applied",ts:(now|floor)}')"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "applied"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "applied" "$keys"
     else
         # apply's own .apply-incomplete marker handles the container-recreate retry; the config
         # backup lets the operator revert by hand if the new config itself is the problem.
         control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$(tail -c 2000 "$logf")" --arg b "${CONFIG_FILE}.bak-control" '{status:"failed",error:$e,backup:$b,ts:(now|floor)}')"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "failed"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "failed" "$keys"
     fi
     rm -f "$staged" "$logf"
 }

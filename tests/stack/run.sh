@@ -929,6 +929,18 @@ caddy_onion_ph="$(
 assert_contains "onion HTTP vhost renders even before the address is captured (#343)" "$caddy_onion_ph" "http://172.28.0.1 {"
 assert_not_contains "no HTTPS onion vhost until the .onion address is provisioned (#343)" "$caddy_onion_ph" "https://placeholder"
 
+echo "== unit: generate_caddyfile access log (#349) =="
+# Every vhost logs each request as one JSON line to a shared file. Growth is bounded by Caddy's
+# native rolling (4 MiB per file, current + 2 rolled); mode 0644 lets the non-root dashboard
+# read what root-run Caddy writes (Caddy's own default is 0600, unreadable across the mount).
+assert_contains "access log block rendered" "$caddy_https" "output file /var/log/caddy/access.log"
+assert_contains "access log is JSON" "$caddy_https" "format json"
+assert_contains "access log growth is bounded (roll_size)" "$caddy_https" "roll_size 4MiB"
+assert_contains "rolled files are capped (roll_keep)" "$caddy_https" "roll_keep 2"
+assert_contains "access log stays dashboard-readable (mode 0644)" "$caddy_https" "mode 0644"
+log_count="$(printf '%s' "$caddy_onion_https" | grep -c 'output file /var/log/caddy/access.log')"
+assert_eq "every vhost (LAN + onion HTTP + onion HTTPS) writes the shared log" "$log_count" "3"
+
 echo "== unit: onion client-auth crypto (#343) =="
 # Portable base32 (RFC 4648 vectors) — no external `base32` binary (absent on macOS).
 assert_eq "b32encode_hex('f') = MY" "$(run_sourced "$SANDBOX" b32encode_hex 66)" "MY"
@@ -2845,6 +2857,8 @@ assert_contains "control spool dir rendered to .env" "$(cat "$C/.env")" "CONTROL
 [ -d "$C/data/control/requests" ] && [ -d "$C/data/control/staged" ] &&
     [ -d "$C/data/control/results" ] && [ -d "$C/data/control/audit" ] &&
     ok "control spool dirs created" || bad "control spool dirs created" "missing under $C/data/control"
+assert_contains "caddy access-log dir rendered to .env (#349)" "$(cat "$C/.env")" "CADDY_LOG_DIR=$C/data/caddy-logs"
+[ -d "$C/data/caddy-logs" ] && ok "caddy access-log dir created (#349)" || bad "caddy access-log dir created (#349)" "missing"
 
 echo "== black-box: apply --dry-run [--porcelain] (#33) =="
 control_config mini # candidate change: pool main -> mini
@@ -2951,6 +2965,16 @@ assert_eq "committed config landed in config.json" "$(jq -r '.p2pool.pool' "$C/c
 assert_contains "commit ran the real apply (containers recreated)" "$(cat "$CTRL_LOG")" "compose up"
 assert_contains "commit audited with the actor" "$(cat "$AUDIT")" "\"actor\":\"admin\",\"action\":\"commit\",\"status\":\"applied\""
 [ ! -f "$STAGED/$UUID1.json" ] && ok "staged intent consumed on commit" || bad "staged intent consumed on commit" "still staged"
+
+echo "== black-box: audit log records names, never values (#349) =="
+# WHAT changed rides in the audit entry as env-key NAMES (main -> mini touches the p2pool keys);
+# no config or secret VALUE may ever land in the log — it is mounted into the dashboard container.
+assert_contains "commit audit records the changed key names" "$(cat "$AUDIT")" '"keys":"P2POOL'
+assert_contains "preview audit records the changed key names" "$(grep '"status":"previewed"' "$AUDIT" | tail -n 1)" '"keys":"P2POOL'
+case "$(cat "$AUDIT")" in
+*"a control passphrase"* | *"$WALLET"* | *mini*) bad "audit log holds no config or secret values" "a value leaked into audit/control.log" ;;
+*) ok "audit log holds no config or secret values" ;;
+esac
 
 # Expired staged intent (older than the 10-min commit window) → rejected as expired and cleared.
 # Age it ~15 min: past the 10-min expiry the commit enforces, but INSIDE the 60-min stale sweep so
@@ -3170,6 +3194,24 @@ jq '.p2pool.pool="mini"' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "non-security change on a security-laden config still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "pool tier change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+
+echo "== black-box: audit log growth is bounded (#349) =="
+# Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
+# to the newest 2000 lines BEFORE appending, so the file shrinks instead of growing forever and
+# the fresh entry is always the last line.
+for _ in $(seq 1 6000); do
+    printf '{"ts":"old","id":"","actor":"filler","action":"preview","status":"previewed","keys":""}\n'
+done >>"$AUDIT"
+[ "$(wc -c <"$AUDIT" | tr -d ' ')" -gt 524288 ] || bad "audit log seeded past the cap" "seed too small"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json" # no staged intent -> rejected, still audited
+run_pending >/dev/null
+audit_size="$(wc -c <"$AUDIT" | tr -d ' ')"
+if [ "$audit_size" -lt 300000 ]; then
+    ok "audit log trimmed back under the cap ($audit_size bytes)"
+else
+    bad "audit log trimmed back under the cap" "$audit_size bytes"
+fi
+assert_eq "trim keeps the newest entries (fresh entry is the last line)" "$(tail -n 1 "$AUDIT" | jq -r '.action')" "commit"
 
 echo "== black-box: spool intake cap + symlink refusal + stale sweep (#33 hardening) =="
 UUID4="44444444-4444-4444-8444-444444444444"

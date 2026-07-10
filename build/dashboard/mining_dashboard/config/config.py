@@ -156,6 +156,11 @@ DASHBOARD_CONTROL_ENABLED = (
 )
 CONTROL_REQUESTS_DIR = os.environ.get("CONTROL_REQUESTS_DIR", "/control/requests")
 CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
+# Host-written security logs, surfaced read-only (#349). control.log is the #33 audit trail
+# (one JSON line per handled control request); access.log is Caddy's JSON access log — both are
+# written and rotated host-side, and every field read from them is sanitized before serving.
+CONTROL_AUDIT_LOG = os.environ.get("CONTROL_AUDIT_LOG", "/control/audit/control.log")
+ACCESS_LOG_PATH = os.environ.get("ACCESS_LOG_PATH", "/access-log/access.log")
 # The live config.json, bind-mounted read-only for form prefill; secrets are masked before serving.
 HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
 # config.reference.json (every key with its default), bind-mounted read-only. read_config merges it
