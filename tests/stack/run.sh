@@ -2079,14 +2079,17 @@ echo "== unit+black-box: secret files are owner-only from creation (#368) =="
 # the write leaves a world-readable window on a shared host, and a silently failed chmod used to
 # leave them 644 forever. The mv shim captures the credential temp file's mode BEFORE it lands on
 # config.json, proving the mode at creation, not just the end state.
-file_mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1" 2>/dev/null; }
+# GNU form first: `stat -c` errors cleanly on BSD/macOS, so the `||` fallback fires there. The
+# reverse order is wrong — on Linux `stat -f` is a VALID flag (filesystem status) that succeeds
+# with the wrong output, so the fallback never runs and CI (Linux) reads garbage.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
 PB="$SANDBOX/perm368"
 mkdir -p "$PB/bin"
 printf '{ "monero": {} }\n' >"$PB/config.json"
 cat >"$PB/bin/mv" <<'EOF'
 #!/usr/bin/env bash
-stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1" 2>/dev/null
-exec /bin/mv "$@" # absolute path — a bare `mv` re-resolves to this stub and loops forever
+stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null # GNU form first (see file_mode note)
+exec /usr/bin/mv "$@" # absolute path — a bare `mv` re-resolves to this stub and loops forever
 EOF
 chmod +x "$PB/bin/mv"
 out="$( (umask 022 && PATH="$PB/bin:$PATH" run_sourced "$PB" persist_node_credentials user secret))"
