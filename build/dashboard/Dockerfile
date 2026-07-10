@@ -4,7 +4,7 @@
 # uv's own CVEs into image scans, #282). uv lives only in the build/test stages.
 # ==========================================================================
 # Pinned by digest (#135) so the python:3.11-slim tag can't be silently re-pointed.
-FROM python:3.11-slim@sha256:b27df5841f3355e9473f9a516d38a6783b6c8dfeacaf2d14a240f443b368ddb6 AS base
+FROM python:3.11-slim@sha256:c20888b6acdd1e63e1c433a185bf3ad162c0288fe484616ce062e0d28add2900 AS base
 
 # Run from a project venv on PATH (so entrypoint.sh's `python3` resolves to it); use the
 # digest-pinned base interpreter (never let uv download a different Python); compile bytecode and
