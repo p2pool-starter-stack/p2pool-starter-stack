@@ -3,7 +3,7 @@
 The stack runs nine containerized services under Docker Compose. This doc lists each service and how
 they connect.
 
-The services provide a Monero full node, P2Pool sidechain mining, Tari merge mining, a single worker
+The services provide a Monero full node, P2Pool sidechain mining, Tari merge-mining, a single worker
 endpoint, and a monitoring dashboard. All node P2P and transaction traffic routes over Tor; no public
 port forwarding is required.
 

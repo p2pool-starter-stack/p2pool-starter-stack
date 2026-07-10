@@ -12,7 +12,12 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TOR_SOCKS_PROXY,
 )
-from mining_dashboard.helper.utils import effective_hashrate, format_duration, format_hashrate
+from mining_dashboard.helper.utils import (
+    effective_hashrate,
+    format_duration,
+    format_hashrate,
+    format_xmr,
+)
 from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
@@ -372,18 +377,18 @@ def format_earnings(metrics, network, host_label=""):
     daily_1h = coeff_day * metrics.p2pool_1h
     lines = [
         f"{_prefix(host_label)}\U0001f4b0 Estimated P2Pool earnings",
-        f"1h avg {format_hashrate(metrics.p2pool_1h)} → ~{daily_1h:.6f} XMR/day",
+        f"1h avg {format_hashrate(metrics.p2pool_1h)} → ~{format_xmr(daily_1h)}/day",
     ]
     # The 24h average smooths the variance a 1h window carries, so it's the steadier projection —
     # shown (and used for the 30-day figure) only once there's a day of history to average.
     if metrics.p2pool_24h > 0:
         daily_24h = coeff_day * metrics.p2pool_24h
         lines.append(
-            f"24h avg {format_hashrate(metrics.p2pool_24h)} → ~{daily_24h:.6f} XMR/day "
-            f"· ~{daily_24h * 30:.5f} XMR/30d"
+            f"24h avg {format_hashrate(metrics.p2pool_24h)} → ~{format_xmr(daily_24h)}/day "
+            f"· ~{format_xmr(daily_24h * 30)}/30d"
         )
     else:
-        lines.append(f"~{daily_1h * 30:.5f} XMR/30d")
+        lines.append(f"~{format_xmr(daily_1h * 30)}/30d")
     # Tari rides along (#117): the same 1h-average hashrate merge-mines the aux chain, so the
     # line is a second rate over the same figure. Omitted while the Tari inputs aren't collected
     # (inactive / still syncing) — never a phantom 0.000000 XTM.
@@ -456,7 +461,7 @@ def format_daily_summary(metrics, data, host_label="", now=None, incidents=None)
     coeff = xmr_per_hs_day(reward, metrics.network_difficulty)
     if coeff > 0:
         lines.append(
-            f"\U0001f4b0 Est. earnings: ~{coeff * (metrics.p2pool_24h or 0):.6f} XMR/day (P2Pool)"
+            f"\U0001f4b0 Est. earnings: ~{format_xmr(coeff * (metrics.p2pool_24h or 0))}/day (P2Pool)"
         )
 
     lines.append(f"\U0001f477 Miners: {metrics.workers_online}/{metrics.workers_total} online")

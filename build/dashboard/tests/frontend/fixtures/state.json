@@ -212,7 +212,7 @@
     "reward": "0.0000 XMR",
     "ts": "Never"
   },
-  "page_title": "Mining Dashboard",
+  "page_title": "Pithead Dashboard",
   "pool": {
     "blocks": 0,
     "diff": "0.00 M",
@@ -536,8 +536,6 @@
       "accepted": 1200,
       "accepted_str": "1,200",
       "api_ok": null,
-      "h10": 0,
-      "h10_str": "0.00 H/s",
       "h15": 0,
       "h15_str": "0.00 H/s",
       "h60": 0,
@@ -558,8 +556,6 @@
       "accepted": 800,
       "accepted_str": "800",
       "api_ok": null,
-      "h10": 0,
-      "h10_str": "0.00 H/s",
       "h15": 0,
       "h15_str": "0.00 H/s",
       "h60": 0,

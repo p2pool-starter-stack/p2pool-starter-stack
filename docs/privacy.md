@@ -50,7 +50,7 @@ address): monerod, Tari, and P2Pool each get one from the built-in Tor daemon. S
   plain stratum, unauthenticated by default, and must never face the internet: `pithead
   setup`/`doctor` warn if your host has a public IP. Lock it down with `p2pool.stratum_bind`, a
   firewall, and/or an optional `p2pool.stratum_password` that requires each rig to authenticate.
-  See [Connecting miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
+  See [Connecting Miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
 - The **dashboard** can get a fourth, optional onion (`dashboard.onion.enabled`, default off) so you
   can reach it remotely over Tor without a port-forward or public IP. It fronts the authenticated
   Caddy login, defaults to Tor v3 client authorization (the onion won't respond without your client
@@ -272,4 +272,4 @@ single-purpose appliance. One consequence is worth recording explicitly:
 ---
 
 See also: [Architecture › Privacy by design](architecture.md#privacy-by-design) ·
-[Connecting miners › Firewall](workers.md#firewall) · the privacy-egress epic (#160).
+[Connecting Miners › Firewall](workers.md#firewall) · the privacy-egress epic (#160).
