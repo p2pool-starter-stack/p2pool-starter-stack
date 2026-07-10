@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 796 dashboard unit tests · 12 contract tests · 67 frontend
-tests · 58 `pithead` shell sections · 18 harness self-test sections ·
+tests · 59 `pithead` shell sections · 18 harness self-test sections ·
 9 live config scenarios (17 axis values) · 8 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 58 `pithead` shell sections · 18 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 796 |
 | 1 — Unit | frontend (node --test) | 67 |
-| 1 — Unit | `pithead` shell suite | 58 sections |
+| 1 — Unit | `pithead` shell suite | 59 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 8 |
@@ -960,11 +960,12 @@ tests · 58 `pithead` shell sections · 18 harness self-test sections ·
 - edgePath: column-crossing edges route orthogonally through a clear lane
 - route palette + names cover every route the server can emit
 
-### `pithead` shell suite (tests/stack/run.sh) — 58 sections
+### `pithead` shell suite (tests/stack/run.sh) — 59 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
 - unit: check_stratum_exposure warning (#113/#206)
+- unit: doctor runtime checks — egress firewall / stratum listening / dashboard probe (#383)
 - unit: is_ipv4
 - unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0)
 - unit: docker_boot_enabled (#137)
@@ -1180,5 +1181,5 @@ tests · 58 `pithead` shell sections · 18 harness self-test sections ·
 
 ---
 
-_Grand total: **968** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **969** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._

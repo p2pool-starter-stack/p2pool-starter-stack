@@ -613,7 +613,7 @@ export function App({
   }
   return html`<${Fragment}>
         <${Header} state=${state} />
-        ${!connected ? html`<div class="disconnected-banner">Disconnected — showing last known data. Retrying…</div>` : null}
+        ${!connected ? html`<div class="disconnected-banner">Disconnected — showing data from ${state.last_update}. Retrying…</div>` : null}
         ${
           state.syncing
             ? html`<${SyncView} sync=${state.sync} />`
