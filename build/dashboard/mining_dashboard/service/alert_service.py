@@ -17,6 +17,11 @@ from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
 logger = logging.getLogger("AlertService")
 
+# Trailing-1h reject rate (percent) above which the high_reject_rate alert fires (#116). Matches
+# the dashboard's presentational _REJECT_FLAG_RATE (5%) so the alert and the on-screen warning
+# flag agree on what "high" means.
+REJECT_ALERT_PCT = 5.0
+
 
 def build_default_notifier():
     """Construct the Telegram notifier from the process config (Issue #121)."""
@@ -61,6 +66,9 @@ class AlertService:
       corrupts monerod's DB mid-write.
     - **DB write failing** — ``StateManager.is_db_healthy`` flipping false (#131): the dashboard
       keeps serving but history/shares/stats stop persisting.
+    - **high reject rate** — the trailing-1h reject rate (from the persisted per-poll share
+      deltas, #116) crossing ``REJECT_ALERT_PCT``: sustained rejects waste hashrate (bad
+      overclock, clock drift, flaky network). Recovers when the rate drops back below.
     - **payout wallet changed** — the wallet p2pool actually mines to differing from the
       kv_store baseline (#375): the highest-value tamper against the stack. Fires on every
       change, including a legitimate ``pithead apply`` — a confirmation, not only an intrusion
@@ -97,6 +105,7 @@ class AlertService:
     EVT_HUGEPAGES = "hugepages"
     EVT_LOW_RAM = "low_ram"
     EVT_WALLET_CHANGED = "wallet_changed"
+    EVT_HIGH_REJECT_RATE = "high_reject_rate"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -135,6 +144,7 @@ class AlertService:
         self._prev_xvb_reg = None
         self._prev_update_available = None
         self._prev_hashrate_low = None
+        self._prev_reject_high = None
         # Persistent host-perf advisories (#104): unlike the transient edges above, these fire on the
         # FIRST observation of the problem (a stable low-RAM box would never "transition"), so their
         # baseline is "no problem" (False) rather than None — a problem present on the first cycle is
@@ -178,6 +188,7 @@ class AlertService:
         hugepages_reserved=True,
         low_ram=False,
         observed_wallet="",
+        reject_rate_1h=None,
         now=None,
     ):
         """Fold this cycle's signals into the list of ``(event_key, text)`` to send, filtered to
@@ -245,6 +256,7 @@ class AlertService:
         alerts += self._registration_edges(xvb_enabled, xvb_registration_state)
         alerts += self._release_edges(update_available)
         alerts += self._hashrate_low_edges(low_hr_warning)
+        alerts += self._reject_rate_edges(reject_rate_1h)
 
         # --- Persistent host-perf advisories (#104): HugePages not reserved, low RAM ---
         alerts += self._advisory_edge(
@@ -524,6 +536,41 @@ class AlertService:
             (
                 self.EVT_HASHRATE_LOW,
                 self._fmt("\U0001f7e2 \U0001f4c8 Hashrate back above the chosen XvB tier."),
+            )
+        ]
+
+    def _reject_rate_edges(self, reject_rate_pct):
+        """Alert on the trailing-1h reject rate (from the #116 delta series) crossing
+        ``REJECT_ALERT_PCT``, and on it dropping back. ``None`` — no shares submitted in the
+        window (proxy idle or held) — is no verdict either way: stay quiet and drop the baseline
+        so resumed mining seeds fresh instead of replaying a stale edge."""
+        if reject_rate_pct is None:
+            self._prev_reject_high = None
+            return []
+        high = reject_rate_pct >= REJECT_ALERT_PCT
+        prev = self._prev_reject_high
+        self._prev_reject_high = high
+        if prev is None or high == prev:
+            return []
+        if high:
+            self._record_incident(self.EVT_HIGH_REJECT_RATE)
+            return [
+                (
+                    self.EVT_HIGH_REJECT_RATE,
+                    self._fmt(
+                        f"⚠️ ⛏️ High reject rate: {reject_rate_pct:.1f}% of shares rejected over "
+                        "the last hour — check the rigs' Workers table for the ⚠ flag (bad "
+                        "overclock, clock drift, flaky network)."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_HIGH_REJECT_RATE,
+                self._fmt(
+                    f"\U0001f7e2 ⛏️ Reject rate back to normal "
+                    f"({reject_rate_pct:.1f}% over the last hour)."
+                ),
             )
         ]
 

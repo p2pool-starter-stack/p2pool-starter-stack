@@ -167,6 +167,7 @@ block and set it to `false` — any event you don't list stays on:
 | `hugepages` | `true` | HugePages not reserved (RandomX capped) / reserved after a reboot |
 | `low_ram` | `true` | Host has less RAM than the stack wants (one-shot heads-up) |
 | `wallet_changed` | `true` | The payout wallet p2pool mines to changed — fires on every change, including your own `pithead apply` (old/new addresses truncated to 8 chars) |
+| `high_reject_rate` | `true` | Pool-wide reject rate over the trailing hour crossed 5% (the same threshold as the dashboard's ⚠ flag) / dropped back |
 
 Run `./pithead apply` after editing.
 
