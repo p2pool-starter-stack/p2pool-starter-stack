@@ -15,7 +15,11 @@ import pytest
 
 import mining_dashboard.web.views as views
 from mining_dashboard.config import config as egress_config
-from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
+from mining_dashboard.config.config import (
+    DEFAULT_HASHRATE_WINDOW,
+    HASHRATE_WINDOWS,
+    XVB_STATS_STALE_AFTER_S,
+)
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
     _MAX_CHART_POINTS,
@@ -1274,6 +1278,10 @@ class TestEarnings:
         )
         assert e["tari_available"] is True
         assert e["tari_coeff_day"] == pytest.approx(13_000.0 / 420_000_000_000 * 86_400)
+        # Solo merge-mining headline (#117 v1.3.1): the seconds-to-block-per-H/s figure (== the
+        # Tari difficulty, so the client does diff / hashrate) and the full per-block reward.
+        assert e["tari_difficulty"] == pytest.approx(420_000_000_000)
+        assert e["tari_reward"] == pytest.approx(13_000.0)
 
     def test_tari_unavailable_without_figures_or_mining(self):
         # No difficulty collected (inactive/syncing) → unavailable; and a positive rate with
@@ -1307,9 +1315,15 @@ class TestXvbCalc:
         "off": 0,
     }
 
-    def _sm(self):
+    # XvB's published per-tier expected rewards, keyed by round-type == tier key (#118).
+    _ESTIMATES = {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9}
+
+    def _sm(self, estimates=None, last_update=None):
         sm = MagicMock()
         sm.get_tiers.return_value = self._TIERS
+        est = self._ESTIMATES if estimates is None else estimates
+        ts = time.time() if last_update is None else last_update
+        sm.get_xvb_reward_estimates.return_value = {"estimates": est, "last_update": ts}
         return sm
 
     def test_disabled_returns_enabled_false_only(self):
@@ -1348,6 +1362,34 @@ class TestXvbCalc:
         note = build_xvb_calc(_metrics(pool_type="Mini"), self._sm())["mode_note"]
         assert "PPLNS" in note
 
+    def test_fresh_estimates_expose_per_tier_expected_reward(self):
+        # #118: each tier carries XvB's own published XMR/year figure, mapped by the tier key
+        # (== round-type), and the estimates_available flag is set on a fresh fetch.
+        out = build_xvb_calc(_metrics(), self._sm())
+        assert out["estimates_available"] is True
+        assert out["estimates_stale"] is False
+        by_threshold = {t["threshold"]: t["expected_reward_year"] for t in out["tiers"]}
+        assert by_threshold[1_000] == 0.06  # donor
+        assert by_threshold[10_000] == 0.81  # donor_vip
+        assert by_threshold[100_000] == 6.17  # donor_whale
+        assert by_threshold[1_000_000] == 56.9  # donor_mega
+
+    def test_stale_estimates_flagged_and_reward_nulled(self):
+        # A stale fetch must degrade: no per-tier number implied fresh, estimates_available False.
+        sm = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        out = build_xvb_calc(_metrics(), sm)
+        assert out["estimates_available"] is False
+        assert out["estimates_stale"] is True
+        assert all(t["expected_reward_year"] is None for t in out["tiers"])
+
+    def test_empty_estimates_available_false_no_crash(self):
+        # Never fetched / unparseable cache: available False, not "stale" (last_update 0), rewards None.
+        sm = self._sm(estimates={}, last_update=0.0)
+        out = build_xvb_calc(_metrics(), sm)
+        assert out["estimates_available"] is False
+        assert out["estimates_stale"] is False
+        assert all(t["expected_reward_year"] is None for t in out["tiers"])
+
 
 # --- build_state integration ----------------------------------------------------------
 
@@ -1360,6 +1402,7 @@ def _state_mgr(history=None, mode="P2POOL", share_stats=None):
     sm.get_history.return_value = history or []
     sm.get_xvb_stats.return_value = {"current_mode": mode}
     sm.get_tiers.return_value = {}
+    sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
     sm.get_share_stats.return_value = share_stats or []
     sm.is_db_healthy.return_value = True
     return sm

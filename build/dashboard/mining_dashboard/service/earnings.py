@@ -57,3 +57,19 @@ def xtm_per_hs_day(block_reward_xtm, network_difficulty):
     if block_reward_xtm <= 0 or network_difficulty <= 0:
         return 0.0
     return block_reward_xtm / network_difficulty * SECONDS_PER_DAY
+
+
+def tari_seconds_to_block_per_hs(network_difficulty):
+    """Expected **seconds to find one Tari block** per 1 H/s (#117 solo merge-mining).
+
+    Tari merge-mining here is **solo**: the whole block reward lands at once when *your* hashrate
+    finds a Tari block, not as a steady trickle. The expected time to that block is
+    ``network_difficulty / hashrate`` seconds (difficulty is hashes-per-block, hashrate is
+    hashes/second), so — like :func:`xtm_per_hs_day` — the per-H/s figure is difficulty itself and
+    the client divides by the what-if hashrate (one source of truth, #61). At the current Tari
+    difficulty a full fleet can be ~months between blocks, which is why the honest headline is this
+    lumpy time-to-block, not the per-day long-run average. Returns ``0.0`` when the difficulty is
+    missing or non-positive — the "unavailable" signal (the card shows ``—``)."""
+    if network_difficulty <= 0:
+        return 0.0
+    return float(network_difficulty)

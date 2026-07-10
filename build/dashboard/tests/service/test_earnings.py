@@ -11,6 +11,7 @@ import pytest
 from mining_dashboard.service.earnings import (
     ATOMIC_PER_XMR,
     SECONDS_PER_DAY,
+    tari_seconds_to_block_per_hs,
     xmr_per_hs_day,
     xtm_per_hs_day,
 )
@@ -82,3 +83,20 @@ class TestXtmPerHsDay:
     def test_missing_or_bad_inputs_are_zero(self, reward, diff):
         # Zero is the "unavailable" signal — the card shows "—" and Telegram omits the line.
         assert xtm_per_hs_day(reward, diff) == 0.0
+
+
+class TestTariSecondsToBlockPerHs:
+    """Solo merge-mining time-to-block rate (#117): seconds-to-block per H/s == difficulty."""
+
+    def test_is_difficulty_per_hs(self):
+        # The per-H/s figure is difficulty itself; the client divides by the what-if hashrate to get
+        # expected seconds to a block. Prod field numbers: diff ~1.677e12, fleet ~269 kH/s.
+        rate = tari_seconds_to_block_per_hs(1_677_000_000_000)
+        assert rate == pytest.approx(1_677_000_000_000)
+        seconds = rate / 269_000
+        assert seconds / SECONDS_PER_DAY == pytest.approx(72.2, rel=0.02)  # ~72 days, not steady
+
+    @pytest.mark.parametrize("diff", [0, -5])
+    def test_missing_or_bad_difficulty_is_zero(self, diff):
+        # Zero difficulty -> zero rate -> the card shows "—" (graceful degradation).
+        assert tari_seconds_to_block_per_hs(diff) == 0.0

@@ -234,6 +234,22 @@ assert_contains "dashboard probe: no answer -> WARN" "$out" "WARN"
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
 assert_contains "dashboard probe: container down -> info" "$out" "isn't running"
 
+# Tor clearnet-egress probe (#424): a bootstrapped Tor on a failing guard breaks clearnet exits
+# (Healthchecks/Telegram/XvB) while mining keeps working — the probe WARNs (never FAILs: Tor
+# weather is transient) and points at a tor restart. Skips when tor is down or curl is absent.
+out="$(RUNNING_CONTAINERS="tor" CURL_RC=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
+assert_contains "tor egress probe: exit works -> OK" "$out" "clearnet egress works"
+out="$(RUNNING_CONTAINERS="tor" CURL_RC=28 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
+assert_contains "tor egress probe: exit times out -> WARN" "$out" "WARN"
+assert_contains "tor egress probe: WARN names the fix" "$out" "restart tor"
+out="$(
+    RUNNING_CONTAINERS="tor" CURL_RC=28 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1
+    echo "rc=$?"
+)"
+assert_contains "tor egress probe: WARN never fails doctor (rc 0)" "$out" "rc=0"
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
+assert_contains "tor egress probe: tor down -> info skip" "$out" "isn't running"
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0" >/dev/null 2>&1
 assert_rc "accepts 0.0.0.0" "$?" "0"

@@ -9,6 +9,59 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.3.1] - YYYY-MM-DD
+
+<!-- Placeholder date — set at release cut. -->
+
+A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
+donation controller during a prolonged stats outage, an XvB per-tier payout comparison, and a
+tabbed earnings panel.
+
+### Added
+
+- **XvB per-tier payout comparison.** The XvB section of the earnings card now shows, for a tier you
+  pick from a dropdown, its **Expected** reward (XvB's own published per-tier figure, in XMR/year),
+  its **Cost** (the P2Pool earnings foregone by donating the tier threshold for a year), and the
+  **Net** of the two — so you can weigh, say, Whale against VIP Donor at a glance. The expected
+  figure comes from XvB's pre-computed `reward_estimate_pub.txt` (their `reward_calc` output),
+  fetched over Tor on the same cadence and staleness rules as the XvB stats: a stale or failed fetch
+  degrades to "estimate unavailable" — never a stale number implied fresh, and never a fabricated
+  one. The card keeps its standing note that a tier is raffle status, not a payout, and that
+  donating above the threshold buys no extra win chance.
+- **Tabbed earnings panel.** The earnings card now splits into `Monero`, `Tari`, and `XvB` tabs,
+  driven by one shared what-if hashrate input, so the (now three-domain) card isn't one long wall of
+  figures. The XvB tab appears only when XvB is enabled.
+
+### Fixed
+
+- **`doctor` catches a Tor guard failure that silently breaks Healthchecks, Telegram, and XvB
+  (#424).** Tor can bootstrap to 100% yet sit on a failing guard: circuits build but clearnet exits
+  time out, so the dead-man's-switch pings, the Telegram bot, and XvB stats all stop while mining
+  (onion circuits) keeps working — the stack looks healthy as three features die. A new doctor check
+  makes one request through Tor's SOCKS to a no-content endpoint and WARNs with the fix (restart the
+  tor container to pick fresh guards) when clearnet exits fail. Found live on pithead-prod after the
+  v1.3.0 deploy.
+- **A release-box checkout that has run the stack no longer fails `lint-toml` (#421).** taplo globs
+  the filesystem, not the git index, so the generated (git-ignored) `build/tari/config.toml` left by
+  a past stack run failed the release gate on a real checkout — CI never sees it. The generated file
+  is now excluded in `.taplo.toml`.
+- **P2Pool Earnings shows Tari as the lumpy solo income it is.** Tari merge-mining here is solo — the
+  whole block reward lands at once when your own hashrate finds a Tari block, which at the current
+  network difficulty can be months apart. The earnings card headlined a per-day XTM figure that read
+  like steady income you never actually receive. It now leads with the expected **time to a Tari
+  block** (`difficulty ÷ hashrate`) and the full **per-block reward**, and keeps the per-day figure
+  only as a clearly labelled long-run average. The server publishes the rate (one source of truth,
+  #61); the client scales it to the what-if hashrate.
+- **XvB donation controller decays a blind donation through a prolonged stats outage.** When the
+  xmrvsbeast.com stats fetch goes quiet, `avg_1h` freezes; the controller already holds the last
+  donation fraction rather than steering off the frozen number (#311). That hold was indefinite —
+  through a multi-hour outage it kept donating blind, and if staleness began mid-ramp it held a
+  high fraction (over-donation, #70 territory). Past a longer grace (`XVB_STALE_DECAY_AFTER_S`,
+  default 30 min, distinct from the short-hold `XVB_STATS_STALE_AFTER_S`) the controller now decays
+  the held fraction geometrically toward 0 each cycle and stops donating: when it can't confirm the
+  donation is still needed, it stops wasting hashrate. A fresh fetch resumes normal control. The
+  brief-blip hold is unchanged.
+
 ## [1.3.0] - 2026-07-09
 
 v1.3 makes the stack remember and reason. The dashboard used to fetch telemetry, render it live, and

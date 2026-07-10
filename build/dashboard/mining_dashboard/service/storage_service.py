@@ -68,6 +68,12 @@ class StateManager:
             "tiers": TIER_DEFAULTS.copy(),
         }
 
+        # XvB's published per-tier expected rewards (#118), fetched over Tor each cycle. Kept in
+        # memory only (NOT the DB): it's re-fetched constantly and derived from an external file, so
+        # losing it on restart just costs one refetch. ``last_update`` bumps only on a genuine fetch,
+        # so the same staleness check as the stats (``xvb_stats_are_stale``) applies to it (#311).
+        self._xvb_rewards = {"estimates": {}, "last_update": 0.0}
+
         # Initialize persistent DB connection
         # check_same_thread=False allows the connection to be used by multiple threads
         # (serialized via self._db_lock)
@@ -477,6 +483,19 @@ class StateManager:
         """Returns the current XvB mining statistics dictionary."""
         with self._lock:
             return self.state["xvb"].copy()
+
+    def get_xvb_reward_estimates(self) -> dict[str, Any]:
+        """The cached XvB per-tier reward estimates (#118): ``{"estimates": {...}, "last_update": ts}``."""
+        with self._lock:
+            return {
+                "estimates": dict(self._xvb_rewards["estimates"]),
+                "last_update": self._xvb_rewards["last_update"],
+            }
+
+    def set_xvb_reward_estimates(self, estimates: dict[str, float]):
+        """Replace the cached reward estimates and stamp ``last_update`` (only on a genuine fetch, #118)."""
+        with self._lock:
+            self._xvb_rewards = {"estimates": dict(estimates or {}), "last_update": time.time()}
 
     def update_xvb_stats(
         self,

@@ -10,9 +10,29 @@ from mining_dashboard.client.xvb_client import (
     REG_NOT_ELIGIBLE,
     REG_OK,
     XvbClient,
+    parse_reward_estimates,
 )
 
 SAMPLE_HTML = "Fail Count: 2\n1hr avg: 1.5 kH/s\n24hr avg: 3.0 kH/s\n"
+
+# A verbatim sample of XvB's reward_estimate_pub.txt (#118): pool-total rows, the non-donor vip/mvp
+# rows, and the four donor-tier Player rows we keep. Real values captured 2026-07-10.
+SAMPLE_REWARD_TXT = (
+    "Raffle HR: 4535.41 kH/s\n"
+    "Raffle Reward: 128.15 XMR/year\n\n"
+    "Round vip: 1.00 XMR/year\n"
+    "Round: vip Player: 0.0036 XMR/year\n\n"
+    "Round mvp: 0.33 XMR/year\n"
+    "Round: mvp Player: 0.083 XMR/year\n\n"
+    "Round: donor: 4.00 XMR/year\n"
+    "Round: donor Player: 0.060 XMR/year\n\n"
+    "Round: donor_vip: 23.36 XMR/year\n"
+    "Round: donor_vip Player: 0.81 XMR/year\n\n"
+    "Round: donor_whale: 48.72 XMR/year\n"
+    "Round: donor_whale Player: 6.17 XMR/year\n\n"
+    "Round: donor_mega: 50.73 XMR/year\n"
+    "Round: donor_mega Player: 56.90 XMR/year\n\n"
+)
 
 
 def test_missing_wallet_returns_none():
@@ -65,6 +85,63 @@ def test_get_stats_unexpected_error_returns_none():
     client = XvbClient("49abc")
     with patch.object(xvb_mod.requests, "get", side_effect=ValueError("kaboom")):
         assert client.get_stats() is None
+
+
+# --- Reward-estimate parser + fetch (#118) --------------------------------------------------
+
+
+def test_parse_reward_estimates_keeps_four_donor_tiers():
+    est = parse_reward_estimates(SAMPLE_REWARD_TXT)
+    # Only the donor Player rows, keyed by round-type; pool totals and vip/mvp rows are dropped.
+    assert est == {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9}
+
+
+def test_parse_reward_estimates_malformed_or_empty_is_empty_dict():
+    assert parse_reward_estimates("") == {}
+    assert parse_reward_estimates(None) == {}
+    assert parse_reward_estimates("total garbage with no rounds") == {}
+    # Pool-total rows alone (no Player figure) yield nothing — the Player keyword is required.
+    assert parse_reward_estimates("Round: donor: 4.00 XMR/year\n") == {}
+    # A donor row whose value isn't a clean float is skipped, not fatal.
+    assert parse_reward_estimates("Round: donor Player: 1.2.3 XMR/year\n") == {}
+
+
+def test_get_reward_estimates_success_routes_over_tor():
+    client = XvbClient("49abc")
+    resp = MagicMock(status_code=200, text=SAMPLE_REWARD_TXT)
+    with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
+        est = client.get_reward_estimates()
+    assert est["donor_whale"] == 6.17
+    proxies = mock_get.call_args.kwargs["proxies"]
+    assert proxies["https"].startswith("socks5h://")  # same Tor path as the stats fetch
+
+
+def test_get_reward_estimates_non_200_returns_none():
+    client = XvbClient("49abc")
+    with patch.object(xvb_mod.requests, "get", return_value=MagicMock(status_code=503)):
+        assert client.get_reward_estimates() is None
+
+
+def test_get_reward_estimates_unparseable_body_returns_none():
+    # A 200 with a garbage body must degrade like a failure (None) so the cache stays frozen — a
+    # stale/empty estimate must never overwrite the last-good reading (#311 contract).
+    client = XvbClient("49abc")
+    with patch.object(
+        xvb_mod.requests, "get", return_value=MagicMock(status_code=200, text="junk")
+    ):
+        assert client.get_reward_estimates() is None
+
+
+def test_get_reward_estimates_network_error_returns_none():
+    client = XvbClient("49abc")
+    with patch.object(xvb_mod.requests, "get", side_effect=requests.RequestException("boom")):
+        assert client.get_reward_estimates() is None
+
+
+def test_get_reward_estimates_unexpected_error_returns_none():
+    client = XvbClient("49abc")
+    with patch.object(xvb_mod.requests, "get", side_effect=ValueError("kaboom")):
+        assert client.get_reward_estimates() is None
 
 
 _SUBMIT = (

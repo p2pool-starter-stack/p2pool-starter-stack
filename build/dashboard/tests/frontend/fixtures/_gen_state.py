@@ -62,7 +62,18 @@ def _state_mgr():
     sm = MagicMock()
     sm.get_history.return_value = HISTORY
     sm.get_xvb_stats.return_value = {"current_mode": "P2POOL"}
-    sm.get_tiers.return_value = {}
+    # Real tiers + XvB's published per-tier reward estimates (#118) so the fixture carries the true
+    # xvb_calc contract the client renders the tier-payout dropdown against (frozen sample values).
+    sm.get_tiers.return_value = {
+        "donor_mega": 1_000_000,
+        "donor_whale": 100_000,
+        "donor_vip": 10_000,
+        "donor": 1_000,
+    }
+    sm.get_xvb_reward_estimates.return_value = {
+        "estimates": {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9},
+        "last_update": NOW,
+    }
     sm.is_db_healthy.return_value = True
     return sm
 

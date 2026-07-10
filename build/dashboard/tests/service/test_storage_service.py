@@ -47,6 +47,21 @@ class TestXvbStats:
         state_manager.update_xvb_stats(avg_1h=100.0, avg_24h=200.0)
         assert state_manager.get_xvb_stats()["last_update"] > 0.0
 
+    def test_reward_estimates_default_empty_and_not_fresh(self, state_manager):
+        # #118: cold cache is empty with last_update 0.0 (never fetched) so build_xvb_calc reads
+        # estimates_available False without treating it as "stale".
+        got = state_manager.get_xvb_reward_estimates()
+        assert got == {"estimates": {}, "last_update": 0.0}
+
+    def test_set_reward_estimates_stamps_last_update_and_copies(self, state_manager):
+        state_manager.set_xvb_reward_estimates({"donor": 0.06, "donor_mega": 56.9})
+        got = state_manager.get_xvb_reward_estimates()
+        assert got["estimates"] == {"donor": 0.06, "donor_mega": 56.9}
+        assert got["last_update"] > 0.0
+        # returns a copy, not the live cache
+        got["estimates"]["donor"] = 99
+        assert state_manager.get_xvb_reward_estimates()["estimates"]["donor"] == 0.06
+
     def test_local_only_writes_do_not_set_last_update(self, state_manager):
         # The algo controller writes mode / donation_fraction / fail_count every cycle; none is an
         # xmrvsbeast.com fetch, so the "Updated" freshness timestamp must NOT bump on them (#136) —
