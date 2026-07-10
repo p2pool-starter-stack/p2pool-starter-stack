@@ -2722,6 +2722,107 @@ rc=$?
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
 
+echo "== black-box: rotate-secrets regenerates the internal credentials (#378) =="
+# One command rotates the local Monero RPC password, the "auto" stratum password, and
+# PROXY_AUTH_TOKEN — the three values apply/load_preserved_state otherwise preserve forever.
+# Baseline: an applied local-mode config with stratum auth on "auto".
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"oldrpcpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rot_sp_old="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+rm -f "$V"/config.json.bak-* "$V"/.env.bak-*
+: >"$DOCKER_LOG"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+rc=$?
+assert_rc "rotate-secrets exits 0" "$rc" "0"
+rot_pass="$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_PASSWORD)"
+rot_sp="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+rot_token="$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)"
+assert_eq "RPC password rotated (32 chars)" "${#rot_pass}" "32"
+assert_eq "RPC password changed" "$([ "$rot_pass" != "oldrpcpass" ] && echo changed)" "changed"
+assert_eq "new RPC password persisted to config.json" "$(jq -r '.monero.node_password' "$V/config.json")" "$rot_pass"
+assert_eq "stratum password changed" "$([ -n "$rot_sp" ] && [ "$rot_sp" != "$rot_sp_old" ] && echo changed)" "changed"
+assert_eq "proxy token changed" "$([ -n "$rot_token" ] && [ "$rot_token" != "ORIGINALTOKEN" ] && echo changed)" "changed"
+assert_eq "DEPLOYMENT_COMPLETED survives the rotate (#356)" "$(run_sourced "$V" env_get_file "$V/.env" DEPLOYMENT_COMPLETED)" "true"
+# Consumers: the containers are RECREATED via compose up (env/args re-read), never `compose restart`
+# (which would reuse p2pool's old --rpc-login args).
+assert_contains "rotate recreates via compose up" "$(cat "$DOCKER_LOG")" "compose up"
+assert_not_contains "rotate never uses compose restart" "$(cat "$DOCKER_LOG")" "compose restart"
+# Secrets stay out of the command output — except the stratum password, deliberately surfaced via
+# announce_stratum_auth so the operator can update each rig's 'pass'.
+case "$out" in
+*"$rot_pass"* | *"$rot_token"*) bad "rotate never prints the RPC password / proxy token" "leaked in: $out" ;;
+*) ok "rotate never prints the RPC password / proxy token" ;;
+esac
+assert_contains "rotate surfaces the new stratum password for rigs" "$out" "Stratum authentication is ON"
+assert_contains "rotate warns that rigs are rejected until updated" "$out" "rejected"
+# Recoverability: the pre-rotation copies hold the OLD values, owner-only.
+rot_cfg_bak="$(ls "$V"/config.json.bak-* 2>/dev/null | head -1)"
+rot_env_bak="$(ls "$V"/.env.bak-* 2>/dev/null | head -1)"
+assert_eq "config.json safety copy holds the old RPC password" "$(jq -r '.monero.node_password' "${rot_cfg_bak:-/dev/null}" 2>/dev/null)" "oldrpcpass"
+assert_contains ".env safety copy holds the old proxy token" "$(cat "${rot_env_bak:-/dev/null}" 2>/dev/null)" "ORIGINALTOKEN"
+rot_bak_mode="$(stat -c '%a' "$rot_env_bak" 2>/dev/null || stat -f '%Lp' "$rot_env_bak" 2>/dev/null)"
+assert_eq "safety copies are owner-only (600)" "$rot_bak_mode" "600"
+# Persistence: a follow-up apply reports no changes — the preservation logic now carries the NEW
+# values instead of resurrecting the old ones. (This is exactly the assertion that fails if
+# rotate silently no-ops: the preserved values would never have changed.)
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "apply after rotate reports no changes" "$out" "No configuration changes detected"
+assert_eq "rotated token survives the next apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "$rot_token"
+
+echo "== black-box: rotate-secrets skips what it must (#378) =="
+# Remote mode: the RPC credential belongs to the remote node — config.json stays untouched.
+seed_env
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"ru","node_password":"remotepass","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+assert_rc "rotate-secrets (remote) exits 0" "$?" "0"
+assert_eq "remote RPC password untouched" "$(jq -r '.monero.node_password' "$V/config.json")" "remotepass"
+assert_contains "remote skip is explained" "$out" "remote"
+assert_eq "proxy token still rotates in remote mode" "$([ "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" != "ORIGINALTOKEN" ] && echo changed)" "changed"
+
+# Literal stratum password: lives in config.json, so rotate leaves it and points there instead.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"my.literal-pass"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+assert_eq "literal stratum password untouched" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "my.literal-pass"
+assert_contains "literal skip points at config.json" "$out" "config.json"
+
+# Declined prompt (no -y): nothing changes.
+rot_token_now="$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" sh -c 'echo n | ./pithead rotate-secrets' 2>&1)"
+assert_rc "declined rotate exits 0" "$?" "0"
+assert_contains "declined rotate says cancelled" "$out" "cancelled"
+assert_eq "declined rotate changes nothing" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "$rot_token_now"
+
+echo "== black-box: rotate-secrets failure path keeps the old values recoverable (#378) =="
+# A failed recreate must exit non-zero, leave the retry marker (#125) so `apply` re-attempts the
+# recreate, and point at the safety copies that still hold the old secrets.
+FDOCK="$SANDBOX/faildocker"
+mkdir -p "$FDOCK"
+cat >"$FDOCK/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "compose version"|"info") exit 0 ;;
+  compose\ up*) echo "boom: no space left on device"; exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$FDOCK/docker"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"failoldpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rm -f "$V"/config.json.bak-* "$V"/.env.bak-* "$V/.env.apply-incomplete"
+out="$(cd "$V" && PATH="$FDOCK:$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+rc=$?
+assert_rc "failed recreate exits non-zero" "$rc" "1"
+assert_contains "failure names the retry path" "$out" "apply"
+[ -f "$V/.env.apply-incomplete" ] && ok "failure leaves the retry marker (#125)" || bad "failure leaves the retry marker (#125)" "marker missing"
+assert_eq "safety copy still holds the pre-rotation RPC password" "$(jq -r '.monero.node_password' "$(ls "$V"/config.json.bak-* | head -1)")" "failoldpass"
+assert_contains "safety copy still holds the pre-rotation token" "$(cat "$(ls "$V"/.env.bak-* | head -1)")" "ORIGINALTOKEN"
+rm -f "$V/.env.apply-incomplete" "$V"/config.json.bak-* "$V"/.env.bak-*
+
 echo "== release: install bundle is free of macOS xattr pax headers (#252) =="
 # Static guard: make_bundle must keep `--no-xattrs` AND the post-bundle xattr assertion, so the
 # fix can't be silently reverted in a future edit.

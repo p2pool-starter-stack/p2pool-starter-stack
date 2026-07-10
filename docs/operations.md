@@ -18,6 +18,7 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
+| `./pithead rotate-secrets` | Regenerate the stack's internal credentials after a suspected leak: the local Monero RPC password, the stratum access-password (only when `p2pool.stratum_password` is `"auto"`), and the xmrig-proxy control-API token. Recreates the affected containers. `-y` / `--yes` skips the prompt. See [Rotating the internal secrets](#rotating-the-internal-secrets). |
 | `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
@@ -209,6 +210,44 @@ dashboard settings.
 
 > NOTE: After a restore, Caddy regenerates the dashboard's HTTPS certificate, so the browser shows
 > its "not trusted" warning once. Accept it as on first setup.
+
+---
+
+## Rotating the internal secrets
+
+`.env` and `config.json` carry three credentials that are generated once and otherwise live
+forever. If either file may have leaked — a backup left the box, a `.env` was pasted into a bug
+report, an operator with access left — rotate them:
+
+```bash
+./pithead rotate-secrets
+```
+
+The command previews exactly what your config rotates, asks for confirmation (`-y` / `--yes`
+skips it), regenerates the secrets, re-renders `.env`, and recreates the containers that consume
+them (a brief restart; chain data and dashboard history are untouched):
+
+- **Monero node RPC password** (`monero.node_password`) — rotated in local mode only; internal to
+  the stack, no follow-up needed. With `monero.mode: "remote"` the credential belongs to the
+  remote node and is skipped.
+- **Stratum access-password** (`PROXY_STRATUM_PASSWORD`) — rotated only when
+  `p2pool.stratum_password` is `"auto"`. The new value is printed at the end. Every rig is
+  rejected until its stratum `pass` is updated to it — see
+  [Workers › Authentication](workers.md#authentication). A literal password lives in
+  `config.json`: change it there and run `./pithead apply`. When stratum auth is off there is
+  nothing to rotate.
+- **xmrig-proxy control-API token** (`PROXY_AUTH_TOKEN`) — always rotated; internal to the stack,
+  no follow-up needed.
+
+Before changing anything, `rotate-secrets` saves owner-only copies of `config.json` and `.env` as
+`config.json.bak-<timestamp>` and `.env.bak-<timestamp>`. They hold the OLD secrets: delete them
+once the stack is confirmed healthy. If the container recreate fails, the new values are already
+committed — fix the cause and run `./pithead apply` to retry the recreate, or restore the two
+copies and run `./pithead apply` to roll back.
+
+The dashboard's `.onion` address and client-auth key have their own command,
+`./pithead rotate-dashboard-onion` — see
+[Configuration › Dashboard onion](configuration.md#reaching-the-dashboard-from-anywhere-tor-onion).
 
 ---
 
