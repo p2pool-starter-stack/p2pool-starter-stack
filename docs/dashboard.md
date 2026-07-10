@@ -370,11 +370,35 @@ How it works underneath: the dashboard container cannot run `pithead` or write h
 drops a typed JSON change request into `./data/control/requests/` — its only writable leg of the
 spool — and a root systemd path unit (`pithead-control`) runs `pithead control-run-pending`, which
 validates the request, dry-runs or applies the staged copy, and writes the outcome to the
-read-only `results/` mount plus an audit line (timestamp, logged-in user, action, outcome) to
-`audit/control.log`. The container cannot forge results, alter a staged config between preview and
-commit, or rewrite the audit log. A failed apply keeps the previous config at
-`config.json.bak-control` and surfaces pithead's error in the view. Operational details:
+read-only `results/` mount plus an audit line (timestamp, logged-in user, action, outcome, and
+the names of the changed settings) to `audit/control.log`. The container cannot forge results,
+alter a staged config between preview and commit, or rewrite the audit log. A failed apply keeps
+the previous config at `config.json.bak-control` and surfaces pithead's error in the view.
+Operational details:
 [Operations › Editing config from the dashboard](operations.md#editing-config-from-the-dashboard).
+
+### Access log and recent config changes
+
+Below the form, the Configuration view shows two read-only security panels
+([#349](https://github.com/p2pool-starter-stack/pithead/issues/349)):
+
+- **Access log.** Recent dashboard requests from Caddy's access log — time, HTTP status, method,
+  path, and the logged-in user — plus a count of failed logins (401s) in the last 24 hours. Over
+  Tor there is no source IP to trace or block, so the signal is the *rate* of failures: five or
+  more in a day shows a warning to rotate the dashboard password (set a new
+  `dashboard.auth.password`, run `./pithead apply`) and, if the onion address may have leaked,
+  `./pithead rotate-dashboard-onion`. The log is always on; entries appear once Caddy has handled
+  a request on this version.
+- **Recent config changes.** The control channel's host-side audit trail: one row per handled
+  request — timestamp, dashboard user, preview/commit, outcome, and the *names* of the settings
+  that changed. Values are never recorded (several are secrets). Shown only when
+  `dashboard.control.enabled` is on.
+
+Both panels read host-written files through read-only mounts, and the dashboard treats every
+field in them as hostile input — a request path is attacker-chosen bytes — so each string is
+stripped to a safe character set before it is served. See
+[Operations › Watching for intruders](operations.md#watching-for-intruders) for the log paths,
+size bounds, and rotation steps.
 
 ## Upgrading from the dashboard
 

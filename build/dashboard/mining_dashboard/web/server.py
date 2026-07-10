@@ -6,7 +6,7 @@ import re
 from aiohttp import web
 
 from mining_dashboard.config import config
-from mining_dashboard.service import control_service
+from mining_dashboard.service import audit_service, control_service
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
@@ -185,6 +185,31 @@ async def handle_control_result(request):
     return web.json_response(res)
 
 
+# --- Security logs (#349) ---------------------------------------------------------------------
+# Read-only views over host-written files; audit_service sanitizes every field (whitelisted
+# charset) before it reaches the browser — log content is attacker-influenceable input.
+
+
+async def handle_audit_log(request):
+    """Recent config-change audit entries, from the read-only /control/audit mount. Registered
+    only alongside the control channel — the log is a #33 artifact."""
+    try:
+        return web.json_response({"entries": audit_service.recent_changes()})
+    except Exception:
+        logger.exception("Error reading the control audit log")
+        return web.json_response({"error": "Failed to read the audit log."}, status=500)
+
+
+async def handle_access_log(request):
+    """Recent dashboard accesses + failed-login count, from Caddy's JSON access log. Always
+    registered (Caddy always writes the log); behind the same Caddy basic_auth as every route."""
+    try:
+        return web.json_response(audit_service.access_summary())
+    except Exception:
+        logger.exception("Error reading the access log")
+        return web.json_response({"error": "Failed to read the access log."}, status=500)
+
+
 def _apply_security_headers(response):
     """Baseline hardening headers. CSP is self-only: HTML shell, CSS/JS (the vendored Preact,
     htm and Chart.js, plus the dashboard's own modules) and the JSON API are all same-origin,
@@ -229,6 +254,7 @@ def create_app(state_manager, latest_data_ref):
             web.get("/", handle_index),
             web.get("/api/state", handle_state),
             web.get("/metrics", handle_metrics),
+            web.get("/api/access", handle_access_log),
         ]
     )
     # Control channel (#33): routes exist only when the feature is on — off means 404, not 403,
@@ -242,6 +268,7 @@ def create_app(state_manager, latest_data_ref):
                 web.post("/api/control/commit", handle_control_commit),
                 web.post("/api/control/upgrade", handle_control_upgrade),
                 web.get("/api/control/result", handle_control_result),
+                web.get("/api/audit", handle_audit_log),
             ]
         )
 

@@ -410,6 +410,10 @@ services:
       - ${CONTROL_DIR:-./data/control}/requests:/control/requests
       - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
       - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
+      # Caddy's JSON access log (#349), read-only: the dashboard tails it to show recent accesses
+      # and a failed-login count (a burst of 401s = rotate the password / onion). Caddy owns the
+      # write side and the rotation; every field read from here is treated as hostile input.
+      - ${CADDY_LOG_DIR:-./data/caddy-logs}:/access-log:ro
       # The live config, read-only, prefills the Configuration view (#33). Secret leaves are masked
       # server-side (control_service.read_config); the raw values never leave the API. NOTE: this
       # bind-mount — not the API masking — is the real secret trust boundary; a backend compromise
@@ -640,6 +644,9 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+      # JSON access log (#349): Caddy rolls it natively (4 MiB × 3 files, see generate_caddyfile);
+      # the dashboard mounts the same dir read-only to show recent accesses and failed logins.
+      - ${CADDY_LOG_DIR:-./data/caddy-logs}:/var/log/caddy
 
 # --- Volumes ---
 volumes:

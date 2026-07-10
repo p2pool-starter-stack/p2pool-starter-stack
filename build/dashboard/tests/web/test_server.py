@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mining_dashboard.service import control_service
+from mining_dashboard.service import audit_service, control_service
 from mining_dashboard.service.storage_service import StateManager
 from mining_dashboard.web.server import _apply_security_headers, create_app
 
@@ -182,6 +182,8 @@ class TestControlRoutesDisabled:
         assert (await client.post("/api/control/commit", json={})).status == 404
         assert (await client.post("/api/control/upgrade", json={})).status == 404
         assert (await client.get("/api/control/result?id=x")).status == 404
+        # The config-change audit view is a control-channel artifact — absent with it (#349).
+        assert (await client.get("/api/audit")).status == 404
 
 
 @pytest.fixture
@@ -389,6 +391,87 @@ class TestControlRoutesEnabled:
         resp = await control_client.get("/api/config")
         assert resp.status == 500
         assert "nonexistent" not in json.dumps(await resp.json())
+
+
+class TestSecurityLogRoutes:
+    """/api/access (always on) and /api/audit (with the control channel) — #349. Both are GET-only
+    reads over host-written, read-only-mounted files; every served field is sanitized because log
+    content is attacker-influenceable (the access log echoes attacker-chosen URIs/usernames)."""
+
+    async def test_access_route_reports_unavailable_without_log(self, client, monkeypatch):
+        monkeypatch.setattr(audit_service.config, "ACCESS_LOG_PATH", "/nonexistent/access.log")
+        resp = await client.get("/api/access")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["available"] is False
+        assert body["entries"] == []
+
+    async def test_access_route_serves_sanitized_entries(self, client, tmp_path, monkeypatch):
+        log = tmp_path / "access.log"
+        log.write_text(
+            json.dumps(
+                {
+                    "ts": 100.0,
+                    "status": 401,
+                    "user_id": "<script>alert(1)</script>",
+                    "request": {"method": "GET", "uri": "/<svg onload=alert(1)>"},
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(audit_service.config, "ACCESS_LOG_PATH", str(log))
+        resp = await client.get("/api/access")
+        assert resp.status == 200
+        text = json.dumps(await resp.json())
+        # A hostile log line must arrive inert — no markup survives to the browser.
+        assert "<" not in text and ">" not in text
+        assert (await client.get("/api/access")).status == 200
+
+    async def test_audit_route_serves_sanitized_entries(
+        self, control_client, tmp_path, monkeypatch
+    ):
+        log = tmp_path / "control.log"
+        log.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-07-10T12:00:00Z",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "actor": "<img src=x onerror=alert(1)>",
+                    "action": "commit",
+                    "status": "applied",
+                    "keys": "XVB_ENABLED",
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        resp = await control_client.get("/api/audit")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["entries"][0]["keys"] == "XVB_ENABLED"
+        assert "<" not in json.dumps(body) and ">" not in json.dumps(body)
+
+    async def test_audit_route_missing_log_is_empty(self, control_client, monkeypatch):
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", "/nonexistent/control.log")
+        resp = await control_client.get("/api/audit")
+        assert resp.status == 200
+        assert (await resp.json())["entries"] == []
+
+    async def test_access_route_failure_is_sanitized(self, client, monkeypatch):
+        monkeypatch.setattr(
+            audit_service, "access_summary", MagicMock(side_effect=RuntimeError("/host/secret"))
+        )
+        resp = await client.get("/api/access")
+        assert resp.status == 500
+        assert "secret" not in json.dumps(await resp.json())
+
+    async def test_audit_route_failure_is_sanitized(self, control_client, monkeypatch):
+        monkeypatch.setattr(
+            audit_service, "recent_changes", MagicMock(side_effect=RuntimeError("/host/secret"))
+        )
+        resp = await control_client.get("/api/audit")
+        assert resp.status == 500
+        assert "secret" not in json.dumps(await resp.json())
 
 
 class TestSecurityHeaders:

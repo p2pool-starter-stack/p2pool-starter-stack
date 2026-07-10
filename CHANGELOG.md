@@ -79,6 +79,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   attempt per 10 minutes, and audits every attempt. A failed release lookup or bundle download
   changes nothing; a failure inside `pithead upgrade` leaves not-yet-recreated containers on the
   previous images and is finished with `./pithead upgrade` on the host.
+- **Audit + access logs for attack visibility (#349).** The #33 audit log now records *what*
+  changed — the env-key names from the same host-side dry-run the approval gate runs; never
+  values — and is size-bounded (trimmed to the newest 2000 entries past 512 KiB). Caddy gains a
+  JSON access log on every vhost (`./data/caddy-logs/access.log`, rolled natively at 4 MiB × 3
+  files, credential headers redacted). The Configuration view surfaces both read-only: recent
+  config changes, recent accesses, and a failed-login (401) count for the last 24 h with a
+  rotate-the-password/onion nudge when failures spike — over Tor there is no source IP, so the
+  rate of 401s *is* the intrusion signal. Every field read from either log is treated as hostile
+  input and whitelisted to a safe character set before display. See
+  [Operations › Watching for intruders](docs/operations.md#watching-for-intruders).
 - **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
   status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
   remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate

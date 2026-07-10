@@ -61,6 +61,15 @@ The stack's defaults:
   list, and a key added in the future stays un-committable until deliberately listed. Those
   edits must be applied from the host CLI; out-of-band approval is tracked in
   [#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
+- Attack visibility (#349): Caddy writes a JSON access log for every dashboard vhost (LAN and
+  onion), and the control channel's host-side audit log records who changed what (setting names
+  only, never values). The dashboard surfaces both read-only — a burst of 401s is the
+  rotate-the-password signal — and treats every logged field as hostile input: strings are
+  whitelisted to a safe character set before display, because the access log echoes
+  attacker-chosen bytes (request paths, attempted usernames) and rendering them raw would hand an
+  anonymous prober stored XSS against the operator. Both logs are size-bounded (Caddy's native
+  rolling; a trim-before-append cap in the audit writer). Neither ever records a secret: Caddy
+  redacts credential headers by default, and the audit writer logs key names only.
 
 ### Secret trust boundary for dashboard config editing
 
