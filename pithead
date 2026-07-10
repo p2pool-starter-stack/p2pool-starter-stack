@@ -75,6 +75,9 @@ if [ "$_STACK_SOURCED" = "0" ]; then
     # anywhere (./pithead, an absolute path, cron, systemd, ...). All paths below are relative to it.
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     cd "$SCRIPT_DIR" || error "Cannot enter the script directory: $SCRIPT_DIR"
+    # Absolute path to this script — run_chain (#94) re-invokes it once per chained step.
+    PITHEAD_SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+    readonly PITHEAD_SELF
 
     # Friendly message on unexpected failure; always clean up the apply staging file.
     trap on_err ERR
@@ -981,10 +984,11 @@ reset_dashboard() {
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
 stack_backup() {
-    local with_chains=0 assume_yes=0 was_running=0
+    local with_chains=0 assume_yes=0 was_running=0 no_encrypt=0
     for arg in "$@"; do
         case "$arg" in
         --with-chains) with_chains=1 ;;
+        --no-encrypt) no_encrypt=1 ;;
         -y | --yes) assume_yes=1 ;;
         *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
         esac
@@ -993,12 +997,45 @@ stack_backup() {
     require_env
     parse_and_validate_config
 
+    # Resolve the encryption passphrase up front, before anything is touched. The archive holds
+    # the stack's full secret material (.env, onion private keys, the dashboard DB), and chmod 600
+    # only protects it on this disk — so it's encrypted by default (#374). Plaintext needs an
+    # explicit choice: --no-encrypt, or an empty passphrase at the interactive prompt (with a loud
+    # warning — never a silent lockout of the operator's own onion keys). An UNATTENDED run
+    # (--yes) with no passphrase refuses instead of downgrading: a cron job whose
+    # PITHEAD_BACKUP_PASSPHRASE line is typo'd away must fail loudly, not archive the onion keys
+    # in plaintext forever while reporting success.
+    local pass=""
+    { set +x; } 2>/dev/null # xtrace would print the passphrase below (see the prompt-path comment)
+    if [ "$no_encrypt" -eq 0 ]; then
+        if [ -n "${PITHEAD_BACKUP_PASSPHRASE:-}" ]; then
+            pass="$PITHEAD_BACKUP_PASSPHRASE"
+        elif [ "$assume_yes" -eq 1 ]; then
+            error "No PITHEAD_BACKUP_PASSPHRASE set for an unattended backup — refusing to write a plaintext archive of your onion keys and secrets. Set the env var, or pass --no-encrypt to choose plaintext explicitly."
+        else
+            local pass2=""
+            # Under `bash -x` (the on_err debugging advice) xtrace would print the passphrase in
+            # every comparison and redirection below — turn it off for the rest of this run.
+            { set +x; } 2>/dev/null
+            read -rs -p "Backup passphrase (empty = plaintext archive): " pass || true
+            echo
+            if [ -n "$pass" ]; then
+                read -rs -p "Confirm passphrase: " pass2 || true
+                echo
+                [ "$pass" = "$pass2" ] || error "Passphrases do not match — nothing was written."
+            else
+                warn "Empty passphrase — writing a PLAINTEXT archive. It holds your onion keys and secrets; anyone who reads it owns the stack."
+            fi
+        fi
+    fi
+
     local backups_dir="$PWD/backups"
     mkdir -p "$backups_dir"
 
     local stamp archive
     stamp=$(date +%Y%m%d-%H%M%S)
     archive="$backups_dir/pithead-backup-$stamp.tar.gz"
+    [ -z "$pass" ] || archive="$archive.enc"
 
     # Collect what exists, as absolute paths. We tar with -C / and strip the leading slash, so
     # restore (extract at /) puts every file back exactly where it came from regardless of where
@@ -1085,11 +1122,29 @@ stack_backup() {
 
     log "Creating backup archive..."
     # Read with sudo because the Tor data dir is owned by 100:101.
-    (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+    if [ -n "$pass" ]; then
+        # Stream tar straight into openssl so no plaintext archive ever exists on disk.
+        # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back to a
+        # single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe), never argv
+        # (visible in `ps`) and never a file. pipefail is in force, so either side failing
+        # fails the whole pipeline; remove the partial ciphertext rather than leave a corrupt
+        # archive that looks like a backup.
+        if ! (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
+            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+                -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
+            rm -f "$archive"
+            error "Backup failed — the partial archive was removed."
+        fi
+    else
+        (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+    fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
     chmod 600 "$archive"
 
     log "Backup written to: $archive"
+    if [ -n "$pass" ]; then
+        log "The archive is useless without the passphrase — store it somewhere other than this host."
+    fi
     if [ "$with_chains" -eq 0 ]; then
         log "Blockchains excluded (they re-sync). Use 'backup --with-chains' to include them."
     fi
@@ -1110,10 +1165,21 @@ stack_restore() {
         esac
     done
 
-    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz>"
+    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz[.enc]>"
     [ -f "$archive" ] || error "Archive not found: $archive"
     # Resolve to an absolute path now, since we extract from "/" below.
     archive=$(cd "$(dirname "$archive")" && printf '%s/%s' "$PWD" "$(basename "$archive")")
+
+    # Detect the format by magic bytes, not by flag or filename: `Salted__` is an openssl-encrypted
+    # archive (the default since #374), gzip magic is a plaintext archive from any earlier release —
+    # both keep restoring with the same command. Anything else is refused before the confirm prompt.
+    local magic encrypted=0
+    magic=$(head -c 8 "$archive" | od -An -tx1 | tr -d ' \n')
+    case "$magic" in
+    53616c7465645f5f) encrypted=1 ;; # "Salted__"
+    1f8b*) ;;                        # gzip
+    *) error "Not a pithead backup archive (neither openssl-encrypted nor gzip): $archive" ;;
+    esac
 
     # Note: we do NOT require/parse the current config here — restore must work even when the
     # on-disk config.json is lost or corrupt. The config comes back out of the archive.
@@ -1128,11 +1194,48 @@ stack_restore() {
         fi
     fi
 
+    local pass=""
+    if [ "$encrypted" -eq 1 ]; then
+        { set +x; } 2>/dev/null # xtrace would print the passphrase in the checks below
+        if [ -n "${PITHEAD_BACKUP_PASSPHRASE:-}" ]; then
+            pass="$PITHEAD_BACKUP_PASSPHRASE"
+        else
+            read -rs -p "Backup passphrase: " pass || true
+            echo
+        fi
+        [ -n "$pass" ] || error "This archive is encrypted — supply the passphrase (prompt or PITHEAD_BACKUP_PASSPHRASE)."
+        # Pre-flight: decrypt only the first bytes and check for the gzip magic, so a wrong
+        # passphrase fails HERE, before tar writes anything to /. `head -c 2` closes the pipe
+        # early, so openssl stops after the first blocks (pipefail makes that exit 141 — hence
+        # the `|| true`); we judge by the decrypted bytes, not the exit code.
+        local plain_magic
+        plain_magic=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            head -c 2 | od -An -tx1 | tr -d ' \n') || true
+        [ "$plain_magic" = "1f8b" ] || error "Wrong passphrase or corrupt archive — nothing was restored."
+        # Full-stream verify BEFORE extraction: CBC has no authentication, so a bit-flip or
+        # truncation past the first block would pass the magic check yet abort tar MID-EXTRACTION,
+        # leaving the live config half-overwritten. Listing the whole archive (`tar -tzf -`, still
+        # no plaintext on disk) decompresses and walks every member — catching a corrupt/tampered
+        # tail — and, unlike `gzip -t`, tolerates tar's own zero-padding. A failure here refuses
+        # before anything is touched.
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            tar -tzf - >/dev/null 2>&1 ||
+            error "Archive fails integrity verification (tampered or truncated) — nothing was restored."
+    fi
+
     log "Restoring from $archive ..."
     # The archive stores paths relative to / (leading slash stripped), so extracting at / puts
     # every file back exactly where it came from. sudo so we can write into the 100:101-owned
-    # Tor data dir.
-    sudo tar -xzf "$archive" -C "/"
+    # Tor data dir. The encrypted path streams openssl into tar — no plaintext archive on disk.
+    if [ "$encrypted" -eq 1 ]; then
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 3< <(printf '%s' "$pass") |
+            sudo tar -xzf - -C "/"
+    else
+        sudo tar -xzf "$archive" -C "/"
+    fi
 
     # Now that config.json is back, resolve the Tor data dir from it and fix ownership so the
     # onion keys load (matching prepare_directories).
@@ -1192,20 +1295,28 @@ Maintenance:
   reset-dashboard [-y|--yes]
                             DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
                               -y, --yes        skip the confirmation prompt.
-  backup [--with-chains] [-y|--yes]
-                            Write a timestamped, chmod-600 tar.gz under backups/ holding the
+  backup [--with-chains] [--no-encrypt] [-y|--yes]
+                            Write a timestamped, chmod-600 archive under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, the Tor data dir
                             (onion keys), and the dashboard's database (your hashrate history &
                             settings). Blockchains are excluded unless --with-chains.
+                            Encrypted by default (openssl AES-256-CBC + PBKDF2, .tar.gz.enc):
+                            prompts for a passphrase, or reads PITHEAD_BACKUP_PASSPHRASE for
+                            unattended runs. With --yes and no passphrase set, falls back to a
+                            plaintext tar.gz with a warning.
                             If the stack is running, backup stops it for a consistent copy and
                             starts it again when it's done.
                               --with-chains    also include the blockchain data (large).
+                              --no-encrypt     write a plaintext tar.gz (the pre-v1.4 format).
                               -y, --yes        skip the confirmation prompts (low free space,
                                                and stopping a running stack).
   restore [-y|--yes] <archive>
                             Restore config.json, .env, Caddyfile, the Tor data dir, and the
                             dashboard's database from a backup archive (prompts before
-                            overwriting; fixes Tor ownership).
+                            overwriting; fixes Tor ownership). Detects encrypted (.enc) vs
+                            plaintext archives by content — old backups restore unchanged.
+                            Asks for the passphrase (or reads PITHEAD_BACKUP_PASSPHRASE) and
+                            fails before touching anything if it's wrong.
                               -y, --yes        restore without the confirmation prompt.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion (#343) —
@@ -1222,7 +1333,23 @@ Maintenance:
                             'apply -y' (commit). Normally fired by the pithead-control
                             systemd path unit when dashboard.control.enabled is true.
 
+  rotate-secrets [-y|--yes]
+                            Regenerate the stack's internal credentials (#378): the local Monero
+                            RPC password, the stratum access-password (only when
+                            p2pool.stratum_password is "auto" — every rig must then update its
+                            'pass'), and the xmrig-proxy control-API token. Recreates the
+                            affected containers; old values stay in timestamped .bak-* copies.
+                              -y, --yes        skip the confirmation prompt.
+
   help, -h, --help          Show this message.
+
+Commands can be chained: '$0 apply upgrade' runs both in order, stopping at the
+first failure. Chainable: apply, up, down, restart, upgrade, status, doctor, backup.
+Contradictory chains (e.g. 'up down', duplicates, anything after 'down') are
+rejected before anything runs.
+
+Tab-completion: 'source pithead-completion.bash' (bash; zsh via bashcompinit) —
+see docs/operations.md.
 
 Workflow: edit config.json, then run '$0 apply'.
 EOF
@@ -2534,6 +2661,103 @@ rotate_dashboard_onion() {
     fi
 }
 
+# `rotate-secrets` (#378): regenerate the stack's internal credentials in one command. After a
+# suspected leak (a backup that left the box, a `.env` pasted into a bug report) the only
+# alternative is hand-editing files and knowing which containers to recreate. Rotates the local
+# Monero RPC password (skipped in remote mode — that credential belongs to the remote node), the
+# stratum access-password when p2pool.stratum_password is "auto" (a literal lives in config.json;
+# empty means auth is off), and PROXY_AUTH_TOKEN (always). The dashboard onion keys/address have
+# their own command (rotate-dashboard-onion) and are not touched. The old values stay recoverable
+# in timestamped owner-only copies of config.json and .env taken before anything changes.
+rotate_secrets() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        *) error "Unknown option for rotate-secrets: $arg. Run '$0 help'." ;;
+        esac
+    done
+    require_deployed
+    parse_and_validate_config
+    load_preserved_state
+
+    # Compute the "what will rotate" preview from the PARSED config, not by grepping .env — the
+    # stratum mode in config.json (auto vs literal vs empty) decides the behavior, not the rendered value.
+    local stratum_mode rotate_stratum=0
+    stratum_mode=$(jq -r '.p2pool.stratum_password // ""' "$CONFIG_FILE")
+
+    log "This rotates the stack's internal credentials:"
+    if [ "$MONERO_MODE" == "local" ]; then
+        log "  • Monero node RPC password — internal to the stack; no follow-up needed."
+    else
+        log "  • Monero RPC password: skipped — monero.mode is \"remote\", so the credential belongs to the remote node, not this stack."
+    fi
+    if [ "$stratum_mode" == "auto" ]; then
+        warn "  • Stratum access-password (#152) — EVERY RIG must update its stratum 'pass' to the new value or it is rejected."
+    elif [ -n "$stratum_mode" ]; then
+        log "  • Stratum access-password: skipped — p2pool.stratum_password is set explicitly in config.json; change it there and run '$0 apply'."
+    fi
+    log "  • xmrig-proxy control-API token (#153) — internal to the stack; no follow-up needed."
+    log "The containers that consume them are recreated (brief restart; chain data and dashboard history are untouched)."
+    if [ "$assume_yes" -eq 0 ]; then
+        read -r -p "Rotate these secrets now? (y/N): " CONFIRM || true
+        [[ "$CONFIRM" =~ ^[Yy] ]] || {
+            log "Rotation cancelled."
+            return 0
+        }
+    fi
+
+    # Keep the OLD values recoverable before anything changes: timestamped owner-only copies of the
+    # two files that carry them. Refuse to rotate at all if the safety copies can't be written.
+    local stamp
+    stamp=$(date +%Y%m%d-%H%M%S)
+    (
+        umask 077
+        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-${stamp}" &&
+            cp "$ENV_FILE" "${ENV_FILE}.bak-${stamp}"
+    ) || error "Could not write the pre-rotation safety copies — nothing was rotated."
+    log "Pre-rotation copies saved (${CONFIG_FILE}.bak-${stamp}, ${ENV_FILE}.bak-${stamp}) — they hold the OLD secrets; delete them once the stack is confirmed healthy."
+
+    # Regenerate, overriding what parse_and_validate_config / load_preserved_state just preserved.
+    # Same generators as the originals, so every consumer's validation keeps holding.
+    if [ "$MONERO_MODE" == "local" ]; then
+        MONERO_PASS=$(generate_node_password)
+        persist_node_credentials "$MONERO_USER" "$MONERO_PASS" # atomic write-back to config.json
+    fi
+    if [ "$stratum_mode" == "auto" ]; then
+        STRATUM_PASSWORD=$(openssl rand -hex 12)
+        rotate_stratum=1
+    fi
+    PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
+
+    resolve_dashboard_host # #356: sets HOST_IP for render_env, which dies unbound without it
+    # #356: render_env writes DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false} and
+    # load_preserved_state doesn't carry it — preserve it or the next apply errors "run setup".
+    DEPLOYMENT_COMPLETED=$(env_get DEPLOYMENT_COMPLETED)
+    render_env
+    inject_service_configs # keep the generated service configs current before the recreate
+    # Recreate marker (#125): .env is committed now, so if the recreate below fails, a plain
+    # `apply` would diff no changes and no-op — the marker makes it retry the recreate instead.
+    local apply_marker="${ENV_FILE}.apply-incomplete"
+    : >"$apply_marker"
+    log "Recreating the containers that consume the rotated secrets..."
+    # `up` recreates exactly the services whose env/args changed (monerod, p2pool, xmrig-proxy,
+    # dashboard). Never `compose restart` here: restart reuses the OLD container args, so p2pool
+    # would keep dialing monerod with the retired --rpc-login.
+    if ! compose_up_checked -d; then
+        warn "Secrets were rotated in config.json/.env but the containers were NOT recreated ('docker compose up' failed)."
+        warn "Fix the cause above, then run '$0 apply' to retry the recreate — or restore the pre-rotation copies (${CONFIG_FILE}.bak-${stamp}, ${ENV_FILE}.bak-${stamp}) and run '$0 apply'."
+        exit 1 # leave $apply_marker so the retry re-attempts the recreate
+    fi
+    rm -f "$apply_marker"
+
+    log "Secrets rotated. The old values are invalid; only the safety copies above still hold them."
+    if [ "$rotate_stratum" -eq 1 ]; then
+        announce_stratum_auth
+        warn "The stratum access-password CHANGED — every rig is rejected until its stratum 'pass' is updated to the value above."
+    fi
+}
+
 # Single writer for the env file. Derives every value from the parsed config plus the preserved
 # secrets/onions/host, so it is safe to call repeatedly (bootstrap, finalize, or apply).
 # $1 = target file (defaults to $ENV_FILE); apply renders to a temp file first to diff it.
@@ -3690,6 +3914,67 @@ apply() {
     announce_dashboard_url
 }
 
+# --- Subcommand chaining (#94) ---
+
+# Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
+# tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
+# if any of the three drift apart.
+readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor reset-dashboard backup restore control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets version help"
+# The subset allowed in a chain: commands that take no positional argument and terminate on their
+# own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
+# archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
+# info/maintenance commands (version, help, onion-client-key, rotate-dashboard-onion).
+readonly PITHEAD_CHAINABLE="apply up down restart upgrade status doctor backup"
+
+is_pithead_command() { case " $PITHEAD_COMMANDS " in *" $1 "*) ;; *) return 1 ;; esac }
+
+# Reject a nonsensical chain BEFORE any step runs (#94): chainable commands only, no duplicates,
+# at most one of up/down/restart (two run-state commands in one chain contradict or repeat each
+# other), and `down` only as the final step (anything after it would act on a stopped stack).
+validate_chain() {
+    local c seen="" runstate=0 last="${!#}"
+    for c in "$@"; do
+        case " $PITHEAD_CHAINABLE " in
+        *" $c "*) ;;
+        *) error "Invalid chain: '$c' can't be chained — run it on its own. Chainable commands: $PITHEAD_CHAINABLE. Nothing was run." ;;
+        esac
+        case " $seen " in
+        *" $c "*) error "Invalid chain: '$c' appears twice. Nothing was run." ;;
+        esac
+        seen="$seen $c"
+        case "$c" in up | down | restart) runstate=$((runstate + 1)) ;; esac
+    done
+    if [ "$runstate" -gt 1 ]; then
+        error "Invalid chain: up/down/restart contradict each other in one invocation. Nothing was run."
+    fi
+    if [ "$last" != "down" ]; then
+        case " $* " in
+        *" down "*) error "Invalid chain: 'down' must be the last step — the commands after it would run against a stopped stack. Nothing was run." ;;
+        esac
+    fi
+}
+
+# Run an all-subcommand argv left-to-right, validating the whole chain first. Each step is its own
+# pithead invocation, so a step's `exit` can't skip the accounting here. Fails fast: the first
+# non-zero step stops the chain, the report says what ran and what didn't, and that step's exit
+# code is propagated.
+run_chain() {
+    validate_chain "$@"
+    local total=$# i=0 c rc
+    for c in "$@"; do
+        i=$((i + 1))
+        log "── chain step $i/$total: $c"
+        rc=0
+        bash "${PITHEAD_SELF:-$0}" "$c" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            warn "Chain stopped: step $i/$total ('$c') failed with exit code $rc."
+            if [ "$i" -gt 1 ]; then warn "Already ran: ${*:1:$((i - 1))}."; fi
+            if [ "$i" -lt "$total" ]; then warn "Did not run: ${*:$((i + 1))}."; fi
+            exit "$rc"
+        fi
+    done
+}
+
 # --- Dashboard control channel (#33) ---
 # The dashboard container can only ASK: it drops typed JSON intents into $CONTROL_DIR/requests
 # (its single writable spool mount). This host-side runner claims each request, validates it, and
@@ -4030,6 +4315,23 @@ EOF
 # --- Main Execution ---
 
 main() {
+    # Chained subcommands (#94): when every argument is a bare subcommand name, run them
+    # left-to-right as a chain. Any other token (a flag, a service name, an archive path) keeps
+    # the invocation on the single-command path below, unchanged.
+    if [ "$#" -ge 2 ]; then
+        local _tok _chain=1
+        for _tok in "$@"; do
+            if ! is_pithead_command "$_tok"; then
+                _chain=0
+                break
+            fi
+        done
+        if [ "$_chain" -eq 1 ]; then
+            run_chain "$@"
+            return 0
+        fi
+    fi
+
     local cmd="${1:-}"
     if [ -n "$cmd" ]; then shift; fi
 
@@ -4091,6 +4393,7 @@ main() {
         ;;
     onion-client-key) onion_client_key ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
+    rotate-secrets) rotate_secrets "$@" ;;
     version | -V | --version) show_version ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;

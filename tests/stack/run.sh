@@ -1797,6 +1797,133 @@ rc=$?
 assert_rc "unknown command fails" "$rc" "1"
 assert_contains "unknown command message" "$out" "Unknown command"
 
+echo "== unit: chain validation (#94) =="
+# A chain must be judged as a whole BEFORE anything runs. validate_chain error-exits (rc 1) on the
+# first broken rule; run_sourced's subshell captures that without killing the suite.
+run_sourced "$SANDBOX" validate_chain apply upgrade >/dev/null 2>&1
+assert_rc "accepts 'apply upgrade'" "$?" "0"
+run_sourced "$SANDBOX" validate_chain apply upgrade status >/dev/null 2>&1
+assert_rc "accepts 'apply upgrade status'" "$?" "0"
+run_sourced "$SANDBOX" validate_chain upgrade down >/dev/null 2>&1
+assert_rc "accepts 'upgrade down' (down last)" "$?" "0"
+out="$(run_sourced "$SANDBOX" validate_chain logs status 2>&1)"
+assert_rc "rejects non-chainable command (logs)" "$?" "1"
+assert_contains "non-chainable message names the command" "$out" "logs"
+out="$(run_sourced "$SANDBOX" validate_chain apply apply 2>&1)"
+assert_rc "rejects duplicate command" "$?" "1"
+assert_contains "duplicate message" "$out" "twice"
+out="$(run_sourced "$SANDBOX" validate_chain up down 2>&1)"
+assert_rc "rejects 'up down' (contradictory run-state)" "$?" "1"
+assert_contains "contradiction message" "$out" "contradict"
+run_sourced "$SANDBOX" validate_chain down up >/dev/null 2>&1
+assert_rc "rejects 'down up'" "$?" "1"
+run_sourced "$SANDBOX" validate_chain up restart >/dev/null 2>&1
+assert_rc "rejects 'up restart'" "$?" "1"
+out="$(run_sourced "$SANDBOX" validate_chain down upgrade 2>&1)"
+assert_rc "rejects 'down upgrade' (down not last)" "$?" "1"
+assert_contains "down-not-last message" "$out" "last"
+
+echo "== unit: chain execution — order, fail-fast, exit code (#94) =="
+# run_chain re-invokes pithead per step via PITHEAD_SELF; a stub records the order and can be told
+# to fail a given step, so order/fail-fast/propagation are proven without a stack.
+CH="$SANDBOX/chain"
+mkdir -p "$CH"
+cat >"$CH/fake-pithead" <<'EOF'
+#!/usr/bin/env bash
+echo "ran $1" >>"$CHAIN_LOG"
+[ "$1" = "${CHAIN_FAIL_ON:-}" ] && exit 42
+exit 0
+EOF
+chmod +x "$CH/fake-pithead"
+: >"$CH/order.log"
+(
+    cd "$CH" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    export CHAIN_LOG="$CH/order.log"
+    PITHEAD_SELF="$CH/fake-pithead" run_chain apply upgrade status
+) >/dev/null 2>&1
+assert_rc "valid chain exits 0" "$?" "0"
+assert_eq "steps run left-to-right" "$(tr '\n' ',' <"$CH/order.log")" "ran apply,ran upgrade,ran status,"
+: >"$CH/order.log"
+out="$(
+    cd "$CH" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    export CHAIN_LOG="$CH/order.log" CHAIN_FAIL_ON=upgrade
+    PITHEAD_SELF="$CH/fake-pithead" run_chain apply upgrade status 2>&1
+)"
+assert_rc "failing step's exit code propagates (42)" "$?" "42"
+assert_eq "fail-fast: later steps never run" "$(tr '\n' ',' <"$CH/order.log")" "ran apply,ran upgrade,"
+assert_contains "report names the failed step" "$out" "step 2/3"
+assert_contains "report says what already ran" "$out" "Already ran: apply"
+assert_contains "report says what did not run" "$out" "Did not run: status"
+
+echo "== black-box: chain wiring — reject runs NOTHING, failure stops the chain (#94) =="
+CBX="$SANDBOX/chainbb"
+mkdir -p "$CBX"
+cp "$STACK" "$CBX/pithead"
+make_stubs "$CBX/bin"
+out="$(cd "$CBX" && DOCKER_LOG="$CBX/docker.log" PATH="$CBX/bin:$PATH" ./pithead up down 2>&1)"
+rc=$?
+assert_rc "'up down' rejected" "$rc" "1"
+assert_contains "'up down' rejection explains itself" "$out" "contradict"
+assert_eq "rejected chain has NO side effects (no docker calls)" "$(cat "$CBX/docker.log" 2>/dev/null)" ""
+# A valid chain whose first step fails (status without .env) stops there and reports the remainder.
+out="$(cd "$CBX" && PATH="$CBX/bin:$PATH" ./pithead status doctor 2>&1)"
+rc=$?
+assert_rc "mid-chain failure propagates non-zero" "$rc" "1"
+assert_contains "chain reached step 1" "$out" "step 1/2"
+assert_contains "chain reports the unrun remainder" "$out" "Did not run: doctor"
+# Single-command invocations with arguments are NOT chains: 'logs monerod' hits the normal
+# .env guard, not a chain error.
+out="$(cd "$CBX" && PATH="$CBX/bin:$PATH" ./pithead logs monerod 2>&1)"
+assert_rc "'logs <service>' stays single-command" "$?" "1"
+assert_contains "'logs <service>' hits the usual guard" "$out" "setup"
+assert_not_contains "'logs <service>' is not judged as a chain" "$out" "chain"
+
+echo "== completion: sources cleanly + no drift from the dispatch (#94) =="
+COMP="$ROOT/pithead-completion.bash"
+bash -c "source '$COMP'" >/dev/null 2>&1
+assert_rc "completion script sources cleanly in bash" "$?" "0"
+# Drift-guard: the completion's static list, pithead's PITHEAD_COMMANDS, and the labels of main's
+# dispatch case must all be the SAME set — adding/removing a subcommand in one place fails here.
+stack_cmds="$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK" 2>/dev/null
+    printf '%s' "${PITHEAD_COMMANDS:-}"
+)"
+comp_cmds="$(
+    # shellcheck disable=SC1090
+    source "$COMP" 2>/dev/null
+    printf '%s' "${_pithead_commands:-}"
+)"
+dispatch_cmds="$(sed -n '/case "\$cmd" in/,/^    esac$/p' "$STACK" |
+    sed -n -e 's/^    \([a-z][a-z-]*\)).*/\1/p' -e 's/^    \([a-z][a-z-]*\) |.*/\1/p' | tr '\n' ' ')"
+dispatch_cmds="${dispatch_cmds% }"
+assert_eq "completion list == pithead's command list" "$comp_cmds" "$stack_cmds"
+assert_eq "dispatch case labels == pithead's command list" "$dispatch_cmds" "$stack_cmds"
+# Every chainable command must be a real command.
+chain_ok=1
+for c in $(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK" 2>/dev/null
+    printf '%s' "${PITHEAD_CHAINABLE:-}"
+); do
+    case " $stack_cmds " in *" $c "*) ;; *) chain_ok=0 ;; esac
+done
+assert_eq "chainable commands are a subset of the command list" "$chain_ok" "1"
+
+echo "== completion: suggestions (#94) =="
+out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
+out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
 mkdir -p "$G/build/tari"
@@ -2643,8 +2770,10 @@ printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
 printf 'ONIONKEY-ORIG\n' >"$BK/data/tor/hs_ed25519_secret_key"
 printf 'DBDATA-ORIG\n' >"$BK/data/dashboard/dashboard.db"
 
-# 1) Backup creates a timestamped archive.
-out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+# 1) Backup creates a timestamped archive. --no-encrypt keeps this #140 round-trip on the plaintext
+# path (encryption is exercised in the #374 block below); an unattended run without a passphrase
+# now refuses rather than downgrading, so the flag is required here.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
 assert_rc "backup exits 0" "$rc" "0"
 archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
@@ -2686,14 +2815,140 @@ printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' '/dev/
 EOF
 chmod +x "$BK/bin/df"
 rm -f "$BK"/backups/pithead-backup-*.tar.gz
-out="$(cd "$BK" && printf 'n\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+# stdin answers two prompts since #374: empty passphrase (-> plaintext fallback), then 'n'.
+out="$(cd "$BK" && printf '\nn\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
 assert_contains "low-space prompt, then cancel" "$out" "ancelled"
 leftover="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
 assert_eq "cancelled backup writes no archive" "$leftover" ""
-out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
 assert_rc "low-space backup proceeds with --yes" "$rc" "0"
 assert_contains "low-space backup warns first" "$out" "Low free space"
+
+echo "== black-box: encrypted backup -> restore (#374) =="
+# The archive holds the stack's full secret material (onion keys, .env, dashboard DB), so backup
+# encrypts by default (openssl aes-256-cbc + pbkdf2). Covered here: the unattended-without-
+# passphrase REFUSAL (an automated run must never silently downgrade to plaintext), the explicit
+# --no-encrypt opt-out, env-var and prompt encrypt round-trips, wrong-passphrase rejection BEFORE
+# anything is touched, a tamper/truncation refusal before extraction, legacy/garbage archives, and
+# that a failed encrypted backup leaves no file behind (the tar|openssl stream means no plaintext
+# temp ever).
+rm -f "$BK/bin/df" "$BK"/backups/pithead-backup-*
+
+# 1a) --yes with no passphrase REFUSES (no silent plaintext downgrade for cron); writes nothing.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "unattended backup without passphrase exits non-zero" || bad "unattended backup without passphrase exits non-zero" "rc=0"
+assert_contains "refusal names the missing passphrase" "$out" "PITHEAD_BACKUP_PASSPHRASE"
+assert_eq "refused unattended backup writes no archive" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+# 1b) --no-encrypt is the explicit plaintext opt-out (loud warning, exits 0, writes a plain archive).
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+assert_rc "explicit --no-encrypt backup exits 0" "$rc" "0"
+plain_optout="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+{ [ -n "$plain_optout" ] && [ -f "$plain_optout" ]; } && ok "--no-encrypt writes a plaintext archive" || bad "--no-encrypt writes a plaintext archive" "no plain archive"
+rm -f "$BK"/backups/pithead-backup-*
+
+# 2) Env-var passphrase: a .enc archive with the openssl Salted__ header, no plaintext twin.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+rc=$?
+assert_rc "encrypted backup exits 0" "$rc" "0"
+enc_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$enc_archive" ] && [ -f "$enc_archive" ]; } && ok "encrypted archive created (.enc)" || bad "encrypted archive created (.enc)" "no .enc under backups/"
+assert_eq "archive starts with Salted__" "$(head -c 8 "$enc_archive")" "Salted__"
+plain_left="$(ls "$BK"/backups/*.tar.gz 2>/dev/null | head -1)"
+assert_eq "no plaintext archive alongside the .enc" "$plain_left" ""
+assert_contains "backup says to store the passphrase elsewhere" "$out" "passphrase"
+
+# 3) Wrong passphrase: restore fails loudly before tar runs — live files untouched.
+printf 'CADDY-LIVE\n' >"$BK/Caddyfile"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=wrong ./pithead restore -y "$enc_archive" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "wrong passphrase exits non-zero" || bad "wrong passphrase exits non-zero" "rc=0"
+assert_contains "wrong passphrase names the cause" "$out" "rong passphrase"
+assert_eq "wrong passphrase leaves live files untouched" "$(cat "$BK/Caddyfile")" "CADDY-LIVE"
+
+# 4) Right passphrase, via the prompt this time: full round-trip (archive was taken while the
+# files held their -ORIG values, so restore must bring those back over the corrupted ones).
+printf 'CORRUPTED\n' >"$BK/data/dashboard/dashboard.db"
+rm -f "$BK/data/tor/hs_ed25519_secret_key"
+out="$(cd "$BK" && printf 'hunter2\n' | PATH="$BK/bin:$PATH" ./pithead restore -y "$enc_archive" 2>&1)"
+rc=$?
+assert_rc "encrypted restore exits 0" "$rc" "0"
+assert_eq "encrypted restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
+assert_eq "encrypted restore brings back the dashboard db" "$(cat "$BK/data/dashboard/dashboard.db")" "DBDATA-ORIG"
+assert_eq "encrypted restore brings back the onion key" "$(cat "$BK/data/tor/hs_ed25519_secret_key" 2>/dev/null)" "ONIONKEY-ORIG"
+
+# 4b) Tampered/truncated ciphertext (CBC has no MAC): a flip past the first block passes the
+# cheap magic pre-flight but must be caught by the full-stream verify BEFORE tar writes anything,
+# so the live files survive. Truncating the archive tail simulates corruption/tampering.
+printf 'CADDY-LIVE\n' >"$BK/Caddyfile"
+head -c $(($(wc -c <"$enc_archive") - 32)) "$enc_archive" >"$BK/backups/truncated.tar.gz.enc"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead restore -y "$BK/backups/truncated.tar.gz.enc" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "tampered archive exits non-zero" || bad "tampered archive exits non-zero" "rc=0"
+assert_contains "tampered archive names integrity failure" "$out" "integrity"
+assert_eq "tampered archive leaves live files untouched" "$(cat "$BK/Caddyfile")" "CADDY-LIVE"
+rm -f "$BK"/backups/pithead-backup-* "$BK/backups/truncated.tar.gz.enc"
+# Leave the fixtures as this block found them (the round-trip above restored -ORIG) so the
+# later plaintext-backup test captures -ORIG, not this test's probe value.
+printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
+
+# 5) Interactive prompt path: passphrase typed twice encrypts; a mismatch aborts with no archive.
+out="$(cd "$BK" && printf 'pw\npw\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+rc=$?
+assert_rc "prompted encrypted backup exits 0" "$rc" "0"
+enc_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+assert_eq "prompted backup writes Salted__" "$(head -c 8 "$enc_archive")" "Salted__"
+rm -f "$BK"/backups/pithead-backup-*
+out="$(cd "$BK" && printf 'pw\nother\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "passphrase mismatch exits non-zero" || bad "passphrase mismatch exits non-zero" "rc=0"
+assert_contains "passphrase mismatch says so" "$out" "do not match"
+assert_eq "passphrase mismatch writes no archive" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+
+# 6) --no-encrypt forces plaintext even with the env var set, and that legacy-format archive
+# still restores through the gzip path (magic-byte detection, no flag).
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+assert_rc "--no-encrypt backup exits 0" "$rc" "0"
+plain_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+{ [ -n "$plain_archive" ] && gzip -t "$plain_archive" 2>/dev/null; } && ok "--no-encrypt writes plain gzip" || bad "--no-encrypt writes plain gzip" "missing or not gzip"
+printf 'CORRUPTED\n' >"$BK/Caddyfile"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$plain_archive" 2>&1)"
+rc=$?
+assert_rc "plaintext archive still restores" "$rc" "0"
+assert_eq "plaintext restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
+rm -f "$BK"/backups/pithead-backup-*
+
+# 7) A failed encrypted backup (openssl dies mid-stream) removes the partial archive.
+cat >"$BK/bin/openssl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$BK/bin/openssl"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=x ./pithead backup -y 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "failed encrypted backup exits non-zero" || bad "failed encrypted backup exits non-zero" "rc=0"
+assert_eq "failed encrypted backup leaves nothing behind" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+rm -f "$BK/bin/openssl"
+
+# 8) An archive that is neither encrypted nor gzip is refused before the overwrite prompt.
+printf 'garbage-not-an-archive' >"$BK/backups/bogus.tar.gz"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$BK/backups/bogus.tar.gz" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "garbage archive is refused" || bad "garbage archive is refused" "rc=0"
+assert_contains "garbage archive names the problem" "$out" "Not a pithead backup archive"
+rm -f "$BK"/backups/bogus.tar.gz
+
+# 9) Restore of an encrypted archive with no passphrase available (piped empty stdin) fails clean.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+enc_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+out="$(cd "$BK" && printf '' | PATH="$BK/bin:$PATH" ./pithead restore -y "$enc_archive" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "encrypted restore w/o passphrase exits non-zero" || bad "encrypted restore w/o passphrase exits non-zero" "rc=0"
+assert_contains "encrypted restore w/o passphrase explains" "$out" "PITHEAD_BACKUP_PASSPHRASE"
+rm -f "$BK"/backups/pithead-backup-*
 
 echo "== black-box: reset-dashboard targets .env dirs, not config.json (#139) =="
 # reset-dashboard must wipe the LIVE deployment's data dirs (from .env), not a path the user may
@@ -2733,6 +2988,107 @@ out="$(cd "$R" && SUDO_LOG=/dev/null PATH="$R/bin:$PATH" ./pithead reset-dashboa
 rc=$?
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
+
+echo "== black-box: rotate-secrets regenerates the internal credentials (#378) =="
+# One command rotates the local Monero RPC password, the "auto" stratum password, and
+# PROXY_AUTH_TOKEN — the three values apply/load_preserved_state otherwise preserve forever.
+# Baseline: an applied local-mode config with stratum auth on "auto".
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"oldrpcpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rot_sp_old="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+rm -f "$V"/config.json.bak-* "$V"/.env.bak-*
+: >"$DOCKER_LOG"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+rc=$?
+assert_rc "rotate-secrets exits 0" "$rc" "0"
+rot_pass="$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_PASSWORD)"
+rot_sp="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+rot_token="$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)"
+assert_eq "RPC password rotated (32 chars)" "${#rot_pass}" "32"
+assert_eq "RPC password changed" "$([ "$rot_pass" != "oldrpcpass" ] && echo changed)" "changed"
+assert_eq "new RPC password persisted to config.json" "$(jq -r '.monero.node_password' "$V/config.json")" "$rot_pass"
+assert_eq "stratum password changed" "$([ -n "$rot_sp" ] && [ "$rot_sp" != "$rot_sp_old" ] && echo changed)" "changed"
+assert_eq "proxy token changed" "$([ -n "$rot_token" ] && [ "$rot_token" != "ORIGINALTOKEN" ] && echo changed)" "changed"
+assert_eq "DEPLOYMENT_COMPLETED survives the rotate (#356)" "$(run_sourced "$V" env_get_file "$V/.env" DEPLOYMENT_COMPLETED)" "true"
+# Consumers: the containers are RECREATED via compose up (env/args re-read), never `compose restart`
+# (which would reuse p2pool's old --rpc-login args).
+assert_contains "rotate recreates via compose up" "$(cat "$DOCKER_LOG")" "compose up"
+assert_not_contains "rotate never uses compose restart" "$(cat "$DOCKER_LOG")" "compose restart"
+# Secrets stay out of the command output — except the stratum password, deliberately surfaced via
+# announce_stratum_auth so the operator can update each rig's 'pass'.
+case "$out" in
+*"$rot_pass"* | *"$rot_token"*) bad "rotate never prints the RPC password / proxy token" "leaked in: $out" ;;
+*) ok "rotate never prints the RPC password / proxy token" ;;
+esac
+assert_contains "rotate surfaces the new stratum password for rigs" "$out" "Stratum authentication is ON"
+assert_contains "rotate warns that rigs are rejected until updated" "$out" "rejected"
+# Recoverability: the pre-rotation copies hold the OLD values, owner-only.
+rot_cfg_bak="$(ls "$V"/config.json.bak-* 2>/dev/null | head -1)"
+rot_env_bak="$(ls "$V"/.env.bak-* 2>/dev/null | head -1)"
+assert_eq "config.json safety copy holds the old RPC password" "$(jq -r '.monero.node_password' "${rot_cfg_bak:-/dev/null}" 2>/dev/null)" "oldrpcpass"
+assert_contains ".env safety copy holds the old proxy token" "$(cat "${rot_env_bak:-/dev/null}" 2>/dev/null)" "ORIGINALTOKEN"
+rot_bak_mode="$(stat -c '%a' "$rot_env_bak" 2>/dev/null || stat -f '%Lp' "$rot_env_bak" 2>/dev/null)"
+assert_eq "safety copies are owner-only (600)" "$rot_bak_mode" "600"
+# Persistence: a follow-up apply reports no changes — the preservation logic now carries the NEW
+# values instead of resurrecting the old ones. (This is exactly the assertion that fails if
+# rotate silently no-ops: the preserved values would never have changed.)
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "apply after rotate reports no changes" "$out" "No configuration changes detected"
+assert_eq "rotated token survives the next apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "$rot_token"
+
+echo "== black-box: rotate-secrets skips what it must (#378) =="
+# Remote mode: the RPC credential belongs to the remote node — config.json stays untouched.
+seed_env
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"ru","node_password":"remotepass","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+assert_rc "rotate-secrets (remote) exits 0" "$?" "0"
+assert_eq "remote RPC password untouched" "$(jq -r '.monero.node_password' "$V/config.json")" "remotepass"
+assert_contains "remote skip is explained" "$out" "remote"
+assert_eq "proxy token still rotates in remote mode" "$([ "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" != "ORIGINALTOKEN" ] && echo changed)" "changed"
+
+# Literal stratum password: lives in config.json, so rotate leaves it and points there instead.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"my.literal-pass"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+assert_eq "literal stratum password untouched" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "my.literal-pass"
+assert_contains "literal skip points at config.json" "$out" "config.json"
+
+# Declined prompt (no -y): nothing changes.
+rot_token_now="$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" sh -c 'echo n | ./pithead rotate-secrets' 2>&1)"
+assert_rc "declined rotate exits 0" "$?" "0"
+assert_contains "declined rotate says cancelled" "$out" "cancelled"
+assert_eq "declined rotate changes nothing" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "$rot_token_now"
+
+echo "== black-box: rotate-secrets failure path keeps the old values recoverable (#378) =="
+# A failed recreate must exit non-zero, leave the retry marker (#125) so `apply` re-attempts the
+# recreate, and point at the safety copies that still hold the old secrets.
+FDOCK="$SANDBOX/faildocker"
+mkdir -p "$FDOCK"
+cat >"$FDOCK/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "compose version"|"info") exit 0 ;;
+  compose\ up*) echo "boom: no space left on device"; exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$FDOCK/docker"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"failoldpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rm -f "$V"/config.json.bak-* "$V"/.env.bak-* "$V/.env.apply-incomplete"
+out="$(cd "$V" && PATH="$FDOCK:$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+rc=$?
+assert_rc "failed recreate exits non-zero" "$rc" "1"
+assert_contains "failure names the retry path" "$out" "apply"
+[ -f "$V/.env.apply-incomplete" ] && ok "failure leaves the retry marker (#125)" || bad "failure leaves the retry marker (#125)" "marker missing"
+assert_eq "safety copy still holds the pre-rotation RPC password" "$(jq -r '.monero.node_password' "$(ls "$V"/config.json.bak-* | head -1)")" "failoldpass"
+assert_contains "safety copy still holds the pre-rotation token" "$(cat "$(ls "$V"/.env.bak-* | head -1)")" "ORIGINALTOKEN"
+rm -f "$V/.env.apply-incomplete" "$V"/config.json.bak-* "$V"/.env.bak-*
 
 echo "== release: install bundle is free of macOS xattr pax headers (#252) =="
 # Static guard: make_bundle must keep `--no-xattrs` AND the post-bundle xattr assertion, so the

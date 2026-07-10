@@ -15,14 +15,58 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus four runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, the dashboard app answers behind its container, and a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — restart the tor container to pick fresh guards). A paste-able health report. |
-| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
-| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
+| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped, passphrase-encrypted archive under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--no-encrypt` writes a plaintext `tar.gz`; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
+| `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
+| `./pithead rotate-secrets` | Regenerate the stack's internal credentials after a suspected leak: the local Monero RPC password, the stratum access-password (only when `p2pool.stratum_password` is `"auto"`), and the xmrig-proxy control-API token. Recreates the affected containers. `-y` / `--yes` skips the prompt. See [Rotating the internal secrets](#rotating-the-internal-secrets). |
 | `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
 `tor`, `dashboard`, `docker-proxy`, `docker-control`, `caddy`.
+
+### Chaining commands
+
+Run several commands in one invocation — each step in order, left to right:
+
+```bash
+./pithead apply upgrade      # apply config changes, then upgrade
+./pithead upgrade status     # upgrade, then health-check the result
+```
+
+Chainable commands: `apply`, `up`, `down`, `restart`, `upgrade`, `status`, `doctor`, `backup`.
+The whole chain is validated before anything runs; a nonsense chain is rejected with nothing
+executed. Rejected: a command that isn't chainable (`setup`, `logs`, `restore`,
+`reset-dashboard`, and the info commands run alone), a duplicated command, more than one of
+`up`/`down`/`restart` in the same chain (`up down` contradicts itself), and `down` anywhere but
+last (the steps after it would act on a stopped stack).
+
+A chain fails fast: the first step that exits non-zero stops it, pithead reports which step
+failed and what did and didn't run, and the failing step's exit code becomes the chain's.
+Flags don't chain — `apply -y upgrade` is a single `apply` invocation (and `apply` rejects the
+stray argument), so run flagged commands separately.
+
+### Tab completion
+
+`pithead-completion.bash` (in the repo root and the release bundle) completes subcommands for
+`./pithead <TAB>` and service names for `./pithead logs <TAB>`.
+
+bash — add to `~/.bashrc`:
+
+```bash
+source /path/to/pithead/pithead-completion.bash
+```
+
+zsh — add to `~/.zshrc` (`bashcompinit` needs `compinit` loaded first):
+
+```zsh
+autoload -U +X compinit && compinit
+autoload -U +X bashcompinit && bashcompinit
+source /path/to/pithead/pithead-completion.bash
+```
+
+Service-name completion reads `docker-compose.yml` next to the `pithead` you're completing, so
+it works from any checkout or bundle directory.
 
 ---
 
@@ -212,12 +256,29 @@ Instead of copying files by hand, run:
 ./pithead backup
 ```
 
-This writes a timestamped `tar.gz` under `backups/` holding the irreplaceable state: `config.json`,
-`.env` (secrets), the `Caddyfile` (if present), the Tor onion keys, and the dashboard database
-(hashrate history and settings). Blockchains are excluded (they re-sync), so the archive is small.
-The archive is `chmod 600`, and `pithead` prints its path when done. Before writing, `backup` checks
-free space and prompts if it looks tight. On a source checkout, `backups/` is git-ignored — the
-archive carries `.env` and the onion private keys, and secret scanners can't see inside a tarball.
+This prompts for a passphrase, then writes a timestamped, encrypted `tar.gz.enc` under `backups/`
+holding the irreplaceable state: `config.json`, `.env` (secrets), the `Caddyfile` (if present), the
+Tor onion keys, and the dashboard database (hashrate history and settings). Blockchains are
+excluded (they re-sync), so the archive is small. The archive is `chmod 600`, and `pithead` prints
+its path when done. Before writing, `backup` checks free space and prompts if it looks tight. On a
+source checkout, `backups/` is git-ignored — the archive carries `.env` and the onion private keys,
+and secret scanners can't see inside a tarball.
+
+Encryption is `openssl enc -aes-256-cbc -pbkdf2` with 600,000 PBKDF2 iterations (`openssl` is
+already a stack dependency; AEAD modes like GCM are not available through `openssl enc`, so CBC is
+the portable choice). The tar stream pipes straight into `openssl` — no plaintext archive ever
+touches the disk — and the passphrase passes over a file descriptor, never the command line.
+`chmod 600` protects the archive on this disk only; the encryption is what protects it once it is
+copied off-box. The archive is unreadable without the passphrase, onion keys included, so store the
+passphrase somewhere other than this host.
+
+Losing the passphrase loses the backup — there is no recovery!
+
+For unattended runs (cron), set `PITHEAD_BACKUP_PASSPHRASE` in the environment. An unattended run
+(`--yes`) with no passphrase set **refuses** rather than downgrading — a job whose passphrase line
+is typo'd away must fail loudly, not archive your onion keys in plaintext while reporting success.
+To write a plaintext archive on purpose, pass `--no-encrypt` (an empty passphrase at the interactive
+prompt does the same, with a warning).
 
 If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
 `-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
@@ -232,16 +293,57 @@ To recover (on a new machine, or after a wipe) copy the archive back and run:
 
 ```bash
 ./pithead down                       # stop the stack first so files restore cleanly
-./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz
+./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz.enc
 ./pithead up
 ```
 
-`restore` prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back,
-fixes Tor key ownership so the onion address returns unchanged, and restores hashrate history and
+`restore` detects the format from the archive itself — encrypted backups ask for the passphrase
+(or read `PITHEAD_BACKUP_PASSPHRASE`), and plaintext archives from earlier releases restore
+unchanged, no flag needed. A wrong passphrase fails before anything on disk is touched. `restore`
+prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back, fixes
+Tor key ownership so the onion address returns unchanged, and restores hashrate history and
 dashboard settings.
 
 > NOTE: After a restore, Caddy regenerates the dashboard's HTTPS certificate, so the browser shows
 > its "not trusted" warning once. Accept it as on first setup.
+
+---
+
+## Rotating the internal secrets
+
+`.env` and `config.json` carry three credentials that are generated once and otherwise live
+forever. If either file may have leaked — a backup left the box, a `.env` was pasted into a bug
+report, an operator with access left — rotate them:
+
+```bash
+./pithead rotate-secrets
+```
+
+The command previews exactly what your config rotates, asks for confirmation (`-y` / `--yes`
+skips it), regenerates the secrets, re-renders `.env`, and recreates the containers that consume
+them (a brief restart; chain data and dashboard history are untouched):
+
+- **Monero node RPC password** (`monero.node_password`) — rotated in local mode only; internal to
+  the stack, no follow-up needed. With `monero.mode: "remote"` the credential belongs to the
+  remote node and is skipped.
+- **Stratum access-password** (`PROXY_STRATUM_PASSWORD`) — rotated only when
+  `p2pool.stratum_password` is `"auto"`. The new value is printed at the end. Every rig is
+  rejected until its stratum `pass` is updated to it — see
+  [Workers › Authentication](workers.md#authentication). A literal password lives in
+  `config.json`: change it there and run `./pithead apply`. When stratum auth is off there is
+  nothing to rotate.
+- **xmrig-proxy control-API token** (`PROXY_AUTH_TOKEN`) — always rotated; internal to the stack,
+  no follow-up needed.
+
+Before changing anything, `rotate-secrets` saves owner-only copies of `config.json` and `.env` as
+`config.json.bak-<timestamp>` and `.env.bak-<timestamp>`. They hold the OLD secrets: delete them
+once the stack is confirmed healthy. If the container recreate fails, the new values are already
+committed — fix the cause and run `./pithead apply` to retry the recreate, or restore the two
+copies and run `./pithead apply` to roll back.
+
+The dashboard's `.onion` address and client-auth key have their own command,
+`./pithead rotate-dashboard-onion` — see
+[Configuration › Dashboard onion](configuration.md#reaching-the-dashboard-from-anywhere-tor-onion).
 
 ---
 

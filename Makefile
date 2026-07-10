@@ -39,9 +39,9 @@ test-integration: ## Run the live config-matrix integration suite (requires a te
 lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-proto lint-toml ## Lint/format-check every surface
 
 lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
-	shellcheck --severity=warning pithead scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
+	shellcheck --severity=warning pithead pithead-completion.bash scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
-	shfmt -i 4 -d pithead $(shell git ls-files '*.sh')
+	shfmt -i 4 -d pithead pithead-completion.bash $(shell git ls-files '*.sh')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
 	uv run --locked --project build/dashboard --extra dev ruff check .

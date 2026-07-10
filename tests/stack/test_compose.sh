@@ -106,8 +106,8 @@ fi
 # non-root uid is pinned via compose. Guard it so a silent drop back to root fails CI.
 expect_min "tari runs non-root via compose user: (#255)" "user: 1000:1000" 1
 # Anchor to the 4-space service-level indent so read-only :ro *bind mounts* (rendered with the
-# same key, deeper-indented) don't inflate the count — we want exactly the 3 read-only roots.
-expect_min "read-only roots (caddy + 2 socket proxies)" "^    read_only: true" 3
+# same key, deeper-indented) don't inflate the count — every service runs on a read-only root (#377).
+expect_min "read-only roots (all 9 services, #377)" "^    read_only: true" 9
 # Caddy keeps NET_BIND_SERVICE so it can still bind :80/:443 after the drop.
 expect_present "caddy retains NET_BIND_SERVICE" "NET_BIND_SERVICE"
 # Stratum port is configurable, defaulting to all interfaces.
@@ -163,6 +163,29 @@ jq_assert "compose project name is pinned to pithead" '.name == "pithead"'
 # Memory ceilings (#132): every service carries a mem_limit so a leak/runaway OOM-restarts the
 # offender in its own cgroup instead of the host OOM-killer reaching monerod (the revenue service).
 jq_assert "memory ceiling (mem_limit) on every service (#132)" '[.services[] | select(.mem_limit != null)] | length >= 9'
+# Immutable root filesystems (#377): every service runs read_only with exactly its expected tmpfs
+# scratch set, INCLUDING the mount options. An edit that grows a size cap or slips in `exec` —
+# re-creating the executable staging area read_only exists to remove — must fail CI, not evolve
+# silently. Each spec's entries are space-separated (the options carry commas). Removing read_only
+# from any service, or changing any tmpfs entry, fails CI.
+for spec in \
+    "tor=/tmp:size=64m,mode=1777" \
+    "monerod=/tmp:size=64m,mode=1777" \
+    "tari=/tmp:size=64m,mode=1777" \
+    "p2pool=/tmp:size=64m,mode=1777" \
+    "xmrig-proxy=/home/ubuntu:size=64m,uid=1000,gid=1000 /tmp:size=64m,mode=1777" \
+    "dashboard=/tmp:size=64m,mode=1777" \
+    "docker-proxy=/run /tmp" \
+    "docker-control=/run /tmp" \
+    "caddy=/config /tmp"; do
+    svc="${spec%%=*}" want="${spec#*=}"
+    jq_assert "read_only rootfs + tmpfs [$want] on $svc (#377)" \
+        ".services[\"$svc\"] | (.read_only == true) and (((.tmpfs // []) | sort) == (\"$want\" | split(\" \") | sort))"
+done
+# Belt-and-braces on the same risk: no tmpfs mount anywhere may carry the `exec` option token
+# (Docker prepends noexec by default; only a literal `exec` in the options displaces it).
+jq_assert "no tmpfs mount carries the exec option (#377)" \
+    '[.services[] | (.tmpfs // [])[] | (split(":")[1] // "") | split(",")[] | select(. == "exec")] | length == 0'
 
 # Fail closed on the xmrig-proxy control-API token (#153). The HTTP API is writable
 # (--http-no-restricted, required for XvB pool-switching) and reachable on the bridge + host, so it
