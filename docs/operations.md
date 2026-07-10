@@ -147,7 +147,8 @@ This writes a timestamped `tar.gz` under `backups/` holding the irreplaceable st
 `.env` (secrets), the `Caddyfile` (if present), the Tor onion keys, and the dashboard database
 (hashrate history and settings). Blockchains are excluded (they re-sync), so the archive is small.
 The archive is `chmod 600`, and `pithead` prints its path when done. Before writing, `backup` checks
-free space and prompts if it looks tight.
+free space and prompts if it looks tight. On a source checkout, `backups/` is git-ignored — the
+archive carries `.env` and the onion private keys, and secret scanners can't see inside a tarball.
 
 If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
 `-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
