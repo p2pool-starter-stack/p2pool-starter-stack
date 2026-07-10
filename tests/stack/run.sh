@@ -1919,6 +1919,33 @@ while IFS= read -r ev; do
         "$compose_text" "TELEGRAM_EVENT_$up="
 done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
 
+echo "== black-box: payout-wallet change needs a typed confirm (#375) =="
+# Swapping the payout wallet is the highest-value tamper: apply must demand the first 8 chars of
+# the new address typed back (a pasted 'y' can't wave it through), while -y keeps automation alive.
+WALLET2="4$(printf 'B%.0s' $(seq 94))" # a second valid mainnet primary; first 8 chars = 4BBBBBBB
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)" # baseline .env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" >"$V/config.json"
+# (1) A bare 'y' — the old destructive confirm — must NOT pass; .env stays untouched.
+out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+rc=$?
+assert_rc "wallet change with 'y' aborts cleanly" "$rc" "0"
+assert_contains "wallet prompt shows the new address's first 8 chars" "$out" "(4BBBBBBB)"
+assert_contains "wallet change cancelled" "$out" "Apply cancelled"
+assert_eq "wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+# The preview/prompt never echoes the full new address (only its first 8 chars).
+assert_not_contains "full new address not echoed by apply" "$out" "$WALLET2"
+# (2) Typing the first 8 chars confirms and applies.
+out="$(cd "$V" && printf '4BBBBBBB\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "typed confirm applies" "$?" "0"
+assert_eq "wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
+# (3) -y still bypasses the prompt for automation.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1 </dev/null)"
+assert_rc "apply -y skips the typed confirm" "$?" "0"
+assert_eq "wallet updated with -y" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"

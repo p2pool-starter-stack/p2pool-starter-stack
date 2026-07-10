@@ -2405,7 +2405,7 @@ render_env() {
     local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
-    local tg_ev_hugepages tg_ev_low_ram
+    local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed
     local hr_drop_threshold hr_drop_minutes
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
@@ -2426,6 +2426,7 @@ render_env() {
     tg_ev_hashrate_loss=$(tg_event hashrate_loss)
     tg_ev_hugepages=$(tg_event hugepages)
     tg_ev_low_ram=$(tg_event low_ram)
+    tg_ev_wallet_changed=$(tg_event wallet_changed)
     # Degradation detector (#99): drop-below-% and sustained-minutes; defaults 50 / 10.
     hr_drop_threshold=$(jq -r '.dashboard.hashrate_drop_threshold // 50' "$CONFIG_FILE")
     hr_drop_minutes=$(jq -r '.dashboard.hashrate_drop_minutes // 10' "$CONFIG_FILE")
@@ -2535,6 +2536,7 @@ TELEGRAM_EVENT_HASHRATE_LOW=$tg_ev_hashrate_low
 TELEGRAM_EVENT_HASHRATE_LOSS=$tg_ev_hashrate_loss
 TELEGRAM_EVENT_HUGEPAGES=$tg_ev_hugepages
 TELEGRAM_EVENT_LOW_RAM=$tg_ev_low_ram
+TELEGRAM_EVENT_WALLET_CHANGED=$tg_ev_wallet_changed
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
@@ -3190,7 +3192,7 @@ apply() {
     local apply_marker="${ENV_FILE}.apply-incomplete" incomplete=0
     [ -f "$apply_marker" ] && incomplete=1
 
-    local destructive=0 caddy_changed=0 line flag msg old new
+    local destructive=0 caddy_changed=0 wallet_new8="" line flag msg old new
     if [ "${#changed[@]}" -gt 0 ]; then
         echo ""
         log "The following changes will be applied:"
@@ -3198,6 +3200,9 @@ apply() {
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
             case "$key" in HOST_IP | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED) caddy_changed=1 ;; esac
+            # Payout-wallet change (#375): remember the new address's first 8 chars for the typed
+            # confirmation below. Never the full address — previews and prompts stay truncated.
+            case "$key" in MONERO_WALLET_ADDRESS | TARI_WALLET_ADDRESS) wallet_new8="${new:0:8}" ;; esac
             line=$(describe_change "$key" "$old" "$new")
             flag=${line%%$'\t'*}
             msg=${line#*$'\t'}
@@ -3211,7 +3216,20 @@ apply() {
         done
         echo ""
 
-        if [ "$destructive" -eq 1 ] && [ "$assume_yes" -eq 0 ]; then
+        if [ -n "$wallet_new8" ] && [ "$assume_yes" -eq 0 ]; then
+            # A payout-wallet change upgrades the generic y/N to a typed confirmation (#375):
+            # every future reward goes to the new address, so the operator must type its first
+            # 8 characters. This is the strongest confirm, so it stands in for the y/N even when
+            # other disruptive changes ride along. --yes keeps working for automation.
+            warn "The payout wallet address is changing — ALL future rewards go to the new address."
+            warn "Confirm by typing the first 8 characters of the new address ($wallet_new8)."
+            read -r -p "Confirm: " CONFIRM || true
+            if [ "$CONFIRM" != "$wallet_new8" ]; then
+                rm -f "$newenv"
+                log "Apply cancelled. No changes were made."
+                return 0
+            fi
+        elif [ "$destructive" -eq 1 ] && [ "$assume_yes" -eq 0 ]; then
             warn "Some of the changes above (⚠) are disruptive."
             read -r -p "Proceed with applying these changes? (y/N): " CONFIRM || true
             if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
