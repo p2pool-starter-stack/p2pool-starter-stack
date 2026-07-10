@@ -12,6 +12,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TELEGRAM_EVENTS,
 )
+from mining_dashboard.service.container_health import ContainerHealthMonitor
 from mining_dashboard.service.telegram_notifier import TelegramNotifier
 from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
@@ -78,6 +79,12 @@ class AlertService:
       alert when this node held a PPLNS share at that poll — PPLNS pays every miner with a share
       in the window, so that block pays *you*. Good news, not incidents — never tallied in the
       daily incident log.
+    - **container crash-loop / unhealthy / recovered** — a debounced
+      :class:`ContainerHealthMonitor` over the per-container inspect snapshots from the
+      read-only docker-proxy (#337): a stack container restarting repeatedly (OOM, bad config)
+      or stuck failing its healthcheck. Keys ONLY off restart deltas / ``restarting`` /
+      ``health=="unhealthy"`` — never off "exited", because the stack stops p2pool and
+      xmrig-proxy on purpose (#35/#31).
 
     Edge state is seeded silently on the first observation (``None`` baselines), so a dashboard
     restart can't replay a stale transition as a fresh alert. The exception is the persistent
@@ -113,6 +120,7 @@ class AlertService:
     EVT_HIGH_REJECT_RATE = "high_reject_rate"
     EVT_BLOCK_FOUND = "block_found"
     EVT_PAYOUT_FOUND = "payout_found"
+    EVT_CONTAINER_UNHEALTHY = "container_unhealthy"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -122,10 +130,30 @@ class AlertService:
         "left": (EVT_WORKER_LEFT, "\U0001f44b Worker left: {name}"),
     }
 
+    # ContainerHealthMonitor edge -> (event key, message template). One toggle for all three
+    # edges (#337) — problem and recovery are the same conversation.
+    _CONTAINER_EDGES = {
+        "crash_loop": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f534 \U0001f4e6 Container {name} is crash-looping — restarting repeatedly "
+            "(OOM or bad config?). Check: docker logs {name}",
+        ),
+        "unhealthy": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f7e0 \U0001f4e6 Container {name} is running but unhealthy — its healthcheck "
+            "keeps failing.",
+        ),
+        "recovered": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f7e2 \U0001f4e6 Container {name} recovered.",
+        ),
+    }
+
     def __init__(
         self,
         notifier=None,
         worker_monitor=None,
+        container_monitor=None,
         host_label=HOST_IP,
         daily_time=TELEGRAM_DAILY_SUMMARY_TIME,
         kv_get=None,
@@ -133,6 +161,9 @@ class AlertService:
     ):
         self.notifier = notifier if notifier is not None else build_default_notifier()
         self.workers = worker_monitor if worker_monitor is not None else WorkerPresenceMonitor()
+        self.containers = (
+            container_monitor if container_monitor is not None else ContainerHealthMonitor()
+        )
         # Once-daily digest: target local minute-of-day (HH:MM → h*60+m), and the day we last sent
         # (so it fires once per day). A malformed time disables it.
         self._daily_target_min = _parse_hhmm(daily_time)
@@ -199,6 +230,7 @@ class AlertService:
         reject_rate_1h=None,
         blocks_found_total=0,
         block_height=0,
+        containers=None,
         now=None,
     ):
         """Fold this cycle's signals into the list of ``(event_key, text)`` to send, filtered to
@@ -250,6 +282,16 @@ class AlertService:
                 alerts.append((evt, self._fmt(template.format(name=name))))
         else:
             self.workers.reset()
+
+        # --- Container crash-loop / stuck-unhealthy / recovered (#337) ---
+        # Driven by the read-proxy inspect snapshots; None = no data this cycle (collector
+        # skipped), which is no verdict — the monitor isn't fed, so streaks stay put.
+        if containers is not None:
+            for name, edge in self.containers.update(containers, now=now):
+                evt, template = self._CONTAINER_EDGES[edge]
+                if edge != "recovered":
+                    self._record_incident(self.EVT_CONTAINER_UNHEALTHY)
+                alerts.append((evt, self._fmt(template.format(name=name))))
 
         # --- Host health: data disk filling up, dashboard DB write failing ---
         alerts += self._disk_edges(disk_percent)

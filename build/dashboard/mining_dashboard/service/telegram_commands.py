@@ -424,6 +424,7 @@ _INCIDENT_LABELS = {
     "clearnet_exposed": "clearnet exposure",
     "hashrate_low": "hashrate low",
     "hashrate_loss": "hashrate drop",
+    "container_unhealthy": "container unhealthy",
 }
 
 

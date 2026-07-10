@@ -13,6 +13,7 @@ from mining_dashboard.client.xvb_client import (
     REG_NOT_ELIGIBLE,
     REG_OK,
 )
+from mining_dashboard.collector.containers import get_container_health
 from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.pools import (
     get_network_stats,
@@ -862,6 +863,12 @@ class DataService:
                         if self.alert_service.enabled
                         else None
                     )
+                    # Per-container restart/health snapshot for the crash-loop/unhealthy alert
+                    # (#337) — 9 inspect calls against the read-only docker-proxy, skipped
+                    # entirely while Telegram is off (same cost discipline as alert_metrics).
+                    container_states = (
+                        await get_container_health() if self.alert_service.enabled else {}
+                    )
                     await self.alert_service.process(
                         monero_down=monero_down,
                         tari_down=tari_down,
@@ -903,6 +910,9 @@ class DataService:
                         # missing/unparsable, which the edge treats as a silent rebaseline.
                         blocks_found_total=pool_local.get("blocks_found", 0) or 0,
                         block_height=pool_local.get("last_block_found", 0) or 0,
+                        # Container crash-loop / stuck-unhealthy edges (#337), read above from
+                        # the read-only docker-proxy.
+                        containers=container_states,
                     )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).
