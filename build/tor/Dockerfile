@@ -1,6 +1,6 @@
-# Pinned by digest (#135). NOTE: still the floating `latest` tag — a follow-up could move this to a
-# specific alpine version; the digest already makes the build reproducible regardless.
-FROM alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+# Pinned to a named minor version by digest (#135, #373). The digest is authoritative; the tag
+# names the Alpine minor line (3.24) so Dependabot's patch-update policy has a real version to track.
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 # Install Tor plus the tools the bootstrap healthcheck needs: netcat (talk to the
 # control port) and xxd (hex-encode the auth cookie). --no-cache keeps the image small.

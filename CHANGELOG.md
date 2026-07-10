@@ -18,6 +18,23 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   vX.Y.Z)` for a release install, `pithead dev (branch @ commit, VERSION X.Y.Z)` for a source
   checkout — with no network call or update check. `doctor` repeats the line in its header, so every
   pasted diagnostics report carries the version.
+- **`CODE_OF_CONDUCT.md`** — the Contributor Covenant v2.1, filling the last empty slot in the
+  GitHub community profile. Enforcement reports go through the same private channel as security
+  reports (see [`SECURITY.md`](SECURITY.md)). CONTRIBUTING links it (#372).
+
+### Changed
+
+- **`build/tor/Dockerfile`** now pins Alpine to a named minor version (`alpine:3.24`) alongside its
+  digest, instead of the floating `latest` tag, so Dependabot has a real version line to track
+  (#373).
+- **CONTRIBUTING** describes `make test` accurately: it needs Docker (via `lint-proto`), and the
+  lint-surface list now includes `lint-docs-voice` (#371).
+
+### Fixed
+
+- **`tests/integration/build-pruned-chain.sh`** no longer defaults `SRC_DIR` to a maintainer's
+  personal path (baked in under the pre-rename repo name); it's now a required variable with a clear
+  error (#373).
 
 ### Dependencies
 
