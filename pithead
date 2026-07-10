@@ -981,10 +981,11 @@ reset_dashboard() {
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
 stack_backup() {
-    local with_chains=0 assume_yes=0 was_running=0
+    local with_chains=0 assume_yes=0 was_running=0 no_encrypt=0
     for arg in "$@"; do
         case "$arg" in
         --with-chains) with_chains=1 ;;
+        --no-encrypt) no_encrypt=1 ;;
         -y | --yes) assume_yes=1 ;;
         *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
         esac
@@ -993,12 +994,45 @@ stack_backup() {
     require_env
     parse_and_validate_config
 
+    # Resolve the encryption passphrase up front, before anything is touched. The archive holds
+    # the stack's full secret material (.env, onion private keys, the dashboard DB), and chmod 600
+    # only protects it on this disk — so it's encrypted by default (#374). Plaintext needs an
+    # explicit choice: --no-encrypt, or an empty passphrase at the interactive prompt (with a loud
+    # warning — never a silent lockout of the operator's own onion keys). An UNATTENDED run
+    # (--yes) with no passphrase refuses instead of downgrading: a cron job whose
+    # PITHEAD_BACKUP_PASSPHRASE line is typo'd away must fail loudly, not archive the onion keys
+    # in plaintext forever while reporting success.
+    local pass=""
+    { set +x; } 2>/dev/null # xtrace would print the passphrase below (see the prompt-path comment)
+    if [ "$no_encrypt" -eq 0 ]; then
+        if [ -n "${PITHEAD_BACKUP_PASSPHRASE:-}" ]; then
+            pass="$PITHEAD_BACKUP_PASSPHRASE"
+        elif [ "$assume_yes" -eq 1 ]; then
+            error "No PITHEAD_BACKUP_PASSPHRASE set for an unattended backup — refusing to write a plaintext archive of your onion keys and secrets. Set the env var, or pass --no-encrypt to choose plaintext explicitly."
+        else
+            local pass2=""
+            # Under `bash -x` (the on_err debugging advice) xtrace would print the passphrase in
+            # every comparison and redirection below — turn it off for the rest of this run.
+            { set +x; } 2>/dev/null
+            read -rs -p "Backup passphrase (empty = plaintext archive): " pass || true
+            echo
+            if [ -n "$pass" ]; then
+                read -rs -p "Confirm passphrase: " pass2 || true
+                echo
+                [ "$pass" = "$pass2" ] || error "Passphrases do not match — nothing was written."
+            else
+                warn "Empty passphrase — writing a PLAINTEXT archive. It holds your onion keys and secrets; anyone who reads it owns the stack."
+            fi
+        fi
+    fi
+
     local backups_dir="$PWD/backups"
     mkdir -p "$backups_dir"
 
     local stamp archive
     stamp=$(date +%Y%m%d-%H%M%S)
     archive="$backups_dir/pithead-backup-$stamp.tar.gz"
+    [ -z "$pass" ] || archive="$archive.enc"
 
     # Collect what exists, as absolute paths. We tar with -C / and strip the leading slash, so
     # restore (extract at /) puts every file back exactly where it came from regardless of where
@@ -1085,11 +1119,29 @@ stack_backup() {
 
     log "Creating backup archive..."
     # Read with sudo because the Tor data dir is owned by 100:101.
-    (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+    if [ -n "$pass" ]; then
+        # Stream tar straight into openssl so no plaintext archive ever exists on disk.
+        # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back to a
+        # single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe), never argv
+        # (visible in `ps`) and never a file. pipefail is in force, so either side failing
+        # fails the whole pipeline; remove the partial ciphertext rather than leave a corrupt
+        # archive that looks like a backup.
+        if ! (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
+            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+                -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
+            rm -f "$archive"
+            error "Backup failed — the partial archive was removed."
+        fi
+    else
+        (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+    fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
     chmod 600 "$archive"
 
     log "Backup written to: $archive"
+    if [ -n "$pass" ]; then
+        log "The archive is useless without the passphrase — store it somewhere other than this host."
+    fi
     if [ "$with_chains" -eq 0 ]; then
         log "Blockchains excluded (they re-sync). Use 'backup --with-chains' to include them."
     fi
@@ -1110,10 +1162,21 @@ stack_restore() {
         esac
     done
 
-    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz>"
+    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz[.enc]>"
     [ -f "$archive" ] || error "Archive not found: $archive"
     # Resolve to an absolute path now, since we extract from "/" below.
     archive=$(cd "$(dirname "$archive")" && printf '%s/%s' "$PWD" "$(basename "$archive")")
+
+    # Detect the format by magic bytes, not by flag or filename: `Salted__` is an openssl-encrypted
+    # archive (the default since #374), gzip magic is a plaintext archive from any earlier release —
+    # both keep restoring with the same command. Anything else is refused before the confirm prompt.
+    local magic encrypted=0
+    magic=$(head -c 8 "$archive" | od -An -tx1 | tr -d ' \n')
+    case "$magic" in
+    53616c7465645f5f) encrypted=1 ;; # "Salted__"
+    1f8b*) ;;                        # gzip
+    *) error "Not a pithead backup archive (neither openssl-encrypted nor gzip): $archive" ;;
+    esac
 
     # Note: we do NOT require/parse the current config here — restore must work even when the
     # on-disk config.json is lost or corrupt. The config comes back out of the archive.
@@ -1128,11 +1191,48 @@ stack_restore() {
         fi
     fi
 
+    local pass=""
+    if [ "$encrypted" -eq 1 ]; then
+        { set +x; } 2>/dev/null # xtrace would print the passphrase in the checks below
+        if [ -n "${PITHEAD_BACKUP_PASSPHRASE:-}" ]; then
+            pass="$PITHEAD_BACKUP_PASSPHRASE"
+        else
+            read -rs -p "Backup passphrase: " pass || true
+            echo
+        fi
+        [ -n "$pass" ] || error "This archive is encrypted — supply the passphrase (prompt or PITHEAD_BACKUP_PASSPHRASE)."
+        # Pre-flight: decrypt only the first bytes and check for the gzip magic, so a wrong
+        # passphrase fails HERE, before tar writes anything to /. `head -c 2` closes the pipe
+        # early, so openssl stops after the first blocks (pipefail makes that exit 141 — hence
+        # the `|| true`); we judge by the decrypted bytes, not the exit code.
+        local plain_magic
+        plain_magic=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            head -c 2 | od -An -tx1 | tr -d ' \n') || true
+        [ "$plain_magic" = "1f8b" ] || error "Wrong passphrase or corrupt archive — nothing was restored."
+        # Full-stream verify BEFORE extraction: CBC has no authentication, so a bit-flip or
+        # truncation past the first block would pass the magic check yet abort tar MID-EXTRACTION,
+        # leaving the live config half-overwritten. Listing the whole archive (`tar -tzf -`, still
+        # no plaintext on disk) decompresses and walks every member — catching a corrupt/tampered
+        # tail — and, unlike `gzip -t`, tolerates tar's own zero-padding. A failure here refuses
+        # before anything is touched.
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            tar -tzf - >/dev/null 2>&1 ||
+            error "Archive fails integrity verification (tampered or truncated) — nothing was restored."
+    fi
+
     log "Restoring from $archive ..."
     # The archive stores paths relative to / (leading slash stripped), so extracting at / puts
     # every file back exactly where it came from. sudo so we can write into the 100:101-owned
-    # Tor data dir.
-    sudo tar -xzf "$archive" -C "/"
+    # Tor data dir. The encrypted path streams openssl into tar — no plaintext archive on disk.
+    if [ "$encrypted" -eq 1 ]; then
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 3< <(printf '%s' "$pass") |
+            sudo tar -xzf - -C "/"
+    else
+        sudo tar -xzf "$archive" -C "/"
+    fi
 
     # Now that config.json is back, resolve the Tor data dir from it and fix ownership so the
     # onion keys load (matching prepare_directories).
@@ -1192,20 +1292,28 @@ Maintenance:
   reset-dashboard [-y|--yes]
                             DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
                               -y, --yes        skip the confirmation prompt.
-  backup [--with-chains] [-y|--yes]
-                            Write a timestamped, chmod-600 tar.gz under backups/ holding the
+  backup [--with-chains] [--no-encrypt] [-y|--yes]
+                            Write a timestamped, chmod-600 archive under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, the Tor data dir
                             (onion keys), and the dashboard's database (your hashrate history &
                             settings). Blockchains are excluded unless --with-chains.
+                            Encrypted by default (openssl AES-256-CBC + PBKDF2, .tar.gz.enc):
+                            prompts for a passphrase, or reads PITHEAD_BACKUP_PASSPHRASE for
+                            unattended runs. With --yes and no passphrase set, falls back to a
+                            plaintext tar.gz with a warning.
                             If the stack is running, backup stops it for a consistent copy and
                             starts it again when it's done.
                               --with-chains    also include the blockchain data (large).
+                              --no-encrypt     write a plaintext tar.gz (the pre-v1.4 format).
                               -y, --yes        skip the confirmation prompts (low free space,
                                                and stopping a running stack).
   restore [-y|--yes] <archive>
                             Restore config.json, .env, Caddyfile, the Tor data dir, and the
                             dashboard's database from a backup archive (prompts before
-                            overwriting; fixes Tor ownership).
+                            overwriting; fixes Tor ownership). Detects encrypted (.enc) vs
+                            plaintext archives by content — old backups restore unchanged.
+                            Asks for the passphrase (or reads PITHEAD_BACKUP_PASSPHRASE) and
+                            fails before touching anything if it's wrong.
                               -y, --yes        restore without the confirmation prompt.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion (#343) —
