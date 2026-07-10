@@ -41,7 +41,11 @@ running (and healthy) service, and a ⚠/✗ for anything unhealthy, restarting,
 It exits non-zero when something needs attention, so you can wire it into a cron/monitoring check.
 A stopped `p2pool`/`xmrig-proxy` is reported as intentional, not an error: the dashboard stops it
 either to fail workers over a node-down outage or while the miner is held until the required chains
-finish their initial sync. Check the dashboard to see which.
+finish their initial sync. When a chain is still syncing, `status` reads the dashboard's own
+`/api/state` and prints its progress inline — a line per chain with the percent and the number of
+blocks left, so you don't have to open the dashboard to see how far off release is. No ETA is
+shown: block rate isn't sampled, so the blocks-remaining count is the honest figure. The lines are
+skipped once both chains are synced, or when the dashboard app isn't answering yet.
 
 **Start / stop / restart:**
 

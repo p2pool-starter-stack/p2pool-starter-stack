@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
+  status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
+  remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate
+  isn't sampled, so blocks-remaining is the honest figure. The lines are skipped once both chains
+  are synced or when the dashboard app isn't answering yet.
+- **First-run "what happens next" note (#384).** The first time the stack comes up, `pithead` prints
+  a short epilogue explaining that the miner is held until Monero and Tari finish their initial sync
+  and then starts automatically, plus where to watch progress. It shows once (keyed on a marker file
+  beside `.env`), not on every restart.
 - **`pithead version` prints the installed stack version (#386).** `version` (and the `-V` /
   `--version` aliases) prints one line identifying the build — `pithead vX.Y.Z (release images
   vX.Y.Z)` for a release install, `pithead dev (branch @ commit, VERSION X.Y.Z)` for a source
