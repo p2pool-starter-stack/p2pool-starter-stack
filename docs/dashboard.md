@@ -255,8 +255,32 @@ figures. It is scoped to P2Pool — **not** an XvB calculator:
 
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
-> network figures aren't available yet, the card shows `—` rather than a bogus number. An XvB
-> tier projection isn't included yet.
+> network figures aren't available yet, the card shows `—` rather than a bogus number.
+
+### XvB Tier (raffle)
+
+A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
+XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
+disabled (`xvb.enabled: false`). It shows tier status only — deliberately no raffle entries or win
+odds, because there are none to show: the raffle winner is drawn at random among everyone above
+the threshold, so donating more than the threshold buys zero extra win chance.
+
+| Field | Meaning |
+|---|---|
+| **Sustainable Tier** | The highest XvB donor tier the entered hashrate sustains while leaving P2Pool its share of the split — the same auto rule the donation controller uses (`hashrate × max donation fraction ≥ tier threshold`, default fraction 0.85). `None` when even the lowest tier is out of reach. |
+| **Hashrate Cost** | What holding that tier costs: about its threshold in **continuous** donation, because XvB qualifies a tier on both the 1h and 24h credited averages. This hashrate earns no P2Pool shares while donated. |
+| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
+| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
+
+Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
+tier threshold on both credited averages; a win terminates if the 1h average then drops below the
+round minimum; and collecting any win needs a share in the P2Pool PPLNS window (what XvB calls
+being a "VIP"). So the optimum donation is the minimum that clears your tier — never more. A tier
+is raffle status, not an XMR payout, and the card says so. The tier thresholds come from the
+server's tier table — the same one the donation controller steers by — so the two can't disagree.
+
+NOTE: on the mini/nano sidechains the block adds a reminder that switching the P2Pool sidechain
+resets your PPLNS shares — and with them XvB win collectability until a new share lands.
 
 ### Pool Cadence & Luck
 

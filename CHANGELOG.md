@@ -24,6 +24,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   what-if input, from the Tari block reward and difficulty p2pool's merge-mine stats already
   report. `—` while merge-mining is inactive or Tari is still syncing; the Telegram `/earnings`
   reply gains the matching XTM/day line, shown only while those figures are live.
+- **XvB tier calculator in the earnings card + richer `/xvb` (#118).** The same what-if hashrate
+  now also answers which XMRvsBeast donor tier it can sustain (the donation controller's own auto
+  rule), the tier's threshold, and the cost of holding it — about the threshold in continuous
+  donation, since XvB qualifies a tier on both the 1h and 24h credited averages. Labelled as
+  raffle status, never an XMR payout, with no entry counts or win odds shown (the draw is random
+  above the threshold). Hidden while XvB is disabled. The Telegram `/xvb` reply gains the matching
+  threshold, cost, and not-a-payout lines.
 
 ## [1.2.2] - 2026-07-04
 
