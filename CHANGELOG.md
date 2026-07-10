@@ -39,6 +39,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 - **CONTRIBUTING** describes `make test` accurately: it needs Docker (via `lint-proto`), and the
   lint-surface list now includes `lint-docs-voice` (#371).
 
+### Security
+
+- **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
+  and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
+  did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a
+  size-capped, `noexec` tmpfs for rendered configs and scratch (`/tmp` everywhere; xmrig-proxy also
+  gets a tmpfs over its image-only home in case the binary persists an API-driven config change).
+  A compromised process can no longer stage tools in, or persist changes to, its container image.
+  Nothing durable moves: the tmpfs mounts are wiped on restart by design, and every config
+  re-renders at container start.
+
 ### Fixed
 
 - **`release.sh` rides out GHCR's read-after-push lag (#429).** A tag the registry just accepted can
