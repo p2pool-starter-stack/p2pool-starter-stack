@@ -331,6 +331,36 @@ there is nothing to configure.
 
 ---
 
+## The configuration editor
+
+Off by default. Set `dashboard.control.enabled: true` in `config.json` (a
+`dashboard.auth.password` is required — pithead refuses to enable the editor without a login) and
+run `./pithead apply`; a **Config** button appears next to the Simple/Advanced toggle.
+
+The Configuration page shows every `config.json` key, grouped by section, prefilled from the
+running stack. Secrets (`dashboard.auth.password`, `telegram.bot_token`, node RPC credentials,
+`workers.api_token`, `p2pool.stratum_password`) render as "set — leave blank to keep": the browser
+never receives the real value, and leaving the field blank keeps it unchanged.
+
+Saving is a two-step confirm:
+
+1. **Review changes** sends the proposed config to the host, which validates it with the same
+   parser `./pithead apply` uses and answers with the same change preview the CLI prints —
+   disruptive rows (payout wallet, pool switch, prune toggle, local↔remote) are marked with ⚠.
+   Switching `p2pool.pool` carries its usual warning: the sidechain re-syncs and your PPLNS and
+   XvB shares reset.
+2. **Apply** commits that exact previewed config. The host backs up the old `config.json` (kept as
+   `config.json.bak-control`), runs `pithead apply -y`, and recreates only the containers whose
+   config changed — the page keeps polling and reports the outcome even if the dashboard container
+   itself is recreated mid-apply.
+
+The dashboard container never runs commands on the host. It writes a typed change request into a
+spool directory; a root systemd unit on the host validates and executes it, and writes the result
+and an audit line (what changed, when, which login asked) where the container can read but not
+modify them. A failed apply keeps the backup and surfaces pithead's error in the page. Runner
+details and how to turn the channel off:
+[Operations › The config-editor runner](operations.md#the-config-editor-runner).
+
 ## Tips
 
 - **First visit certificate warning.** With `dashboard.secure: true` (the default), Caddy uses a

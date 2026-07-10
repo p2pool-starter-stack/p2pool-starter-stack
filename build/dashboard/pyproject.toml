@@ -87,9 +87,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests: asserts are the idiom (S101); fixtures use dummy creds (S106); broad
-# pytest.raises(Exception) is fine (B017); os.path in async test bodies is harmless (ASYNC240).
-"tests/**" = ["S101", "S106", "B017", "ASYNC240"]
+# Tests: asserts are the idiom (S101); fixtures use dummy creds, both assigned (S105) and
+# passed (S106); broad pytest.raises(Exception) is fine (B017); os.path in async test bodies
+# is harmless (ASYNC240).
+"tests/**" = ["S101", "S105", "S106", "B017", "ASYNC240"]
 # Generated-stub imports are intentionally grouped below the logger + the generation guidance.
 "mining_dashboard/client/tari/tari_client.py" = ["E402"]
 

@@ -2577,6 +2577,154 @@ rc=$?
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
 
+echo "== black-box: config editor / control channel (#33) =="
+# The host-mutation channel end-to-end with docker/sudo stubbed: fail-closed validation, the
+# --dry-run preview, the PITHEAD_CONFIG_FILE override, and the spool runner's preview/commit,
+# rejection, expiry and disabled paths. The systemd units and a real apply run at tier 4.
+CTL="$SANDBOX/ctl"
+mkdir -p "$CTL/build/tari" "$CTL/build/dashboard"
+: >"$CTL/build/dashboard/Dockerfile"
+cp "$STACK" "$CTL/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$CTL/build/tari/"
+cp "$ROOT/docker-compose.yml" "$CTL/docker-compose.yml"
+make_stubs "$CTL/bin"
+mkdir -p "$CTL/data/monero" "$CTL/data/tari" "$CTL/data/p2pool/stats" "$CTL/data/tor" "$CTL/data/dashboard"
+cat >"$CTL/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+ctl_config() { # <pool> <dashboard-extra-json (must start with ,)>
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"%s"}, "dashboard":{"secure":true,"host":"box.lan"%s} }\n' "$WALLET" "$1" "$2"
+}
+CTL_AUTH=',"auth":{"username":"admin","password":"hunter2hunter2"},"control":{"enabled":true}'
+
+# Fail closed: enabling the channel without a dashboard password must abort validation — the
+# channel can change the payout wallet, so it never exists without a login in front of it.
+ctl_config main ',"control":{"enabled":true}' >"$CTL/config.json"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "control without a password rejected" "$?" "1"
+assert_contains "control fail-closed message" "$out" "dashboard.control.enabled"
+
+# Enable with a password: renders the flag + spool dir into .env, creates the spool layout, and
+# every Caddy vhost forwards the authenticated user as X-Auth-User (the audit actor).
+ctl_config main "$CTL_AUTH" >"$CTL/config.json"
+CTL_LOG="$CTL/docker.log"
+: >"$CTL_LOG"
+out="$(cd "$CTL" && DOCKER_LOG="$CTL_LOG" PATH="$CTL/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "control enable applies cleanly" "$?" "0"
+assert_eq "control flag rendered to .env" "$(run_sourced "$CTL" env_get_file "$CTL/.env" DASHBOARD_CONTROL_ENABLED)" "true"
+assert_eq "spool dir rendered to .env" "$(run_sourced "$CTL" env_get_file "$CTL/.env" CONTROL_DIR)" "$CTL/data/control"
+for d in requests staged results audit; do
+    [ -d "$CTL/data/control/$d" ] && ok "spool $d/ created" || bad "spool $d/ created" "missing"
+done
+assert_contains "Caddyfile forwards the auth user as X-Auth-User" "$(cat "$CTL/Caddyfile")" "header_up X-Auth-User"
+line="$(run_sourced "$CTL" describe_change DASHBOARD_CONTROL_ENABLED false true)"
+assert_contains "enabling the channel is flagged DEST" "$line" "DEST"
+
+# --dry-run: prints the preview, changes nothing. Porcelain emits FLAG<TAB>KEY<TAB>MSG lines.
+ctl_config mini "$CTL_AUTH" >"$CTL/config.json"
+: >"$CTL_LOG"
+env_before="$(cat "$CTL/.env")"
+out="$(cd "$CTL" && DOCKER_LOG="$CTL_LOG" PATH="$CTL/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "dry-run exits 0" "$?" "0"
+assert_contains "porcelain emits the changed key" "$out" "$(printf 'INFO\tP2POOL_FLAGS\t')"
+assert_eq "dry-run leaves .env byte-identical" "$(cat "$CTL/.env")" "$env_before"
+assert_not_contains "dry-run touches no container" "$(cat "$CTL_LOG")" "compose up"
+[ -f "$CTL/.env.dryrun" ] && bad "dry-run staging file removed" "left behind" || ok "dry-run staging file removed"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead apply --dry-run 2>&1)"
+assert_contains "human dry-run says nothing was applied" "$out" "Dry run — nothing was applied"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead apply --porcelain 2>&1)"
+assert_rc "--porcelain without --dry-run rejected" "$?" "1"
+
+# PITHEAD_CONFIG_FILE (#33): the runner previews a STAGED copy through the same code path.
+ctl_config main "$CTL_AUTH" >"$CTL/config.json" # config.json itself matches the live .env again
+ctl_config nano "$CTL_AUTH" >"$CTL/alt-config.json"
+out="$(cd "$CTL" && PITHEAD_CONFIG_FILE="$CTL/alt-config.json" PATH="$CTL/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_contains "PITHEAD_CONFIG_FILE previews the override file" "$out" "$(printf 'INFO\tP2POOL_FLAGS\t')"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_not_contains "without the override config.json is unchanged" "$out" "P2POOL_FLAGS"
+
+# Runner: a valid preview request -> staged copy + a 'previewed' result with describe_change rows.
+ID1="11111111-1111-1111-1111-111111111111"
+ctl_config mini "$CTL_AUTH" | jq --arg id "$ID1" '{id: $id, action: "preview", actor: "admin", config: .}' \
+    >"$CTL/data/control/requests/$ID1.json"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead control-run-pending 2>&1)"
+assert_rc "runner drains the spool cleanly" "$?" "0"
+[ -f "$CTL/data/control/results/$ID1.json" ] && ok "preview result written" || bad "preview result written" "missing"
+assert_eq "preview result status" "$(jq -r '.status' "$CTL/data/control/results/$ID1.json")" "previewed"
+assert_contains "preview result carries the changed key" "$(jq -r '.changes[].key' "$CTL/data/control/results/$ID1.json")" "P2POOL_FLAGS"
+assert_eq "preview result carries the actor" "$(jq -r '.actor' "$CTL/data/control/results/$ID1.json")" "admin"
+[ -f "$CTL/data/control/staged/$ID1.json" ] && ok "intent staged host-side" || bad "intent staged host-side" "missing"
+[ -z "$(ls -A "$CTL/data/control/requests")" ] && ok "request claimed out of the spool" || bad "request claimed out of the spool" "still present"
+
+# Runner rejections: invalid config, unknown action, extra keys, malformed id, non-object JSON.
+ID2="22222222-2222-2222-2222-222222222222"
+printf '{"id":"%s","action":"preview","config":{"p2pool":{"pool":"banana"}}}\n' "$ID2" >"$CTL/data/control/requests/$ID2.json"
+(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "invalid staged config rejected" "$(jq -r '.status' "$CTL/data/control/results/$ID2.json")" "rejected"
+[ -f "$CTL/data/control/staged/$ID2.json" ] && bad "rejected preview leaves nothing staged" "staged file present" || ok "rejected preview leaves nothing staged"
+ID3="33333333-3333-3333-3333-333333333333"
+printf '{"id":"%s","action":"frobnicate"}\n' "$ID3" >"$CTL/data/control/requests/$ID3.json"
+printf '{"id":"%s","action":"preview","config":{},"exec":"rm -rf /"}\n' "44444444-4444-4444-4444-444444444444" >"$CTL/data/control/requests/44444444-4444-4444-4444-444444444444.json"
+printf '{"id":"../../etc/evil","action":"preview","config":{}}\n' >"$CTL/data/control/requests/evil.json"
+printf '["not","an","object"]\n' >"$CTL/data/control/requests/55555555-5555-5555-5555-555555555555.json"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead control-run-pending 2>&1)"
+assert_rc "runner survives a batch of hostile requests" "$?" "0"
+assert_eq "unknown action rejected" "$(jq -r '.status' "$CTL/data/control/results/$ID3.json")" "rejected"
+assert_eq "unexpected keys rejected" "$(jq -r '.status' "$CTL/data/control/results/44444444-4444-4444-4444-444444444444.json")" "rejected"
+assert_contains "malformed id dropped without a result" "$out" "malformed id"
+[ -f "$CTL/data/control/results/../../etc/evil.json" ] && bad "traversal id writes nothing" "wrote outside results/" || ok "traversal id writes nothing"
+assert_contains "non-object request dropped" "$out" "not a JSON object"
+
+# Commit without a staged intent -> rejected (a commit can only apply a previewed copy).
+ID6="66666666-6666-6666-6666-666666666666"
+printf '{"id":"%s","action":"commit","intent_id":"99999999-9999-9999-9999-999999999999"}\n' "$ID6" >"$CTL/data/control/requests/$ID6.json"
+(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "commit without a staged intent rejected" "$(jq -r '.error' "$CTL/data/control/results/$ID6.json")" "no staged intent"
+
+# An expired staged intent (>10 min) -> rejected and unstaged.
+ID7="77777777-7777-7777-7777-777777777777"
+ctl_config mini "$CTL_AUTH" >"$CTL/data/control/staged/$ID7.json"
+touch -t 202001010000 "$CTL/data/control/staged/$ID7.json"
+ID8="88888888-8888-8888-8888-888888888888"
+printf '{"id":"%s","action":"commit","intent_id":"%s"}\n' "$ID8" "$ID7" >"$CTL/data/control/requests/$ID8.json"
+(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "expired staged intent rejected" "$(jq -r '.error' "$CTL/data/control/results/$ID8.json")" "expired"
+[ -f "$CTL/data/control/staged/$ID7.json" ] && bad "expired intent unstaged" "still staged" || ok "expired intent unstaged"
+
+# The full preview -> commit path: config.json is backed up and replaced by the STAGED copy,
+# a real apply runs, and the audit trail records the commit with its actor.
+ID9="99999999-1111-1111-1111-999999999999"
+printf '{"id":"%s","action":"commit","intent_id":"%s","actor":"admin"}\n' "$ID9" "$ID1" >"$CTL/data/control/requests/$ID9.json"
+: >"$CTL_LOG"
+out="$(cd "$CTL" && DOCKER_LOG="$CTL_LOG" PATH="$CTL/bin:$PATH" ./pithead control-run-pending 2>&1)"
+assert_eq "commit result status applied" "$(jq -r '.status' "$CTL/data/control/results/$ID9.json")" "applied"
+assert_eq "commit installed the staged config" "$(jq -r '.p2pool.pool' "$CTL/config.json")" "mini"
+assert_eq "commit kept a backup of the old config" "$(jq -r '.p2pool.pool' "$CTL/config.json.bak-control")" "main"
+assert_contains "commit ran a real apply" "$(cat "$CTL_LOG")" "compose up"
+assert_contains "commit propagated to .env" "$(run_sourced "$CTL" env_get_file "$CTL/.env" P2POOL_FLAGS)" "--mini"
+audit_line="$(tail -n 1 "$CTL/data/control/audit/audit.log")"
+assert_eq "audit line records the action" "$(printf '%s' "$audit_line" | jq -r '.action')" "commit"
+assert_eq "audit line records the actor" "$(printf '%s' "$audit_line" | jq -r '.actor')" "admin"
+assert_eq "audit line records the outcome" "$(printf '%s' "$audit_line" | jq -r '.status')" "applied"
+[ -f "$CTL/data/control/staged/$ID1.json" ] && bad "committed intent unstaged" "still staged" || ok "committed intent unstaged"
+
+# Fail-closed runner: with the channel disabled in .env, pending requests are left untouched.
+grep -v '^DASHBOARD_CONTROL_ENABLED=' "$CTL/.env" >"$CTL/.env.tmp"
+echo 'DASHBOARD_CONTROL_ENABLED=false' >>"$CTL/.env.tmp"
+mv "$CTL/.env.tmp" "$CTL/.env"
+IDA="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+printf '{"id":"%s","action":"preview","config":{}}\n' "$IDA" >"$CTL/data/control/requests/$IDA.json"
+out="$(cd "$CTL" && PATH="$CTL/bin:$PATH" ./pithead control-run-pending 2>&1)"
+assert_rc "disabled runner exits 0" "$?" "0"
+assert_contains "disabled runner says so" "$out" "disabled"
+[ -f "$CTL/data/control/requests/$IDA.json" ] && ok "disabled runner leaves requests untouched" || bad "disabled runner leaves requests untouched" "request consumed"
+
 echo "== release: install bundle is free of macOS xattr pax headers (#252) =="
 # Static guard: make_bundle must keep `--no-xattrs` AND the post-bundle xattr assertion, so the
 # fix can't be silently reverted in a future edit.

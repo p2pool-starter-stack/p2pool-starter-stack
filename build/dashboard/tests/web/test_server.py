@@ -1,8 +1,11 @@
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
+from mining_dashboard.service import control_service
 from mining_dashboard.service.storage_service import StateManager
+from mining_dashboard.web import server as server_module
 from mining_dashboard.web.server import _apply_security_headers, create_app
 
 SECURITY_HEADERS = [
@@ -277,3 +280,195 @@ class TestResponsiveLayout:
         css = await (await client.get("/static/dashboard.css")).text()
         assert "brand-host-at" in mjs and "state.host_addr" in mjs
         assert ".brand-host-at" in css and "opacity" in css
+
+
+class TestControlRoutesDisabled:
+    """With dashboard.control.enabled off (the default) the control routes are never
+    registered — the disabled channel has no surface at all (Issue #33)."""
+
+    async def test_all_control_routes_404(self, client):
+        for method, path in (
+            ("GET", "/api/config"),
+            ("POST", "/api/control/preview"),
+            ("POST", "/api/control/commit"),
+            ("GET", "/api/control/result?id=x"),
+            ("GET", "/api/control/audit"),
+        ):
+            resp = await client.request(method, path, headers={"X-Pithead-Control": "1"})
+            assert resp.status == 404, path
+
+
+CONTROL_HEADERS = {"X-Pithead-Control": "1", "X-Auth-User": "admin"}
+
+
+@pytest.fixture
+def control_dirs(tmp_path, monkeypatch):
+    """Enable the channel and point every control path at tmp_path (no container mounts)."""
+    for name in ("requests", "results", "audit"):
+        (tmp_path / name).mkdir()
+    host_cfg = tmp_path / "config.json"
+    host_cfg.write_text(
+        json.dumps(
+            {
+                "monero": {"wallet_address": "4AAA", "node_password": "rpc-secret"},
+                "dashboard": {"auth": {"password": "hunter2hunter2"}},
+            }
+        )
+    )
+    monkeypatch.setattr("mining_dashboard.config.config.DASHBOARD_CONTROL_ENABLED", True)
+    monkeypatch.setattr(control_service, "CONTROL_REQUESTS_DIR", str(tmp_path / "requests"))
+    monkeypatch.setattr(control_service, "CONTROL_RESULTS_DIR", str(tmp_path / "results"))
+    monkeypatch.setattr(control_service, "CONTROL_AUDIT_DIR", str(tmp_path / "audit"))
+    monkeypatch.setattr(control_service, "HOST_CONFIG_PATH", str(host_cfg))
+    monkeypatch.setattr(control_service, "HOST_REFERENCE_PATH", str(tmp_path / "absent.json"))
+    # Don't sit out the full runner-wait in tests; the 202 path is what's under test.
+    monkeypatch.setattr(server_module, "CONTROL_RESULT_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(server_module, "CONTROL_RESULT_POLL_S", 0.05)
+    return tmp_path
+
+
+@pytest.fixture
+async def control_client(aiohttp_client, app_data, control_dirs):
+    sm = StateManager(db_path=":memory:")
+    cli = await aiohttp_client(create_app(sm, app_data))
+    yield cli
+    sm.close()
+
+
+class TestControlRoutesEnabled:
+    async def test_get_config_masks_secrets(self, control_client):
+        resp = await control_client.get("/api/config")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["dashboard"]["auth"]["password"] == {"__secret__": True}
+        assert "hunter2hunter2" not in json.dumps(body)
+        assert "rpc-secret" not in json.dumps(body)
+
+    async def test_post_without_csrf_header_is_403(self, control_client):
+        # A custom-header check: cross-site requests can't add it without a CORS preflight,
+        # which is never granted — and same-site posts without it are refused too.
+        for path in ("/api/control/preview", "/api/control/commit"):
+            resp = await control_client.post(path, json={})
+            assert resp.status == 403, path
+
+    async def test_preview_stages_intent_and_answers_202(self, control_client, control_dirs):
+        # No runner in this tier, so the handler times out to 202 + id for client polling —
+        # and the staged intent in requests/ carries the merged secret, actor and action.
+        resp = await control_client.post(
+            "/api/control/preview",
+            json={"dashboard": {"auth": {"password": {"__secret__": True}}}},
+            headers=CONTROL_HEADERS,
+        )
+        assert resp.status == 202
+        rid = (await resp.json())["id"]
+        intent = json.loads((control_dirs / "requests" / f"{rid}.json").read_text())
+        assert intent["action"] == "preview"
+        assert intent["actor"] == "admin"  # Caddy's X-Auth-User is the audit actor
+        assert intent["config"]["dashboard"]["auth"]["password"] == "hunter2hunter2"
+
+    async def test_preview_answers_result_when_runner_is_fast(self, control_client, control_dirs):
+        # Pre-write the runner's answer for whatever id the handler mints: patch submit's uuid
+        # source is overkill — instead poll-write from a task. Simpler: post, get 202, drop the
+        # result file, poll the result route like the client would.
+        resp = await control_client.post("/api/control/preview", json={}, headers=CONTROL_HEADERS)
+        rid = (await resp.json())["id"]
+        result = {"id": rid, "status": "previewed", "changes": [], "destructive": False}
+        (control_dirs / "results" / f"{rid}.json").write_text(json.dumps(result))
+        polled = await control_client.get(f"/api/control/result?id={rid}")
+        assert polled.status == 200
+        assert (await polled.json())["status"] == "previewed"
+
+    async def test_result_pending_is_202(self, control_client):
+        resp = await control_client.get(
+            "/api/control/result?id=12345678-1234-1234-1234-123456789abc"
+        )
+        assert resp.status == 202
+        assert (await resp.json())["status"] == "pending"
+
+    async def test_result_traversal_id_reads_nothing(self, control_client):
+        resp = await control_client.get("/api/control/result?id=../../etc/passwd")
+        assert resp.status == 202  # treated as "no result", never a file read
+
+    async def test_commit_requires_a_previewed_intent(self, control_client):
+        resp = await control_client.post(
+            "/api/control/commit", json={"intent_id": "nope"}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_commit_stages_intent_for_previewed_id(self, control_client, control_dirs):
+        prev_id = "12345678-1234-1234-1234-123456789abc"
+        (control_dirs / "results" / f"{prev_id}.json").write_text(
+            json.dumps({"id": prev_id, "status": "previewed"})
+        )
+        resp = await control_client.post(
+            "/api/control/commit", json={"intent_id": prev_id}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 202  # no runner in this tier
+        rid = (await resp.json())["id"]
+        intent = json.loads((control_dirs / "requests" / f"{rid}.json").read_text())
+        assert intent == {"id": rid, "action": "commit", "actor": "admin", "intent_id": prev_id}
+
+    async def test_preview_bad_json_is_400(self, control_client):
+        resp = await control_client.post(
+            "/api/control/preview", data="not-json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_audit_serves_the_host_written_trail(self, control_client, control_dirs):
+        (control_dirs / "audit" / "audit.log").write_text(
+            json.dumps({"action": "commit", "status": "applied"}) + "\n"
+        )
+        resp = await control_client.get("/api/control/audit")
+        assert resp.status == 200
+        assert (await resp.json()) == [{"action": "commit", "status": "applied"}]
+
+    async def test_get_config_read_failure_is_sanitized_500(self, control_client, monkeypatch):
+        monkeypatch.setattr(
+            control_service, "HOST_CONFIG_PATH", "/nonexistent/definitely/config.json"
+        )
+        resp = await control_client.get("/api/config")
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())  # no path leak
+
+    async def test_preview_non_object_body_is_400(self, control_client):
+        resp = await control_client.post(
+            "/api/control/preview", json=[1, 2], headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_commit_bad_json_is_400(self, control_client):
+        resp = await control_client.post(
+            "/api/control/commit", data="not-json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_preview_returns_result_the_moment_it_lands(
+        self, control_client, control_dirs, monkeypatch
+    ):
+        # Pin the request id so the runner's answer can be pre-written: the handler's wait loop
+        # must return the result (200), not the 202 fallback.
+        rid = "12345678-1234-1234-1234-123456789abc"
+        monkeypatch.setattr(control_service.uuid, "uuid4", lambda: rid)
+        (control_dirs / "results" / f"{rid}.json").write_text(
+            json.dumps({"id": rid, "status": "previewed", "changes": []})
+        )
+        resp = await control_client.post("/api/control/preview", json={}, headers=CONTROL_HEADERS)
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "previewed"
+
+    async def test_spool_write_failure_is_sanitized_500(
+        self, control_client, control_dirs, monkeypatch
+    ):
+        # An unwritable requests/ mount must surface as a sanitized 500 on both POST routes.
+        monkeypatch.setattr(control_service, "CONTROL_REQUESTS_DIR", "/nonexistent/spool")
+        resp = await control_client.post("/api/control/preview", json={}, headers=CONTROL_HEADERS)
+        assert resp.status == 500
+        prev_id = "12345678-1234-1234-1234-123456789abc"
+        (control_dirs / "results" / f"{prev_id}.json").write_text(
+            json.dumps({"id": prev_id, "status": "previewed"})
+        )
+        resp = await control_client.post(
+            "/api/control/commit", json={"intent_id": prev_id}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())

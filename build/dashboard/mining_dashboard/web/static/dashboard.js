@@ -47,6 +47,9 @@ const ui = {
   sortIndex: null,
   sortAsc: true,
   view: localStorage.getItem("dashboardView") === "advanced" ? "advanced" : "simple",
+  // Which page is shown: the dashboard, or the configuration editor (#33). Not persisted —
+  // a reload always lands on the dashboard.
+  page: "dashboard",
   // Theme is persisted in localStorage so it survives reloads and stack restarts (Issue #43).
   // theme-init.js already applied it to <html> before first paint; we mirror it into the UI
   // state and re-apply on toggle.
@@ -62,13 +65,15 @@ function applyTheme(theme) {
 let state = null; // latest /api/state payload, or null before the first response
 let connected = true; // false after a failed fetch (we keep showing the last snapshot)
 let inflight = false; // guard against overlapping fetches if one is slow
+let controlEnabled = false; // config editor available (#33)? Probed once below.
 
 function rerender() {
   render(
     html`<${App} state=${state} connected=${connected} ui=${ui}
+                     controlEnabled=${controlEnabled}
                      onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme}
                      onZoom=${setZoom} onResetZoom=${resetZoom} onToggleSeries=${toggleSeries}
-                     onAvgWindow=${setAvgWindow} />`,
+                     onAvgWindow=${setAvgWindow} onPage=${setPage} />`,
     root,
   );
 }
@@ -153,6 +158,22 @@ function setAvgWindow(w) {
   localStorage.setItem("dashboardAvgWindow", ui.avg);
   tick();
 }
+
+// Switch between the dashboard and the configuration editor (#33).
+function setPage(page) {
+  ui.page = page;
+  rerender();
+}
+
+// Probe once whether the config editor exists (#33): the control routes are only registered
+// when dashboard.control.enabled is on, so a 404 here simply means the feature is off and the
+// Config button never renders. HEAD keeps the (masked) config body off the wire.
+fetch("/api/config", { method: "HEAD" })
+  .then((res) => {
+    controlEnabled = res.ok;
+    if (controlEnabled) rerender();
+  })
+  .catch(() => {});
 
 applyTheme(ui.theme); // re-assert the (normalized) theme before the first paint
 rerender(); // paint the loading shell immediately

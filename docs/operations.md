@@ -7,7 +7,7 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | Command | Description |
 |---|---|
 | `./pithead setup` | First-time setup (interactive): dependency check, config, Tor provisioning, kernel optimization, and start. `--skip-optimize` skips kernel/GRUB tuning; `--skip-deps` skips the dependency check/install. |
-| `./pithead apply` | Preview and apply `config.json` changes. Warns before disruptive ones and recreates only what changed. `-y` / `--yes` skips the prompt. |
+| `./pithead apply` | Preview and apply `config.json` changes. Warns before disruptive ones and recreates only what changed. `-y` / `--yes` skips the prompt. `--dry-run` validates and prints the change preview without writing anything or touching a container; `--dry-run --porcelain` emits tab-separated `FLAG KEY MSG` lines for tools. |
 | `./pithead up` | Start the stack. |
 | `./pithead down` | Stop the stack. |
 | `./pithead restart` | Restart the stack. |
@@ -18,6 +18,7 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
+| `./pithead control-run-pending` | Process dashboard config-editor requests from the control spool (`./data/control/requests/`). Normally run by the `pithead-control` systemd path unit; a no-op unless `dashboard.control.enabled` is on. See [The config-editor runner](#the-config-editor-runner). |
 | `./pithead help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
@@ -118,6 +119,32 @@ so confirm yours is a `4…`/95-char address first (see [Configuration](configur
 > empty* `data/`: a full re-sync, and the dashboard history is orphaned. If you move the install,
 > move its `data/` with it, or set absolute `data_dir` paths in `config.json` and run `./pithead
 > apply`. `./pithead up` and `./pithead doctor` now warn when a data directory named in `.env` is missing.
+
+---
+
+## The config-editor runner
+
+The host side of the dashboard's [configuration editor](dashboard.md#the-configuration-editor).
+Only present when `dashboard.control.enabled: true`; `setup`, `apply` and `upgrade` install or
+remove it to match the flag.
+
+Two systemd units, written to `/etc/systemd/system/`:
+
+- **`pithead-control.path`** watches `./data/control/requests/` for `*.json` files.
+- **`pithead-control.service`** (oneshot, root) runs `pithead control-run-pending` when one lands.
+
+The runner is the trust boundary. The dashboard container can only *write requests* into
+`requests/` (its one writable spool mount); the runner claims each request out of that directory
+before reading it, rejects anything but a typed preview/commit intent, re-validates the proposed
+config with `pithead apply --dry-run` (the same parser a manual apply uses), and executes exactly
+`pithead apply -y` on commit — never a command the container composed. Results land in `results/`
+and an append-only trail in `audit/audit.log` (what changed, when, which dashboard login asked);
+the container mounts both read-only, so it can read but not forge them. Each commit also leaves
+the previous config as `config.json.bak-control`.
+
+Turn the channel off by setting `dashboard.control.enabled: false` and running `./pithead apply`:
+the units are disabled and removed, and the dashboard's control routes disappear (404). On a host
+without systemd there is no runner; process requests manually with `./pithead control-run-pending`.
 
 ---
 

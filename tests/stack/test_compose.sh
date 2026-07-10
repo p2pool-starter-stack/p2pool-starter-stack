@@ -164,6 +164,19 @@ jq_assert "compose project name is pinned to pithead" '.name == "pithead"'
 # offender in its own cgroup instead of the host OOM-killer reaching monerod (the revenue service).
 jq_assert "memory ceiling (mem_limit) on every service (#132)" '[.services[] | select(.mem_limit != null)] | length >= 9'
 
+# Config-editor spool mounts (#33): the rw/ro split IS the trust boundary. The dashboard may
+# write ONLY requests/; results/, audit/ and the two config views are read-only, and staged/
+# (the host-side copy a commit applies) is not mounted at all — so the container can ask, but
+# can never forge a result, alter a staged intent, or rewrite the audit log.
+jq_assert "control requests/ is the dashboard's only writable spool mount (#33)" \
+    '.services.dashboard.volumes | any((.target == "/control/requests") and (.read_only != true))'
+jq_assert "control results/, audit/ and config views are read-only (#33)" \
+    '.services.dashboard.volumes | map(select(.target == "/control/results" or .target == "/control/audit" or .target == "/host-config/config.json" or .target == "/host-config/config.reference.json")) | (length == 4) and all(.read_only == true)'
+jq_assert "control staged/ is never mounted in the dashboard (#33)" \
+    '.services.dashboard.volumes | all(.target != "/control/staged")'
+jq_assert "control channel defaults off in the dashboard env (#33)" \
+    '.services.dashboard.environment["DASHBOARD_CONTROL_ENABLED"] == "false"'
+
 # Fail closed on the xmrig-proxy control-API token (#153). The HTTP API is writable
 # (--http-no-restricted, required for XvB pool-switching) and reachable on the bridge + host, so it
 # must ALWAYS be authenticated. The command requires a non-empty token; an empty/stale .env value

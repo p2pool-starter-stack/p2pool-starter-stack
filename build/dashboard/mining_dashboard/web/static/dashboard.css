@@ -971,3 +971,90 @@ tr:last-child td {
   color: var(--text-muted);
   margin-bottom: 0.4rem;
 }
+
+/* ---- Configuration editor (Issue #33) --------------------------------------------------
+   Form generated from /api/config; Save opens the runner's change preview in a modal. */
+.config-controls {
+  display: flex;
+  justify-content: space-between;
+}
+.config-form .config-section h4 {
+  margin: 0 0 0.6rem;
+  text-transform: capitalize;
+}
+.config-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.25rem 0;
+}
+.config-row label {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+.config-row input[type="text"],
+.config-row input[type="password"],
+.config-row input[type="number"],
+.config-row select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.85em;
+  width: 100%;
+  min-width: 0;
+}
+.config-row input[type="checkbox"] {
+  justify-self: start;
+}
+.config-warning {
+  grid-column: 1 / -1;
+  color: var(--warn);
+  font-size: 0.8em;
+  margin: 0;
+}
+.config-applied {
+  color: var(--ok);
+  text-align: center;
+  padding: 0.5rem;
+}
+.btn-danger {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+/* Change-preview modal: the runner's describe_change lines, DEST rows as warnings. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  max-width: 640px;
+  width: calc(100% - 2rem);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.change-list {
+  list-style: none;
+  padding: 0;
+}
+.change-list li {
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.change-dest {
+  color: var(--warn);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}

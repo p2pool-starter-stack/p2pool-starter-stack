@@ -201,6 +201,25 @@ TARI_REQUIRED = os.environ.get("TARI_REQUIRED", "true").strip().lower() == "true
 # Container the dashboard stops/starts to reject/readmit workers on a monerod/Tari outage.
 REJECT_WORKERS_CONTAINER = os.environ.get("REJECT_WORKERS_CONTAINER", "xmrig-proxy")
 
+# --- Config editor / host-mutation channel (#33) ---
+# Off by default (fail-closed): with the flag false the control routes are never registered, so
+# the channel does not exist. When on, the dashboard writes typed intents into the requests/
+# spool (its ONLY writable control dir; see docker-compose.yml) and the host-side runner
+# (`pithead control-run-pending`, a root systemd path unit) validates and applies them. Results
+# and the audit trail arrive through read-only mounts, so the container can never forge either.
+# The dir paths are env-overridable for tests only; compose pins the container paths.
+DASHBOARD_CONTROL_ENABLED = (
+    os.environ.get("DASHBOARD_CONTROL_ENABLED", "false").strip().lower() == "true"
+)
+CONTROL_REQUESTS_DIR = os.environ.get("CONTROL_REQUESTS_DIR", "/control/requests")
+CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
+CONTROL_AUDIT_DIR = os.environ.get("CONTROL_AUDIT_DIR", "/control/audit")
+# Read-only view of the host's config.json (form prefill; secrets masked before serving) and of
+# config.reference.json (the full schema with defaults, merged under the host config so the
+# editor's form covers every key, not just the ones the operator has set).
+HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config.reference.json")
+
 # Containers held stopped until the required chain(s) finish syncing, then started together
 # (p2pool first so the proxy has something to connect to). Comma-separated; order preserved.
 # The hold is a one-way latch: after the first release we never re-hold (a later node blip is

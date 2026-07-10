@@ -1,15 +1,27 @@
+import asyncio
 import logging
 import mimetypes
 import os
 
 from aiohttp import web
 
+from mining_dashboard.config import config as app_config
+from mining_dashboard.service import control_service
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
 from mining_dashboard.web.views import build_state, canonical_window, get_shell_html, parse_window
 
 logger = logging.getLogger("WebServer")
+
+# Config editor (#33): every mutating control POST must carry this custom header. A custom
+# header forces a CORS preflight on any cross-site request, which is never granted (same-origin
+# only, consistent with the self-only CSP below) — a cheap CSRF guard with no session state.
+CONTROL_CSRF_HEADER = "X-Pithead-Control"
+# How long a preview/commit handler waits for the host-side runner's result before answering
+# 202 (the client then polls GET /api/control/result). Module-level so tests can shrink it.
+CONTROL_RESULT_TIMEOUT_S = 30
+CONTROL_RESULT_POLL_S = 0.5
 
 # Slim/minimal containers (the production image is python:3.11-slim) often lack
 # /etc/mime.types, so ES modules (.mjs) — and on some setups .js — would be served as
@@ -81,6 +93,107 @@ async def handle_metrics(request):
         return web.Response(text="Failed to render metrics.", status=500, content_type="text/plain")
 
 
+# --- Config editor / host-mutation channel routes (#33) ---
+# Registered ONLY when DASHBOARD_CONTROL_ENABLED is true (create_app below) — when the channel
+# is off these paths 404 like any unknown route, so the disabled channel has no surface at all.
+# The dashboard side only stages typed intents and polls results; validation and execution
+# happen host-side (`pithead control-run-pending`). See docs/dashboard.md and SECURITY.md.
+
+
+def _control_forbidden(request):
+    """The CSRF guard for mutating control requests; None when the request may proceed."""
+    if request.headers.get(CONTROL_CSRF_HEADER) != "1":
+        return web.json_response({"error": f"Missing {CONTROL_CSRF_HEADER} header."}, status=403)
+    return None
+
+
+def _actor(request):
+    """The audit actor: Caddy sets X-Auth-User to the authenticated basic_auth username and
+    always overwrites a client-sent value, so this is trustworthy (empty when auth is off,
+    which pithead refuses to combine with the control channel anyway)."""
+    return request.headers.get("X-Auth-User", "") or "unknown"
+
+
+async def _await_result(request_id):
+    """Poll the read-only results mount for the runner's answer; 202 + id on timeout so the
+    client keeps polling GET /api/control/result — a commit can recreate this very container,
+    so the result must be retrievable after a restart (it is: results/ persists on the host)."""
+    deadline = asyncio.get_event_loop().time() + CONTROL_RESULT_TIMEOUT_S
+    while asyncio.get_event_loop().time() < deadline:
+        res = control_service.result(request_id)
+        if res is not None:
+            return web.json_response(res)
+        await asyncio.sleep(CONTROL_RESULT_POLL_S)
+    return web.json_response({"id": request_id, "status": "pending"}, status=202)
+
+
+async def handle_get_config(request):
+    """The host's config.json for form prefill, with every secret leaf masked to the
+    ``__secret__`` sentinel — raw secrets never reach the browser."""
+    try:
+        return web.json_response(control_service.read_config())
+    except Exception:
+        logger.exception("Error reading the host config")
+        return web.json_response({"error": "Failed to read the host config."}, status=500)
+
+
+async def handle_control_preview(request):
+    """Stage a proposed config as a typed 'preview' intent for the host runner to validate."""
+    forbidden = _control_forbidden(request)
+    if forbidden:
+        return forbidden
+    try:
+        proposed = await request.json()
+    except ValueError:
+        return web.json_response({"error": "Request body is not valid JSON."}, status=400)
+    if not isinstance(proposed, dict):
+        return web.json_response({"error": "Expected a config object."}, status=400)
+    try:
+        merged = control_service.merge_secrets(proposed)
+        rid = control_service.submit("preview", config=merged, actor=_actor(request))
+    except Exception:
+        logger.exception("Error submitting a preview intent")
+        return web.json_response({"error": "Failed to submit the preview."}, status=500)
+    return await _await_result(rid)
+
+
+async def handle_control_commit(request):
+    """Ask the host runner to apply a previously previewed intent (by its id). The runner
+    only ever applies its own host-side staged copy — the config can't be swapped here."""
+    forbidden = _control_forbidden(request)
+    if forbidden:
+        return forbidden
+    try:
+        body = await request.json()
+    except ValueError:
+        return web.json_response({"error": "Request body is not valid JSON."}, status=400)
+    intent_id = body.get("intent_id") if isinstance(body, dict) else None
+    if not isinstance(intent_id, str) or control_service.result(intent_id) is None:
+        # No previewed result for that id => nothing staged worth committing (also rejects
+        # malformed ids before they go anywhere near a filename).
+        return web.json_response({"error": "Unknown intent_id — preview first."}, status=400)
+    try:
+        rid = control_service.submit("commit", intent_id=intent_id, actor=_actor(request))
+    except Exception:
+        logger.exception("Error submitting a commit intent")
+        return web.json_response({"error": "Failed to submit the commit."}, status=500)
+    return await _await_result(rid)
+
+
+async def handle_control_result(request):
+    """Poll one runner result by request id; 202 while it's still pending."""
+    rid = request.query.get("id", "")
+    res = control_service.result(rid)
+    if res is None:
+        return web.json_response({"id": rid, "status": "pending"}, status=202)
+    return web.json_response(res)
+
+
+async def handle_control_audit(request):
+    """The host-written audit trail (read-only mount) — what changed, when, approved by whom."""
+    return web.json_response(control_service.read_audit())
+
+
 def _apply_security_headers(response):
     """Baseline hardening headers. CSP is self-only: HTML shell, CSS/JS (the vendored Preact,
     htm and Chart.js, plus the dashboard's own modules) and the JSON API are all same-origin,
@@ -127,6 +240,19 @@ def create_app(state_manager, latest_data_ref):
             web.get("/metrics", handle_metrics),
         ]
     )
+
+    # Config editor (#33): the control routes exist ONLY when the channel is enabled — off
+    # (the default) means 404, not 403, so the disabled channel has no probeable surface.
+    if app_config.DASHBOARD_CONTROL_ENABLED:
+        app.add_routes(
+            [
+                web.get("/api/config", handle_get_config),
+                web.post("/api/control/preview", handle_control_preview),
+                web.post("/api/control/commit", handle_control_commit),
+                web.get("/api/control/result", handle_control_result),
+                web.get("/api/control/audit", handle_control_audit),
+            ]
+        )
 
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.router.add_static("/static", static_path)

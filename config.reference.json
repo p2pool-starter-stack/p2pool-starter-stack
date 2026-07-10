@@ -65,6 +65,9 @@
             "username": "admin",
             "password": ""
         },
+        "control": {
+            "enabled": false
+        },
         "onion": {
             "enabled": false,
             "client_auth": true

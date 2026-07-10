@@ -43,5 +43,12 @@ The stack's defaults:
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.
 - Tor for all node networking.
+- Host mutation only through the control runner: the dashboard container never runs commands on
+  the host. With the opt-in config editor (`dashboard.control.enabled`, default off, refused
+  without a dashboard password), the container can only *write typed change requests* into a
+  spool directory; a root systemd unit re-validates each request with pithead's own config parser
+  and runs exactly `pithead apply` — no shell strings cross the boundary. Results and the audit
+  log are host-written and mounted read-only, so a compromised dashboard can ask but cannot forge
+  an outcome, alter a staged request, or rewrite the trail.
 
 Report any gap in these.

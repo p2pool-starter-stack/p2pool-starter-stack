@@ -44,7 +44,10 @@ on_err() {
 # Detect Operating System
 OS_TYPE="$(uname -s)"
 readonly OS_TYPE
-readonly CONFIG_FILE="config.json"
+# PITHEAD_CONFIG_FILE (#33): lets the control runner validate/preview a STAGED config copy with
+# the exact same parser the CLI uses (validation parity, not a second validator). Defaults to the
+# checkout's config.json for every normal invocation.
+readonly CONFIG_FILE="${PITHEAD_CONFIG_FILE:-config.json}"
 readonly ENV_FILE=".env"
 readonly REAL_USER="${SUDO_USER:-$USER}"
 
@@ -70,9 +73,9 @@ if [ "$_STACK_SOURCED" = "0" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     cd "$SCRIPT_DIR" || error "Cannot enter the script directory: $SCRIPT_DIR"
 
-    # Friendly message on unexpected failure; always clean up the apply staging file.
+    # Friendly message on unexpected failure; always clean up the apply staging files.
     trap on_err ERR
-    trap 'rm -f "${ENV_FILE}.new" 2>/dev/null || true' EXIT
+    trap 'rm -f "${ENV_FILE}.new" "${ENV_FILE}.dryrun" 2>/dev/null || true' EXIT
 fi
 
 # --- Lifecycle Helpers ---
@@ -299,6 +302,7 @@ stack_upgrade() {
     mv "${ENV_FILE}.new" "$ENV_FILE"
     inject_service_configs
     generate_caddyfile
+    provision_control_runner # #33: install/remove the config-editor runner units
     log "Re-rendered generated config for the current release."
     migrate_compose_project
     # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
@@ -1106,6 +1110,10 @@ Setup & configuration:
                             change, warns before anything disruptive, then recreates only
                             the containers that need it. Use this after you edit config.json.
                               -y, --yes        apply without the confirmation prompt.
+                              --dry-run        validate and print the change preview only;
+                                               nothing is written and no container is touched.
+                              --porcelain      with --dry-run: tab-separated FLAG/KEY/MSG
+                                               lines for tools (the #33 control runner).
 
 Lifecycle:
   up                        Start the stack.
@@ -1139,6 +1147,10 @@ Maintenance:
                             dashboard's database from a backup archive (prompts before
                             overwriting; fixes Tor ownership).
                               -y, --yes        restore without the confirmation prompt.
+
+  control-run-pending       Process dashboard config-editor requests from the control spool
+                            (#33). Normally run by the pithead-control systemd path unit;
+                            no-op unless dashboard.control.enabled is on.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion (#343) —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -2100,6 +2112,18 @@ parse_and_validate_config() {
             ;;
         esac
     fi
+
+    # Dashboard config editor / host-mutation channel (#33). Opt-in, default off. FAIL CLOSED: the
+    # channel can change the payout wallet and run `pithead apply` on the host, so it must never
+    # exist without a dashboard login in front of it (mirrors the onion-without-password refusal).
+    DASHBOARD_CONTROL_ENABLED=$(normalize_bool "$(config_bool '.dashboard.control.enabled' false)")
+    if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ -z "$dash_pw" ]; then
+        error "dashboard.control.enabled is true but dashboard.auth.password is empty. The config editor can change the payout wallet and run 'pithead apply' on this host — it must sit behind a login. Set dashboard.auth.password and re-run."
+    fi
+    # Spool directory for the control channel (#33). Fixed under ./data (like CLEARNET_STATE_DIR):
+    # it is transport plumbing, not a user-facing data dir. requests/ is the only container-writable
+    # part; staged/, results/ and audit/ are host-side only (mounted :ro or not at all).
+    CONTROL_DIR="$PWD/data/control"
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
@@ -2138,6 +2162,21 @@ prepare_directories() {
     # World-writable so the dashboard container (its own uid) can drop the clearnet auto-transition
     # marker (#234) while monerod/tari mount it read-only. It holds only non-secret state markers.
     sudo chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || true
+    ensure_control_dirs
+}
+
+# Spool layout for the dashboard config editor (#33). The rw/ro mount split in docker-compose.yml is
+# the trust boundary: the dashboard container can only WRITE requests/ (mounted rw); staged/,
+# results/ and audit/ are written by the host-side runner only (results/ and audit/ are mounted :ro,
+# staged/ isn't mounted at all) — so the container can ask, but can never forge a result, alter a
+# staged intent, or rewrite the audit log. requests/ is chowned to the container uid so the non-root
+# dashboard (#255, cap_drop ALL) can actually write it; the rest stays owned by whoever runs pithead.
+ensure_control_dirs() {
+    [ -n "${CONTROL_DIR:-}" ] || return 0
+    mkdir -p "$CONTROL_DIR/requests" "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
+    chmod 755 "$CONTROL_DIR" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
+    ensure_owner "$CONTROL_DIR/requests" "$APP_UID" "$APP_GID"
+    return 0
 }
 
 # List "*_DATA_DIR=path" lines from .env whose directory is MISSING — the signature of a relocated
@@ -2190,6 +2229,7 @@ ensure_directories() {
         [ -d "$d" ] || { mkdir -p "$d" && created+=("$d"); }
     done
     mkdir -p "$P2POOL_DIR/stats"
+    ensure_control_dirs
     ensure_owner "$TOR_DATA_DIR" 100 101
     ensure_owner "$MONERO_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$TARI_DIR" "$APP_UID" "$APP_GID"
@@ -2700,6 +2740,8 @@ MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
+DASHBOARD_CONTROL_ENABLED=$DASHBOARD_CONTROL_ENABLED
+CONTROL_DIR=$CONTROL_DIR
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
 DASHBOARD_ONION_CLIENT_AUTH=$DASHBOARD_ONION_CLIENT_AUTH
 DASHBOARD_TZ=$DASHBOARD_TZ
@@ -2764,6 +2806,9 @@ generate_caddyfile() {
     # Optional basic_auth block (#8), rendered only when a dashboard password is configured. The
     # hash is decoded from its base64 .env form back to the raw bcrypt string Caddy expects; it
     # protects every route, so the dashboard prompts for login before anything is served.
+    # Every vhost also sets header_up X-Auth-User to the authenticated basic_auth username (#33):
+    # the config editor's audit `actor`. header_up SETS the header, so a browser-supplied
+    # X-Auth-User is always overwritten (empty when auth is off) — it can't be spoofed.
     local auth=""
     if [ -n "$DASHBOARD_AUTH_HASH_B64" ]; then
         local hash
@@ -2776,7 +2821,9 @@ generate_caddyfile() {
 https://$HOST_IP {
     tls internal
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
     else
@@ -2784,7 +2831,9 @@ EOF
         cat <<EOF >"Caddyfile"
 http://$HOST_IP {
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
     fi
@@ -2803,7 +2852,9 @@ EOF
 
 http://${NETWORK_PREFIX}.1 {
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
         # Also serve HTTPS on the .onion name so Tor Browser's default http->https upgrade lands on a
@@ -2820,7 +2871,9 @@ EOF
 https://${DASHBOARD_ONION} {
     tls internal
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
         fi
@@ -3062,6 +3115,222 @@ preflight_resources() {
 
 # --- Top-level Commands ---
 
+# --- Dashboard config editor: host-side control runner (#33) ---
+#
+# The canonical host-mutation channel (#59/#77 build on it; see SECURITY.md). The dashboard
+# container drops a TYPED JSON intent into $CONTROL_DIR/requests/ — the only spool dir it can
+# write — and systemd's pithead-control.path fires this runner. The runner re-validates the
+# intent with pithead's own parser and runs exactly `apply --dry-run --porcelain` (preview) or
+# `apply -y` (commit). No shell string from the container is ever executed; the container never
+# gets a generic "run this" primitive.
+
+# Approval gate for a commit. Today the dashboard's explicit confirm is the gate and this always
+# allows; the #338 out-of-band Telegram approve (deny-on-timeout) plugs in here.
+control_approval_gate() { # <staged-intent-file>
+    return 0
+}
+
+# Write a result the dashboard polls (results/ is mounted :ro in the container, so only the host
+# can write one). Temp+rename so a poller never reads a half-written file.
+control_write_result() { # <id> <json>
+    printf '%s\n' "$2" >"$CONTROL_DIR/results/.$1.tmp" &&
+        mv "$CONTROL_DIR/results/.$1.tmp" "$CONTROL_DIR/results/$1.json"
+}
+
+# One rejection result, uniform shape. Args: <id> <ts> <error message>.
+control_reject() {
+    control_write_result "$1" "$(jq -n --arg id "$1" --arg ts "$2" --arg err "$3" \
+        '{id: $id, status: "rejected", error: $err, ts: $ts}')"
+}
+
+# Append one JSON line to the host-side audit log (mounted :ro in the container — the dashboard
+# can read the trail but never rewrite it).
+control_audit() { # <json-line>
+    printf '%s\n' "$1" >>"$CONTROL_DIR/audit/audit.log"
+}
+
+# Validate + preview a staged config copy. The staged file is the HOST-SIDE copy the later commit
+# applies — a tampered second request can't swap the config between preview and commit.
+control_preview() { # <request-file> <id> <actor> <ts>
+    local f="$1" id="$2" actor="$3" ts="$4" staged out rc changes
+    if ! jq -e '.config | type == "object"' "$f" >/dev/null 2>&1; then
+        control_reject "$id" "$ts" "preview request carries no config object"
+        return 0
+    fi
+    staged="$CONTROL_DIR/staged/$id.json"
+    jq '.config' "$f" >"$staged"
+    chmod 600 "$staged"
+    # Validation PARITY, not a second validator: the exact parse/render/describe path a real apply
+    # runs, pointed at the staged copy via PITHEAD_CONFIG_FILE. Nothing on the host is touched.
+    rc=0
+    out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        rm -f "$staged"
+        control_reject "$id" "$ts" "$(printf '%s\n' "$out" | tail -n 5)"
+        return 0
+    fi
+    # `|| true`: zero changes is a valid preview (grep must not abort the runner via pipefail).
+    changes=$(printf '%s\n' "$out" | { grep -E $'^(INFO|DEST)\t' || true; } |
+        jq -Rn '[inputs | split("\t") | {flag: .[0], key: .[1], msg: .[2]}]')
+    control_write_result "$id" "$(jq -n --arg id "$id" --arg ts "$ts" --arg actor "$actor" --argjson changes "$changes" \
+        '{id: $id, status: "previewed", changes: $changes,
+          destructive: ([$changes[] | select(.flag == "DEST")] | length > 0), actor: $actor, ts: $ts}')"
+}
+
+# Commit a previously previewed intent: back up config.json, install the staged copy, run a real
+# `apply -y`. On failure the backup is kept (named in the result) and apply's own
+# .apply-incomplete marker makes the next apply retry the recreate.
+control_commit() { # <request-file> <id> <actor> <ts>
+    local f="$1" id="$2" actor="$3" ts="$4" intent_id staged out rc now mtime backup status
+    intent_id=$(jq -r '.intent_id // empty' "$f")
+    if ! printf '%s' "$intent_id" | grep -qE '^[0-9a-f-]{36}$'; then
+        control_reject "$id" "$ts" "commit carries no valid intent_id"
+        return 0
+    fi
+    staged="$CONTROL_DIR/staged/$intent_id.json"
+    if [ ! -f "$staged" ]; then
+        control_reject "$id" "$ts" "no staged intent $intent_id — run a preview first"
+        return 0
+    fi
+    # A staged intent is commit-able for 10 minutes; past that the operator previews again, so a
+    # long-forgotten intent can't fire out of context.
+    now=$(date +%s)
+    mtime=$(stat -c %Y "$staged" 2>/dev/null || stat -f %m "$staged" 2>/dev/null || echo 0)
+    if [ $((now - mtime)) -gt 600 ]; then
+        rm -f "$staged"
+        control_reject "$id" "$ts" "staged intent expired (older than 10 minutes) — preview again"
+        return 0
+    fi
+    if ! control_approval_gate "$staged"; then
+        rm -f "$staged"
+        control_reject "$id" "$ts" "commit denied by the approval gate"
+        return 0
+    fi
+    backup="${CONFIG_FILE}.bak-control"
+    cp "$CONFIG_FILE" "$backup"
+    cp "$staged" "$CONFIG_FILE"
+    rm -f "$staged"
+    rc=0
+    out=$("$0" apply -y 2>&1) || rc=$?
+    status=$([ "$rc" -eq 0 ] && echo applied || echo failed)
+    if [ "$rc" -eq 0 ]; then
+        control_write_result "$id" "$(jq -n --arg id "$id" --arg ts "$ts" --arg actor "$actor" \
+            '{id: $id, status: "applied", actor: $actor, ts: $ts}')"
+    else
+        control_write_result "$id" "$(jq -n --arg id "$id" --arg ts "$ts" --arg actor "$actor" \
+            --arg err "$(printf '%s\n' "$out" | tail -n 5)" --arg backup "$backup" \
+            '{id: $id, status: "failed", error: $err, backup: $backup, actor: $actor, ts: $ts}')"
+    fi
+    control_audit "$(jq -cn --arg ts "$ts" --arg actor "$actor" --arg id "$id" \
+        --arg intent_id "$intent_id" --arg status "$status" \
+        '{ts: $ts, actor: $actor, action: "commit", id: $id, intent_id: $intent_id, status: $status}')"
+}
+
+# Dispatch one claimed request. Shape-checked with jq before anything else: only known keys, a
+# filename-safe uuid id (it becomes the results/ filename), a known action.
+control_process_request() { # <claimed request file>
+    local f="$1" id action actor ts
+    ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    # A symlink dropped in requests/ could point the root runner at any host file — refuse it.
+    if [ -L "$f" ] || [ ! -f "$f" ]; then
+        warn "control: refusing a non-regular request file (${f##*/})."
+        return 0
+    fi
+    if ! jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
+        warn "control: request ${f##*/} is not a JSON object — dropped."
+        return 0
+    fi
+    id=$(jq -r '.id // empty' "$f")
+    action=$(jq -r '.action // empty' "$f")
+    actor=$(jq -r '.actor // "unknown"' "$f")
+    if ! printf '%s' "$id" | grep -qE '^[0-9a-f-]{36}$'; then
+        warn "control: request ${f##*/} has a malformed id — dropped (no result can be keyed to it)."
+        return 0
+    fi
+    if jq -e '(keys - ["id", "action", "config", "intent_id", "actor"]) | length > 0' "$f" >/dev/null 2>&1; then
+        control_reject "$id" "$ts" "unexpected keys in request"
+        return 0
+    fi
+    case "$action" in
+    preview) control_preview "$f" "$id" "$actor" "$ts" ;;
+    commit) control_commit "$f" "$id" "$actor" "$ts" ;;
+    *) control_reject "$id" "$ts" "unknown action" ;;
+    esac
+}
+
+# `control-run-pending`: drain the request spool, oldest first. Fail-closed: does nothing unless
+# the rendered .env says the channel is on. Each request is CLAIMED (moved out of the
+# container-writable dir) before it is read, so the container can never mutate or re-trigger a
+# request the runner has started on.
+control_run_pending() {
+    if [ "$(env_get DASHBOARD_CONTROL_ENABLED 2>/dev/null)" != "true" ]; then
+        log "dashboard.control is disabled — nothing to run."
+        return 0
+    fi
+    CONTROL_DIR="$PWD/data/control"
+    [ -d "$CONTROL_DIR/requests" ] || return 0
+    mkdir -p "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
+    local req claimed
+    # ls -tr = oldest first (uuid names carry no order). Hostile names are harmless here: the
+    # claim mv either fails (loop continues) or the shape check drops the file unread.
+    # shellcheck disable=SC2010
+    while IFS= read -r req; do
+        [ -n "$req" ] || continue
+        claimed="$CONTROL_DIR/staged/.claim.$$.${req##*/}"
+        mv "$CONTROL_DIR/requests/$req" "$claimed" 2>/dev/null || continue
+        control_process_request "$claimed"
+        rm -f "$claimed"
+    done < <(ls -1tr "$CONTROL_DIR/requests" 2>/dev/null | grep -E '\.json$')
+    return 0
+}
+
+# systemd trigger for the control runner (#33): a path unit fires the oneshot service whenever a
+# request lands in the spool. Called from setup/apply/upgrade (like provision_onion_client_auth)
+# so the units always track dashboard.control.enabled. Root because apply needs iptables/chown;
+# NOT parameterisable — fixed ExecStart, no environment crosses from the container.
+provision_control_runner() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ] ||
+            warn "systemd not found — the config-editor runner can't be installed. Process requests manually with '$0 control-run-pending'."
+        return 0
+    fi
+    local path_unit=/etc/systemd/system/pithead-control.path
+    local svc_unit=/etc/systemd/system/pithead-control.service
+    if [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ]; then
+        # Disabled: remove any units a previous enable left behind.
+        if [ -f "$path_unit" ] || [ -f "$svc_unit" ]; then
+            log "Removing the config-editor runner units (dashboard.control.enabled is off)..."
+            sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
+            sudo rm -f "$path_unit" "$svc_unit"
+            sudo systemctl daemon-reload
+        fi
+        return 0
+    fi
+    log "Installing the config-editor runner units (pithead-control.path/.service)..."
+    sudo tee "$path_unit" >/dev/null <<EOF
+[Unit]
+Description=Watch the pithead control spool for dashboard config-editor requests (#33)
+
+[Path]
+PathExistsGlob=$CONTROL_DIR/requests/*.json
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo tee "$svc_unit" >/dev/null <<EOF
+[Unit]
+Description=pithead control runner — validate and apply dashboard config-editor requests (#33)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$PWD
+ExecStart=$PWD/pithead control-run-pending
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now pithead-control.path
+}
+
 setup() {
     if is_deployed; then
         warn "A previous deployment was detected."
@@ -3089,6 +3358,7 @@ setup() {
     inject_service_configs
     optimize_kernel
     generate_caddyfile
+    provision_control_runner # #33: install/remove the config-editor runner units
 
     log "Deployment preparation complete!"
     if [ "$REBOOT_REQUIRED" = true ]; then
@@ -3215,6 +3485,18 @@ describe_change() {
         # carries the user-facing message. Emit no message so the preview shows one line, not two.
         msg=""
         ;;
+    DASHBOARD_CONTROL_ENABLED)
+        if [ "$new" == "true" ]; then
+            flag=DEST
+            msg="Dashboard config editor ENABLED (#33) — the dashboard can now stage config changes for the host-side runner to validate and apply; the dashboard container is recreated."
+        else
+            msg="Dashboard config editor DISABLED (#33) — the runner units are removed and the dashboard can no longer stage config changes; the dashboard container is recreated."
+        fi
+        ;;
+    CONTROL_DIR)
+        # Fixed under ./data; only ever changes when the checkout moves. Keep the preview quiet.
+        msg=""
+        ;;
     DASHBOARD_ONION_ENABLED)
         flag=DEST
         if [ "$new" == "true" ]; then
@@ -3294,13 +3576,20 @@ describe_change() {
 }
 
 apply() {
-    local assume_yes=0 arg
+    local assume_yes=0 dry_run=0 porcelain=0 arg
     for arg in "$@"; do
         case "$arg" in
         -y | --yes) assume_yes=1 ;;
+        # --dry-run (#33): validate + render + diff and PRINT the change preview, then stop — no
+        # .env commit, no container touched. --porcelain emits raw "FLAG<TAB>KEY<TAB>MSG" lines
+        # for the control runner to parse; both share the exact validate/render/describe path a
+        # real apply runs, so the preview can never disagree with what apply would do.
+        --dry-run) dry_run=1 ;;
+        --porcelain) porcelain=1 ;;
         *) error "Unknown option for apply: $arg. Run '$0 help'." ;;
         esac
     done
+    [ "$porcelain" -eq 1 ] && [ "$dry_run" -eq 0 ] && error "--porcelain only makes sense with --dry-run."
 
     require_env
     ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one
@@ -3310,19 +3599,50 @@ apply() {
         error "Stack is not fully provisioned. Run '$0 setup' first."
     fi
 
-    ensure_directories
+    # A dry run must leave the host untouched, so skip the data-dir create/chown pass.
+    [ "$dry_run" -eq 1 ] || ensure_directories
     resolve_dashboard_host # non-interactive
     DEPLOYMENT_COMPLETED=true
 
     # Render the new config to a staging file and diff it against the live .env, so we can
     # preview the changes and confirm anything disruptive before touching running containers.
+    # Dry runs use their own staging name so a concurrent real apply's file is never clobbered.
     local newenv="${ENV_FILE}.new"
+    [ "$dry_run" -eq 1 ] && newenv="${ENV_FILE}.dryrun"
     render_env "$newenv"
 
     local changed=() key
     while IFS= read -r key; do
         [ -n "$key" ] && changed+=("$key")
     done < <(env_changed_keys "$ENV_FILE" "$newenv")
+
+    if [ "$dry_run" -eq 1 ]; then
+        local line flag msg old new
+        for key in "${changed[@]}"; do
+            old=$(env_get_file "$ENV_FILE" "$key")
+            new=$(env_get_file "$newenv" "$key")
+            line=$(describe_change "$key" "$old" "$new")
+            flag=${line%%$'\t'*}
+            msg=${line#*$'\t'}
+            [ -z "$msg" ] && continue # internal-only keys stay silent, like a real apply
+            if [ "$porcelain" -eq 1 ]; then
+                printf '%s\t%s\t%s\n' "$flag" "$key" "$msg"
+            elif [ "$flag" == "DEST" ]; then
+                echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
+            else
+                echo "  • ${msg}"
+            fi
+        done
+        rm -f "$newenv"
+        [ "$porcelain" -eq 1 ] || {
+            if [ "${#changed[@]}" -gt 0 ]; then
+                log "Dry run — nothing was applied."
+            else
+                log "No configuration changes detected (dry run)."
+            fi
+        }
+        return 0
+    fi
 
     # A marker left by a previous apply whose `docker compose up` failed AFTER the new config was
     # committed (#125): the stack then runs OLD containers against NEW config files, and because a
@@ -3402,6 +3722,7 @@ apply() {
     # Client-auth keys must be written before tor is recreated below, so an onion just turned on (or a
     # client-auth toggle) takes effect on this apply rather than the next (#343).
     provision_onion_client_auth
+    provision_control_runner # #33: install/remove the config-editor runner units
 
     log "Updating containers..."
     migrate_compose_project
@@ -3495,6 +3816,10 @@ main() {
         ;;
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
+    control-run-pending)
+        require_deployed
+        control_run_pending
+        ;;
     onion-client-key) onion_client_key ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
     help | -h | --help) show_help ;;

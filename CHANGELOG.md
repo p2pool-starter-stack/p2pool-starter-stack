@@ -9,6 +9,25 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **Dashboard configuration editor (#33).** Opt-in (`dashboard.control.enabled`, default off,
+  refused without a `dashboard.auth.password`): a Configuration page that edits every `config.json`
+  key, shows the same change preview a CLI `apply` prints (disruptive rows marked ⚠, the
+  main/mini/nano pool switch carries its PPLNS/XvB-reset warning), and applies after an explicit
+  confirm. The dashboard container never mutates the host: it stages typed change requests into a
+  spool directory (`./data/control`, requests-only writable) and a root systemd path unit
+  (`pithead-control`) re-validates each request with pithead's own parser and runs exactly
+  `pithead apply` — results and an append-only audit log (actor = the Caddy login, forwarded as
+  `X-Auth-User`) come back through read-only mounts. Secrets round-trip masked (`__secret__`
+  sentinels), so they never reach the browser; each commit keeps the previous config as
+  `config.json.bak-control`. This is the canonical host-mutation channel the upgrade button (#59)
+  and the first-boot wizard (#77) build on. New CLI plumbing: `pithead apply --dry-run
+  [--porcelain]` (validate + preview, nothing applied), a `PITHEAD_CONFIG_FILE` override, and
+  `pithead control-run-pending` (the runner).
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB

@@ -4,6 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 
 import { ChartCard } from "./chart.mjs";
+import { ConfigEditor } from "./config-editor.mjs";
 import {
   computeEarnings,
   computeXvbTier,
@@ -711,9 +712,11 @@ function ComponentHealth({ topology, egress }) {
 function DashboardView({
   state,
   ui,
+  controlEnabled,
   onRange,
   onSort,
   onView,
+  onPage,
   onZoom,
   onResetZoom,
   onToggleSeries,
@@ -729,6 +732,13 @@ function DashboardView({
             <div class="toggle-group">
                 <button class=${"btn-toggle" + (!advanced ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
                 <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
+                ${
+                  // Config editor entry point (#33): only rendered when the control channel is on
+                  // (the probe 404s otherwise, so most stacks never see this button).
+                  controlEnabled
+                    ? html`<button class="btn-toggle" onClick=${() => onPage("config")}>Config</button>`
+                    : null
+                }
             </div>
         </div>
         <div class="grid">
@@ -760,6 +770,7 @@ export function App({
   state,
   connected,
   ui,
+  controlEnabled,
   onRange,
   onSort,
   onView,
@@ -768,6 +779,7 @@ export function App({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onPage,
 }) {
   // The theme toggle is fixed-position and always available, even before the first data load.
   const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
@@ -777,6 +789,15 @@ export function App({
             ${switcher}
         <//>`;
   }
+  // The configuration editor (#33) replaces the dashboard body; header/banner/theme stay.
+  if (ui.page === "config") {
+    return html`<${Fragment}>
+        <${Header} state=${state} />
+        ${!connected ? html`<div class="disconnected-banner">Disconnected — showing data from ${state.last_update}. Retrying…</div>` : null}
+        <${ConfigEditor} onBack=${() => onPage("dashboard")} />
+        ${switcher}
+    <//>`;
+  }
   return html`<${Fragment}>
         <${Header} state=${state} />
         ${!connected ? html`<div class="disconnected-banner">Disconnected — showing data from ${state.last_update}. Retrying…</div>` : null}
@@ -785,8 +806,9 @@ export function App({
             ? html`<${SyncView} sync=${state.sync} />`
             : html`<${Fragment}>
                 <${HeroBand} state=${state} />
-                <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
-                                  onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
+                <${DashboardView} state=${state} ui=${ui} controlEnabled=${controlEnabled}
+                                  onRange=${onRange} onSort=${onSort}
+                                  onView=${onView} onPage=${onPage} onZoom=${onZoom} onResetZoom=${onResetZoom}
                                   onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
               <//>`
         }
