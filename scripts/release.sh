@@ -148,11 +148,36 @@ WORKDIR="" # scratch dir for digests, the manifest and the bundle (created in ma
 set_digest() { printf '%s' "$2" >"$WORKDIR/digest.$1"; }
 get_digest() { cat "$WORKDIR/digest.$1" 2>/dev/null || true; }
 
+# GHCR is read-after-push eventually-consistent: a tag it JUST accepted can fail to resolve for a few
+# seconds (#429 — this killed stage-4 digest capture twice on the v1.3.1 cut). Retry a registry read up
+# to $REGISTRY_READ_RETRIES times, with $REGISTRY_READ_BACKOFF-second backoff, requiring non-empty
+# output. Emits the read's stdout; returns non-zero only after every attempt fails, so a genuinely-
+# missing image still stops the release (the caller's `[ -n "$digest" ] || die` fires as before).
+REGISTRY_READ_RETRIES="${PITHEAD_REGISTRY_READ_RETRIES:-5}"
+REGISTRY_READ_BACKOFF="${PITHEAD_REGISTRY_READ_BACKOFF:-3}"
+
+# The registry inspect, wrapped in a function so the tests can stub it (fail N times, then succeed).
+buildx_inspect() { docker buildx imagetools inspect "$@"; }
+
+retry_registry_read() {
+    local attempt=1 out
+    while :; do
+        if out="$("$@" 2>/dev/null)" && [ -n "$out" ]; then
+            printf '%s' "$out"
+            return 0
+        fi
+        [ "$attempt" -ge "$REGISTRY_READ_RETRIES" ] && return 1
+        warn "registry read failed (attempt $attempt/$REGISTRY_READ_RETRIES): $* — GHCR read-after-push lag? retrying in ${REGISTRY_READ_BACKOFF}s..."
+        sleep "$REGISTRY_READ_BACKOFF"
+        attempt=$((attempt + 1))
+    done
+}
+
 # The manifest-LIST (index) digest of a pushed tag — the sha that spans every built platform, which
 # promote re-tags by digest. NOTE: `imagetools inspect --format '{{.Manifest.Digest}}'` does NOT work
 # for a buildx OCI index (it renders the whole descriptor block, not the digest), so parse the human
 # `Digest:` line instead. Verified equal to `imagetools inspect --raw | shasum -a 256`.
-manifest_digest() { docker buildx imagetools inspect "$1" 2>/dev/null | awk '/^Digest:/{print $2; exit}'; }
+manifest_digest() { retry_registry_read buildx_inspect "$1" | awk '/^Digest:/{print $2; exit}'; }
 
 # Resolve a single upstream component pin on demand (the "ingredients" each release bundles).
 pin() {
@@ -169,6 +194,24 @@ pin() {
 
 # --- Stage 1: preflight --------------------------------------------------------------------------
 
+# The CLI tools the blocking test gate (`make test` → `make lint`) shells out to: shellcheck + shfmt
+# (lint-sh), node/npx (lint-js/md/toml), uv/uvx (lint-py/lint-yaml). A reimaged release box loses these
+# (#426 — the v1.3.0 cut died ~1 min in with a bare `shellcheck: not found`). docker/jq are checked
+# elsewhere. Verify them here so a missing tool fails preflight with an actionable message, before any
+# build, instead of mid-gate.
+LINT_TOOLCHAIN=(shellcheck shfmt node npx uv uvx)
+
+check_release_toolchain() {
+    local tool missing=()
+    for tool in "${LINT_TOOLCHAIN[@]}"; do
+        command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        die "Missing lint/test tool(s): ${missing[*]} — the release box needs the lint toolchain before the test gate can run. Provision it (apt + the pinned uv installer): see docs/release-server.md § Provisioning the server. (Or --skip-tests to bypass the gate — NOT recommended.)"
+    fi
+    ok "Lint/test toolchain present (${LINT_TOOLCHAIN[*]})."
+}
+
 preflight() {
     stage "1/7  Preflight"
 
@@ -177,6 +220,10 @@ preflight() {
     [ -f VERSION ] && [ -f docker-compose.yml ] || die "VERSION / docker-compose.yml not found at the repo root."
     command -v docker >/dev/null 2>&1 || die "docker is required."
     docker buildx version >/dev/null 2>&1 || die "docker buildx is required (for digest-level promotion)."
+    # Only the test gate needs the lint toolchain — skip the check on the paths that don't run it.
+    if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_TESTS" -eq 0 ] && [ "$RESUME_PROMOTE" -eq 0 ]; then
+        check_release_toolchain
+    fi
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
     is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
@@ -352,8 +399,11 @@ smoke_test() {
             # The pushed manifest MUST carry every target platform — a wrong-arch image here means the
             # build host's arch leaked through (the v1.0.0 bug: an arm64 host produced an arm64-labelled
             # image that doesn't run on x86_64). Read the raw manifest list and require each $PLATFORMS.
-            local arches
-            arches="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --raw 2>/dev/null |
+            # The read retries GHCR's read-after-push lag (#429) so a slow-to-resolve tag doesn't fail smoke.
+            local arches raw
+            raw="$(retry_registry_read buildx_inspect "$repo:$STAGING_TAG" --raw)" ||
+                die "Smoke: could not read the pushed manifest for $repo:$STAGING_TAG from the registry (after $REGISTRY_READ_RETRIES tries)."
+            arches="$(printf '%s' "$raw" |
                 python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(sorted({m.get("platform",{}).get("os","")+"/"+m["platform"]["architecture"] for m in d.get("manifests",[]) if m.get("platform",{}).get("architecture") not in (None,"unknown")})))' 2>/dev/null || true)"
             local p
             for p in ${PLATFORMS//,/ }; do

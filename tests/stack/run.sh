@@ -1344,6 +1344,83 @@ for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "
     fi
 done
 
+echo "== unit: release.sh registry read retries GHCR read-after-push lag (#429) =="
+# manifest_digest reads a tag GHCR just accepted, which can 404 for a few seconds (read-after-push
+# lag) — this killed stage-4 digest capture twice on v1.3.1. retry_registry_read must retry until the
+# read resolves. Stub buildx_inspect to fail the first two calls (empty + rc 1) then succeed; a counter
+# file survives the retries. Backoff forced to 0 keeps the test instant.
+RETRY_CNT="$SANDBOX/inspect.count"
+# shellcheck disable=SC1090,SC2034  # dynamic source; REGISTRY_READ_* are read by the sourced retry helper
+retry_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    REGISTRY_READ_BACKOFF=0
+    printf 0 >"$RETRY_CNT"
+    buildx_inspect() {
+        local n
+        n=$(($(cat "$RETRY_CNT") + 1))
+        printf '%s' "$n" >"$RETRY_CNT"
+        [ "$n" -lt 3 ] && return 1                  # attempts 1 and 2 fail (tag not yet readable)
+        printf 'Name: x\nDigest: sha256:deadbeef\n' # attempt 3 resolves
+    }
+    printf 'DIGEST=%s ATTEMPTS=%s\n' "$(manifest_digest some:tag)" "$(cat "$RETRY_CNT")"
+)"
+assert_contains "manifest_digest resolves after transient GHCR failures" "$retry_out" "DIGEST=sha256:deadbeef"
+assert_contains "retried until the read succeeded (3 attempts)" "$retry_out" "ATTEMPTS=3"
+# Genuinely-missing image: after the retries exhaust, manifest_digest stays empty so the caller's
+# `[ -n "$digest" ] || die` still stops the release (a missing image must not silently pass).
+# shellcheck disable=SC1090,SC2034  # dynamic source; REGISTRY_READ_* are read by the sourced retry helper
+exhaust_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    REGISTRY_READ_BACKOFF=0
+    REGISTRY_READ_RETRIES=3
+    buildx_inspect() { return 1; } # GHCR never makes it readable
+    digest="$(manifest_digest gone:tag)"
+    [ -n "$digest" ] || echo "DIED-EMPTY"
+)"
+assert_contains "exhausted retries -> empty digest (caller dies)" "$exhaust_out" "DIED-EMPTY"
+# The smoke stage's raw manifest read has the same read-after-push exposure — wire it through the retry.
+assert_contains "smoke stage reads the manifest via retry_registry_read (#429)" \
+    "$(cat "$REL")" "retry_registry_read buildx_inspect \"\$repo:\$STAGING_TAG\" --raw"
+
+echo "== unit: release.sh preflight checks the lint toolchain (#426) =="
+# A reimaged release box loses shellcheck/shfmt/node/uv — the v1.3.0 cut died ~1 min in mid-gate with a
+# bare `shellcheck: not found`. check_release_toolchain must fail fast BEFORE building, naming the tool
+# and the provisioning doc. Point PATH at a sandbox of stub tools so the host's real PATH doesn't decide.
+RTB="$SANDBOX/release-tools"
+mkdir -p "$RTB"
+for t in shellcheck shfmt node npx uv uvx; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$RTB/$t"
+    chmod +x "$RTB/$t"
+done
+# shellcheck disable=SC1090
+(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    PATH="$RTB" check_release_toolchain >/dev/null 2>&1
+)
+assert_rc "full toolchain present -> preflight passes" "$?" "0"
+rm -f "$RTB/shfmt" # simulate a reimaged box missing one tool
+# shellcheck disable=SC1090
+tc_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    PATH="$RTB" check_release_toolchain 2>&1
+)"
+tc_rc=$?
+assert_rc "missing tool -> preflight fails fast (rc 1)" "$tc_rc" "1"
+assert_contains "the missing tool is named" "$tc_out" "shfmt"
+assert_contains "error points at the provisioning doc" "$tc_out" "release-server.md"
+
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
 # (Dockerfiles) are present: a source checkout builds locally (:dev, --pull never); a release bundle
