@@ -13,6 +13,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **`pithead rotate-secrets` regenerates the stack's internal credentials in one command (#378).**
+  After a suspected leak (a backup that left the box, a pasted `.env`), one command rotates the
+  local Monero RPC password (skipped in remote mode — that credential belongs to the remote node),
+  the stratum access-password when `p2pool.stratum_password` is `"auto"` (the new value is printed
+  and every rig must update its `pass`; a literal is left in `config.json` with a pointer), and the
+  xmrig-proxy control-API token (always), then recreates the containers that consume them. The old
+  values stay recoverable in owner-only `config.json.bak-<timestamp>` / `.env.bak-<timestamp>`
+  copies taken before anything changes, and a failed recreate leaves the retry marker so
+  `./pithead apply` finishes the job. The dashboard onion keeps its own `rotate-dashboard-onion`.
+  See [Operations › Rotating the internal secrets](docs/operations.md#rotating-the-internal-secrets).
 - **`pithead backup` encrypts archives by default (#374).** The backup archive carries the stack's
   full secret material (`.env`, the onion private keys, the dashboard DB), and its `chmod 600` only
   protects it on the local disk. `backup` now prompts for a passphrase (twice) and streams the tar

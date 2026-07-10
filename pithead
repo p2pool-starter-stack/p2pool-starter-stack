@@ -1330,6 +1330,14 @@ Maintenance:
                             'apply -y' (commit). Normally fired by the pithead-control
                             systemd path unit when dashboard.control.enabled is true.
 
+  rotate-secrets [-y|--yes]
+                            Regenerate the stack's internal credentials (#378): the local Monero
+                            RPC password, the stratum access-password (only when
+                            p2pool.stratum_password is "auto" — every rig must then update its
+                            'pass'), and the xmrig-proxy control-API token. Recreates the
+                            affected containers; old values stay in timestamped .bak-* copies.
+                              -y, --yes        skip the confirmation prompt.
+
   help, -h, --help          Show this message.
 
 Workflow: edit config.json, then run '$0 apply'.
@@ -2631,6 +2639,103 @@ rotate_dashboard_onion() {
         onion_client_key
     else
         log "New dashboard onion: http://$(env_get DASHBOARD_ONION_ADDRESS)"
+    fi
+}
+
+# `rotate-secrets` (#378): regenerate the stack's internal credentials in one command. After a
+# suspected leak (a backup that left the box, a `.env` pasted into a bug report) the only
+# alternative is hand-editing files and knowing which containers to recreate. Rotates the local
+# Monero RPC password (skipped in remote mode — that credential belongs to the remote node), the
+# stratum access-password when p2pool.stratum_password is "auto" (a literal lives in config.json;
+# empty means auth is off), and PROXY_AUTH_TOKEN (always). The dashboard onion keys/address have
+# their own command (rotate-dashboard-onion) and are not touched. The old values stay recoverable
+# in timestamped owner-only copies of config.json and .env taken before anything changes.
+rotate_secrets() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        *) error "Unknown option for rotate-secrets: $arg. Run '$0 help'." ;;
+        esac
+    done
+    require_deployed
+    parse_and_validate_config
+    load_preserved_state
+
+    # Compute the "what will rotate" preview from the PARSED config, not by grepping .env — the
+    # stratum mode in config.json (auto vs literal vs empty) decides the behavior, not the rendered value.
+    local stratum_mode rotate_stratum=0
+    stratum_mode=$(jq -r '.p2pool.stratum_password // ""' "$CONFIG_FILE")
+
+    log "This rotates the stack's internal credentials:"
+    if [ "$MONERO_MODE" == "local" ]; then
+        log "  • Monero node RPC password — internal to the stack; no follow-up needed."
+    else
+        log "  • Monero RPC password: skipped — monero.mode is \"remote\", so the credential belongs to the remote node, not this stack."
+    fi
+    if [ "$stratum_mode" == "auto" ]; then
+        warn "  • Stratum access-password (#152) — EVERY RIG must update its stratum 'pass' to the new value or it is rejected."
+    elif [ -n "$stratum_mode" ]; then
+        log "  • Stratum access-password: skipped — p2pool.stratum_password is set explicitly in config.json; change it there and run '$0 apply'."
+    fi
+    log "  • xmrig-proxy control-API token (#153) — internal to the stack; no follow-up needed."
+    log "The containers that consume them are recreated (brief restart; chain data and dashboard history are untouched)."
+    if [ "$assume_yes" -eq 0 ]; then
+        read -r -p "Rotate these secrets now? (y/N): " CONFIRM || true
+        [[ "$CONFIRM" =~ ^[Yy] ]] || {
+            log "Rotation cancelled."
+            return 0
+        }
+    fi
+
+    # Keep the OLD values recoverable before anything changes: timestamped owner-only copies of the
+    # two files that carry them. Refuse to rotate at all if the safety copies can't be written.
+    local stamp
+    stamp=$(date +%Y%m%d-%H%M%S)
+    (
+        umask 077
+        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-${stamp}" &&
+            cp "$ENV_FILE" "${ENV_FILE}.bak-${stamp}"
+    ) || error "Could not write the pre-rotation safety copies — nothing was rotated."
+    log "Pre-rotation copies saved (${CONFIG_FILE}.bak-${stamp}, ${ENV_FILE}.bak-${stamp}) — they hold the OLD secrets; delete them once the stack is confirmed healthy."
+
+    # Regenerate, overriding what parse_and_validate_config / load_preserved_state just preserved.
+    # Same generators as the originals, so every consumer's validation keeps holding.
+    if [ "$MONERO_MODE" == "local" ]; then
+        MONERO_PASS=$(generate_node_password)
+        persist_node_credentials "$MONERO_USER" "$MONERO_PASS" # atomic write-back to config.json
+    fi
+    if [ "$stratum_mode" == "auto" ]; then
+        STRATUM_PASSWORD=$(openssl rand -hex 12)
+        rotate_stratum=1
+    fi
+    PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
+
+    resolve_dashboard_host # #356: sets HOST_IP for render_env, which dies unbound without it
+    # #356: render_env writes DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false} and
+    # load_preserved_state doesn't carry it — preserve it or the next apply errors "run setup".
+    DEPLOYMENT_COMPLETED=$(env_get DEPLOYMENT_COMPLETED)
+    render_env
+    inject_service_configs # keep the generated service configs current before the recreate
+    # Recreate marker (#125): .env is committed now, so if the recreate below fails, a plain
+    # `apply` would diff no changes and no-op — the marker makes it retry the recreate instead.
+    local apply_marker="${ENV_FILE}.apply-incomplete"
+    : >"$apply_marker"
+    log "Recreating the containers that consume the rotated secrets..."
+    # `up` recreates exactly the services whose env/args changed (monerod, p2pool, xmrig-proxy,
+    # dashboard). Never `compose restart` here: restart reuses the OLD container args, so p2pool
+    # would keep dialing monerod with the retired --rpc-login.
+    if ! compose_up_checked -d; then
+        warn "Secrets were rotated in config.json/.env but the containers were NOT recreated ('docker compose up' failed)."
+        warn "Fix the cause above, then run '$0 apply' to retry the recreate — or restore the pre-rotation copies (${CONFIG_FILE}.bak-${stamp}, ${ENV_FILE}.bak-${stamp}) and run '$0 apply'."
+        exit 1 # leave $apply_marker so the retry re-attempts the recreate
+    fi
+    rm -f "$apply_marker"
+
+    log "Secrets rotated. The old values are invalid; only the safety copies above still hold them."
+    if [ "$rotate_stratum" -eq 1 ]; then
+        announce_stratum_auth
+        warn "The stratum access-password CHANGED — every rig is rejected until its stratum 'pass' is updated to the value above."
     fi
 }
 
@@ -4136,6 +4241,7 @@ main() {
         ;;
     onion-client-key) onion_client_key ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
+    rotate-secrets) rotate_secrets "$@" ;;
     version | -V | --version) show_version ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;
