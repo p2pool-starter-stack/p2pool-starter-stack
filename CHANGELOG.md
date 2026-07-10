@@ -9,6 +9,22 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **`release.sh` rides out GHCR's read-after-push lag (#429).** A tag the registry just accepted can
+  fail to resolve for a few seconds; the digest-capture and smoke-stage manifest reads killed the
+  v1.3.1 cut twice this way. Both reads now retry with backoff (5 tries by default, tunable via
+  `PITHEAD_REGISTRY_READ_RETRIES` / `PITHEAD_REGISTRY_READ_BACKOFF`) before giving up, so a slow-to-
+  propagate push no longer turns a release into a relaunch exercise. A genuinely-missing image still
+  stops the release after the retries exhaust.
+- **`release.sh` preflight checks the lint toolchain before building (#426).** A reimaged release box
+  can lack `shellcheck`/`shfmt`/`node`/`uv`; the release used to die about a minute in with a bare
+  `shellcheck: not found` mid-gate. Preflight now verifies the tools the test gate needs are on PATH
+  and fails fast, naming the missing tool and pointing at the provisioning steps in
+  `docs/release-server.md`, before anything is built.
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
