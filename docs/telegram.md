@@ -212,7 +212,7 @@ Run `./pithead apply` after editing. The commands:
 | `/sync` | Monero and Tari sync progress (percent and block height). |
 | `/system` | Host resources: disk, RAM, CPU + load, and HugePages. |
 | `/pool` | P2Pool sidechain type, pool hashrate, Monero network height + difficulty, PPLNS shares in window, current **effort** (luck indicator), **sidechain blocks found**, **share acceptance** (accepted/rejected + reject %), and the **best share** difficulty found. |
-| `/xvb` | XvB mode, current and target tier, hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
+| `/xvb` | XvB mode, current and target tier, the target tier's **threshold and cost** (holding a tier ≈ donating its threshold continuously, on both credited averages; a tier is **raffle status, not an XMR payout**), hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
 | `/earnings` | Estimated P2Pool XMR per day/month, from both your **1h** and (once available) steadier **24h** average hashrate, plus the XTM the same hashrate **merge-mines alongside** (shown only while merge-mining figures are live). Excludes XvB-donated hashrate. |
 | `/luck` | Pool cadence: time since the pool's last block (pool-wide, not your payout), estimated **time-to-share** for your hashrate, **luck** (actual vs. expected shares in the PPLNS window — over 100 % = running lucky), and **your PPLNS weight** (the sum of your share difficulty in the window). The same figures as the dashboard's Pool Cadence & Luck card. |
 | `/help` | The command list. |

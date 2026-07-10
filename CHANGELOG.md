@@ -67,6 +67,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 - **Naming sweep (#388).** The CLI log prefix is `[pithead]` (the last survivor of the pre-rename
   wordmark), the browser tab says Pithead, and "merge-mining" is hyphenated everywhere.
+- **XvB tier calculator in the earnings card + richer `/xvb` (#118).** The same what-if hashrate
+  now also answers which XMRvsBeast donor tier it can sustain (the donation controller's own auto
+  rule), the tier's threshold, and the cost of holding it — about the threshold in continuous
+  donation, since XvB qualifies a tier on both the 1h and 24h credited averages. Labelled as
+  raffle status, never an XMR payout, with no entry counts or win odds shown (the draw is random
+  above the threshold). Hidden while XvB is disabled. The Telegram `/xvb` reply gains the matching
+  threshold, cost, and not-a-payout lines.
 
 ## [1.2.2] - 2026-07-04
 
