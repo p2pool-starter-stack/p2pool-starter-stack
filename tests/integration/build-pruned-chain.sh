@@ -13,7 +13,7 @@
 # and always restarts monerod even if the copy fails. Designed to be run under nohup.
 set -uo pipefail
 
-SRC_DIR="${SRC_DIR:-$HOME/code/p2pool-starter-stack/data/monero}"
+SRC_DIR="${SRC_DIR:?set SRC_DIR to the monero data dir to copy from (e.g. /srv/pithead/data/monero)}"
 DST_DIR="${DST_DIR:-/mnt/chains/monero-pruned}"
 PRUNE_BIN="${PRUNE_BIN:-$HOME/pithead-testbench/bin/monero-blockchain-prune}"
 STATUS="${STATUS:-$HOME/pithead-testbench/status}"
