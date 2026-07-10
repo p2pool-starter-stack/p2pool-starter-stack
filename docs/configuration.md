@@ -109,7 +109,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `telegram.enabled` | `false` | Push operational alerts (node down/recovered, worker offline/back, sync finished) to Telegram. Off by default. Requires `bot_token` + `chat_id` to actually send. Full walkthrough: [Telegram Bot](telegram.md). |
 | `telegram.bot_token` | `""` | Your BotFather bot token. A secret — stored owner-only in `.env`, git-ignored, and never logged. Get one from [@BotFather](https://t.me/BotFather). |
 | `telegram.chat_id` | `""` | Where alerts are sent and the only chat the command interface answers. A Telegram group id (negative, e.g. `-1001234567890`) or a personal chat id. See [how to find it](telegram.md#3-find-your-chat-id). |
-| `telegram.events.*` | all `true` | Per-event toggles: `stack_online`, `node_down`, `node_recovered`, `worker_offline`, `worker_recovered`, `worker_joined`, `worker_left`, `sync_finished`, `disk_space`, `db_unhealthy`, `xvb_no_share`, `xvb_registration`, `clearnet_exposed`, `new_release`, `daily_summary`, `hashrate_low`, `hashrate_loss`, `hugepages`, `low_ram`. Each defaults to on once Telegram is enabled; set one `false` to silence just that alert. Full list: [Telegram Bot](telegram.md#choosing-which-alerts-you-get). |
+| `telegram.events.*` | all `true` | Per-event toggles: `stack_online`, `node_down`, `node_recovered`, `worker_offline`, `worker_recovered`, `worker_joined`, `worker_left`, `sync_finished`, `disk_space`, `db_unhealthy`, `xvb_no_share`, `xvb_registration`, `clearnet_exposed`, `new_release`, `daily_summary`, `hashrate_low`, `hashrate_loss`, `hugepages`, `low_ram`, `wallet_changed`. Each defaults to on once Telegram is enabled; set one `false` to silence just that alert. Full list: [Telegram Bot](telegram.md#choosing-which-alerts-you-get). |
 | `telegram.daily_summary_time` | `08:00` | Local time (24-hour `HH:MM`) to push the once-a-day status digest, when the `daily_summary` event is on. Uses the dashboard's timezone (`dashboard.timezone`). A malformed value disables the digest. |
 | `telegram.commands.enabled` | `false` | Turn on the interactive command interface — the bot answers `/status`, `/hashrate`, `/workers`, `/sync`, and `/help` from the configured `chat_id` (every other chat is ignored). Off by default; alerts work without it. Long-polls over Tor, so it needs no inbound port. See [Telegram › Commands](telegram.md#commands). |
 
@@ -244,7 +244,7 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
   without a manual CA process, and Tor already encrypts the transport, so the browser shows a one-time
   "accept the risk" prompt — the same click you make for the LAN dashboard.
 
-After `apply`, read the address from `pithead status` or `pithead doctor` (printed only to that local
+After `apply`, read the address from `./pithead status` or `./pithead doctor` (printed only to that local
 output). Treat the `.onion` as a secret: anyone who has it can _attempt_ the login (and, without
 client-auth, reach it).
 
