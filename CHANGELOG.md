@@ -19,6 +19,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   checkout — with no network call or update check. `doctor` repeats the line in its header, so every
   pasted diagnostics report carries the version.
 
+### Dependencies
+
+- **Move `grpcio` off the yanked 1.82.0 release (#419).** PyPI yanked 1.82.0 for a bad protobuf
+  constraint, so every `uv lock` warned. The floor moves to 1.82.1, the first non-yanked release
+  above it; the lock now resolves to 1.82.1 with the warning gone. `grpcio` core carries no protobuf
+  dependency, so protobuf stays on 6.x and the checked-in Tari stubs (which floor at
+  `GRPC_GENERATED_VERSION = '1.78.0'`) import unchanged — no regeneration needed.
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
