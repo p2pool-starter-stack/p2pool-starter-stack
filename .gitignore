@@ -7,6 +7,9 @@ config.json
 /build/monero/bitmonero.conf
 /build/tari/config.toml
 Caddyfile
+# pithead backup archives bundle .env, config.json, the Caddyfile, and the Tor onion private keys
+# into one tarball; secret scanners can't see inside a gzipped tar, so keep the whole dir out (#369).
+/backups/
 
 # Leftover worker-kit dir (tech debt). The worker/ kit was extracted to the RigForge repo (#71/#74);
 # a stale top-level worker/ can linger locally with miner runtime logs/state until that cutover is

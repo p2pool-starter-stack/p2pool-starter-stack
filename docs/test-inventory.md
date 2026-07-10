@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 880 dashboard unit tests · 12 contract tests · 72 frontend
-tests · 60 `pithead` shell sections · 19 harness self-test sections ·
+tests · 61 `pithead` shell sections · 19 harness self-test sections ·
 9 live config scenarios (17 axis values) · 8 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -16,7 +16,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 |---|---|---|
 | 1 — Unit | dashboard pytest | 880 |
 | 1 — Unit | frontend (node --test) | 72 |
-| 1 — Unit | `pithead` shell suite | 60 sections |
+| 1 — Unit | `pithead` shell suite | 61 sections |
 | 1 — Unit | compose interpolation + hardening (#90) | 1 |
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 8 |
@@ -1051,7 +1051,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 - edgePath: column-crossing edges route orthogonally through a clear lane
 - route palette + names cover every route the server can emit
 
-### `pithead` shell suite (tests/stack/run.sh) — 60 sections
+### `pithead` shell suite (tests/stack/run.sh) — 61 sections
 - unit: resolve_default
 - unit: assert_safe_dir
 - unit: is_public_ip classifier (#113)
@@ -1100,6 +1100,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 - black-box: dashboard auth lifecycle (#8)
 - black-box: apply preserves secrets + propagates
 - black-box: payout-wallet change needs a typed confirm (#375)
+- unit+black-box: secret files are owner-only from creation (#368)
 - black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level)
 - black-box: clearnet initial sync render (#183)
 - black-box: local node creds auto-generated + persisted (#50)
@@ -1276,5 +1277,5 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 
 ---
 
-_Grand total: **1060** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **1061** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
