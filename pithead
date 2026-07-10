@@ -1689,11 +1689,16 @@ cred_needs_generating() {
 # rather than aborting, since the in-memory creds still make this run work.
 persist_node_credentials() {
     local user="$1" pass="$2" tmp="${CONFIG_FILE}.tmp"
-    if jq --arg u "$user" --arg p "$pass" \
-        '.monero.node_username = $u | .monero.node_password = $p' \
-        "$CONFIG_FILE" >"$tmp" 2>/dev/null; then
+    # Subshell umask (#368): the temp file carries the credentials, so it too must be owner-only
+    # from creation — mv preserves its mode onto config.json.
+    if (
+        umask 077
+        jq --arg u "$user" --arg p "$pass" \
+            '.monero.node_username = $u | .monero.node_password = $p' \
+            "$CONFIG_FILE" >"$tmp" 2>/dev/null
+    ); then
         mv "$tmp" "$CONFIG_FILE"
-        chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+        chmod 600 "$CONFIG_FILE"
     else
         rm -f "$tmp"
         warn "Could not write generated node credentials back to $CONFIG_FILE (they'll work for this run but may change on the next one)."
@@ -1739,7 +1744,11 @@ ensure_config_exists() {
         IN_MONERO_USER=$(default_node_username)
         IN_MONERO_PASS=$(generate_node_password)
         log "Generated internal Monero node RPC credentials (saved in $CONFIG_FILE)."
-        cat <<EOF >"$CONFIG_FILE"
+        # Subshell umask (#368): the file must be owner-only from its FIRST byte — a chmod after
+        # the redirect leaves a world-readable window under the default umask.
+        (
+            umask 077
+            cat <<EOF >"$CONFIG_FILE"
 {
     "monero": {
         "mode": "local",
@@ -1758,6 +1767,7 @@ ensure_config_exists() {
     }
 }
 EOF
+        )
     else
         echo "Remote node selected."
         read -r -p "Enter Remote Node Host (IP or Domain): " REMOTE_HOST || true
@@ -1773,7 +1783,10 @@ EOF
             read -r -s -p "Enter Remote Node Password: " IN_MONERO_PASS || true
             echo ""
         fi
-        cat <<EOF >"$CONFIG_FILE"
+        # Subshell umask (#368): owner-only from the first byte, same as the local-mode write.
+        (
+            umask 077
+            cat <<EOF >"$CONFIG_FILE"
 {
     "monero": {
         "mode": "remote",
@@ -1797,8 +1810,9 @@ EOF
     }
 }
 EOF
+        )
     fi
-    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    chmod 600 "$CONFIG_FILE"
     log "$CONFIG_FILE created successfully."
 }
 
@@ -2570,7 +2584,11 @@ render_env() {
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
-    cat <<EOF >"$target"
+    # Subshell umask (#368): .env carries the RPC, stratum, and Telegram secrets — it must be
+    # owner-only from its FIRST byte, not after a post-write chmod window.
+    (
+        umask 077
+        cat <<EOF >"$target"
 MONERO_DATA_DIR=$MONERO_DIR
 TARI_DATA_DIR=$TARI_DIR
 P2POOL_DATA_DIR=$P2POOL_DIR
@@ -2662,8 +2680,10 @@ DASHBOARD_AUTH_PW_FP=$DASHBOARD_AUTH_PW_FP
 HOST_IP=$HOST_IP
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
-    # Contains the node RPC password; keep it owner-only.
-    chmod 600 "$target" 2>/dev/null || true
+    )
+    # Contains the node RPC password; keep it owner-only (belt-and-braces — the umask above
+    # already created it 600; a chmod failure now aborts loudly instead of passing silently).
+    chmod 600 "$target"
 }
 
 inject_service_configs() {

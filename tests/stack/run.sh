@@ -2074,6 +2074,31 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "healthchecks ping_url propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
 
+echo "== unit+black-box: secret files are owner-only from creation (#368) =="
+# The subshell umask must make the secret-bearing files 600 from the FIRST byte — a chmod after
+# the write leaves a world-readable window on a shared host, and a silently failed chmod used to
+# leave them 644 forever. The mv shim captures the credential temp file's mode BEFORE it lands on
+# config.json, proving the mode at creation, not just the end state.
+# GNU form first: `stat -c` errors cleanly on BSD/macOS, so the `||` fallback fires there. The
+# reverse order is wrong — on Linux `stat -f` is a VALID flag (filesystem status) that succeeds
+# with the wrong output, so the fallback never runs and CI (Linux) reads garbage.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+PB="$SANDBOX/perm368"
+mkdir -p "$PB/bin"
+printf '{ "monero": {} }\n' >"$PB/config.json"
+cat >"$PB/bin/mv" <<'EOF'
+#!/usr/bin/env bash
+stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null # GNU form first (see file_mode note)
+exec /usr/bin/mv "$@" # absolute path — a bare `mv` re-resolves to this stub and loops forever
+EOF
+chmod +x "$PB/bin/mv"
+out="$( (umask 022 && PATH="$PB/bin:$PATH" run_sourced "$PB" persist_node_credentials user secret))"
+assert_eq "credential temp file is 600 at creation (umask 022)" "$out" "600"
+assert_eq "config.json is 600 after credential persist" "$(file_mode "$PB/config.json")" "600"
+# Black-box: a full apply under the default umask must leave .env owner-only.
+out="$( (cd "$V" && umask 022 && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1))"
+assert_eq ".env is owner-only after apply (umask 022)" "$(file_mode "$V/.env")" "600"
+
 echo "== black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level) =="
 # stratum_password "auto" generates + persists a stable secret and surfaces it for rigs; an explicit
 # proxy.donate_level propagates verbatim.
