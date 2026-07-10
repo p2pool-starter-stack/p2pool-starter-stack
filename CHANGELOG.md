@@ -9,6 +9,20 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
+  status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
+  remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate
+  isn't sampled, so blocks-remaining is the honest figure. The lines are skipped once both chains
+  are synced or when the dashboard app isn't answering yet.
+- **First-run "what happens next" note (#384).** The first time the stack comes up, `pithead` prints
+  a short epilogue explaining that the miner is held until Monero and Tari finish their initial sync
+  and then starts automatically, plus where to watch progress. It shows once (keyed on a marker file
+  beside `.env`), not on every restart.
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB

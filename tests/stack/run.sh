@@ -1117,6 +1117,48 @@ assert_eq "status onion: nothing when the onion is disabled" \
     "$(run_sourced "$od_off" dashboard_onion_status)" ""
 rm -rf "$od_on" "$od_noauth" "$od_unprov" "$od_off"
 
+echo "== unit: dashboard_sync_progress re-renders per-chain sync from /api/state (#384) =="
+# The one-curl re-render behind `pithead status`: read the dashboard's own /api/state (host-local,
+# no auth) and print per-chain progress, skipping synced chains and degrading quietly when the app
+# isn't up. Stub curl to serve a canned body — real jq parses it, matching the dashboard's shape.
+SP="$(mktemp -d)"
+mkdir -p "$SP/bin"
+cat >"$SP/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+[ -n "${CURL_BODY:-}" ] && printf '%s' "$CURL_BODY"
+exit "${CURL_RC:-0}"
+EOF
+chmod +x "$SP/bin/curl"
+# Monero mid-sync + Tari still discovering its target height: both surface, monero with numbers.
+sp_body='{"sync":{"monero":{"state":"syncing","percent":87,"current":2451000,"target":2810000,"remaining":359000},"tari":{"state":"loading","percent":0,"current":0,"target":0,"remaining":0}}}'
+out="$(CURL_BODY="$sp_body" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)"
+assert_contains "sync progress: monero syncing shows percent + blocks-to-go" "$out" "87% (2451000 / 2810000 blocks, 359000 to go)"
+assert_contains "sync progress: no-target chain reads as discovering" "$out" "discovering the target height"
+assert_contains "sync progress: header names the #35 hold" "$out" "held until it completes"
+# Both synced: nothing to say (steady-state status stays quiet), non-zero return.
+sp_done='{"sync":{"monero":{"state":"done","percent":100,"current":10,"target":10,"remaining":0},"tari":{"state":"done","percent":100,"current":5,"target":5,"remaining":0}}}'
+assert_eq "sync progress: both synced -> silent" \
+    "$(CURL_BODY="$sp_done" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)" ""
+# Only monero still syncing: the synced tari is omitted (not listed as done).
+sp_partial='{"sync":{"monero":{"state":"syncing","percent":42,"current":100,"target":238,"remaining":138},"tari":{"state":"done","percent":100,"current":5,"target":5,"remaining":0}}}'
+out="$(CURL_BODY="$sp_partial" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)"
+assert_contains "sync progress: partial -> monero listed" "$out" "monero"
+assert_not_contains "sync progress: partial -> synced tari omitted" "$out" "tari"
+# Dashboard app not answering yet (curl fails): quiet, non-zero — graceful during startup.
+assert_eq "sync progress: dashboard down -> silent" \
+    "$(CURL_RC=22 PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)" ""
+rm -rf "$SP"
+
+echo "== unit: first-run epilogue shows once after up (#384) =="
+# The "what happens next" onboarding note: prints on the first up in a fresh deploy dir, drops a
+# marker beside .env, and stays silent on every later restart.
+FR="$(mktemp -d)"
+out="$(run_sourced "$FR" print_first_run_epilogue 2>&1)"
+assert_contains "first-run: epilogue explains the sync-then-mine hold" "$out" "held until Monero and Tari finish their first sync"
+assert_eq "first-run: silent on the second up (marker respected)" \
+    "$(run_sourced "$FR" print_first_run_epilogue 2>&1)" ""
+rm -rf "$FR"
+
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
 # 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).
