@@ -497,7 +497,6 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp }) {
                             }</td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
-                            <td>${w.h10_str}</td>
                             <td>${w.h60_str}</td>
                             <td>${w.h15_str}</td>
                             <td>${w.accepted_str}</td>

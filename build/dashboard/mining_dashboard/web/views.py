@@ -637,7 +637,6 @@ def build_workers(workers):
                 pool = "unknown"
 
             uptime = worker.get("uptime", 0)
-            h10 = worker.get("h10", 0)
             h60 = worker.get("h60", 0)
             h15 = worker.get("h15", 0)
             # Per-worker share health (Issue #82). Raw counts for client-side sorting; a display
@@ -656,8 +655,8 @@ def build_workers(workers):
                     "status": "online" if worker["status"] == "online" else "offline",
                     "uptime": uptime,
                     "uptime_str": format_duration(uptime),
-                    "h10": h10,
-                    "h10_str": format_hashrate(h10),
+                    # No h10 here: the table shows the 1m (h60) and 10m (h15) windows — via the
+                    # proxy the legacy h10 field is just a second copy of the 1m rate (#387).
                     "h60": h60,
                     "h60_str": format_hashrate(h60),
                     "h15": h15,

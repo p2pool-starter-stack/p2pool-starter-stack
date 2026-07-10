@@ -1,4 +1,5 @@
 import ipaddress
+import math
 import socket
 import time
 
@@ -71,6 +72,26 @@ def format_hashrate(hashrate):
 
     except (ValueError, TypeError):
         return "0 H/s"
+
+
+def format_xmr(amount):
+    """Format an XMR amount with magnitude-adaptive precision — 4 decimal places at >= 1 XMR,
+    6 at >= 0.001, 8 below that — so a small daily estimate isn't truncated to zeros.
+
+    Mirrors ``formatXmr`` in ``web/static/logic.mjs`` (the dashboard earnings card) so the same
+    estimate reads the same on every surface (#387). Returns "0 XMR" for zero and an em dash for
+    non-numeric input.
+    """
+    try:
+        val = float(amount)
+    except (ValueError, TypeError):
+        return "—"
+    if not math.isfinite(val):
+        return "—"
+    if val == 0:
+        return "0 XMR"
+    dp = 4 if val >= 1 else 6 if val >= 0.001 else 8
+    return f"{val:.{dp}f} XMR"
 
 
 def format_duration(seconds):

@@ -185,8 +185,9 @@ The summary panel pulls the key numbers together:
 
 ### Workers Alive
 
-A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over several
-windows (e.g. 10s / 60s / 15m), for spotting a rig that has dropped off or is underperforming. A
+A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over the 1m
+and 10m windows — the same 10m window the chart's averaging toggle and Telegram's totals report —
+for spotting a rig that has dropped off or is underperforming. A
 worker whose direct API is unreachable still counts (with proxy-derived hashrate); a worker whose
 miner has stopped drops out of the total. On a narrow screen the table scrolls sideways within its
 card so columns stay readable.

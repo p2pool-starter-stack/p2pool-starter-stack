@@ -807,7 +807,9 @@ class TestWorkers:
             ]
         )[0]
         assert row["uptime"] == 3600 and row["uptime_str"]
-        assert row["h10"] == 5000 and "kH/s" in row["h10_str"]
+        assert row["h60"] == 5100 and "kH/s" in row["h60_str"]
+        assert row["h15"] == 5200 and "kH/s" in row["h15_str"]
+        assert "h10" not in row  # dropped from the payload — the table shows 1m/10m (#387)
 
     def test_api_ok_passes_through(self):
         # The probe verdict reaches the client so it can badge a misconfigured worker API; a worker
