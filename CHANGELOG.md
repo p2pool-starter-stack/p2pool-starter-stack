@@ -9,9 +9,7 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
-## [1.3.1] - YYYY-MM-DD
-
-<!-- Placeholder date — set at release cut. -->
+## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
 donation controller during a prolonged stats outage, an XvB per-tier payout comparison, and a
