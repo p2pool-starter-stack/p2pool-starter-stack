@@ -34,8 +34,13 @@ from mining_dashboard.helper.utils import (
     format_time_abs,
     get_tier_info,
     is_ip_address,
+    xvb_stats_are_stale,
 )
-from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
+from mining_dashboard.service.earnings import (
+    tari_seconds_to_block_per_hs,
+    xmr_per_hs_day,
+    xtm_per_hs_day,
+)
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.version import resolve_version
@@ -992,8 +997,9 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
 
 _EARNINGS_DISCLAIMER = (
     "Estimated XMR from P2Pool mining only — excludes XvB donations (donated hashrate earns no "
-    "P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and "
-    "its estimate assumes the merge-mine channel stays connected. Expected values only; mining "
+    "P2Pool payout). Tari is merge-mined SOLO by the same hashrate: you get the whole block reward "
+    "at once when your hashrate finds a Tari block — roughly every 'time to Tari block' shown — so "
+    "the per-day XTM figure is a long-run average, not steady income. Expected values only; mining "
     "is variance-heavy, so real payouts swing well above and below these figures. Estimates, "
     "not guarantees."
 )
@@ -1031,13 +1037,20 @@ def build_earnings(data, metrics):
     # Tari rate (#117). We take p2pool's aux `reward` field as the current Tari block reward —
     # it refreshes every poll, so the linear model tracks the decaying emission.
     tari_coeff_day = xtm_per_hs_day(metrics.tari_reward, metrics.tari_difficulty)
+    # Solo merge-mining pays the whole block at once (#117): the honest headline is the expected
+    # time to a Tari block (difficulty / hashrate) and the per-block reward, with the per-day rate
+    # kept only as a long-run average. `tari_difficulty` carries the seconds-to-block-per-H/s figure
+    # (== difficulty, guarded); the client divides it by the what-if hashrate.
+    tari_seconds_per_hs = tari_seconds_to_block_per_hs(metrics.tari_difficulty)
     return {
         "available": coeff_day > 0,
         "p2pool_hr": p2pool_hr,  # raw H/s — the what-if default
         "p2pool_hr_str": format_hashrate(p2pool_hr),
         "coeff_day": coeff_day,  # XMR per H/s per day
         "tari_available": tari_coeff_day > 0 and metrics.tari_mining,
-        "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (merge-mined alongside)
+        "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (long-run AVERAGE, not steady income)
+        "tari_difficulty": tari_seconds_per_hs,  # seconds-to-block per H/s (client: diff / hashrate)
+        "tari_reward": metrics.tari_reward,  # full XTM paid per Tari block (solo, lumpy)
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,
@@ -1076,18 +1089,36 @@ def build_xvb_calc(metrics, state_mgr):
     if not metrics.xvb_enabled:
         return {"enabled": False}
     tiers = state_mgr.get_tiers()
+    # XvB's published per-tier expected reward (XMR/year), fetched over Tor and cached (#118). The
+    # tier KEY is exactly the round-type in the file (donor / donor_vip / donor_whale / donor_mega),
+    # so a tier maps to its estimate by key. A stale or empty cache degrades to None per tier +
+    # estimates_available False — the client shows "estimate unavailable", never a frozen number
+    # implied fresh (reusing the stats staleness rule so the two never disagree, #311).
+    est_state = state_mgr.get_xvb_reward_estimates()
+    estimates = (est_state or {}).get("estimates") or {}
+    estimates_stale = xvb_stats_are_stale(est_state)
+    estimates_available = bool(estimates) and not estimates_stale
     return {
         "enabled": True,
         # Ascending tier table for the client's what-if; names via get_tier_info so they read
         # exactly like the tier strings everywhere else (threshold already embedded in the name).
+        # expected_reward_year is XvB's own figure for the tier, or None when unavailable/stale.
         "tiers": sorted(
             (
-                {"name": get_tier_info(t, tiers)[0], "threshold": float(t)}
-                for t in tiers.values()
+                {
+                    "name": get_tier_info(t, tiers)[0],
+                    "threshold": float(t),
+                    "expected_reward_year": (
+                        float(estimates[key]) if estimates_available and key in estimates else None
+                    ),
+                }
+                for key, t in tiers.items()
                 if t > 0
             ),
             key=lambda entry: entry["threshold"],
         ),
+        "estimates_available": estimates_available,
+        "estimates_stale": estimates_stale,
         "max_fraction": XVB_MAX_DONATION_FRACTION,  # donation headroom rule (sustainability)
         "current_tier": metrics.current_tier,
         "target_tier": metrics.target_tier,

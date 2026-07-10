@@ -20,6 +20,7 @@ import {
   THEME_ORDER,
   uptimeCell,
   WORKER_COLUMNS,
+  xvbTierComparison,
 } from "./logic.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { StackTopology } from "./topology.mjs";
@@ -354,12 +355,79 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
+// XvB per-tier payout comparison dropdown (#118). Picks one of the four donor tiers and weighs XvB's
+// OWN published expected reward for it (server-fetched over Tor) against the P2Pool earnings donating
+// that tier costs, and the net. Defaults to the operator's target tier. When XvB's estimate is
+// stale/unavailable it shows the tier cost with an "estimate unavailable" note — never a fabricated
+// number. Selection is local UI state; the whole block is a raffle comparison, not a claim that
+// donating above a tier threshold pays more (it does not — the draw is random among qualifiers).
+class XvbComparison extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { selected: null };
+    this.onSelect = (e) => this.setState({ selected: e.target.value });
+  }
+
+  render() {
+    const { calc, coeffDay, hr } = this.props;
+    const tiers = (calc && calc.tiers) || [];
+    if (!tiers.length) return null;
+    const { selected } = this.state;
+    // Default the dropdown to the operator's configured target tier; fall back to the lowest.
+    const sel =
+      tiers.find((t) => t.name === selected) ||
+      tiers.find((t) => t.name === calc.target_tier) ||
+      tiers[0];
+    const cmp = xvbTierComparison(sel, coeffDay);
+    // The same sustains rule the tier block states: donating the threshold must fit inside the
+    // donateable share of the what-if hashrate. An unsustainable tier's Net is "—" — showing,
+    // say, Mega's +56 XMR/yr to a 269 kH/s fleet would imply an unreachable payout.
+    const sustainable = hr > 0 && sel.threshold <= hr * (calc.max_fraction || 0);
+    const expected =
+      calc.estimates_available && cmp.expected !== null
+        ? formatXmr(cmp.expected)
+        : "estimate unavailable";
+    return html`
+        <div class="xvb-comparison">
+            <label class="xvb-compare-label" for="xvb-tier-select">Compare tier payout (per year)</label>
+            <select id="xvb-tier-select" class="xvb-tier-select" value=${sel.name} onChange=${this.onSelect}>
+                ${tiers.map((t) => html`<option value=${t.name}>${t.name}</option>`)}
+            </select>
+            <div class="stat-grid mt-2">
+                <${StatCard} label="Expected (XvB)" value=${expected} cls="c-purple"
+                             title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
+                <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
+                             title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
+                <${StatCard} label="Net / yr" value=${sustainable && cmp.net !== null ? formatXmr(cmp.net) : "—"}
+                             title=${
+                               sustainable
+                                 ? "Expected XvB reward minus the P2Pool earnings given up. Shown only when XvB's estimate is available."
+                                 : "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
+} />
+            </div>
+            ${
+              !sustainable
+                ? html`<p class="status-warn text-xs mt-1">Not sustainable at your hashrate — holding this tier needs about ${fmtHashrate(sel.threshold)} donated continuously, more than your hashrate can spare.</p>`
+                : null
+            }
+            <p class="text-muted text-xs mt-2">
+                ${
+                  calc.estimates_available
+                    ? "From XvB's published per-tier estimate, fetched over Tor."
+                    : "Expected reward estimate unavailable — showing tier cost only."
+                }
+            </p>
+        </div>`;
+  }
+}
+
 // XvB tier / raffle block (#118), inside the earnings card and driven by the same what-if
 // hashrate: the highest XMRvsBeast tier that hashrate sustains (computeXvbTier — the server's
 // own auto rule), what holding it costs, and the current vs target tier for context. Labelled
 // raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
-// above the threshold. Hidden entirely while XvB is disabled.
-function XvbTierBlock({ calc, hr }) {
+// above the threshold. Hidden entirely while XvB is disabled. `coeffDay` (earnings.coeff_day)
+// feeds the per-tier payout comparison dropdown below.
+function XvbTierBlock({ calc, hr, coeffDay }) {
   if (!calc || !calc.enabled) return null;
   const t = computeXvbTier(hr, calc);
   return html`
@@ -375,6 +443,7 @@ function XvbTierBlock({ calc, hr }) {
             <${StatCard} label="Target Tier" value=${calc.target_tier}
                          title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
         </div>
+        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} hr=${hr} />
         <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
     </div>`;
 }
@@ -390,8 +459,11 @@ function XvbTierBlock({ calc, hr }) {
 class EarningsCard extends Component {
   constructor(props) {
     super(props);
-    this.state = { input: null };
+    // `input` (what-if hashrate) is SHARED across tabs — it lives above the tab strip so switching
+    // tabs keeps the entered value. `tab` is the active earnings tab (Monero / Tari / XvB).
+    this.state = { input: null, tab: "monero" };
     this.onInput = (e) => this.setState({ input: e.target.value });
+    this.onTab = (tab) => this.setState({ tab });
   }
 
   render() {
@@ -403,12 +475,21 @@ class EarningsCard extends Component {
                 <p class="text-muted text-small">Network stats unavailable — the estimate can't be computed right now.</p>
             </div>`;
     }
-    const { input } = this.state;
+    const { input, tab } = this.state;
     const useDefault = input === null;
     // Default to your P2Pool 1h-average hashrate (the figure shown in the header / Overview,
     // already excluding the XvB-donated slice); once edited, use the parsed what-if value.
     const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
     const est = computeEarnings(hr, e);
+    const xvb = this.props.xvb;
+    // Tabs split the (now three-domain) card body. XvB only appears when it's enabled — there's no
+    // tier to show otherwise. The one what-if input above the strip drives every tab's estimate.
+    const tabs = [
+      { id: "monero", label: "Monero" },
+      { id: "tari", label: "Tari" },
+    ];
+    if (xvb && xvb.enabled) tabs.push({ id: "xvb", label: "XvB" });
+    const active = tabs.some((t) => t.id === tab) ? tab : "monero";
     return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
@@ -419,18 +500,46 @@ class EarningsCard extends Component {
                        autocomplete="off" value=${useDefault ? e.p2pool_hr_str : input}
                        onInput=${this.onInput} />
             </div>
-            <div class="stat-grid">
-                <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
-                <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
-                <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
-                <${StatCard} label="XTM / day" value=${formatXtm(est.tariDay)}
-                             title="Tari merge-mined alongside the XMR by the same hashrate — earned in addition, not instead. Shows — while merge-mining is inactive or syncing." />
-                <${StatCard} label="XTM / month" value=${formatXtm(est.tariMonth)} />
-                <${StatCard} label="XTM / year" value=${formatXtm(est.tariYear)} />
-                <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
-                <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
+            <div class="earnings-tabs" role="tablist" aria-label="Earnings breakdown">
+                ${tabs.map(
+                  (t) => html`
+                    <button role="tab" type="button"
+                            id=${"etab-" + t.id} aria-controls=${"epanel-" + t.id}
+                            aria-selected=${active === t.id ? "true" : "false"}
+                            class=${"earnings-tab" + (active === t.id ? " is-active" : "")}
+                            onClick=${() => this.onTab(t.id)}>${t.label}</button>`,
+                )}
             </div>
-            <${XvbTierBlock} calc=${this.props.xvb} hr=${hr} />
+
+            <div role="tabpanel" id="epanel-monero" aria-labelledby="etab-monero" hidden=${active !== "monero"}>
+                <div class="stat-grid">
+                    <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
+                    <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
+                    <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                    <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
+                    <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
+                </div>
+            </div>
+
+            <div role="tabpanel" id="epanel-tari" aria-labelledby="etab-tari" hidden=${active !== "tari"}>
+                <div class="stat-grid">
+                    <${StatCard} label="Est. Time to Tari Block" value=${formatTimeToShare(est.tariTimeToBlockSec)}
+                                 title="Tari is merge-mined SOLO: the whole block reward lands at once when your hashrate finds a Tari block, roughly this often (difficulty ÷ your hashrate). Shows — while merge-mining is inactive or syncing." />
+                    <${StatCard} label="XTM per Block" value=${formatXtm(est.tariRewardPerBlock)}
+                                 title="The full Tari block reward paid when you solo-find a block — you get all of it at once, not spread over time." />
+                    <${StatCard} label="XTM / day (avg)" value=${formatXtm(est.tariDay)}
+                                 title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — this per-day figure just spreads that lumpy payout out on paper." />
+                </div>
+            </div>
+
+            ${
+              xvb && xvb.enabled
+                ? html`
+            <div role="tabpanel" id="epanel-xvb" aria-labelledby="etab-xvb" hidden=${active !== "xvb"}>
+                <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} />
+            </div>`
+                : null
+            }
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }

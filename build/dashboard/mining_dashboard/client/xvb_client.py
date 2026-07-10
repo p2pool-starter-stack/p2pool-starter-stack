@@ -6,6 +6,35 @@ import requests
 from mining_dashboard.config.config import TOR_SOCKS_PROXY, XVB_SUBMIT_URL
 from mining_dashboard.helper.utils import parse_hashrate
 
+# The four donor tiers XvB publishes an expected per-player reward for. These are exactly the tier
+# keys in TIER_DEFAULTS, so build_xvb_calc maps a tier straight to its estimate by key (#118).
+DONOR_ROUND_TYPES = ("donor", "donor_vip", "donor_whale", "donor_mega")
+
+# XvB publishes its own reward_calc.sh output as plain text — one "Round: <type> Player: <X>
+# XMR/year" line per tier, kept current. We parse the four donor-tier Player figures and ignore the
+# non-donor (vip/mvp) and pool-total ("Round: donor: N") rows; the "Player:" keyword disambiguates.
+_REGEX_REWARD_LINE = re.compile(r"Round:\s*(\S+)\s+Player:\s*([\d.]+)\s*XMR/year", re.IGNORECASE)
+
+
+def parse_reward_estimates(text):
+    """Parse XvB's published per-tier expected rewards (XMR/year) from ``reward_estimate_pub.txt``.
+
+    Returns ``{round_type: xmr_per_year}`` for the recognised donor tiers only — an EMPTY dict when
+    the text is missing, empty, or has no parseable donor lines (a malformed file must never raise,
+    just yield nothing). A tolerant regex keys off the ``Player:`` figure so the pool-total rows and
+    the non-donor vip/mvp rows are skipped.
+    """
+    out = {}
+    for round_type, value in _REGEX_REWARD_LINE.findall(text or ""):
+        key = round_type.lower()
+        if key in DONOR_ROUND_TYPES:
+            try:
+                out[key] = float(value)
+            except (ValueError, TypeError):
+                continue
+    return out
+
+
 # register() outcomes (#263). The endpoint returns plaintext "ERROR: ..." with a 422 for the error
 # cases (not a 200/JSON contract), so success/failure is classified from status + body, not status
 # alone. The caller maps these to dashboard state + retry behaviour.
@@ -31,6 +60,11 @@ class XvbClient:
         self.logger = logging.getLogger("XvbClient")
         self.wallet_address = wallet_address
         self.url = "https://xmrvsbeast.com/cgi-bin/p2pool_bonus_history.cgi"
+        # XvB's pre-computed per-tier expected rewards (their own reward_calc.sh output, kept
+        # current). Fetched over the SAME Tor proxy as the stats so the dashboard never reimplements
+        # reward_calc or needs Monero difficulty/reward (#118). Carries no wallet, so no IP<->wallet
+        # correlation risk — but routed over Tor anyway to keep all XvB egress on one path.
+        self.reward_estimate_url = "https://xmrvsbeast.com/p2pool/reward_estimate_pub.txt"
         self.tor_proxy = tor_proxy if tor_proxy is not None else TOR_SOCKS_PROXY
         self.submit_url = submit_url if submit_url is not None else XVB_SUBMIT_URL
 
@@ -70,6 +104,36 @@ class XvbClient:
             return None
         except Exception as e:
             self.logger.error(f"Unexpected error in XvB client: {e}")
+            return None
+
+    def get_reward_estimates(self):
+        """Fetch XvB's published per-tier expected rewards (XMR/year) over Tor (#118).
+
+        Returns ``{round_type: xmr_per_year}`` for the donor tiers on success, or ``None`` on a
+        failed fetch OR an unparseable body — same "None means keep the last good reading frozen"
+        contract as ``get_stats`` (the caller writes nothing on None, so a stale/failed fetch can be
+        detected via a frozen ``last_update`` and never implied fresh, #311).
+        """
+        proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
+        try:
+            response = requests.get(self.reward_estimate_url, timeout=20, proxies=proxies)
+            if response.status_code != 200:
+                self.logger.error(
+                    f"XvB reward-estimate fetch failed with status code: {response.status_code}"
+                )
+                return None
+            estimates = parse_reward_estimates(response.text)
+            if not estimates:
+                self.logger.warning(
+                    "XvB reward-estimate parse found no donor tiers — file format may have changed."
+                )
+                return None
+            return estimates
+        except requests.RequestException as e:
+            self.logger.error(f"Network error while fetching XvB reward estimates: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Unexpected error fetching XvB reward estimates: {e}")
             return None
 
     def register(self):

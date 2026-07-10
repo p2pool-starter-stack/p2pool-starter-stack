@@ -6,6 +6,7 @@ import pytest
 
 from mining_dashboard.config.config import (
     TIER_DEFAULTS,
+    XVB_STALE_DECAY_AFTER_S,
     XVB_STATS_STALE_AFTER_S,
     XVB_SWITCH_OVERHEAD_MS,
     XVB_TIME_ALGO_MS,
@@ -38,6 +39,12 @@ def _fresh_ts():
 def _stale_ts():
     """A `last_update` old enough that the fetch is considered stale (#311)."""
     return time.time() - (XVB_STATS_STALE_AFTER_S + 60)
+
+
+def _decay_ts():
+    """A `last_update` old enough to be past the prolonged-staleness decay grace, not just
+    the short hold grace — the fail-safe should bleed the donation fraction toward 0."""
+    return time.time() - (XVB_STALE_DECAY_AFTER_S + 60)
 
 
 def _split_ms(decision):
@@ -336,6 +343,79 @@ class TestStaleStatsGuard:
                 RECENT_SHARES,
             )
             assert algo.donation_fraction > seeded  # fresh read still ramps
+
+    def test_prolonged_stale_decays_fraction_toward_zero(self, algo):
+        """Past the longer decay grace, holding blind is the bigger risk: the fail-safe
+        must bleed the held fraction toward 0, not freeze it (the short-hold behavior)."""
+        algo.donation_level = "vip"
+        with patch("mining_dashboard.service.algo_service.ENABLE_XVB", True):
+            # Seed a real held fraction from a fresh read.
+            algo.get_decision(
+                46_300,
+                46_300,
+                POOL_STATS,
+                P2P_MAIN,
+                {"avg_1h": 0, "avg_24h": 0, "fail_count": 0, "last_update": _fresh_ts()},
+                RECENT_SHARES,
+            )
+            held = algo.donation_fraction
+            assert held > 0
+            # One cycle past the decay grace: strictly smaller than the held fraction.
+            algo.get_decision(
+                46_300,
+                46_300,
+                POOL_STATS,
+                P2P_MAIN,
+                {"avg_1h": 0, "avg_24h": 0, "fail_count": 0, "last_update": _decay_ts()},
+                RECENT_SHARES,
+            )
+            assert algo.donation_fraction < held
+            # Keep decaying: it converges to exactly 0 (snapped at the floor), fully stopping.
+            for _ in range(20):
+                algo.get_decision(
+                    46_300,
+                    46_300,
+                    POOL_STATS,
+                    P2P_MAIN,
+                    {"avg_1h": 0, "avg_24h": 0, "fail_count": 0, "last_update": _decay_ts()},
+                    RECENT_SHARES,
+                )
+            assert algo.donation_fraction == 0.0
+
+    def test_fresh_read_resumes_control_after_decay(self, algo):
+        """The decay is a fail-safe, not a latch: once a genuine fetch lands again the
+        controller must resume normal steering from the decayed fraction."""
+        algo.donation_level = "vip"
+        with patch("mining_dashboard.service.algo_service.ENABLE_XVB", True):
+            algo.get_decision(
+                46_300,
+                46_300,
+                POOL_STATS,
+                P2P_MAIN,
+                {"avg_1h": 0, "avg_24h": 0, "fail_count": 0, "last_update": _fresh_ts()},
+                RECENT_SHARES,
+            )
+            # Decay it down over a prolonged outage.
+            for _ in range(5):
+                algo.get_decision(
+                    46_300,
+                    46_300,
+                    POOL_STATS,
+                    P2P_MAIN,
+                    {"avg_1h": 0, "avg_24h": 0, "fail_count": 0, "last_update": _decay_ts()},
+                    RECENT_SHARES,
+                )
+            decayed = algo.donation_fraction
+            # A fresh, below-reference read resumes the catch-up ramp (advance runs again).
+            algo.get_decision(
+                46_300,
+                46_300,
+                POOL_STATS,
+                P2P_MAIN,
+                {"avg_1h": 0, "avg_24h": 0, "fail_count": 0, "last_update": _fresh_ts()},
+                RECENT_SHARES,
+            )
+            assert algo.donation_fraction > decayed  # control resumed, not still decaying
 
     async def test_smart_sleep_does_not_bail_early_on_stale_below_tier(self, algo):
         """The dominant symptom (#311): a frozen below-tier avg_1h made _smart_sleep

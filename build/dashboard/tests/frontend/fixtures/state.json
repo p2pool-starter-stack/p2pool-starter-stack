@@ -72,12 +72,14 @@
     "available": false,
     "block_reward": "0.0000 XMR",
     "coeff_day": 0.0,
-    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and its estimate assumes the merge-mine channel stays connected. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
+    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is merge-mined SOLO by the same hashrate: you get the whole block reward at once when your hashrate finds a Tari block \u2014 roughly every 'time to Tari block' shown \u2014 so the per-day XTM figure is a long-run average, not steady income. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
     "p2pool_hr": 8050.0,
     "p2pool_hr_str": "8.05 kH/s",
     "pool_difficulty": 0,
     "tari_available": false,
-    "tari_coeff_day": 0.0
+    "tari_coeff_day": 0.0,
+    "tari_difficulty": 0.0,
+    "tari_reward": 0
   },
   "egress": {
     "components": [
@@ -186,7 +188,7 @@
     "p2p_1h": "8.05 kH/s",
     "p2p_24h": "8.05 kH/s",
     "p2p_variant": "ok",
-    "target_tier": "None",
+    "target_tier": "Donor (1.00 kH/s+)",
     "tier": "None",
     "total": "10.00 kH/s",
     "xvb_1h": "0.00 H/s",
@@ -578,12 +580,35 @@
   "xvb_calc": {
     "current_tier": "None",
     "enabled": true,
+    "estimates_available": true,
+    "estimates_stale": false,
     "max_fraction": 0.85,
     "mode_note": null,
     "note": "An XvB tier is raffle status, not an XMR payout. Donated hashrate earns no P2Pool shares; holding a tier costs about its threshold in continuous donation (XvB qualifies a tier on both the 1h and 24h credited averages), and donating above the threshold adds nothing \u2014 the raffle winner is drawn at random among qualifiers.",
-    "sustainable": false,
-    "target_threshold": 0.0,
-    "target_tier": "None",
-    "tiers": []
+    "sustainable": true,
+    "target_threshold": 1000.0,
+    "target_tier": "Donor (1.00 kH/s+)",
+    "tiers": [
+      {
+        "expected_reward_year": 0.06,
+        "name": "Donor (1.00 kH/s+)",
+        "threshold": 1000.0
+      },
+      {
+        "expected_reward_year": 0.81,
+        "name": "Vip (10.00 kH/s+)",
+        "threshold": 10000.0
+      },
+      {
+        "expected_reward_year": 6.17,
+        "name": "Whale (100.00 kH/s+)",
+        "threshold": 100000.0
+      },
+      {
+        "expected_reward_year": 56.9,
+        "name": "Mega (1.00 MH/s+)",
+        "threshold": 1000000.0
+      }
+    ]
   }
 }

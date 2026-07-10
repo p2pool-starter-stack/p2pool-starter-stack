@@ -268,6 +268,62 @@ h3 {
 .earnings-disclaimer {
   line-height: 1.4;
 }
+/* Earnings tab strip (#118): switches the card body between Monero / Tari / XvB. Reuses the
+ * existing border/accent tokens — no new palette. The active tab carries an accent underline. */
+.earnings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.earnings-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.earnings-tab:hover {
+  color: var(--text);
+}
+.earnings-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.earnings-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+/* Per-tier payout comparison dropdown (#118), inside the XvB tier block. */
+.xvb-comparison {
+  margin-top: 12px;
+}
+.xvb-compare-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.xvb-tier-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+.xvb-tier-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 /* XvB tier / raffle block inside the earnings card (#118) — visually separated from the
  * XMR/XTM payout figures, since a tier is raffle status, not a payout. */
 .xvb-tier-block {

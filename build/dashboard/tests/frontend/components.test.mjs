@@ -102,23 +102,26 @@ test('EarningsCard shows the fallback when stats are down, the calculator when a
     assert.match(up, /id="whatif-hr"/);
 });
 
-test('EarningsCard renders the Tari rows: figures when merge-mining, "—" when not (#117)', () => {
-    // Merge-mining live: the XTM rows scale the server rate by the default what-if hashrate.
+test('EarningsCard leads with solo time-to-block + per-block reward, day as avg (#117)', () => {
+    // Merge-mining live: the honest solo headline is time-to-block and the whole per-block reward.
     const s = clone();
     s.earnings.available = true;
     s.earnings.tari_available = true;
-    s.earnings.tari_coeff_day = 2e-3;   // × p2pool_hr (8050) → 16.1 XTM/day
+    s.earnings.tari_coeff_day = 2e-3;   // × p2pool_hr (8050) → 16.1 XTM/day (long-run avg)
+    s.earnings.tari_difficulty = 1.677e12;  // seconds-to-block per H/s; ÷ 8050 → ~2410 days
+    s.earnings.tari_reward = 10_709;
     const up = renderApp({ state: s });
-    assert.match(up, /XTM \/ day/);
-    assert.match(up, /XTM \/ month/);
-    assert.match(up, /XTM \/ year/);
-    assert.match(up, /16\.1000 XTM/);
+    assert.match(up, /Est\. Time to Tari Block/);
+    assert.match(up, /XTM per Block/);
+    assert.match(up, /10709\.0000 XTM/);   // the full block reward
+    assert.match(up, /XTM \/ day \(avg\)/); // per-day kept, but labelled an average
+    assert.match(up, /16\.1000 XTM/);       // the long-run average figure still shown
     // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
     const off = clone();
     off.earnings.available = true;
     off.earnings.tari_available = false;
     const down = renderApp({ state: off });
-    assert.match(down, /XTM \/ day/);
+    assert.match(down, /Est\. Time to Tari Block/);
     assert.match(down, /—/);
     assert.doesNotMatch(down, /NaN/);
 });
@@ -154,6 +157,111 @@ test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it 
     const off = renderApp({ state: s });
     assert.doesNotMatch(off, /XvB Tier \(raffle\)/);
     assert.match(off, /Your P2Pool Hashrate/);
+});
+
+test('EarningsCard splits into Monero / Tari / XvB tabs, Monero active by default (#118)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    // XvB on → three tabs; the XvB tab only exists when XvB is enabled.
+    const html = renderApp({ state: s });
+    assert.match(html, /role="tablist"/);
+    assert.match(html, /id="etab-monero"[^>]*>Monero</);
+    assert.match(html, /id="etab-tari"[^>]*>Tari</);
+    assert.match(html, /id="etab-xvb"[^>]*>XvB</);
+    // Default active tab = Monero: it is aria-selected and its panel is visible; the others hidden.
+    assert.match(html, /id="etab-monero"[^>]*aria-selected="true"/);
+    assert.match(html, /id="etab-tari"[^>]*aria-selected="false"/);
+    assert.match(html, /id="epanel-monero"[^>]*aria-labelledby="etab-monero">/); // no `hidden` → shown
+    assert.match(html, /id="epanel-tari"[^>]*hidden>/); // inactive panel hidden
+    assert.match(html, /id="epanel-xvb"[^>]*hidden>/);
+    // The shared what-if input sits above the tab strip, so it drives all three tabs.
+    assert.match(html, /id="whatif-hr"/);
+    // The Monero panel carries the XMR figures, the Tari panel the solo time-to-block, the XvB
+    // panel the tier block — all present in the DOM (inactive ones just hidden).
+    assert.match(html, /XMR \/ day/);
+    assert.match(html, /Est\. Time to Tari Block/);
+    assert.match(html, /XvB Tier \(raffle\)/);
+});
+
+test('EarningsCard drops the XvB tab entirely when XvB is disabled (#118)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.xvb_calc = { enabled: false };
+    const html = renderApp({ state: s });
+    assert.match(html, /id="etab-monero"/);
+    assert.match(html, /id="etab-tari"/);
+    assert.doesNotMatch(html, /id="etab-xvb"/); // no XvB tab
+    assert.doesNotMatch(html, /id="epanel-xvb"/);
+    assert.doesNotMatch(html, /XvB Tier \(raffle\)/);
+});
+
+test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-7; // XMR per H/s per day → cost = threshold × this × 365
+    // A Whale-capable what-if default (200k × 0.85 ≥ 100k threshold) so the target tier's Net shows;
+    // the unsustainable path is asserted separately below.
+    base.earnings.p2pool_hr = 200000;
+    base.earnings.p2pool_hr_str = '200.00 kH/s';
+    base.xvb_calc = {
+        enabled: true,
+        max_fraction: 0.85,
+        estimates_available: true,
+        estimates_stale: false,
+        current_tier: 'None',
+        target_tier: 'Whale (100.00 kH/s+)',
+        target_threshold: 100000,
+        sustainable: true,
+        note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null,
+        tiers: [
+            { name: 'Donor (1.00 kH/s+)', threshold: 1000, expected_reward_year: 0.06 },
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81 },
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17 },
+            { name: 'Mega (1.00 MH/s+)', threshold: 1000000, expected_reward_year: 56.9 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    // The dropdown renders all four tiers as options.
+    assert.match(up, /id="xvb-tier-select"/);
+    for (const name of ['Donor', 'Vip', 'Whale', 'Mega']) {
+        assert.match(up, new RegExp(`<option[^>]*>${name}`), `missing tier option: ${name}`);
+    }
+    // Default selection = the target tier (Whale): Expected is XvB's figure, Cost = 100000 × 1e-7 ×
+    // 365 = 3.65 XMR/yr, Net = 6.17 − 3.65 = 2.52.
+    assert.match(up, /Expected \(XvB\)/);
+    assert.match(up, /6\.1700 XMR/);   // expected
+    assert.match(up, /3\.6500 XMR/);   // cost
+    assert.match(up, /2\.5200 XMR/);   // net
+    assert.match(up, /From XvB's published per-tier estimate/);
+    assert.doesNotMatch(up, /estimate unavailable/);
+
+    // Stale/unavailable estimate: the note replaces the Expected number, cost still shows.
+    const stale = clone();
+    stale.earnings.available = true;
+    stale.earnings.coeff_day = 1e-7;
+    stale.xvb_calc = {
+        ...base.xvb_calc,
+        estimates_available: false,
+        estimates_stale: true,
+        tiers: base.xvb_calc.tiers.map((t) => ({ ...t, expected_reward_year: null })),
+    };
+    const sHtml = renderApp({ state: stale });
+    assert.match(sHtml, /estimate unavailable/);
+    assert.match(sHtml, /Expected reward estimate unavailable/);
+    assert.match(sHtml, /3\.6500 XMR/); // cost still stands
+
+    // Unsustainable tier: at the fixture's small default hashrate (~8 kH/s), the Whale target
+    // can't be held (8k × 0.85 < 100k) — the comparison must SAY so and withhold the Net rather
+    // than imply an unreachable +2.52 XMR/yr payout.
+    const small = clone();
+    small.earnings.available = true;
+    small.earnings.coeff_day = 1e-7;
+    small.xvb_calc = { ...base.xvb_calc };
+    const uHtml = renderApp({ state: small });
+    assert.match(uHtml, /Not sustainable at your hashrate/);
+    assert.match(uHtml, /6\.1700 XMR/); // XvB's expected figure still shown (it's their number)
+    assert.doesNotMatch(uHtml, /2\.5200 XMR/); // but no reachable-looking Net
 });
 
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
