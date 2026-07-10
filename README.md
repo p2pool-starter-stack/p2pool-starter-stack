@@ -31,8 +31,9 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
 - 🧠 **XvB switching engine.** Watches the XMRvsBeast raffle and shifts hashrate to hold your tier,
   donating the minimum needed and routing the rest to your P2Pool payouts.
 - 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses;
-  a host firewall drops any direct clearnet dial from the stack. Two outbound paths still touch
-  clearnet in v1.0 — the [privacy guide](docs/privacy.md) maps every connection and how to harden it.
+  a host firewall drops any direct clearnet dial from the stack. All runtime egress routes over Tor
+  by default — the one opt-in exception is clearnet initial sync. The [privacy
+  guide](docs/privacy.md) maps every connection.
 - 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
   address in the miner config; the stack routes the hashrate.
 - 📊 **Live dashboard.** Hashrate, the P2Pool/XvB split, the PPLNS window, and per-worker updates,
@@ -43,11 +44,11 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   [Telegram guide](docs/telegram.md).
 - 🔔 **Dead-man's switch.** An optional [Healthchecks.io](https://healthchecks.io/) ping tells you
   when the whole box goes dark — the one failure a monitor running *on* that box can never report.
-- 🚀 **Interactive setup.** `pithead setup` checks dependencies, writes config, provisions Tor, and
+- 🚀 **Interactive setup.** `./pithead setup` checks dependencies, writes config, provisions Tor, and
   (on Linux) tunes HugePages for RandomX. It prompts before any GRUB change, then offers to start.
-- 🔒 **Hardened defaults.** Non-root containers, SHA256-verified binaries, pinned image digests,
-  localhost-only RPC, and two scoped Docker socket proxies: a read-only one for stats and a
-  separate start/stop-only one for node-down worker failover.
+- 🔒 **Hardened defaults.** Non-root containers, SHA256-verified binaries, digest-pinned base and
+  third-party images, localhost-only RPC, and two scoped Docker socket proxies: a read-only one for
+  stats and a separate start/stop-only one for node-down worker failover.
 
 ---
 

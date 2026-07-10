@@ -268,6 +268,20 @@ h3 {
 .earnings-disclaimer {
   line-height: 1.4;
 }
+/* XvB tier / raffle block inside the earnings card (#118) — visually separated from the
+ * XMR/XTM payout figures, since a tier is raffle status, not a payout. */
+.xvb-tier-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.xvb-tier-block h4 {
+  margin: 0 0 10px 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 
 /* Table */
 table {

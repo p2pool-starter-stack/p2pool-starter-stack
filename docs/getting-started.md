@@ -30,7 +30,7 @@ script drives every step.
 > is in **[Hardware Requirements](hardware.md)**. Miner specs live in
 > [RigForge](https://github.com/p2pool-starter-stack/rigforge).
 
-> 🔎 `setup` checks this for you. Before it starts anything, `pithead setup` runs a best-effort
+> 🔎 `setup` checks this for you. Before it starts anything, `./pithead setup` runs a best-effort
 > pre-flight on free disk and total RAM. If either is below the recommended minimums (~300 GB
 > pruned / ~500 GB full disk, 16 GB RAM), it prints a warning. It never blocks setup, so you can
 > proceed on a smaller host at your own risk. See **[Hardware Requirements](hardware.md)**.

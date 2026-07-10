@@ -16,7 +16,7 @@ import {
     SERIES_KEYS, normalizeSeries,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, fmtHashrate, computeEarnings, formatXmr, formatXtm, formatTimeToShare,
+    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, formatXmr, formatXtm, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -241,6 +241,50 @@ test('computeEarnings: no time-to-share when share difficulty is unknown', () =>
     const est = computeEarnings(50_000, { available: true, coeff_day: 1e-7, pool_difficulty: 0 });
     assert.equal(est.timeToShareSec, null);
     assert.ok(est.day > 0);   // earnings still computed
+});
+
+// --- computeXvbTier (#118) — transcription of resolve_target_threshold's auto rule ------
+
+const XVB_CALC = {
+    enabled: true,
+    max_fraction: 0.85,
+    tiers: [
+        { name: 'Donor (1.00 kH/s+)', threshold: 1_000 },
+        { name: 'Vip (10.00 kH/s+)', threshold: 10_000 },
+        { name: 'Whale (100.00 kH/s+)', threshold: 100_000 },
+        { name: 'Mega (1.00 MH/s+)', threshold: 1_000_000 },
+    ],
+};
+
+test('computeXvbTier: pinned against the Python resolve_target_threshold auto case', () => {
+    // Same inputs as tests/helper/test_utils.py::test_auto_picks_highest_sustainable:
+    // 15,000 H/s × 0.85 = 12,750 sustains exactly the 10k (Vip) tier — the transcription
+    // cross-check that keeps the JS and helper/utils.py rules from drifting silently.
+    const t = computeXvbTier(15_000, XVB_CALC);
+    assert.equal(t.threshold, 10_000);
+    assert.equal(t.cost, 10_000);    // cost = the threshold itself (continuous donation)
+    assert.match(t.tier, /Vip/);
+});
+
+test('computeXvbTier: below the lowest tier → null', () => {
+    assert.equal(computeXvbTier(100, XVB_CALC), null);  // 100 × 0.85 = 85 < 1,000
+});
+
+test('computeXvbTier: exactly threshold / max_fraction clears the tier (boundary)', () => {
+    assert.equal(computeXvbTier(10_000 / 0.85, XVB_CALC).threshold, 10_000);
+});
+
+test('computeXvbTier: between tiers picks the lower one', () => {
+    // 60,000 × 0.85 = 51,000 — clears 10k, not 100k.
+    assert.equal(computeXvbTier(60_000, XVB_CALC).threshold, 10_000);
+});
+
+test('computeXvbTier: null when disabled, calc missing, empty tiers, or bad hashrate', () => {
+    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, enabled: false }), null);
+    assert.equal(computeXvbTier(15_000, null), null);
+    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, tiers: [] }), null);
+    assert.equal(computeXvbTier(0, XVB_CALC), null);
+    assert.equal(computeXvbTier(null, XVB_CALC), null);
 });
 
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {

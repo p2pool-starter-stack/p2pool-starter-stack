@@ -116,7 +116,7 @@ so confirm yours is a `4…`/95-char address first (see [Configuration](configur
 > copying the stack to a different path (or running a second checkout) points it at a *different,
 > empty* `data/`: a full re-sync, and the dashboard history is orphaned. If you move the install,
 > move its `data/` with it, or set absolute `data_dir` paths in `config.json` and run `./pithead
-> apply`. `pithead up` and `pithead doctor` now warn when a data directory named in `.env` is missing.
+> apply`. `./pithead up` and `./pithead doctor` now warn when a data directory named in `.env` is missing.
 
 ---
 

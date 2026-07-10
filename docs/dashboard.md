@@ -65,7 +65,10 @@ Once both nodes are synced, the dashboard shows the operational view.
 </picture>
 
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
-position, the worker-table sort column, and the chart stay put between updates.
+position, the worker-table sort column, and the chart stay put between updates. A poll that fails —
+or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
+timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
+successful refresh.
 
 ### Top bar
 
@@ -99,10 +102,12 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | `⚠ HugePages off` | HugePages aren't reserved — RandomX hashrate is capped. | Run setup's tuning (or edit GRUB) and reboot; the badge clears once they're reserved. |
 | `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
+| `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
 
 The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
-on; AVX2 is badge-only (see [Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active
-warning badges are echoed in the bot's `/status` reply.
+on; the wallet badge pairs with the `wallet_changed` alert; AVX2 is badge-only (see
+[Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active warning badges are echoed in
+the bot's `/status` reply.
 
 ### Hero band
 
@@ -190,7 +195,9 @@ and 10m windows — the same 10m window the chart's averaging toggle and Telegra
 for spotting a rig that has dropped off or is underperforming. A
 worker whose direct API is unreachable still counts (with proxy-derived hashrate); a worker whose
 miner has stopped drops out of the total. On a narrow screen the table scrolls sideways within its
-card so columns stay readable.
+card so columns stay readable. Until the first worker ever connects, the card shows a connect hint
+("point each rig at `<host-ip>:3333`") in place of the empty table; see
+[Connecting Miners](workers.md).
 
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
@@ -255,8 +262,32 @@ figures. It is scoped to P2Pool — **not** an XvB calculator:
 
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
-> network figures aren't available yet, the card shows `—` rather than a bogus number. An XvB
-> tier projection isn't included yet.
+> network figures aren't available yet, the card shows `—` rather than a bogus number.
+
+### XvB Tier (raffle)
+
+A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
+XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
+disabled (`xvb.enabled: false`). It shows tier status only — deliberately no raffle entries or win
+odds, because there are none to show: the raffle winner is drawn at random among everyone above
+the threshold, so donating more than the threshold buys zero extra win chance.
+
+| Field | Meaning |
+|---|---|
+| **Sustainable Tier** | The highest XvB donor tier the entered hashrate sustains while leaving P2Pool its share of the split — the same auto rule the donation controller uses (`hashrate × max donation fraction ≥ tier threshold`, default fraction 0.85). `None` when even the lowest tier is out of reach. |
+| **Hashrate Cost** | What holding that tier costs: about its threshold in **continuous** donation, because XvB qualifies a tier on both the 1h and 24h credited averages. This hashrate earns no P2Pool shares while donated. |
+| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
+| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
+
+Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
+tier threshold on both credited averages; a win terminates if the 1h average then drops below the
+round minimum; and collecting any win needs a share in the P2Pool PPLNS window (what XvB calls
+being a "VIP"). So the optimum donation is the minimum that clears your tier — never more. A tier
+is raffle status, not an XMR payout, and the card says so. The tier thresholds come from the
+server's tier table — the same one the donation controller steers by — so the two can't disagree.
+
+NOTE: on the mini/nano sidechains the block adds a reminder that switching the P2Pool sidechain
+resets your PPLNS shares — and with them XvB win collectability until a new share lands.
 
 ### Pool Cadence & Luck
 
