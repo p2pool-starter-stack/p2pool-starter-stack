@@ -47,6 +47,7 @@ const ui = {
   sortIndex: null,
   sortAsc: true,
   view: localStorage.getItem("dashboardView") === "advanced" ? "advanced" : "simple",
+  configOpen: false, // the #33 config-editor overlay; opened from the toolbar, closed on done/✕
   // Theme is persisted in localStorage so it survives reloads and stack restarts (Issue #43).
   // theme-init.js already applied it to <html> before first paint; we mirror it into the UI
   // state and re-apply on toggle.
@@ -68,9 +69,20 @@ function rerender() {
     html`<${App} state=${state} connected=${connected} ui=${ui}
                      onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme}
                      onZoom=${setZoom} onResetZoom=${resetZoom} onToggleSeries=${toggleSeries}
-                     onAvgWindow=${setAvgWindow} />`,
+                     onAvgWindow=${setAvgWindow} onOpenConfig=${openConfig} onCloseConfig=${closeConfig} />`,
     root,
   );
+}
+
+// The config editor (#33) overlay is pure client UI state — no fetch on toggle; the panel loads
+// /api/config itself when it mounts.
+function openConfig() {
+  ui.configOpen = true;
+  rerender();
+}
+function closeConfig() {
+  ui.configOpen = false;
+  rerender();
 }
 
 async function tick() {

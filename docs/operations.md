@@ -183,6 +183,34 @@ dashboard settings.
 
 ---
 
+## The config-editor runner
+
+The in-dashboard [config editor](dashboard.md#the-config-editor) (`dashboard.control.enabled: true`)
+applies changes through a host-side systemd runner, installed by `pithead setup`/`apply`/`upgrade`
+when the channel is on:
+
+- `pithead-control.path` — watches `./data/control/requests/` for a new change request.
+- `pithead-control.service` — a `oneshot` unit, `User=root`, with a fixed
+  `ExecStart=<checkout>/pithead control-run-pending`. It re-validates the request and runs
+  `pithead apply`. The command is fixed and takes no input from the container, so a compromised
+  dashboard cannot turn it into arbitrary execution.
+
+Check it:
+
+```bash
+systemctl status pithead-control.path
+journalctl -u pithead-control.service
+```
+
+The applied-change log lives at `./data/control/audit/control.log` (root-owned, one JSON line per
+commit: timestamp, request id, actor, outcome). A failed apply keeps the previous config as
+`config.json.bak-control`.
+
+To turn the editor off, set `dashboard.control.enabled: false` and run `./pithead apply` — pithead
+disables and removes both units. The spool under `./data/control/` is inert once the units are gone.
+
+---
+
 ## Troubleshooting
 
 **The dashboard is stuck on Sync Mode.**

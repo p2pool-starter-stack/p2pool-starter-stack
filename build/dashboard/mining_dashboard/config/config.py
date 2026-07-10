@@ -180,6 +180,22 @@ DOCKER_CONTROL_URL = os.environ.get("DOCKER_CONTROL_URL", "tcp://127.0.0.1:12376
 LOG_TAIL_LINES = int(os.environ.get("LOG_TAIL_LINES", 100))
 DOCKER_TIMEOUT = int(os.environ.get("DOCKER_TIMEOUT", 5))
 
+# --- Dashboard config editor / host-mutation channel (Issue #33) ---
+# The canonical channel that lets the dashboard write config.json and run `pithead apply` on the
+# HOST. Default OFF: when off, the /api/config + /api/control/* routes are never registered, so the
+# editor is fully inert (404). pithead fails closed — it refuses to enable this without a dashboard
+# login. The dashboard only WRITES typed intents into the request spool; a root systemd runner on
+# the host re-validates and executes. See control_service.py and docs/dashboard.md.
+DASHBOARD_CONTROL_ENABLED = (
+    os.environ.get("DASHBOARD_CONTROL_ENABLED", "false").strip().lower() == "true"
+)
+# The read-only config mount (form prefill) and the spool leaves the dashboard can touch. requests/
+# is the only writable one; results/ + audit/ are mounted read-only. Overridable for tests.
+HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+CONTROL_REQUESTS_DIR = os.environ.get("CONTROL_REQUESTS_DIR", "/control/requests")
+CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
+CONTROL_AUDIT_LOG = os.environ.get("CONTROL_AUDIT_LOG", "/control/audit/control.log")
+
 # --- Monero is required; Tari is optional (Issues #31, #35, #51) ---
 # monerod is the chain the stack actually mines: if it's unreachable or still syncing, the
 # workers can't mine no matter what, so those behaviours aren't configurable.

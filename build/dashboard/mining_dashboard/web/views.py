@@ -17,6 +17,7 @@ import os
 import time
 
 from mining_dashboard.config.config import (
+    DASHBOARD_CONTROL_ENABLED,
     DEFAULT_HASHRATE_WINDOW,
     DISK_CRITICAL_PERCENT,
     DISK_WARN_PERCENT,
@@ -1196,6 +1197,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
+        # Whether the config editor (#33) is on — the client shows the "Configuration" entry point
+        # only then. The routes themselves are the real gate (absent = 404 when off); this is UI only.
+        "control_enabled": DASHBOARD_CONTROL_ENABLED,
         "version": resolve_version(),
         "update": data.get("update"),  # {available, latest, url} | None — new-release badge (#224)
         "last_update": format_time_abs(time.time()),

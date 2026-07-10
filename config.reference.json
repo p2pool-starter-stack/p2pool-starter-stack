@@ -68,6 +68,9 @@
         "onion": {
             "enabled": false,
             "client_auth": true
+        },
+        "control": {
+            "enabled": false
         }
     },
 

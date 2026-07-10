@@ -331,6 +331,39 @@ there is nothing to configure.
 
 ---
 
+## The config editor
+
+Off by default. Set `dashboard.control.enabled: true` (and a `dashboard.auth.password`) and run
+`./pithead apply` to add a **⚙ Configuration** button above the chart. It edits the same
+`config.json` you would edit by hand, from the browser, and applies it for you.
+
+The flow is deliberately two-step so nothing changes on a single click:
+
+1. **Edit.** The form is prefilled from your current `config.json`. Secrets (the dashboard password,
+   node RPC credentials, Telegram token, worker API token, stratum password) show as
+   `set — leave blank to keep`; leave them blank to keep the current value, or type a new one to
+   change it. The raw secret is never sent to the browser.
+2. **Save → preview.** The host re-validates the proposed config and shows the exact change list —
+   the same lines `./pithead apply` prints on the terminal. Disruptive changes (a payout-wallet
+   change, a `main`/`mini`/`nano` switch that resets your PPLNS window, a `prune` toggle, a
+   local↔remote node switch) are flagged with a ⚠.
+3. **Confirm → apply.** Only an explicit Confirm runs `pithead apply` on the host, which recreates
+   just the containers whose config changed. The result (applied, or the error if it failed) is
+   shown back in the panel.
+
+What it can change: any key in [`config.reference.json`](../config.reference.json) that is present
+in your `config.json`. The `p2pool.pool` switch carries its usual warning — changing the sidechain
+re-syncs it and resets your PPLNS and XvB shares.
+
+This is the one path where the dashboard changes the host, so it is locked down: the browser only
+ever *asks*, a root systemd runner *decides*, and every applied change is written to a host-side
+audit log the dashboard cannot alter. It needs a systemd host. See
+[Operations › The config-editor runner](operations.md#the-config-editor-runner) for the units and
+how to turn it off, and [Security › The host-mutation channel](../SECURITY.md#the-host-mutation-channel-33)
+for the trust boundary.
+
+---
+
 ## Tips
 
 - **First visit certificate warning.** With `dashboard.secure: true` (the default), Caddy uses a

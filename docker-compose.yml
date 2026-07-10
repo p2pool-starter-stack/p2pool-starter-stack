@@ -361,6 +361,15 @@ services:
       # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
       # the same dir read-only. Holds only non-secret state markers.
       - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
+      # Host-mutation control spool (#33). The trust boundary in mount form: requests/ is the ONLY
+      # writable leaf — the dashboard drops typed, validated config-change intents there. staged/ is
+      # host-only (never mounted). results/ and audit/ are mounted READ-ONLY, so a compromised
+      # dashboard can ask but can never forge a result or rewrite the audit log. config.json is
+      # mounted read-only purely to prefill the editor form. All inert unless dashboard.control.enabled.
+      - ${CONTROL_DIR:-./data/control}/requests:/control/requests
+      - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
+      - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
+      - ./config.json:/host-config/config.json:ro
     environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
@@ -470,6 +479,10 @@ services:
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}
       - HASHRATE_DROP_MINUTES=${HASHRATE_DROP_MINUTES:-10}
       - TELEGRAM_COMMANDS_ENABLED=${TELEGRAM_COMMANDS_ENABLED:-false}
+      # Dashboard config editor / host-mutation channel (#33). Default off; when off the /api/config
+      # + /api/control/* routes are never registered (404), so the editor is fully inert. Fail-closed:
+      # pithead refuses to render this true without a dashboard login. See docs/dashboard.md.
+      - DASHBOARD_CONTROL_ENABLED=${DASHBOARD_CONTROL_ENABLED:-false}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

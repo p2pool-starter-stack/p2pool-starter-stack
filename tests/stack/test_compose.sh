@@ -155,6 +155,18 @@ jq_assert "both socket proxies publish only to the host loopback" \
 # No mining service may sit on proxy_net (keep the isolation one-directional).
 jq_assert "mining services are not on proxy_net" \
     '[.services["monerod"], .services["tari"], .services["p2pool"], .services["xmrig-proxy"]] | all((.networks // {} | keys) | any(. == "proxy_net") | not)'
+# Host-mutation control spool (#33): the trust boundary is the rw/ro split. requests/ is the ONLY
+# writable leaf; results/, audit/, and the config.json prefill are mounted READ-ONLY, so a
+# compromised dashboard can drop an intent but can never forge a result, rewrite the audit log, or
+# tamper with the host's config file directly.
+jq_assert "control requests/ is the only writable control mount" \
+    '.services.dashboard.volumes | any((.target == "/control/requests") and ((.read_only // false) == false))'
+jq_assert "control results/ is mounted read-only" \
+    '.services.dashboard.volumes | any((.target == "/control/results") and (.read_only == true))'
+jq_assert "control audit/ is mounted read-only" \
+    '.services.dashboard.volumes | any((.target == "/control/audit") and (.read_only == true))'
+jq_assert "host config.json prefill is mounted read-only" \
+    '.services.dashboard.volumes | any((.target == "/host-config/config.json") and (.read_only == true))'
 # The Tari probe uses the [m] bracket so grep can't match its own argv (a false-healthy bug).
 jq_assert "tari healthcheck uses the [m]inotari self-match guard" \
     '(.services.tari.healthcheck.test | tostring) | contains("[m]inotari")'

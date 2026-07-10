@@ -1922,6 +1922,114 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead onion-client-key 2>&1)"
 assert_rc "onion-client-key errors when client-auth off" "$?" "1"
 assert_contains "onion-client-key off message" "$out" "password-only"
 
+# ---------------------------------------------------------------------------
+echo "== black-box: config editor / host-mutation channel (#33) =="
+# Fail-closed: enabling the control channel without a dashboard login must abort validation, exactly
+# like the onion (the editor can rewrite config.json and run apply on the host).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","control":{"enabled":true}} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "control.enabled without a password rejected" "$?" "1"
+assert_contains "control-without-login message" "$out" "dashboard.control.enabled"
+assert_contains "control-without-login names the login" "$out" "dashboard login"
+
+# apply --dry-run --porcelain: emits FLAG<TAB>KEY<TAB>MSG lines and touches NOTHING (no .env write,
+# no container). Change the pool so at least one key differs.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+env_before="$(cat "$V/.env")"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_rc "apply --dry-run exits 0" "$?" "0"
+# The porcelain line for the sidechain change is 'INFO<TAB>P2POOL_FLAGS<TAB>...'.
+case "$out" in
+*"$(printf 'P2POOL_FLAGS\t')"*) ok "dry-run porcelain emits FLAG<TAB>KEY<TAB>MSG" ;;
+*) bad "dry-run porcelain emits FLAG<TAB>KEY<TAB>MSG" "no tab-delimited P2POOL_FLAGS line in [$out]" ;;
+esac
+assert_eq "dry-run leaves .env untouched" "$(cat "$V/.env")" "$env_before"
+[ -f "$V/.env.dryrun" ] && bad "dry-run cleans its staging file" ".env.dryrun left behind" || ok "dry-run cleans its staging file"
+
+# PITHEAD_CONFIG_FILE override: dry-run reads the alternate file, not config.json. config.json keeps
+# pool=main here; the override file asks for nano, and the preview must reflect nano.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"nano"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/staged.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" PITHEAD_CONFIG_FILE=staged.json ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_contains "PITHEAD_CONFIG_FILE override reads the alt file" "$out" "--nano"
+
+# --- The runner: control-run-pending drains the request spool ---
+CT="$V/data/control"
+seed_control_env() {
+    cat >"$V/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+DASHBOARD_CONTROL_ENABLED=true
+CONTROL_DIR=$CT
+EOF
+    rm -rf "$CT"
+    mkdir -p "$CT/requests" "$CT/staged" "$CT/results" "$CT/audit"
+}
+mk_intent() { # id action [intent_id]
+    if [ -n "${3:-}" ]; then
+        jq -n --arg id "$1" --arg a "$2" --arg iid "$3" '{id:$id,action:$a,intent_id:$iid,actor:"tester"}'
+    else
+        cfg="$(sed 's/"pool":"main"/"pool":"mini"/' "$V/config.json")"
+        jq -n --arg id "$1" --arg a "$2" --argjson c "$cfg" '{id:$id,action:$a,config:$c,actor:"tester"}'
+    fi
+}
+PID="11111111-2222-4333-8444-555555555555"
+seed_control_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+
+# Valid preview → a 'previewed' result and a host-side staged config; the request is consumed.
+mk_intent "$PID" preview >"$CT/requests/$PID.json"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "preview: request consumed" "$(ls -A "$CT/requests")" ""
+assert_eq "preview: staged config written" "$(ls -A "$CT/staged")" "$PID.json"
+assert_contains "preview: result is previewed" "$(cat "$CT/results/$PID.json")" '"previewed"'
+assert_contains "preview: pool switch is a change" "$(jq -r '.changes[].key' "$CT/results/$PID.json")" "P2POOL_FLAGS"
+
+# Bad id / invalid JSON: dropped, nothing staged, no result (an id can't be trusted as a filename).
+seed_control_env
+echo '{"id":"not-a-uuid","action":"preview","config":{}}' >"$CT/requests/bad.json"
+printf '{not json' >"$CT/requests/dddddddd-eeee-4fff-8000-111111111111.json"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "bad requests dropped" "$(ls -A "$CT/requests")" ""
+assert_eq "bad requests stage nothing" "$(ls -A "$CT/staged")" ""
+assert_eq "bad requests write no result" "$(ls -A "$CT/results")" ""
+
+# Unknown action on a valid id → rejected result.
+seed_control_env
+UA="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+jq -n --arg id "$UA" '{id:$id,action:"frobnicate",config:{}}' >"$CT/requests/$UA.json"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "unknown action rejected" "$(cat "$CT/results/$UA.json")" '"rejected"'
+
+# Commit with a missing staged intent → rejected (must preview first).
+seed_control_env
+CID="bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+mk_intent "$CID" commit "cccccccc-dddd-4eee-8fff-000000000000" >"$CT/requests/$CID.json"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "commit without staged intent rejected" "$(cat "$CT/results/$CID.json")" '"rejected"'
+
+# Full commit: preview then commit-by-intent-id → apply runs, config.json is swapped, an audit line
+# is appended, and the backup is removed on success.
+seed_control_env
+mk_intent "$PID" preview >"$CT/requests/$PID.json"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+mk_intent "$CID" commit "$PID" >"$CT/requests/$CID.json"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "commit applied" "$(cat "$CT/results/$CID.json")" '"applied"'
+assert_eq "commit swapped config.json (pool=mini)" "$(jq -r '.p2pool.pool' "$V/config.json")" "mini"
+assert_contains "commit audit line records the actor + outcome" "$(cat "$CT/audit/control.log")" '"actor":"tester"'
+assert_contains "commit audit line records applied" "$(cat "$CT/audit/control.log")" '"outcome":"applied"'
+[ -f "$V/config.json.bak-control" ] && bad "commit removes the backup on success" "bak-control left behind" || ok "commit removes the backup on success"
+rm -rf "$CT" "$V/staged.json" "$V/config.json.bak-control"
+
 # Wallet-type hard-fail (#250): p2pool pays via coinbase, which CANNOT reach a subaddress or an
 # integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is
 # unit-tested in isolation; these prove parse_and_validate_config actually ABORTS apply on each,

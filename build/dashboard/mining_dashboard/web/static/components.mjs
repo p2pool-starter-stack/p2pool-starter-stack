@@ -4,6 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 
 import { ChartCard } from "./chart.mjs";
+import { ControlPanel } from "./control.mjs";
 import {
   computeEarnings,
   computeXvbTier,
@@ -718,6 +719,7 @@ function DashboardView({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onOpenConfig,
 }) {
   const advanced = ui.view === "advanced";
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
@@ -730,6 +732,7 @@ function DashboardView({
                 <button class=${"btn-toggle" + (!advanced ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
                 <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
             </div>
+            ${state.control_enabled ? html`<button class="btn-toggle" id="btn-config" onClick=${onOpenConfig}>⚙ Configuration</button>` : null}
         </div>
         <div class="grid">
             <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
@@ -768,9 +771,16 @@ export function App({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onOpenConfig,
+  onCloseConfig,
 }) {
   // The theme toggle is fixed-position and always available, even before the first data load.
   const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
+  // The config editor (#33) is a full-screen overlay; only reachable when the channel is enabled.
+  const configPanel =
+    ui.configOpen && state && state.control_enabled
+      ? html`<${ControlPanel} onClose=${onCloseConfig} />`
+      : null;
   if (!state) {
     return html`<${Fragment}>
             <div class="loading">${connected ? "Connecting to the dashboard…" : "Cannot reach the dashboard."}</div>
@@ -787,9 +797,11 @@ export function App({
                 <${HeroBand} state=${state} />
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
+                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow}
+                                  onOpenConfig=${onOpenConfig} />
               <//>`
         }
+        ${configPanel}
         ${switcher}
     <//>`;
 }

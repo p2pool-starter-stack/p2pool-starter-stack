@@ -1,8 +1,11 @@
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
+from mining_dashboard.service.control_service import SECRET_SENTINEL
 from mining_dashboard.service.storage_service import StateManager
+from mining_dashboard.web import server
 from mining_dashboard.web.server import _apply_security_headers, create_app
 
 SECURITY_HEADERS = [
@@ -167,6 +170,172 @@ class TestMetricsEndpoint:
         body = await resp.text()
         assert "SECRET internal detail" not in body
         assert "Traceback" not in body
+
+
+class TestControlChannelOff:
+    """With dashboard.control disabled (the default), the mutation routes must not exist at all —
+    the boundary is "absent", not "guarded" (#33)."""
+
+    async def test_config_route_404_when_disabled(self, aiohttp_client, app_data, monkeypatch):
+        monkeypatch.setattr(server.config, "DASHBOARD_CONTROL_ENABLED", False)
+        sm = StateManager(db_path=":memory:")
+        cli = await aiohttp_client(create_app(sm, app_data))
+        for path in ("/api/config", "/api/control/result?id=x"):
+            assert (await cli.get(path)).status == 404, path
+        assert (await cli.post("/api/control/preview")).status == 404
+        assert (await cli.post("/api/control/commit")).status == 404
+        sm.close()
+
+
+HOST_CONFIG = {
+    "monero": {"wallet_address": "4W", "node_password": "rpcpass"},
+    "p2pool": {"pool": "main"},
+    "dashboard": {"auth": {"password": "hunter2hunter2"}},
+}
+
+
+@pytest.fixture
+async def control_client(aiohttp_client, app_data, tmp_path, monkeypatch):
+    """A client with the control channel enabled, wired to a tmp spool + host config."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(HOST_CONFIG))
+    reqs, results, audit = tmp_path / "requests", tmp_path / "results", tmp_path / "audit"
+    reqs.mkdir()
+    results.mkdir()
+    audit.mkdir()
+    monkeypatch.setattr(server.config, "DASHBOARD_CONTROL_ENABLED", True)
+    monkeypatch.setattr(server.config, "HOST_CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(server.config, "CONTROL_REQUESTS_DIR", str(reqs))
+    monkeypatch.setattr(server.config, "CONTROL_RESULTS_DIR", str(results))
+    monkeypatch.setattr(server.config, "CONTROL_AUDIT_LOG", str(audit / "control.log"))
+    # Don't block the test 30s waiting for a runner that isn't there — fall straight to the 202 path.
+    monkeypatch.setattr(server, "CONTROL_RESULT_WAIT_S", 0)
+    sm = StateManager(db_path=":memory:")
+    cli = await aiohttp_client(create_app(sm, app_data))
+    cli._pithead_dirs = (reqs, results)
+    yield cli
+    sm.close()
+
+
+class TestControlChannelOn:
+    async def test_get_config_masks_secrets(self, control_client):
+        body = await (await control_client.get("/api/config")).json()
+        assert body["monero"]["node_password"] == SECRET_SENTINEL
+        assert body["dashboard"]["auth"]["password"] == SECRET_SENTINEL
+        assert "rpcpass" not in json.dumps(body)
+        assert body["p2pool"]["pool"] == "main"  # non-secret passes through
+
+    async def test_preview_without_csrf_header_is_403(self, control_client):
+        resp = await control_client.post("/api/control/preview", json={"config": {}})
+        assert resp.status == 403
+
+    async def test_commit_without_csrf_header_is_403(self, control_client):
+        resp = await control_client.post(
+            "/api/control/commit", json={"intent_id": "11111111-2222-4333-8444-555555555555"}
+        )
+        assert resp.status == 403
+
+    async def test_preview_writes_request_and_returns_id(self, control_client):
+        resp = await control_client.post(
+            "/api/control/preview",
+            headers={"X-Pithead-Control": "1", "X-Auth-User": "alice"},
+            json={"config": {"p2pool": {"pool": "mini"}}},
+        )
+        # No runner in this tier, so it hands back a pollable id (202).
+        assert resp.status == 202
+        body = await resp.json()
+        rid = body["id"]
+        reqs, _ = control_client._pithead_dirs
+        intent = json.loads((reqs / (rid + ".json")).read_text())
+        assert intent["action"] == "preview"
+        assert intent["actor"] == "alice"  # X-Auth-User carried through as the audit actor
+        assert intent["config"]["p2pool"]["pool"] == "mini"
+
+    async def test_preview_bad_body_is_400(self, control_client):
+        resp = await control_client.post(
+            "/api/control/preview", headers={"X-Pithead-Control": "1"}, json={"nope": 1}
+        )
+        assert resp.status == 400
+
+    async def test_commit_requires_intent_id(self, control_client):
+        resp = await control_client.post(
+            "/api/control/commit", headers={"X-Pithead-Control": "1"}, json={}
+        )
+        assert resp.status == 400
+
+    async def test_result_returns_written_verdict(self, control_client):
+        _, results = control_client._pithead_dirs
+        rid = "11111111-2222-4333-8444-555555555555"
+        (results / (rid + ".json")).write_text(json.dumps({"status": "applied"}))
+        resp = await control_client.get("/api/control/result?id=" + rid)
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "applied"
+
+    async def test_result_pending_is_202(self, control_client):
+        resp = await control_client.get(
+            "/api/control/result?id=deadbeef-0000-4000-8000-000000000000"
+        )
+        assert resp.status == 202
+
+    async def test_preview_returns_result_when_runner_answers(self, control_client, monkeypatch):
+        # When the host runner has written a result within the wait window, the POST returns it (200).
+        control = control_client.app["control"]
+        _, results = control_client._pithead_dirs
+        rid = "22222222-3333-4444-8555-666666666666"
+        (results / (rid + ".json")).write_text(
+            json.dumps({"status": "previewed", "changes": [], "destructive": False})
+        )
+        monkeypatch.setattr(control, "submit", lambda *a, **k: rid)
+        monkeypatch.setattr(server, "CONTROL_RESULT_WAIT_S", 1)
+        resp = await control_client.post(
+            "/api/control/preview",
+            headers={"X-Pithead-Control": "1"},
+            json={"config": {"p2pool": {"pool": "mini"}}},
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["status"] == "previewed"
+        assert body["id"] == rid
+
+    async def test_commit_returns_result_when_runner_answers(self, control_client, monkeypatch):
+        control = control_client.app["control"]
+        _, results = control_client._pithead_dirs
+        rid = "33333333-4444-4555-8666-777777777777"
+        (results / (rid + ".json")).write_text(json.dumps({"status": "applied", "output": "ok"}))
+        monkeypatch.setattr(control, "submit", lambda *a, **k: rid)
+        monkeypatch.setattr(server, "CONTROL_RESULT_WAIT_S", 1)
+        resp = await control_client.post(
+            "/api/control/commit",
+            headers={"X-Pithead-Control": "1"},
+            json={"intent_id": "22222222-3333-4444-8555-666666666666"},
+        )
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "applied"
+
+    async def test_get_config_error_is_500(self, control_client):
+        control_client.app["control"].host_config_path = "/no/such/config.json"
+        resp = await control_client.get("/api/config")
+        assert resp.status == 500
+
+    async def test_poll_waits_for_a_slow_runner(self, control_client, monkeypatch):
+        # The result isn't there on the first poll but appears on the second — the handler must sleep
+        # and re-check rather than give up (the apply-then-write can lag the submit by a moment).
+        control = control_client.app["control"]
+        monkeypatch.setattr(server, "CONTROL_RESULT_WAIT_S", 2)
+        monkeypatch.setattr(server, "CONTROL_POLL_INTERVAL_S", 0.01)
+        calls = {"n": 0}
+
+        def slow_result(_id):
+            calls["n"] += 1
+            return {"status": "previewed"} if calls["n"] >= 2 else None
+
+        monkeypatch.setattr(control, "result", slow_result)
+        monkeypatch.setattr(control, "submit", lambda *a, **k: "id")
+        resp = await control_client.post(
+            "/api/control/preview", headers={"X-Pithead-Control": "1"}, json={"config": {}}
+        )
+        assert resp.status == 200
+        assert calls["n"] >= 2
 
 
 class TestSecurityHeaders:

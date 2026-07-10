@@ -13,6 +13,22 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **In-dashboard config editor (#33).** Off by default. Set `dashboard.control.enabled: true` (plus a
+  `dashboard.auth.password`) and a **⚙ Configuration** button appears in the dashboard: edit
+  `config.json` in the browser, preview the exact change list (the same lines `./pithead apply`
+  prints, with disruptive changes flagged), and apply it — instead of editing the file and running
+  `apply` by hand. This is the canonical host-mutation channel, built as a one-way trust boundary:
+  the dashboard only writes a typed, validated intent into a spool directory; a root systemd runner
+  on the host (`pithead control-run-pending`) re-validates it against pithead's own parser and runs
+  `pithead apply`. `requests/` is the only container-writable spool leaf — `results/`, `audit/`, and
+  the `config.json` prefill are mounted read-only, so a compromised dashboard can ask but can never
+  forge a result, rewrite the audit log, or run an arbitrary command. pithead fails closed: enabling
+  the channel without a dashboard login aborts, and every applied change is written to a host-side
+  audit log. Needs a systemd host. New CLI plumbing: `./pithead apply --dry-run [--porcelain]` (a
+  no-side-effect change preview) and a `PITHEAD_CONFIG_FILE` override. See
+  [The config editor](docs/dashboard.md#the-config-editor),
+  [Operations › The config-editor runner](docs/operations.md#the-config-editor-runner), and
+  [Security › The host-mutation channel](SECURITY.md#the-host-mutation-channel-33).
 - **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
   status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
   remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate
