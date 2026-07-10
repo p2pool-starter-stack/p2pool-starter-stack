@@ -4,6 +4,8 @@ import os
 
 from aiohttp import web
 
+from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.web.prometheus import render_prometheus
 from mining_dashboard.web.views import build_state, canonical_window, get_shell_html, parse_window
 
 logger = logging.getLogger("WebServer")
@@ -40,6 +42,25 @@ async def handle_state(request):
         # Log the full error server-side; never leak exception details to the browser.
         logger.exception("Error building dashboard state")
         return web.json_response({"error": "Failed to build dashboard state."}, status=500)
+
+
+async def handle_metrics(request):
+    """Prometheus text exposition (#379), rendered from the same ``build_metrics`` snapshot
+    ``/api/state`` uses — live gauges only, no history. Same trust boundary as the state API:
+    bound to loopback behind Caddy, covered by the optional dashboard basic_auth."""
+    app = request.app
+    data = app["latest_data"]
+    state_mgr = app["state_manager"]
+    try:
+        metrics = build_metrics(data, state_mgr)
+        # Raw disk percent from the system snapshot; same or-{} chain as the views badge lookup.
+        disk_percent = ((data or {}).get("system", {}).get("disk", {}) or {}).get("percent", 0) or 0
+        body = render_prometheus(metrics, disk_percent, state_mgr.is_db_healthy())
+        return web.Response(text=body, content_type="text/plain")
+    except Exception:
+        # Log the full error server-side; never leak exception details to the scraper.
+        logger.exception("Error rendering Prometheus metrics")
+        return web.Response(text="Failed to render metrics.", status=500, content_type="text/plain")
 
 
 def _apply_security_headers(response):
@@ -85,6 +106,7 @@ def create_app(state_manager, latest_data_ref):
         [
             web.get("/", handle_index),
             web.get("/api/state", handle_state),
+            web.get("/metrics", handle_metrics),
         ]
     )
 
