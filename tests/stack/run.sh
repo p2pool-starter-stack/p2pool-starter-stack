@@ -218,6 +218,10 @@ assert_contains "stratum listen: proxy down -> info" "$out" "isn't running"
 # Running + a :3333 listener -> OK.
 out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 0.0.0.0:3333 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
 assert_contains "stratum listen: listening -> OK" "$out" "workers can connect"
+# An IPv6-only listener ([::]:3333, what ss reports on a dual-stack box) must also read OK —
+# pins the ':3333 ' match against the bracketed v6 local-address format.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 [::]:3333 [::]:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: IPv6 listener -> OK" "$out" "workers can connect"
 # Running + nothing on :3333 -> FAIL.
 out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
 assert_contains "stratum listen: nothing on :3333 -> FAIL" "$out" "NOTHING is listening"
@@ -2024,6 +2028,33 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1 </dev/null)"
 assert_rc "apply -y skips the typed confirm" "$?" "0"
 assert_eq "wallet updated with -y" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+
+# A TARI-only wallet change demands the same typed confirm (the suite above only drove Monero).
+TARI2="TARITARITARI2" # first 8 chars = TARITARI
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" "$TARI2" >"$V/config.json"
+out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "tari wallet change with 'y' aborts cleanly" "$?" "0"
+assert_contains "tari wallet prompt shows the new address's first 8 chars" "$out" "(TARITARI)"
+assert_eq "tari wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "T"
+out="$(cd "$V" && printf 'TARITARI\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "tari typed confirm applies" "$?" "0"
+assert_eq "tari wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
+
+# BOTH wallets changing in one apply needs TWO typed confirms — one prefix must never wave both
+# through (env_changed_keys sorts, so Monero prompts first, then Tari).
+TARI3="TARIXTARIX3" # first 8 chars = TARIXTAR
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" "$TARI3" >"$V/config.json"
+out="$(cd "$V" && printf '4BBBBBBB\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "both-wallet change with one prefix aborts cleanly" "$?" "0"
+assert_contains "both-wallet change prompts for the Monero prefix" "$out" "(4BBBBBBB)"
+assert_contains "both-wallet change prompts for the Tari prefix too" "$out" "(TARIXTAR)"
+assert_contains "both-wallet change with one prefix is cancelled" "$out" "Apply cancelled"
+assert_eq "monero wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+assert_eq "tari wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
+out="$(cd "$V" && printf '4BBBBBBB\nTARIXTAR\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "both typed confirms apply" "$?" "0"
+assert_eq "monero wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
+assert_eq "tari wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI3"
 
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env

@@ -97,6 +97,8 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | badges (node-down, workers-rejected, miner-held, passive-Tari, pruned/full, low-HR) | metrics | 1 ✅ |
 | system levels (cpu/mem/disk/hugepages), worker pool/online, chart outage breaks | metrics | 1 ✅ |
 | dashboard DB writes failing → `db_healthy:false` (#131) | data dir read-only | 1 ✅ (flag logic) · 4 ▶ (`--fault-injection`, #202) |
+| `/metrics` Prometheus exposition (#379), through Caddy + basic_auth | scrape | 1 ✅ (format) · 4 ▶ (`--check`) |
+| `share_stats` series populated on a mining box (#116) | polls land | 1 ✅ (shape) · 4 ▶ (`--check`) |
 | Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
 
 ### G. CLI lifecycle (`pithead`)
@@ -106,7 +108,8 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Config validation, secret preservation, `apply` no-op/destructive guards | sourced fns | 1 ✅ |
 | `setup`→`up`→`status`→`apply`→`restart`→`down`; idempotency; secret preservation | real box | 4 ▶ (`--lifecycle`) |
 | `upgrade` (image pull/rebuild) | real box | release staging smoke (docs) |
-| `backup`/`restore`, `reset-dashboard`, `doctor` | real box | 1 ✅ (partial) · 4 (future) |
+| `backup`/`restore`, `reset-dashboard` | real box | 1 ✅ (partial) · 4 ▶ (`--lifecycle`/`--safety-backup`) |
+| `doctor` runtime verdicts (#383): egress firewall, stratum listening, dashboard answers | real box | 1 ✅ (stubbed toolchain) · 4 ▶ (`--check`) |
 
 ### H. Host / infrastructure (real-only)
 
@@ -234,8 +237,10 @@ tier 3/4:
   healthy); never driven with real containers, so the recovery ordering is unproven end-to-end.
 - **Partial-start / stop-failure idempotency.** The control loop's "container fails to start/stop →
   retry next cycle" is unit-only; no tier-3/4 scenario injects a docker start/stop error.
-- **`pithead doctor` on a real box.** Only its exit code is unit-tested; its NTP/clock-drift check
-  (mining is time-sensitive) is never fault-injected or asserted at tier 4.
+- **`pithead doctor` on a real box.** ✅ The `--check` phase now runs `doctor` and asserts exit 0
+  plus the three #383 runtime OK verdicts (egress firewall installed, stratum listening, dashboard
+  answers). Still open: its NTP/clock-drift check (mining is time-sensitive) is never
+  fault-injected.
 - **Disk-full / ENOSPC verdict.** Only a disk-headroom *warning* is checked; a real
   container-unhealthy-on-ENOSPC verdict is never forced, though the disk badge + db-write-error
   paths are unit-tested.

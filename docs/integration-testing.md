@@ -125,7 +125,7 @@ Useful flags (full list in `run.sh --help`):
 | `--host <user@host>` / `--local` | Drive the box over SSH, or a stack on this machine. |
 | `--dir <path>` | The Pithead stack directory on the box, relative to the SSH login dir or absolute (default `pithead`). Avoid a literal `~`; your local shell expands it before the box sees it. |
 | `--pithead <cmd>` | How to invoke pithead there (e.g. `"sudo ./pithead"`). |
-| `--check` | Non-destructive: assert the box's current live state only. No config change, no apply, no restore. The safe first run / ongoing health check. |
+| `--check` | Non-destructive: assert the box's current live state only. No config change, no apply, no restore. The safe first run / ongoing health check. Also runs `pithead doctor` (exit 0 + the [#383](https://github.com/p2pool-starter-stack/pithead/issues/383) runtime verdicts), fetches `/metrics` through Caddy ([#379](https://github.com/p2pool-starter-stack/pithead/issues/379); if a dashboard login is set, export `IT_DASHBOARD_PASSWORD` or the fetch skips), and asserts the share-health series is populated ([#116](https://github.com/p2pool-starter-stack/pithead/issues/116)). |
 | `--readiness` | Non-destructive: assess whether the box is fit to be a release/validation server (synced chains reusable, snapshot-capable FS, disk headroom, secrets owner-only, dashboard localhost-only). See [Release Server](release-server.md). |
 | `--scenario <name>` | Run just one scenario. |
 | `--workers <n>` | Miners expected online while mining (default `2`). |

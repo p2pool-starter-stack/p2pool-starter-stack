@@ -55,7 +55,8 @@ finish their initial sync. Check the dashboard to see which.
 
 **Changing the payout wallet:** `apply` asks you to type the first 8 characters of the new address
 (a bare `y` is not enough for the one change that redirects every future reward; `apply -y` skips
-the prompt for automation). The dashboard also watches the wallet p2pool actually mines to: any
+the prompt for automation). Changing both the Monero and Tari addresses in one `apply` prompts
+once per address. The dashboard also watches the wallet p2pool actually mines to: any
 change raises a `wallet_changed` [Telegram alert](telegram.md) and a 72-hour top-bar banner —
 including a change you made yourself. Treat that pair as confirmation; if you didn't change it,
 your rewards are being redirected — check `config.json` and re-apply the correct address.
