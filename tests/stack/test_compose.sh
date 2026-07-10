@@ -164,22 +164,28 @@ jq_assert "compose project name is pinned to pithead" '.name == "pithead"'
 # offender in its own cgroup instead of the host OOM-killer reaching monerod (the revenue service).
 jq_assert "memory ceiling (mem_limit) on every service (#132)" '[.services[] | select(.mem_limit != null)] | length >= 9'
 # Immutable root filesystems (#377): every service runs read_only with exactly its expected tmpfs
-# scratch set (targets only — mount options like size/mode may evolve without breaking this).
-# Removing read_only from any one service, or dropping/adding a tmpfs mount, fails CI.
+# scratch set, INCLUDING the mount options. An edit that grows a size cap or slips in `exec` —
+# re-creating the executable staging area read_only exists to remove — must fail CI, not evolve
+# silently. Each spec's entries are space-separated (the options carry commas). Removing read_only
+# from any service, or changing any tmpfs entry, fails CI.
 for spec in \
-    "tor=/tmp" \
-    "monerod=/tmp" \
-    "tari=/tmp" \
-    "p2pool=/tmp" \
-    "xmrig-proxy=/home/ubuntu,/tmp" \
-    "dashboard=/tmp" \
-    "docker-proxy=/run,/tmp" \
-    "docker-control=/run,/tmp" \
-    "caddy=/config,/tmp"; do
+    "tor=/tmp:size=64m,mode=1777" \
+    "monerod=/tmp:size=64m,mode=1777" \
+    "tari=/tmp:size=64m,mode=1777" \
+    "p2pool=/tmp:size=64m,mode=1777" \
+    "xmrig-proxy=/home/ubuntu:size=64m,uid=1000,gid=1000 /tmp:size=64m,mode=1777" \
+    "dashboard=/tmp:size=64m,mode=1777" \
+    "docker-proxy=/run /tmp" \
+    "docker-control=/run /tmp" \
+    "caddy=/config /tmp"; do
     svc="${spec%%=*}" want="${spec#*=}"
     jq_assert "read_only rootfs + tmpfs [$want] on $svc (#377)" \
-        ".services[\"$svc\"] | (.read_only == true) and (((.tmpfs // []) | map(split(\":\")[0]) | sort) == (\"$want\" | split(\",\") | sort))"
+        ".services[\"$svc\"] | (.read_only == true) and (((.tmpfs // []) | sort) == (\"$want\" | split(\" \") | sort))"
 done
+# Belt-and-braces on the same risk: no tmpfs mount anywhere may carry the `exec` option token
+# (Docker prepends noexec by default; only a literal `exec` in the options displaces it).
+jq_assert "no tmpfs mount carries the exec option (#377)" \
+    '[.services[] | (.tmpfs // [])[] | (split(":")[1] // "") | split(",")[] | select(. == "exec")] | length == 0'
 
 # Fail closed on the xmrig-proxy control-API token (#153). The HTTP API is writable
 # (--http-no-restricted, required for XvB pool-switching) and reachable on the bridge + host, so it
