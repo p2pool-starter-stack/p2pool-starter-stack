@@ -140,9 +140,11 @@ map and the remaining lock-down steps.
   with `no-new-privileges`, and all of them drop every Linux capability (`cap_drop: [ALL]`). Caddy
   keeps only `NET_BIND_SERVICE` so it can bind `:80`/`:443`. The dashboard writes its history
   database as that non-root user into its (matching-owned) volume, so it no longer needs root's
-  file-permission capability and drops all caps like the others. Caddy and both socket proxies also
-  run with a read-only root filesystem, writing only to a small ephemeral `tmpfs` and (for Caddy)
-  the `caddy_data` volume that holds its certs.
+  file-permission capability and drops all caps like the others. Every service runs with a
+  read-only root filesystem (#377): each process can write only to its own data mount (blockchain
+  DBs, Tor's keys, the dashboard's history, Caddy's certs) plus a small, size-capped ephemeral
+  `tmpfs` (`noexec`, wiped on restart) for rendered configs and scratch. A compromised process
+  cannot stage tooling in, or persist changes to, its container image.
 - **Mining endpoint stays on the LAN.** The stratum port (`3333`) your rigs connect to is meant for
   your local network, never the public internet. It's published on all interfaces by default so LAN
   rigs work without extra config; narrow it with `p2pool.stratum_bind` (a specific LAN IP, or

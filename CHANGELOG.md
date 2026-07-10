@@ -13,6 +13,39 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Subcommand chaining + bash/zsh tab-completion (#94).** `./pithead apply upgrade` runs both
+  commands in order, failing fast on the first non-zero step and reporting what did and didn't
+  run. The whole chain is validated first: non-chainable commands (`setup`, `logs`, `restore`,
+  `reset-dashboard`, the info commands), duplicates, more than one of `up`/`down`/`restart`, or
+  `down` anywhere but last are rejected with nothing executed. Single-command invocations are
+  unchanged. `pithead-completion.bash` (repo root, shipped in the release bundle) adds
+  tab-completion for subcommands and `logs <service>` in bash and zsh; a test pins its command
+  list to the CLI dispatch so the two can't drift. See
+  [Operations](docs/operations.md#chaining-commands).
+- **`pithead rotate-secrets` regenerates the stack's internal credentials in one command (#378).**
+  After a suspected leak (a backup that left the box, a pasted `.env`), one command rotates the
+  local Monero RPC password (skipped in remote mode — that credential belongs to the remote node),
+  the stratum access-password when `p2pool.stratum_password` is `"auto"` (the new value is printed
+  and every rig must update its `pass`; a literal is left in `config.json` with a pointer), and the
+  xmrig-proxy control-API token (always), then recreates the containers that consume them. The old
+  values stay recoverable in owner-only `config.json.bak-<timestamp>` / `.env.bak-<timestamp>`
+  copies taken before anything changes, and a failed recreate leaves the retry marker so
+  `./pithead apply` finishes the job. The dashboard onion keeps its own `rotate-dashboard-onion`.
+  See [Operations › Rotating the internal secrets](docs/operations.md#rotating-the-internal-secrets).
+- **`pithead backup` encrypts archives by default (#374).** The backup archive carries the stack's
+  full secret material (`.env`, the onion private keys, the dashboard DB), and its `chmod 600` only
+  protects it on the local disk. `backup` now prompts for a passphrase (twice) and streams the tar
+  through `openssl enc -aes-256-cbc -pbkdf2 -iter 600000` into a `.tar.gz.enc` — no plaintext
+  archive ever touches the disk, and the passphrase travels over a file descriptor, never argv.
+  `PITHEAD_BACKUP_PASSPHRASE` covers unattended runs; an unattended run (`--yes`) with no passphrase
+  set **refuses** rather than writing plaintext (a cron job that lost its passphrase fails loudly
+  instead of archiving your onion keys in the clear), while `--no-encrypt` — or an empty passphrase
+  at the interactive prompt — chooses plaintext explicitly. `restore` detects encrypted vs plaintext
+  archives by magic bytes, so every existing backup restores unchanged; a wrong passphrase fails
+  before anything on disk is touched, and because CBC carries no authentication, `restore`
+  verifies the whole decrypted stream (`tar -tzf -`, no plaintext on disk) before extracting, so a
+  tampered or truncated archive is refused rather than half-restored over the live config.
+
 - **Edit config from the dashboard (#33).** A new **Configuration** view — opt-in via
   `dashboard.control.enabled` (default off; requires a `dashboard.auth.password`) — prefills a
   form from the live `config.json` with secrets masked ("set — leave blank to keep"), previews
@@ -91,6 +124,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
+  and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
+  did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a
+  size-capped, `noexec` tmpfs for rendered configs and scratch (`/tmp` everywhere; xmrig-proxy also
+  gets a tmpfs over its image-only home in case the binary persists an API-driven config change).
+  A compromised process can no longer stage tools in, or persist changes to, its container image.
+  Nothing durable moves: the tmpfs mounts are wiped on restart by design, and every config
+  re-renders at container start.
 - **Reject control characters in every config string (#33).** `parse_and_validate_config` — the
   chokepoint both the preview and the real apply run — now refuses any config value carrying a
   newline or other control character. A newline in a secret that renders unquoted into `.env`
