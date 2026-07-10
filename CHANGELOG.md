@@ -9,6 +9,24 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [1.3.1] - YYYY-MM-DD
+
+<!-- Placeholder date — set at release cut. -->
+
+A patch release: a fail-safe for the XvB donation controller during a prolonged stats outage.
+
+### Fixed
+
+- **XvB donation controller decays a blind donation through a prolonged stats outage.** When the
+  xmrvsbeast.com stats fetch goes quiet, `avg_1h` freezes; the controller already holds the last
+  donation fraction rather than steering off the frozen number (#311). That hold was indefinite —
+  through a multi-hour outage it kept donating blind, and if staleness began mid-ramp it held a
+  high fraction (over-donation, #70 territory). Past a longer grace (`XVB_STALE_DECAY_AFTER_S`,
+  default 30 min, distinct from the short-hold `XVB_STATS_STALE_AFTER_S`) the controller now decays
+  the held fraction geometrically toward 0 each cycle and stops donating: when it can't confirm the
+  donation is still needed, it stops wasting hashrate. A fresh fetch resumes normal control. The
+  brief-blip hold is unchanged.
+
 ## [1.3.0] - 2026-07-09
 
 v1.3 makes the stack remember and reason. The dashboard used to fetch telemetry, render it live, and

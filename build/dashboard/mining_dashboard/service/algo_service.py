@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import time
 
 from mining_dashboard.config.config import (
     ENABLE_XVB,
@@ -16,6 +17,7 @@ from mining_dashboard.config.config import (
     XVB_MIN_TIME_SEND_MS,
     XVB_P2POOL_RESERVE_FACTOR,
     XVB_POOL_URL,
+    XVB_STALE_DECAY_AFTER_S,
     XVB_STATS_STALE_AFTER_S,
     XVB_SWITCH_OVERHEAD_MS,
     XVB_TIME_ALGO_MS,
@@ -31,6 +33,14 @@ from mining_dashboard.helper.utils import (
 )
 
 logger = logging.getLogger("AlgoService")
+
+# Prolonged-staleness fail-safe (see XVB_STALE_DECAY_AFTER_S). Once past the decay grace,
+# multiply the held donation fraction by this each advance cycle so it geometrically bleeds
+# toward 0, and snap to 0 below the floor (a tiny residual would otherwise be floored back
+# up to XVB_MIN_TIME_SEND_MS, never actually stopping). 0.5 halves the blind donation every
+# cycle — a fast, obvious retreat when we can't confirm the donation is still needed.
+XVB_STALE_DECAY_FACTOR = 0.5
+XVB_STALE_DECAY_FLOOR = 0.005
 
 
 class AlgoService:
@@ -161,13 +171,29 @@ class AlgoService:
         # against a target we can't refresh. Hold the last split until a fresh read lands.
         if advance:
             if self._stats_are_stale(xvb_stats):
-                logger.warning(
-                    "XvB stats stale (no fetch in >%.0fs): holding donation fraction at %.3f "
-                    "(frozen 1h %.0f)",
-                    XVB_STATS_STALE_AFTER_S,
-                    self.donation_fraction or 0.0,
-                    avg_1h,
-                )
+                if self._stats_age(xvb_stats) > XVB_STALE_DECAY_AFTER_S:
+                    # Prolonged outage: the hold has run long enough that donating blind is
+                    # the bigger risk (over-donation if staleness began mid-ramp, #70). Bleed
+                    # the held fraction toward 0 — a fresh read below resumes normal control.
+                    before = self.donation_fraction or 0.0
+                    decayed = before * XVB_STALE_DECAY_FACTOR
+                    self.donation_fraction = decayed if decayed >= XVB_STALE_DECAY_FLOOR else 0.0
+                    logger.warning(
+                        "XvB stats stale >%.0fs (fetch age %.0fs): decaying donation fraction "
+                        "%.3f -> %.3f toward 0 — not donating blind through a prolonged outage",
+                        XVB_STALE_DECAY_AFTER_S,
+                        self._stats_age(xvb_stats),
+                        before,
+                        self.donation_fraction,
+                    )
+                else:
+                    logger.warning(
+                        "XvB stats stale (no fetch in >%.0fs): holding donation fraction at %.3f "
+                        "(frozen 1h %.0f)",
+                        XVB_STATS_STALE_AFTER_S,
+                        self.donation_fraction or 0.0,
+                        avg_1h,
+                    )
             else:
                 self._advance_controller(current_hr, target_hr, avg_1h, max_fraction)
 
@@ -215,6 +241,12 @@ class AlgoService:
         the controller and the UI agree on staleness. Cold start (no fetch yet) is NOT
         stale — the feedforward ramp must be left to seed and climb to tier."""
         return xvb_stats_are_stale(xvb_stats)
+
+    def _stats_age(self, xvb_stats):
+        """Seconds since the last genuine XvB fetch (``last_update``, #136). 0.0 when we've
+        never fetched (cold start) — the decay grace only fires on a real, aged fetch."""
+        last_update = (xvb_stats or {}).get("last_update", 0) or 0
+        return time.time() - last_update if last_update else 0.0
 
     def _reference_hr(self, target_hr):
         """Hashrate the controller holds XvB's 1h average at: the tier threshold

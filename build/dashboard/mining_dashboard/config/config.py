@@ -396,6 +396,14 @@ XVB_CONTROL_GAIN = float(os.environ.get("XVB_CONTROL_GAIN", 0.03))
 # the last split instead of chasing it. Default ~3 fetch intervals.
 XVB_STATS_STALE_AFTER_S = float(os.environ.get("XVB_STATS_STALE_AFTER_S", 3 * 10 * UPDATE_INTERVAL))
 
+# Fail-safe for a PROLONGED stale read. Holding the last split (above) is right for a
+# brief blip, but through a multi-hour outage it keeps donating blind — and if staleness
+# began mid-ramp it holds a high fraction (over-donation, #70 territory). Past this longer
+# grace the controller stops trusting the frozen number and DECAYS the held donation
+# fraction toward 0 each advance cycle: when we can't confirm we still need to donate, stop
+# wasting hashrate. A fresh fetch resumes normal control. Default 30 min (> the hold grace).
+XVB_STALE_DECAY_AFTER_S = float(os.environ.get("XVB_STALE_DECAY_AFTER_S", 1800))
+
 # VIP / PPLNS reserve. To stay "VIP" we must keep finding p2pool shares, so we
 # reserve enough hashrate for p2pool to hold a share in the PPLNS window. The bare
 # minimum (one expected share per window) is sidechain_difficulty / window_seconds;
