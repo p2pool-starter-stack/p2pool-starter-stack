@@ -102,23 +102,26 @@ test('EarningsCard shows the fallback when stats are down, the calculator when a
     assert.match(up, /id="whatif-hr"/);
 });
 
-test('EarningsCard renders the Tari rows: figures when merge-mining, "—" when not (#117)', () => {
-    // Merge-mining live: the XTM rows scale the server rate by the default what-if hashrate.
+test('EarningsCard leads with solo time-to-block + per-block reward, day as avg (#117)', () => {
+    // Merge-mining live: the honest solo headline is time-to-block and the whole per-block reward.
     const s = clone();
     s.earnings.available = true;
     s.earnings.tari_available = true;
-    s.earnings.tari_coeff_day = 2e-3;   // × p2pool_hr (8050) → 16.1 XTM/day
+    s.earnings.tari_coeff_day = 2e-3;   // × p2pool_hr (8050) → 16.1 XTM/day (long-run avg)
+    s.earnings.tari_difficulty = 1.677e12;  // seconds-to-block per H/s; ÷ 8050 → ~2410 days
+    s.earnings.tari_reward = 10_709;
     const up = renderApp({ state: s });
-    assert.match(up, /XTM \/ day/);
-    assert.match(up, /XTM \/ month/);
-    assert.match(up, /XTM \/ year/);
-    assert.match(up, /16\.1000 XTM/);
+    assert.match(up, /Est\. Time to Tari Block/);
+    assert.match(up, /XTM per Block/);
+    assert.match(up, /10709\.0000 XTM/);   // the full block reward
+    assert.match(up, /XTM \/ day \(avg\)/); // per-day kept, but labelled an average
+    assert.match(up, /16\.1000 XTM/);       // the long-run average figure still shown
     // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
     const off = clone();
     off.earnings.available = true;
     off.earnings.tari_available = false;
     const down = renderApp({ state: off });
-    assert.match(down, /XTM \/ day/);
+    assert.match(down, /Est\. Time to Tari Block/);
     assert.match(down, /—/);
     assert.doesNotMatch(down, /NaN/);
 });

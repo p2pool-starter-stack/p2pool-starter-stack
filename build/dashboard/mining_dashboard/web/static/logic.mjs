@@ -208,6 +208,8 @@ export function computeEarnings(hashrateHs, earnings) {
       tariDay: null,
       tariMonth: null,
       tariYear: null,
+      tariTimeToBlockSec: null,
+      tariRewardPerBlock: null,
     };
   }
   const day = hashrateHs * earnings.coeff_day;
@@ -216,6 +218,13 @@ export function computeEarnings(hashrateHs, earnings) {
   // input scales the server's XTM rate identically. Nulls (rendered "—") while merge-mining is
   // inactive or the Tari figures aren't collected yet — the XMR estimate is unaffected.
   const tariDay = earnings.tari_available ? hashrateHs * earnings.tari_coeff_day : null;
+  // Solo merge-mining is lumpy (the block reward lands all at once), so the honest headline is the
+  // expected time to a Tari block — difficulty / hashrate — and the whole per-block reward. The
+  // server sends difficulty as seconds-to-block-per-H/s (tari_difficulty), so divide by hashrate.
+  const tariTimeToBlockSec =
+    earnings.tari_available && earnings.tari_difficulty > 0
+      ? earnings.tari_difficulty / hashrateHs
+      : null;
   return {
     day,
     month: day * DAYS_PER_MONTH,
@@ -224,6 +233,8 @@ export function computeEarnings(hashrateHs, earnings) {
     tariDay,
     tariMonth: tariDay === null ? null : tariDay * DAYS_PER_MONTH,
     tariYear: tariDay === null ? null : tariDay * DAYS_PER_YEAR,
+    tariTimeToBlockSec,
+    tariRewardPerBlock: earnings.tari_available ? earnings.tari_reward : null,
   };
 }
 

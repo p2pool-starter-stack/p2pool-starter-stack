@@ -35,7 +35,11 @@ from mining_dashboard.helper.utils import (
     get_tier_info,
     is_ip_address,
 )
-from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
+from mining_dashboard.service.earnings import (
+    tari_seconds_to_block_per_hs,
+    xmr_per_hs_day,
+    xtm_per_hs_day,
+)
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.version import resolve_version
@@ -992,8 +996,9 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
 
 _EARNINGS_DISCLAIMER = (
     "Estimated XMR from P2Pool mining only — excludes XvB donations (donated hashrate earns no "
-    "P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and "
-    "its estimate assumes the merge-mine channel stays connected. Expected values only; mining "
+    "P2Pool payout). Tari is merge-mined SOLO by the same hashrate: you get the whole block reward "
+    "at once when your hashrate finds a Tari block — roughly every 'time to Tari block' shown — so "
+    "the per-day XTM figure is a long-run average, not steady income. Expected values only; mining "
     "is variance-heavy, so real payouts swing well above and below these figures. Estimates, "
     "not guarantees."
 )
@@ -1031,13 +1036,20 @@ def build_earnings(data, metrics):
     # Tari rate (#117). We take p2pool's aux `reward` field as the current Tari block reward —
     # it refreshes every poll, so the linear model tracks the decaying emission.
     tari_coeff_day = xtm_per_hs_day(metrics.tari_reward, metrics.tari_difficulty)
+    # Solo merge-mining pays the whole block at once (#117): the honest headline is the expected
+    # time to a Tari block (difficulty / hashrate) and the per-block reward, with the per-day rate
+    # kept only as a long-run average. `tari_difficulty` carries the seconds-to-block-per-H/s figure
+    # (== difficulty, guarded); the client divides it by the what-if hashrate.
+    tari_seconds_per_hs = tari_seconds_to_block_per_hs(metrics.tari_difficulty)
     return {
         "available": coeff_day > 0,
         "p2pool_hr": p2pool_hr,  # raw H/s — the what-if default
         "p2pool_hr_str": format_hashrate(p2pool_hr),
         "coeff_day": coeff_day,  # XMR per H/s per day
         "tari_available": tari_coeff_day > 0 and metrics.tari_mining,
-        "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (merge-mined alongside)
+        "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (long-run AVERAGE, not steady income)
+        "tari_difficulty": tari_seconds_per_hs,  # seconds-to-block per H/s (client: diff / hashrate)
+        "tari_reward": metrics.tari_reward,  # full XTM paid per Tari block (solo, lumpy)
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,

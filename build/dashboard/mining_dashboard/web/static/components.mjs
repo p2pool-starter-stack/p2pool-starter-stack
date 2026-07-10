@@ -423,10 +423,12 @@ class EarningsCard extends Component {
                 <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
                 <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
                 <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
-                <${StatCard} label="XTM / day" value=${formatXtm(est.tariDay)}
-                             title="Tari merge-mined alongside the XMR by the same hashrate — earned in addition, not instead. Shows — while merge-mining is inactive or syncing." />
-                <${StatCard} label="XTM / month" value=${formatXtm(est.tariMonth)} />
-                <${StatCard} label="XTM / year" value=${formatXtm(est.tariYear)} />
+                <${StatCard} label="Est. Time to Tari Block" value=${formatTimeToShare(est.tariTimeToBlockSec)}
+                             title="Tari is merge-mined SOLO: the whole block reward lands at once when your hashrate finds a Tari block, roughly this often (difficulty ÷ your hashrate). Shows — while merge-mining is inactive or syncing." />
+                <${StatCard} label="XTM per Block" value=${formatXtm(est.tariRewardPerBlock)}
+                             title="The full Tari block reward paid when you solo-find a block — you get all of it at once, not spread over time." />
+                <${StatCard} label="XTM / day (avg)" value=${formatXtm(est.tariDay)}
+                             title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — this per-day figure just spreads that lumpy payout out on paper." />
                 <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                 <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
             </div>

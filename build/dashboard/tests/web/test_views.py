@@ -1274,6 +1274,10 @@ class TestEarnings:
         )
         assert e["tari_available"] is True
         assert e["tari_coeff_day"] == pytest.approx(13_000.0 / 420_000_000_000 * 86_400)
+        # Solo merge-mining headline (#117 v1.3.1): the seconds-to-block-per-H/s figure (== the
+        # Tari difficulty, so the client does diff / hashrate) and the full per-block reward.
+        assert e["tari_difficulty"] == pytest.approx(420_000_000_000)
+        assert e["tari_reward"] == pytest.approx(13_000.0)
 
     def test_tari_unavailable_without_figures_or_mining(self):
         # No difficulty collected (inactive/syncing) → unavailable; and a positive rate with

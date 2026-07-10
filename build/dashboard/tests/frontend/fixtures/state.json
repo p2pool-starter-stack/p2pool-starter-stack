@@ -72,12 +72,14 @@
     "available": false,
     "block_reward": "0.0000 XMR",
     "coeff_day": 0.0,
-    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and its estimate assumes the merge-mine channel stays connected. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
+    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is merge-mined SOLO by the same hashrate: you get the whole block reward at once when your hashrate finds a Tari block \u2014 roughly every 'time to Tari block' shown \u2014 so the per-day XTM figure is a long-run average, not steady income. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
     "p2pool_hr": 8050.0,
     "p2pool_hr_str": "8.05 kH/s",
     "pool_difficulty": 0,
     "tari_available": false,
-    "tari_coeff_day": 0.0
+    "tari_coeff_day": 0.0,
+    "tari_difficulty": 0.0,
+    "tari_reward": 0
   },
   "egress": {
     "components": [

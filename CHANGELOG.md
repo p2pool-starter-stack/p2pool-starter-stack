@@ -13,10 +13,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 <!-- Placeholder date — set at release cut. -->
 
-A patch release: a fail-safe for the XvB donation controller during a prolonged stats outage.
+A patch release: an honest Tari earnings headline for solo merge-mining, and a fail-safe for the XvB
+donation controller during a prolonged stats outage.
 
 ### Fixed
 
+- **P2Pool Earnings shows Tari as the lumpy solo income it is.** Tari merge-mining here is solo — the
+  whole block reward lands at once when your own hashrate finds a Tari block, which at the current
+  network difficulty can be months apart. The earnings card headlined a per-day XTM figure that read
+  like steady income you never actually receive. It now leads with the expected **time to a Tari
+  block** (`difficulty ÷ hashrate`) and the full **per-block reward**, and keeps the per-day figure
+  only as a clearly labelled long-run average. The server publishes the rate (one source of truth,
+  #61); the client scales it to the what-if hashrate.
 - **XvB donation controller decays a blind donation through a prolonged stats outage.** When the
   xmrvsbeast.com stats fetch goes quiet, `avg_1h` freezes; the controller already holds the last
   donation fraction rather than steering off the frozen number (#311). That hold was indefinite —

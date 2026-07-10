@@ -207,7 +207,8 @@ test('computeEarnings: scales the daily rate to day/month/year + time-to-share',
 test('computeEarnings: returns nulls when unavailable or hashrate is non-positive', () => {
     const ok = { available: true, coeff_day: 1e-7, pool_difficulty: 1 };
     const allNull = { day: null, month: null, year: null, timeToShareSec: null,
-                      tariDay: null, tariMonth: null, tariYear: null };
+                      tariDay: null, tariMonth: null, tariYear: null,
+                      tariTimeToBlockSec: null, tariRewardPerBlock: null };
     assert.deepEqual(computeEarnings(0, ok), allNull);
     assert.deepEqual(computeEarnings(null, ok), allNull);
     // available:false (network stats missing) -> graceful "—" path even with a valid hashrate.
@@ -226,14 +227,32 @@ test('computeEarnings: Tari figures scale with the same what-if input (#117)', (
     assert.equal(computeEarnings(100_000, earnings).tariDay, 2 * est.tariDay);
 });
 
+test('computeEarnings: solo Tari time-to-block = difficulty / hashrate, reward passed through', () => {
+    // tari_difficulty carries seconds-to-block-per-H/s (== difficulty, guarded server-side).
+    // Prod field numbers: diff ~1.677e12, fleet ~269 kH/s -> ~6.23e6 s (~72 days).
+    const earnings = { available: true, coeff_day: 1e-7, pool_difficulty: 1,
+                       tari_available: true, tari_coeff_day: 2e-3,
+                       tari_difficulty: 1.677e12, tari_reward: 10_709 };
+    const est = computeEarnings(269_000, earnings);
+    assert.equal(est.tariTimeToBlockSec, 1.677e12 / 269_000);
+    assert.ok(est.tariTimeToBlockSec / 86_400 > 70 && est.tariTimeToBlockSec / 86_400 < 74);
+    assert.equal(est.tariRewardPerBlock, 10_709);
+    // More hashrate finds the block sooner (inverse), so time-to-block halves when hashrate doubles.
+    assert.equal(computeEarnings(538_000, earnings).tariTimeToBlockSec, est.tariTimeToBlockSec / 2);
+    // The duration formatter renders the ~72-day span as days, not a huge hour count.
+    assert.match(formatTimeToShare(est.tariTimeToBlockSec), /^\d+d/);
+});
+
 test('computeEarnings: Tari figures are null when merge-mining is unavailable (#117)', () => {
     const est = computeEarnings(50_000, {
         available: true, coeff_day: 1e-7, pool_difficulty: 1,
-        tari_available: false, tari_coeff_day: 0,
+        tari_available: false, tari_coeff_day: 0, tari_difficulty: 0, tari_reward: 0,
     });
     assert.equal(est.tariDay, null);
     assert.equal(est.tariMonth, null);
     assert.equal(est.tariYear, null);
+    assert.equal(est.tariTimeToBlockSec, null);
+    assert.equal(est.tariRewardPerBlock, null);
     assert.ok(est.day > 0);   // the XMR estimate is unaffected
 });
 
