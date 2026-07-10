@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 880 dashboard unit tests · 12 contract tests · 72 frontend
-tests · 60 `pithead` shell sections · 19 harness self-test sections ·
+tests · 60 `pithead` shell sections · 21 harness self-test sections ·
 9 live config scenarios (17 axis values) · 8 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -21,7 +21,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 8 |
 | 4 — Live matrix | config scenarios | 9 (17 axis values) |
-| 4 — Live matrix | harness self-test | 19 sections |
+| 4 — Live matrix | harness self-test | 21 sections |
 
 ---
 
@@ -1179,6 +1179,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 
 ### Per-scenario assertions (tests/integration/run.sh)
 - .env is owner-only (mode $envmode)
+- /metrics serves pithead_ samples through Caddy (#379)
 - Caddyfile uses correct scheme
 - DASHBOARD_SECURE matches config
 - MONERO_CLEARNET_SYNC matches config (#183)
@@ -1202,6 +1203,10 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 - db_healthy true after write access restored
 - default-off stratum: no --access-password live (#152)
 - disk headroom on the live chain FS (${avail} GiB free)
+- doctor exits 0 on a healthy box (#383)
+- doctor: dashboard answers (#383)
+- doctor: egress firewall installed (#383)
+- doctor: stratum :3333 listening (#383)
 - egress posture section present
 - firewall apply degrades gracefully on an insert failure (rc 0)
 - firewall reinstated after recovery
@@ -1230,6 +1235,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 - secrets intact (token + onions)
 - secrets intact after restore
 - secrets preserved across pool change
+- share_stats non-empty on a mining box (#116)
 - snapshot-isolated $baseline_mode chain on a CoW FS ($same_dir, $sfs) — destructive scenarios needn't touch the live chain
 - stack healthy again after token restore
 - stack is healthy (pithead status)
@@ -1253,7 +1259,7 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 - xmrig-proxy dev-fee donate-level is explicit + live (#173)
 - xmrig-proxy stopped for failover
 
-### Harness self-test (tests/integration/selftest.sh) — 19 sections
+### Harness self-test (tests/integration/selftest.sh) — 21 sections
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
@@ -1269,6 +1275,8 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 - _pred_pool_ready: gates on .pool.type matching expected
 - _pred_hashes_flowing: gates on stratum.total_hashes > 0
 - _pred_db_healthy_is: gates on the top-level db_healthy flag (#202)
+- _pred_share_stats_nonempty: gates on .share_stats rows (#116)
+- metrics_has_pithead_sample: samples vs comments (#379)
 - dispatch loop: a stdin-draining child must not skip iterations
 - service_state parsing (fault-injection predicates)
 - egress_verdict: clean / leak / verifier-couldn't-run are distinct
@@ -1276,5 +1284,5 @@ tests · 60 `pithead` shell sections · 19 harness self-test sections ·
 
 ---
 
-_Grand total: **1060** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **1062** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
