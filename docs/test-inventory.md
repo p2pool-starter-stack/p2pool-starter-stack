@@ -5,7 +5,7 @@ edit by hand** — re-run the target to refresh. See [Testing Strategy](testing-
 how the tiers fit together._
 
 **Totals:** 796 dashboard unit tests · 12 contract tests · 66 frontend
-tests · 59 `pithead` shell sections · 18 harness self-test sections ·
+tests · 59 `pithead` shell sections · 19 harness self-test sections ·
 9 live config scenarios (17 axis values) · 8 mini-stack scenarios.
 
 > Counts are **test functions / named cases** (parametrized pytest cases expand to more at
@@ -21,7 +21,7 @@ tests · 59 `pithead` shell sections · 18 harness self-test sections ·
 | 2 — Contract | fake-daemon clients | 12 |
 | 3 — Mini-stack | docker control-plane scenarios | 8 |
 | 4 — Live matrix | config scenarios | 9 (17 axis values) |
-| 4 — Live matrix | harness self-test | 18 sections |
+| 4 — Live matrix | harness self-test | 19 sections |
 
 ---
 
@@ -1105,6 +1105,8 @@ tests · 59 `pithead` shell sections · 18 harness self-test sections ·
 - container up: $svc
 - dashboard /api/state reachable
 - dashboard bound to localhost only (Caddy fronts it)
+- db_healthy false while data dir is read-only
+- db_healthy true after write access restored
 - default-off stratum: no --access-password live (#152)
 - disk headroom on the live chain FS (${avail} GiB free)
 - egress posture section present
@@ -1158,7 +1160,7 @@ tests · 59 `pithead` shell sections · 18 harness self-test sections ·
 - xmrig-proxy dev-fee donate-level is explicit + live (#173)
 - xmrig-proxy stopped for failover
 
-### Harness self-test (tests/integration/selftest.sh) — 18 sections
+### Harness self-test (tests/integration/selftest.sh) — 19 sections
 - overrides_to_jq: value typing
 - resolve_overrides: prerequisite gate (never mutates the canonical chain)
 - render_scenario_config: applies overrides, stays valid JSON
@@ -1173,6 +1175,7 @@ tests · 59 `pithead` shell sections · 18 harness self-test sections ·
 - _pred_monero_panel_done: gates on .sync.monero.state
 - _pred_pool_ready: gates on .pool.type matching expected
 - _pred_hashes_flowing: gates on stratum.total_hashes > 0
+- _pred_db_healthy_is: gates on the top-level db_healthy flag (#202)
 - dispatch loop: a stdin-draining child must not skip iterations
 - service_state parsing (fault-injection predicates)
 - egress_verdict: clean / leak / verifier-couldn't-run are distinct
@@ -1180,5 +1183,5 @@ tests · 59 `pithead` shell sections · 18 harness self-test sections ·
 
 ---
 
-_Grand total: **968** enumerated cases/sections across the four tiers (plus the live
+_Grand total: **969** enumerated cases/sections across the four tiers (plus the live
 lifecycle and fault-injection phases, which are exercised on a real server)._
