@@ -268,6 +268,18 @@ assert_rc "rejects hostname" "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
 
+echo "== unit: semver_newer (#59 — the upgrade downgrade guard) =="
+# The comparison gates the upgrade button: a lexical bug would let 1.9.0 look "newer" than 1.10.0
+# and could be leveraged to force an older, vulnerable release.
+run_sourced "$SANDBOX" semver_newer "v1.10.0" "v1.9.0" >/dev/null 2>&1
+assert_rc "1.10.0 is newer than 1.9.0 (no lexical bug)" "$?" "0"
+run_sourced "$SANDBOX" semver_newer "v1.9.0" "v1.10.0" >/dev/null 2>&1
+assert_rc "1.9.0 is NOT newer than 1.10.0" "$?" "1"
+run_sourced "$SANDBOX" semver_newer "v1.3.1" "v1.3.1" >/dev/null 2>&1
+assert_rc "equal versions are not newer" "$?" "1"
+run_sourced "$SANDBOX" semver_newer "v2.0.0" "v1.99.99" >/dev/null 2>&1
+assert_rc "major bump beats a high minor/patch" "$?" "0"
+
 echo "== unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0) =="
 # A configured dashboard.host is used verbatim.
 # shellcheck disable=SC1090,SC2034  # $STACK path is dynamic; DASHBOARD_HOST is read by the sourced function
@@ -3624,6 +3636,196 @@ assert_eq "overflow intents left for the next run" "$(ls "$REQS" | wc -l | tr -d
 out="$(run_pending)"
 assert_contains "next run drains the remainder" "$out" "Processed 10 control request(s)"
 assert_eq "spool empty after the second run" "$(ls "$REQS" | wc -l | tr -d ' ')" "0"
+
+echo "== black-box: control upgrade verb (#59) =="
+# A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
+# on. The runner's upgrade verb runs against a stub curl (GitHub release API + bundle download)
+# and a fake release bundle whose pithead records what it was asked to do — no network, no docker.
+UPG="$SANDBOX/upgrade59"
+UPGREQS="$UPG/data/control/requests"
+UPGRESULTS="$UPG/data/control/results"
+UPGAUDIT="$UPG/data/control/audit/control.log"
+mkdir -p "$UPGREQS" "$UPG/data/control/staged" "$UPGRESULTS" "$UPG/data/control/audit"
+cp "$STACK" "$UPG/pithead"
+make_stubs "$UPG/bin"
+printf '1.3.1' >"$UPG/VERSION"
+# The stub curl serves the canned API response for the release-API URL and copies the fake bundle
+# for the download URL; every call is logged so the tests can assert what was (not) dialled.
+cat >"$UPG/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "[curl] $*" >>"${CURL_LOG:-/dev/null}"
+[ "${CURL_FAIL:-}" = "1" ] && exit 22
+url="${*: -1}"
+out=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "-o" ] && out="$a"
+    prev="$a"
+done
+case "$url" in
+*api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+*releases/download/*) cp "${CURL_BUNDLE:?}" "$out" ;;
+*) exit 22 ;;
+esac
+EOF
+chmod +x "$UPG/bin/curl"
+# The fake v9.9.9 release bundle: a pithead that logs its invocation (and can be told to fail).
+UPGB="$SANDBOX/upgrade59-bundle"
+mkdir -p "$UPGB/pithead-src"
+cat >"$UPGB/pithead-src/pithead" <<'EOF'
+#!/usr/bin/env bash
+echo "new-pithead $*" >>upgrade-invocations.log
+[ "${NEW_PITHEAD_FAIL:-}" = "1" ] && exit 1
+exit 0
+EOF
+chmod +x "$UPGB/pithead-src/pithead"
+printf '9.9.9' >"$UPGB/pithead-src/VERSION"
+tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead-src
+printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel"}' >"$UPGB/api.json"
+seed_upgrade_env() { # <control-enabled true|false>
+    cat >"$UPG/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=$1
+CONTROL_DIR=$UPG/data/control
+NETWORK_PREFIX=10.9.0
+EOF
+}
+urun() {
+    (cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+        CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/bundle.tar.gz" \
+        ./pithead control-run-pending 2>&1)
+}
+upgrade_intent() { # <id> [version] — drop an upgrade request into the spool
+    if [ "$#" -ge 2 ]; then
+        printf '{"id":"%s","action":"upgrade","actor":"admin","version":"%s"}\n' "$1" "$2" >"$UPGREQS/$1.json"
+    else
+        printf '{"id":"%s","action":"upgrade","actor":"admin"}\n' "$1" >"$UPGREQS/$1.json"
+    fi
+}
+UUPG="66666666-6666-4666-8666-666666666666"
+reset_upgrade_state() { # restore between attempts: fresh runner copy, running version, no throttle
+    cp "$STACK" "$UPG/pithead"
+    printf '1.3.1' >"$UPG/VERSION"
+    rm -f "$UPG/data/control/staged/.upgrade-stamp" "$UPGRESULTS/$UUPG.json" "$UPG/upgrade-invocations.log"
+    : >"$UPG/curl.log"
+}
+
+# Source checkout ($C): the upgrade verb is refused outright — its update path is `git pull`.
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$REQS/$UUPG.json"
+run_pending >/dev/null
+assert_eq "upgrade on a source checkout is rejected" "$(jq -r '.status' "$RESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "source-checkout refusal points at git pull" "$(jq -r '.error' "$RESULTS/$UUPG.json" 2>/dev/null)" "git pull"
+rm -f "$RESULTS/$UUPG.json"
+
+# Channel off: the runner refuses to process ANYTHING — the intent stays unclaimed, no result.
+seed_upgrade_env false
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+out="$(urun)"
+assert_rc "upgrade runner refuses when the channel is off" "$?" "1"
+assert_contains "channel-off refusal names the flag" "$out" "not enabled"
+[ -f "$UPGREQS/$UUPG.json" ] && ok "channel-off intent left unclaimed" || bad "channel-off intent left unclaimed" "claimed"
+[ ! -f "$UPGRESULTS/$UUPG.json" ] && ok "channel-off intent gets no result" || bad "channel-off intent gets no result" "result written"
+rm -f "$UPGREQS/$UUPG.json"
+seed_upgrade_env true
+
+# Malformed / missing version: refused BEFORE any network dial (curl must never run).
+reset_upgrade_state
+upgrade_intent "$UUPG" 'v9.9.9;curl evil.tld'
+urun >/dev/null
+assert_eq "shell-metacharacter version is rejected" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "malformed-version rejection names the field" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "version"
+assert_eq "no network dial for a malformed version" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+reset_upgrade_state
+upgrade_intent "$UUPG"
+urun >/dev/null
+assert_eq "missing version is rejected" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_eq "no network dial for a missing version" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+
+# A smuggled target field (the image-swap vector): the closed key set refuses the whole request.
+reset_upgrade_state
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9","target":"evil.tld/img:tag"}\n' "$UUPG" >"$UPGREQS/$UUPG.json"
+urun >/dev/null
+assert_contains "upgrade intent smuggling a target is rejected" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "unexpected keys"
+
+# Forged/stale version: the container proposes v1.9.9 but the host-derived latest is v9.9.9 —
+# refused, nothing downloaded, nothing extracted. The container cannot choose the target.
+reset_upgrade_state
+upgrade_intent "$UUPG" "v1.9.9"
+urun >/dev/null
+assert_eq "container-proposed non-latest version is rejected" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "forged-version rejection names the real latest" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "v9.9.9"
+assert_eq "forged version downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
+assert_eq "forged version leaves the install untouched" "$(cat "$UPG/VERSION")" "1.3.1"
+# ...and it still CLAIMED the throttle (stamp taken before the network dial), so a compromised
+# container can't flood well-formed-but-stale intents to grind the GitHub API / beacon over Tor:
+# a second attempt straight after — without reset — is throttled (#59 review, egress-beacon guard).
+upgrade_intent "$UUPG" "v1.9.9"
+urun >/dev/null
+assert_contains "a non-latest attempt still claims the throttle" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
+
+# Already up to date: latest equals the running version — refused, no download.
+reset_upgrade_state
+printf '{"tag_name":"v1.3.1","html_url":"https://example.invalid/rel"}' >"$UPGB/api-same.json"
+upgrade_intent "$UUPG" "v1.3.1"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api-same.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "same-version upgrade is rejected as up to date" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "already up to date"
+
+# Release API unreachable / unusable: refused, nothing changed (fail closed, silent stack).
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_FAIL=1 CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "unreachable release API rejects the upgrade" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "could not reach"
+reset_upgrade_state
+printf '{"tag_name":"main","html_url":"https://example.invalid/rel"}' >"$UPGB/api-bad.json"
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api-bad.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "non-semver API tag rejects the upgrade" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "no usable release tag"
+
+# Bundle download failure AFTER the checks pass: the attempt fails, the stack keeps running.
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/missing.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "failed bundle download reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "download failure says the stack keeps running" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "keeps running"
+assert_eq "download failure extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+
+# `pithead upgrade` itself fails after extraction: status failed, error points at the host CLI.
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" NEW_PITHEAD_FAIL=1 CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "failed upgrade run reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "failed upgrade points at the host CLI" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "./pithead upgrade"
+assert_contains "failed upgrade audited" "$(cat "$UPGAUDIT" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"failed\""
+
+# Happy path: proposed == host-derived latest and newer than running → bundle extracted, the NEW
+# pithead's `upgrade` ran, both dials went through the stack's Tor SOCKS, everything audited.
+reset_upgrade_state
+: >"$UPGAUDIT"
+upgrade_intent "$UUPG" "v9.9.9"
+out="$(urun)"
+assert_rc "runner exits 0 on a valid upgrade" "$?" "0"
+assert_eq "upgrade result status" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "upgrade result carries the host-derived version" "$(jq -r '.version' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "v9.9.9"
+assert_eq "bundle extracted over the install" "$(cat "$UPG/VERSION")" "9.9.9"
+assert_contains "the NEW pithead ran the upgrade" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null)" "new-pithead upgrade"
+assert_eq "both GitHub dials went over Tor SOCKS" "$(grep -c -- '--socks5-hostname 10.9.0.25:9050' "$UPG/curl.log")" "2"
+assert_contains "upgrade start audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"started\""
+assert_contains "upgrade completion audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+
+# Throttle: a second attempt straight after is refused for 10 minutes (egress-beacon guard).
+# The happy path replaced $U/pithead with the fake bundle's script — restore the real runner
+# (keeping the throttle stamp the successful attempt left behind).
+cp "$STACK" "$UPG/pithead"
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_contains "immediate second upgrade attempt is throttled" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
+reset_upgrade_state
 
 # The runner refuses to run at all when the channel is off (fail-closed).
 control_config main

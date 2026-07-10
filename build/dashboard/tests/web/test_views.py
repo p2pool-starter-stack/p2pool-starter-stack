@@ -432,6 +432,16 @@ class TestChartWindow:
         assert state["avg_window"] == DEFAULT_HASHRATE_WINDOW
         assert state["chart"]["p2pool"][0]["y"] == 1000  # the original 10m series
 
+    def test_build_state_exposes_control_flag_for_upgrade_button(self, monkeypatch):
+        # Off by default; flipping the module attribute flips the state key (#59 button gating).
+        import mining_dashboard.config.config as cfg
+
+        state = build_state(_data(), _state_mgr(history=[self._row()]), "all")
+        assert state["control_enabled"] is False
+        monkeypatch.setattr(cfg, "DASHBOARD_CONTROL_ENABLED", True)
+        state = build_state(_data(), _state_mgr(history=[self._row()]), "all")
+        assert state["control_enabled"] is True
+
 
 # --- Hashrate / mode / tier formatting ------------------------------------------------
 

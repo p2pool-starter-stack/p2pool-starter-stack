@@ -43,14 +43,17 @@ The stack's defaults:
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.
 - Tor for all node networking.
-- A one-way host-control boundary for dashboard config editing (`dashboard.control`, default
-  off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
+- A one-way host-control boundary for dashboard config editing and upgrades (`dashboard.control`,
+  default off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
   directory whose other legs (staged configs, results, the audit log) are host-owned and mounted
   read-only. A root systemd unit re-validates every intent with pithead's own config validation
-  and dispatches exactly two fixed actions (`apply --dry-run`, `apply -y`); no string from the
-  container is ever executed. Enabling the channel without a dashboard password is a validation
-  error, on a published onion it additionally requires Tor client authorization, and every
-  mutation is audited host-side. Commits are default-denied against an explicit allowlist of
+  and dispatches exactly three fixed actions (`apply --dry-run`, `apply -y`, and a release
+  upgrade); no string from the container is ever executed. The upgrade intent carries only the
+  version the operator confirmed: the runner re-derives the target itself from the GitHub release
+  API (over the stack's Tor SOCKS), refuses any mismatch or non-release tag, and limits attempts
+  to one per 10 minutes — the container cannot choose an image, tag, or registry. Enabling the
+  channel without a dashboard password is a validation error, on a published onion it additionally
+  requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist of
   operational settings: a commit that changes any env key off that list — in every direction
   (enabling, changing, or disabling) — is refused, as is anything the change preview flags
   destructive. Wallets, dashboard auth and onion exposure, the control channel itself, the Tor

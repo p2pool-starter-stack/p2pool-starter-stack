@@ -1328,9 +1328,10 @@ Maintenance:
                             the old address and any client keys you handed out stop working.
                               -y, --yes        skip the confirmation prompt.
 
-  control-run-pending       Process queued dashboard config-change requests (#33): validate
-                            each staged intent and run 'apply --dry-run' (preview) or
-                            'apply -y' (commit). Normally fired by the pithead-control
+  control-run-pending       Process queued dashboard control requests (#33): validate each
+                            intent and run 'apply --dry-run' (preview), 'apply -y' (commit),
+                            or a release upgrade (#59, target verified against the GitHub
+                            release API host-side). Normally fired by the pithead-control
                             systemd path unit when dashboard.control.enabled is true.
 
   rotate-secrets [-y|--yes]
@@ -3978,7 +3979,8 @@ run_chain() {
 # --- Dashboard control channel (#33) ---
 # The dashboard container can only ASK: it drops typed JSON intents into $CONTROL_DIR/requests
 # (its single writable spool mount). This host-side runner claims each request, validates it, and
-# dispatches EXACTLY two actions — `apply --dry-run --porcelain` (preview) and `apply -y` (commit).
+# dispatches EXACTLY three actions — `apply --dry-run --porcelain` (preview), `apply -y` (commit),
+# and `upgrade` to the latest published release (#59, target re-derived host-side).
 # Outcomes land in results/ and an audit line in audit/, both mounted read-only in the container.
 # No string from the container is ever executed or interpolated into a command; the candidate
 # config crosses the boundary only as a FILE handed to `apply` via PITHEAD_CONFIG_FILE.
@@ -4172,9 +4174,124 @@ control_commit() { # <id> <actor> <control-dir>
     rm -f "$staged" "$logf"
 }
 
+# True when SemVer $1 is strictly newer than $2 (either may carry a leading `v`). Both arguments
+# are shape-checked (vX.Y.Z) before the call. Pure bash/awk — macOS sort has no -V.
+semver_newer() {
+    local a b
+    a=$(printf '%s' "${1#v}" | awk -F. '{printf "%d%05d%05d",$1,$2,$3}')
+    b=$(printf '%s' "${2#v}" | awk -F. '{printf "%d%05d%05d",$1,$2,$3}')
+    [ "$a" -gt "$b" ]
+}
+
+# Upgrade the install to the latest published release (#59). The container only PROPOSES ("the
+# operator confirmed vX.Y.Z"); this host side re-derives the target itself: it asks the GitHub
+# release API — over the stack's own Tor SOCKS, like every other stack egress — for the latest
+# tag, refuses unless the proposed version matches that tag exactly AND the tag is strictly newer
+# than the running VERSION, then downloads the release bundle for the HOST-derived tag and runs
+# `pithead upgrade`: the same two steps docs/operations.md documents for a manual update. No
+# container string ever reaches a command line or URL — the proposed version is shape-checked and
+# used only in an equality comparison, so a container-supplied tag/registry cannot steer what is
+# installed (the image-swap RCE the #33 review closed). Source checkouts are refused: their
+# update is `git pull`, a judgment the operator makes at a shell. One attempt per 10 minutes,
+# so a compromised container cannot use the root runner as an egress beacon or grind GitHub.
+control_upgrade() { # <request-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    _upg_reject() { # <reason> — refuse before anything changed on the host
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$1" '{status:"rejected",error:$e,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "rejected"
+    }
+    _upg_fail() { # <reason> — the attempt started and did not finish
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$1" '{status:"failed",error:$e,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
+    }
+    if is_source_checkout; then
+        _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
+        return 0
+    fi
+    # Throttle: one attempt per 10 minutes, checked before any network dial.
+    local stamp="$cdir/staged/.upgrade-stamp"
+    if [ -n "$(find "$stamp" -mmin -10 2>/dev/null)" ]; then
+        _upg_reject "an upgrade was attempted less than 10 minutes ago — wait for it to finish, then retry."
+        return 0
+    fi
+    # The proposed version must LOOK like a release tag before it is even compared.
+    local proposed
+    proposed=$(jq -r '.version // ""' "$file")
+    if ! printf '%s' "$proposed" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        _upg_reject "malformed or missing 'version' in the upgrade request."
+        return 0
+    fi
+    if [ -z "${PITHEAD_VERSION:-}" ]; then
+        _upg_reject "cannot determine the running version (VERSION file missing) — upgrade from the host."
+        return 0
+    fi
+    # Claim the throttle now — BEFORE the network dial — so every well-formed attempt costs the
+    # 10-minute window, even one that will be rejected as non-latest. Otherwise a compromised
+    # container floods well-formed-but-stale version intents and turns the root runner into an
+    # unthrottled GitHub-API / Tor-egress beacon (each fails only at the proposed!=tag check, past
+    # the dial). A genuine probe that fails to reach GitHub costing the operator a 10-minute wait
+    # is the right trade.
+    touch "$stamp"
+    # Host-side re-derivation of the target: the latest tag according to GitHub, not the request.
+    local prefix socks rel tag
+    prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
+    [ -n "$prefix" ] || prefix="172.28.0"
+    socks="${prefix}.25:9050"
+    if ! rel=$(curl -fsS --max-time 60 --socks5-hostname "$socks" \
+        -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null); then
+        _upg_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        return 0
+    fi
+    tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
+    if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        _upg_reject "the GitHub release API returned no usable release tag — nothing was changed."
+        return 0
+    fi
+    if [ "$proposed" != "$tag" ]; then
+        _upg_reject "requested version $proposed is not the latest published release ($tag) — reload the dashboard and retry."
+        return 0
+    fi
+    if ! semver_newer "$tag" "v$PITHEAD_VERSION"; then
+        _upg_reject "already up to date (running v$PITHEAD_VERSION; latest release is $tag)."
+        return 0
+    fi
+    control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
+    # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.
+    local bundle="$cdir/staged/.$id.tar.gz" logf="$cdir/staged/.$id.log"
+    if ! curl -fsSL --max-time 900 --socks5-hostname "$socks" -o "$bundle" \
+        "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz" 2>/dev/null; then
+        rm -f "$bundle"
+        _upg_fail "could not download the $tag release bundle over Tor — the stack keeps running v$PITHEAD_VERSION."
+        return 0
+    fi
+    # -U (unlink first): the archive contains THIS running script — replacing it via unlink keeps
+    # the running copy executing from its old inode, where an in-place truncate would corrupt it.
+    if ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" 2>"$logf"; then
+        rm -f "$bundle"
+        _upg_fail "the $tag release bundle failed to extract: $(tail -c 500 "$logf") — the stack keeps running v$PITHEAD_VERSION."
+        rm -f "$logf"
+        return 0
+    fi
+    rm -f "$bundle"
+    # The extraction replaced this script on disk (the running copy keeps executing from its old
+    # inode); run the NEW pithead's `upgrade`, which re-renders the generated config and pulls the
+    # $tag images — exactly what the manual bundle update does.
+    if "$PWD/pithead" upgrade >"$logf" 2>&1; then
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"upgraded",version:$v,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
+    else
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" \
+            '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
+    fi
+    rm -f "$logf"
+}
+
 # Validate + dispatch one CLAIMED request file. Trusts no byte of it: must be JSON, only the keys
-# id/action/config/actor, the id must be a UUID (it becomes the result/staged FILENAME — anything
-# else is rejected before it can touch a path), and the action one of the two known verbs.
+# id/action/config/actor/version, the id must be a UUID (it becomes the result/staged FILENAME —
+# anything else is rejected before it can touch a path), and the action one of the three known verbs.
 control_process_request() { # <claimed-file> <control-dir>
     local file="$1" cdir="$2" id action actor size
     # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
@@ -4203,7 +4320,7 @@ control_process_request() { # <claimed-file> <control-dir>
         warn "Control request has a malformed id — discarded (no result can be addressed)."
         return 0
     fi
-    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor")] | length' "$file")" != "0" ]; then
+    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version")] | length' "$file")" != "0" ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unexpected keys in request",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "" "invalid" "rejected"
         return 0
@@ -4216,6 +4333,7 @@ control_process_request() { # <claimed-file> <control-dir>
     case "$action" in
     preview) control_preview "$file" "$id" "$actor" "$cdir" ;;
     commit) control_commit "$id" "$actor" "$cdir" ;;
+    upgrade) control_upgrade "$file" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "${action:-none}" "rejected"

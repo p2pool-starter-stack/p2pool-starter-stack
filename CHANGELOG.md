@@ -69,6 +69,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   points a single invocation at a candidate config file.
 - **`pithead control-run-pending`.** The host-side runner behind the Configuration view; fired by
   the systemd path unit, runnable by hand.
+- **One-click upgrade from the dashboard (#59).** With `dashboard.control.enabled` on, a release
+  install shows an **Upgrade to vX.Y.Z** button next to the existing new-release badge (#224).
+  After a typed `UPGRADE` confirm, the host-side control runner performs the documented update —
+  download the new release bundle, run `pithead upgrade` — surviving the dashboard container's own
+  recreation, and the page rides out the restart and reports the outcome. The intent carries only
+  the version the operator saw: the runner re-derives the latest release from the GitHub API over
+  Tor and refuses a mismatch, an older-or-equal version, a source checkout, or more than one
+  attempt per 10 minutes, and audits every attempt. A failed release lookup or bundle download
+  changes nothing; a failure inside `pithead upgrade` leaves not-yet-recreated containers on the
+  previous images and is finished with `./pithead upgrade` on the host.
 - **Audit + access logs for attack visibility (#349).** The #33 audit log now records *what*
   changed — the env-key names from the same host-side dry-run the approval gate runs; never
   values — and is size-bounded (trimmed to the newest 2000 entries past 512 KiB). Caddy gains a

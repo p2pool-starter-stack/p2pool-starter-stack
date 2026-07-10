@@ -115,6 +115,13 @@ class TestSubmit:
         req = json.loads((spool / "requests" / f"{rid}.json").read_text())
         assert "config" not in req
 
+    def test_upgrade_intent_carries_version_only(self, spool):
+        # The upgrade intent (#59) proposes a version and nothing else — no config leg, no
+        # free-form target; the host runner re-derives what actually gets installed.
+        rid = control_service.submit("upgrade", actor="admin", version="v9.9.9")
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req == {"id": rid, "action": "upgrade", "actor": "admin", "version": "v9.9.9"}
+
     def test_garbage_intent_id_rejected(self, spool):
         # The id becomes a host-side filename; anything that isn't a UUID never leaves the app.
         with pytest.raises(ValueError):

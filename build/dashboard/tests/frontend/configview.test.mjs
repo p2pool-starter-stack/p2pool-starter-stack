@@ -58,3 +58,66 @@ test("poll skips the still-present preview result until the commit outcome lands
   const out = await withFastPoll(fetchStub, () => view.poll(ID, "previewed"));
   assert.equal(out.status, "applied");
 });
+
+// --- One-click upgrade (#59) ----------------------------------------------------------
+//
+// runUpgrade is the whole client-side flow: POST the version the operator saw, then poll the
+// result file to the terminal outcome — skipping the runner's intermediate "running" status and
+// riding out the window where the upgrade recreates the dashboard container itself. The typed
+// UPGRADE confirm is UX only; the host runner re-derives the real target (tier-2 spool tests).
+
+import { runUpgrade, UpgradeControl } from "../../mining_dashboard/web/static/configview.mjs";
+import { renderToString } from "./helpers/render.mjs";
+
+const UPDATE = { available: true, latest: "v9.9.9", url: "https://example.invalid/rel" };
+
+test("runUpgrade posts the seen version, skips 'running', rides out the restart, returns the outcome", async () => {
+  let posted = null;
+  let polls = 0;
+  const fetchStub = async (url, opts) => {
+    if (url === "/api/control/upgrade") {
+      posted = { body: JSON.parse(opts.body), headers: opts.headers };
+      return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+    }
+    polls++;
+    if (polls === 1) return okResult({ status: "running", version: "v9.9.9" });
+    if (polls === 2) throw new TypeError("Failed to fetch"); // dashboard recreated mid-upgrade
+    return okResult({ status: "upgraded", version: "v9.9.9" });
+  };
+  const out = await withFastPoll(fetchStub, () => runUpgrade("v9.9.9"));
+  assert.equal(out.status, "upgraded");
+  assert.deepEqual(posted.body, { version: "v9.9.9" }); // the proposal — nothing else crosses
+  assert.equal(posted.headers["X-Pithead-Control"], "1"); // CSRF guard rides every mutation
+});
+
+test("runUpgrade surfaces a host-side rejection as the outcome, not a throw", async () => {
+  const fetchStub = async (url) =>
+    url === "/api/control/upgrade"
+      ? { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) }
+      : okResult({ status: "rejected", error: "already up to date" });
+  const out = await withFastPoll(fetchStub, () => runUpgrade("v9.9.9"));
+  assert.equal(out.status, "rejected");
+  assert.match(out.error, /up to date/);
+});
+
+test("UpgradeControl renders nothing without a newer release or with the channel off", () => {
+  const inst = (props) => {
+    const c = new UpgradeControl(props);
+    c.props = props;
+    return renderToString(c.render());
+  };
+  assert.equal(inst({ update: null, enabled: true }), "");
+  assert.equal(inst({ update: { available: false }, enabled: true }), "");
+  assert.equal(inst({ update: UPDATE, enabled: false }), "");
+  assert.match(inst({ update: UPDATE, enabled: true }), /Upgrade to v9\.9\.9/);
+});
+
+test("the confirm modal arms only on a typed UPGRADE", () => {
+  const props = { update: UPDATE, enabled: true };
+  const inst = new UpgradeControl(props);
+  inst.props = props;
+  inst.state.phase = "confirm";
+  assert.match(renderToString(inst.render()), /disabled/); // unarmed until typed
+  inst.state.confirmText = "UPGRADE";
+  assert.doesNotMatch(renderToString(inst.render()), /disabled/);
+});

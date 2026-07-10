@@ -87,10 +87,13 @@ report shows the build. To switch a `dev` build to a published release, see
 [Switching a source checkout to release images](operations.md#switching-a-source-checkout-to-release-images).
 
 When a newer Pithead release is out, a clickable `New release vX.Y.Z available ↗` badge appears next
-to the version badge, linking to the GitHub release. It never updates anything; upgrade with
-`./pithead upgrade` when ready. The check is on by default and routed over Tor, so it does not reveal
-your IP. Turn it off with `dashboard.check_for_updates: false` (see
-[Configuration](configuration.md#configuration-reference)).
+to the version badge, linking to the GitHub release. The badge itself never updates anything. The
+check is on by default and routed over Tor, so it does not reveal your IP. Turn it off with
+`dashboard.check_for_updates: false` (see [Configuration](configuration.md#configuration-reference)).
+
+With the [control channel](#configuration-view) enabled, an **Upgrade to vX.Y.Z** button appears
+beside the badge — see [Upgrading from the dashboard](#upgrading-from-the-dashboard). Without it,
+upgrade from the host per [Operations › Updating the stack](operations.md#updating-the-stack).
 
 ### Host & performance warnings
 
@@ -396,6 +399,43 @@ field in them as hostile input — a request path is attacker-chosen bytes — s
 stripped to a safe character set before it is served. See
 [Operations › Watching for intruders](operations.md#watching-for-intruders) for the log paths,
 size bounds, and rotation steps.
+
+## Upgrading from the dashboard
+
+With `dashboard.control.enabled: true` (the same flag as the Configuration view) and a newer
+release detected, an **Upgrade to vX.Y.Z** button appears next to the new-release badge. It runs
+the release install's documented update — download the new bundle, run `./pithead upgrade` — on
+the host, with no SSH:
+
+1. Click the button and type `UPGRADE` to confirm. An upgrade recreates every container, so the
+   dashboard disconnects briefly and miners reconnect to the stratum port; config, wallet, and
+   chain data are untouched.
+2. The dashboard drops an upgrade request into the same control spool the Configuration view
+   uses. The host-side runner asks the GitHub release API (over Tor) for the latest release
+   itself and refuses the request unless the version you confirmed **is** that latest release and
+   it is newer than the running version — the container proposes, the host decides what gets
+   installed. Attempts are limited to one per 10 minutes, and every one is written to the audit
+   log.
+3. The runner downloads the release bundle (over Tor), extracts it over the install directory,
+   and runs the new release's `./pithead upgrade`, which re-renders the generated config and
+   pulls the new images. The page rides out its own restart and reports the outcome; reload when
+   it says the new version is up.
+
+The version the container proposes is never trusted as the target: the host independently fetches
+the latest tag from GitHub, and the bundle it downloads is for that host-derived tag. Today the
+bundle's authenticity rests on TLS to GitHub (over Tor) plus that tag pinning — it is not yet
+cryptographically signed, so a compromise of the release pipeline or GitHub account could serve a
+malicious bundle. Signing releases and verifying the signature in `pithead upgrade` is tracked in
+[#376](https://github.com/p2pool-starter-stack/pithead/issues/376); until it lands, treat the
+one-click upgrade with the same trust you place in GitHub itself.
+
+The button never appears on a source checkout — the runner refuses the request there, since a dev
+install updates with `git pull`. If the upgrade fails, the result says so in the view: a failed
+release lookup or bundle download changes nothing; a failure during `pithead upgrade` leaves
+containers that were not yet recreated on the previous images, and finishing up is one
+`./pithead upgrade` on the host. There is no automatic rollback — the images of the previous
+release stay on disk, and `docker compose` state is recoverable the same way as a failed
+CLI upgrade.
 
 ## Tips
 

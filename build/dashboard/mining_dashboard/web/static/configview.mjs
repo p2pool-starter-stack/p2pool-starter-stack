@@ -11,6 +11,32 @@ import { Component, html } from "./preact.mjs";
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
 const POLL_MS = 2000;
 const POLL_MAX = 90; // 3 minutes — a commit recreates containers, which can take a while
+const UPGRADE_POLL_MAX = 450; // 15 minutes — an upgrade pulls a whole release of images first
+
+// Poll /api/control/result until a terminal result lands; shared by the Configuration view and
+// the Upgrade button (#59). `skip` ignores an intermediate status under the same id (the
+// still-present "previewed" result while a commit runs; "running" while an upgrade runs). Both
+// flows recreate the dashboard container itself, so a fetch here can transiently fail (connection
+// refused mid-restart) — ride it out and keep polling until the result file answers.
+async function pollResult(id, skip, max = POLL_MAX) {
+  for (let i = 0; i < max; i++) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    let res;
+    try {
+      res = await fetch(`/api/control/result?id=${encodeURIComponent(id)}`);
+    } catch {
+      continue;
+    }
+    if (res.status === 202) continue;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const out = await res.json();
+    if (out.status === skip) continue;
+    return out;
+  }
+  throw new Error(
+    "Timed out waiting for the host runner — is dashboard.control enabled and the pithead-control unit running?",
+  );
+}
 
 const Field = ({ field, edits, onEdit }) => {
   const value = field.key in edits ? edits[field.key] : field.value;
@@ -107,29 +133,10 @@ export class ConfigView extends Component {
     }
   }
 
-  // Poll the result endpoint until a terminal result lands. `skip` ignores the still-present
-  // preview result while waiting for the commit outcome under the same id.
-  async poll(id, skip) {
-    for (let i = 0; i < POLL_MAX; i++) {
-      await new Promise((r) => setTimeout(r, POLL_MS));
-      // A commit recreates the dashboard container itself, so a fetch here can transiently fail
-      // (connection refused mid-restart). Ride it out — keep polling until the result file answers
-      // rather than dropping to an error state (graft #437 pollResult).
-      let res;
-      try {
-        res = await fetch(`/api/control/result?id=${encodeURIComponent(id)}`);
-      } catch {
-        continue;
-      }
-      if (res.status === 202) continue;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const out = await res.json();
-      if (out.status === skip) continue;
-      return out;
-    }
-    throw new Error(
-      "Timed out waiting for the host runner — is dashboard.control enabled and the pithead-control unit running?",
-    );
+  // Poll the result endpoint until a terminal result lands (shared pollResult above; kept as a
+  // method because the view's flows and tests drive it through the instance).
+  poll(id, skip) {
+    return pollResult(id, skip);
   }
 
   async save() {
@@ -237,5 +244,104 @@ export class ConfigView extends Component {
             : null
         }
     </div>`;
+  }
+}
+
+// --- One-click upgrade (#59) ---------------------------------------------------------
+
+// POST the upgrade intent, then wait out the whole run. Exported for node --test — this network
+// flow is the logic; UpgradeControl only maps its outcome onto UI state. The server answers 202
+// straight away (the upgrade recreates the dashboard container itself), so the real outcome
+// arrives via pollResult, skipping the intermediate "running" result and riding out the restart.
+export async function runUpgrade(version) {
+  const res = await fetch("/api/control/upgrade", {
+    method: "POST",
+    headers: CONTROL_HEADERS,
+    body: JSON.stringify({ version }),
+  });
+  if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
+  const out = await res.json();
+  return pollResult(out.id, "running", UPGRADE_POLL_MAX);
+}
+
+// Header control for #59, rendered next to the new-release badge only when the server reports
+// BOTH a newer release and an enabled control channel. The typed UPGRADE confirm is UX, not a
+// security control — the host runner re-derives the target from the GitHub release API and
+// refuses anything that isn't the latest published release.
+export class UpgradeControl extends Component {
+  constructor(props) {
+    super(props);
+    // idle | confirm | upgrading | done | failed
+    this.state = { phase: "idle", confirmText: "", result: null };
+  }
+
+  async run() {
+    this.setState({ phase: "upgrading" });
+    try {
+      const out = await runUpgrade(this.props.update.latest);
+      this.setState({ phase: out.status === "upgraded" ? "done" : "failed", result: out });
+    } catch (e) {
+      this.setState({ phase: "failed", result: { error: String(e) } });
+    }
+  }
+
+  render() {
+    const { update, enabled } = this.props;
+    if (!enabled || !update || !update.available) return null;
+    const { phase, confirmText, result } = this.state;
+    const version = update.latest;
+    let modal = null;
+    if (phase === "confirm") {
+      modal = html`<div class="config-modal-backdrop">
+          <div class="card config-modal">
+              <h3>Upgrade to ${version}</h3>
+              <p>The host pulls the ${version} release and recreates every container — including
+              this dashboard, which goes away for a moment, and the miners' stratum connection,
+              which reconnects. Your config, wallet, and chain data are kept.</p>
+              <label class="config-confirm-type">Type <code>UPGRADE</code> to confirm:
+                  <input type="text" value=${confirmText}
+                      onInput=${(e) => this.setState({ confirmText: e.target.value })} /></label>
+              <div class="config-modal-actions">
+                  <button class="btn-toggle" onClick=${() => this.setState({ phase: "idle", confirmText: "" })}>Cancel</button>
+                  <button class="btn-toggle active" disabled=${confirmText !== "UPGRADE"}
+                      onClick=${() => this.run()}>Upgrade</button>
+              </div>
+          </div>
+      </div>`;
+    } else if (phase === "upgrading") {
+      modal = html`<div class="config-modal-backdrop">
+          <div class="card config-modal">
+              <h3>Upgrading to ${version}…</h3>
+              <p class="text-muted">The host is pulling images and recreating containers. This page
+              will briefly disconnect while the dashboard restarts — leave it open; it reports the
+              outcome when the new version is up.</p>
+          </div>
+      </div>`;
+    } else if (phase === "done") {
+      modal = html`<div class="config-modal-backdrop">
+          <div class="card config-modal">
+              <h3>Upgraded to ${result.version || version}</h3>
+              <p class="status-ok">The stack is running the new release.</p>
+              <div class="config-modal-actions">
+                  <button class="btn-toggle active" onClick=${() => window.location.reload()}>Reload the dashboard</button>
+              </div>
+          </div>
+      </div>`;
+    } else if (phase === "failed") {
+      modal = html`<div class="config-modal-backdrop">
+          <div class="card config-modal">
+              <h3>Upgrade did not complete</h3>
+              <p class="status-bad">${result.error || "The host runner reported a failure."}</p>
+              <div class="config-modal-actions">
+                  <button class="btn-toggle" onClick=${() => this.setState({ phase: "idle", confirmText: "" })}>Close</button>
+              </div>
+          </div>
+      </div>`;
+    }
+    return html`<button class="badge badge-accent version-badge upgrade-btn ml-2"
+            title=${"Upgrade the stack to " + version + " from the dashboard"}
+            onClick=${() => this.setState({ phase: "confirm", confirmText: "" })}>
+            Upgrade to ${version}
+        </button>${modal}`;
   }
 }

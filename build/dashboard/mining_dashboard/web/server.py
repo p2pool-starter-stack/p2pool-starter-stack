@@ -1,6 +1,7 @@
 import logging
 import mimetypes
 import os
+import re
 
 from aiohttp import web
 
@@ -149,6 +150,30 @@ async def handle_control_commit(request):
     return web.json_response({"id": rid, **res})
 
 
+async def handle_control_upgrade(request):
+    """Ask the host runner to upgrade the stack to the latest release (#59). The body's version
+    is only what the operator confirmed seeing ("upgrade to vX.Y.Z"); the host re-derives the real
+    target from the GitHub release API and refuses a mismatch — the container cannot choose what
+    gets installed. Returns 202 immediately: the upgrade recreates this very container, so the
+    client polls /api/control/result and rides out the restart."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    version = body.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        raise web.HTTPBadRequest(text="'version' must look like vX.Y.Z.")
+    try:
+        rid = control_service.submit(
+            "upgrade", actor=request.headers.get("X-Auth-User", ""), version=version
+        )
+    except Exception:
+        logger.exception("Error submitting control upgrade")
+        return web.json_response({"error": "Failed to submit the upgrade request."}, status=500)
+    return web.json_response({"id": rid, "status": "pending"}, status=202)
+
+
 async def handle_control_result(request):
     """Client-side polling endpoint for a 202'd preview/commit."""
     try:
@@ -241,6 +266,7 @@ def create_app(state_manager, latest_data_ref):
                 web.get("/api/config", handle_config),
                 web.post("/api/control/preview", handle_control_preview),
                 web.post("/api/control/commit", handle_control_commit),
+                web.post("/api/control/upgrade", handle_control_upgrade),
                 web.get("/api/control/result", handle_control_result),
                 web.get("/api/audit", handle_audit_log),
             ]
