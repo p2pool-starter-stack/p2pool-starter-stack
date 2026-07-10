@@ -6,10 +6,10 @@ set -euo pipefail
 BANNED='leverage|robust|seamless|powerful|effortlessly|comprehensive|elevate|streamline|simply|unlock|empower|cutting-edge|blazing|lightning-fast'
 
 # Prose docs only. Exclude the style guide itself (it lists the words), the changelog (a historical
-# record), and vendored/third-party markdown. (The generated test-inventory is git-ignored now, so
-# `git ls-files` never surfaces it — no exclusion needed, #414.)
+# record), the verbatim Contributor Covenant, and vendored/third-party markdown. (The generated
+# test-inventory is git-ignored now, so `git ls-files` never surfaces it — no exclusion needed, #414.)
 files=$(git ls-files '*.md' |
-    grep -vxE 'docs/STYLE\.md|CHANGELOG\.md|THIRD_PARTY_LICENSES\.md' |
+    grep -vxE 'docs/STYLE\.md|CHANGELOG\.md|THIRD_PARTY_LICENSES\.md|CODE_OF_CONDUCT\.md' |
     grep -vE '(^|/)(vendor|node_modules)/' || true)
 
 if [ -z "$files" ]; then

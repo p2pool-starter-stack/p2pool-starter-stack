@@ -22,6 +22,47 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   a short epilogue explaining that the miner is held until Monero and Tari finish their initial sync
   and then starts automatically, plus where to watch progress. It shows once (keyed on a marker file
   beside `.env`), not on every restart.
+- **`pithead version` prints the installed stack version (#386).** `version` (and the `-V` /
+  `--version` aliases) prints one line identifying the build — `pithead vX.Y.Z (release images
+  vX.Y.Z)` for a release install, `pithead dev (branch @ commit, VERSION X.Y.Z)` for a source
+  checkout — with no network call or update check. `doctor` repeats the line in its header, so every
+  pasted diagnostics report carries the version.
+- **`CODE_OF_CONDUCT.md`** — the Contributor Covenant v2.1, filling the last empty slot in the
+  GitHub community profile. Enforcement reports go through the same private channel as security
+  reports (see [`SECURITY.md`](SECURITY.md)). CONTRIBUTING links it (#372).
+
+### Changed
+
+- **`build/tor/Dockerfile`** now pins Alpine to a named minor version (`alpine:3.24`) alongside its
+  digest, instead of the floating `latest` tag, so Dependabot has a real version line to track
+  (#373).
+- **CONTRIBUTING** describes `make test` accurately: it needs Docker (via `lint-proto`), and the
+  lint-surface list now includes `lint-docs-voice` (#371).
+
+### Fixed
+
+- **`release.sh` rides out GHCR's read-after-push lag (#429).** A tag the registry just accepted can
+  fail to resolve for a few seconds; the digest-capture and smoke-stage manifest reads killed the
+  v1.3.1 cut twice this way. Both reads now retry with backoff (5 tries by default, tunable via
+  `PITHEAD_REGISTRY_READ_RETRIES` / `PITHEAD_REGISTRY_READ_BACKOFF`) before giving up, so a slow-to-
+  propagate push no longer turns a release into a relaunch exercise. A genuinely-missing image still
+  stops the release after the retries exhaust.
+- **`release.sh` preflight checks the lint toolchain before building (#426).** A reimaged release box
+  can lack `shellcheck`/`shfmt`/`node`/`uv`; the release used to die about a minute in with a bare
+  `shellcheck: not found` mid-gate. Preflight now verifies the tools the test gate needs are on PATH
+  and fails fast, naming the missing tool and pointing at the provisioning steps in
+  `docs/release-server.md`, before anything is built.
+- **`tests/integration/build-pruned-chain.sh`** no longer defaults `SRC_DIR` to a maintainer's
+  personal path (baked in under the pre-rename repo name); it's now a required variable with a clear
+  error (#373).
+
+### Dependencies
+
+- **Move `grpcio` off the yanked 1.82.0 release (#419).** PyPI yanked 1.82.0 for a bad protobuf
+  constraint, so every `uv lock` warned. The floor moves to 1.82.1, the first non-yanked release
+  above it; the lock now resolves to 1.82.1 with the warning gone. `grpcio` core carries no protobuf
+  dependency, so protobuf stays on 6.x and the checked-in Tari stubs (which floor at
+  `GRPC_GENERATED_VERSION = '1.78.0'`) import unchanged — no regeneration needed.
 
 ## [1.3.1] - 2026-07-10
 

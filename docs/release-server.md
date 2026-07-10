@@ -92,6 +92,31 @@ It asserts: chains synced (reusable), the prune axis is exercisable (the live ch
 snapshot-capable **or** a pre-built variant chain is supplied), disk headroom, `.env` is
 owner-only, the dashboard is bound to localhost, and the backup/rollback net is usable.
 
+### The lint/release toolchain
+
+`make release`'s blocking test gate runs `make lint`, which shells out to `shellcheck`, `shfmt`,
+`node`/`npx`, and `uv`/`uvx`. A reimaged box loses these, so the release preflight
+([#426](https://github.com/p2pool-starter-stack/pithead/issues/426)) stops early and names the
+missing tool rather than dying mid-gate. Restore them with the same pinned versions CI uses
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) — apt's `shellcheck`/`shfmt` are older
+and reformat differently, so a version skew would fail `make lint` on the box for diffs the merge
+gate never saw:
+
+```bash
+# node 20 (brings npx) + the basics the harness also needs
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs jq curl git tar
+
+# shellcheck 0.11.0 + shfmt 3.13.1 (pinned, not apt's)
+curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ -C /tmp
+sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+sudo curl -fsSL -o /usr/local/bin/shfmt https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+sudo chmod 0755 /usr/local/bin/shfmt
+
+# uv 0.10.10 (pinned installer; brings uvx, and adds ~/.local/bin to PATH)
+curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+```
+
 ### Recipe: prune-axis coverage, and the storage that matters
 
 Put the active chain on fast storage. The biggest factor is the disk, not the filesystem:

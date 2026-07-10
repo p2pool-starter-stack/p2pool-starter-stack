@@ -8,6 +8,7 @@ The workflow for contributing bug fixes, docs changes, and features.
   there first.
 - Check the [open issues](https://github.com/p2pool-starter-stack/pithead/issues) for existing
   work on the same thing.
+- This project follows a [Code of Conduct](CODE_OF_CONDUCT.md); by participating you agree to uphold it.
 
 ## Dev environment
 
@@ -36,11 +37,12 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    make test
    ```
 
-   This runs everything CI does without a server or Docker:
+   This runs everything CI does that doesn't need a live test server:
 
    - **lint** — every file surface gets a linter/formatter check (`make lint` runs them all; run one
      with `make lint-<surface>`): `lint-sh` (shellcheck + shfmt), `lint-py` (ruff), `lint-js` (Biome),
-     `lint-yaml` (yamllint), `lint-md` (markdownlint), `lint-proto` (buf), `lint-toml` (taplo). The
+     `lint-yaml` (yamllint), `lint-md` (markdownlint), `lint-docs-voice` (banned-word check),
+     `lint-proto` (buf), `lint-toml` (taplo). The
      non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
      on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
      (`lychee`) runs on a weekly schedule, not per-PR.
