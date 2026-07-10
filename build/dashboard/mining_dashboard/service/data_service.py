@@ -38,6 +38,7 @@ from mining_dashboard.config.config import (
     HOST_IP,
     LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
+    MONERO_WALLET_ADDRESS,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
@@ -419,8 +420,12 @@ class DataService:
         # Notifications-only Telegram alerter (Issue #121). Consumes the loop's existing edges
         # (node down/recovered, sync gate open) plus a debounced per-worker presence tracker.
         # Disabled unless telegram.enabled + bot_token + chat_id are configured, so this is a
-        # cheap no-op for the default stack.
-        self.alert_service = AlertService()
+        # cheap no-op for the default stack. The payout-wallet tripwire baseline (#375) is backed
+        # by the SQLite kv_store, not AlertService memory — `apply` recreates this container, and
+        # an in-memory baseline would silently re-seed to a tampered wallet.
+        self.alert_service = AlertService(
+            kv_get=self.state_manager.get_kv, kv_set=self.state_manager.set_kv
+        )
         # Hashrate-degradation detector (Issue #99): flags a sustained total-hashrate drop and its
         # recovery. Runs every cycle (cheap, self-contained EMA baseline) so it can mark the chart
         # even with Telegram off; a loss also drives a hashrate_loss alert.
@@ -849,6 +854,10 @@ class DataService:
                         # threshold. avx2 is badge-only (no alert), so it isn't passed here.
                         hugepages_reserved=(hugepages[0] != "Disabled"),
                         low_ram=(0 < (memory.get("total_gb") or 0) < LOW_RAM_GB),
+                        # Payout-wallet tripwire (#375): what p2pool itself reports mining to —
+                        # the same stratum field the dashboard's Stratum card shows — with the
+                        # env address as fallback while p2pool is down/restarting. Empty => no-op.
+                        observed_wallet=stratum_raw.get("wallet") or MONERO_WALLET_ADDRESS,
                     )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).

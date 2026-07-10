@@ -27,7 +27,8 @@ stack host on port `3333`:
 ```
 
 That is the whole pool config. Start the miner; it appears in the dashboard's Workers Alive table
-within a few seconds.
+within a few seconds. Until the first worker connects, that table shows this connect hint with the
+stack's address filled in.
 
 - `user` is a label for the rig. Use its hostname to tell workers apart on the dashboard. (No wallet
   address; see above.)

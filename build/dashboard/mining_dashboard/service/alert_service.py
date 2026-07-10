@@ -61,6 +61,10 @@ class AlertService:
       corrupts monerod's DB mid-write.
     - **DB write failing** — ``StateManager.is_db_healthy`` flipping false (#131): the dashboard
       keeps serving but history/shares/stats stop persisting.
+    - **payout wallet changed** — the wallet p2pool actually mines to differing from the
+      kv_store baseline (#375): the highest-value tamper against the stack. Fires on every
+      change, including a legitimate ``pithead apply`` — a confirmation, not only an intrusion
+      signal. Addresses are truncated to 8 chars; the full address never leaves the host.
 
     Edge state is seeded silently on the first observation (``None`` baselines), so a dashboard
     restart can't replay a stale transition as a fresh alert. The exception is the persistent
@@ -92,6 +96,7 @@ class AlertService:
     EVT_HASHRATE_LOSS = "hashrate_loss"
     EVT_HUGEPAGES = "hugepages"
     EVT_LOW_RAM = "low_ram"
+    EVT_WALLET_CHANGED = "wallet_changed"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -107,6 +112,8 @@ class AlertService:
         worker_monitor=None,
         host_label=HOST_IP,
         daily_time=TELEGRAM_DAILY_SUMMARY_TIME,
+        kv_get=None,
+        kv_set=None,
     ):
         self.notifier = notifier if notifier is not None else build_default_notifier()
         self.workers = worker_monitor if worker_monitor is not None else WorkerPresenceMonitor()
@@ -139,6 +146,13 @@ class AlertService:
         self._incidents = {}
         # One-shot "stack is online" ping, sent on the first cycle after the dashboard starts.
         self._announced_online = False
+        # Payout-wallet tamper tripwire (#375): the baseline lives in the SQLite kv_store, NOT in
+        # an in-memory `_prev_*` attr, because `pithead apply` recreates the dashboard container —
+        # exactly the moment an attacker swaps the wallet — and an in-memory baseline would
+        # silently re-seed to the attacker's address. Injected as callables so the edge stays
+        # unit-testable with a plain dict. Both None => the tripwire is off.
+        self._kv_get = kv_get
+        self._kv_set = kv_set
 
     @property
     def enabled(self):
@@ -163,10 +177,12 @@ class AlertService:
         low_hr_warning=False,
         hugepages_reserved=True,
         low_ram=False,
+        observed_wallet="",
         now=None,
     ):
-        """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
-        filtered to the events the operator left enabled."""
+        """Fold this cycle's signals into the list of ``(event_key, text)`` to send, filtered to
+        the events the operator left enabled. No I/O except the injected wallet-baseline kv
+        callables (#375), which tests back with a plain dict."""
         alerts = []
 
         # --- Stack online (one-shot on the first cycle after the dashboard starts) ---
@@ -217,6 +233,9 @@ class AlertService:
         # --- Host health: data disk filling up, dashboard DB write failing ---
         alerts += self._disk_edges(disk_percent)
         alerts += self._db_edges(db_healthy)
+
+        # --- Payout-wallet tamper tripwire (#375) — kv-backed, so it survives container recreate ---
+        alerts += self._wallet_edges(observed_wallet)
 
         # --- Revenue / privacy: XvB PPLNS-share gate, clearnet-sync exposure ---
         alerts += self._xvb_share_edges(xvb_enabled, shares_in_window)
@@ -329,6 +348,38 @@ class AlertService:
             (
                 self.EVT_DB_UNHEALTHY,
                 self._fmt("\U0001f7e2 \U0001f5c4️ Dashboard DB writes recovered."),
+            )
+        ]
+
+    def _wallet_edges(self, observed):
+        """Payout-wallet tamper tripwire (#375). ``observed`` is the wallet p2pool itself reports
+        mining to (stratum stats), with the env address as fallback — ground truth of where
+        rewards go. Baseline in the kv_store so an `apply`-driven container recreate can't wipe
+        it (that recreate IS the attack window). Empty/Unknown observations no-op: p2pool briefly
+        reports no wallet while restarting, and that must not read as "changed to ''" or re-seed.
+        The first-ever observation seeds silently. Only the first 8 chars of each address are
+        ever put in a message."""
+        if not observed or observed == "Unknown" or self._kv_get is None or self._kv_set is None:
+            return []
+        baseline = self._kv_get("payout_wallet")
+        if not baseline:
+            self._kv_set("payout_wallet", observed)
+            return []
+        if observed == baseline:
+            return []
+        old8, new8 = baseline[:8], observed[:8]
+        self._kv_set("payout_wallet", observed)
+        self._kv_set("payout_wallet_prev8", old8)  # for the dashboard banner's tooltip
+        self._kv_set("payout_wallet_changed_ts", time.time())
+        self._record_incident(self.EVT_WALLET_CHANGED)
+        return [
+            (
+                self.EVT_WALLET_CHANGED,
+                self._fmt(
+                    f"\U0001f6a8 Payout wallet CHANGED: {old8}… → {new8}… — if you did not do "
+                    "this, your rewards are being redirected. Check config.json and run "
+                    "'pithead status'."
+                ),
             )
         ]
 

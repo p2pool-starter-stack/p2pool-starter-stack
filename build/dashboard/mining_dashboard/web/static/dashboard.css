@@ -296,6 +296,16 @@ tr:last-child td {
   margin-top: 12px;
 }
 
+/* First-run empty state in the Workers card (#385): shown until the proxy has ever reported a
+ * worker, pointing the operator at the one action left — connecting a rig. */
+.workers-empty {
+  padding: 24px 12px;
+  text-align: center;
+}
+.workers-empty code {
+  font-family: monospace;
+}
+
 /* Horizontal-scroll wrapper for the workers table (Issue #83): the table can be wider than a
  * phone viewport (eight columns, incl. accepted/rejected per #82), so it lives in this wrapper
  * that scrolls sideways within its card instead of stretching the whole page. Cells stay on one

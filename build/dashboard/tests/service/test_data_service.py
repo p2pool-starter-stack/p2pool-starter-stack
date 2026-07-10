@@ -1024,7 +1024,9 @@ class TestRunIteration:
             patch.object(ds_mod, "ClientSession", _FakeClientSession),
             patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
             patch.object(ds_mod, "TariClient", return_value=tari_client),
-            patch.object(ds_mod, "get_stratum_stats", return_value=({}, [])),
+            # The real get_stratum_stats returns a dict ({} on a missing/unreadable stats file);
+            # the wallet tripwire (#375) reads .get("wallet") off it, so the mock must match.
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
             patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
             patch.object(
                 ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
