@@ -227,6 +227,23 @@ export function computeEarnings(hashrateHs, earnings) {
   };
 }
 
+// Highest sustainable XvB tier for a what-if hashrate (#118): the highest tier whose threshold
+// clears `hashrateHs * calc.max_fraction`. A direct transcription of the AUTO path of
+// helper/utils.resolve_target_threshold (get_tier_info over stable_hr × max_fraction) — a pinned
+// test shares its inputs with the Python unit test so the two can't drift silently. Cost = the
+// threshold itself: XvB qualifies a tier on BOTH the 1h and 24h credited averages, so holding it
+// costs ~threshold H/s of continuous donation. Null when no tier is sustainable or XvB is off.
+export function computeXvbTier(hashrateHs, calc) {
+  if (!calc || !calc.enabled || !(hashrateHs > 0)) return null;
+  let best = null;
+  for (const t of calc.tiers || []) {
+    if (t.threshold > 0 && hashrateHs * calc.max_fraction >= t.threshold) {
+      if (!best || t.threshold > best.threshold) best = t;
+    }
+  }
+  return best && { tier: best.name, threshold: best.threshold, cost: best.threshold };
+}
+
 // Format a client-computed coin amount. More decimal places for small amounts (a day's earnings can
 // be a tiny fraction) so the figure isn't rounded to "0.0000"; "—" for the null/invalid case.
 function formatCoin(value, unit) {

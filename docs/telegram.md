@@ -30,6 +30,7 @@ transition, not a stream:
 | ✅ **Sync finished** | The initial blockchain sync completed and mining has started — handy on first run, when the sync can take hours. |
 | 🟠 **Disk filling up** | The data disk crossed the warn/critical threshold — a full disk can corrupt the Monero database, so free space before it runs out. |
 | 🔴 **DB write failing** | The dashboard can no longer write to its database; hashrate history, shares, and stats will be lost on restart until it's fixed (usually disk space or permissions). |
+| 🔴 **Container trouble** | A stack container is restart-looping (an OOM kill — the per-container memory ceiling doing its job — or a bad config) or running but failing its healthcheck for over 2 minutes. One alert per incident, not one per restart, and a recovery note when it stabilises. Intentional stops (the sync hold, node-down failover) never fire it. |
 | ⚠ **No PPLNS share (XvB)** | You're donating to XvB but hold no share in the PPLNS window, so raffle wins are **skipped** — donations are wasted until you land one. Only fires when XvB is enabled. |
 | ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
 | 🎰 **XvB registration** | XvB auto-registration was rejected (bad payout address) or is failing — raffle wins won't count until it recovers. Only fires when XvB is enabled. |
@@ -37,7 +38,7 @@ transition, not a stream:
 | ⚠️ **Hashrate drop** | Total fleet hashrate fell sharply below its recent normal and **stayed down** — a rig gone dark, a network cut, or a stalled miner. The dashboard also drops a marker on the hashrate chart at the moment it happened. Fires once on the drop and again on recovery. Thresholds are tunable (`dashboard.hashrate_drop_threshold`, `dashboard.hashrate_drop_minutes`). |
 | 🧠 **HugePages not reserved** | RandomX runs capped until HugePages are reserved. Fires when the dashboard first sees them missing and again once a reboot applies them — so you know the tuning took. |
 | 💾 **Low RAM** | This host has less RAM than the stack wants (syncing is memory-heavy; Tari can OOM). Sent once when first detected — a heads-up that instability may be under-provisioning, not a bug. |
-| 🚨 **Payout wallet changed** | The wallet p2pool mines to differs from the last one seen — every future reward goes to the new address. Fires on **every** change, including one you made yourself with `pithead apply`, so treat it as a confirmation; if you didn't change it, your rewards are being redirected. Addresses appear truncated to 8 characters (full addresses never leave the host), and the dashboard shows a matching top-bar warning for 72 hours. |
+| 🚨 **Payout wallet changed** | The wallet p2pool mines to differs from the last one seen — every future reward goes to the new address. Fires on **every** change, including one you made yourself with `./pithead apply`, so treat it as a confirmation; if you didn't change it, your rewards are being redirected. Addresses appear truncated to 8 characters (full addresses never leave the host), and the dashboard shows a matching top-bar warning for 72 hours — the dashboard warning works even with Telegram off. |
 | 🎉 **Block found** | The P2Pool sidechain found a Monero block. Pool-wide: every miner with a PPLNS share gets paid from it. |
 | 💰 **Payout incoming** | That block pays **you** — this node held a share in the PPLNS window when it was found. The amount lands in your wallet once the block matures (about two hours). |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
@@ -168,10 +169,11 @@ block and set it to `false` — any event you don't list stays on:
 | `hashrate_loss` | `true` | Total hashrate dropped sharply and stayed down (outage / rig dark) / recovered |
 | `hugepages` | `true` | HugePages not reserved (RandomX capped) / reserved after a reboot |
 | `low_ram` | `true` | Host has less RAM than the stack wants (one-shot heads-up) |
-| `wallet_changed` | `true` | The payout wallet p2pool mines to changed — fires on every change, including your own `pithead apply` (old/new addresses truncated to 8 chars) |
+| `wallet_changed` | `true` | The payout wallet p2pool mines to changed — fires on every change, including your own `./pithead apply` (old/new addresses truncated to 8 chars) |
 | `high_reject_rate` | `true` | Pool-wide reject rate over the trailing hour crossed 5% (the same threshold as the dashboard's ⚠ flag) / dropped back |
 | `block_found` | `true` | The P2Pool sidechain found a Monero block (pool-wide — every miner with a PPLNS share gets paid) |
 | `payout_found` | `true` | That block pays you — this node held a share in the PPLNS window when it was found |
+| `container_unhealthy` | `true` | A stack container is crash-looping or stuck failing its healthcheck / recovered |
 
 Run `./pithead apply` after editing.
 
@@ -212,7 +214,7 @@ Run `./pithead apply` after editing. The commands:
 | `/sync` | Monero and Tari sync progress (percent and block height). |
 | `/system` | Host resources: disk, RAM, CPU + load, and HugePages. |
 | `/pool` | P2Pool sidechain type, pool hashrate, Monero network height + difficulty, PPLNS shares in window, current **effort** (luck indicator), **sidechain blocks found**, **share acceptance** (accepted/rejected + reject %), and the **best share** difficulty found. |
-| `/xvb` | XvB mode, current and target tier, hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
+| `/xvb` | XvB mode, current and target tier, the target tier's **threshold and cost** (holding a tier ≈ donating its threshold continuously, on both credited averages; a tier is **raffle status, not an XMR payout**), hashrate **routed** to XvB, the **credited** 1h/24h averages XvB measures (what sets your tier), raffle eligibility (PPLNS share), and a stale-data warning if the XvB feed is behind. |
 | `/earnings` | Estimated P2Pool XMR per day/month, from both your **1h** and (once available) steadier **24h** average hashrate, plus the XTM the same hashrate **merge-mines alongside** (shown only while merge-mining figures are live). Excludes XvB-donated hashrate. |
 | `/luck` | Pool cadence: time since the pool's last block (pool-wide, not your payout), estimated **time-to-share** for your hashrate, **luck** (actual vs. expected shares in the PPLNS window — over 100 % = running lucky), and **your PPLNS weight** (the sum of your share difficulty in the window). The same figures as the dashboard's Pool Cadence & Luck card. |
 | `/help` | The command list. |

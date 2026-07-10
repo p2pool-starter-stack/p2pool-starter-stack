@@ -68,6 +68,7 @@ def _ev(
     reject_rate_1h=None,
     blocks_found_total=0,
     block_height=0,
+    containers=None,
     now=0,
 ):
     return svc.evaluate(
@@ -91,6 +92,7 @@ def _ev(
         reject_rate_1h=reject_rate_1h,
         blocks_found_total=blocks_found_total,
         block_height=block_height,
+        containers=containers,
         now=now,
     )
 
@@ -448,12 +450,25 @@ class TestBlockEdges:
         assert "3 PPLNS share(s)" in alerts[1][1]
 
     def test_counter_backwards_rebaselines_silently(self):
-        # p2pool restart (or the stats file briefly reading 0) resets the counter: no alert,
-        # and the next real find from the new baseline still fires.
+        # p2pool restart: the counter resets, the next observation seeds the new baseline
+        # silently (two-step), and the next real find from there still fires.
         svc = _svc()
         _ev(svc, blocks_found_total=7)  # seed
-        assert _ev(svc, blocks_found_total=0) == []  # restart -> rebaseline
+        assert _ev(svc, blocks_found_total=0) == []  # backwards -> arm rebaseline
+        assert _ev(svc, blocks_found_total=0) == []  # next observation seeds silently
         assert _keys(_ev(svc, blocks_found_total=1, block_height=3_000_200)) == [
+            AlertService.EVT_BLOCK_FOUND
+        ]
+
+    def test_transient_stats_blank_does_not_fire(self):
+        # A partially-written stats file reads 0 for one poll, then restores the real counter.
+        # The 7→0→7 round trip must stay silent — the restored 7 is not "found 7 blocks".
+        svc = _svc()
+        _ev(svc, blocks_found_total=7)  # seed
+        assert _ev(svc, blocks_found_total=0) == []  # blank -> arm rebaseline
+        assert _ev(svc, blocks_found_total=7) == []  # restore seeds silently
+        # Normal edge behavior resumes: the next genuine find fires once.
+        assert _keys(_ev(svc, blocks_found_total=8, block_height=3_000_400)) == [
             AlertService.EVT_BLOCK_FOUND
         ]
 
@@ -469,6 +484,75 @@ class TestBlockEdges:
         _ev(svc, blocks_found_total=7)
         _ev(svc, blocks_found_total=8, shares_in_window=2)
         assert svc.drain_incidents() == {}
+
+
+class _StubContainerMonitor:
+    """Scripted ContainerHealthMonitor stand-in: the debounce logic has its own unit tests
+    (test_container_health.py); here we only prove the edge → event/message mapping."""
+
+    def __init__(self, edges=()):
+        self.edges = list(edges)
+        self.fed = []
+
+    def update(self, states, now=None):
+        self.fed.append(states)
+        return self.edges
+
+
+class TestContainerEdges:
+    """#337: container crash-loop / stuck-unhealthy / recovered off the read-proxy inspects."""
+
+    def test_crash_loop_message_names_the_container(self):
+        svc = _svc(container_monitor=_StubContainerMonitor([("p2pool", "crash_loop")]))
+        alerts = _ev(svc, containers={})
+        assert _keys(alerts) == [AlertService.EVT_CONTAINER_UNHEALTHY]
+        assert "p2pool" in alerts[0][1] and "docker logs p2pool" in alerts[0][1]
+
+    def test_unhealthy_and_recovered_messages(self):
+        svc = _svc(
+            container_monitor=_StubContainerMonitor(
+                [("monerod", "unhealthy"), ("tari", "recovered")]
+            )
+        )
+        alerts = _ev(svc, containers={})
+        assert _keys(alerts) == [AlertService.EVT_CONTAINER_UNHEALTHY] * 2
+        assert "monerod" in alerts[0][1] and "unhealthy" in alerts[0][1]
+        assert "tari" in alerts[1][1] and "recovered" in alerts[1][1]
+
+    def test_problem_edges_are_incidents_recovery_is_not(self):
+        svc = _svc(
+            container_monitor=_StubContainerMonitor(
+                [("p2pool", "crash_loop"), ("monerod", "unhealthy"), ("tari", "recovered")]
+            )
+        )
+        _ev(svc, containers={})
+        assert svc.drain_incidents() == {"container_unhealthy": 2}
+
+    def test_none_is_no_data_and_skips_the_monitor(self):
+        # containers=None (collector skipped) is no verdict — the monitor isn't fed, so its
+        # streak state stays put rather than aging on missing data.
+        monitor = _StubContainerMonitor([("p2pool", "crash_loop")])
+        svc = _svc(container_monitor=monitor)
+        assert _ev(svc, containers=None) == []
+        assert monitor.fed == []
+
+    def test_toggle_off_filters_every_edge(self):
+        svc = _svc(
+            notifier=_FakeNotifier(allow=set()),
+            container_monitor=_StubContainerMonitor([("p2pool", "crash_loop")]),
+        )
+        assert _ev(svc, containers={}) == []
+
+    def test_real_monitor_wiring_uses_now(self):
+        # End-to-end through evaluate() with the real monitor: a restarting container on two
+        # consecutive cycles is a crash-loop edge; the injected `now` drives its clock.
+        svc = _svc()
+        s = {"restart_count": 0, "restarting": True, "health": None, "running": True}
+        assert _ev(svc, containers={"tari": {**s, "restarting": False}}, now=0) == []  # seed
+        assert _ev(svc, containers={"tari": s}, now=30) == []
+        assert _keys(_ev(svc, containers={"tari": s}, now=60)) == [
+            AlertService.EVT_CONTAINER_UNHEALTHY
+        ]
 
 
 class TestIncidentLog:
@@ -541,6 +625,45 @@ class TestProcess:
         )
         assert out == []
         assert notifier.sent == []
+
+    async def test_disabled_notifier_still_persists_wallet_baseline(self):
+        # The payout-wallet tripwire (#375) must work on a Telegram-less stack — the default.
+        # The dashboard's 72h banner reads the kv keys, so the baseline seed + change record
+        # must persist every cycle; only the Telegram message stays notifier-gated.
+        store, get, put = _kv_store()
+        svc = _svc(notifier=_FakeNotifier(enabled=False), kv_get=get, kv_set=put)
+        signals = dict(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+        )
+        await svc.process(observed_wallet=_W_A, **signals)  # seed
+        assert store["payout_wallet"] == _W_A
+        out = await svc.process(observed_wallet=_W_B, **signals)  # tamper
+        assert out == [] and svc.notifier.sent == []  # no Telegram — but the kv record lands
+        assert store["payout_wallet"] == _W_B
+        assert store["payout_wallet_prev8"] == _W_A[:8]
+        assert float(store["payout_wallet_changed_ts"]) > 0
+
+    async def test_disabled_path_swallows_wallet_baseline_error(self):
+        # A broken kv store must not break the data loop, Telegram on or off.
+        def boom(_k, _v=None):
+            raise RuntimeError("kv down")
+
+        svc = _svc(notifier=_FakeNotifier(enabled=False), kv_get=boom, kv_set=boom)
+        out = await svc.process(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+            observed_wallet=_W_A,
+        )
+        assert out == []
 
     async def test_enabled_notifier_dispatches(self):
         notifier = _FakeNotifier()

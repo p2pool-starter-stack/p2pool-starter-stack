@@ -179,10 +179,13 @@ def build_metrics(latest_data, state_mgr, history=None):
 
     # Cadence & luck (#84). Sidechain share difficulty is H·s, so diff/hashrate = expected seconds
     # per share (the same formula the client's earnings calculator uses for time-to-share). Both
-    # figures need a real p2pool_1h (0 for the first samples after a wipe) and a real pool
-    # difficulty — otherwise they stay 0.0 and the view layer hides them.
+    # figures need a real p2pool_1h (0 for the first samples after a wipe), a real pool
+    # difficulty AND a real PPLNS window — a partially-written stats file can carry the
+    # difficulty but not pplnsWindowSize (collector defaults it to 0), which would make
+    # expected_shares 0 and the luck division raise. Otherwise both stay 0.0 and the view
+    # layer hides them.
     pool_difficulty = local_pool.get("difficulty", 0) or 0
-    if pool_difficulty > 0 and p2pool_1h > 0:
+    if pool_difficulty > 0 and p2pool_1h > 0 and pplns_window > 0:
         expected_share_sec = pool_difficulty / p2pool_1h
         expected_shares = p2pool_1h * (pplns_window * block_time) / pool_difficulty
         luck_pct = shares_in_window / expected_shares * 100

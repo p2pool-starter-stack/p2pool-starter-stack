@@ -123,6 +123,39 @@ test('EarningsCard renders the Tari rows: figures when merge-mining, "—" when 
     assert.doesNotMatch(down, /NaN/);
 });
 
+test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it when off (#118)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.xvb_calc = {
+        enabled: true,
+        max_fraction: 0.85,
+        tiers: [
+            { name: 'Donor (1.00 kH/s+)', threshold: 1000 },
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000 },
+        ],
+        current_tier: 'None',
+        target_tier: 'Donor (1.00 kH/s+)',
+        target_threshold: 1000,
+        sustainable: true,
+        note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null,
+    };
+    const up = renderApp({ state: s });
+    assert.match(up, /XvB Tier \(raffle\)/);
+    // Default what-if hashrate (p2pool_hr ≈ 8k) × 0.85 sustains the Donor tier, not Vip —
+    // the client-side transcription of the server's auto rule, with cost = the threshold.
+    assert.match(up, /Sustainable Tier/);
+    assert.match(up, /Donor \(1\.00 kH\/s\+\)/);
+    assert.match(up, /Hashrate Cost/);
+    assert.match(up, /1\.00 kH\/s/);
+    assert.match(up, /not an XMR payout/);   // the required labelling rides on the card
+    // XvB disabled → the whole block disappears; the XMR calculator stays.
+    s.xvb_calc = { enabled: false };
+    const off = renderApp({ state: s });
+    assert.doesNotMatch(off, /XvB Tier \(raffle\)/);
+    assert.match(off, /Your P2Pool Hashrate/);
+});
+
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
     // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
     const cold = renderApp();

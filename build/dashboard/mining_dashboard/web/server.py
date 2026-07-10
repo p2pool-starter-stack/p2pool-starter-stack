@@ -4,7 +4,8 @@ import os
 
 from aiohttp import web
 
-from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.service.metrics import build_metrics, share_reject_pct
+from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
 from mining_dashboard.web.views import build_state, canonical_window, get_shell_html, parse_window
 
@@ -52,11 +53,28 @@ async def handle_metrics(request):
     data = app["latest_data"]
     state_mgr = app["state_manager"]
     try:
+        data = data or {}
         metrics = build_metrics(data, state_mgr)
         # Raw disk percent from the system snapshot; same or-{} chain as the views badge lookup.
-        disk_percent = ((data or {}).get("system", {}).get("disk", {}) or {}).get("percent", 0) or 0
-        body = render_prometheus(metrics, disk_percent, state_mgr.is_db_healthy())
-        return web.Response(text=body, content_type="text/plain")
+        disk_percent = (data.get("system", {}).get("disk", {}) or {}).get("percent", 0) or 0
+        # The batch's own signals (#379 follow-up): trailing reject rate from the persisted
+        # delta series, the proxy's cumulative share counters, p2pool's blocks-found counter,
+        # and the snapshot timestamp (age = staleness of everything above).
+        summary = data.get("proxy_summary", {}) or {}
+        pool_local = (data.get("pool", {}) or {}).get("pool", {}) or {}
+        body = render_prometheus(
+            metrics,
+            disk_percent,
+            state_mgr.is_db_healthy(),
+            reject_pct_1h=share_reject_pct(state_mgr.get_share_stats(), 3600),
+            shares_accepted=summary.get("accepted", 0) or 0,
+            shares_rejected=summary.get("rejected", 0) or 0,
+            pool_blocks_found=pool_local.get("blocks_found", 0) or 0,
+            snapshot_ts=data.get("timestamp", 0) or 0,
+        )
+        response = web.Response(text=body)
+        response.headers["Content-Type"] = PROMETHEUS_CONTENT_TYPE
+        return response
     except Exception:
         # Log the full error server-side; never leak exception details to the scraper.
         logger.exception("Error rendering Prometheus metrics")
