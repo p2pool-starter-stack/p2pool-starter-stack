@@ -80,6 +80,8 @@ def _metrics(**over):
         ("/pool", "pool"),
         ("/xvb", "xvb"),
         ("/earnings", "earnings"),
+        ("/luck", "luck"),
+        ("/luck@Bot", "luck"),
         ("/status@PitheadBot", "status"),  # group @mention suffix stripped
         ("/workers now please", "workers"),  # only the first word matters
         ("/help", "help"),
@@ -311,6 +313,31 @@ def test_earnings_unavailable_without_network_data():
     assert "unavailable" in out
 
 
+def test_luck_reads_the_cadence_metrics():
+    # #84: the four figures come straight off Metrics — the same fields the dashboard card shows.
+    out = tc.format_luck(
+        _metrics(
+            last_block_ts=1,  # ancient → the "since" duration renders (days), not "n/a"
+            expected_share_sec=3600.0,
+            luck_pct=123.4,
+            own_pplns_weight=1_234_567.0,
+        )
+    )
+    assert "Since pool's last block: " in out and "n/a" not in out
+    assert "Est. time to a share: 1h 0m" in out
+    assert "Luck: 123%" in out
+    assert "Your PPLNS weight: 1,234,567" in out
+
+
+def test_luck_na_before_hashrate_history():
+    # Cold stack (#84 pitfall): no p2pool_1h / pool difficulty yet → n/a, never inf or "0s".
+    out = tc.format_luck(_metrics())  # cadence fields at their 0.0 defaults
+    assert "Since pool's last block: n/a" in out
+    assert "Est. time to a share: n/a" in out
+    assert "Luck: n/a" in out
+    assert "Your PPLNS weight: 0" in out
+
+
 def test_daily_summary_is_a_24h_retrospective():
     now = 1_000_000
     data = {
@@ -415,6 +442,12 @@ def test_reply_for_pool_reads_share_snapshot(monkeypatch):
     bot = _bot(monkeypatch, latest_data=data, pool_type="Mini")
     out = bot.reply_for("/pool")
     assert "Best share: 💎 555" in out and "999 ✓ / 1 ✗" in out
+
+
+def test_reply_for_luck(monkeypatch):
+    bot = _bot(monkeypatch, expected_share_sec=3600.0, luck_pct=100.0, own_pplns_weight=42.0)
+    out = bot.reply_for("/luck")
+    assert "Luck: 100%" in out and "Your PPLNS weight: 42" in out
 
 
 def test_reply_for_workers_reads_snapshot(monkeypatch):

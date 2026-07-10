@@ -401,6 +401,28 @@ class EarningsCard extends Component {
   }
 }
 
+// Pool cadence & luck (#84). Read-only Advanced card over server-formatted figures: time since the
+// pool's last block (pool-wide, not a payout to you), the expected time for your hashrate to find a
+// sidechain share, luck, and YOUR PPLNS share-weight (sum of your share difficulty in the window —
+// not p2pool's pool-wide pplnsWeight shown in the node stats).
+function CadenceCard({ cadence }) {
+  if (!cadence) return null;
+  return html`
+    <div class="card card-advanced" id="card-cadence">
+        <h3>Pool Cadence & Luck</h3>
+        <div class="stat-grid">
+            <${StatCard} label="Since Pool's Last Block" value=${cadence.since_block}
+                         title=${"Last block the pool found (" + cadence.last_block + ") — pool-wide, not a payout to you."} />
+            <${StatCard} label="Est. Time / Share" value=${cadence.tts}
+                         title="Expected time for your P2Pool hashrate to find one sidechain share (share difficulty ÷ your 1h average)." />
+            <${StatCard} label="Luck" value=${cadence.luck}
+                         title="Actual vs expected shares in the PPLNS window, as a percentage. Over 100% = running lucky." />
+            <${StatCard} label="Your PPLNS Weight" value=${cadence.weight}
+                         title="Sum of your share difficulty inside the PPLNS window — your slice of the next payout. Not the pool-wide PPLNS weight." />
+        </div>
+    </div>`;
+}
+
 function TariCard({ tari }) {
   return html`
     <div class="card card-advanced" id="card-tari">
@@ -564,6 +586,7 @@ function DashboardView({
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
             <${EarningsCard} earnings=${state.earnings} />
+            <${CadenceCard} cadence=${state.cadence} />
             <${TariCard} tari=${state.tari} />
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />

@@ -13,6 +13,7 @@ from mining_dashboard.helper.utils import (
     is_ip_address,
     parse_hashrate,
     pplns_block_time,
+    pplns_weight_in_window,
     resolve_target_threshold,
     shares_in_pplns_window,
     xvb_stats_are_stale,
@@ -61,6 +62,28 @@ class TestPplnsWindow:
 
     def test_empty_shares_is_zero(self):
         assert shares_in_pplns_window([], 2160, 10, now=10_000) == 0
+
+    def test_weight_sums_difficulty_inside_the_window(self):
+        # #84: same cutoff as the count above, but summing the persisted per-share difficulty.
+        now = 10_000
+        shares = [
+            {"ts": now - 5, "difficulty": 100.0},
+            {"ts": now - 20, "difficulty": 250.0},  # boundary inclusive
+            {"ts": now - 21, "difficulty": 999.0},  # outside — dropped
+        ]
+        assert pplns_weight_in_window(shares, 2, 10, now=now) == 350.0
+
+    def test_weight_missing_or_null_difficulty_counts_zero(self):
+        now = 10_000
+        shares = [
+            {"ts": now - 1},
+            {"ts": now - 2, "difficulty": None},
+            {"ts": now - 3, "difficulty": 40},
+        ]
+        assert pplns_weight_in_window(shares, 2, 10, now=now) == 40
+
+    def test_weight_empty_shares_is_zero(self):
+        assert pplns_weight_in_window([], 2160, 10, now=10_000) == 0
 
 
 class TestParseHashrate:
