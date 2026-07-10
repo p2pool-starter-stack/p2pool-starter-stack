@@ -24,6 +24,7 @@ import {
   xvbTierComparison,
 } from "./logic.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
+import { SecurityPanel } from "./securityview.mjs";
 import { StackTopology } from "./topology.mjs";
 
 // Palette token -> text-colour class (defined in dashboard.css).
@@ -734,7 +735,7 @@ function DashboardView({
                 <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
-        ${configView ? html`<${ConfigView} />` : null}
+        ${configView ? html`<${ConfigView} /><${SecurityPanel} />` : null}
         ${
           configView
             ? null

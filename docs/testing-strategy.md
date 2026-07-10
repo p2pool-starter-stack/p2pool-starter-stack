@@ -111,6 +111,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `backup`/`restore`, `reset-dashboard` | real box | 1 ✅ (partial) · 4 ▶ (`--lifecycle`/`--safety-backup`) |
 | `doctor` runtime verdicts (#383): egress firewall, stratum listening, dashboard answers | real box | 1 ✅ (stubbed toolchain) · 4 ▶ (`--check`) |
 | Control channel (#33): `apply --dry-run` preview, runner claim/validate/commit, fail-closed flag, rw/ro spool mounts | spool files / sourced fns | 1 ✅ (shell + pytest + compose) · 4 (systemd path unit on a real box — not yet a matrix row) |
+| Audit + access logs (#349): key-names-not-values audit entries, bounded log growth, Caddyfile log block, hostile log content served inert | spool/log fixtures | 1 ✅ (shell + pytest + node) · 4 (real Caddy writes over Tor — covered by the same onion matrix row) |
 
 ### H. Host / infrastructure (real-only)
 
