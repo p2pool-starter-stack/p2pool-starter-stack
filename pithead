@@ -3877,6 +3877,13 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "cannot determine the running version (VERSION file missing) — upgrade from the host."
         return 0
     fi
+    # Claim the throttle now — BEFORE the network dial — so every well-formed attempt costs the
+    # 10-minute window, even one that will be rejected as non-latest. Otherwise a compromised
+    # container floods well-formed-but-stale version intents and turns the root runner into an
+    # unthrottled GitHub-API / Tor-egress beacon (each fails only at the proposed!=tag check, past
+    # the dial). A genuine probe that fails to reach GitHub costing the operator a 10-minute wait
+    # is the right trade.
+    touch "$stamp"
     # Host-side re-derivation of the target: the latest tag according to GitHub, not the request.
     local prefix socks rel tag
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
@@ -3901,7 +3908,6 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "already up to date (running v$PITHEAD_VERSION; latest release is $tag)."
         return 0
     fi
-    touch "$stamp"
     control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"
     control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
     # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.

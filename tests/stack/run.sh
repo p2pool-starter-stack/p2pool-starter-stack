@@ -268,6 +268,18 @@ assert_rc "rejects hostname" "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
 
+echo "== unit: semver_newer (#59 — the upgrade downgrade guard) =="
+# The comparison gates the upgrade button: a lexical bug would let 1.9.0 look "newer" than 1.10.0
+# and could be leveraged to force an older, vulnerable release.
+run_sourced "$SANDBOX" semver_newer "v1.10.0" "v1.9.0" >/dev/null 2>&1
+assert_rc "1.10.0 is newer than 1.9.0 (no lexical bug)" "$?" "0"
+run_sourced "$SANDBOX" semver_newer "v1.9.0" "v1.10.0" >/dev/null 2>&1
+assert_rc "1.9.0 is NOT newer than 1.10.0" "$?" "1"
+run_sourced "$SANDBOX" semver_newer "v1.3.1" "v1.3.1" >/dev/null 2>&1
+assert_rc "equal versions are not newer" "$?" "1"
+run_sourced "$SANDBOX" semver_newer "v2.0.0" "v1.99.99" >/dev/null 2>&1
+assert_rc "major bump beats a high minor/patch" "$?" "0"
+
 echo "== unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0) =="
 # A configured dashboard.host is used verbatim.
 # shellcheck disable=SC1090,SC2034  # $STACK path is dynamic; DASHBOARD_HOST is read by the sourced function
@@ -3332,6 +3344,12 @@ assert_eq "container-proposed non-latest version is rejected" "$(jq -r '.status'
 assert_contains "forged-version rejection names the real latest" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "v9.9.9"
 assert_eq "forged version downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
 assert_eq "forged version leaves the install untouched" "$(cat "$UPG/VERSION")" "1.3.1"
+# ...and it still CLAIMED the throttle (stamp taken before the network dial), so a compromised
+# container can't flood well-formed-but-stale intents to grind the GitHub API / beacon over Tor:
+# a second attempt straight after — without reset — is throttled (#59 review, egress-beacon guard).
+upgrade_intent "$UUPG" "v1.9.9"
+urun >/dev/null
+assert_contains "a non-latest attempt still claims the throttle" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
 
 # Already up to date: latest equals the running version — refused, no download.
 reset_upgrade_state
