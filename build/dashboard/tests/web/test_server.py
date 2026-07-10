@@ -1,7 +1,10 @@
+import json
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
 
+from mining_dashboard.service import control_service
 from mining_dashboard.service.storage_service import StateManager
 from mining_dashboard.web.server import _apply_security_headers, create_app
 
@@ -167,6 +170,169 @@ class TestMetricsEndpoint:
         body = await resp.text()
         assert "SECRET internal detail" not in body
         assert "Traceback" not in body
+
+
+class TestControlRoutesDisabled:
+    """With dashboard.control.enabled off (the default) the control routes must not exist at
+    all — 404, not 403, so a disabled stack gives no hint the endpoints are there (#33)."""
+
+    async def test_control_routes_absent_when_disabled(self, client):
+        assert (await client.get("/api/config")).status == 404
+        assert (await client.post("/api/control/preview", json={})).status == 404
+        assert (await client.post("/api/control/commit", json={})).status == 404
+        assert (await client.get("/api/control/result?id=x")).status == 404
+
+
+@pytest.fixture
+def control_spool(tmp_path, monkeypatch):
+    """Enable the control channel and point the service at throwaway spool dirs."""
+    host_config = tmp_path / "config.json"
+    host_config.write_text(
+        json.dumps(
+            {
+                "p2pool": {"pool": "mini"},
+                "dashboard": {"auth": {"username": "admin", "password": "correct horse"}},
+            }
+        )
+    )
+    (tmp_path / "requests").mkdir()
+    (tmp_path / "results").mkdir()
+    monkeypatch.setattr(control_service.config, "DASHBOARD_CONTROL_ENABLED", True)
+    monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", str(host_config))
+    monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", str(tmp_path / "requests"))
+    monkeypatch.setattr(control_service.config, "CONTROL_RESULTS_DIR", str(tmp_path / "results"))
+    monkeypatch.setattr(control_service.config, "CONTROL_WAIT_S", 0.1)
+    return tmp_path
+
+
+@pytest.fixture
+async def control_client(aiohttp_client, app_data, control_spool):
+    sm = StateManager(db_path=":memory:")
+    cli = await aiohttp_client(create_app(sm, app_data))
+    yield cli
+    sm.close()
+
+
+CONTROL_HEADERS = {"X-Pithead-Control": "1"}
+
+
+class TestControlRoutesEnabled:
+    async def test_get_config_masks_secrets(self, control_client):
+        resp = await control_client.get("/api/config")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["dashboard"]["auth"]["password"] == {"__secret__": True}
+        assert "correct horse" not in json.dumps(body)
+
+    async def test_post_without_control_header_forbidden(self, control_client):
+        # The custom header forces a CORS preflight cross-site, which is never granted (CSRF).
+        for path in ("/api/control/preview", "/api/control/commit"):
+            resp = await control_client.post(path, json={"config": {}})
+            assert resp.status == 403, path
+
+    async def test_preview_submits_request_and_returns_result(
+        self, control_client, control_spool, monkeypatch
+    ):
+        # Pin the request id and pre-write the runner's answer, so wait_result returns at once.
+        rid = str(uuid.uuid4())
+        monkeypatch.setattr(control_service.uuid, "uuid4", lambda: uuid.UUID(rid))
+        result = {"status": "previewed", "changes": [], "destructive": False}
+        (control_spool / "results" / f"{rid}.json").write_text(json.dumps(result))
+
+        proposed = {
+            "p2pool": {"pool": "main"},
+            "dashboard": {"auth": {"password": {"__secret__": True}}},
+        }
+        resp = await control_client.post(
+            "/api/control/preview", json={"config": proposed}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["id"] == rid
+        assert body["status"] == "previewed"
+        # The spooled request carries the merged config: the sentinel became the live secret.
+        req = json.loads((control_spool / "requests" / f"{rid}.json").read_text())
+        assert req["action"] == "preview"
+        assert req["config"]["dashboard"]["auth"]["password"] == "correct horse"
+
+    async def test_preview_actor_taken_from_caddy_header(self, control_client, control_spool):
+        resp = await control_client.post(
+            "/api/control/preview",
+            json={"config": {"p2pool": {"pool": "nano"}}},
+            headers={**CONTROL_HEADERS, "X-Auth-User": "admin"},
+        )
+        assert resp.status == 202  # no runner in this test — pending
+        rid = (await resp.json())["id"]
+        req = json.loads((control_spool / "requests" / f"{rid}.json").read_text())
+        assert req["actor"] == "admin"
+
+    async def test_preview_rejects_non_object_config(self, control_client):
+        resp = await control_client.post(
+            "/api/control/preview", json={"config": "rm -rf /"}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_preview_rejects_non_json_body(self, control_client):
+        resp = await control_client.post(
+            "/api/control/preview", data=b"not json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_commit_requires_valid_intent_id(self, control_client):
+        resp = await control_client.post(
+            "/api/control/commit", json={"id": "../etc/passwd"}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_commit_waits_past_stale_preview_result(self, control_client, control_spool):
+        # The preview result under the same id must not be mistaken for the commit outcome:
+        # with only the preview result present, commit times out to 202 pending.
+        rid = str(uuid.uuid4())
+        (control_spool / "results" / f"{rid}.json").write_text(
+            json.dumps({"status": "previewed", "changes": []})
+        )
+        resp = await control_client.post(
+            "/api/control/commit", json={"id": rid}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 202
+        assert (await resp.json())["status"] == "pending"
+
+    async def test_commit_returns_applied_result(self, control_client, control_spool):
+        rid = str(uuid.uuid4())
+        (control_spool / "results" / f"{rid}.json").write_text(json.dumps({"status": "applied"}))
+        resp = await control_client.post(
+            "/api/control/commit", json={"id": rid}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "applied"
+
+    async def test_result_endpoint_polling(self, control_client, control_spool):
+        rid = str(uuid.uuid4())
+        resp = await control_client.get(f"/api/control/result?id={rid}")
+        assert resp.status == 202
+        (control_spool / "results" / f"{rid}.json").write_text(json.dumps({"status": "failed"}))
+        resp = await control_client.get(f"/api/control/result?id={rid}")
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "failed"
+
+    async def test_result_endpoint_rejects_bad_id(self, control_client):
+        assert (await control_client.get("/api/control/result?id=..%2Fx")).status == 400
+
+    async def test_preview_spool_failure_is_sanitized(self, control_client, monkeypatch):
+        # A broken spool (here: the host config can't be read for the secret merge) must come
+        # back as a sanitized 500, never a traceback.
+        monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
+        resp = await control_client.post(
+            "/api/control/preview", json={"config": {"p2pool": {}}}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())
+
+    async def test_config_read_failure_is_sanitized(self, control_client, monkeypatch):
+        monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
+        resp = await control_client.get("/api/config")
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())
 
 
 class TestSecurityHeaders:

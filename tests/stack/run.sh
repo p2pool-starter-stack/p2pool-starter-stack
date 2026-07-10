@@ -2647,6 +2647,174 @@ assert_not_contains "tor entrypoint: no dashboard onion when disabled (default o
     "$(tor_torrc false)" "Dashboard Hidden Service"
 
 # ---------------------------------------------------------------------------
+echo "== black-box: dashboard control channel (#33) =="
+# A deployed sandbox with the control channel on: config carries a dashboard password (required)
+# and dashboard.control.enabled, docker/sudo stubbed. The runner is exercised end-to-end against
+# real spool files; `apply` inside it runs this same sandboxed pithead.
+C="$SANDBOX/control"
+mkdir -p "$C/build/tari" "$C/build/dashboard" \
+    "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
+: >"$C/build/dashboard/Dockerfile"
+cp "$STACK" "$C/pithead"
+make_stubs "$C/bin"
+cp "$ROOT/build/tari/config.toml.template" "$C/build/tari/"
+# The password hash step reads the pinned Caddy image out of docker-compose.yml (#8).
+cp "$ROOT/docker-compose.yml" "$C/docker-compose.yml"
+CTRL_LOG="$C/docker.log"
+seed_control_env() {
+    cat >"$C/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+}
+control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
+    printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+              "tari":{"wallet_address":"T"}, "p2pool":{"pool":"%s"},
+              "dashboard":{"secure":true,"host":"box.lan",
+                           "auth":{"username":"admin","password":"a control passphrase"},
+                           "control":{"enabled":true}} }\n' "$WALLET" "$1" >"$C/config.json"
+}
+
+# Fail-closed: enabling the control channel without a dashboard password must not validate.
+seed_control_env
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"},
+          "dashboard":{"secure":true,"host":"box.lan","control":{"enabled":true}} }\n' "$WALLET" >"$C/config.json"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "control.enabled without a password is rejected" "$rc" "1"
+assert_contains "control-without-password message names the flag" "$out" "dashboard.control.enabled"
+
+# Baseline: control enabled + password, pool main → a rendered .env with the control keys.
+seed_control_env
+control_config main
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "baseline apply with control enabled succeeds" "$?" "0"
+assert_contains "control toggle rendered to .env" "$(cat "$C/.env")" "DASHBOARD_CONTROL_ENABLED=true"
+assert_contains "control spool dir rendered to .env" "$(cat "$C/.env")" "CONTROL_DIR=$C/data/control"
+[ -d "$C/data/control/requests" ] && [ -d "$C/data/control/staged" ] &&
+    [ -d "$C/data/control/results" ] && [ -d "$C/data/control/audit" ] &&
+    ok "control spool dirs created" || bad "control spool dirs created" "missing under $C/data/control"
+
+echo "== black-box: apply --dry-run [--porcelain] (#33) =="
+control_config mini # candidate change: pool main -> mini
+cp "$C/.env" "$C/env.before"
+: >"$CTRL_LOG"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_rc "dry-run --porcelain exits 0" "$?" "0"
+assert_contains "porcelain emits FLAG<TAB>KEY<TAB>MSG rows" "$out" "$(printf 'INFO\tP2POOL_FLAGS\t')"
+assert_contains "porcelain row carries the describe_change message" "$out" "P2Pool sidechain changing"
+if cmp -s "$C/.env" "$C/env.before"; then ok "dry-run leaves .env untouched"; else bad "dry-run leaves .env untouched" ".env changed"; fi
+case "$(grep 'compose up' "$CTRL_LOG" 2>/dev/null || true)" in
+"") ok "dry-run touches no container" ;;
+*) bad "dry-run touches no container" "docker compose up was called" ;;
+esac
+[ ! -f "$C/.env.dryrun" ] && ok "dry-run staging file removed" || bad "dry-run staging file removed" ".env.dryrun left behind"
+# Human (non-porcelain) preview prints the bullet form of the same row.
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" NO_COLOR=1 ./pithead apply --dry-run 2>/dev/null)"
+assert_contains "human dry-run prints the preview bullet" "$out" "• P2Pool sidechain changing"
+# --porcelain without --dry-run is refused (it would silently look like a real apply).
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --porcelain 2>&1)"
+assert_rc "--porcelain without --dry-run is rejected" "$?" "1"
+
+# PITHEAD_CONFIG_FILE points ONE invocation at a candidate config; config.json is not consulted.
+control_config main # config.json back to the applied state (no changes)
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"nano"},
+          "dashboard":{"secure":true,"host":"box.lan",
+                       "auth":{"username":"admin","password":"a control passphrase"},
+                       "control":{"enabled":true}} }\n' "$WALLET" >"$C/alt.json"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" PITHEAD_CONFIG_FILE="$C/alt.json" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_contains "PITHEAD_CONFIG_FILE override is honoured" "$out" "37890" # nano's p2p port
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_eq "without the override, config.json shows no changes" "$out" ""
+
+echo "== black-box: control-run-pending (#33) =="
+UUID1="11111111-1111-4111-8111-111111111111"
+UUID2="22222222-2222-4222-8222-222222222222"
+REQS="$C/data/control/requests"
+RESULTS="$C/data/control/results"
+STAGED="$C/data/control/staged"
+AUDIT="$C/data/control/audit/control.log"
+run_pending() { (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending 2>&1); }
+
+# Preview: a valid typed intent (pool main -> mini) → previewed result + a host-side staged copy.
+jq -n --arg w "$WALLET" --arg id "$UUID1" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID1.json"
+out="$(run_pending)"
+assert_rc "runner exits 0 on a valid preview" "$?" "0"
+[ ! -f "$REQS/$UUID1.json" ] && ok "request claimed out of requests/" || bad "request claimed out of requests/" "still present"
+assert_eq "preview result status" "$(jq -r '.status' "$RESULTS/$UUID1.json" 2>/dev/null)" "previewed"
+assert_contains "preview result carries the change row" "$(jq -r '.changes[].msg' "$RESULTS/$UUID1.json" 2>/dev/null)" "P2Pool sidechain changing"
+assert_eq "pool switch alone is not destructive" "$(jq -r '.destructive' "$RESULTS/$UUID1.json" 2>/dev/null)" "false"
+[ -f "$STAGED/$UUID1.json" ] && ok "candidate staged host-side" || bad "candidate staged host-side" "missing"
+assert_contains "preview audited" "$(cat "$AUDIT" 2>/dev/null)" "\"action\":\"preview\",\"status\":\"previewed\""
+
+# Malformed id: it would become a filename, so the request is discarded with no result at all.
+printf '{"id":"../../etc/passwd","action":"preview","actor":"x","config":{}}\n' >"$REQS/evil.json"
+out="$(run_pending)"
+assert_rc "runner exits 0 on a malformed id" "$?" "0"
+assert_contains "malformed id is called out" "$out" "malformed id"
+assert_eq "no result file for a malformed id" "$(ls "$RESULTS" | wc -l | tr -d ' ')" "1"
+
+# Unknown action / extra keys / invalid candidate config → rejected results, nothing staged.
+printf '{"id":"%s","action":"exec","actor":"x"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_eq "unknown action is rejected" "$(jq -r '.status' "$RESULTS/$UUID2.json" 2>/dev/null)" "rejected"
+printf '{"id":"%s","action":"preview","actor":"x","config":{},"cmd":"rm -rf /"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_contains "extra request keys are rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "unexpected keys"
+jq -n --arg w "$WALLET" --arg id "$UUID2" '{id:$id, action:"preview", actor:"x", config:{
+    monero:{mode:"local",wallet_address:$w}, tari:{wallet_address:"T"}, p2pool:{pool:"banana"},
+    dashboard:{auth:{password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_eq "invalid candidate config is rejected" "$(jq -r '.status' "$RESULTS/$UUID2.json" 2>/dev/null)" "rejected"
+assert_contains "rejection carries pithead's validation error" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "p2pool.pool"
+[ ! -f "$STAGED/$UUID2.json" ] && ok "rejected candidate is not left staged" || bad "rejected candidate is not left staged" "staged file present"
+
+# Commit without a staged intent → rejected (preview first).
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_contains "commit without a staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "preview first"
+
+# Commit of the previewed intent: backup written, apply -y ran, audit line, result applied.
+: >"$CTRL_LOG"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID1" >"$REQS/$UUID1.json"
+run_pending >/dev/null
+assert_eq "commit result status" "$(jq -r '.status' "$RESULTS/$UUID1.json" 2>/dev/null)" "applied"
+assert_eq "committed config landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+[ -f "$C/config.json.bak-control" ] &&
+    assert_eq "pre-change backup kept" "$(jq -r '.p2pool.pool' "$C/config.json.bak-control")" "main" ||
+    bad "pre-change backup kept" "config.json.bak-control missing"
+assert_contains "commit ran the real apply (containers recreated)" "$(cat "$CTRL_LOG")" "compose up"
+assert_contains "commit audited with the actor" "$(cat "$AUDIT")" "\"actor\":\"admin\",\"action\":\"commit\",\"status\":\"applied\""
+[ ! -f "$STAGED/$UUID1.json" ] && ok "staged intent consumed on commit" || bad "staged intent consumed on commit" "still staged"
+
+# Expired staged intent (older than 10 min) → rejected and cleared.
+jq -n --arg id "$UUID2" '{}' >"$STAGED/$UUID2.json"
+touch -t 202001010000 "$STAGED/$UUID2.json"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_contains "expired staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "expired"
+[ ! -f "$STAGED/$UUID2.json" ] && ok "expired staged intent cleared" || bad "expired staged intent cleared" "still staged"
+
+# The runner refuses to run at all when the channel is off (fail-closed).
+control_config main
+"$C/bin/docker" >/dev/null 2>&1 || true
+sed -i.bak 's/"control":{"enabled":true}/"control":{"enabled":false}/' "$C/config.json" 2>/dev/null || true
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+out="$(run_pending)"
+assert_rc "runner refuses when the channel is disabled" "$?" "1"
+assert_contains "runner disabled message" "$out" "not enabled"
+
+# ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
 if [ "$FAIL" -gt 0 ]; then

@@ -1,8 +1,10 @@
 # Secrets and Env
 .env
 .env.new
+.env.dryrun
 .env.apply-incomplete
 config.json
+config.json.bak-control
 /data/
 /build/monero/bitmonero.conf
 /build/tari/config.toml

@@ -331,6 +331,39 @@ there is nothing to configure.
 
 ---
 
+## Configuration view
+
+Edit `config.json` from the dashboard. Off by default: set `dashboard.control.enabled: true` in
+`config.json`, set a `dashboard.auth.password` (required — this channel can change the payout
+wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
+button then appears next to the Simple/Advanced toggle.
+
+The flow mirrors the CLI's `apply`:
+
+1. The form is prefilled from the live `config.json`, grouped by section. Secrets (the dashboard
+   password, the Telegram bot token, node RPC credentials, the stratum password) show as
+   "set — leave blank to keep"; their values are never sent to the browser.
+2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
+   the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
+   (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own
+   error message; nothing is applied.
+3. Confirm. If any change is disruptive (pool switch, wallet change, prune toggle, local↔remote
+   node switch), you must type `APPLY` first. The commit runs `pithead apply -y` on the host and
+   recreates only the containers whose config changed.
+
+A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new
+sidechain and your PPLNS window (and XvB shares) reset.
+
+How it works underneath: the dashboard container cannot run `pithead` or write host files. It
+drops a typed JSON change request into `./data/control/requests/` — its only writable leg of the
+spool — and a root systemd path unit (`pithead-control`) runs `pithead control-run-pending`, which
+validates the request, dry-runs or applies the staged copy, and writes the outcome to the
+read-only `results/` mount plus an audit line (timestamp, logged-in user, action, outcome) to
+`audit/control.log`. The container cannot forge results, alter a staged config between preview and
+commit, or rewrite the audit log. A failed apply keeps the previous config at
+`config.json.bak-control` and surfaces pithead's error in the view. Operational details:
+[Operations › Editing config from the dashboard](operations.md#editing-config-from-the-dashboard).
+
 ## Tips
 
 - **First visit certificate warning.** With `dashboard.secure: true` (the default), Caddy uses a

@@ -9,6 +9,29 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **Edit config from the dashboard (#33).** A new **Configuration** view — opt-in via
+  `dashboard.control.enabled` (default off; requires a `dashboard.auth.password`) — prefills a
+  form from the live `config.json` with secrets masked ("set — leave blank to keep"), previews
+  the exact change rows `pithead apply` prints (disruptive rows flagged ⚠; destructive commits
+  gated behind a typed `APPLY`), and applies the result. The dashboard container never runs
+  `pithead`: it writes typed JSON intents into `./data/control/requests/` (its only writable
+  spool leg; results and the audit log are mounted read-only), and a root systemd path unit
+  (`pithead-control`) validates each intent with pithead's own config validation and dispatches
+  only `apply --dry-run --porcelain` or `apply -y`. Every mutation lands in a host-side audit log
+  with the logged-in user (Caddy forwards it as `X-Auth-User`); a failed apply keeps the previous
+  config at `config.json.bak-control`. This is the canonical host-mutation channel that the
+  upgrade button (#59) and the first-boot wizard (#77) build on.
+- **`pithead apply --dry-run [--porcelain]`.** Print the change preview and stop — `.env`,
+  generated files, and containers are untouched. `--porcelain` emits machine-readable
+  `FLAG<TAB>KEY<TAB>MESSAGE` rows (what the control runner consumes), and `PITHEAD_CONFIG_FILE`
+  points a single invocation at a candidate config file.
+- **`pithead control-run-pending`.** The host-side runner behind the Configuration view; fired by
+  the systemd path unit, runnable by hand.
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB

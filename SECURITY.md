@@ -43,5 +43,12 @@ The stack's defaults:
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.
 - Tor for all node networking.
+- A one-way host-control boundary for dashboard config editing (`dashboard.control`, default
+  off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
+  directory whose other legs (staged configs, results, the audit log) are host-owned and mounted
+  read-only. A root systemd unit re-validates every intent with pithead's own config validation
+  and dispatches exactly two fixed actions (`apply --dry-run`, `apply -y`); no string from the
+  container is ever executed. Enabling the channel without a dashboard password is a validation
+  error, and every mutation is audited host-side.
 
 Report any gap in these.

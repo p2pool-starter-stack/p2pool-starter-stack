@@ -53,6 +53,10 @@ finish their initial sync. Check the dashboard to see which.
 **Change a setting:** edit `config.json`, then run `./pithead apply`. See
 [Configuration › Changing settings later](configuration.md#changing-settings-later).
 
+**Preview without applying:** `./pithead apply --dry-run` prints the change rows and stops —
+nothing is written or recreated. `--porcelain` makes the output machine-readable
+(`FLAG<TAB>KEY<TAB>MESSAGE` per row); the dashboard control runner uses exactly this.
+
 **Changing the payout wallet:** `apply` asks you to type the first 8 characters of the new address
 (a bare `y` is not enough for the one change that redirects every future reward; `apply -y` skips
 the prompt for automation). Changing both the Monero and Tari addresses in one `apply` prompts
@@ -66,6 +70,31 @@ after a reboot or power loss, provided the Docker daemon starts at boot. Ubuntu'
 enables this by default; a custom/rootless install (or `setup --skip-deps`) may leave it disabled.
 `./pithead doctor` checks this and warns if Docker isn't boot-enabled. Fix it with
 `sudo systemctl enable --now docker`.
+
+---
+
+## Editing config from the dashboard
+
+With `dashboard.control.enabled: true` (default off; needs a `dashboard.auth.password`), the
+dashboard gains a [Configuration view](dashboard.md#configuration-view) that stages config changes
+for a host-side runner. `apply` (and `setup`/`upgrade`) install two systemd units when the flag is
+on, and remove them when it is off:
+
+- `pithead-control.path` — watches `./data/control/requests/` for request files.
+- `pithead-control.service` — a root oneshot running `pithead control-run-pending` from the
+  install directory. Fixed command, no parameters from the container.
+
+The spool lives under `./data/control/`: `requests/` (the only directory the dashboard container
+can write), `staged/` (host-only), and `results/` + `audit/` (container read-only).
+`audit/control.log` records one JSON line per handled request — timestamp, the logged-in dashboard
+user, action, outcome — and the container cannot rewrite it.
+
+To disable the channel, set `dashboard.control.enabled: false` and run `./pithead apply`: the
+units are disabled and removed, the routes disappear from the dashboard (404), and the spool
+directory is left in place. To inspect or drain the queue by hand, run
+`./pithead control-run-pending`. A commit keeps the previous config at `config.json.bak-control`;
+a failed apply names it in the result and retries container recreation on the next apply, same as
+the CLI.
 
 ---
 
