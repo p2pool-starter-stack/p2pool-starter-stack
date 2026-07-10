@@ -102,6 +102,27 @@ test('EarningsCard shows the fallback when stats are down, the calculator when a
     assert.match(up, /id="whatif-hr"/);
 });
 
+test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
+    // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
+    const cold = renderApp();
+    assert.match(cold, /Pool Cadence & Luck/);
+    assert.match(cold, /Since Pool's Last Block/);
+    assert.match(cold, /Est\. Time \/ Share/);
+    assert.match(cold, /Your PPLNS Weight/);
+    assert.match(cold, /—/);
+    // With server-computed figures, the card renders them verbatim (no client-side math).
+    const s = clone();
+    s.cadence = {
+        last_block: '12:34:56', since_block: '5m 0s', tts: '1h 0m',
+        luck: '123%', weight: '1,234,567', available: true,
+    };
+    const up = renderApp({ state: s });
+    assert.match(up, /5m 0s/);
+    assert.match(up, /1h 0m/);
+    assert.match(up, /123%/);
+    assert.match(up, /1,234,567/);
+});
+
 test('XvBStats greys the credited figures and flags the footer when the fetch is stale (#311)', () => {
     // Fresh (base fixture, xvb_stale false): the normal "Stats fetched" footer, no stale marks.
     const fresh = renderApp();

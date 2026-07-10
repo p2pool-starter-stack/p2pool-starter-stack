@@ -243,6 +243,22 @@ XvB or a Tari calculator:
 > network figures aren't available yet, the card shows `—` rather than a bogus number. Tari
 > earnings and an XvB tier projection aren't included yet.
 
+### Pool Cadence & Luck
+
+A read-only card (Advanced view) that answers "is my share-finding on pace?" with four figures:
+
+| Field | Meaning |
+|---|---|
+| **Since Pool's Last Block** | Time since the pool found a Monero block — **pool-wide**, not a payout to you specifically. Pool blocks are what trigger PPLNS payouts, so a long gap here means the whole pool is waiting, not that your rigs are misbehaving. |
+| **Est. Time / Share** | How long your P2Pool hashrate takes, on average, to find one sidechain share: `share difficulty ÷ your P2Pool 1h average`. The same figure the earnings calculator shows as Time / Share. |
+| **Luck** | Actual vs. expected shares in the PPLNS window, as a percentage: `expected = your 1h average × window length ÷ share difficulty`, `luck = actual ÷ expected × 100`. Over 100 % means you found shares faster than the math predicts (running lucky); under 100 %, slower. |
+| **Your PPLNS Weight** | The sum of the difficulty of **your** shares inside the PPLNS window — the figure that sizes your slice of the next pool payout. Distinct from the pool-wide PPLNS Weight in the My P2Pool Node Stats card, which covers *everyone's* shares. |
+
+Luck and Est. Time / Share need a P2Pool hashrate average and a live share difficulty; on a fresh
+start (no history yet) the card shows `—` until the first samples land. Every figure derives from
+data the dashboard already stores — the per-share difficulty recorded with each found share — so
+there is nothing to configure.
+
 ---
 
 ## Tips

@@ -164,6 +164,19 @@ def shares_in_pplns_window(shares, pplns_window, block_time, now=None):
     return sum(1 for s in shares if s.get("ts", 0) >= cutoff)
 
 
+def pplns_weight_in_window(shares, pplns_window, block_time, now=None):
+    """Sum the persisted per-share ``difficulty`` over the shares inside the PPLNS window (#84).
+
+    Same cutoff math as :func:`shares_in_pplns_window`, but weighted: this is the miner's own
+    PPLNS share-weight — the figure that sizes their slice of a pool payout — NOT p2pool's
+    pool-wide ``pplnsWeight``. ``now`` defaults to ``time.time()`` and is injectable for tests.
+    """
+    if now is None:
+        now = time.time()
+    cutoff = now - pplns_window * block_time
+    return sum(s.get("difficulty", 0) or 0 for s in shares if s.get("ts", 0) >= cutoff)
+
+
 def get_tier_info(hashrate, tiers=None):
     """
     Determines the donation tier based on hashrate.

@@ -41,6 +41,7 @@ COMMANDS = (
     "pool",
     "xvb",
     "earnings",
+    "luck",
     "help",
 )
 
@@ -55,6 +56,7 @@ HELP_TEXT = (
     "/pool — P2Pool sidechain + Monero network\n"
     "/xvb — XvB mode, tier, and raffle eligibility\n"
     "/earnings — estimated P2Pool XMR per day\n"
+    "/luck — pool cadence: time-to-share, luck, PPLNS weight\n"
     "/help — this message"
 )
 
@@ -310,6 +312,28 @@ def format_pool(metrics, data=None, host_label=""):
     return "\n".join(lines)
 
 
+def format_luck(metrics, host_label=""):
+    """Pool cadence & luck — the answer to '/luck' (#84). Reads the same Metrics fields the
+    dashboard's cadence card renders: time since the pool's last block (pool-wide, not a payout),
+    expected time-to-share for this miner's hashrate, luck (actual vs expected shares in the PPLNS
+    window; >100% = lucky), and the miner's own PPLNS share-weight."""
+    prefix = _prefix(host_label)
+    lines = [f"{prefix}\U0001f340 Pool cadence & luck"]
+    if metrics.last_block_ts:
+        since = format_duration(time.time() - metrics.last_block_ts)
+        lines.append(f"Since pool's last block: {since}")
+    else:
+        lines.append("Since pool's last block: n/a")
+    if metrics.expected_share_sec > 0:
+        lines.append(f"Est. time to a share: {format_duration(metrics.expected_share_sec)}")
+        lines.append(f"Luck: {metrics.luck_pct:.0f}% (actual vs expected shares in PPLNS window)")
+    else:
+        lines.append("Est. time to a share: n/a (waiting on hashrate history)")
+        lines.append("Luck: n/a")
+    lines.append(f"Your PPLNS weight: {metrics.own_pplns_weight:,.0f}")
+    return "\n".join(lines)
+
+
 def format_xvb(metrics, host_label=""):
     """XvB mode / tier / raffle eligibility — the answer to '/xvb'."""
     prefix = _prefix(host_label)
@@ -545,6 +569,8 @@ class TelegramCommandBot:
             return format_xvb(metrics, self.host_label)
         if cmd == "earnings":
             return format_earnings(metrics, data.get("network", {}), self.host_label)
+        if cmd == "luck":
+            return format_luck(metrics, self.host_label)
         return None
 
     async def run(self):
