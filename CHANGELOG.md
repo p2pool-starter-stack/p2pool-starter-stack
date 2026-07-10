@@ -22,6 +22,53 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   tab-completion for subcommands and `logs <service>` in bash and zsh; a test pins its command
   list to the CLI dispatch so the two can't drift. See
   [Operations](docs/operations.md#chaining-commands).
+- **`pithead rotate-secrets` regenerates the stack's internal credentials in one command (#378).**
+  After a suspected leak (a backup that left the box, a pasted `.env`), one command rotates the
+  local Monero RPC password (skipped in remote mode — that credential belongs to the remote node),
+  the stratum access-password when `p2pool.stratum_password` is `"auto"` (the new value is printed
+  and every rig must update its `pass`; a literal is left in `config.json` with a pointer), and the
+  xmrig-proxy control-API token (always), then recreates the containers that consume them. The old
+  values stay recoverable in owner-only `config.json.bak-<timestamp>` / `.env.bak-<timestamp>`
+  copies taken before anything changes, and a failed recreate leaves the retry marker so
+  `./pithead apply` finishes the job. The dashboard onion keeps its own `rotate-dashboard-onion`.
+  See [Operations › Rotating the internal secrets](docs/operations.md#rotating-the-internal-secrets).
+- **`pithead backup` encrypts archives by default (#374).** The backup archive carries the stack's
+  full secret material (`.env`, the onion private keys, the dashboard DB), and its `chmod 600` only
+  protects it on the local disk. `backup` now prompts for a passphrase (twice) and streams the tar
+  through `openssl enc -aes-256-cbc -pbkdf2 -iter 600000` into a `.tar.gz.enc` — no plaintext
+  archive ever touches the disk, and the passphrase travels over a file descriptor, never argv.
+  `PITHEAD_BACKUP_PASSPHRASE` covers unattended runs; an unattended run (`--yes`) with no passphrase
+  set **refuses** rather than writing plaintext (a cron job that lost its passphrase fails loudly
+  instead of archiving your onion keys in the clear), while `--no-encrypt` — or an empty passphrase
+  at the interactive prompt — chooses plaintext explicitly. `restore` detects encrypted vs plaintext
+  archives by magic bytes, so every existing backup restores unchanged; a wrong passphrase fails
+  before anything on disk is touched, and because CBC carries no authentication, `restore`
+  verifies the whole decrypted stream (`tar -tzf -`, no plaintext on disk) before extracting, so a
+  tampered or truncated archive is refused rather than half-restored over the live config.
+
+- **Edit config from the dashboard (#33).** A new **Configuration** view — opt-in via
+  `dashboard.control.enabled` (default off; requires a `dashboard.auth.password`) — prefills a
+  form from the live `config.json` with secrets masked ("set — leave blank to keep"), previews
+  the exact change rows `pithead apply` prints (disruptive rows flagged ⚠), and applies the
+  result. The form covers the full schema — `config.reference.json` is merged under the operator's
+  sparse `config.json`, so every setting is editable, not just the keys already present. The
+  dashboard container never runs `pithead`: it writes typed JSON intents into
+  `./data/control/requests/` (its only writable spool leg; results and the audit log are mounted
+  read-only), and a root systemd path unit (`pithead-control`) validates each intent with
+  pithead's own config validation and dispatches only `apply --dry-run --porcelain` or `apply -y`.
+  A change outside a small allowlist of operational settings (wallets, auth, onion exposure,
+  clearnet toggles, credentials, and anything destructive) is refused at the host — the
+  client-side confirm is not a security control, since a compromised container writes the spool
+  directly — and must be applied from the host CLI until out-of-band approval (#338) lands. Every mutation lands in a host-side audit log with the logged-in user (Caddy forwards it
+  as `X-Auth-User`); a failed apply keeps the previous config at `config.json.bak-control`. This is
+  the canonical host-mutation channel that the upgrade button (#59) and the first-boot wizard (#77)
+  build on.
+- **`pithead apply --dry-run [--porcelain]`.** Print the change preview and stop — `.env`,
+  generated files, and containers are untouched. `--porcelain` emits machine-readable
+  `FLAG<TAB>KEY<TAB>MESSAGE` rows (what the control runner consumes), and `PITHEAD_CONFIG_FILE`
+  points a single invocation at a candidate config file.
+- **`pithead control-run-pending`.** The host-side runner behind the Configuration view; fired by
+  the systemd path unit, runnable by hand.
 - **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
   status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
   remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate
@@ -64,6 +111,44 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 - **`tests/integration/build-pruned-chain.sh`** no longer defaults `SRC_DIR` to a maintainer's
   personal path (baked in under the pre-rename repo name); it's now a required variable with a clear
   error (#373).
+
+### Security
+
+- **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
+  and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
+  did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a
+  size-capped, `noexec` tmpfs for rendered configs and scratch (`/tmp` everywhere; xmrig-proxy also
+  gets a tmpfs over its image-only home in case the binary persists an API-driven config change).
+  A compromised process can no longer stage tools in, or persist changes to, its container image.
+  Nothing durable moves: the tmpfs mounts are wiped on restart by design, and every config
+  re-renders at container start.
+- **Reject control characters in every config string (#33).** `parse_and_validate_config` — the
+  chokepoint both the preview and the real apply run — now refuses any config value carrying a
+  newline or other control character. A newline in a secret that renders unquoted into `.env`
+  (`node_password`, `bot_token`, `api_token`, …) could otherwise inject a second `KEY=value` line
+  such as `PITHEAD_REGISTRY=evil.tld`, which the root apply would then trust for every image pull.
+  Now that a full config crosses the control-channel boundary, these fields are attacker-reachable.
+- **Require Tor client authorization for the control channel on a published onion (#33).** Enabling
+  `dashboard.control` while `dashboard.onion` is on now fails validation unless
+  `dashboard.onion.client_auth` is true (the default). A root-capable, funds-redirecting mutation
+  channel must not sit behind only a brute-forceable password on an anonymously-reachable onion.
+- **Default-deny commit gate at the host (#33).** The control approval gate refuses any commit
+  that changes an env key outside an explicit allowlist of operational settings (pool tier, XvB
+  enable and donation level, alert toggles, memory limits, time zone, …) — in either direction,
+  enable or disable — plus anything the change preview flags destructive. An allowlist, not a
+  blocklist: wallets, auth, onion exposure, the control channel itself, Tor egress and clearnet
+  toggles, node endpoints, the XvB pool URL and donor id, and every credential stay host-CLI-only,
+  and so does any key added in the future until it is deliberately listed. The changed-key set and
+  destructiveness are re-derived host-side from the staged config — the container's result is
+  never trusted. The hook is shaped for #338 to drop in out-of-band Telegram approval.
+- **Bound the root-runner spool (#33).** Intents over 64 KB are refused before `jq` parses them, a
+  run drains at most 50 intents, and `staged/` + `requests/` files older than an hour are swept at
+  run start. Symlinked or non-regular claimed files are refused (never followed), and the intent-id
+  gate is a strict canonical uuid4.
+- **Mask `healthchecks.ping_url` and narrow the secret mount (#33).** The dashboard config API now
+  masks the Healthchecks ping URL (a capability secret) alongside the other secrets, host-side
+  staged copies carrying merged secrets are written mode 600, and `SECURITY.md` records that the
+  read-only `config.json` bind mount — not the API masking — is the real secret trust boundary.
 
 ### Dependencies
 

@@ -44,7 +44,10 @@ on_err() {
 # Detect Operating System
 OS_TYPE="$(uname -s)"
 readonly OS_TYPE
-readonly CONFIG_FILE="config.json"
+# PITHEAD_CONFIG_FILE points a single invocation at an alternate candidate config — the control
+# runner (#33) uses it to preview a staged config with `apply --dry-run` without touching the
+# live config.json. Everything else (the .env, generated files) still belongs to this checkout.
+readonly CONFIG_FILE="${PITHEAD_CONFIG_FILE:-config.json}"
 readonly ENV_FILE=".env"
 # Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
@@ -78,7 +81,7 @@ if [ "$_STACK_SOURCED" = "0" ]; then
 
     # Friendly message on unexpected failure; always clean up the apply staging file.
     trap on_err ERR
-    trap 'rm -f "${ENV_FILE}.new" 2>/dev/null || true' EXIT
+    trap 'rm -f "${ENV_FILE}.new" "${ENV_FILE}.dryrun" 2>/dev/null || true' EXIT
 fi
 
 # --- Lifecycle Helpers ---
@@ -319,6 +322,7 @@ stack_upgrade() {
     mv "${ENV_FILE}.new" "$ENV_FILE"
     inject_service_configs
     generate_caddyfile
+    provision_control_runner # #33: converge the control-runner units on the current toggle
     log "Re-rendered generated config for the current release."
     migrate_compose_project
     # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
@@ -980,10 +984,11 @@ reset_dashboard() {
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
 stack_backup() {
-    local with_chains=0 assume_yes=0 was_running=0
+    local with_chains=0 assume_yes=0 was_running=0 no_encrypt=0
     for arg in "$@"; do
         case "$arg" in
         --with-chains) with_chains=1 ;;
+        --no-encrypt) no_encrypt=1 ;;
         -y | --yes) assume_yes=1 ;;
         *) error "Unknown option for backup: $arg. Run '$0 help'." ;;
         esac
@@ -992,12 +997,45 @@ stack_backup() {
     require_env
     parse_and_validate_config
 
+    # Resolve the encryption passphrase up front, before anything is touched. The archive holds
+    # the stack's full secret material (.env, onion private keys, the dashboard DB), and chmod 600
+    # only protects it on this disk — so it's encrypted by default (#374). Plaintext needs an
+    # explicit choice: --no-encrypt, or an empty passphrase at the interactive prompt (with a loud
+    # warning — never a silent lockout of the operator's own onion keys). An UNATTENDED run
+    # (--yes) with no passphrase refuses instead of downgrading: a cron job whose
+    # PITHEAD_BACKUP_PASSPHRASE line is typo'd away must fail loudly, not archive the onion keys
+    # in plaintext forever while reporting success.
+    local pass=""
+    { set +x; } 2>/dev/null # xtrace would print the passphrase below (see the prompt-path comment)
+    if [ "$no_encrypt" -eq 0 ]; then
+        if [ -n "${PITHEAD_BACKUP_PASSPHRASE:-}" ]; then
+            pass="$PITHEAD_BACKUP_PASSPHRASE"
+        elif [ "$assume_yes" -eq 1 ]; then
+            error "No PITHEAD_BACKUP_PASSPHRASE set for an unattended backup — refusing to write a plaintext archive of your onion keys and secrets. Set the env var, or pass --no-encrypt to choose plaintext explicitly."
+        else
+            local pass2=""
+            # Under `bash -x` (the on_err debugging advice) xtrace would print the passphrase in
+            # every comparison and redirection below — turn it off for the rest of this run.
+            { set +x; } 2>/dev/null
+            read -rs -p "Backup passphrase (empty = plaintext archive): " pass || true
+            echo
+            if [ -n "$pass" ]; then
+                read -rs -p "Confirm passphrase: " pass2 || true
+                echo
+                [ "$pass" = "$pass2" ] || error "Passphrases do not match — nothing was written."
+            else
+                warn "Empty passphrase — writing a PLAINTEXT archive. It holds your onion keys and secrets; anyone who reads it owns the stack."
+            fi
+        fi
+    fi
+
     local backups_dir="$PWD/backups"
     mkdir -p "$backups_dir"
 
     local stamp archive
     stamp=$(date +%Y%m%d-%H%M%S)
     archive="$backups_dir/pithead-backup-$stamp.tar.gz"
+    [ -z "$pass" ] || archive="$archive.enc"
 
     # Collect what exists, as absolute paths. We tar with -C / and strip the leading slash, so
     # restore (extract at /) puts every file back exactly where it came from regardless of where
@@ -1084,11 +1122,29 @@ stack_backup() {
 
     log "Creating backup archive..."
     # Read with sudo because the Tor data dir is owned by 100:101.
-    (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+    if [ -n "$pass" ]; then
+        # Stream tar straight into openssl so no plaintext archive ever exists on disk.
+        # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back to a
+        # single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe), never argv
+        # (visible in `ps`) and never a file. pipefail is in force, so either side failing
+        # fails the whole pipeline; remove the partial ciphertext rather than leave a corrupt
+        # archive that looks like a backup.
+        if ! (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
+            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+                -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
+            rm -f "$archive"
+            error "Backup failed — the partial archive was removed."
+        fi
+    else
+        (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+    fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
     chmod 600 "$archive"
 
     log "Backup written to: $archive"
+    if [ -n "$pass" ]; then
+        log "The archive is useless without the passphrase — store it somewhere other than this host."
+    fi
     if [ "$with_chains" -eq 0 ]; then
         log "Blockchains excluded (they re-sync). Use 'backup --with-chains' to include them."
     fi
@@ -1109,10 +1165,21 @@ stack_restore() {
         esac
     done
 
-    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz>"
+    [ -n "$archive" ] || error "Usage: $0 restore [-y|--yes] <archive.tar.gz[.enc]>"
     [ -f "$archive" ] || error "Archive not found: $archive"
     # Resolve to an absolute path now, since we extract from "/" below.
     archive=$(cd "$(dirname "$archive")" && printf '%s/%s' "$PWD" "$(basename "$archive")")
+
+    # Detect the format by magic bytes, not by flag or filename: `Salted__` is an openssl-encrypted
+    # archive (the default since #374), gzip magic is a plaintext archive from any earlier release —
+    # both keep restoring with the same command. Anything else is refused before the confirm prompt.
+    local magic encrypted=0
+    magic=$(head -c 8 "$archive" | od -An -tx1 | tr -d ' \n')
+    case "$magic" in
+    53616c7465645f5f) encrypted=1 ;; # "Salted__"
+    1f8b*) ;;                        # gzip
+    *) error "Not a pithead backup archive (neither openssl-encrypted nor gzip): $archive" ;;
+    esac
 
     # Note: we do NOT require/parse the current config here — restore must work even when the
     # on-disk config.json is lost or corrupt. The config comes back out of the archive.
@@ -1127,11 +1194,48 @@ stack_restore() {
         fi
     fi
 
+    local pass=""
+    if [ "$encrypted" -eq 1 ]; then
+        { set +x; } 2>/dev/null # xtrace would print the passphrase in the checks below
+        if [ -n "${PITHEAD_BACKUP_PASSPHRASE:-}" ]; then
+            pass="$PITHEAD_BACKUP_PASSPHRASE"
+        else
+            read -rs -p "Backup passphrase: " pass || true
+            echo
+        fi
+        [ -n "$pass" ] || error "This archive is encrypted — supply the passphrase (prompt or PITHEAD_BACKUP_PASSPHRASE)."
+        # Pre-flight: decrypt only the first bytes and check for the gzip magic, so a wrong
+        # passphrase fails HERE, before tar writes anything to /. `head -c 2` closes the pipe
+        # early, so openssl stops after the first blocks (pipefail makes that exit 141 — hence
+        # the `|| true`); we judge by the decrypted bytes, not the exit code.
+        local plain_magic
+        plain_magic=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            head -c 2 | od -An -tx1 | tr -d ' \n') || true
+        [ "$plain_magic" = "1f8b" ] || error "Wrong passphrase or corrupt archive — nothing was restored."
+        # Full-stream verify BEFORE extraction: CBC has no authentication, so a bit-flip or
+        # truncation past the first block would pass the magic check yet abort tar MID-EXTRACTION,
+        # leaving the live config half-overwritten. Listing the whole archive (`tar -tzf -`, still
+        # no plaintext on disk) decompresses and walks every member — catching a corrupt/tampered
+        # tail — and, unlike `gzip -t`, tolerates tar's own zero-padding. A failure here refuses
+        # before anything is touched.
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            tar -tzf - >/dev/null 2>&1 ||
+            error "Archive fails integrity verification (tampered or truncated) — nothing was restored."
+    fi
+
     log "Restoring from $archive ..."
     # The archive stores paths relative to / (leading slash stripped), so extracting at / puts
     # every file back exactly where it came from. sudo so we can write into the 100:101-owned
-    # Tor data dir.
-    sudo tar -xzf "$archive" -C "/"
+    # Tor data dir. The encrypted path streams openssl into tar — no plaintext archive on disk.
+    if [ "$encrypted" -eq 1 ]; then
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 3< <(printf '%s' "$pass") |
+            sudo tar -xzf - -C "/"
+    else
+        sudo tar -xzf "$archive" -C "/"
+    fi
 
     # Now that config.json is back, resolve the Tor data dir from it and fix ownership so the
     # onion keys load (matching prepare_directories).
@@ -1162,10 +1266,16 @@ Setup & configuration:
                               --skip-optimize  skip the kernel/GRUB HugePages tuning.
                               --skip-deps      skip dependency detection/install (for
                                                unsupported or custom setups).
-  apply [-y|--yes]          Re-read config.json and propagate changes: previews what will
+  apply [-y|--yes] [--dry-run [--porcelain]]
+                            Re-read config.json and propagate changes: previews what will
                             change, warns before anything disruptive, then recreates only
                             the containers that need it. Use this after you edit config.json.
                               -y, --yes        apply without the confirmation prompt.
+                              --dry-run        print the change preview and stop; nothing is
+                                               written or recreated.
+                              --porcelain      with --dry-run: machine-readable preview lines
+                                               (FLAG<TAB>KEY<TAB>MESSAGE), used by the
+                                               dashboard control runner (#33).
 
 Lifecycle:
   up                        Start the stack.
@@ -1185,20 +1295,28 @@ Maintenance:
   reset-dashboard [-y|--yes]
                             DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
                               -y, --yes        skip the confirmation prompt.
-  backup [--with-chains] [-y|--yes]
-                            Write a timestamped, chmod-600 tar.gz under backups/ holding the
+  backup [--with-chains] [--no-encrypt] [-y|--yes]
+                            Write a timestamped, chmod-600 archive under backups/ holding the
                             irreplaceable bits: config.json, .env, Caddyfile, the Tor data dir
                             (onion keys), and the dashboard's database (your hashrate history &
                             settings). Blockchains are excluded unless --with-chains.
+                            Encrypted by default (openssl AES-256-CBC + PBKDF2, .tar.gz.enc):
+                            prompts for a passphrase, or reads PITHEAD_BACKUP_PASSPHRASE for
+                            unattended runs. With --yes and no passphrase set, falls back to a
+                            plaintext tar.gz with a warning.
                             If the stack is running, backup stops it for a consistent copy and
                             starts it again when it's done.
                               --with-chains    also include the blockchain data (large).
+                              --no-encrypt     write a plaintext tar.gz (the pre-v1.4 format).
                               -y, --yes        skip the confirmation prompts (low free space,
                                                and stopping a running stack).
   restore [-y|--yes] <archive>
                             Restore config.json, .env, Caddyfile, the Tor data dir, and the
                             dashboard's database from a backup archive (prompts before
-                            overwriting; fixes Tor ownership).
+                            overwriting; fixes Tor ownership). Detects encrypted (.enc) vs
+                            plaintext archives by content — old backups restore unchanged.
+                            Asks for the passphrase (or reads PITHEAD_BACKUP_PASSPHRASE) and
+                            fails before touching anything if it's wrong.
                               -y, --yes        restore without the confirmation prompt.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion (#343) —
@@ -1208,6 +1326,19 @@ Maintenance:
   rotate-dashboard-onion [-y|--yes]
                             Mint a fresh dashboard .onion address and client-auth key (#343);
                             the old address and any client keys you handed out stop working.
+                              -y, --yes        skip the confirmation prompt.
+
+  control-run-pending       Process queued dashboard config-change requests (#33): validate
+                            each staged intent and run 'apply --dry-run' (preview) or
+                            'apply -y' (commit). Normally fired by the pithead-control
+                            systemd path unit when dashboard.control.enabled is true.
+
+  rotate-secrets [-y|--yes]
+                            Regenerate the stack's internal credentials (#378): the local Monero
+                            RPC password, the stratum access-password (only when
+                            p2pool.stratum_password is "auto" — every rig must then update its
+                            'pass'), and the xmrig-proxy control-API token. Recreates the
+                            affected containers; old values stay in timestamped .bak-* copies.
                               -y, --yes        skip the confirmation prompt.
 
   help, -h, --help          Show this message.
@@ -1963,6 +2094,19 @@ parse_and_validate_config() {
         error "$CONFIG_FILE is not valid JSON."
     fi
 
+    # Central .env line-injection guard (#33 hardening). No config string value may carry a
+    # control character (newline, CR, tab, …). A raw newline in a value that renders into .env
+    # unquoted — e.g. monero.node_password, telegram.bot_token, workers.api_token — would inject
+    # a SECOND KEY=value line such as PITHEAD_REGISTRY=evil.tld/attacker; every compose image: is
+    # ${PITHEAD_REGISTRY:-…}, so the root `apply -y` would then pull attacker images for the whole
+    # stack (RCE). Now that the dashboard control channel lets a full config cross the trust
+    # boundary, these fields are attacker-influenceable. Check EVERY string leaf here — the shared
+    # chokepoint both `apply --dry-run` (preview) and `apply -y` (commit) run — so no current or
+    # future field is missed. No legitimate config value contains a control character.
+    if jq -e 'any(.. | strings; test("[[:cntrl:]]"))' "$CONFIG_FILE" >/dev/null 2>&1; then
+        error "$CONFIG_FILE has a config value containing a control character or newline. That is not allowed — it could inject an extra line into the stack's .env. Remove the newline/control character (check secrets like node_password, bot_token, api_token)."
+    fi
+
     # Required fields
     MONERO_WALLET=$(jq -r '.monero.wallet_address // empty' "$CONFIG_FILE")
     TARI_WALLET=$(jq -r '.tari.wallet_address // empty' "$CONFIG_FILE")
@@ -2092,10 +2236,14 @@ parse_and_validate_config() {
     # marker here and the monerod/tari entrypoints (ro) read it to decide Tor-vs-clearnet. Not a
     # user-facing data dir, so it's fixed under ./data rather than config-driven.
     CLEARNET_STATE_DIR="$PWD/data/clearnet-state"
+    # Control-channel spool (#33): requests/ (container rw) + staged/results/audit (host-only /
+    # container ro). Fixed under ./data like CLEARNET_STATE_DIR — not a user-facing data dir.
+    # Deliberately NOT inside DASHBOARD_DIR, which is mounted rw wholesale into the container.
+    CONTROL_DIR="$PWD/data/control"
 
     # Guard every data dir against catastrophic chown -R / rm -rf targets before we touch them.
     local d
-    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR"; do
+    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR"; do
         assert_safe_dir "$d"
     done
 
@@ -2182,6 +2330,24 @@ parse_and_validate_config() {
             ;;
         esac
     fi
+
+    # Dashboard control channel (#33). Opt-in, default off. When on, the dashboard's Configuration
+    # view can stage config changes that the host-side runner (control-run-pending) validates and
+    # applies. That is a host-mutation channel that can change the payout wallet, so FAIL CLOSED:
+    # refuse to enable it on a dashboard with no login (mirrors the onion-without-password refusal).
+    DASHBOARD_CONTROL_ENABLED=$(normalize_bool "$(config_bool '.dashboard.control.enabled' false)")
+    if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ -z "$dash_pw" ]; then
+        error "dashboard.control.enabled is true but dashboard.auth.password is empty. Config editing from the dashboard can change the payout wallet and run '$0 apply' — it must sit behind a login. Set dashboard.auth.password and re-run."
+    fi
+    # And on a PUBLISHED onion, refuse the control channel unless Tor v3 client authorization is on
+    # (mirrors the onion-without-password refusal above). The control channel is a root-capable,
+    # funds-redirecting mutation surface; a password alone on an anonymously-reachable .onion is
+    # online-brute-forceable (per-IP throttling is meaningless over Tor). Client-auth means the onion
+    # does not respond at all without the operator's key — the real primary gate. Set it before
+    # exposing config editing to the internet.
+    if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_CLIENT_AUTH" != "true" ]; then
+        error "dashboard.control.enabled is true on a published onion (dashboard.onion.enabled) but dashboard.onion.client_auth is false. A root-capable config-mutation channel must not sit behind only a brute-forceable password on an anonymously-reachable .onion. Set dashboard.onion.client_auth: true (the default) and re-run."
+    fi
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
@@ -2220,6 +2386,17 @@ prepare_directories() {
     # World-writable so the dashboard container (its own uid) can drop the clearnet auto-transition
     # marker (#234) while monerod/tari mount it read-only. It holds only non-secret state markers.
     sudo chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || true
+    prepare_control_dirs
+}
+
+# Control-channel spool layout (#33). requests/ is the ONLY leg the dashboard container may write
+# (chowned to its uid); staged/, results/ and audit/ stay host-owned — the container mounts
+# results/ and audit/ read-only and never sees staged/ at all. That rw/ro split IS the trust
+# boundary: the container can only ask; it cannot forge a result, rewrite the audit log, or alter
+# a staged intent between preview and commit.
+prepare_control_dirs() {
+    mkdir -p "$CONTROL_DIR/requests" "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
+    ensure_owner "$CONTROL_DIR/requests" "$APP_UID" "$APP_GID"
 }
 
 # List "*_DATA_DIR=path" lines from .env whose directory is MISSING — the signature of a relocated
@@ -2277,6 +2454,7 @@ ensure_directories() {
     ensure_owner "$TARI_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$P2POOL_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
+    prepare_control_dirs # #33: spool dirs exist + requests/ writable by the dashboard uid
     [ "${#created[@]}" -gt 0 ] && sudo chmod -R 755 "$P2POOL_DIR/stats"
     return 0
 }
@@ -2363,8 +2541,11 @@ provision_onion_client_auth() {
     $run chmod 700 "$hs_dir" "$hs_dir/authorized_clients"
     $run chmod 600 "$hs_dir/authorized_clients/dashboard.auth"
     local owner
-    owner=$($run stat -c '%u:%g' "$TOR_DATA_DIR" 2>/dev/null) || owner=""
-    [ -n "$owner" ] && $run chown -R "$owner" "$hs_dir"
+    # GNU stat first, BSD fallback (macOS dev checkouts). With neither, skip the chown — and do it
+    # with `if`, not `[ ] &&`, so an empty owner doesn't become the function's (nonzero) return
+    # value and abort the whole apply under set -e after .env is already committed.
+    owner=$($run stat -c '%u:%g' "$TOR_DATA_DIR" 2>/dev/null || $run stat -f '%u:%g' "$TOR_DATA_DIR" 2>/dev/null) || owner=""
+    if [ -n "$owner" ]; then $run chown -R "$owner" "$hs_dir"; fi
 }
 
 # Read the dashboard onion hostname from the running tor container into DASHBOARD_ONION (#343).
@@ -2469,6 +2650,103 @@ rotate_dashboard_onion() {
         onion_client_key
     else
         log "New dashboard onion: http://$(env_get DASHBOARD_ONION_ADDRESS)"
+    fi
+}
+
+# `rotate-secrets` (#378): regenerate the stack's internal credentials in one command. After a
+# suspected leak (a backup that left the box, a `.env` pasted into a bug report) the only
+# alternative is hand-editing files and knowing which containers to recreate. Rotates the local
+# Monero RPC password (skipped in remote mode — that credential belongs to the remote node), the
+# stratum access-password when p2pool.stratum_password is "auto" (a literal lives in config.json;
+# empty means auth is off), and PROXY_AUTH_TOKEN (always). The dashboard onion keys/address have
+# their own command (rotate-dashboard-onion) and are not touched. The old values stay recoverable
+# in timestamped owner-only copies of config.json and .env taken before anything changes.
+rotate_secrets() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        *) error "Unknown option for rotate-secrets: $arg. Run '$0 help'." ;;
+        esac
+    done
+    require_deployed
+    parse_and_validate_config
+    load_preserved_state
+
+    # Compute the "what will rotate" preview from the PARSED config, not by grepping .env — the
+    # stratum mode in config.json (auto vs literal vs empty) decides the behavior, not the rendered value.
+    local stratum_mode rotate_stratum=0
+    stratum_mode=$(jq -r '.p2pool.stratum_password // ""' "$CONFIG_FILE")
+
+    log "This rotates the stack's internal credentials:"
+    if [ "$MONERO_MODE" == "local" ]; then
+        log "  • Monero node RPC password — internal to the stack; no follow-up needed."
+    else
+        log "  • Monero RPC password: skipped — monero.mode is \"remote\", so the credential belongs to the remote node, not this stack."
+    fi
+    if [ "$stratum_mode" == "auto" ]; then
+        warn "  • Stratum access-password (#152) — EVERY RIG must update its stratum 'pass' to the new value or it is rejected."
+    elif [ -n "$stratum_mode" ]; then
+        log "  • Stratum access-password: skipped — p2pool.stratum_password is set explicitly in config.json; change it there and run '$0 apply'."
+    fi
+    log "  • xmrig-proxy control-API token (#153) — internal to the stack; no follow-up needed."
+    log "The containers that consume them are recreated (brief restart; chain data and dashboard history are untouched)."
+    if [ "$assume_yes" -eq 0 ]; then
+        read -r -p "Rotate these secrets now? (y/N): " CONFIRM || true
+        [[ "$CONFIRM" =~ ^[Yy] ]] || {
+            log "Rotation cancelled."
+            return 0
+        }
+    fi
+
+    # Keep the OLD values recoverable before anything changes: timestamped owner-only copies of the
+    # two files that carry them. Refuse to rotate at all if the safety copies can't be written.
+    local stamp
+    stamp=$(date +%Y%m%d-%H%M%S)
+    (
+        umask 077
+        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-${stamp}" &&
+            cp "$ENV_FILE" "${ENV_FILE}.bak-${stamp}"
+    ) || error "Could not write the pre-rotation safety copies — nothing was rotated."
+    log "Pre-rotation copies saved (${CONFIG_FILE}.bak-${stamp}, ${ENV_FILE}.bak-${stamp}) — they hold the OLD secrets; delete them once the stack is confirmed healthy."
+
+    # Regenerate, overriding what parse_and_validate_config / load_preserved_state just preserved.
+    # Same generators as the originals, so every consumer's validation keeps holding.
+    if [ "$MONERO_MODE" == "local" ]; then
+        MONERO_PASS=$(generate_node_password)
+        persist_node_credentials "$MONERO_USER" "$MONERO_PASS" # atomic write-back to config.json
+    fi
+    if [ "$stratum_mode" == "auto" ]; then
+        STRATUM_PASSWORD=$(openssl rand -hex 12)
+        rotate_stratum=1
+    fi
+    PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
+
+    resolve_dashboard_host # #356: sets HOST_IP for render_env, which dies unbound without it
+    # #356: render_env writes DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false} and
+    # load_preserved_state doesn't carry it — preserve it or the next apply errors "run setup".
+    DEPLOYMENT_COMPLETED=$(env_get DEPLOYMENT_COMPLETED)
+    render_env
+    inject_service_configs # keep the generated service configs current before the recreate
+    # Recreate marker (#125): .env is committed now, so if the recreate below fails, a plain
+    # `apply` would diff no changes and no-op — the marker makes it retry the recreate instead.
+    local apply_marker="${ENV_FILE}.apply-incomplete"
+    : >"$apply_marker"
+    log "Recreating the containers that consume the rotated secrets..."
+    # `up` recreates exactly the services whose env/args changed (monerod, p2pool, xmrig-proxy,
+    # dashboard). Never `compose restart` here: restart reuses the OLD container args, so p2pool
+    # would keep dialing monerod with the retired --rpc-login.
+    if ! compose_up_checked -d; then
+        warn "Secrets were rotated in config.json/.env but the containers were NOT recreated ('docker compose up' failed)."
+        warn "Fix the cause above, then run '$0 apply' to retry the recreate — or restore the pre-rotation copies (${CONFIG_FILE}.bak-${stamp}, ${ENV_FILE}.bak-${stamp}) and run '$0 apply'."
+        exit 1 # leave $apply_marker so the retry re-attempts the recreate
+    fi
+    rm -f "$apply_marker"
+
+    log "Secrets rotated. The old values are invalid; only the safety copies above still hold them."
+    if [ "$rotate_stratum" -eq 1 ]; then
+        announce_stratum_auth
+        warn "The stratum access-password CHANGED — every rig is rejected until its stratum 'pass' is updated to the value above."
     fi
 }
 
@@ -2788,6 +3066,8 @@ DASHBOARD_TZ=$DASHBOARD_TZ
 DASHBOARD_AUTH_USER=$DASHBOARD_AUTH_USER
 DASHBOARD_AUTH_HASH_B64=$DASHBOARD_AUTH_HASH_B64
 DASHBOARD_AUTH_PW_FP=$DASHBOARD_AUTH_PW_FP
+DASHBOARD_CONTROL_ENABLED=$DASHBOARD_CONTROL_ENABLED
+CONTROL_DIR=$CONTROL_DIR
 HOST_IP=$HOST_IP
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
@@ -2843,6 +3123,10 @@ caddy_hash_password_b64() {
 }
 
 generate_caddyfile() {
+    # Every vhost forwards the authenticated basic_auth username as X-Auth-User (#33) — the audit
+    # `actor` for control-channel requests. header_up SETS the header, so a client-supplied
+    # X-Auth-User can never spoof it; with auth off the placeholder renders empty.
+    #
     # Optional basic_auth block (#8), rendered only when a dashboard password is configured. The
     # hash is decoded from its base64 .env form back to the raw bcrypt string Caddy expects; it
     # protects every route, so the dashboard prompts for login before anything is served.
@@ -2858,7 +3142,9 @@ generate_caddyfile() {
 https://$HOST_IP {
     tls internal
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
     else
@@ -2866,7 +3152,9 @@ EOF
         cat <<EOF >"Caddyfile"
 http://$HOST_IP {
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
     fi
@@ -2885,7 +3173,9 @@ EOF
 
 http://${NETWORK_PREFIX}.1 {
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
         # Also serve HTTPS on the .onion name so Tor Browser's default http->https upgrade lands on a
@@ -2902,7 +3192,9 @@ EOF
 https://${DASHBOARD_ONION} {
     tls internal
 $auth
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Auth-User {http.auth.user.id}
+    }
 }
 EOF
         fi
@@ -3171,6 +3463,7 @@ setup() {
     inject_service_configs
     optimize_kernel
     generate_caddyfile
+    provision_control_runner # #33: install/remove the dashboard-control systemd trigger
 
     log "Deployment preparation complete!"
     if [ "$REBOOT_REQUIRED" = true ]; then
@@ -3297,6 +3590,18 @@ describe_change() {
         # carries the user-facing message. Emit no message so the preview shows one line, not two.
         msg=""
         ;;
+    DASHBOARD_CONTROL_ENABLED)
+        if [ "$new" == "true" ]; then
+            flag=DEST
+            msg="Dashboard configuration editing ENABLED (#33) — the dashboard can stage config changes that a host-side runner validates and applies; the dashboard container is recreated."
+        else
+            msg="Dashboard configuration editing disabled (#33) — the control runner units are removed; the dashboard container is recreated."
+        fi
+        ;;
+    CONTROL_DIR)
+        # Fixed spool path under ./data — internal, changes only when the checkout moves.
+        msg=""
+        ;;
     DASHBOARD_ONION_ENABLED)
         flag=DEST
         if [ "$new" == "true" ]; then
@@ -3375,16 +3680,73 @@ describe_change() {
     printf '%s\t%s' "$flag" "$msg"
 }
 
+# Preview what `apply` would change without touching .env, generated files, or containers (#33).
+# Runs apply's own render-and-diff preamble against a throwaway staging file, prints the same
+# describe_change preview, and stops before the commit. --porcelain prints machine-readable
+# "FLAG<TAB>KEY<TAB>MSG" lines for the control runner. Progress logs go to stderr so stdout
+# carries only the preview. Reads $CONFIG_FILE, so PITHEAD_CONFIG_FILE can point one invocation
+# at a staged candidate config.
+apply_dry_run() {
+    local porcelain="$1"
+    local newenv="${ENV_FILE}.dryrun"
+    {
+        # NOTE: no ensure_onion_password here — it would write an auto-generated password into
+        # the candidate config. A dry run must only read; an invalid candidate fails validation.
+        parse_and_validate_config
+        load_preserved_state
+        if [ "$MONERO_ONION" == "placeholder" ] || ! is_deployed; then
+            error "Stack is not fully provisioned. Run '$0 setup' first."
+        fi
+        resolve_dashboard_host # non-interactive
+        DEPLOYMENT_COMPLETED=true
+        render_env "$newenv"
+    } >&2
+
+    local changed=() key old new line flag msg
+    while IFS= read -r key; do
+        [ -n "$key" ] && changed+=("$key")
+    done < <(env_changed_keys "$ENV_FILE" "$newenv")
+
+    if [ "${#changed[@]}" -eq 0 ]; then
+        [ "$porcelain" -eq 0 ] && log "No configuration changes detected."
+        rm -f "$newenv"
+        return 0
+    fi
+    for key in "${changed[@]}"; do
+        old=$(env_get_file "$ENV_FILE" "$key")
+        new=$(env_get_file "$newenv" "$key")
+        line=$(describe_change "$key" "$old" "$new")
+        flag=${line%%$'\t'*}
+        msg=${line#*$'\t'}
+        [ -z "$msg" ] && continue # internal-only keys stay silent, same as apply
+        if [ "$porcelain" -eq 1 ]; then
+            printf '%s\t%s\t%s\n' "$flag" "$key" "$msg"
+        elif [ "$flag" == "DEST" ]; then
+            echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
+        else
+            echo "  • ${msg}"
+        fi
+    done
+    rm -f "$newenv"
+}
+
 apply() {
-    local assume_yes=0 arg
+    local assume_yes=0 dry_run=0 porcelain=0 arg
     for arg in "$@"; do
         case "$arg" in
         -y | --yes) assume_yes=1 ;;
+        --dry-run) dry_run=1 ;;
+        --porcelain) porcelain=1 ;;
         *) error "Unknown option for apply: $arg. Run '$0 help'." ;;
         esac
     done
+    [ "$porcelain" -eq 1 ] && [ "$dry_run" -eq 0 ] && error "--porcelain only makes sense with --dry-run."
 
     require_env
+    if [ "$dry_run" -eq 1 ]; then
+        apply_dry_run "$porcelain"
+        return 0
+    fi
     ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one
     parse_and_validate_config
     load_preserved_state
@@ -3420,7 +3782,10 @@ apply() {
         for key in "${changed[@]}"; do
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
-            case "$key" in HOST_IP | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED) caddy_changed=1 ;; esac
+            # DASHBOARD_CONTROL_ENABLED rides along (#33): the Caddyfile always renders the
+            # X-Auth-User header_up now, but a pre-upgrade caddy may still run without it —
+            # restart caddy at the moment the audit actor starts to matter.
+            case "$key" in HOST_IP | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED | DASHBOARD_CONTROL_ENABLED) caddy_changed=1 ;; esac
             # Payout-wallet change (#375): remember WHICH wallet keys change for the typed
             # confirmation below — one prompt per key, so a Monero+Tari double change can't
             # ride through on a single typed prefix.
@@ -3484,6 +3849,7 @@ apply() {
     # Client-auth keys must be written before tor is recreated below, so an onion just turned on (or a
     # client-auth toggle) takes effect on this apply rather than the next (#343).
     provision_onion_client_auth
+    provision_control_runner # #33: converge the control-runner units on the (new) toggle
 
     log "Updating containers..."
     migrate_compose_project
@@ -3524,7 +3890,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor reset-dashboard backup restore onion-client-key rotate-dashboard-onion version help"
+readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor reset-dashboard backup restore control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -3578,6 +3944,309 @@ run_chain() {
             exit "$rc"
         fi
     done
+}
+
+# --- Dashboard control channel (#33) ---
+# The dashboard container can only ASK: it drops typed JSON intents into $CONTROL_DIR/requests
+# (its single writable spool mount). This host-side runner claims each request, validates it, and
+# dispatches EXACTLY two actions — `apply --dry-run --porcelain` (preview) and `apply -y` (commit).
+# Outcomes land in results/ and an audit line in audit/, both mounted read-only in the container.
+# No string from the container is ever executed or interpolated into a command; the candidate
+# config crosses the boundary only as a FILE handed to `apply` via PITHEAD_CONFIG_FILE.
+
+# Approval gate for a commit (#33). The client-side typed-APPLY modal is NOT a security control:
+# a compromised/XSS'd container writes the request spool directly and never renders that modal, so
+# the only trustworthy gate is here, host-side. FAIL CLOSED, two independent checks:
+#
+#   1. TRUE DEFAULT-DENY: a commit that changes ANY env key NOT in
+#      CONTROL_DASHBOARD_EDITABLE_KEYS — in EITHER direction (enable, change, or DISABLE) — is
+#      refused. An allowlist, not a blocklist: a key added to render_env tomorrow is
+#      un-committable from the dashboard until someone deliberately lists it here. Deliberately
+#      decoupled from describe_change's cosmetic INFO/DEST flag: that flag labels only the
+#      disruptive direction (enabling auth is DEST, disabling is INFO), so a compromised
+#      container could otherwise switch security controls OFF with zero DEST rows.
+#   2. Anything describe_change still flags DEST (pruning, data dirs, node-mode switch, ...) is
+#      refused as disruptive, even for allowlisted keys.
+#
+# Both checks re-derive the changed keys from the staged config via the SAME dry-run path a preview
+# runs — nothing is trusted from the container's request or its (host-written but container-visible)
+# result file — so a forged "destructive:false" cannot slip a wallet swap or an auth-disable
+# through. Out-of-band approval with deny-on-timeout is #338 (Telegram approve/deny) — it drops in
+# here, replacing the refusal with a real second factor. Until then, these edits must be made from
+# the host CLI. Echoes a reason on stdout when it refuses.
+
+# The env keys committable from the dashboard: operational tuning only, and only keys whose value
+# is derived from a validated enum, boolean, or number — never a free-form string that reaches a
+# command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
+# channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
+# and donor id, tokens and passwords — stays host-CLI-only. The WALLET_CHANGED and
+# CLEARNET_EXPOSED alert toggles are excluded on purpose: they are the tamper-evidence alarms on
+# the Telegram channel (the future #338 approval channel), so the dashboard must not silence
+# them. Space-separated exact env-key names.
+CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
+    XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED
+    DASHBOARD_CHECK_UPDATES DASHBOARD_TZ
+    MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS
+    HASHRATE_DROP_THRESHOLD_PCT HASHRATE_DROP_MINUTES TELEGRAM_DAILY_SUMMARY_TIME
+    TELEGRAM_EVENT_NODE_DOWN TELEGRAM_EVENT_NODE_RECOVERED
+    TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
+    TELEGRAM_EVENT_WORKER_JOINED TELEGRAM_EVENT_WORKER_LEFT
+    TELEGRAM_EVENT_SYNC_FINISHED TELEGRAM_EVENT_DISK_SPACE
+    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_XVB_NO_SHARE
+    TELEGRAM_EVENT_XVB_REGISTRATION TELEGRAM_EVENT_NEW_RELEASE
+    TELEGRAM_EVENT_STACK_ONLINE TELEGRAM_EVENT_DAILY_SUMMARY
+    TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
+    TELEGRAM_EVENT_HUGEPAGES TELEGRAM_EVENT_LOW_RAM
+    TELEGRAM_EVENT_HIGH_REJECT_RATE TELEGRAM_EVENT_BLOCK_FOUND
+    TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
+
+control_approval_gate() { # <staged-file>
+    local staged="$1" porcelain
+    # Fail closed if we cannot re-derive the change set (the staged config was validated at
+    # preview, so a dry-run failure here means something changed — refuse).
+    if ! porcelain=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>/dev/null); then
+        printf 'could not re-validate the staged change host-side — refusing to commit'
+        return 1
+    fi
+    # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
+    # flag says. Refusal keys off a violation COUNT, not the matched text, so a blank or
+    # malformed porcelain row (empty KEY column) still refuses instead of slipping past an
+    # emptiness test.
+    local editable_re bad hit
+    editable_re=$(printf '%s' "$CONTROL_DASHBOARD_EDITABLE_KEYS" | tr -s ' \n' '|')
+    bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
+    if [ "${bad:-0}" -gt 0 ]; then
+        hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
+        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "${hit:-unparseable change row}" "$0"
+        return 1
+    fi
+    if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
+        printf 'this change is destructive and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
+        return 1
+    fi
+    return 0
+}
+
+control_write_result() { # <results-dir> <id> <json>
+    printf '%s\n' "$3" >"$1/.$2.tmp" && mv "$1/.$2.tmp" "$1/$2.json"
+}
+
+control_audit() { # <audit-file> <id> <actor> <action> <status>
+    printf '{"ts":"%s","id":"%s","actor":"%s","action":"%s","status":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "$3" "$4" "$5" >>"$1"
+}
+
+# Preview: stage the candidate config host-side, dry-run it, report the describe_change rows.
+control_preview() { # <request-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    local staged="$cdir/staged/$id.json" errf="$cdir/staged/.$id.err" out result
+    if [ "$(jq -r '.config | type' "$file")" != "object" ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"config must be a JSON object",ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "rejected"
+        return 0
+    fi
+    # The staged copy carries the operator's MERGED secrets (the dashboard re-inserted real values
+    # for unchanged sentinels before submitting). It lives in host-only staged/ — never mounted —
+    # but pin it owner-only anyway so a co-tenant on the host can't read secrets from it (#33
+    # hardening; the config.json bind-mount, not this file, is the real secret trust boundary —
+    # see SECURITY.md). Created under umask 077 so it is never even briefly world-readable
+    # (create-then-chmod race); the chmod stays as belt-and-suspenders.
+    (umask 077 && jq '.config' "$file" >"$staged")
+    chmod 600 "$staged" 2>/dev/null || true
+    if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
+        result=$(printf '%s\n' "$out" | jq -R -s '
+            [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
+            | {status: "previewed", changes: ., destructive: (map(.flag == "DEST") | any), ts: (now | floor)}')
+        control_write_result "$cdir/results" "$id" "$result"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "previewed"
+    else
+        # Validation failed — reject with pithead's own error tail; nothing stays staged.
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$(tail -c 2000 "$errf")" '{status:"rejected",error:$e,ts:(now|floor)}')"
+        rm -f "$staged"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "rejected"
+    fi
+    rm -f "$errf"
+}
+
+# Commit: apply the HOST-SIDE staged copy from the matching preview. A tampered second request
+# can't swap the config — commit carries only the id; the config it applies is the one previewed.
+control_commit() { # <id> <actor> <control-dir>
+    local id="$1" actor="$2" cdir="$3"
+    local staged="$cdir/staged/$id.json" logf="$cdir/staged/.$id.log" rc=0
+    if [ ! -f "$staged" ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"no staged intent for this id — preview first",ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
+        return 0
+    fi
+    if [ -z "$(find "$staged" -mmin -10 2>/dev/null)" ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"staged intent expired (older than 10 minutes) — preview again",ts:(now|floor)}')"
+        rm -f "$staged"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
+        return 0
+    fi
+    local gate_reason
+    if ! gate_reason=$(control_approval_gate "$staged"); then
+        [ -n "$gate_reason" ] || gate_reason="approval denied"
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$gate_reason" '{status:"rejected",error:$e,ts:(now|floor)}')"
+        rm -f "$staged"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
+        return 0
+    fi
+    # Keep a pre-change backup; on failure it is named in the result and left in place. cp (not mv)
+    # keeps config.json's inode stable — the container bind-mounts the file read-only for prefill.
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-control"
+    cp "$staged" "$CONFIG_FILE"
+    "$0" apply -y >"$logf" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"applied",ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "applied"
+    else
+        # apply's own .apply-incomplete marker handles the container-recreate retry; the config
+        # backup lets the operator revert by hand if the new config itself is the problem.
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$(tail -c 2000 "$logf")" --arg b "${CONFIG_FILE}.bak-control" '{status:"failed",error:$e,backup:$b,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "failed"
+    fi
+    rm -f "$staged" "$logf"
+}
+
+# Validate + dispatch one CLAIMED request file. Trusts no byte of it: must be JSON, only the keys
+# id/action/config/actor, the id must be a UUID (it becomes the result/staged FILENAME — anything
+# else is rejected before it can touch a path), and the action one of the two known verbs.
+control_process_request() { # <claimed-file> <control-dir>
+    local file="$1" cdir="$2" id action actor size
+    # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
+    # could point the root runner at any host file. Skip + audit, never follow it.
+    if [ -L "$file" ] || [ ! -f "$file" ]; then
+        warn "Control request is a symlink or not a regular file — refused."
+        control_audit "$cdir/audit/control.log" "" "" "invalid" "refused-nonregular"
+        return 0
+    fi
+    # Bound the root-runner DoS (#33 hardening): reject an oversized intent BEFORE jq parses it. A
+    # real config.json is a few KB; 64 KB is generous headroom for the full schema plus edits.
+    size=$(wc -c <"$file" 2>/dev/null || echo 0)
+    if [ "$size" -gt 65536 ]; then
+        warn "Control request exceeds 64 KB ($size bytes) — refused before parsing."
+        control_audit "$cdir/audit/control.log" "" "" "invalid" "refused-oversize"
+        return 0
+    fi
+    if ! jq -e . "$file" >/dev/null 2>&1; then
+        warn "Control request is not valid JSON — discarded."
+        return 0
+    fi
+    id=$(jq -r '.id // ""' "$file")
+    # Strict canonical uuid4 (version nibble 4, variant nibble 8/9/a/b) — the id becomes a result/
+    # staged FILENAME, so pin it hard (defense-in-depth, from #438). submit() mints str(uuid4()).
+    if ! printf '%s' "$id" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+        warn "Control request has a malformed id — discarded (no result can be addressed)."
+        return 0
+    fi
+    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor")] | length' "$file")" != "0" ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unexpected keys in request",ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "" "invalid" "rejected"
+        return 0
+    fi
+    actor=$(jq -r '.actor // ""' "$file")
+    # The actor rides into the audit log; it originates from Caddy's X-Auth-User but the container
+    # writes the file, so re-validate it against the basic_auth username charset.
+    printf '%s' "$actor" | grep -qE '^[A-Za-z0-9._@-]{0,64}$' || actor="untrusted"
+    action=$(jq -r '.action // ""' "$file")
+    case "$action" in
+    preview) control_preview "$file" "$id" "$actor" "$cdir" ;;
+    commit) control_commit "$id" "$actor" "$cdir" ;;
+    *)
+        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "${action:-none}" "rejected"
+        ;;
+    esac
+}
+
+# `control-run-pending`: drain the request spool, oldest first. Each request is CLAIMED (moved out
+# of requests/) before a byte of it is parsed, so the container can never mutate or replay a
+# request the runner is working on. Fired by the pithead-control systemd path unit.
+control_run_pending() {
+    [ "$(env_get DASHBOARD_CONTROL_ENABLED)" == "true" ] ||
+        error "The dashboard control channel is not enabled (dashboard.control.enabled)."
+    local cdir
+    cdir=$(env_get CONTROL_DIR)
+    [ -n "$cdir" ] || cdir="$PWD/data/control"
+    mkdir -p "$cdir/staged" "$cdir/results" "$cdir/audit"
+    # Time-bounded DoS sweep (#33 hardening): drop staged/ copies and stray requests/ files older
+    # than an hour that no commit ever claimed, so a burst that is never committed cannot pile up
+    # (staged intents already expire per-commit at 10 min; this bounds accumulation regardless).
+    find "$cdir/staged" "$cdir/requests" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
+    local names name req claim n=0
+    # Per-run cap (#33 hardening): a single trigger drains at most this many intents, so a flood in
+    # the spool can't hold the root runner for an unbounded stretch — the leftovers wait for the
+    # next path-unit fire.
+    local max=50
+    names=$(cd "$cdir/requests" 2>/dev/null && ls -1tr -- *.json 2>/dev/null) || true
+    if [ -z "$names" ]; then
+        log "No pending control requests."
+        return 0
+    fi
+    while IFS= read -r name; do
+        if [ "$n" -ge "$max" ]; then
+            warn "Reached the $max-request per-run cap — remaining intents wait for the next run."
+            break
+        fi
+        req="$cdir/requests/$name"
+        [ -f "$req" ] || continue
+        claim="$cdir/.claim.$$"
+        mv "$req" "$claim" 2>/dev/null || continue
+        control_process_request "$claim" "$cdir"
+        rm -f "$claim"
+        n=$((n + 1))
+    done <<<"$names"
+    log "Processed $n control request(s)."
+}
+
+# Install (or remove) the systemd trigger for the runner (#33): a path unit that fires
+# `pithead control-run-pending` whenever a request file lands in the spool. Root, because `apply`
+# needs iptables/chown; the service is a FIXED ExecStart with no parameter from the container, so
+# a compromised dashboard cannot steer it into anything but the two known verbs. No-op on hosts
+# without systemd (macOS/dev checkouts run the runner by hand).
+provision_control_runner() {
+    [ "$OS_TYPE" == "Linux" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local unit_dir="/etc/systemd/system"
+    if [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ]; then
+        if [ -e "$unit_dir/pithead-control.path" ] || [ -e "$unit_dir/pithead-control.service" ]; then
+            log "Removing the dashboard control runner units (#33)..."
+            sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
+            sudo rm -f "$unit_dir/pithead-control.path" "$unit_dir/pithead-control.service"
+            sudo systemctl daemon-reload
+        fi
+        return 0
+    fi
+    # Already installed for this checkout — keep the routine apply sudo-free.
+    if grep -qs "PathExistsGlob=$CONTROL_DIR/requests/\*.json" "$unit_dir/pithead-control.path" &&
+        grep -qs "ExecStart=$PWD/pithead control-run-pending" "$unit_dir/pithead-control.service"; then
+        return 0
+    fi
+    log "Installing the dashboard control runner (systemd path unit, #33)..."
+    sudo tee "$unit_dir/pithead-control.service" >/dev/null <<EOF
+[Unit]
+Description=pithead dashboard control runner (#33)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$PWD
+ExecStart=$PWD/pithead control-run-pending
+EOF
+    sudo tee "$unit_dir/pithead-control.path" >/dev/null <<EOF
+[Unit]
+Description=Watch the pithead control spool for dashboard requests (#33)
+
+[Path]
+PathExistsGlob=$CONTROL_DIR/requests/*.json
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now pithead-control.path >/dev/null 2>&1 ||
+        warn "Could not enable pithead-control.path — dashboard config changes will not be applied until it is enabled."
 }
 
 # --- Main Execution ---
@@ -3655,8 +4324,13 @@ main() {
         ;;
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
+    control-run-pending)
+        require_deployed
+        control_run_pending
+        ;;
     onion-client-key) onion_client_key ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
+    rotate-secrets) rotate_secrets "$@" ;;
     version | -V | --version) show_version ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;
