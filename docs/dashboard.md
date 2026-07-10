@@ -202,6 +202,14 @@ Below the table, a **Proxy totals** line sums the stack's share health as report
 total accepted / rejected (with aggregate reject %) / invalid shares submitted upstream, plus the
 best difficulty any share has hit. Hidden until the proxy submits its first shares.
 
+The dashboard also persists these pool-wide counts as a time series: each 30-second poll stores how
+much the accepted / rejected / invalid / expired counters advanced (a proxy restart re-baselines the
+counters without corrupting the series), retained for 30 days like the hashrate history. `/api/state`
+serves the series as `share_stats` and a trailing-24-hour reject rate as `reject_pct_24h` — a rate
+over recent shares rather than the cumulative-since-proxy-start percentage in Proxy totals. The same
+series drives the `high_reject_rate` [Telegram alert](telegram.md) when the trailing-hour rate
+crosses 5%.
+
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the
