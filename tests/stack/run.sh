@@ -2937,6 +2937,21 @@ assert_contains "non-v4 uuid id is discarded" "$out" "malformed id"
 printf '{"id":"%s","action":"exec","actor":"x"}\n' "$UUID2" >"$REQS/$UUID2.json"
 run_pending >/dev/null
 assert_eq "unknown action is rejected" "$(jq -r '.status' "$RESULTS/$UUID2.json" 2>/dev/null)" "rejected"
+# A malicious action string on the unknown-action path cannot forge a second line into the
+# tamper-evidence audit log: the field is charset-stripped at the write chokepoint. Feed an action
+# carrying a newline + a fake JSON entry, then assert every audit line is still valid JSON and no
+# forged status leaked in (#349 review).
+audit_before=$(wc -l <"$AUDIT" 2>/dev/null || echo 0)
+# jq decodes the \n and quotes into REAL characters in the action value, so the host-side
+# jq -r '.action' hands control_audit a string with an embedded newline + fake JSON object —
+# the exact shape that would append a forged line without the charset strip.
+jq -nc --arg id "$UUID2" '{id:$id,actor:"x",action:"evil\n{\"ts\":\"0\",\"forged\":\"yes\"}"}' >"$REQS/$UUID2.json"
+run_pending >/dev/null
+audit_after=$(wc -l <"$AUDIT" 2>/dev/null || echo 0)
+assert_eq "forged-action intent adds exactly one audit line" "$((audit_after - audit_before))" "1"
+while IFS= read -r line; do printf '%s' "$line" | jq -e . >/dev/null 2>&1 || bad "every audit line is valid JSON" "unparseable: $line"; done <"$AUDIT"
+ok "every audit line is valid JSON after a forged-action intent"
+assert_not_contains "no forged audit entry leaked in" "$(cat "$AUDIT")" '"forged":"yes"'
 printf '{"id":"%s","action":"preview","actor":"x","config":{},"cmd":"rm -rf /"}\n' "$UUID2" >"$REQS/$UUID2.json"
 run_pending >/dev/null
 assert_contains "extra request keys are rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "unexpected keys"
