@@ -199,6 +199,10 @@ test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a st
     const base = clone();
     base.earnings.available = true;
     base.earnings.coeff_day = 1e-7; // XMR per H/s per day → cost = threshold × this × 365
+    // A Whale-capable what-if default (200k × 0.85 ≥ 100k threshold) so the target tier's Net shows;
+    // the unsustainable path is asserted separately below.
+    base.earnings.p2pool_hr = 200000;
+    base.earnings.p2pool_hr_str = '200.00 kH/s';
     base.xvb_calc = {
         enabled: true,
         max_fraction: 0.85,
@@ -246,6 +250,18 @@ test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a st
     assert.match(sHtml, /estimate unavailable/);
     assert.match(sHtml, /Expected reward estimate unavailable/);
     assert.match(sHtml, /3\.6500 XMR/); // cost still stands
+
+    // Unsustainable tier: at the fixture's small default hashrate (~8 kH/s), the Whale target
+    // can't be held (8k × 0.85 < 100k) — the comparison must SAY so and withhold the Net rather
+    // than imply an unreachable +2.52 XMR/yr payout.
+    const small = clone();
+    small.earnings.available = true;
+    small.earnings.coeff_day = 1e-7;
+    small.xvb_calc = { ...base.xvb_calc };
+    const uHtml = renderApp({ state: small });
+    assert.match(uHtml, /Not sustainable at your hashrate/);
+    assert.match(uHtml, /6\.1700 XMR/); // XvB's expected figure still shown (it's their number)
+    assert.doesNotMatch(uHtml, /2\.5200 XMR/); // but no reachable-looking Net
 });
 
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {

@@ -34,6 +34,17 @@ tabbed earnings panel.
 
 ### Fixed
 
+- **`doctor` catches a Tor guard failure that silently breaks Healthchecks, Telegram, and XvB
+  (#424).** Tor can bootstrap to 100% yet sit on a failing guard: circuits build but clearnet exits
+  time out, so the dead-man's-switch pings, the Telegram bot, and XvB stats all stop while mining
+  (onion circuits) keeps working — the stack looks healthy as three features die. A new doctor check
+  makes one request through Tor's SOCKS to a no-content endpoint and WARNs with the fix (restart the
+  tor container to pick fresh guards) when clearnet exits fail. Found live on pithead-prod after the
+  v1.3.0 deploy.
+- **A release-box checkout that has run the stack no longer fails `lint-toml` (#421).** taplo globs
+  the filesystem, not the git index, so the generated (git-ignored) `build/tari/config.toml` left by
+  a past stack run failed the release gate on a real checkout — CI never sees it. The generated file
+  is now excluded in `.taplo.toml`.
 - **P2Pool Earnings shows Tari as the lumpy solo income it is.** Tari merge-mining here is solo — the
   whole block reward lands at once when your own hashrate finds a Tari block, which at the current
   network difficulty can be months apart. The earnings card headlined a per-day XTM figure that read

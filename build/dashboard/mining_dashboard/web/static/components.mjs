@@ -369,7 +369,7 @@ class XvbComparison extends Component {
   }
 
   render() {
-    const { calc, coeffDay } = this.props;
+    const { calc, coeffDay, hr } = this.props;
     const tiers = (calc && calc.tiers) || [];
     if (!tiers.length) return null;
     const { selected } = this.state;
@@ -379,6 +379,10 @@ class XvbComparison extends Component {
       tiers.find((t) => t.name === calc.target_tier) ||
       tiers[0];
     const cmp = xvbTierComparison(sel, coeffDay);
+    // The same sustains rule the tier block states: donating the threshold must fit inside the
+    // donateable share of the what-if hashrate. An unsustainable tier's Net is "—" — showing,
+    // say, Mega's +56 XMR/yr to a 269 kH/s fleet would imply an unreachable payout.
+    const sustainable = hr > 0 && sel.threshold <= hr * (calc.max_fraction || 0);
     const expected =
       calc.estimates_available && cmp.expected !== null
         ? formatXmr(cmp.expected)
@@ -394,9 +398,18 @@ class XvbComparison extends Component {
                              title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
                 <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
                              title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
-                <${StatCard} label="Net / yr" value=${cmp.net !== null ? formatXmr(cmp.net) : "—"}
-                             title="Expected XvB reward minus the P2Pool earnings given up. Shown only when XvB's estimate is available." />
+                <${StatCard} label="Net / yr" value=${sustainable && cmp.net !== null ? formatXmr(cmp.net) : "—"}
+                             title=${
+                               sustainable
+                                 ? "Expected XvB reward minus the P2Pool earnings given up. Shown only when XvB's estimate is available."
+                                 : "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
+} />
             </div>
+            ${
+              !sustainable
+                ? html`<p class="status-warn text-xs mt-1">Not sustainable at your hashrate — holding this tier needs about ${fmtHashrate(sel.threshold)} donated continuously, more than your hashrate can spare.</p>`
+                : null
+            }
             <p class="text-muted text-xs mt-2">
                 ${
                   calc.estimates_available
@@ -430,7 +443,7 @@ function XvbTierBlock({ calc, hr, coeffDay }) {
             <${StatCard} label="Target Tier" value=${calc.target_tier}
                          title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
         </div>
-        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} />
+        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} hr=${hr} />
         <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
     </div>`;
 }

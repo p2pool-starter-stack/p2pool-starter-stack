@@ -684,6 +684,7 @@ doctor() {
     check_stratum_exposure doctor
     check_stratum_listening
     check_egress_firewall_installed
+    check_tor_clearnet_egress
     # Clearnet initial sync (#183): a deliberate, privacy-relevant opt-in. Warn whenever it's on so
     # an operator who forgot to switch back after syncing is reminded their node IP is exposed.
     if [ -f "$ENV_FILE" ] && clearnet_sync_active; then
@@ -1472,6 +1473,34 @@ check_dashboard_answers() {
         dr_ok "Dashboard app answers on 127.0.0.1:8000."
     else
         dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'."
+    fi
+    return 0
+}
+
+# doctor (#424): Tor can bootstrap to 100% yet sit on a FAILING GUARD — circuits build but
+# clearnet exits time out, silently killing Healthchecks pings, Telegram, and XvB stats while
+# mining (onion/established circuits) keeps working, so the stack otherwise looks healthy. One
+# SOCKS request through the tor container to a robust no-content endpoint distinguishes "Tor
+# down" (container health already shows that) from "Tor up but exits failing" — the state that
+# needs a tor restart to pick fresh guards. WARN not FAIL: Tor weather is transient and this
+# must not fail cron health gates on a slow circuit.
+check_tor_clearnet_egress() {
+    if ! container_is_running tor; then
+        dr_info "Tor clearnet-egress check skipped — the tor container isn't running."
+        return 0
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        dr_info "Tor clearnet-egress check skipped — no curl."
+        return 0
+    fi
+    local prefix
+    prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
+    [ -n "$prefix" ] || prefix="172.28.0"
+    if curl -fsS --max-time 15 --socks5-hostname "${prefix}.25:9050" -o /dev/null \
+        "https://www.google.com/generate_204" 2>/dev/null; then
+        dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
+    else
+        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this, #424). Restart the tor container to pick fresh guards: 'docker compose restart tor' from the install directory."
     fi
     return 0
 }
