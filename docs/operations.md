@@ -15,8 +15,8 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
 | `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus four runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, the dashboard app answers behind its container, and a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — restart the tor container to pick fresh guards). A paste-able health report. |
-| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
-| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
+| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped, passphrase-encrypted archive under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--no-encrypt` writes a plaintext `tar.gz`; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
+| `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
 | `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
@@ -150,12 +150,28 @@ Instead of copying files by hand, run:
 ./pithead backup
 ```
 
-This writes a timestamped `tar.gz` under `backups/` holding the irreplaceable state: `config.json`,
-`.env` (secrets), the `Caddyfile` (if present), the Tor onion keys, and the dashboard database
-(hashrate history and settings). Blockchains are excluded (they re-sync), so the archive is small.
-The archive is `chmod 600`, and `pithead` prints its path when done. Before writing, `backup` checks
-free space and prompts if it looks tight. On a source checkout, `backups/` is git-ignored — the
-archive carries `.env` and the onion private keys, and secret scanners can't see inside a tarball.
+This prompts for a passphrase, then writes a timestamped, encrypted `tar.gz.enc` under `backups/`
+holding the irreplaceable state: `config.json`, `.env` (secrets), the `Caddyfile` (if present), the
+Tor onion keys, and the dashboard database (hashrate history and settings). Blockchains are
+excluded (they re-sync), so the archive is small. The archive is `chmod 600`, and `pithead` prints
+its path when done. Before writing, `backup` checks free space and prompts if it looks tight. On a
+source checkout, `backups/` is git-ignored — the archive carries `.env` and the onion private keys,
+and secret scanners can't see inside a tarball.
+
+Encryption is `openssl enc -aes-256-cbc -pbkdf2` with 600,000 PBKDF2 iterations (`openssl` is
+already a stack dependency; AEAD modes like GCM are not available through `openssl enc`, so CBC is
+the portable choice). The tar stream pipes straight into `openssl` — no plaintext archive ever
+touches the disk — and the passphrase passes over a file descriptor, never the command line.
+`chmod 600` protects the archive on this disk only; the encryption is what protects it once it is
+copied off-box. The archive is unreadable without the passphrase, onion keys included, so store the
+passphrase somewhere other than this host.
+
+Losing the passphrase loses the backup — there is no recovery!
+
+For unattended runs (cron), set `PITHEAD_BACKUP_PASSPHRASE` in the environment. With `--yes` and no
+passphrase set — or an empty passphrase at the prompt — `backup` falls back to a plaintext `tar.gz`
+with a warning, so an unattended job never silently locks you out of your own keys. To write a
+plaintext archive on purpose, pass `--no-encrypt`.
 
 If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
 `-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
@@ -170,12 +186,15 @@ To recover (on a new machine, or after a wipe) copy the archive back and run:
 
 ```bash
 ./pithead down                       # stop the stack first so files restore cleanly
-./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz
+./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz.enc
 ./pithead up
 ```
 
-`restore` prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back,
-fixes Tor key ownership so the onion address returns unchanged, and restores hashrate history and
+`restore` detects the format from the archive itself — encrypted backups ask for the passphrase
+(or read `PITHEAD_BACKUP_PASSPHRASE`), and plaintext archives from earlier releases restore
+unchanged, no flag needed. A wrong passphrase fails before anything on disk is touched. `restore`
+prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back, fixes
+Tor key ownership so the onion address returns unchanged, and restores hashrate history and
 dashboard settings.
 
 > NOTE: After a restore, Caddy regenerates the dashboard's HTTPS certificate, so the browser shows

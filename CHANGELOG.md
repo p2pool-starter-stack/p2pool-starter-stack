@@ -13,6 +13,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **`pithead backup` encrypts archives by default (#374).** The backup archive carries the stack's
+  full secret material (`.env`, the onion private keys, the dashboard DB), and its `chmod 600` only
+  protects it on the local disk. `backup` now prompts for a passphrase (twice) and streams the tar
+  through `openssl enc -aes-256-cbc -pbkdf2 -iter 600000` into a `.tar.gz.enc` — no plaintext
+  archive ever touches the disk, and the passphrase travels over a file descriptor, never argv.
+  `PITHEAD_BACKUP_PASSPHRASE` covers unattended runs; `--no-encrypt` (or an empty passphrase, or
+  `--yes` with no env var — with a loud warning) keeps the old plaintext format. `restore` detects
+  encrypted vs plaintext archives by magic bytes, so every existing backup restores unchanged, and
+  a wrong passphrase fails before anything on disk is touched.
+
 - **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
   status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
   remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate
