@@ -16,7 +16,7 @@ import {
     SERIES_KEYS, normalizeSeries,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, formatXmr, formatXtm, formatTimeToShare,
+    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -304,6 +304,32 @@ test('computeXvbTier: null when disabled, calc missing, empty tiers, or bad hash
     assert.equal(computeXvbTier(15_000, { ...XVB_CALC, tiers: [] }), null);
     assert.equal(computeXvbTier(0, XVB_CALC), null);
     assert.equal(computeXvbTier(null, XVB_CALC), null);
+});
+
+// --- xvbTierComparison (#118) — per-tier expected vs cost vs net -------------------------
+
+test('xvbTierComparison: expected − cost = net when the estimate is present', () => {
+    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17 };
+    const c = xvbTierComparison(tier, 1e-7); // cost = 100000 × 1e-7 × 365 = 3.65
+    assert.equal(c.expected, 6.17);
+    assert.ok(Math.abs(c.cost - 3.65) < 1e-9);
+    assert.ok(Math.abs(c.net - 2.52) < 1e-9);
+});
+
+test('xvbTierComparison: null expected (stale) keeps cost, nulls net — never fabricates a reward', () => {
+    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: null };
+    const c = xvbTierComparison(tier, 1e-7);
+    assert.equal(c.expected, null);
+    assert.ok(Math.abs(c.cost - 3.65) < 1e-9);
+    assert.equal(c.net, null);
+});
+
+test('xvbTierComparison: no coeff_day (network stats down) → cost and net null', () => {
+    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17 };
+    const c = xvbTierComparison(tier, 0);
+    assert.equal(c.cost, null);
+    assert.equal(c.net, null);
+    assert.equal(c.expected, 6.17);
 });
 
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {

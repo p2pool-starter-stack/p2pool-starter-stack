@@ -576,6 +576,22 @@ class DataService:
         await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
         logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)")
 
+    async def _sync_xvb_reward_estimates(self):
+        """
+        Fetch XvB's published per-tier expected rewards over Tor and cache them (#118).
+
+        Same "no write on failure" contract as ``_sync_xvb_stats``: a failed/unparseable fetch
+        returns None, we write NOTHING, and the cached ``last_update`` stays frozen so the dashboard
+        detects a stale feed (``xvb_stats_are_stale``) and shows "estimate unavailable" rather than a
+        stale-implied-fresh number. Runs off the main data loop (to_thread), on the same 10th-poll
+        throttle as the stats sync, so a slow xmrvsbeast.com never blocks live metrics.
+        """
+        estimates = await asyncio.to_thread(self.xvb_client.get_reward_estimates)
+        if not estimates:
+            return  # fetch failed / unparseable — keep the last-good estimates + last_update frozen
+        await asyncio.to_thread(self.state_manager.set_xvb_reward_estimates, estimates)
+        logger.info(f"External Sync: XvB Reward Estimates Updated ({len(estimates)} tiers)")
+
     async def _maybe_register_xvb(self, shares, p2pool_stats):
         """
         Auto-enter the wallet into the XvB raffle once it's eligible (#263).
@@ -1017,6 +1033,11 @@ class DataService:
                     # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.
                     if ENABLE_XVB and iteration_count % 10 == 0:
                         await self._sync_xvb_stats()
+
+                        # 7a. XvB published per-tier reward estimates (#118) — same throttle/egress
+                        # (Tor, every 10th poll, XvB-enabled only) so the tier-payout comparison in
+                        # the earnings card is current without an extra fetch cadence.
+                        await self._sync_xvb_reward_estimates()
 
                         # 7b. XvB raffle auto-registration (#263). Rides the same throttle/egress as
                         # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS

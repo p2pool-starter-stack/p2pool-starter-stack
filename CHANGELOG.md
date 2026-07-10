@@ -13,8 +13,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 <!-- Placeholder date — set at release cut. -->
 
-A patch release: an honest Tari earnings headline for solo merge-mining, and a fail-safe for the XvB
-donation controller during a prolonged stats outage.
+A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
+donation controller during a prolonged stats outage, and an XvB per-tier payout comparison.
+
+### Added
+
+- **XvB per-tier payout comparison.** The XvB section of the earnings card now shows, for a tier you
+  pick from a dropdown, its **Expected** reward (XvB's own published per-tier figure, in XMR/year),
+  its **Cost** (the P2Pool earnings foregone by donating the tier threshold for a year), and the
+  **Net** of the two — so you can weigh, say, Whale against VIP Donor at a glance. The expected
+  figure comes from XvB's pre-computed `reward_estimate_pub.txt` (their `reward_calc` output),
+  fetched over Tor on the same cadence and staleness rules as the XvB stats: a stale or failed fetch
+  degrades to "estimate unavailable" — never a stale number implied fresh, and never a fabricated
+  one. The card keeps its standing note that a tier is raffle status, not a payout, and that
+  donating above the threshold buys no extra win chance.
 
 ### Fixed
 

@@ -283,6 +283,18 @@ the threshold, so donating more than the threshold buys zero extra win chance.
 | **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
 | **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
 
+Below the tier figures, a **per-tier payout comparison** dropdown weighs each donor tier three ways:
+
+| Field | Meaning |
+|---|---|
+| **Expected (XvB)** | XvB's own published expected reward for the tier, in XMR per year. This is XvB's pre-computed `reward_calc` figure for the tier's donor round, fetched over Tor from `reward_estimate_pub.txt` — the dashboard does not re-derive it. It is the raffle expectation across all qualifiers, so donating **above** the tier threshold does not raise it. `estimate unavailable` when the fetch is stale or failed — never a stale figure implied fresh. |
+| **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year: `threshold × the P2Pool daily rate × 365`, using the same rate the Monero tab shows. |
+| **Net / yr** | Expected minus Cost. Shown only when XvB's estimate is available; otherwise the cost stands alone. |
+
+The estimate is fetched over Tor on the same cadence and staleness rules as the XvB stats card, so
+a quiet feed degrades to `estimate unavailable` rather than showing an old number. Pick a tier to
+compare, e.g. Whale against VIP Donor, at a glance.
+
 Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
 tier threshold on both credited averages; a win terminates if the 1h average then drops below the
 round minimum; and collecting any win needs a share in the P2Pool PPLNS window (what XvB calls

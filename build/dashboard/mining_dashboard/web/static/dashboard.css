@@ -268,6 +268,31 @@ h3 {
 .earnings-disclaimer {
   line-height: 1.4;
 }
+/* Per-tier payout comparison dropdown (#118), inside the XvB tier block. */
+.xvb-comparison {
+  margin-top: 12px;
+}
+.xvb-compare-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.xvb-tier-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+.xvb-tier-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 /* XvB tier / raffle block inside the earnings card (#118) — visually separated from the
  * XMR/XTM payout figures, since a tier is raffle status, not a payout. */
 .xvb-tier-block {

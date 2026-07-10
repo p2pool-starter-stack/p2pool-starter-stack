@@ -20,6 +20,7 @@ import {
   THEME_ORDER,
   uptimeCell,
   WORKER_COLUMNS,
+  xvbTierComparison,
 } from "./logic.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { StackTopology } from "./topology.mjs";
@@ -354,12 +355,66 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
+// XvB per-tier payout comparison dropdown (#118). Picks one of the four donor tiers and weighs XvB's
+// OWN published expected reward for it (server-fetched over Tor) against the P2Pool earnings donating
+// that tier costs, and the net. Defaults to the operator's target tier. When XvB's estimate is
+// stale/unavailable it shows the tier cost with an "estimate unavailable" note — never a fabricated
+// number. Selection is local UI state; the whole block is a raffle comparison, not a claim that
+// donating above a tier threshold pays more (it does not — the draw is random among qualifiers).
+class XvbComparison extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { selected: null };
+    this.onSelect = (e) => this.setState({ selected: e.target.value });
+  }
+
+  render() {
+    const { calc, coeffDay } = this.props;
+    const tiers = (calc && calc.tiers) || [];
+    if (!tiers.length) return null;
+    const { selected } = this.state;
+    // Default the dropdown to the operator's configured target tier; fall back to the lowest.
+    const sel =
+      tiers.find((t) => t.name === selected) ||
+      tiers.find((t) => t.name === calc.target_tier) ||
+      tiers[0];
+    const cmp = xvbTierComparison(sel, coeffDay);
+    const expected =
+      calc.estimates_available && cmp.expected !== null
+        ? formatXmr(cmp.expected)
+        : "estimate unavailable";
+    return html`
+        <div class="xvb-comparison">
+            <label class="xvb-compare-label" for="xvb-tier-select">Compare tier payout (per year)</label>
+            <select id="xvb-tier-select" class="xvb-tier-select" value=${sel.name} onChange=${this.onSelect}>
+                ${tiers.map((t) => html`<option value=${t.name}>${t.name}</option>`)}
+            </select>
+            <div class="stat-grid mt-2">
+                <${StatCard} label="Expected (XvB)" value=${expected} cls="c-purple"
+                             title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
+                <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
+                             title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
+                <${StatCard} label="Net / yr" value=${cmp.net !== null ? formatXmr(cmp.net) : "—"}
+                             title="Expected XvB reward minus the P2Pool earnings given up. Shown only when XvB's estimate is available." />
+            </div>
+            <p class="text-muted text-xs mt-2">
+                ${
+                  calc.estimates_available
+                    ? "From XvB's published per-tier estimate, fetched over Tor."
+                    : "Expected reward estimate unavailable — showing tier cost only."
+                }
+            </p>
+        </div>`;
+  }
+}
+
 // XvB tier / raffle block (#118), inside the earnings card and driven by the same what-if
 // hashrate: the highest XMRvsBeast tier that hashrate sustains (computeXvbTier — the server's
 // own auto rule), what holding it costs, and the current vs target tier for context. Labelled
 // raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
-// above the threshold. Hidden entirely while XvB is disabled.
-function XvbTierBlock({ calc, hr }) {
+// above the threshold. Hidden entirely while XvB is disabled. `coeffDay` (earnings.coeff_day)
+// feeds the per-tier payout comparison dropdown below.
+function XvbTierBlock({ calc, hr, coeffDay }) {
   if (!calc || !calc.enabled) return null;
   const t = computeXvbTier(hr, calc);
   return html`
@@ -375,6 +430,7 @@ function XvbTierBlock({ calc, hr }) {
             <${StatCard} label="Target Tier" value=${calc.target_tier}
                          title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
         </div>
+        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} />
         <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
     </div>`;
 }
@@ -432,7 +488,7 @@ class EarningsCard extends Component {
                 <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                 <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
             </div>
-            <${XvbTierBlock} calc=${this.props.xvb} hr=${hr} />
+            <${XvbTierBlock} calc=${this.props.xvb} hr=${hr} coeffDay=${e.coeff_day} />
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }

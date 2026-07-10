@@ -255,6 +255,21 @@ export function computeXvbTier(hashrateHs, calc) {
   return best && { tier: best.name, threshold: best.threshold, cost: best.threshold };
 }
 
+// XvB per-tier payout comparison (#118). Weighs XvB's own published expected reward for a tier
+// (`expected_reward_year`, XMR/year, fetched server-side over Tor) against what donating that tier
+// costs in foregone P2Pool earnings: cost = threshold H/s × the daily P2Pool rate (`coeffDay`,
+// same `earnings.coeff_day` the card already uses) × 365. Net = expected − cost. `expected` is null
+// when the estimate is unavailable/stale — cost still stands, but net is null: we never fabricate
+// the reward. This is a raffle-tier comparison, NOT a claim that donating more within a tier helps.
+export function xvbTierComparison(tier, coeffDay) {
+  const cost =
+    tier && tier.threshold > 0 && coeffDay > 0 ? tier.threshold * coeffDay * DAYS_PER_YEAR : null;
+  const expected =
+    tier && Number.isFinite(tier.expected_reward_year) ? tier.expected_reward_year : null;
+  const net = expected !== null && cost !== null ? expected - cost : null;
+  return { expected, cost, net };
+}
+
 // Format a client-computed coin amount. More decimal places for small amounts (a day's earnings can
 // be a tiny fraction) so the figure isn't rounded to "0.0000"; "—" for the null/invalid case.
 function formatCoin(value, unit) {

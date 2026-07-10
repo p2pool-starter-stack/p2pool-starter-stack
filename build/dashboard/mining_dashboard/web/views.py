@@ -34,6 +34,7 @@ from mining_dashboard.helper.utils import (
     format_time_abs,
     get_tier_info,
     is_ip_address,
+    xvb_stats_are_stale,
 )
 from mining_dashboard.service.earnings import (
     tari_seconds_to_block_per_hs,
@@ -1088,18 +1089,36 @@ def build_xvb_calc(metrics, state_mgr):
     if not metrics.xvb_enabled:
         return {"enabled": False}
     tiers = state_mgr.get_tiers()
+    # XvB's published per-tier expected reward (XMR/year), fetched over Tor and cached (#118). The
+    # tier KEY is exactly the round-type in the file (donor / donor_vip / donor_whale / donor_mega),
+    # so a tier maps to its estimate by key. A stale or empty cache degrades to None per tier +
+    # estimates_available False — the client shows "estimate unavailable", never a frozen number
+    # implied fresh (reusing the stats staleness rule so the two never disagree, #311).
+    est_state = state_mgr.get_xvb_reward_estimates()
+    estimates = (est_state or {}).get("estimates") or {}
+    estimates_stale = xvb_stats_are_stale(est_state)
+    estimates_available = bool(estimates) and not estimates_stale
     return {
         "enabled": True,
         # Ascending tier table for the client's what-if; names via get_tier_info so they read
         # exactly like the tier strings everywhere else (threshold already embedded in the name).
+        # expected_reward_year is XvB's own figure for the tier, or None when unavailable/stale.
         "tiers": sorted(
             (
-                {"name": get_tier_info(t, tiers)[0], "threshold": float(t)}
-                for t in tiers.values()
+                {
+                    "name": get_tier_info(t, tiers)[0],
+                    "threshold": float(t),
+                    "expected_reward_year": (
+                        float(estimates[key]) if estimates_available and key in estimates else None
+                    ),
+                }
+                for key, t in tiers.items()
                 if t > 0
             ),
             key=lambda entry: entry["threshold"],
         ),
+        "estimates_available": estimates_available,
+        "estimates_stale": estimates_stale,
         "max_fraction": XVB_MAX_DONATION_FRACTION,  # donation headroom rule (sustainability)
         "current_tier": metrics.current_tier,
         "target_tier": metrics.target_tier,

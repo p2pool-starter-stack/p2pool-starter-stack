@@ -159,6 +159,59 @@ test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it 
     assert.match(off, /Your P2Pool Hashrate/);
 });
 
+test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-7; // XMR per H/s per day → cost = threshold × this × 365
+    base.xvb_calc = {
+        enabled: true,
+        max_fraction: 0.85,
+        estimates_available: true,
+        estimates_stale: false,
+        current_tier: 'None',
+        target_tier: 'Whale (100.00 kH/s+)',
+        target_threshold: 100000,
+        sustainable: true,
+        note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null,
+        tiers: [
+            { name: 'Donor (1.00 kH/s+)', threshold: 1000, expected_reward_year: 0.06 },
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81 },
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17 },
+            { name: 'Mega (1.00 MH/s+)', threshold: 1000000, expected_reward_year: 56.9 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    // The dropdown renders all four tiers as options.
+    assert.match(up, /id="xvb-tier-select"/);
+    for (const name of ['Donor', 'Vip', 'Whale', 'Mega']) {
+        assert.match(up, new RegExp(`<option[^>]*>${name}`), `missing tier option: ${name}`);
+    }
+    // Default selection = the target tier (Whale): Expected is XvB's figure, Cost = 100000 × 1e-7 ×
+    // 365 = 3.65 XMR/yr, Net = 6.17 − 3.65 = 2.52.
+    assert.match(up, /Expected \(XvB\)/);
+    assert.match(up, /6\.1700 XMR/);   // expected
+    assert.match(up, /3\.6500 XMR/);   // cost
+    assert.match(up, /2\.5200 XMR/);   // net
+    assert.match(up, /From XvB's published per-tier estimate/);
+    assert.doesNotMatch(up, /estimate unavailable/);
+
+    // Stale/unavailable estimate: the note replaces the Expected number, cost still shows.
+    const stale = clone();
+    stale.earnings.available = true;
+    stale.earnings.coeff_day = 1e-7;
+    stale.xvb_calc = {
+        ...base.xvb_calc,
+        estimates_available: false,
+        estimates_stale: true,
+        tiers: base.xvb_calc.tiers.map((t) => ({ ...t, expected_reward_year: null })),
+    };
+    const sHtml = renderApp({ state: stale });
+    assert.match(sHtml, /estimate unavailable/);
+    assert.match(sHtml, /Expected reward estimate unavailable/);
+    assert.match(sHtml, /3\.6500 XMR/); // cost still stands
+});
+
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
     // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
     const cold = renderApp();
