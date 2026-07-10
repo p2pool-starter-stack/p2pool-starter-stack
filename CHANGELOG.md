@@ -11,6 +11,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **`pithead version` prints the installed stack version (#386).** `version` (and the `-V` /
+  `--version` aliases) prints one line identifying the build — `pithead vX.Y.Z (release images
+  vX.Y.Z)` for a release install, `pithead dev (branch @ commit, VERSION X.Y.Z)` for a source
+  checkout — with no network call or update check. `doctor` repeats the line in its header, so every
+  pasted diagnostics report carries the version.
+
 ### Dependencies
 
 - **Move `grpcio` off the yanked 1.82.0 release (#419).** PyPI yanked 1.82.0 for a bad protobuf

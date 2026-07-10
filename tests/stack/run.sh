@@ -2437,11 +2437,37 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$DOC/bin/sudo"
 chmod +x "$DOC/bin/docker" "$DOC/bin/sudo"
+printf '9.9.9\n' >"$DOC/VERSION" # #386: doctor's header must carry the stack version
 out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"
 rc=$?
 assert_contains "doctor runs to the summary" "$out" "Diagnostics summary"
 assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
 assert_rc "doctor exits 1 on a critical FAIL" "$rc" "1"
+assert_contains "doctor header carries the version (#386)" "$out" "Version: pithead v9.9.9"
+
+echo "== black-box: version subcommand (#386) =="
+# The version identity must print offline and exit 0 before any setup, on both a release bundle
+# (VERSION present, no Dockerfile) and a source checkout (Dockerfile marker), and read the value
+# export_build_provenance computed — no VERSION file falls back to `unknown`, still exit 0.
+VER="$SANDBOX/version"
+mkdir -p "$VER"
+cp "$STACK" "$VER/pithead"
+printf '9.9.9\n' >"$VER/VERSION"
+out="$(cd "$VER" && ./pithead version)"
+rc=$?
+assert_rc "version: exits 0" "$rc" "0"
+assert_contains "version: prints the VERSION contents" "$out" "v9.9.9"
+assert_contains "version: -V alias" "$(cd "$VER" && ./pithead -V)" "v9.9.9"
+assert_contains "version: --version alias" "$(cd "$VER" && ./pithead --version)" "v9.9.9"
+mkdir -p "$VER/build/dashboard"
+: >"$VER/build/dashboard/Dockerfile"
+assert_contains "version: source checkout reads dev" "$(cd "$VER" && ./pithead version)" "pithead dev"
+rm -rf "$VER/build"
+rm -f "$VER/VERSION"
+out="$(cd "$VER" && ./pithead version)"
+rc=$?
+assert_rc "version: no VERSION still exits 0" "$rc" "0"
+assert_contains "version: no VERSION -> unknown" "$out" "unknown"
 
 echo "== black-box: backup -> restore round-trip (#140) =="
 # backup/restore touch irreplaceable state (onion keys, the dashboard DB) and have fiddly logic

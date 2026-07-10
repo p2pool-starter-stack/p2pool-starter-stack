@@ -18,6 +18,7 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
+| `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
@@ -92,6 +93,8 @@ Either way, `upgrade` re-renders the generated config (`.env`, the Caddyfile, an
 the new release *before* pulling/rebuilding, so a release that changes a config template or adds an
 `.env` var takes effect, not just the new image. Data directories and `config.json` are untouched, so
 blockchain sync and settings survive an upgrade.
+
+Run `./pithead version` to see what is currently installed before and after an upgrade.
 
 ### Switching a source checkout to release images
 
