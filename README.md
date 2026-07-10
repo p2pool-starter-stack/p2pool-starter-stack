@@ -194,6 +194,11 @@ Everything runs through `pithead` (`./pithead help` lists it all):
 | `./pithead backup` | Save config, secrets, the Tor onion keys, and the dashboard's database to `backups/` (`--with-chains` adds blockchain data; `-y` / `--yes` skips the prompts). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; `-y` / `--yes` skips the prompt). |
 
+Commands chain in one call (`./pithead apply upgrade` runs both, stopping on the first failure;
+nonsense like `up down` is rejected before anything runs), and `source pithead-completion.bash`
+adds bash/zsh tab-completion — see
+[Operations › Chaining commands](docs/operations.md#chaining-commands).
+
 Full reference: **[Operations & Maintenance](docs/operations.md)**.
 
 ---

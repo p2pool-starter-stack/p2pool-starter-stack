@@ -1785,6 +1785,133 @@ rc=$?
 assert_rc "unknown command fails" "$rc" "1"
 assert_contains "unknown command message" "$out" "Unknown command"
 
+echo "== unit: chain validation (#94) =="
+# A chain must be judged as a whole BEFORE anything runs. validate_chain error-exits (rc 1) on the
+# first broken rule; run_sourced's subshell captures that without killing the suite.
+run_sourced "$SANDBOX" validate_chain apply upgrade >/dev/null 2>&1
+assert_rc "accepts 'apply upgrade'" "$?" "0"
+run_sourced "$SANDBOX" validate_chain apply upgrade status >/dev/null 2>&1
+assert_rc "accepts 'apply upgrade status'" "$?" "0"
+run_sourced "$SANDBOX" validate_chain upgrade down >/dev/null 2>&1
+assert_rc "accepts 'upgrade down' (down last)" "$?" "0"
+out="$(run_sourced "$SANDBOX" validate_chain logs status 2>&1)"
+assert_rc "rejects non-chainable command (logs)" "$?" "1"
+assert_contains "non-chainable message names the command" "$out" "logs"
+out="$(run_sourced "$SANDBOX" validate_chain apply apply 2>&1)"
+assert_rc "rejects duplicate command" "$?" "1"
+assert_contains "duplicate message" "$out" "twice"
+out="$(run_sourced "$SANDBOX" validate_chain up down 2>&1)"
+assert_rc "rejects 'up down' (contradictory run-state)" "$?" "1"
+assert_contains "contradiction message" "$out" "contradict"
+run_sourced "$SANDBOX" validate_chain down up >/dev/null 2>&1
+assert_rc "rejects 'down up'" "$?" "1"
+run_sourced "$SANDBOX" validate_chain up restart >/dev/null 2>&1
+assert_rc "rejects 'up restart'" "$?" "1"
+out="$(run_sourced "$SANDBOX" validate_chain down upgrade 2>&1)"
+assert_rc "rejects 'down upgrade' (down not last)" "$?" "1"
+assert_contains "down-not-last message" "$out" "last"
+
+echo "== unit: chain execution — order, fail-fast, exit code (#94) =="
+# run_chain re-invokes pithead per step via PITHEAD_SELF; a stub records the order and can be told
+# to fail a given step, so order/fail-fast/propagation are proven without a stack.
+CH="$SANDBOX/chain"
+mkdir -p "$CH"
+cat >"$CH/fake-pithead" <<'EOF'
+#!/usr/bin/env bash
+echo "ran $1" >>"$CHAIN_LOG"
+[ "$1" = "${CHAIN_FAIL_ON:-}" ] && exit 42
+exit 0
+EOF
+chmod +x "$CH/fake-pithead"
+: >"$CH/order.log"
+(
+    cd "$CH" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    export CHAIN_LOG="$CH/order.log"
+    PITHEAD_SELF="$CH/fake-pithead" run_chain apply upgrade status
+) >/dev/null 2>&1
+assert_rc "valid chain exits 0" "$?" "0"
+assert_eq "steps run left-to-right" "$(tr '\n' ',' <"$CH/order.log")" "ran apply,ran upgrade,ran status,"
+: >"$CH/order.log"
+out="$(
+    cd "$CH" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    export CHAIN_LOG="$CH/order.log" CHAIN_FAIL_ON=upgrade
+    PITHEAD_SELF="$CH/fake-pithead" run_chain apply upgrade status 2>&1
+)"
+assert_rc "failing step's exit code propagates (42)" "$?" "42"
+assert_eq "fail-fast: later steps never run" "$(tr '\n' ',' <"$CH/order.log")" "ran apply,ran upgrade,"
+assert_contains "report names the failed step" "$out" "step 2/3"
+assert_contains "report says what already ran" "$out" "Already ran: apply"
+assert_contains "report says what did not run" "$out" "Did not run: status"
+
+echo "== black-box: chain wiring — reject runs NOTHING, failure stops the chain (#94) =="
+CBX="$SANDBOX/chainbb"
+mkdir -p "$CBX"
+cp "$STACK" "$CBX/pithead"
+make_stubs "$CBX/bin"
+out="$(cd "$CBX" && DOCKER_LOG="$CBX/docker.log" PATH="$CBX/bin:$PATH" ./pithead up down 2>&1)"
+rc=$?
+assert_rc "'up down' rejected" "$rc" "1"
+assert_contains "'up down' rejection explains itself" "$out" "contradict"
+assert_eq "rejected chain has NO side effects (no docker calls)" "$(cat "$CBX/docker.log" 2>/dev/null)" ""
+# A valid chain whose first step fails (status without .env) stops there and reports the remainder.
+out="$(cd "$CBX" && PATH="$CBX/bin:$PATH" ./pithead status doctor 2>&1)"
+rc=$?
+assert_rc "mid-chain failure propagates non-zero" "$rc" "1"
+assert_contains "chain reached step 1" "$out" "step 1/2"
+assert_contains "chain reports the unrun remainder" "$out" "Did not run: doctor"
+# Single-command invocations with arguments are NOT chains: 'logs monerod' hits the normal
+# .env guard, not a chain error.
+out="$(cd "$CBX" && PATH="$CBX/bin:$PATH" ./pithead logs monerod 2>&1)"
+assert_rc "'logs <service>' stays single-command" "$?" "1"
+assert_contains "'logs <service>' hits the usual guard" "$out" "setup"
+assert_not_contains "'logs <service>' is not judged as a chain" "$out" "chain"
+
+echo "== completion: sources cleanly + no drift from the dispatch (#94) =="
+COMP="$ROOT/pithead-completion.bash"
+bash -c "source '$COMP'" >/dev/null 2>&1
+assert_rc "completion script sources cleanly in bash" "$?" "0"
+# Drift-guard: the completion's static list, pithead's PITHEAD_COMMANDS, and the labels of main's
+# dispatch case must all be the SAME set — adding/removing a subcommand in one place fails here.
+stack_cmds="$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK" 2>/dev/null
+    printf '%s' "${PITHEAD_COMMANDS:-}"
+)"
+comp_cmds="$(
+    # shellcheck disable=SC1090
+    source "$COMP" 2>/dev/null
+    printf '%s' "${_pithead_commands:-}"
+)"
+dispatch_cmds="$(sed -n '/case "\$cmd" in/,/^    esac$/p' "$STACK" |
+    sed -n -e 's/^    \([a-z][a-z-]*\)).*/\1/p' -e 's/^    \([a-z][a-z-]*\) |.*/\1/p' | tr '\n' ' ')"
+dispatch_cmds="${dispatch_cmds% }"
+assert_eq "completion list == pithead's command list" "$comp_cmds" "$stack_cmds"
+assert_eq "dispatch case labels == pithead's command list" "$dispatch_cmds" "$stack_cmds"
+# Every chainable command must be a real command.
+chain_ok=1
+for c in $(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK" 2>/dev/null
+    printf '%s' "${PITHEAD_CHAINABLE:-}"
+); do
+    case " $stack_cmds " in *" $c "*) ;; *) chain_ok=0 ;; esac
+done
+assert_eq "chainable commands are a subset of the command list" "$chain_ok" "1"
+
+echo "== completion: suggestions (#94) =="
+out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
+out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
 mkdir -p "$G/build/tari"

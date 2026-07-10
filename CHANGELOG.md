@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Subcommand chaining + bash/zsh tab-completion (#94).** `./pithead apply upgrade` runs both
+  commands in order, failing fast on the first non-zero step and reporting what did and didn't
+  run. The whole chain is validated first: non-chainable commands (`setup`, `logs`, `restore`,
+  `reset-dashboard`, the info commands), duplicates, more than one of `up`/`down`/`restart`, or
+  `down` anywhere but last are rejected with nothing executed. Single-command invocations are
+  unchanged. `pithead-completion.bash` (repo root, shipped in the release bundle) adds
+  tab-completion for subcommands and `logs <service>` in bash and zsh; a test pins its command
+  list to the CLI dispatch so the two can't drift. See
+  [Operations](docs/operations.md#chaining-commands).
 - **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
   status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
   remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate
