@@ -46,8 +46,9 @@ test('App always renders the theme switcher, even before the first load', () => 
 });
 
 test('operational App shows a disconnected banner when not connected', () => {
-    assert.match(renderApp({ connected: false }), /Disconnected — showing last known data/);
-    assert.doesNotMatch(renderApp({ connected: true }), /Disconnected — showing last known data/);
+    // The banner names the timestamp of the data on screen (#382) — the fixture's last_update.
+    assert.match(renderApp({ connected: false }), /Disconnected — showing data from 00:00:00/);
+    assert.doesNotMatch(renderApp({ connected: true }), /Disconnected — showing data from/);
 });
 
 // --- Header -----------------------------------------------------------------------------
