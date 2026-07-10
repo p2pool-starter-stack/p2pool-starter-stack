@@ -144,6 +144,28 @@ P2POOL_CLEARNET = os.environ.get("P2POOL_CLEARNET", "false").strip().lower() == 
 # as XvB (socks5h, so DNS goes through Tor too), so it reveals neither the host IP nor a DNS lookup to
 # GitHub — which is why it's safe to default on; it fails silently offline. Opt out with `false`.
 CHECK_FOR_UPDATES = os.environ.get("DASHBOARD_CHECK_UPDATES", "true").strip().lower() == "true"
+
+# --- Dashboard control channel (#33, config.json: dashboard.control.enabled) ---
+# Default OFF. When on, the config-editing routes (/api/config, /api/control/*) are registered and
+# the dashboard may write typed JSON intents into the requests/ spool, which a host-side runner
+# (pithead control-run-pending) validates and applies. The container's only write access is
+# CONTROL_REQUESTS_DIR; results/ and audit/ are mounted read-only and staged intents never enter
+# the container at all — that rw/ro split is the trust boundary (see docker-compose.yml).
+DASHBOARD_CONTROL_ENABLED = (
+    os.environ.get("DASHBOARD_CONTROL_ENABLED", "false").strip().lower() == "true"
+)
+CONTROL_REQUESTS_DIR = os.environ.get("CONTROL_REQUESTS_DIR", "/control/requests")
+CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
+# The live config.json, bind-mounted read-only for form prefill; secrets are masked before serving.
+HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+# config.reference.json (every key with its default), bind-mounted read-only. read_config merges it
+# UNDER the operator's sparse config.json so the editor form covers the full schema, not just the
+# keys the operator happens to have set (#33 "edit every setting"). A missing reference degrades to
+# the host config alone.
+HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config.reference.json")
+# How long a preview/commit POST waits for the host-side runner's result before returning 202 and
+# leaving the client to poll /api/control/result. The systemd path unit fires within seconds.
+CONTROL_WAIT_S = float(os.environ.get("CONTROL_WAIT_S", 30))
 GITHUB_RELEASES_API = os.environ.get(
     "GITHUB_RELEASES_API",
     "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest",
