@@ -9,6 +9,28 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **`CODE_OF_CONDUCT.md`** — the Contributor Covenant v2.1, filling the last empty slot in the
+  GitHub community profile. Enforcement reports go through the same private channel as security
+  reports (see [`SECURITY.md`](SECURITY.md)). CONTRIBUTING links it (#372).
+
+### Changed
+
+- **`build/tor/Dockerfile`** now pins Alpine to a named minor version (`alpine:3.24`) alongside its
+  digest, instead of the floating `latest` tag, so Dependabot has a real version line to track
+  (#373).
+- **CONTRIBUTING** describes `make test` accurately: it needs Docker (via `lint-proto`), and the
+  lint-surface list now includes `lint-docs-voice` (#371).
+
+### Fixed
+
+- **`tests/integration/build-pruned-chain.sh`** no longer defaults `SRC_DIR` to a maintainer's
+  personal path (baked in under the pre-rename repo name); it's now a required variable with a clear
+  error (#373).
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
