@@ -201,9 +201,15 @@ Use a **separate** check for the host timer if you want to tell "the host is up"
 ## Prometheus metrics
 
 The dashboard exposes its live operational figures in Prometheus text format at `/metrics` —
-hashrate averages, worker counts, PPLNS shares, node sync/health, XvB state, disk usage, and
-database health, all as gauges named `pithead_*`. The endpoint renders the same metrics snapshot
-the dashboard UI uses; it is always on and needs no configuration.
+hashrate averages, worker counts, PPLNS shares, luck and expected time-to-share, the trailing-1h
+reject rate, node sync/health, XvB state, disk usage, and database health as gauges named
+`pithead_*`, plus three counters: cumulative accepted shares (`pithead_shares_accepted_total`),
+rejected shares (`pithead_shares_rejected_total`), and pool blocks found
+(`pithead_pool_blocks_found_total`). `pithead_snapshot_age_seconds` reports how old the data
+loop's snapshot is — alert on it growing past a few update intervals to catch a wedged loop
+that would otherwise keep scraping as healthy. The reject-rate gauge is omitted while no shares
+were submitted in the window (no shares is not 0% rejected). The endpoint renders the same
+metrics snapshot the dashboard UI uses; it is always on and needs no configuration.
 
 `/metrics` is served on the same routes as the dashboard itself: Caddy fronts it on the
 dashboard port, and when a dashboard password is set (`dashboard.auth.password`, see
@@ -224,7 +230,7 @@ scrape_configs:
       - targets: ["<host>"]
 ```
 
-The exposed gauges are current values only — no history; the dashboard's own database keeps the
+The exposed values are current only — no history; the dashboard's own database keeps the
 persisted series. Scraping over Tor from outside the LAN (e.g. via the
 [onion service](configuration.md#remote-access-over-tor-onion-service)) is out of scope here;
 scrape from the same network.

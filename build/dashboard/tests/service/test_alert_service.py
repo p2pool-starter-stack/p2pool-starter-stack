@@ -448,12 +448,25 @@ class TestBlockEdges:
         assert "3 PPLNS share(s)" in alerts[1][1]
 
     def test_counter_backwards_rebaselines_silently(self):
-        # p2pool restart (or the stats file briefly reading 0) resets the counter: no alert,
-        # and the next real find from the new baseline still fires.
+        # p2pool restart: the counter resets, the next observation seeds the new baseline
+        # silently (two-step), and the next real find from there still fires.
         svc = _svc()
         _ev(svc, blocks_found_total=7)  # seed
-        assert _ev(svc, blocks_found_total=0) == []  # restart -> rebaseline
+        assert _ev(svc, blocks_found_total=0) == []  # backwards -> arm rebaseline
+        assert _ev(svc, blocks_found_total=0) == []  # next observation seeds silently
         assert _keys(_ev(svc, blocks_found_total=1, block_height=3_000_200)) == [
+            AlertService.EVT_BLOCK_FOUND
+        ]
+
+    def test_transient_stats_blank_does_not_fire(self):
+        # A partially-written stats file reads 0 for one poll, then restores the real counter.
+        # The 7→0→7 round trip must stay silent — the restored 7 is not "found 7 blocks".
+        svc = _svc()
+        _ev(svc, blocks_found_total=7)  # seed
+        assert _ev(svc, blocks_found_total=0) == []  # blank -> arm rebaseline
+        assert _ev(svc, blocks_found_total=7) == []  # restore seeds silently
+        # Normal edge behavior resumes: the next genuine find fires once.
+        assert _keys(_ev(svc, blocks_found_total=8, block_height=3_000_400)) == [
             AlertService.EVT_BLOCK_FOUND
         ]
 
@@ -541,6 +554,45 @@ class TestProcess:
         )
         assert out == []
         assert notifier.sent == []
+
+    async def test_disabled_notifier_still_persists_wallet_baseline(self):
+        # The payout-wallet tripwire (#375) must work on a Telegram-less stack — the default.
+        # The dashboard's 72h banner reads the kv keys, so the baseline seed + change record
+        # must persist every cycle; only the Telegram message stays notifier-gated.
+        store, get, put = _kv_store()
+        svc = _svc(notifier=_FakeNotifier(enabled=False), kv_get=get, kv_set=put)
+        signals = dict(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+        )
+        await svc.process(observed_wallet=_W_A, **signals)  # seed
+        assert store["payout_wallet"] == _W_A
+        out = await svc.process(observed_wallet=_W_B, **signals)  # tamper
+        assert out == [] and svc.notifier.sent == []  # no Telegram — but the kv record lands
+        assert store["payout_wallet"] == _W_B
+        assert store["payout_wallet_prev8"] == _W_A[:8]
+        assert float(store["payout_wallet_changed_ts"]) > 0
+
+    async def test_disabled_path_swallows_wallet_baseline_error(self):
+        # A broken kv store must not break the data loop, Telegram on or off.
+        def boom(_k, _v=None):
+            raise RuntimeError("kv down")
+
+        svc = _svc(notifier=_FakeNotifier(enabled=False), kv_get=boom, kv_set=boom)
+        out = await svc.process(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+            observed_wallet=_W_A,
+        )
+        assert out == []
 
     async def test_enabled_notifier_dispatches(self):
         notifier = _FakeNotifier()

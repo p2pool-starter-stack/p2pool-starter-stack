@@ -304,6 +304,16 @@ class TestCadenceAndLuck:
             assert m.expected_share_sec == 0.0
             assert m.luck_pct == 0.0
 
+    def test_zero_pplns_window_reads_zero_not_raise(self):
+        # A partially-written stats file can carry sidechainDifficulty without pplnsWindowSize —
+        # the collector then defaults pplns_window to 0. Luck must read the unavailable state
+        # (0.0, hidden by the view layer), not divide by an expected_shares of 0 and 500 every
+        # /api/state until the next poll.
+        data = _data(pool={"pool": {"difficulty": 100_000, "pplns_window": 0}})
+        m = build_metrics(data, _mgr(history=self._hist(1000)))
+        assert m.luck_pct == 0.0
+        assert m.expected_share_sec == 0.0
+
     def test_luck_at_exactly_expected_is_100(self):
         # expected = 1000 H/s * (2160 * 10 s) / 21_600_000 H·s = 1 share; 1 actual share => 100 %.
         now = time.time()
