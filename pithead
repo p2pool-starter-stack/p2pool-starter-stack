@@ -1896,6 +1896,19 @@ parse_and_validate_config() {
         error "$CONFIG_FILE is not valid JSON."
     fi
 
+    # Central .env line-injection guard (#33 hardening). No config string value may carry a
+    # control character (newline, CR, tab, …). A raw newline in a value that renders into .env
+    # unquoted — e.g. monero.node_password, telegram.bot_token, workers.api_token — would inject
+    # a SECOND KEY=value line such as PITHEAD_REGISTRY=evil.tld/attacker; every compose image: is
+    # ${PITHEAD_REGISTRY:-…}, so the root `apply -y` would then pull attacker images for the whole
+    # stack (RCE). Now that the dashboard control channel lets a full config cross the trust
+    # boundary, these fields are attacker-influenceable. Check EVERY string leaf here — the shared
+    # chokepoint both `apply --dry-run` (preview) and `apply -y` (commit) run — so no current or
+    # future field is missed. No legitimate config value contains a control character.
+    if jq -e 'any(.. | strings; test("[[:cntrl:]]"))' "$CONFIG_FILE" >/dev/null 2>&1; then
+        error "$CONFIG_FILE has a config value containing a control character or newline. That is not allowed — it could inject an extra line into the stack's .env. Remove the newline/control character (check secrets like node_password, bot_token, api_token)."
+    fi
+
     # Required fields
     MONERO_WALLET=$(jq -r '.monero.wallet_address // empty' "$CONFIG_FILE")
     TARI_WALLET=$(jq -r '.tari.wallet_address // empty' "$CONFIG_FILE")
@@ -2127,6 +2140,15 @@ parse_and_validate_config() {
     DASHBOARD_CONTROL_ENABLED=$(normalize_bool "$(config_bool '.dashboard.control.enabled' false)")
     if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ -z "$dash_pw" ]; then
         error "dashboard.control.enabled is true but dashboard.auth.password is empty. Config editing from the dashboard can change the payout wallet and run '$0 apply' — it must sit behind a login. Set dashboard.auth.password and re-run."
+    fi
+    # And on a PUBLISHED onion, refuse the control channel unless Tor v3 client authorization is on
+    # (mirrors the onion-without-password refusal above). The control channel is a root-capable,
+    # funds-redirecting mutation surface; a password alone on an anonymously-reachable .onion is
+    # online-brute-forceable (per-IP throttling is meaningless over Tor). Client-auth means the onion
+    # does not respond at all without the operator's key — the real primary gate. Set it before
+    # exposing config editing to the internet.
+    if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_CLIENT_AUTH" != "true" ]; then
+        error "dashboard.control.enabled is true on a published onion (dashboard.onion.enabled) but dashboard.onion.client_auth is false. A root-capable config-mutation channel must not sit behind only a brute-forceable password on an anonymously-reachable .onion. Set dashboard.onion.client_auth: true (the default) and re-run."
     fi
 }
 
@@ -3573,9 +3595,29 @@ apply() {
 # No string from the container is ever executed or interpolated into a command; the candidate
 # config crosses the boundary only as a FILE handed to `apply` via PITHEAD_CONFIG_FILE.
 
-# Approval hook for a destructive commit. Today the dashboard's typed confirm is the gate, so this
-# always allows; an out-of-band approve with deny-on-timeout (#338 Telegram) plugs in here.
+# Approval gate for a commit (#33). The client-side typed-APPLY modal is NOT a security control:
+# a compromised/XSS'd container writes the request spool directly and never renders that modal, so
+# the only trustworthy gate is here, host-side. FAIL CLOSED: a DESTRUCTIVE change (wallet address,
+# Tor egress firewall off, clearnet sync on, password/auth changes — anything describe_change flags
+# DEST) is REFUSED from the dashboard; non-destructive changes proceed. Out-of-band approval with
+# deny-on-timeout is #338 (Telegram approve/deny) — it drops in here, replacing the refusal with a
+# real second factor. Until then, destructive config edits must be made from the host CLI.
+#
+# Destructiveness is re-derived from the staged config via the SAME dry-run/describe path a preview
+# runs (not trusted from the container's result), so a forged "destructive:false" cannot slip a
+# wallet swap through. Echoes a reason on stdout when it refuses.
 control_approval_gate() { # <staged-file>
+    local staged="$1" porcelain
+    # Fail closed if we cannot re-derive destructiveness (the staged config was validated at
+    # preview, so a dry-run failure here means something changed — refuse).
+    if ! porcelain=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>/dev/null); then
+        printf 'could not re-validate the staged change host-side — refusing to commit'
+        return 1
+    fi
+    if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
+        printf 'this change is destructive (wallet, egress firewall, clearnet sync, or auth) and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
+        return 1
+    fi
     return 0
 }
 
@@ -3598,6 +3640,12 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         return 0
     fi
     jq '.config' "$file" >"$staged"
+    # The staged copy carries the operator's MERGED secrets (the dashboard re-inserted real values
+    # for unchanged sentinels before submitting). It lives in host-only staged/ — never mounted —
+    # but pin it owner-only anyway so a co-tenant on the host can't read secrets from it (#33
+    # hardening; the config.json bind-mount, not this file, is the real secret trust boundary —
+    # see SECURITY.md).
+    chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '
             [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
@@ -3629,8 +3677,10 @@ control_commit() { # <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
         return 0
     fi
-    if ! control_approval_gate "$staged"; then
-        control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"approval denied",ts:(now|floor)}')"
+    local gate_reason
+    if ! gate_reason=$(control_approval_gate "$staged"); then
+        [ -n "$gate_reason" ] || gate_reason="approval denied"
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$gate_reason" '{status:"rejected",error:$e,ts:(now|floor)}')"
         rm -f "$staged"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
         return 0
@@ -3656,13 +3706,30 @@ control_commit() { # <id> <actor> <control-dir>
 # id/action/config/actor, the id must be a UUID (it becomes the result/staged FILENAME — anything
 # else is rejected before it can touch a path), and the action one of the two known verbs.
 control_process_request() { # <claimed-file> <control-dir>
-    local file="$1" cdir="$2" id action actor
+    local file="$1" cdir="$2" id action actor size
+    # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
+    # could point the root runner at any host file. Skip + audit, never follow it.
+    if [ -L "$file" ] || [ ! -f "$file" ]; then
+        warn "Control request is a symlink or not a regular file — refused."
+        control_audit "$cdir/audit/control.log" "" "" "invalid" "refused-nonregular"
+        return 0
+    fi
+    # Bound the root-runner DoS (#33 hardening): reject an oversized intent BEFORE jq parses it. A
+    # real config.json is a few KB; 64 KB is generous headroom for the full schema plus edits.
+    size=$(wc -c <"$file" 2>/dev/null || echo 0)
+    if [ "$size" -gt 65536 ]; then
+        warn "Control request exceeds 64 KB ($size bytes) — refused before parsing."
+        control_audit "$cdir/audit/control.log" "" "" "invalid" "refused-oversize"
+        return 0
+    fi
     if ! jq -e . "$file" >/dev/null 2>&1; then
         warn "Control request is not valid JSON — discarded."
         return 0
     fi
     id=$(jq -r '.id // ""' "$file")
-    if ! printf '%s' "$id" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+    # Strict canonical uuid4 (version nibble 4, variant nibble 8/9/a/b) — the id becomes a result/
+    # staged FILENAME, so pin it hard (defense-in-depth, from #438). submit() mints str(uuid4()).
+    if ! printf '%s' "$id" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
         warn "Control request has a malformed id — discarded (no result can be addressed)."
         return 0
     fi
@@ -3696,13 +3763,25 @@ control_run_pending() {
     cdir=$(env_get CONTROL_DIR)
     [ -n "$cdir" ] || cdir="$PWD/data/control"
     mkdir -p "$cdir/staged" "$cdir/results" "$cdir/audit"
+    # Time-bounded DoS sweep (#33 hardening): drop staged/ copies and stray requests/ files older
+    # than an hour that no commit ever claimed, so a burst that is never committed cannot pile up
+    # (staged intents already expire per-commit at 10 min; this bounds accumulation regardless).
+    find "$cdir/staged" "$cdir/requests" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
     local names name req claim n=0
+    # Per-run cap (#33 hardening): a single trigger drains at most this many intents, so a flood in
+    # the spool can't hold the root runner for an unbounded stretch — the leftovers wait for the
+    # next path-unit fire.
+    local max=50
     names=$(cd "$cdir/requests" 2>/dev/null && ls -1tr -- *.json 2>/dev/null) || true
     if [ -z "$names" ]; then
         log "No pending control requests."
         return 0
     fi
     while IFS= read -r name; do
+        if [ "$n" -ge "$max" ]; then
+            warn "Reached the $max-request per-run cap — remaining intents wait for the next run."
+            break
+        fi
         req="$cdir/requests/$name"
         [ -f "$req" ] || continue
         claim="$cdir/.claim.$$"

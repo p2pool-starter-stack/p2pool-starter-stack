@@ -21,6 +21,7 @@ CONFIG = {
     "dashboard": {"auth": {"username": "admin", "password": "correct horse"}},
     "telegram": {"bot_token": "123:abc"},
     "workers": {"api_token": ""},
+    "healthchecks": {"ping_url": "https://hc-ping.com/SECRET-UUID"},
 }
 
 
@@ -34,6 +35,11 @@ def spool(tmp_path, monkeypatch):
     requests_dir.mkdir()
     results_dir.mkdir()
     monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", str(host_config))
+    # Hermetic default: no reference file, so read_config degrades to the host config alone unless a
+    # test opts in by writing one and repointing HOST_REFERENCE_PATH.
+    monkeypatch.setattr(
+        control_service.config, "HOST_REFERENCE_PATH", str(tmp_path / "no-reference.json")
+    )
     monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", str(requests_dir))
     monkeypatch.setattr(control_service.config, "CONTROL_RESULTS_DIR", str(results_dir))
     monkeypatch.setattr(control_service.config, "CONTROL_WAIT_S", 0.1)
@@ -46,9 +52,12 @@ class TestSecretMasking:
         assert cfg["dashboard"]["auth"]["password"] == {"__secret__": True}
         assert cfg["telegram"]["bot_token"] == {"__secret__": True}
         assert cfg["monero"]["node_password"] == {"__secret__": True}
+        # healthchecks.ping_url is a capability secret (#33 hardening): masked, never served raw.
+        assert cfg["healthchecks"]["ping_url"] == {"__secret__": True}
         # No raw secret value anywhere in the served payload.
         assert "hunter2" not in json.dumps(cfg)
         assert "correct horse" not in json.dumps(cfg)
+        assert "SECRET-UUID" not in json.dumps(cfg)
 
     def test_empty_secret_stays_empty(self, spool):
         # An UNSET secret is served as-is so the UI can tell "set" from "not set".
@@ -145,3 +154,38 @@ class TestResult:
             rid, done=lambda r: r.get("status") != "previewed", timeout_s=0.05
         )
         assert res is None
+
+
+class TestReferenceMerge:
+    """read_config merges config.reference.json UNDER the sparse config so the form shows the whole
+    schema (#33 acceptance: "edit every setting"); a missing reference degrades gracefully (#437)."""
+
+    def test_reference_fills_missing_keys_operator_overrides_win(self, spool, monkeypatch):
+        reference = {
+            "_docs": "human notes that must not reach the form",
+            "monero": {"pool": "main", "mode": "remote", "new_key": "default"},
+            "brand_new_section": {"knob": 7},
+        }
+        ref_path = spool / "config.reference.json"
+        ref_path.write_text(json.dumps(reference))
+        monkeypatch.setattr(control_service.config, "HOST_REFERENCE_PATH", str(ref_path))
+        cfg = control_service.read_config()
+        # Reference-only keys/sections appear...
+        assert cfg["monero"]["new_key"] == "default"
+        assert cfg["brand_new_section"] == {"knob": 7}
+        # ...the operator's config.json overrides the reference default where both set it...
+        assert cfg["monero"]["mode"] == "local"
+        # ...secrets are still masked AFTER the merge...
+        assert cfg["monero"]["node_password"] == {"__secret__": True}
+        # ...and the _docs blob never leaks into the served form.
+        assert "human notes" not in json.dumps(cfg)
+        assert "_docs" not in cfg
+
+    def test_missing_reference_degrades_to_host_config(self, spool, monkeypatch):
+        monkeypatch.setattr(
+            control_service.config, "HOST_REFERENCE_PATH", str(spool / "does-not-exist.json")
+        )
+        cfg = control_service.read_config()
+        # Still serves the host config (masked) rather than raising.
+        assert cfg["p2pool"]["pool"] == "mini"
+        assert cfg["monero"]["node_password"] == {"__secret__": True}

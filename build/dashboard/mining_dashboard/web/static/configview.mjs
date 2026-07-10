@@ -112,7 +112,15 @@ export class ConfigView extends Component {
   async poll(id, skip) {
     for (let i = 0; i < POLL_MAX; i++) {
       await new Promise((r) => setTimeout(r, POLL_MS));
-      const res = await fetch(`/api/control/result?id=${encodeURIComponent(id)}`);
+      // A commit recreates the dashboard container itself, so a fetch here can transiently fail
+      // (connection refused mid-restart). Ride it out — keep polling until the result file answers
+      // rather than dropping to an error state (graft #437 pollResult).
+      let res;
+      try {
+        res = await fetch(`/api/control/result?id=${encodeURIComponent(id)}`);
+      } catch {
+        continue;
+      }
       if (res.status === 202) continue;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const out = await res.json();

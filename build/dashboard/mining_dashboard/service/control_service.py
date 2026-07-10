@@ -12,11 +12,14 @@ proposed config for the current live value ("unchanged"). The raw secret is neve
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
 
 from mining_dashboard.config import config
+
+logger = logging.getLogger("ControlService")
 
 # Config paths whose leaves are secrets. Mirrors what pithead's describe_change refuses to echo.
 SECRET_PATHS = [
@@ -26,6 +29,9 @@ SECRET_PATHS = [
     ("monero", "node_username"),
     ("monero", "node_password"),
     ("p2pool", "stratum_password"),
+    # A capability secret: pithead's describe_change already refuses to echo it, but read_config
+    # was serving it in cleartext to the browser. Mask it too (#33 hardening).
+    ("healthchecks", "ping_url"),
 ]
 SECRET_SENTINEL = {"__secret__": True}
 
@@ -60,10 +66,32 @@ def is_secret_sentinel(value):
     return isinstance(value, dict) and value.get("__secret__") is True
 
 
+def _deep_merge(base, override):
+    """Recursively lay ``override`` over ``base`` (dicts merge; any other value replaces)."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def read_config():
-    """The live config with every set secret masked to the sentinel. An *empty* secret stays
-    empty, so the UI can tell "set — leave blank to keep" from "not set"."""
+    """The full config schema for the editor's form, every set secret masked to the sentinel.
+
+    ``config.reference.json`` (every key with its default) is merged UNDER the operator's sparse
+    ``config.json`` so the form covers the whole schema — a missing/unreadable reference degrades to
+    the host config alone (graft #437). An *empty* secret stays empty, so the UI can tell
+    "set — leave blank to keep" from "not set"; masking runs AFTER the merge."""
     cfg = _load_raw()
+    try:
+        with open(config.HOST_REFERENCE_PATH) as f:
+            reference = json.load(f)
+        reference.pop("_docs", None)
+        cfg = _deep_merge(reference, cfg)
+    except (OSError, ValueError):
+        logger.warning("config.reference.json unavailable — serving the host config alone.")
     for path in SECRET_PATHS:
         found, value = _get(cfg, path)
         if found and value:

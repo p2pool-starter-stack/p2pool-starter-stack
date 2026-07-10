@@ -370,8 +370,13 @@ services:
       - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
       - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
       # The live config, read-only, prefills the Configuration view (#33). Secret leaves are masked
-      # server-side (control_service.read_config); the raw values never leave the API.
+      # server-side (control_service.read_config); the raw values never leave the API. NOTE: this
+      # bind-mount — not the API masking — is the real secret trust boundary; a backend compromise
+      # reads config.json plaintext here (see SECURITY.md).
       - ./config.json:/host-config/config.json:ro
+      # config.reference.json (every key with its default), read-only, so the editor form covers the
+      # full schema even for keys the operator's sparse config.json omits (#33). No secrets.
+      - ./config.reference.json:/host-config/config.reference.json:ro
     environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json

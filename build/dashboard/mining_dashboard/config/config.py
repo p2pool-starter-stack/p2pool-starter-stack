@@ -158,6 +158,11 @@ CONTROL_REQUESTS_DIR = os.environ.get("CONTROL_REQUESTS_DIR", "/control/requests
 CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
 # The live config.json, bind-mounted read-only for form prefill; secrets are masked before serving.
 HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+# config.reference.json (every key with its default), bind-mounted read-only. read_config merges it
+# UNDER the operator's sparse config.json so the editor form covers the full schema, not just the
+# keys the operator happens to have set (#33 "edit every setting"). A missing reference degrades to
+# the host config alone.
+HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config.reference.json")
 # How long a preview/commit POST waits for the host-side runner's result before returning 202 and
 # leaving the client to poll /api/control/result. The systemd path unit fires within seconds.
 CONTROL_WAIT_S = float(os.environ.get("CONTROL_WAIT_S", 30))

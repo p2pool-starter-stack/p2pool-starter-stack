@@ -2797,13 +2797,136 @@ assert_contains "commit ran the real apply (containers recreated)" "$(cat "$CTRL
 assert_contains "commit audited with the actor" "$(cat "$AUDIT")" "\"actor\":\"admin\",\"action\":\"commit\",\"status\":\"applied\""
 [ ! -f "$STAGED/$UUID1.json" ] && ok "staged intent consumed on commit" || bad "staged intent consumed on commit" "still staged"
 
-# Expired staged intent (older than 10 min) → rejected and cleared.
+# Expired staged intent (older than the 10-min commit window) → rejected as expired and cleared.
+# Age it ~15 min: past the 10-min expiry the commit enforces, but INSIDE the 60-min stale sweep so
+# the sweep leaves it for control_commit to judge (a 2020 date would be swept first, #33 hardening).
 jq -n --arg id "$UUID2" '{}' >"$STAGED/$UUID2.json"
-touch -t 202001010000 "$STAGED/$UUID2.json"
+touch -t "$(date -d '15 minutes ago' +%Y%m%d%H%M 2>/dev/null || date -v-15M +%Y%m%d%H%M)" "$STAGED/$UUID2.json"
 printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID2" >"$REQS/$UUID2.json"
 run_pending >/dev/null
 assert_contains "expired staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "expired"
 [ ! -f "$STAGED/$UUID2.json" ] && ok "expired staged intent cleared" || bad "expired staged intent cleared" "still staged"
+
+echo "== black-box: .env line-injection guard (#33 hardening, per field) =="
+# A newline in any config string that renders into .env unquoted would inject a SECOND KEY=value
+# line — e.g. PITHEAD_REGISTRY=evil.tld — which the root apply then trusts for every image: pull
+# (RCE). parse_and_validate_config (the chokepoint both preview dry-run and real commit run) must
+# reject a control character in EVERY string leaf. Build a full valid config, then poison one field.
+inject_reject() { # <label> <jq-setter expr using $v>
+    jq -n --arg w "$WALLET" --arg v $'legit\nPITHEAD_REGISTRY=evil.tld/attacker' \
+        '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}
+         | '"$2" >"$C/config.json"
+    out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+    rc=$?
+    assert_rc "$1 with a newline is rejected by parse_and_validate_config" "$rc" "1"
+    assert_contains "$1 rejection names the control-char guard" "$out" "control character"
+}
+inject_reject "node_password" '.monero.node_password=$v'
+inject_reject "node_username" '.monero.node_username=$v'
+inject_reject "bot_token" '(.telegram={bot_token:$v})'
+inject_reject "api_token" '(.workers={api_token:$v})'
+inject_reject "ping_url" '(.healthchecks={ping_url:$v})'
+inject_reject "chat_id" '(.telegram={chat_id:$v})'
+# Positive: legitimate tokens (no control chars) still validate.
+jq -n --arg w "$WALLET" \
+    '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+      tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+      telegram:{bot_token:"123456:legit-ABC_def"}, workers:{api_token:"tok_legit123"},
+      healthchecks:{ping_url:"https://hc-ping.com/abc-123"},
+      dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "legitimate secrets still validate" "$?" "0"
+# No second line reaches .env: a poisoned config rejected at `apply -y` never renders the attacker key.
+jq -n --arg w "$WALLET" --arg v $'legit\nPITHEAD_REGISTRY=evil.tld/attacker' \
+    '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+      tari:{wallet_address:"T"}, p2pool:{pool:"main"}, telegram:{bot_token:$v},
+      dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+if grep -q 'PITHEAD_REGISTRY' "$C/.env"; then bad "no injected line in .env" "PITHEAD_REGISTRY landed in .env"; else ok "rejected config injects no second .env line"; fi
+
+echo "== black-box: control channel on a published onion requires client-auth (#33 hardening) =="
+# A root-capable, funds-redirecting mutation channel must not sit behind only a brute-forceable
+# password on an anonymously-reachable onion. control+onion+client_auth=false → refused.
+onion_control_config() { # <onion-enabled> <client-auth> -> writes config.json
+    jq -n --arg w "$WALLET" --argjson onion "$1" --argjson ca "$2" \
+        '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a strong control passphrase"},
+                     onion:{enabled:$onion,client_auth:$ca}, control:{enabled:true}}}' >"$C/config.json"
+}
+onion_control_config true false
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "control+onion without client_auth is refused" "$?" "1"
+assert_contains "refusal names client_auth" "$out" "client_auth"
+onion_control_config true true
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "control+onion WITH client_auth validates" "$?" "0"
+assert_not_contains "allowed combo raises no client_auth error" "$out" "client_auth"
+# control without an onion (LAN) stays allowed — client-auth only gates the published onion.
+control_config main
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "control without an onion is allowed" "$?" "0"
+
+echo "== black-box: approval gate fails closed on a destructive commit (#33 / #338) =="
+UUID3="33333333-3333-4333-8333-333333333333"
+# Clean baseline: pool mini, clearnet off, applied.
+control_config mini
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+# Candidate turns on Monero clearnet initial sync — describe_change flags this DEST (destructive).
+jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",clearnet_initial_sync:true},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "destructive candidate previews destructive:true" "$(jq -r '.destructive' "$RESULTS/$UUID3.json" 2>/dev/null)" "true"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "destructive commit is refused" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
+assert_contains "destructive refusal points at #338" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "#338"
+assert_eq "refused destructive commit did not touch config.json" "$(jq -r '.monero.clearnet_initial_sync // false' "$C/config.json")" "false"
+[ ! -f "$STAGED/$UUID3.json" ] && ok "refused destructive intent cleared from staged" || bad "refused destructive intent cleared from staged" "still staged"
+# A NON-destructive commit still proceeds (pool switch mini -> nano is INFO, not DEST).
+jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+    tari:{wallet_address:"T"}, p2pool:{pool:"nano"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
+run_pending >/dev/null
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "non-destructive commit still applies through the gate" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "applied"
+assert_eq "non-destructive change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "nano"
+
+echo "== black-box: spool intake cap + symlink refusal + stale sweep (#33 hardening) =="
+UUID4="44444444-4444-4444-8444-444444444444"
+# Oversized intent: refused BEFORE jq parses it (bounded root-runner DoS), no result addressed.
+: >"$AUDIT"
+{
+    printf '{"id":"%s","action":"preview","pad":"' "$UUID4"
+    head -c 70000 /dev/zero | tr '\0' a
+    printf '"}\n'
+} >"$REQS/$UUID4.json"
+run_pending >/dev/null
+assert_contains "oversized intent refused before parsing" "$(cat "$AUDIT" 2>/dev/null)" "refused-oversize"
+[ ! -f "$RESULTS/$UUID4.json" ] && ok "oversized intent gets no result file" || bad "oversized intent gets no result file" "result written"
+[ ! -f "$REQS/$UUID4.json" ] && ok "oversized intent claimed out of requests/" || bad "oversized intent claimed out of requests/" "still present"
+# Symlinked request: a symlink dropped in requests/ could point the root runner at any host file —
+# refused, never followed (graft #437).
+: >"$AUDIT"
+ln -s "$C/config.json" "$REQS/$UUID4.json"
+run_pending >/dev/null
+assert_contains "symlinked request refused" "$(cat "$AUDIT" 2>/dev/null)" "refused-nonregular"
+[ ! -f "$RESULTS/$UUID4.json" ] && ok "symlinked request gets no result" || bad "symlinked request gets no result" "result written"
+rm -f "$REQS/$UUID4.json"
+# Stale sweep: staged/ + requests/ files older than an hour are removed at run start.
+jq -n '{}' >"$STAGED/stale.json"
+touch -t 202001010000 "$STAGED/stale.json"
+printf '{}' >"$REQS/stale-req.json"
+touch -t 202001010000 "$REQS/stale-req.json"
+run_pending >/dev/null
+[ ! -f "$STAGED/stale.json" ] && ok "aged staged file swept" || bad "aged staged file swept" "still present"
+[ ! -f "$REQS/stale-req.json" ] && ok "aged request file swept" || bad "aged request file swept" "still present"
 
 # The runner refuses to run at all when the channel is off (fail-closed).
 control_config main

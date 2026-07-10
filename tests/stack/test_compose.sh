@@ -219,6 +219,8 @@ jq_assert "dashboard control audit/ mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/audit") and (.read_only == true))'
 jq_assert "dashboard config.json prefill mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/host-config/config.json") and (.read_only == true))'
+jq_assert "dashboard config.reference.json prefill mounted read-only (#33)" \
+    '.services.dashboard.volumes | any((.target == "/host-config/config.reference.json") and (.read_only == true))'
 jq_assert "control staged/ dir never enters the container (#33)" \
     '.services.dashboard.volumes | any(.target | contains("staged")) | not'
 jq_assert "control channel defaults off in the dashboard env (#33)" \

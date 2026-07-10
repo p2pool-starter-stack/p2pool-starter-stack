@@ -192,6 +192,7 @@ def control_spool(tmp_path, monkeypatch):
             {
                 "p2pool": {"pool": "mini"},
                 "dashboard": {"auth": {"username": "admin", "password": "correct horse"}},
+                "healthchecks": {"ping_url": "https://hc-ping.com/SECRET-UUID"},
             }
         )
     )
@@ -199,6 +200,9 @@ def control_spool(tmp_path, monkeypatch):
     (tmp_path / "results").mkdir()
     monkeypatch.setattr(control_service.config, "DASHBOARD_CONTROL_ENABLED", True)
     monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", str(host_config))
+    monkeypatch.setattr(
+        control_service.config, "HOST_REFERENCE_PATH", str(tmp_path / "no-reference.json")
+    )
     monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", str(tmp_path / "requests"))
     monkeypatch.setattr(control_service.config, "CONTROL_RESULTS_DIR", str(tmp_path / "results"))
     monkeypatch.setattr(control_service.config, "CONTROL_WAIT_S", 0.1)
@@ -222,7 +226,10 @@ class TestControlRoutesEnabled:
         assert resp.status == 200
         body = await resp.json()
         assert body["dashboard"]["auth"]["password"] == {"__secret__": True}
+        # healthchecks.ping_url is a capability secret — masked at the route, never served raw (#33).
+        assert body["healthchecks"]["ping_url"] == {"__secret__": True}
         assert "correct horse" not in json.dumps(body)
+        assert "SECRET-UUID" not in json.dumps(body)
 
     async def test_post_without_control_header_forbidden(self, control_client):
         # The custom header forces a CORS preflight cross-site, which is never granted (CSRF).

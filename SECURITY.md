@@ -49,6 +49,19 @@ The stack's defaults:
   read-only. A root systemd unit re-validates every intent with pithead's own config validation
   and dispatches exactly two fixed actions (`apply --dry-run`, `apply -y`); no string from the
   container is ever executed. Enabling the channel without a dashboard password is a validation
-  error, and every mutation is audited host-side.
+  error, on a published onion it additionally requires Tor client authorization, destructive edits
+  (wallet, egress firewall, clearnet sync, auth) are refused from the dashboard and must be applied
+  from the host CLI, and every mutation is audited host-side.
+
+### Secret trust boundary for dashboard config editing
+
+When `dashboard.control` is on, the dashboard reads `config.json` through a **read-only bind
+mount** to prefill the editor form. The API masks every secret leaf before serving it to the
+browser — but that masking protects the *browser*, not the container. The bind mount itself is the
+real secret boundary: a backend compromise of the dashboard container can read the plaintext
+`config.json` (including the dashboard login and stratum passwords) directly off the mount,
+regardless of the API masking. Treat the dashboard container as semi-trusted, keep the onion behind
+Tor client authorization, and do not co-host untrusted workloads in that container. Host-side
+staged copies that carry merged secrets are written mode 600.
 
 Report any gap in these.
