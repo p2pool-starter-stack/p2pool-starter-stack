@@ -898,6 +898,11 @@ class DataService:
                         # the same stratum field the dashboard's Stratum card shows — with the
                         # env address as fallback while p2pool is down/restarting. Empty => no-op.
                         observed_wallet=stratum_raw.get("wallet") or MONERO_WALLET_ADDRESS,
+                        # Block-found / payout-found edges (#336): p2pool's cumulative pool-wide
+                        # block counter and the height of the last one. 0 while the stats file is
+                        # missing/unparsable, which the edge treats as a silent rebaseline.
+                        blocks_found_total=pool_local.get("blocks_found", 0) or 0,
+                        block_height=pool_local.get("last_block_found", 0) or 0,
                     )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).
