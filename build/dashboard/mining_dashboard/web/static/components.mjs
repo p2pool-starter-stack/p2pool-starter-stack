@@ -9,6 +9,7 @@ import {
   egressRoute,
   formatTimeToShare,
   formatXmr,
+  formatXtm,
   heroKpis,
   parseHashrate,
   raffleCls,
@@ -352,11 +353,13 @@ function NetworkCard({ state }) {
 }
 
 // P2Pool earnings calculator (Issue #12). A power-user card (Advanced view) over the metrics
-// layer that estimates XMR from *P2Pool mining only* — explicitly not XvB or Tari. The server
-// sends the daily XMR rate per H/s; this card scales it to a what-if hashrate. Stateful because
-// the what-if input is local UI: `input` is null until the user edits it, so the field tracks the
-// live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header / Overview show, which
-// already excludes the XvB-donated slice) until they take control, then holds their raw text.
+// layer that estimates XMR from *P2Pool mining only* — explicitly not XvB — plus the Tari the
+// same hashrate merge-mines alongside it (#117; "—" while merge-mining is inactive). The server
+// sends the daily XMR and XTM rates per H/s; this card scales both to a what-if hashrate.
+// Stateful because the what-if input is local UI: `input` is null until the user edits it, so
+// the field tracks the live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header /
+// Overview show, which already excludes the XvB-donated slice) until they take control, then
+// holds their raw text.
 class EarningsCard extends Component {
   constructor(props) {
     super(props);
@@ -382,7 +385,7 @@ class EarningsCard extends Component {
     return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
-            <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining only — excludes XvB donations and Tari merge-mining.</p>
+            <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining plus the Tari merge-mined alongside it — excludes XvB donations.</p>
             <div class="earnings-input">
                 <label for="whatif-hr">Your P2Pool Hashrate</label>
                 <input id="whatif-hr" type="text" inputmode="decimal" spellcheck="false"
@@ -393,6 +396,10 @@ class EarningsCard extends Component {
                 <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
                 <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
                 <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                <${StatCard} label="XTM / day" value=${formatXtm(est.tariDay)}
+                             title="Tari merge-mined alongside the XMR by the same hashrate — earned in addition, not instead. Shows — while merge-mining is inactive or syncing." />
+                <${StatCard} label="XTM / month" value=${formatXtm(est.tariMonth)} />
+                <${StatCard} label="XTM / year" value=${formatXtm(est.tariYear)} />
                 <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                 <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
             </div>
@@ -497,7 +504,6 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp }) {
                             }</td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
-                            <td>${w.h10_str}</td>
                             <td>${w.h60_str}</td>
                             <td>${w.h15_str}</td>
                             <td>${w.accepted_str}</td>

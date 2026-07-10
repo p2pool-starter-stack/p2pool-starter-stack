@@ -72,10 +72,12 @@
     "available": false,
     "block_reward": "0.0000 XMR",
     "coeff_day": 0.0,
-    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
+    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and its estimate assumes the merge-mine channel stays connected. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
     "p2pool_hr": 8050.0,
     "p2pool_hr_str": "8.05 kH/s",
-    "pool_difficulty": 0
+    "pool_difficulty": 0,
+    "tari_available": false,
+    "tari_coeff_day": 0.0
   },
   "egress": {
     "components": [
@@ -534,8 +536,6 @@
       "accepted": 1200,
       "accepted_str": "1,200",
       "api_ok": null,
-      "h10": 0,
-      "h10_str": "0.00 H/s",
       "h15": 0,
       "h15_str": "0.00 H/s",
       "h60": 0,
@@ -556,8 +556,6 @@
       "accepted": 800,
       "accepted_str": "800",
       "api_ok": null,
-      "h10": 0,
-      "h10_str": "0.00 H/s",
       "h15": 0,
       "h15_str": "0.00 H/s",
       "h60": 0,

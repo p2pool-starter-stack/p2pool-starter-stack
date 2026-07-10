@@ -102,6 +102,27 @@ test('EarningsCard shows the fallback when stats are down, the calculator when a
     assert.match(up, /id="whatif-hr"/);
 });
 
+test('EarningsCard renders the Tari rows: figures when merge-mining, "—" when not (#117)', () => {
+    // Merge-mining live: the XTM rows scale the server rate by the default what-if hashrate.
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.tari_available = true;
+    s.earnings.tari_coeff_day = 2e-3;   // × p2pool_hr (8050) → 16.1 XTM/day
+    const up = renderApp({ state: s });
+    assert.match(up, /XTM \/ day/);
+    assert.match(up, /XTM \/ month/);
+    assert.match(up, /XTM \/ year/);
+    assert.match(up, /16\.1000 XTM/);
+    // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
+    const off = clone();
+    off.earnings.available = true;
+    off.earnings.tari_available = false;
+    const down = renderApp({ state: off });
+    assert.match(down, /XTM \/ day/);
+    assert.match(down, /—/);
+    assert.doesNotMatch(down, /NaN/);
+});
+
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
     // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
     const cold = renderApp();

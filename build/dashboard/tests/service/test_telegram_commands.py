@@ -310,13 +310,16 @@ def test_status_merge_mining_line():
 
 
 def test_earnings_estimate():
-    # network reward present + a real difficulty → a positive daily figure.
+    # network reward present + a real difficulty → a positive daily figure, rendered with the
+    # dashboard card's adaptive-precision XMR rule (#387): these figures sit in the 6-dp band.
+    # coeff = 0.6 XMR / 380e9 * 86400 ≈ 1.364e-7 XMR per H/s per day.
     out = tc.format_earnings(
         _metrics(p2pool_1h=8000.0, p2pool_24h=8100.0), {"reward": 600_000_000_000}
     )
-    assert "1h avg" in out and "XMR/day" in out
+    assert "1h avg" in out and "~0.001091 XMR/day" in out
     # The 24h average is shown once available and drives the steadier 30d projection.
-    assert "24h avg" in out and "XMR/30d" in out
+    assert "24h avg" in out and "~0.001105 XMR/day" in out
+    assert "~0.033150 XMR/30d" in out
 
 
 def test_earnings_falls_back_to_1h_30d_without_24h_history():
@@ -331,6 +334,25 @@ def test_earnings_falls_back_to_1h_30d_without_24h_history():
 def test_earnings_unavailable_without_network_data():
     out = tc.format_earnings(_metrics(), {})  # no reward → coeff 0
     assert "unavailable" in out
+
+
+def test_earnings_includes_tari_line_when_merge_mining():
+    # #117: live Tari figures → a second line from the SAME 1h-average hashrate (merge-mined
+    # alongside the XMR), at the same rate the dashboard calculator publishes.
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        {"reward": 600_000_000_000},
+    )
+    expected = 8000.0 * (13_000.0 / 420_000_000_000 * 86_400)
+    assert f"Tari (merge-mined alongside): ~{expected:.2f} XTM/day" in out
+    assert "excludes XvB-donated hashrate" in out  # Tari no longer listed as excluded
+
+
+def test_earnings_omits_tari_line_without_tari_figures():
+    # Tari inactive / still syncing (reward+difficulty at 0) → no phantom XTM line.
+    out = tc.format_earnings(_metrics(p2pool_1h=8000.0), {"reward": 600_000_000_000})
+    assert "XTM" not in out
+    assert "XMR/day" in out  # the XMR estimate is unaffected
 
 
 def test_luck_reads_the_cadence_metrics():

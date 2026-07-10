@@ -19,6 +19,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   running lucky), and your own PPLNS share-weight (the sum of your share difficulty in the window,
   distinct from the pool-wide PPLNS weight). `/luck` answers with the same four figures. Everything
   derives from the per-share difficulty the dashboard already stores — no new data captured.
+- **Tari earnings in the calculator and `/earnings` (#117).** The earnings card now also estimates
+  the XTM the same hashrate merge-mines alongside the XMR — day/month/year rows driven by the one
+  what-if input, from the Tari block reward and difficulty p2pool's merge-mine stats already
+  report. `—` while merge-mining is inactive or Tari is still syncing; the Telegram `/earnings`
+  reply gains the matching XTM/day line, shown only while those figures are live.
 
 ## [1.2.2] - 2026-07-04
 

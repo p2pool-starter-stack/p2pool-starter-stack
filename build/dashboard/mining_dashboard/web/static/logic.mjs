@@ -6,13 +6,15 @@
 // Worker table columns, each carrying the state key it sorts on. Hashrate/uptime/IP and the
 // accepted/rejected share counts sort numerically (raw values the server includes alongside the
 // formatted strings); name sorts as text. The order matches the rendered <th>s.
+// The hashrate windows are named for what the proxy data is — 1m and 10m (#387) — matching the
+// chart's averaging toggle and Telegram's "(10m avg)". The legacy h10 field isn't shown: via the
+// proxy it's just a second copy of the 1m rate.
 export const WORKER_COLUMNS = [
   { label: "Worker", key: "name" },
   { label: "IP", key: "ip_sort" },
   { label: "Uptime", key: "uptime" },
-  { label: "10s", key: "h10" },
-  { label: "60s", key: "h60" },
-  { label: "15m", key: "h15" },
+  { label: "1m", key: "h60" },
+  { label: "10m", key: "h15" },
   { label: "Accepted", key: "accepted" },
   { label: "Rejected", key: "rejected" },
 ];
@@ -181,25 +183,66 @@ export function parseHashrate(str) {
   return val * (unit === "g" ? 1e9 : unit === "m" ? 1e6 : unit === "k" ? 1e3 : 1);
 }
 
+// Format raw H/s for display. Mirrors helper/utils.format_hashrate on the server side (same
+// thresholds, 2 decimals, same unit strings — the parseHashrate precedent) so client-rendered
+// figures like the chart tooltip read identically to the server-formatted cards (#387).
+export function fmtHashrate(hs) {
+  const val = Number(hs);
+  if (!Number.isFinite(val)) return "0 H/s";
+  if (val >= 1e9) return (val / 1e9).toFixed(2) + " GH/s";
+  if (val >= 1e6) return (val / 1e6).toFixed(2) + " MH/s";
+  if (val >= 1e3) return (val / 1e3).toFixed(2) + " kH/s";
+  return val.toFixed(2) + " H/s";
+}
+
 // Scale the server's daily rate to expected XMR over day/month/year for `hashrateHs`, plus the
 // expected seconds to find one P2Pool share (share difficulty / hashrate). Returns nulls when the
 // estimate can't be computed (rate unavailable, or a non-positive hashrate) so the card shows "—".
 export function computeEarnings(hashrateHs, earnings) {
   if (!earnings || !earnings.available || !(hashrateHs > 0)) {
-    return { day: null, month: null, year: null, timeToShareSec: null };
+    return {
+      day: null,
+      month: null,
+      year: null,
+      timeToShareSec: null,
+      tariDay: null,
+      tariMonth: null,
+      tariYear: null,
+    };
   }
   const day = hashrateHs * earnings.coeff_day;
   const tts = earnings.pool_difficulty > 0 ? earnings.pool_difficulty / hashrateHs : null;
-  return { day, month: day * DAYS_PER_MONTH, year: day * DAYS_PER_YEAR, timeToShareSec: tts };
+  // Tari (#117): merge-mining works the aux chain with the SAME hashrate, so the one what-if
+  // input scales the server's XTM rate identically. Nulls (rendered "—") while merge-mining is
+  // inactive or the Tari figures aren't collected yet — the XMR estimate is unaffected.
+  const tariDay = earnings.tari_available ? hashrateHs * earnings.tari_coeff_day : null;
+  return {
+    day,
+    month: day * DAYS_PER_MONTH,
+    year: day * DAYS_PER_YEAR,
+    timeToShareSec: tts,
+    tariDay,
+    tariMonth: tariDay === null ? null : tariDay * DAYS_PER_MONTH,
+    tariYear: tariDay === null ? null : tariDay * DAYS_PER_YEAR,
+  };
 }
 
-// Format a client-computed XMR amount. More decimal places for small amounts (a day's earnings can
+// Format a client-computed coin amount. More decimal places for small amounts (a day's earnings can
 // be a tiny fraction) so the figure isn't rounded to "0.0000"; "—" for the null/invalid case.
+function formatCoin(value, unit) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === 0) return "0 " + unit;
+  const dp = value >= 1 ? 4 : value >= 0.001 ? 6 : 8;
+  return value.toFixed(dp) + " " + unit;
+}
+
 export function formatXmr(xmr) {
-  if (xmr === null || xmr === undefined || !Number.isFinite(xmr)) return "—";
-  if (xmr === 0) return "0 XMR";
-  const dp = xmr >= 1 ? 4 : xmr >= 0.001 ? 6 : 8;
-  return xmr.toFixed(dp) + " XMR";
+  return formatCoin(xmr, "XMR");
+}
+
+// Merge-mined Tari (#117); the collector already delivers the reward in XTM (not µT).
+export function formatXtm(xtm) {
+  return formatCoin(xtm, "XTM");
 }
 
 // Format the expected time-to-share (seconds) for display; "—" when not computable. Reuses the
