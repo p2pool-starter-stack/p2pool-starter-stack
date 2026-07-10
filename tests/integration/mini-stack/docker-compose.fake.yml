@@ -28,6 +28,12 @@ services:
     image: *fake_image
     container_name: itest-dashboard
     networks: [itestnet]
+    # Mirror production's immutable rootfs (#377): the mini-stack e2e then proves the REAL dashboard
+    # code runs — writes history, drops markers, serves /api/state — with its rootfs read-only and
+    # only /tmp + the volumes writable.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     volumes:
       - dashboard_data:/data
       - dashboard_stats:/app/stats:ro
