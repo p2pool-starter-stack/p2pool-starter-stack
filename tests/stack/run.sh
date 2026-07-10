@@ -2631,8 +2631,10 @@ printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
 printf 'ONIONKEY-ORIG\n' >"$BK/data/tor/hs_ed25519_secret_key"
 printf 'DBDATA-ORIG\n' >"$BK/data/dashboard/dashboard.db"
 
-# 1) Backup creates a timestamped archive.
-out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+# 1) Backup creates a timestamped archive. --no-encrypt keeps this #140 round-trip on the plaintext
+# path (encryption is exercised in the #374 block below); an unattended run without a passphrase
+# now refuses rather than downgrading, so the flag is required here.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
 assert_rc "backup exits 0" "$rc" "0"
 archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
@@ -2679,25 +2681,33 @@ out="$(cd "$BK" && printf '\nn\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
 assert_contains "low-space prompt, then cancel" "$out" "ancelled"
 leftover="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
 assert_eq "cancelled backup writes no archive" "$leftover" ""
-out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
 assert_rc "low-space backup proceeds with --yes" "$rc" "0"
 assert_contains "low-space backup warns first" "$out" "Low free space"
 
 echo "== black-box: encrypted backup -> restore (#374) =="
 # The archive holds the stack's full secret material (onion keys, .env, dashboard DB), so backup
-# encrypts by default (openssl aes-256-cbc + pbkdf2). Reuses the #140 sandbox — which also proves
-# the fallback: every `backup -y` above ran with no passphrase and wrote plaintext. Covered here:
-# the plaintext-fallback warning, env-var and prompt encrypt round-trips, wrong-passphrase
-# rejection BEFORE anything is touched, --no-encrypt, legacy/garbage archives, and that a failed
-# encrypted backup leaves no file behind (the tar|openssl stream means no plaintext temp ever).
+# encrypts by default (openssl aes-256-cbc + pbkdf2). Covered here: the unattended-without-
+# passphrase REFUSAL (an automated run must never silently downgrade to plaintext), the explicit
+# --no-encrypt opt-out, env-var and prompt encrypt round-trips, wrong-passphrase rejection BEFORE
+# anything is touched, a tamper/truncation refusal before extraction, legacy/garbage archives, and
+# that a failed encrypted backup leaves no file behind (the tar|openssl stream means no plaintext
+# temp ever).
 rm -f "$BK/bin/df" "$BK"/backups/pithead-backup-*
 
-# 1) --yes with no passphrase falls back to plaintext, loudly.
+# 1a) --yes with no passphrase REFUSES (no silent plaintext downgrade for cron); writes nothing.
 out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
 rc=$?
-assert_rc "plaintext-fallback backup exits 0" "$rc" "0"
-assert_contains "plaintext fallback warns loudly" "$out" "PLAINTEXT"
+[ "$rc" -ne 0 ] && ok "unattended backup without passphrase exits non-zero" || bad "unattended backup without passphrase exits non-zero" "rc=0"
+assert_contains "refusal names the missing passphrase" "$out" "PITHEAD_BACKUP_PASSPHRASE"
+assert_eq "refused unattended backup writes no archive" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+# 1b) --no-encrypt is the explicit plaintext opt-out (loud warning, exits 0, writes a plain archive).
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+assert_rc "explicit --no-encrypt backup exits 0" "$rc" "0"
+plain_optout="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+{ [ -n "$plain_optout" ] && [ -f "$plain_optout" ]; } && ok "--no-encrypt writes a plaintext archive" || bad "--no-encrypt writes a plaintext archive" "no plain archive"
 rm -f "$BK"/backups/pithead-backup-*
 
 # 2) Env-var passphrase: a .enc archive with the openssl Salted__ header, no plaintext twin.
@@ -2729,7 +2739,21 @@ assert_rc "encrypted restore exits 0" "$rc" "0"
 assert_eq "encrypted restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
 assert_eq "encrypted restore brings back the dashboard db" "$(cat "$BK/data/dashboard/dashboard.db")" "DBDATA-ORIG"
 assert_eq "encrypted restore brings back the onion key" "$(cat "$BK/data/tor/hs_ed25519_secret_key" 2>/dev/null)" "ONIONKEY-ORIG"
-rm -f "$BK"/backups/pithead-backup-*
+
+# 4b) Tampered/truncated ciphertext (CBC has no MAC): a flip past the first block passes the
+# cheap magic pre-flight but must be caught by the full-stream verify BEFORE tar writes anything,
+# so the live files survive. Truncating the archive tail simulates corruption/tampering.
+printf 'CADDY-LIVE\n' >"$BK/Caddyfile"
+head -c $(($(wc -c <"$enc_archive") - 32)) "$enc_archive" >"$BK/backups/truncated.tar.gz.enc"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead restore -y "$BK/backups/truncated.tar.gz.enc" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "tampered archive exits non-zero" || bad "tampered archive exits non-zero" "rc=0"
+assert_contains "tampered archive names integrity failure" "$out" "integrity"
+assert_eq "tampered archive leaves live files untouched" "$(cat "$BK/Caddyfile")" "CADDY-LIVE"
+rm -f "$BK"/backups/pithead-backup-* "$BK/backups/truncated.tar.gz.enc"
+# Leave the fixtures as this block found them (the round-trip above restored -ORIG) so the
+# later plaintext-backup test captures -ORIG, not this test's probe value.
+printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
 
 # 5) Interactive prompt path: passphrase typed twice encrypts; a mismatch aborts with no archive.
 out="$(cd "$BK" && printf 'pw\npw\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"

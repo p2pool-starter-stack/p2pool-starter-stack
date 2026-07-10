@@ -18,10 +18,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   protects it on the local disk. `backup` now prompts for a passphrase (twice) and streams the tar
   through `openssl enc -aes-256-cbc -pbkdf2 -iter 600000` into a `.tar.gz.enc` — no plaintext
   archive ever touches the disk, and the passphrase travels over a file descriptor, never argv.
-  `PITHEAD_BACKUP_PASSPHRASE` covers unattended runs; `--no-encrypt` (or an empty passphrase, or
-  `--yes` with no env var — with a loud warning) keeps the old plaintext format. `restore` detects
-  encrypted vs plaintext archives by magic bytes, so every existing backup restores unchanged, and
-  a wrong passphrase fails before anything on disk is touched.
+  `PITHEAD_BACKUP_PASSPHRASE` covers unattended runs; an unattended run (`--yes`) with no passphrase
+  set **refuses** rather than writing plaintext (a cron job that lost its passphrase fails loudly
+  instead of archiving your onion keys in the clear), while `--no-encrypt` — or an empty passphrase
+  at the interactive prompt — chooses plaintext explicitly. `restore` detects encrypted vs plaintext
+  archives by magic bytes, so every existing backup restores unchanged; a wrong passphrase fails
+  before anything on disk is touched, and because CBC carries no authentication, `restore`
+  verifies the whole decrypted stream (`tar -tzf -`, no plaintext on disk) before extracting, so a
+  tampered or truncated archive is refused rather than half-restored over the live config.
 
 - **Edit config from the dashboard (#33).** A new **Configuration** view — opt-in via
   `dashboard.control.enabled` (default off; requires a `dashboard.auth.password`) — prefills a

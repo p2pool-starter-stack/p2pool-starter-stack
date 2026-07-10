@@ -197,10 +197,11 @@ passphrase somewhere other than this host.
 
 Losing the passphrase loses the backup — there is no recovery!
 
-For unattended runs (cron), set `PITHEAD_BACKUP_PASSPHRASE` in the environment. With `--yes` and no
-passphrase set — or an empty passphrase at the prompt — `backup` falls back to a plaintext `tar.gz`
-with a warning, so an unattended job never silently locks you out of your own keys. To write a
-plaintext archive on purpose, pass `--no-encrypt`.
+For unattended runs (cron), set `PITHEAD_BACKUP_PASSPHRASE` in the environment. An unattended run
+(`--yes`) with no passphrase set **refuses** rather than downgrading — a job whose passphrase line
+is typo'd away must fail loudly, not archive your onion keys in plaintext while reporting success.
+To write a plaintext archive on purpose, pass `--no-encrypt` (an empty passphrase at the interactive
+prompt does the same, with a warning).
 
 If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
 `-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
