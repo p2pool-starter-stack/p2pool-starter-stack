@@ -93,9 +93,11 @@ MATRIX:
   --fault-injection      also run the fault-injection phase: deliberately break monerod
                          (stop / SIGSTOP / remove) and assert pithead's status verdicts
                          (down / unhealthy / missing) and the failover→recovery cycle. Also
-                         forces a real `iptables -I` failure and asserts the #270 firewall
-                         rolls back fail-closed (no half-open ruleset). DESTRUCTIVE-then-
-                         restored; local mode only. Slow (healthcheck + node-health debounce).
+                         makes the dashboard data dir read-only and asserts /api/state flags
+                         db_healthy:false, then restores it (#202), and forces a real
+                         `iptables -I` failure and asserts the #270 firewall rolls back
+                         fail-closed (no half-open ruleset). DESTRUCTIVE-then-restored;
+                         local mode only. Slow (healthcheck + node-health debounce).
   --auth-fail-closed     also run the fail-closed auth phase (#153/#203): empty PROXY_AUTH_TOKEN
                          in .env and assert `pithead up` REFUSES to start (the live counterpart
                          to the tier-1 compose-config check), then restore the exact token and
@@ -929,6 +931,39 @@ fault_missing() {
     wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
 }
 
+# Live counterpart to the tier-1 #131 flag-logic tests: make the dashboard's data dir read-only on
+# the REAL filesystem and prove /api/state flags db_healthy:false while the dashboard keeps serving,
+# then restore write access and prove recovery (#202). Two facts dictate the restarts: chmod cannot
+# fail writes on already-open file descriptors (the dashboard holds a live sqlite connection with
+# WAL/shm sidecars open), so the fault only trips when a fresh process re-runs _init_db; and
+# db_healthy is a one-way latch per process (storage_service only sets it True in __init__), so
+# recovery needs a fresh process too — a successful write can't clear the flag.
+fault_db_readonly() {
+    local ddir
+    ddir="$(env_on_box DASHBOARD_DATA_DIR)"
+    if [ -z "$ddir" ]; then
+        it_warn "skipping db-readonly fault (no DASHBOARD_DATA_DIR in .env)"
+        return 0
+    fi
+    it_step "fault: make the dashboard data dir read-only (#131/#202)…"
+    # The data dir is uid-1000-owned (#255) and the deploy user usually isn't uid 1000, so both
+    # chmods need sudo (already an assumed capability: fault_firewall_rollback uses it). -R covers
+    # the -wal/-shm sidecar files too.
+    rx "sudo chmod -R a-w $(quote_arg "$ddir")" >/dev/null 2>&1
+    rx "docker compose restart dashboard" >/dev/null 2>&1
+    wait_for 90 5 "dashboard to report db_healthy=false" _pred_db_healthy_is false || true
+    # api_state answering at all is part of the assertion: the #131 design keeps the web server
+    # serving (reads still work) while persistence is broken.
+    assert_eq "db_healthy false while data dir is read-only" \
+        "$(jq_get "$(api_state)" '.db_healthy')" "false"
+    it_step "recover: restore write access and restart the dashboard…"
+    rx "sudo chmod -R u+w $(quote_arg "$ddir")" >/dev/null 2>&1
+    rx "docker compose restart dashboard" >/dev/null 2>&1
+    wait_for 90 5 "dashboard to report db_healthy=true" _pred_db_healthy_is true || true
+    assert_eq "db_healthy true after write access restored" \
+        "$(jq_get "$(api_state)" '.db_healthy')" "true"
+}
+
 # Live counterpart to the tier-1 stubbed rollback (tests/stack/run.sh #270): force a REAL
 # `iptables -I` to fail mid-apply and prove the box ends fail-closed — the partial ruleset is
 # rolled BACK, not left half-open (a stubbed iptables can't prove the real kernel strips a partial
@@ -978,13 +1013,16 @@ run_fault_injection() {
     fault_node_down
     fault_unhealthy
     fault_missing
+    fault_db_readonly
     fault_firewall_rollback
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "fault-injection" "$OUT_DIR"
 
-    # Belt-and-braces: whatever happened above, leave monerod up, the firewall reinstated, and the
-    # stack healthy (the firewall reinstate is unconditional so a mid-phase abort can't leave the box
-    # with clearnet egress open).
+    # Belt-and-braces: whatever happened above, leave monerod up, the dashboard data dir writable,
+    # the firewall reinstated, and the stack healthy (the writability and firewall reinstates are
+    # unconditional so a mid-phase abort can't leave the box read-only or with clearnet egress open).
     rx "docker compose up -d monerod" >/dev/null 2>&1 || true
+    rx "sudo chmod -R u+w $(quote_arg "$(env_on_box DASHBOARD_DATA_DIR)")" >/dev/null 2>&1 || true
+    rx "docker compose restart dashboard" >/dev/null 2>&1 || true
     rx 'bash -c "source ./pithead && apply_tor_egress_firewall" >/dev/null 2>&1' || true
     wait_for 240 5 "monerod healthy after fault phase" _pred_monerod_healthy || true
     wait_status_ok 240 || true

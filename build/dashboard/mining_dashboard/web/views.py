@@ -724,10 +724,45 @@ def build_sync(metrics, monero_db_size):
     }
 
 
-def build_badges(data, metrics, mode_variant, db_healthy=True):
+# How long the "payout wallet changed" banner stays in the top bar after a change (#375).
+WALLET_CHANGED_BADGE_SEC = 72 * 3600
+
+
+def recent_wallet_change(state_mgr, now=None):
+    """The payout-wallet tripwire's change record (#375) if one happened within the banner
+    window: ``{"old8", "new8", "ts"}`` (addresses pre-truncated to 8 chars by the alerter),
+    else ``None``. Reads the kv_store keys AlertService persists; any unreadable value reads
+    as "no recent change" rather than breaking ``/api/state``."""
+    try:
+        ts = float(state_mgr.get_kv("payout_wallet_changed_ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not ts or (now if now is not None else time.time()) - ts >= WALLET_CHANGED_BADGE_SEC:
+        return None
+    return {
+        "old8": state_mgr.get_kv("payout_wallet_prev8") or "?",
+        "new8": (state_mgr.get_kv("payout_wallet") or "")[:8],
+        "ts": ts,
+    }
+
+
+def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=None):
     """Top-bar status badges as data: ``{text, variant, title?}`` (Issues #27/#31/#35/#51/#32/#131).
-    The client renders them (variant -> ``badge-<variant>``)."""
+    The client renders them (variant -> ``badge-<variant>``). ``wallet_change`` is the
+    payout-wallet tripwire's recent-change record (#375) from :func:`recent_wallet_change`, or
+    ``None``."""
     badges = []
+    # Payout wallet changed within the last 72h (#375): the loudest possible tamper signal, shown
+    # even during sync. Addresses are truncated to 8 chars — full addresses stay off the wire.
+    if wallet_change:
+        badges.append(
+            {
+                "text": "⚠ Payout wallet changed",
+                "variant": "warn",
+                "title": f"{wallet_change['old8']}… → {wallet_change['new8']}… at "
+                f"{format_time_abs(wallet_change['ts'])}",
+            }
+        )
     # Persistence health (#131): the dashboard keeps serving live data even if its SQLite DB can't
     # be written, but history/shares/stats would silently vanish on restart — surface it loudly.
     if not db_healthy:
@@ -988,7 +1023,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     topology = (
         topology_from_config()
     )  # full stack wiring for the topology panel (#170); shares summary
-    badges = build_badges(data, metrics, mode_tok, db_healthy)
+    badges = build_badges(
+        data, metrics, mode_tok, db_healthy, wallet_change=recent_wallet_change(state_mgr)
+    )
     badges.append(_egress_badge(egress["summary"]))  # glanceable Tor-only / leak header badge
 
     return {

@@ -121,6 +121,26 @@ def test_status_node_down_and_not_mining():
     assert "Mining: 🔴 not mining" in out
 
 
+def test_status_xvb_split_line():
+    # XvB on with routed history → one "24h split" line, same math as the daily summary.
+    out = tc.format_status(_metrics(), mining_active=True)
+    assert "24h split" in out
+    assert "P2Pool 8.10 kH/s" in out
+    assert "XvB 2.05 kH/s" in out
+    assert "20% to XvB" in out  # 2050 / (8100 + 2050) ≈ 20%
+
+
+def test_status_xvb_off_omits_split():
+    out = tc.format_status(_metrics(xvb_enabled=False), mining_active=True)
+    assert "to XvB" not in out
+
+
+def test_status_xvb_no_history_omits_split():
+    # No routed history yet (both 24h averages zero) → the line is absent, not "0%".
+    out = tc.format_status(_metrics(p2pool_24h=0, xvb_routed_24h=0), mining_active=True)
+    assert "24h split" not in out
+
+
 def test_hashrate_lists_online_workers_desc():
     workers = [
         {"name": "rig-a", "status": "online", "h15": 3000},

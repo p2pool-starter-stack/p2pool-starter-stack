@@ -53,6 +53,13 @@ finish their initial sync. Check the dashboard to see which.
 **Change a setting:** edit `config.json`, then run `./pithead apply`. See
 [Configuration › Changing settings later](configuration.md#changing-settings-later).
 
+**Changing the payout wallet:** `apply` asks you to type the first 8 characters of the new address
+(a bare `y` is not enough for the one change that redirects every future reward; `apply -y` skips
+the prompt for automation). The dashboard also watches the wallet p2pool actually mines to: any
+change raises a `wallet_changed` [Telegram alert](telegram.md) and a 72-hour top-bar banner —
+including a change you made yourself. Treat that pair as confirmation; if you didn't change it,
+your rewards are being redirected — check `config.json` and re-apply the correct address.
+
 **Reboot resilience:** every service runs with `restart: unless-stopped`, so the stack restarts
 after a reboot or power loss, provided the Docker daemon starts at boot. Ubuntu's packaged Docker
 enables this by default; a custom/rootless install (or `setup --skip-deps`) may leave it disabled.

@@ -153,13 +153,30 @@ test('WorkersTable renders headers and a row per worker with status classes', ()
     assert.match(html, /badge-ok">P2Pool/); // PoolBadge for a p2pool worker
 });
 
-test('WorkersTable with no workers still renders the headers but no rows', () => {
+test('WorkersTable with no workers shows the connect hint instead of a bare table (#385)', () => {
+    // The fixture's host_ip is "Unknown Host" — the hint must fall back to the docs placeholder.
     const s = clone();
     s.workers = [];
     const html = renderApp({ state: s });
     assert.match(html, /Workers Alive/);
-    assert.match(html, />Worker</);
+    assert.match(html, /No workers connected yet/);
+    assert.match(html, /YOUR_STACK_IP:3333/);
+    assert.match(html, /docs\/workers\.md/); // links the workers guide
+    assert.doesNotMatch(html, /workers-table/); // no empty table skeleton
     assert.doesNotMatch(html, /rig-alpha/);
+});
+
+test('WorkersTable connect hint uses the real host IP when known (#385)', () => {
+    const s = clone();
+    s.workers = [];
+    s.host_ip = '192.168.1.10';
+    const html = renderApp({ state: s });
+    assert.match(html, /192\.168\.1\.10:3333/);
+    assert.doesNotMatch(html, /Unknown Host:3333/);
+    // A populated fleet — even all-offline — keeps the table, never the hint.
+    const offline = clone();
+    offline.workers = offline.workers.map((w) => ({ ...w, status: 'offline' }));
+    assert.doesNotMatch(renderApp({ state: offline }), /No workers connected yet/);
 });
 
 test('ProxyTotals footer is hidden until the proxy reports data', () => {

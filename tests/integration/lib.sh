@@ -336,6 +336,19 @@ _pred_hashes_flowing() {
     [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null
 }
 
+# Predicate: the dashboard's persistence flag (#131) reads exactly <expected> ("true"/"false").
+# Parameterized because the db-readonly fault (#202) waits on both edges. db_healthy is a one-way
+# latch per process — storage_service only sets it True in __init__ — so the fault choreography in
+# run.sh restarts the dashboard around each wait instead of polling for a self-heal that can't
+# happen. jq_get preserves boolean false (it doesn't fall through `// empty`), so "false" here
+# means the flag really reads false, not that the key is missing.
+_pred_db_healthy_is() { # _pred_db_healthy_is <true|false>
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
+    [ "$(jq_get "$st" '.db_healthy')" = "$1" ]
+}
+
 wait_status_ok() { wait_for "${1:-180}" 5 "pithead status OK" _pred_status_ok; }
 wait_monero_synced() { wait_for "${1:-300}" 10 "Monero sync complete" _pred_monero_synced; }
 wait_miner_running() { wait_for "${1:-180}" 5 "miner released" _pred_miner_running; }
