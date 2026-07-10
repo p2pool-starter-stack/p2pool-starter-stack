@@ -9,6 +9,16 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **`pithead version` prints the installed stack version (#386).** `version` (and the `-V` /
+  `--version` aliases) prints one line identifying the build — `pithead vX.Y.Z (release images
+  vX.Y.Z)` for a release install, `pithead dev (branch @ commit, VERSION X.Y.Z)` for a source
+  checkout — with no network call or update check. `doctor` repeats the line in its header, so every
+  pasted diagnostics report carries the version.
+
 ## [1.3.1] - 2026-07-10
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB

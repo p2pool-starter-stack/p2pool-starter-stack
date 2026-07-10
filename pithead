@@ -563,6 +563,7 @@ doctor() {
 
     log "Running pithead diagnostics (read-only)..."
     echo "  Host: ${OS_PRETTY:-$OS_TYPE}"
+    echo "  Version: $(show_version)"
     echo ""
 
     # --- Dependencies ---
@@ -1119,6 +1120,7 @@ Inspection:
                             (warns about anything down; non-zero exit if so).
   doctor                    Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk,
                             .env/onion state, and container status — a paste-able health report.
+  version, -V, --version    Print the installed stack version (offline; no update check).
 
 Maintenance:
   reset-dashboard [-y|--yes]
@@ -1153,6 +1155,19 @@ Maintenance:
 
 Workflow: edit config.json, then run '$0 apply'.
 EOF
+}
+
+# One-line, greppable version identity for support threads (#386). Reads the provenance
+# export_build_provenance already computed this invocation — never re-reads VERSION or calls git,
+# so a release bundle (no .git) works and the values can't drift. `unknown` when VERSION is absent.
+show_version() {
+    local ver="unknown"
+    [ -n "$PITHEAD_VERSION" ] && ver="v$PITHEAD_VERSION"
+    if is_source_checkout; then
+        echo "pithead dev (${PITHEAD_GIT_BRANCH:-unknown} @ ${PITHEAD_GIT_COMMIT:-unknown}, VERSION ${PITHEAD_VERSION:-unknown})"
+    else
+        echo "pithead $ver (release images $STACK_VERSION)"
+    fi
 }
 
 # --- Small Utilities ---
@@ -3497,6 +3512,7 @@ main() {
     restore) stack_restore "$@" ;;
     onion-client-key) onion_client_key ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
+    version | -V | --version) show_version ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;
     esac
