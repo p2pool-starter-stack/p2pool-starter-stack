@@ -28,7 +28,7 @@ else
 fi
 readonly C_RESET C_GREEN C_YELLOW C_RED
 
-log() { echo -e "${C_GREEN}[STACK]${C_RESET} $1"; }
+log() { echo -e "${C_GREEN}[pithead]${C_RESET} $1"; }
 warn() { echo -e "${C_YELLOW}[WARNING]${C_RESET} $1" >&2; }
 error() {
     echo -e "${C_RED}[ERROR]${C_RESET} $1" >&2
@@ -2178,7 +2178,7 @@ resolve_dashboard_host() {
 }
 
 provision_tor() {
-    log "Initializing Tor service to generate Onion addresses..."
+    log "Initializing Tor service to generate onion addresses..."
     # Client-auth keys must be in place before tor starts, since it reads authorized_clients then (#343).
     provision_onion_client_auth
     docker compose up --pull "$(resolve_pull_policy)" -d tor
