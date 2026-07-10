@@ -25,6 +25,49 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
 `tor`, `dashboard`, `docker-proxy`, `docker-control`, `caddy`.
 
+### Chaining commands
+
+Run several commands in one invocation — each step in order, left to right:
+
+```bash
+./pithead apply upgrade      # apply config changes, then upgrade
+./pithead upgrade status     # upgrade, then health-check the result
+```
+
+Chainable commands: `apply`, `up`, `down`, `restart`, `upgrade`, `status`, `doctor`, `backup`.
+The whole chain is validated before anything runs; a nonsense chain is rejected with nothing
+executed. Rejected: a command that isn't chainable (`setup`, `logs`, `restore`,
+`reset-dashboard`, and the info commands run alone), a duplicated command, more than one of
+`up`/`down`/`restart` in the same chain (`up down` contradicts itself), and `down` anywhere but
+last (the steps after it would act on a stopped stack).
+
+A chain fails fast: the first step that exits non-zero stops it, pithead reports which step
+failed and what did and didn't run, and the failing step's exit code becomes the chain's.
+Flags don't chain — `apply -y upgrade` is a single `apply` invocation (and `apply` rejects the
+stray argument), so run flagged commands separately.
+
+### Tab completion
+
+`pithead-completion.bash` (in the repo root and the release bundle) completes subcommands for
+`./pithead <TAB>` and service names for `./pithead logs <TAB>`.
+
+bash — add to `~/.bashrc`:
+
+```bash
+source /path/to/pithead/pithead-completion.bash
+```
+
+zsh — add to `~/.zshrc` (`bashcompinit` needs `compinit` loaded first):
+
+```zsh
+autoload -U +X compinit && compinit
+autoload -U +X bashcompinit && bashcompinit
+source /path/to/pithead/pithead-completion.bash
+```
+
+Service-name completion reads `docker-compose.yml` next to the `pithead` you're completing, so
+it works from any checkout or bundle directory.
+
 ---
 
 ## Day-to-day

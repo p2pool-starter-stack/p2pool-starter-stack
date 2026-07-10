@@ -522,7 +522,7 @@ make_bundle() {
     # own "copy config.minimal.json" guidance); the advanced example is "for more options".
     local out="$1" d="$WORKDIR/pithead"
     mkdir -p "$d"
-    cp pithead VERSION docker-compose.yml config.minimal.json config.reference.json "$d/" 2>/dev/null || true
+    cp pithead pithead-completion.bash VERSION docker-compose.yml config.minimal.json config.reference.json "$d/" 2>/dev/null || true
     local m
     while IFS= read -r m; do
         [ -e "$m" ] || {

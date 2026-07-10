@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Subcommand chaining + bash/zsh tab-completion (#94).** `./pithead apply upgrade` runs both
+  commands in order, failing fast on the first non-zero step and reporting what did and didn't
+  run. The whole chain is validated first: non-chainable commands (`setup`, `logs`, `restore`,
+  `reset-dashboard`, the info commands), duplicates, more than one of `up`/`down`/`restart`, or
+  `down` anywhere but last are rejected with nothing executed. Single-command invocations are
+  unchanged. `pithead-completion.bash` (repo root, shipped in the release bundle) adds
+  tab-completion for subcommands and `logs <service>` in bash and zsh; a test pins its command
+  list to the CLI dispatch so the two can't drift. See
+  [Operations](docs/operations.md#chaining-commands).
 - **`pithead rotate-secrets` regenerates the stack's internal credentials in one command (#378).**
   After a suspected leak (a backup that left the box, a pasted `.env`), one command rotates the
   local Monero RPC password (skipped in remote mode — that credential belongs to the remote node),
