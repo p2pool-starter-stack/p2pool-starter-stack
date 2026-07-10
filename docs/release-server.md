@@ -144,6 +144,43 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 > patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest
 > to leave the free pages.
 
+## Bench allocation and the rig lock
+
+Ten boxes are shared between this repo's tier-4 harness, RigForge's release gates, and
+production mining. Two automations cycling the same rig's services corrupt each other's results
+(the 2026-07-10 miner-0 incident: an operator "fixed" a service an e2e run had deliberately
+stopped), so ownership is static and every run takes a kernel lock.
+
+Static allocation — each box states its owner in `/etc/bench-role`:
+
+| Box | Owner | Use |
+|---|---|---|
+| miner-0 | RigForge | `e2e-real` / tune gates. Pithead never touches its services. |
+| miner-1, miner-2 | Pithead | Tier-4 loaner rigs: `e2e.sh` repoints one at the test bench for a run, then reverts it. Verify `systemctl is-active xmrig` after any remote restart. |
+| miner-3 … miner-7 | Production | Mining only. No test traffic. |
+| gouda | Pithead | Test bench + release box (the tier-4 target). |
+| pithead-prod | Production | Production stack; deploys only. |
+
+The run lock. Both harnesses take a `flock` on `/var/lock/rig-e2e.lock` before the first
+service-touching action and hold it on an inherited FD for the whole run, so the kernel releases
+it the moment the run dies — `kill -9` included, no stale-lock cleanup. rigforge#183 defines the
+mechanism; [#430](https://github.com/p2pool-starter-stack/pithead/issues/430) is this repo's
+mirror; the shared path on every box is the protocol. Mutating runs hold it exclusive; read-only
+runs (`run.sh --check` / `--readiness`) hold it shared, so concurrent readers coexist but still
+exclude mutators. `tests/integration/run.sh` takes it on the target box (over SSH for `--host`);
+`e2e.sh` also takes it on the loaner rig it borrows. A busy box makes the run exit 75
+(`EX_TEMPFAIL`) naming the holder; set `RIG_LOCK_WAIT=1` to queue instead.
+`/run/rig-e2e.holder` is a display-only sidecar naming the holder — the flock is authoritative,
+and a stale sidecar is harmless.
+
+Off-box actors (a human or an agent over SSH) touch services on a shared box only after the same
+check:
+
+```bash
+ssh <box> 'flock -n -x /var/lock/rig-e2e.lock true' || ssh <box> 'cat /run/rig-e2e.holder'
+ssh <box> 'cat /etc/bench-role'   # the box's static owner
+```
+
 ## Hardening checklist (the pitfalls)
 
 Treat the box as production-sensitive. It holds keys and it's the thing that signs off releases.

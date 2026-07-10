@@ -258,6 +258,67 @@ assert_num_ge "num_ge passes when equal" 5 5
 assert_num_gt "num_gt passes when greater" 6 5
 [ "$IT_PASS" -gt "$_p" ] && it_pass "passing assertions increment IT_PASS" || it_fail "passing assertions increment IT_PASS" "no increment"
 
+echo "== rig_lock: the shared-bench flock (#430 / rigforge#183) =="
+# The canonical rig lock, exercised in a sandbox via the env-overridable paths — no root, no
+# /var/lock. Holders run as background subshells that acquire, signal readiness, then block on
+# a fifo until released; probes run in their own subshells (rig_lock exits 75 when busy).
+if ! command -v flock >/dev/null 2>&1; then
+    it_warn "flock not found on this host (macOS?) — skipping; CI and the boxes run this section"
+else
+    RL="$TMP/rig-lock"
+    mkdir -p "$RL"
+    RIG_LOCK_FILE="$RL/lock"
+    RIG_LOCK_HOLDER="$RL/holder"
+    mkfifo "$RL/hold-x" "$RL/hold-s"
+
+    # An exclusive holder (a stand-in for a running matrix).
+    (rig_lock pithead "run.sh matrix" && : >"$RL/ready-x" && read -r _ <"$RL/hold-x") &
+    _rl_x=$!
+    wait_for 30 0.2 "exclusive holder to acquire" test -f "$RL/ready-x" || it_fail "exclusive holder acquired" "never signalled ready"
+    if [ -f "$RIG_LOCK_HOLDER" ]; then it_pass "holder sidecar written on acquire"; else it_fail "holder sidecar written on acquire" "no $RIG_LOCK_HOLDER"; fi
+
+    # (a) A second exclusive acquire fails fast: exit 75, message names the holder.
+    out="$( (rig_lock rigforge e2e-real) 2>&1)"
+    rc=$?
+    assert_rc "second exclusive acquire exits 75 (EX_TEMPFAIL)" "$rc" "75"
+    assert_contains "busy message names the holder" "$out" "pithead run.sh matrix"
+    assert_contains "busy message points at RIG_LOCK_WAIT=1" "$out" "RIG_LOCK_WAIT=1"
+
+    # (b) Shared vs an exclusive holder is excluded too.
+    (rig_lock rigforge poll shared) >/dev/null 2>&1
+    rc=$?
+    assert_rc "shared acquire vs exclusive holder exits 75" "$rc" "75"
+
+    # (c) RIG_LOCK_WAIT=1 queues: it blocks while the lock is held (gated on its own waiting
+    # notice — a real signal, not a sleep), then acquires the moment the holder exits.
+    (RIG_LOCK_WAIT=1 rig_lock pithead queued 2>"$RL/waiter.err") &
+    _rl_q=$!
+    wait_for 30 0.2 "queued waiter to block on the held lock" grep -qs waiting "$RL/waiter.err" ||
+        kill "$_rl_q" 2>/dev/null # never acquired-nor-blocked: reap it so wait below fails loudly
+    printf 'go\n' >"$RL/hold-x"   # release the exclusive holder
+    wait "$_rl_q"
+    rc=$?
+    assert_rc "RIG_LOCK_WAIT=1 blocks, then acquires on release" "$rc" "0"
+    wait "$_rl_x"
+
+    # (d) Shared + shared coexist; exclusive vs a shared holder is excluded.
+    (rig_lock pithead "run.sh --check" shared && : >"$RL/ready-s" && read -r _ <"$RL/hold-s") &
+    _rl_s=$!
+    wait_for 30 0.2 "shared holder to acquire" test -f "$RL/ready-s" || it_fail "shared holder acquired" "never signalled ready"
+    (rig_lock rigforge poll shared) >/dev/null 2>&1
+    rc=$?
+    assert_rc "shared + shared coexist (rc 0)" "$rc" "0"
+    (rig_lock rigforge e2e-real) >/dev/null 2>&1
+    rc=$?
+    assert_rc "exclusive vs shared holder exits 75" "$rc" "75"
+    printf 'go\n' >"$RL/hold-s"
+    wait "$_rl_s"
+
+    # (e) Every holder exited normally, so the display-only sidecar is gone (EXIT-trap rm).
+    if [ ! -f "$RIG_LOCK_HOLDER" ]; then it_pass "holder sidecar removed on normal exit"; else it_fail "holder sidecar removed on normal exit" "sidecar still present"; fi
+    unset RIG_LOCK_FILE RIG_LOCK_HOLDER
+fi
+
 # --- Tally ------------------------------------------------------------------
 echo ""
 echo "selftest: $IT_PASS passed, $IT_FAIL failed"

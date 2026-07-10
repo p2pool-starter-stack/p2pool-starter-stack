@@ -253,6 +253,74 @@ monero_caught_up() {
         printf "%s" "$body" | jq -e "(.status==\"OK\") and ((.synchronized==true) or (.target_height==0))" >/dev/null 2>&1'
 }
 
+# --- Shared-bench rig lock (#430; canonical helper from rigforge#183) --------
+# RigForge's release gates and this harness share bench hardware; a kernel flock on one
+# world-known path coordinates them. The lock lives on an open FD, so it dies with its holder
+# (kill -9 included — no stale-lock cleanup), shared (read-only) holders coexist but exclude
+# exclusive (mutating) ones, and a busy box exits 75 (EX_TEMPFAIL) so wrappers can tell
+# "retry later" from a real failure. The helper is copied VERBATIM from rigforge#183 — the
+# same lock path on every box IS the protocol; do not fork the two copies. FD 9 is inherited
+# by children, which is what keeps the lock held for the whole run — never close it.
+# RIG_LOCK_FILE/RIG_LOCK_HOLDER are env-overridable so the tier-1 self-test can sandbox the
+# paths (rigforge#183 note 6). run.sh sets no other EXIT trap; if one is ever added there,
+# fold this rm -f into its body instead of trapping twice — a later `trap … EXIT` replaces,
+# it doesn't stack (rigforge#183 note 3).
+rig_lock() { # rig_lock <project> <suite> [shared]
+    local mode=-x
+    [ "${3:-}" = shared ] && mode=-s
+    exec 9>"${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}"
+    if ! flock -n $mode 9; then
+        if [ "${RIG_LOCK_WAIT:-0}" = 1 ]; then
+            echo "rig busy ($(cat "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || echo unknown)) — waiting..." >&2
+            flock $mode 9
+        else
+            echo "miner-0 busy: $(cat "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || echo unknown). Retry with RIG_LOCK_WAIT=1 to queue." >&2
+            exit 75
+        fi
+    fi
+    printf '%s %s pid=%s started=%s\n' "$1" "$2" "$$" "$(date -Is)" >"${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}"
+    trap 'rm -f "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}"' EXIT
+}
+
+# Take the rig lock ON a remote box and hold it for the lifetime of THIS process. The remote
+# bash receives the verbatim helper over ssh stdin, acquires, answers RIG_LOCK_OK, then blocks
+# reading the still-open pipe; local FD 8 keeps that pipe open, so the remote shell — and with
+# it the kernel lock — dies the moment this process does, kill -9 included: the same crash
+# semantics as holding FD 9 locally, one hop out. Busy propagates as the helper's exit 75; an
+# ssh failure propagates as ssh's own exit code. Uses fixed local FD 8 (bash 3.2 has no
+# dynamic fds), so: one remote lock per process — enough for run.sh (the target box) and
+# e2e.sh (the borrowed loaner rig; its bench lock is taken by the run.sh it launches there).
+RIG_LOCK_SSH_PID=""
+rig_lock_remote() { # rig_lock_remote <project> <suite> <shared|""> <dest> [ssh opts...]
+    local project="$1" suite="$2" shmode="$3" dest="$4"
+    shift 4
+    local d
+    d="$(mktemp -d)" && mkfifo "$d/in" "$d/out" || {
+        it_err "rig_lock_remote: cannot create fifos under ${TMPDIR:-/tmp}"
+        exit 1
+    }
+    ssh "$@" "$dest" "RIG_LOCK_WAIT=$(quote_arg "${RIG_LOCK_WAIT:-0}") RIG_LOCK_FILE=$(quote_arg "${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}") RIG_LOCK_HOLDER=$(quote_arg "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}") bash -s" <"$d/in" >"$d/out" &
+    RIG_LOCK_SSH_PID=$!
+    exec 8>"$d/in"
+    {
+        declare -f rig_lock
+        printf 'rig_lock %s %s %s && echo RIG_LOCK_OK\n' "$(quote_arg "$project")" "$(quote_arg "$suite")" "$(quote_arg "$shmode")"
+    } >&8
+    local ack=""
+    IFS= read -r ack <"$d/out" || true
+    rm -rf "$d" # the open FDs outlive the fifo names
+    if [ "$ack" != "RIG_LOCK_OK" ]; then
+        # No ack: the remote helper exited 75 (its busy message already reached our stderr
+        # via ssh) or ssh itself failed — either way the run must not touch the box.
+        local rc
+        wait "$RIG_LOCK_SSH_PID" 2>/dev/null
+        rc=$?
+        [ "$rc" -eq 0 ] && rc=1 # EOF without the ack is never success
+        it_err "could not take the rig lock on $dest (exit $rc)"
+        exit "$rc"
+    fi
+}
+
 # --- Readiness waiters ------------------------------------------------------
 # Poll a predicate until it succeeds or the timeout elapses. The interval is a *poll* cadence
 # against a real readiness signal — not a fixed "sleep and hope" (issue #54). Returns 0 on
