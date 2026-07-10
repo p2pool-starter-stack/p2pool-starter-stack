@@ -980,6 +980,7 @@ class TestRunIteration:
             "low_ram",
             "blocks_found_total",
             "block_height",
+            "containers",
         }
         # ...sourced from the real computed values, not placeholders.
         assert kw["db_healthy"] is True  # from state_manager.is_db_healthy()

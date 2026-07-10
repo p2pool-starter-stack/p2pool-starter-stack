@@ -24,6 +24,56 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   what-if input, from the Tari block reward and difficulty p2pool's merge-mine stats already
   report. `—` while merge-mining is inactive or Tari is still syncing; the Telegram `/earnings`
   reply gains the matching XTM/day line, shown only while those figures are live.
+- **Share-health time-series and reject-rate trends (#116, first slice of the #196 epic).**
+  Pool-wide accepted/rejected/invalid/expired share deltas persist per poll in the dashboard
+  database, reset-safe across proxy restarts. `/api/state` serves the series plus a trailing 24h
+  reject rate, and a `high_reject_rate` Telegram alert fires when the trailing hour crosses 5 %
+  (`telegram.events.high_reject_rate`, on by default).
+- **Telegram alerts for the good news: block found and payout found (#336).** Fires on P2Pool block
+  finds from the pool stats the loop already reads; the payout variant additionally requires a share
+  in the PPLNS window. Both on by default (`telegram.events.block_found` / `payout_found`).
+- **Payout-wallet tamper tripwire (#375).** The dashboard persists the wallet p2pool actually mines
+  to; any change raises a Telegram alert and a 72-hour top-bar warning (addresses truncated to
+  8 chars), and `pithead apply` requires typing the new address's first 8 characters before applying
+  a wallet change (`--yes` still works for automation). A silently swapped `monero.wallet_address`
+  no longer goes unnoticed.
+- **Prometheus `/metrics` endpoint (#379).** ~28 `pithead_*` gauges rendered from the metrics the
+  dashboard already computes — no new dependency, same bind and auth as the dashboard. Scrape
+  example in [docs/monitoring.md](docs/monitoring.md).
+- **Telegram `/status` shows the 24h P2Pool/XvB split (#365)** when XvB is enabled, using the same
+  math as the daily digest.
+- **Three `doctor` runtime checks (#383).** The Tor-egress firewall rules are actually installed (a
+  host reboot silently drops them while the containers auto-restart), something is listening on
+  stratum `:3333` while xmrig-proxy runs, and the dashboard app answers behind its container.
+- **Workers-table first-run hint (#385).** Until the first worker connects, the empty table is
+  replaced by "point each rig at `<host-ip>:3333`" with the real address filled in.
+- **Tier-4 fault injection: dashboard DB write failure (#202).** The live matrix proves
+  `db_healthy` flips false when the data dir goes read-only and recovers on restore.
+
+### Fixed
+
+- **A hung `/api/state` poll no longer freezes the dashboard (#382).** The refresh fetch had no
+  timeout, so a Tor circuit that hung (rather than failed) left stale numbers looking live
+  indefinitely. Polls now abort after 25 s and the disconnected banner names the timestamp of the
+  data on screen.
+- **Worker-table columns tell the truth (#387).** The "10s / 60s / 15m" labels sat over 1m/1m/10m
+  proxy data; the columns are now labelled `1m`/`10m` and the duplicate first column is gone (API
+  consumers: worker rows no longer carry `h10`/`h10_str`). The chart tooltip abbreviates hashrate
+  like every other surface, and Telegram XMR figures use the dashboard's adaptive decimals.
+- **The CLI's own messages say `./pithead` (#389)** — thirteen remediation hints told the operator
+  to run a `pithead` command that isn't on PATH.
+
+### Changed
+
+- **Naming sweep (#388).** The CLI log prefix is `[pithead]` (the last survivor of the pre-rename
+  wordmark), the browser tab says Pithead, and "merge-mining" is hyphenated everywhere.
+- **XvB tier calculator in the earnings card + richer `/xvb` (#118).** The same what-if hashrate
+  now also answers which XMRvsBeast donor tier it can sustain (the donation controller's own auto
+  rule), the tier's threshold, and the cost of holding it — about the threshold in continuous
+  donation, since XvB qualifies a tier on both the 1h and 24h credited averages. Labelled as
+  raffle status, never an XMR payout, with no entry counts or win odds shown (the draw is random
+  above the threshold). Hidden while XvB is disabled. The Telegram `/xvb` reply gains the matching
+  threshold, cost, and not-a-payout lines.
 
 ## [1.2.2] - 2026-07-04
 

@@ -349,6 +349,20 @@ def format_xvb(metrics, host_label=""):
         f"Mode: {metrics.mode}",
         f"Current tier: {metrics.current_tier}",
         f"Target tier: {metrics.target_tier}",
+    ]
+    # Tier cost framing (#118), all from existing Metrics fields: what the target tier demands and
+    # what holding it costs. A tier is raffle status, never an XMR payout — say so explicitly.
+    if metrics.target_threshold > 0:
+        sust = "sustainable" if metrics.target_sustainable else "NOT sustainable at your hashrate"
+        lines.append(f"Target threshold: {format_hashrate(metrics.target_threshold)} ({sust})")
+        lines.append(
+            f"Holding it costs ~{format_hashrate(metrics.target_threshold)} donated continuously "
+            "(both the 1h and 24h credited averages must clear it)."
+        )
+    else:
+        lines.append("No donor tier is sustainable at your hashrate.")
+    lines += [
+        "A tier is raffle status, not an XMR payout — donated hashrate earns no P2Pool shares.",
         f"Routed to XvB: {format_hashrate(metrics.xvb_routed_1h)} (1h)",
         # Credited averages are what XvB itself measures — the figures that actually set your tier
         # (routed above is what we send; credited is what counts). Showing both explains the tier.
@@ -410,6 +424,7 @@ _INCIDENT_LABELS = {
     "clearnet_exposed": "clearnet exposure",
     "hashrate_low": "hashrate low",
     "hashrate_loss": "hashrate drop",
+    "container_unhealthy": "container unhealthy",
 }
 
 

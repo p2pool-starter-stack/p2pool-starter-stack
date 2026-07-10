@@ -244,6 +244,8 @@
     "label": "No"
   },
   "range": "all",
+  "reject_pct_24h": "\u2014",
+  "share_stats": [],
   "shares_window": {
     "count": 1,
     "ok": true
@@ -572,5 +574,16 @@
       "uptime": 0,
       "uptime_str": "0m 0s"
     }
-  ]
+  ],
+  "xvb_calc": {
+    "current_tier": "None",
+    "enabled": true,
+    "max_fraction": 0.85,
+    "mode_note": null,
+    "note": "An XvB tier is raffle status, not an XMR payout. Donated hashrate earns no P2Pool shares; holding a tier costs about its threshold in continuous donation (XvB qualifies a tier on both the 1h and 24h credited averages), and donating above the threshold adds nothing \u2014 the raffle winner is drawn at random among qualifiers.",
+    "sustainable": false,
+    "target_threshold": 0.0,
+    "target_tier": "None",
+    "tiers": []
+  }
 }
