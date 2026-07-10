@@ -12,6 +12,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TELEGRAM_EVENTS,
 )
+from mining_dashboard.service.container_health import ContainerHealthMonitor
 from mining_dashboard.service.telegram_notifier import TelegramNotifier
 from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
@@ -78,6 +79,12 @@ class AlertService:
       alert when this node held a PPLNS share at that poll — PPLNS pays every miner with a share
       in the window, so that block pays *you*. Good news, not incidents — never tallied in the
       daily incident log.
+    - **container crash-loop / unhealthy / recovered** — a debounced
+      :class:`ContainerHealthMonitor` over the per-container inspect snapshots from the
+      read-only docker-proxy (#337): a stack container restarting repeatedly (OOM, bad config)
+      or stuck failing its healthcheck. Keys ONLY off restart deltas / ``restarting`` /
+      ``health=="unhealthy"`` — never off "exited", because the stack stops p2pool and
+      xmrig-proxy on purpose (#35/#31).
 
     Edge state is seeded silently on the first observation (``None`` baselines), so a dashboard
     restart can't replay a stale transition as a fresh alert. The exception is the persistent
@@ -113,6 +120,7 @@ class AlertService:
     EVT_HIGH_REJECT_RATE = "high_reject_rate"
     EVT_BLOCK_FOUND = "block_found"
     EVT_PAYOUT_FOUND = "payout_found"
+    EVT_CONTAINER_UNHEALTHY = "container_unhealthy"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -122,10 +130,30 @@ class AlertService:
         "left": (EVT_WORKER_LEFT, "\U0001f44b Worker left: {name}"),
     }
 
+    # ContainerHealthMonitor edge -> (event key, message template). One toggle for all three
+    # edges (#337) — problem and recovery are the same conversation.
+    _CONTAINER_EDGES = {
+        "crash_loop": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f534 \U0001f4e6 Container {name} is crash-looping — restarting repeatedly "
+            "(OOM or bad config?). Check: docker logs {name}",
+        ),
+        "unhealthy": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f7e0 \U0001f4e6 Container {name} is running but unhealthy — its healthcheck "
+            "keeps failing.",
+        ),
+        "recovered": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f7e2 \U0001f4e6 Container {name} recovered.",
+        ),
+    }
+
     def __init__(
         self,
         notifier=None,
         worker_monitor=None,
+        container_monitor=None,
         host_label=HOST_IP,
         daily_time=TELEGRAM_DAILY_SUMMARY_TIME,
         kv_get=None,
@@ -133,6 +161,9 @@ class AlertService:
     ):
         self.notifier = notifier if notifier is not None else build_default_notifier()
         self.workers = worker_monitor if worker_monitor is not None else WorkerPresenceMonitor()
+        self.containers = (
+            container_monitor if container_monitor is not None else ContainerHealthMonitor()
+        )
         # Once-daily digest: target local minute-of-day (HH:MM → h*60+m), and the day we last sent
         # (so it fires once per day). A malformed time disables it.
         self._daily_target_min = _parse_hhmm(daily_time)
@@ -153,6 +184,11 @@ class AlertService:
         self._prev_hashrate_low = None
         self._prev_reject_high = None
         self._prev_blocks_found = None
+        # Two-step rebaseline for the block counter (#336): a backwards move (p2pool restart, or
+        # a partially-written stats file briefly reading 0) arms this; the NEXT observation then
+        # seeds the baseline silently. Without it, the transient 7→0→7 glitch would read the
+        # restored 7 as "found 7 blocks".
+        self._blocks_rebaselining = False
         # Persistent host-perf advisories (#104): unlike the transient edges above, these fire on the
         # FIRST observation of the problem (a stable low-RAM box would never "transition"), so their
         # baseline is "no problem" (False) rather than None — a problem present on the first cycle is
@@ -199,6 +235,7 @@ class AlertService:
         reject_rate_1h=None,
         blocks_found_total=0,
         block_height=0,
+        containers=None,
         now=None,
     ):
         """Fold this cycle's signals into the list of ``(event_key, text)`` to send, filtered to
@@ -250,6 +287,16 @@ class AlertService:
                 alerts.append((evt, self._fmt(template.format(name=name))))
         else:
             self.workers.reset()
+
+        # --- Container crash-loop / stuck-unhealthy / recovered (#337) ---
+        # Driven by the read-proxy inspect snapshots; None = no data this cycle (collector
+        # skipped), which is no verdict — the monitor isn't fed, so streaks stay put.
+        if containers is not None:
+            for name, edge in self.containers.update(containers, now=now):
+                evt, template = self._CONTAINER_EDGES[edge]
+                if edge != "recovered":
+                    self._record_incident(self.EVT_CONTAINER_UNHEALTHY)
+                alerts.append((evt, self._fmt(template.format(name=name))))
 
         # --- Host health: data disk filling up, dashboard DB write failing ---
         alerts += self._disk_edges(disk_percent)
@@ -591,12 +638,21 @@ class AlertService:
         """Alert when the pool's cumulative ``totalBlocksFound`` counter advances (#336): the
         P2Pool sidechain found a Monero block. Pool-wide news; when this node also held a PPLNS
         share at that poll, a second alert says the block pays *this* node (PPLNS pays every
-        miner with a share in the window on every pool block). Same counter semantics as
-        ``_shares_to_record``: the first observation seeds silently (a dashboard restart must not
-        replay the last block), and a counter that went backwards (p2pool restart, or the stats
-        file briefly reading 0) rebaselines silently. A burst between polls alerts once, with the
-        count. Good news, not incidents — never recorded in the daily incident log."""
+        miner with a share in the window on every pool block). The first observation seeds
+        silently (a dashboard restart must not replay the last block). A counter that went
+        backwards (p2pool restart, or the stats file briefly reading 0 mid-write) arms a
+        TWO-STEP rebaseline: the next observation seeds the baseline silently, whatever it is —
+        so a transient 7→0→7 blank never fires "found 7 blocks", while a genuine restart
+        (7→0→0→1) still fires for the 1. A burst between polls alerts once, with the count.
+        Good news, not incidents — never recorded in the daily incident log."""
+        if self._blocks_rebaselining:
+            self._blocks_rebaselining = False
+            self._prev_blocks_found = blocks_found_total
+            return []
         prev = self._prev_blocks_found
+        if prev is not None and blocks_found_total < prev:
+            self._blocks_rebaselining = True
+            return []
         self._prev_blocks_found = blocks_found_total
         if prev is None or blocks_found_total <= prev:
             return []
@@ -648,10 +704,19 @@ class AlertService:
         return f"[{self.host_label}] {text}" if self.host_label else text
 
     async def process(self, **signals):
-        """Evaluate this cycle's signals and dispatch any alerts. No-op (and cheap) when the
-        notifier is disabled. Each send runs off-thread so a slow Telegram call can't stall
-        the data loop. Returns the alerts that were dispatched (handy for tests/logging)."""
+        """Evaluate this cycle's signals and dispatch any alerts. Near-no-op when the notifier
+        is disabled — except the payout-wallet baseline (#375), which must persist every cycle
+        regardless: the dashboard's 72h tamper banner reads the kv keys ``_wallet_edges``
+        writes, and Telegram-off is the default stack. Each send runs off-thread so a slow
+        Telegram call can't stall the data loop. Returns the alerts that were dispatched
+        (handy for tests/logging)."""
         if not self.notifier.enabled:
+            try:
+                # Seed/update the kv baseline and change record; the returned alert (the
+                # Telegram message) is the only part that stays notifier-gated.
+                self._wallet_edges(signals.get("observed_wallet", ""))
+            except Exception as exc:  # never let the tripwire break the data loop
+                logger.debug("Wallet baseline update failed (%s)", type(exc).__name__)
             return []
         try:
             alerts = self.evaluate(**signals)

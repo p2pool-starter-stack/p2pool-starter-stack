@@ -18,6 +18,7 @@ from mining_dashboard.config import config as egress_config
 from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
+    _MAX_CHART_POINTS,
     _chart_tension,
     _mode_palette,
     _reject_flag,
@@ -37,6 +38,7 @@ from mining_dashboard.web.views import (
     build_system,
     build_tari,
     build_workers,
+    build_xvb_calc,
     canonical_window,
     get_shell_html,
     host_display_addr,
@@ -1074,6 +1076,37 @@ class TestShareStatsSeries:
         idle = [{"ts": time.time(), "accepted": 0, "rejected": 0, "invalid": 3, "expired": 0}]
         assert _window_reject_pct(idle, 24 * 3600) == "—"
 
+    def test_long_series_is_bounded_and_bucket_summed(self):
+        # 30 days of 30s polls ≈ 86k rows; /api/state must ship at most _MAX_CHART_POINTS,
+        # like the hashrate chart. The deltas are additive, so bucket-summing keeps the
+        # series' totals exact through the thinning.
+        now = time.time()
+        rows = [
+            {"ts": now - i * 30, "accepted": 2, "rejected": 1, "invalid": 0, "expired": 0}
+            for i in range(86_400, 0, -1)  # ascending ts, like the DB returns them
+        ]
+        pts = build_share_stats(rows, "all")
+        assert len(pts) <= _MAX_CHART_POINTS
+        assert sum(p["a"] for p in pts) == 2 * 86_400
+        assert sum(p["r"] for p in pts) == 86_400
+        # Timestamps stay ordered ms-epoch positions from within the data.
+        xs = [p["x"] for p in pts]
+        assert xs == sorted(xs)
+
+    def test_reject_pct_24h_stays_exact_on_long_series(self):
+        # The trailing 24h reject rate is computed from the RAW rows, never the thinned
+        # series — thinning the chart must not move the number.
+        now = time.time()
+        rows = [
+            {"ts": now - i * 30, "accepted": 9, "rejected": 1, "invalid": 0, "expired": 0}
+            for i in range(86_400)
+        ]
+        assert _window_reject_pct(rows, 24 * 3600) == "10.00%"
+
+    def test_short_series_is_untouched(self):
+        pts = build_share_stats(self._rows(time.time()), "all")
+        assert len(pts) == 3  # under the cap -> native resolution, no bucketing
+
 
 # --- pool/network passthrough ---------------------------------------------------------
 
@@ -1261,6 +1294,61 @@ class TestEarnings:
         assert e["coeff_day"] > 0
 
 
+# --- XvB tier / raffle calculator (Issue #118) -----------------------------------------
+
+
+class TestXvbCalc:
+    # Includes a zero-threshold entry to prove it's filtered out of the published table.
+    _TIERS = {
+        "donor_mega": 1_000_000,
+        "donor_whale": 100_000,
+        "donor_vip": 10_000,
+        "donor": 1_000,
+        "off": 0,
+    }
+
+    def _sm(self):
+        sm = MagicMock()
+        sm.get_tiers.return_value = self._TIERS
+        return sm
+
+    def test_disabled_returns_enabled_false_only(self):
+        # XvB off → nothing to calculate; the whole payload is the single flag.
+        assert build_xvb_calc(_metrics(xvb_enabled=False), self._sm()) == {"enabled": False}
+
+    def test_tier_table_sorted_ascending_and_zero_thresholds_dropped(self):
+        out = build_xvb_calc(_metrics(), self._sm())
+        assert [t["threshold"] for t in out["tiers"]] == [1_000, 10_000, 100_000, 1_000_000]
+        # Names come from get_tier_info, threshold already embedded — same string as everywhere.
+        assert out["tiers"][1]["name"] == "Vip (10.00 kH/s+)"
+
+    def test_mirrors_metrics_and_config(self):
+        # Current/target state is passed straight through from Metrics — no tier math re-derived
+        # here — and max_fraction is the configured sustainability headroom rule.
+        m = _metrics(
+            current_tier="Donor (1.00 kH/s+)",
+            target_tier="Vip (10.00 kH/s+)",
+            target_threshold=10_000.0,
+            target_sustainable=False,
+        )
+        out = build_xvb_calc(m, self._sm())
+        assert out["enabled"] is True
+        assert out["current_tier"] == "Donor (1.00 kH/s+)"
+        assert out["target_tier"] == "Vip (10.00 kH/s+)"
+        assert out["target_threshold"] == 10_000.0
+        assert out["sustainable"] is False
+        assert out["max_fraction"] == views.XVB_MAX_DONATION_FRACTION
+        # The labelling the issue demands: tier = raffle status, never a payout.
+        assert "not an XMR payout" in out["note"]
+
+    def test_sidechain_mode_note_only_off_main(self):
+        # #33 context: off the Main sidechain, a pool switch resets PPLNS shares (and with them
+        # XvB win collectability) — display-only text, absent on Main.
+        assert build_xvb_calc(_metrics(pool_type="Main"), self._sm())["mode_note"] is None
+        note = build_xvb_calc(_metrics(pool_type="Mini"), self._sm())["mode_note"]
+        assert "PPLNS" in note
+
+
 # --- build_state integration ----------------------------------------------------------
 
 
@@ -1314,6 +1402,7 @@ class TestBuildState:
             "cadence",
             "proxy_workers",
             "earnings",
+            "xvb_calc",
             "tari",
             "workers",
             "proxy_summary",

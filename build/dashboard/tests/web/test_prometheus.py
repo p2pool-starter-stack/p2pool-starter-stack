@@ -7,7 +7,7 @@ renderer is a pure function, so tier 1 proves it completely.
 import re
 
 from mining_dashboard.service.metrics import Metrics, SyncMetric
-from mining_dashboard.web.prometheus import render_prometheus
+from mining_dashboard.web.prometheus import CONTENT_TYPE, render_prometheus
 
 
 def _sync(percent=100, down=False):
@@ -130,3 +130,64 @@ class TestRenderPrometheus:
         sample = re.compile(r'^[a-z0-9_]+(\{[a-z]+="[^"]+"\})? -?\d+(\.\d+)?(e[+-]?\d+)?$')
         for line in body.splitlines():
             assert line.startswith("# TYPE pithead_") or sample.match(line), line
+
+
+class TestBatchSignals:
+    """The batch's own signals: luck/cadence, reject rate, cumulative counters, snapshot age."""
+
+    def test_luck_and_expected_share_seconds(self):
+        body = render_prometheus(
+            _metrics(luck_pct=105.5, expected_share_sec=3600.0), disk_percent=0, db_healthy=True
+        )
+        lines = body.splitlines()
+        assert "pithead_luck_pct 105.5" in lines
+        assert "pithead_expected_share_seconds 3600.0" in lines
+
+    def test_reject_rate_present_when_known(self):
+        body = render_prometheus(_metrics(), disk_percent=0, db_healthy=True, reject_pct_1h=2.5)
+        assert 'pithead_share_reject_pct{window="1h"} 2.5' in body.splitlines()
+
+    def test_reject_rate_omitted_when_no_shares(self):
+        # None = no shares submitted in the window; omit the sample rather than lying 0%.
+        body = render_prometheus(_metrics(), disk_percent=0, db_healthy=True, reject_pct_1h=None)
+        assert "pithead_share_reject_pct" not in body
+
+    def test_cumulative_counters_typed_counter(self):
+        body = render_prometheus(
+            _metrics(),
+            disk_percent=0,
+            db_healthy=True,
+            shares_accepted=12345,
+            shares_rejected=67,
+            pool_blocks_found=9,
+        )
+        lines = body.splitlines()
+        assert "# TYPE pithead_shares_accepted_total counter" in lines
+        assert "pithead_shares_accepted_total 12345" in lines
+        assert "# TYPE pithead_shares_rejected_total counter" in lines
+        assert "pithead_shares_rejected_total 67" in lines
+        assert "# TYPE pithead_pool_blocks_found_total counter" in lines
+        assert "pithead_pool_blocks_found_total 9" in lines
+
+    def test_snapshot_age_from_timestamp(self):
+        # now − snapshot timestamp: a wedged data loop shows a growing age instead of
+        # scraping as healthy forever.
+        body = render_prometheus(
+            _metrics(), disk_percent=0, db_healthy=True, snapshot_ts=1000.0, now=1030.0
+        )
+        assert "pithead_snapshot_age_seconds 30.0" in body.splitlines()
+
+    def test_snapshot_age_never_negative_and_honest_at_zero_ts(self):
+        # Clock skew clamps at 0; a never-written snapshot (ts 0) reads as maximally stale.
+        skew = render_prometheus(
+            _metrics(), disk_percent=0, db_healthy=True, snapshot_ts=2000.0, now=1000.0
+        )
+        assert "pithead_snapshot_age_seconds 0.0" in skew.splitlines()
+        cold = render_prometheus(
+            _metrics(), disk_percent=0, db_healthy=True, snapshot_ts=0, now=5000.0
+        )
+        assert "pithead_snapshot_age_seconds 5000.0" in cold.splitlines()
+
+    def test_content_type_carries_exposition_version(self):
+        assert "version=0.0.4" in CONTENT_TYPE
+        assert CONTENT_TYPE.startswith("text/plain")

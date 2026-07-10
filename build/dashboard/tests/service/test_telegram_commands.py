@@ -285,6 +285,27 @@ def test_xvb_enabled_with_share():
     assert "Credited by XvB: 2.10 kH/s (1h) · 2.30 kH/s (24h)" in out
 
 
+def test_xvb_tier_threshold_cost_and_not_a_payout_label():
+    # #118: /xvb carries the target threshold, the cost framing (holding a tier ≈ donating its
+    # threshold continuously), and the explicit not-a-payout labelling.
+    out = tc.format_xvb(_metrics(target_threshold=10_000.0, target_sustainable=True))
+    assert "Target threshold: 10.00 kH/s (sustainable)" in out
+    assert "costs ~10.00 kH/s donated continuously" in out
+    assert "not an XMR payout" in out
+
+
+def test_xvb_unsustainable_target_flagged():
+    out = tc.format_xvb(_metrics(target_threshold=10_000.0, target_sustainable=False))
+    assert "NOT sustainable at your hashrate" in out
+
+
+def test_xvb_no_sustainable_tier():
+    # Auto mode with too little hashrate resolves to threshold 0 — say so instead of "0 H/s".
+    out = tc.format_xvb(_metrics(target_threshold=0.0, target_sustainable=False))
+    assert "No donor tier is sustainable" in out
+    assert "Target threshold:" not in out
+
+
 def test_xvb_stale_warns():
     out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5, xvb_stale=True))
     assert "stale" in out

@@ -55,7 +55,8 @@ finish their initial sync. Check the dashboard to see which.
 
 **Changing the payout wallet:** `apply` asks you to type the first 8 characters of the new address
 (a bare `y` is not enough for the one change that redirects every future reward; `apply -y` skips
-the prompt for automation). The dashboard also watches the wallet p2pool actually mines to: any
+the prompt for automation). Changing both the Monero and Tari addresses in one `apply` prompts
+once per address. The dashboard also watches the wallet p2pool actually mines to: any
 change raises a `wallet_changed` [Telegram alert](telegram.md) and a 72-hour top-bar banner —
 including a change you made yourself. Treat that pair as confirmation; if you didn't change it,
 your rewards are being redirected — check `config.json` and re-apply the correct address.
@@ -116,7 +117,7 @@ so confirm yours is a `4…`/95-char address first (see [Configuration](configur
 > copying the stack to a different path (or running a second checkout) points it at a *different,
 > empty* `data/`: a full re-sync, and the dashboard history is orphaned. If you move the install,
 > move its `data/` with it, or set absolute `data_dir` paths in `config.json` and run `./pithead
-> apply`. `pithead up` and `pithead doctor` now warn when a data directory named in `.env` is missing.
+> apply`. `./pithead up` and `./pithead doctor` now warn when a data directory named in `.env` is missing.
 
 ---
 

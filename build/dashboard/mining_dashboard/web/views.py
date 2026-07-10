@@ -25,12 +25,14 @@ from mining_dashboard.config.config import (
     HOST_IP,
     LOW_RAM_GB,
     UPDATE_INTERVAL,
+    XVB_MAX_DONATION_FRACTION,
 )
 from mining_dashboard.helper.utils import (
     detect_host_ipv4,
     format_duration,
     format_hashrate,
     format_time_abs,
+    get_tier_info,
     is_ip_address,
 )
 from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
@@ -235,8 +237,11 @@ def _filter_events(events, range_arg, window=None):
 
 def build_share_stats(share_stats, range_arg, window=None):
     """The persisted per-poll share-health deltas (#116) as chart-ready points, restricted to the
-    selected range/window — same bounds as ``_filter_events``. Each point is
-    ``{x: ms epoch, a, r, i, e}`` (accepted/rejected/invalid/expired deltas for that interval)."""
+    selected range/window — same bounds as ``_filter_events`` — and bounded at
+    ``_MAX_CHART_POINTS`` like the hashrate series (the default "all" range over the 30-day
+    retention is ~86k rows, which /api/state would otherwise ship every poll). Each point is
+    ``{x: ms epoch, a, r, i, e}`` (accepted/rejected/invalid/expired deltas for that interval).
+    ``reject_pct_24h`` stays exact — it is computed from the raw rows, never this thinned series."""
     return [
         {
             "x": int(s["ts"] * 1000),
@@ -245,8 +250,28 @@ def build_share_stats(share_stats, range_arg, window=None):
             "i": s.get("invalid", 0),
             "e": s.get("expired", 0),
         }
-        for s in _filter_share_stats(share_stats, range_arg, window)
+        for s in _downsample_share_stats(_filter_share_stats(share_stats, range_arg, window))
     ]
+
+
+def _downsample_share_stats(rows, target=_MAX_CHART_POINTS):
+    """Bucket the delta rows down to ``target`` points. Unlike ``_downsample_history`` (which
+    averages a rate), the counts are per-interval DELTAS, so each bucket is **summed** — totals
+    and the reject ratio survive thinning exactly. The bucket's mid-row timestamp positions the
+    point, matching the hashrate downsampler."""
+    if len(rows) <= target:
+        return rows
+    chunk_size = len(rows) / target
+    out = []
+    for i in range(target):
+        chunk = rows[int(i * chunk_size) : int((i + 1) * chunk_size)]
+        if not chunk:
+            continue
+        bucket = {"ts": chunk[len(chunk) // 2]["ts"]}
+        for col in ("accepted", "rejected", "invalid", "expired"):
+            bucket[col] = sum(r.get(col, 0) or 0 for r in chunk)
+        out.append(bucket)
+    return out
 
 
 def _filter_share_stats(rows, range_arg, window=None):
@@ -1019,6 +1044,62 @@ def build_earnings(data, metrics):
     }
 
 
+# XvB tier calculator copy (#118). A tier is RAFFLE status, never an XMR payout, and the winner is
+# drawn at random among qualifiers — donating above the threshold buys zero extra win chance, so
+# the honest framing is cost, not reward.
+_XVB_TIER_NOTE = (
+    "An XvB tier is raffle status, not an XMR payout. Donated hashrate earns no P2Pool shares; "
+    "holding a tier costs about its threshold in continuous donation (XvB qualifies a tier on "
+    "both the 1h and 24h credited averages), and donating above the threshold adds nothing — "
+    "the raffle winner is drawn at random among qualifiers."
+)
+
+_XVB_SIDECHAIN_NOTE = (
+    "Note: switching the P2Pool sidechain resets your PPLNS shares, and collecting an XvB win "
+    "needs a share in the window."
+)
+
+
+def build_xvb_calc(metrics, state_mgr):
+    """XvB tier/raffle calculator inputs for the Advanced view (Issue #118).
+
+    Same pattern as ``build_earnings``'s ``coeff_day``: the server publishes the tier table and
+    the sustainability rule once (single source of truth — ``state_mgr.get_tiers()``, so a
+    ``TIER_CONFIG`` override flows through, plus ``XVB_MAX_DONATION_FRACTION``), and the client
+    does the what-if math (``computeXvbTier`` in ``logic.mjs``, a transcription of
+    ``resolve_target_threshold``'s auto rule). Current/target tier state comes straight off
+    ``Metrics`` — no tier math is re-derived here.
+
+    Deliberately carries NO raffle-entry or win-probability figures: the raffle draw is random
+    among qualifiers, so tier + threshold + cost is everything the operator can act on. Returns
+    ``{"enabled": False}`` alone when XvB is off — there is no tier to calculate."""
+    if not metrics.xvb_enabled:
+        return {"enabled": False}
+    tiers = state_mgr.get_tiers()
+    return {
+        "enabled": True,
+        # Ascending tier table for the client's what-if; names via get_tier_info so they read
+        # exactly like the tier strings everywhere else (threshold already embedded in the name).
+        "tiers": sorted(
+            (
+                {"name": get_tier_info(t, tiers)[0], "threshold": float(t)}
+                for t in tiers.values()
+                if t > 0
+            ),
+            key=lambda entry: entry["threshold"],
+        ),
+        "max_fraction": XVB_MAX_DONATION_FRACTION,  # donation headroom rule (sustainability)
+        "current_tier": metrics.current_tier,
+        "target_tier": metrics.target_tier,
+        "target_threshold": metrics.target_threshold,
+        "sustainable": metrics.target_sustainable,
+        "note": _XVB_TIER_NOTE,
+        # #33 mode context, display-only: off the Main sidechain a pool switch costs your PPLNS
+        # shares — and with them XvB win collectability. None on Main (nothing to warn about).
+        "mode_note": _XVB_SIDECHAIN_NOTE if metrics.pool_type != "Main" else None,
+    }
+
+
 # --------------------------------------------------------------------------------------
 # Assembly.
 # --------------------------------------------------------------------------------------
@@ -1105,6 +1186,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "raffle_eligible": build_raffle_eligibility(metrics),
         "proxy_workers": metrics.workers_online,
         "earnings": build_earnings(data, metrics),
+        "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),

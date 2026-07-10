@@ -6,7 +6,9 @@
 import { ChartCard } from "./chart.mjs";
 import {
   computeEarnings,
+  computeXvbTier,
   egressRoute,
+  fmtHashrate,
   formatTimeToShare,
   formatXmr,
   formatXtm,
@@ -352,6 +354,31 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
+// XvB tier / raffle block (#118), inside the earnings card and driven by the same what-if
+// hashrate: the highest XMRvsBeast tier that hashrate sustains (computeXvbTier — the server's
+// own auto rule), what holding it costs, and the current vs target tier for context. Labelled
+// raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
+// above the threshold. Hidden entirely while XvB is disabled.
+function XvbTierBlock({ calc, hr }) {
+  if (!calc || !calc.enabled) return null;
+  const t = computeXvbTier(hr, calc);
+  return html`
+    <div class="xvb-tier-block">
+        <h4>XvB Tier (raffle)</h4>
+        <div class="stat-grid">
+            <${StatCard} label="Sustainable Tier" value=${t ? t.tier : "None"} cls="c-purple"
+                         title="The highest XvB donor tier this hashrate sustains while leaving P2Pool its share — the same auto rule the donation controller uses." />
+            <${StatCard} label="Hashrate Cost" value=${t ? fmtHashrate(t.cost) : "—"}
+                         title="Holding the tier means continuously donating about its threshold — hashrate that earns no P2Pool shares while donated." />
+            <${StatCard} label="Current Tier" value=${calc.current_tier}
+                         title="The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages)." />
+            <${StatCard} label="Target Tier" value=${calc.target_tier}
+                         title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
+        </div>
+        <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
+    </div>`;
+}
+
 // P2Pool earnings calculator (Issue #12). A power-user card (Advanced view) over the metrics
 // layer that estimates XMR from *P2Pool mining only* — explicitly not XvB — plus the Tari the
 // same hashrate merge-mines alongside it (#117; "—" while merge-mining is inactive). The server
@@ -403,6 +430,7 @@ class EarningsCard extends Component {
                 <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                 <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
             </div>
+            <${XvbTierBlock} calc=${this.props.xvb} hr=${hr} />
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }
@@ -607,7 +635,7 @@ function DashboardView({
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
-            <${EarningsCard} earnings=${state.earnings} />
+            <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} />
             <${CadenceCard} cadence=${state.cadence} />
             <${TariCard} tari=${state.tari} />
             <${GlobalStats} state=${state} />
