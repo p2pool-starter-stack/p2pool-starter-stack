@@ -200,7 +200,7 @@ Run `./pithead apply` after editing. The commands:
 
 | Command | Reply |
 |---|---|
-| `/status` | One-glance health: each node up/down/syncing, the **Tari merge-mine link** (gRPC connected — distinct from the node being synced), whether mining is active, workers online, total hashrate, PPLNS shares in window — followed by any active **warning/error badges** (the same ones the dashboard's top bar shows), or an explicit "✅ No warnings." |
+| `/status` | One-glance health: each node up/down/syncing, the **Tari merge-mine link** (gRPC connected — distinct from the node being synced), whether mining is active, workers online, total hashrate, PPLNS shares in window, and — when XvB is on — the **24h P2Pool/XvB split** (same figures as the daily summary) — followed by any active **warning/error badges** (the same ones the dashboard's top bar shows), or an explicit "✅ No warnings." |
 | `/info` | About this stack: the running **version** (and whether a newer release is available), the Monero **DB mode** (pruned / full), the P2Pool **sidechain** (Mini / Main), and the **privacy posture** (Tor-only, or how many clearnet paths are exposed). |
 | `/hashrate` | Total hashrate plus a per-rig breakdown of everything currently online. |
 | `/workers` | Every rig's online/offline state, with uptime for the ones that are up. |
