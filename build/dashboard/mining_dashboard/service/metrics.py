@@ -315,3 +315,20 @@ def _monero_mode():
     if MONERO_NODE_HOST == LOCAL_MONERO_HOST:
         return "Pruned" if MONERO_PRUNE else "Full"
     return "Unknown"
+
+
+def share_reject_pct(rows, window_sec, now=None):
+    """Trailing reject rate (percent) from the per-poll share-health deltas (#116).
+
+    ``rows`` are StateManager.get_share_stats() rows (per-interval deltas, ts-keyed). Sums the
+    accepted/rejected deltas over the trailing ``window_sec`` and returns
+    ``rejected / (accepted + rejected) * 100``, or ``None`` when the window has no submitted
+    shares (proxy idle or held) — callers must not read that as 0% healthy."""
+    cutoff = (now if now is not None else time.time()) - window_sec
+    accepted = rejected = 0
+    for r in rows:
+        if r["ts"] >= cutoff:
+            accepted += r.get("accepted", 0) or 0
+            rejected += r.get("rejected", 0) or 0
+    total = accepted + rejected
+    return (rejected / total * 100) if total > 0 else None

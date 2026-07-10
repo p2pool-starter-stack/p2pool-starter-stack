@@ -138,7 +138,7 @@ stack doesn't manage that node.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's
-progress until it catches up and merge mining resumes.
+progress until it catches up and merge-mining resumes.
 
 ### Hashrate chart
 
@@ -180,7 +180,7 @@ The summary panel pulls the key numbers together:
 | **XvB 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually **routed** to XvB. (The XvB-API *credited* figure, XvB's definitive record, appears in the **Advanced** view's *XvB Donation Stats* card.) |
 | **Current Tier** | The XvB tier you're currently holding, the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
 | **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
-| **Tari Mining** | Whether merge mining of Tari is active and healthy. |
+| **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallets** | Your configured Monero and Tari payout addresses. |
 
 ### Workers Alive
@@ -203,12 +203,20 @@ Below the table, a **Proxy totals** line sums the stack's share health as report
 total accepted / rejected (with aggregate reject %) / invalid shares submitted upstream, plus the
 best difficulty any share has hit. Hidden until the proxy submits its first shares.
 
+The dashboard also persists these pool-wide counts as a time series: each 30-second poll stores how
+much the accepted / rejected / invalid / expired counters advanced (a proxy restart re-baselines the
+counters without corrupting the series), retained for 30 days like the hashrate history. `/api/state`
+serves the series as `share_stats` and a trailing-24-hour reject rate as `reject_pct_24h` — a rate
+over recent shares rather than the cumulative-since-proxy-start percentage in Proxy totals. The same
+series drives the `high_reject_rate` [Telegram alert](telegram.md) when the trailing-hour rate
+crosses 5%.
+
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the
 Overview summary, and the worker table. **Advanced** swaps the Overview for cards that break out the
 same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**,
-**XMR Network**, **Tari Merge Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+**XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
 choice is remembered across reloads.
 
 <picture>

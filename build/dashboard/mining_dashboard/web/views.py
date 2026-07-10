@@ -35,7 +35,7 @@ from mining_dashboard.helper.utils import (
 )
 from mining_dashboard.service.earnings import xmr_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
-from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
@@ -231,6 +231,44 @@ def _filter_events(events, range_arg, window=None):
         return events
     cutoff = time.time() - secs
     return [e for e in events if e["ts"] >= cutoff]
+
+
+def build_share_stats(share_stats, range_arg, window=None):
+    """The persisted per-poll share-health deltas (#116) as chart-ready points, restricted to the
+    selected range/window — same bounds as ``_filter_events``. Each point is
+    ``{x: ms epoch, a, r, i, e}`` (accepted/rejected/invalid/expired deltas for that interval)."""
+    return [
+        {
+            "x": int(s["ts"] * 1000),
+            "a": s.get("accepted", 0),
+            "r": s.get("rejected", 0),
+            "i": s.get("invalid", 0),
+            "e": s.get("expired", 0),
+        }
+        for s in _filter_share_stats(share_stats, range_arg, window)
+    ]
+
+
+def _filter_share_stats(rows, range_arg, window=None):
+    """Restrict share-stat deltas (#116) to the selected window — same bounds as
+    ``_filter_events``, for the ``ts``-keyed delta rows."""
+    if window is not None:
+        lo, hi = window
+        return [s for s in rows if lo <= s["ts"] <= hi]
+    if range_arg == "all":
+        return rows
+    secs = _RANGE_SECONDS.get(range_arg, 0)
+    if secs <= 0:
+        return rows
+    cutoff = time.time() - secs
+    return [s for s in rows if s["ts"] >= cutoff]
+
+
+def _window_reject_pct(rows, seconds):
+    """Trailing reject rate over ``seconds`` from the delta series (#116), as a display string.
+    "—" when no shares were submitted in the window (a 0% would read as falsely healthy)."""
+    pct = share_reject_pct(rows, seconds)
+    return "—" if pct is None else f"{pct:.2f}%"
 
 
 def _window_duration(filtered_history, range_arg, window):
@@ -852,7 +890,7 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
             {
                 "text": label,
                 "variant": "warn",
-                "title": "Tari is still syncing — merge mining resumes when it catches up; Monero mining continues",
+                "title": "Tari is still syncing — merge-mining resumes when it catches up; Monero mining continues",
             }
         )
     # Monero pruned/full badge (Issue #32) — only when known (local node).
@@ -1012,6 +1050,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     (e.g. ``state_mgr.get_history`` failing); the caller turns that into a sanitized 500."""
     data = data or {}
     history = state_mgr.get_history()
+    share_stats = state_mgr.get_share_stats()  # per-poll share-health deltas (#116)
     metrics = build_metrics(data, state_mgr, history)
     db_healthy = state_mgr.is_db_healthy()
 
@@ -1029,9 +1068,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
 
     return {
         "syncing": metrics.global_syncing,
-        "page_title": "Mining Dashboard - Syncing"
+        "page_title": "Pithead Dashboard - Syncing"
         if metrics.global_syncing
-        else "Mining Dashboard",
+        else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
@@ -1058,6 +1097,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),
+        # Persisted per-poll share-health deltas + trailing 24h reject rate (#116). Kept out of
+        # proxy_summary so its (cumulative) shape stays unchanged for existing clients.
+        "share_stats": build_share_stats(share_stats, range_arg, window),
+        "reject_pct_24h": _window_reject_pct(share_stats, 24 * 3600),
         "egress": egress,
         "topology": topology,
         "chart": build_chart(

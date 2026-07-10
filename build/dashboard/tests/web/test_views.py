@@ -22,6 +22,7 @@ from mining_dashboard.web.views import (
     _mode_palette,
     _reject_flag,
     _target_points,
+    _window_reject_pct,
     build_badges,
     build_cadence,
     build_chart,
@@ -30,6 +31,7 @@ from mining_dashboard.web.views import (
     build_pool_network,
     build_proxy_summary,
     build_raffle_eligibility,
+    build_share_stats,
     build_state,
     build_sync,
     build_system,
@@ -1033,6 +1035,46 @@ class TestProxySummary:
         assert ps["best"] == "—"
 
 
+class TestShareStatsSeries:
+    """#116: the persisted per-poll share-health deltas surfaced in /api/state."""
+
+    def _rows(self, now):
+        return [
+            {"ts": now - 3 * 24 * 3600, "accepted": 50, "rejected": 9, "invalid": 0, "expired": 0},
+            {"ts": now - 3600, "accepted": 90, "rejected": 10, "invalid": 1, "expired": 2},
+            {"ts": now - 60, "accepted": 10, "rejected": 0, "invalid": 0, "expired": 0},
+        ]
+
+    def test_points_shape_and_ms_epoch(self):
+        now = time.time()
+        pts = build_share_stats(self._rows(now), "all")
+        assert len(pts) == 3
+        assert pts[1] == {"x": int((now - 3600) * 1000), "a": 90, "r": 10, "i": 1, "e": 2}
+
+    def test_range_filters_old_rows(self):
+        # The 24h preset drops the 3-day-old row, same bounds as the chart's event filter.
+        assert len(build_share_stats(self._rows(time.time()), "24h")) == 2
+
+    def test_unknown_range_keeps_everything(self):
+        assert len(build_share_stats(self._rows(time.time()), "bogus")) == 3
+
+    def test_custom_window_bounds_both_ends(self):
+        now = time.time()
+        pts = build_share_stats(self._rows(now), "all", window=(now - 7200, now - 600))
+        assert len(pts) == 1 and pts[0]["a"] == 90
+
+    def test_window_reject_pct(self):
+        now = time.time()
+        # Trailing 24h: 100 accepted + 10 rejected -> 9.09%; the 3-day-old row is excluded.
+        assert _window_reject_pct(self._rows(now), 24 * 3600) == "9.09%"
+
+    def test_window_reject_pct_dash_when_no_shares(self):
+        # Zero submitted shares in the window must read "—", not a falsely-healthy 0%.
+        assert _window_reject_pct([], 24 * 3600) == "—"
+        idle = [{"ts": time.time(), "accepted": 0, "rejected": 0, "invalid": 3, "expired": 0}]
+        assert _window_reject_pct(idle, 24 * 3600) == "—"
+
+
 # --- pool/network passthrough ---------------------------------------------------------
 
 
@@ -1197,11 +1239,12 @@ class TestEarnings:
 # ponytail: this _state_mgr()/_data() pair looks near-duplicated with the ones in test_metrics.py,
 # but the per-module defaults differ on purpose (e.g. tari_sync, the get_tiers/xvb shapes). A shared
 # builder would need enough params that it reads worse than the local copy — left duplicated.
-def _state_mgr(history=None, mode="P2POOL"):
+def _state_mgr(history=None, mode="P2POOL", share_stats=None):
     sm = MagicMock()
     sm.get_history.return_value = history or []
     sm.get_xvb_stats.return_value = {"current_mode": mode}
     sm.get_tiers.return_value = {}
+    sm.get_share_stats.return_value = share_stats or []
     sm.is_db_healthy.return_value = True
     return sm
 
@@ -1246,6 +1289,8 @@ class TestBuildState:
             "tari",
             "workers",
             "proxy_summary",
+            "share_stats",
+            "reject_pct_24h",
             "egress",
             "topology",
             "chart",
@@ -1269,6 +1314,18 @@ class TestBuildState:
 
     def test_is_json_serializable(self):
         json.dumps(build_state(_data(), _state_mgr(), "all"))
+
+    def test_share_stats_series_and_24h_rate_surfaced(self):
+        # #116: the persisted delta series rides on /api/state with a trailing-24h reject rate;
+        # proxy_summary keeps its cumulative shape untouched.
+        rows = [{"ts": time.time() - 60, "accepted": 95, "rejected": 5, "invalid": 0, "expired": 0}]
+        st = build_state(_data(), _state_mgr(share_stats=rows), "all")
+        assert st["share_stats"][0]["a"] == 95 and st["share_stats"][0]["r"] == 5
+        assert st["reject_pct_24h"] == "5.00%"
+        assert "reject_pct_24h" not in st["proxy_summary"]
+        # No rows (fresh install / proxy idle) -> empty series and an honest dash.
+        empty = build_state(_data(), _state_mgr(), "all")
+        assert empty["share_stats"] == [] and empty["reject_pct_24h"] == "—"
 
     def test_db_unhealthy_surfaces_field_and_badge(self):
         # When persistence is broken, /api/state must carry db_healthy=False and a loud badge (#131).
@@ -1297,7 +1354,7 @@ class TestBuildState:
     def test_syncing_flag_and_title(self):
         st = build_state(_data(global_sync=True), _state_mgr(), "all")
         assert st["syncing"] is True
-        assert st["page_title"] == "Mining Dashboard - Syncing"
+        assert st["page_title"] == "Pithead Dashboard - Syncing"
 
     def test_proxy_workers_from_metrics(self):
         data = _data(

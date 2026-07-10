@@ -4,14 +4,14 @@
 
 # Pithead
 
-### Private Monero + Tari merge mining stack
+### Private Monero + Tari merge-mining stack
 
 [![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Tor](https://img.shields.io/badge/Networking-Tor--first-7D4698?logo=torproject&logoColor=white)
 
-Docker Compose stack for Monero + Tari merge mining on [P2Pool](https://github.com/SChernykh/p2pool),
+Docker Compose stack for Monero + Tari merge-mining on [P2Pool](https://github.com/SChernykh/p2pool),
 with a [Monero](https://www.getmonero.org/) full node, [Tari](https://www.tari.com/) base node, and
 a Tor daemon. The `pithead` script renders config, provisions Tor, and drives docker-compose.
 
@@ -26,7 +26,7 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
 
 ## What it does
 
-- ⛏️ **P2Pool payouts, Tari merge mined.** Mines Monero on [P2Pool](https://p2pool.io/): no pool
+- ⛏️ **P2Pool payouts, Tari merge-mined.** Mines Monero on [P2Pool](https://p2pool.io/): no pool
   operator, no fee, rewards paid to your own wallet. Every hash merge-mines Tari on the same work.
 - 🧠 **XvB switching engine.** Watches the XMRvsBeast raffle and shifts hashrate to hold your tier,
   donating the minimum needed and routing the rest to your P2Pool payouts.

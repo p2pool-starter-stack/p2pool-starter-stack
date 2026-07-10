@@ -26,6 +26,7 @@ from mining_dashboard.service.data_service import (
     _parse_proxy_list_worker,
     _parse_proxy_summary,
     _shares_to_record,
+    _summary_deltas,
 )
 
 
@@ -71,6 +72,36 @@ class TestSharesToRecord:
     def test_counter_reset_rebaselines(self):
         # p2pool restarted (counter went backwards) -> re-baseline to the lower value, record nothing.
         assert _shares_to_record(1000, 5) == (0, 5)
+
+
+def _totals(accepted=0, rejected=0, invalid=0, expired=0):
+    return {"accepted": accepted, "rejected": rejected, "invalid": invalid, "expired": expired}
+
+
+class TestSummaryDeltas:
+    """#116: per-poll share-health deltas from consecutive cumulative proxy /summary totals."""
+
+    def test_first_poll_baselines_without_backfill(self):
+        cur = _totals(accepted=1000, rejected=5)
+        assert _summary_deltas(None, cur) == (None, cur)
+
+    def test_normal_delta(self):
+        deltas, baseline = _summary_deltas(
+            _totals(accepted=100, rejected=5), _totals(accepted=110, rejected=6, invalid=1)
+        )
+        assert deltas == _totals(accepted=10, rejected=1, invalid=1)
+        assert baseline == _totals(accepted=110, rejected=6, invalid=1)
+
+    def test_any_counter_backwards_rebaselines_without_negative_delta(self):
+        # Proxy restart: accepted went backwards while rejected advanced — segment break, no row.
+        cur = _totals(accepted=3, rejected=9)
+        assert _summary_deltas(_totals(accepted=100, rejected=5), cur) == (None, cur)
+
+    def test_all_zero_deltas_skipped(self):
+        # _merge_proxy_summary repeats last-good totals on a bad poll and an idle proxy submits
+        # nothing — neither may write an empty row every cycle.
+        cur = _totals(accepted=100, rejected=5)
+        assert _summary_deltas(_totals(accepted=100, rejected=5), cur) == (None, cur)
 
 
 class TestProxyWorkerParsers:
@@ -708,6 +739,62 @@ class TestRunIteration:
         }
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
+
+    async def test_share_stat_deltas_persisted(self):
+        # #116 wiring: with a baseline from a previous poll, one iteration writes the counters'
+        # deltas via add_share_stats (the delta rules themselves are unit-tested above).
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        proxy.get_summary.return_value = {
+            "results": {"accepted": 110, "rejected": 6, "invalid": 1, "expired": 2, "best": [1]}
+        }
+        svc._last_share_totals = _totals(accepted=100, rejected=5, invalid=1, expired=2)
+
+        worker_client = MagicMock()
+        worker_client.get_stats = AsyncMock(return_value={})
+        tari_client = MagicMock()
+        tari_client.get_sync_status = AsyncMock(return_value={"is_syncing": False})
+        tari_client.close = AsyncMock()
+
+        with (
+            patch.object(ds_mod, "ClientSession", _FakeClientSession),
+            patch.object(ds_mod, "XMRigWorkerClient", return_value=worker_client),
+            patch.object(ds_mod, "TariClient", return_value=tari_client),
+            patch.object(ds_mod, "get_stratum_stats", return_value={}),
+            patch.object(ds_mod, "get_network_stats", return_value={"height": 100}),
+            patch.object(
+                ds_mod, "get_tari_stats", return_value={"active": True, "status": "OK", "height": 3}
+            ),
+            patch.object(
+                ds_mod,
+                "get_p2pool_stats",
+                return_value={"pool": {"last_share_time": 0, "difficulty": 0}},
+            ),
+            patch.object(
+                ds_mod,
+                "get_monero_sync_status",
+                AsyncMock(return_value={"is_syncing": False, "percent": 100}),
+            ),
+            patch.object(ds_mod, "get_disk_usage", return_value={}),
+            patch.object(ds_mod, "get_hugepages_status", return_value=("Enabled", "ok", "1/2")),
+            patch.object(ds_mod, "get_memory_usage", return_value={}),
+            patch.object(ds_mod, "get_load_average", return_value="0"),
+            patch.object(ds_mod, "get_cpu_usage", return_value="0%"),
+            patch.object(ds_mod, "get_cpu_avx2", return_value=True),
+            patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)),
+        ):
+            with pytest.raises(StopAsyncIteration):
+                await svc.run()
+
+        # Only accepted (+10) and rejected (+1) advanced; the deltas — not the counters — landed.
+        assert sm.add_share_stats.call_args.kwargs == {
+            "accepted": 10,
+            "rejected": 1,
+            "invalid": 0,
+            "expired": 0,
+        }
+        # Baseline advanced to the new cumulative totals for the next poll.
+        assert svc._last_share_totals == _totals(accepted=110, rejected=6, invalid=1, expired=2)
 
     async def test_degradation_edge_records_event_and_alerts(self):
         # #99 wiring: when the detector reports an edge, the loop persists a chart marker and pushes
