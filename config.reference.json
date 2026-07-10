@@ -109,7 +109,8 @@
             "hashrate_low": true,
             "hashrate_loss": true,
             "hugepages": true,
-            "low_ram": true
+            "low_ram": true,
+            "wallet_changed": true
         },
         "daily_summary_time": "08:00",
         "commands": {

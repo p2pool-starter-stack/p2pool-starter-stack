@@ -504,6 +504,35 @@ class StateManager:
             except sqlite3.Error as e:
                 self._db_error("XVB Update Error", e)
 
+    def get_kv(self, key: str) -> str | None:
+        """Read one value from the kv_store, or None if absent / unreadable (#375)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return None
+                cursor = self._conn.cursor()
+                cursor.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row[0] if row else None
+        except sqlite3.Error as e:
+            self.logger.error(f"KV Read Error: {e}")
+            return None
+
+    def set_kv(self, key: str, value):
+        """Insert-or-replace one kv_store value (#375). Values are stored as strings, mirroring
+        the XvB stats writes above."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+                        (key, str(value)),
+                    )
+        except sqlite3.Error as e:
+            self._db_error("KV Write Error", e)
+
     def save_snapshot(self, data: dict[str, Any]):
         """Persists the full application state snapshot to the KV store."""
         if not data:

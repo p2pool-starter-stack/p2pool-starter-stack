@@ -130,6 +130,42 @@ class TestSharesAndHistory:
             sm2.close()
 
 
+class TestKvStore:
+    def test_get_missing_key_is_none(self, state_manager):
+        assert state_manager.get_kv("payout_wallet") is None
+
+    def test_set_then_get_roundtrip(self, state_manager):
+        state_manager.set_kv("payout_wallet", "4Aaaa")
+        assert state_manager.get_kv("payout_wallet") == "4Aaaa"
+        state_manager.set_kv("payout_wallet", "4Bbbb")  # insert-or-replace
+        assert state_manager.get_kv("payout_wallet") == "4Bbbb"
+
+    def test_non_string_values_stored_as_strings(self, state_manager):
+        state_manager.set_kv("payout_wallet_changed_ts", 1234.5)
+        assert state_manager.get_kv("payout_wallet_changed_ts") == "1234.5"
+
+    def test_kv_survives_restart(self, tmp_path):
+        # The wallet-tripwire baseline (#375) must outlive a dashboard container recreate —
+        # that recreate (a `pithead apply`) is exactly the attack window.
+        db = str(tmp_path / "kv.db")
+        sm = StateManager(db_path=db)
+        sm.set_kv("payout_wallet", "4Aaaa")
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            assert sm2.get_kv("payout_wallet") == "4Aaaa"
+        finally:
+            sm2.close()
+
+    def test_write_error_flags_db_unhealthy(self):
+        sm = StateManager(":memory:")
+        sm._conn.execute("DROP TABLE kv_store")
+        sm.set_kv("payout_wallet", "x")  # INSERT fails -> caught -> #131 flag flips
+        assert sm.is_db_healthy() is False
+        assert sm.get_kv("payout_wallet") is None  # read error -> None, never raises
+        sm.close()
+
+
 class TestDbHealth:
     def test_healthy_by_default(self, state_manager):
         assert state_manager.is_db_healthy() is True
