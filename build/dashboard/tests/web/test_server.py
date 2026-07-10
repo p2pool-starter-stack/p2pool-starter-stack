@@ -180,6 +180,7 @@ class TestControlRoutesDisabled:
         assert (await client.get("/api/config")).status == 404
         assert (await client.post("/api/control/preview", json={})).status == 404
         assert (await client.post("/api/control/commit", json={})).status == 404
+        assert (await client.post("/api/control/upgrade", json={})).status == 404
         assert (await client.get("/api/control/result?id=x")).status == 404
 
 
@@ -233,7 +234,7 @@ class TestControlRoutesEnabled:
 
     async def test_post_without_control_header_forbidden(self, control_client):
         # The custom header forces a CORS preflight cross-site, which is never granted (CSRF).
-        for path in ("/api/control/preview", "/api/control/commit"):
+        for path in ("/api/control/preview", "/api/control/commit", "/api/control/upgrade"):
             resp = await control_client.post(path, json={"config": {}})
             assert resp.status == 403, path
 
@@ -313,6 +314,45 @@ class TestControlRoutesEnabled:
         assert resp.status == 200
         assert (await resp.json())["status"] == "applied"
 
+    async def test_upgrade_submits_typed_intent_and_returns_pending(
+        self, control_client, control_spool
+    ):
+        # 202 straight away: the upgrade recreates this container, so the outcome is polled.
+        resp = await control_client.post(
+            "/api/control/upgrade",
+            json={"version": "v9.9.9"},
+            headers={**CONTROL_HEADERS, "X-Auth-User": "admin"},
+        )
+        assert resp.status == 202
+        body = await resp.json()
+        assert body["status"] == "pending"
+        req = json.loads((control_spool / "requests" / f"{body['id']}.json").read_text())
+        # Closed shape: exactly these keys — no config leg, no free-form target for the runner.
+        assert req == {
+            "id": body["id"],
+            "action": "upgrade",
+            "actor": "admin",
+            "version": "v9.9.9",
+        }
+
+    @pytest.mark.parametrize(
+        "version",
+        ["", "9.9.9", "latest", "v9.9", "v9.9.9; rm -rf /", "v9.9.9\n", 42, None],
+    )
+    async def test_upgrade_rejects_malformed_version(self, control_client, control_spool, version):
+        # Shape-checked before anything touches the spool (the host re-validates regardless).
+        resp = await control_client.post(
+            "/api/control/upgrade", json={"version": version}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+        assert list((control_spool / "requests").iterdir()) == []
+
+    async def test_upgrade_rejects_non_json_body(self, control_client):
+        resp = await control_client.post(
+            "/api/control/upgrade", data=b"not json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
     async def test_result_endpoint_polling(self, control_client, control_spool):
         rid = str(uuid.uuid4())
         resp = await control_client.get(f"/api/control/result?id={rid}")
@@ -331,6 +371,15 @@ class TestControlRoutesEnabled:
         monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
         resp = await control_client.post(
             "/api/control/preview", json={"config": {"p2pool": {}}}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())
+
+    async def test_upgrade_spool_failure_is_sanitized(self, control_client, monkeypatch):
+        # A broken spool (unwritable requests dir) must come back as a sanitized 500.
+        monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
+        resp = await control_client.post(
+            "/api/control/upgrade", json={"version": "v9.9.9"}, headers=CONTROL_HEADERS
         )
         assert resp.status == 500
         assert "nonexistent" not in json.dumps(await resp.json())

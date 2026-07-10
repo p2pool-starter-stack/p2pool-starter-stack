@@ -36,6 +36,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   points a single invocation at a candidate config file.
 - **`pithead control-run-pending`.** The host-side runner behind the Configuration view; fired by
   the systemd path unit, runnable by hand.
+- **One-click upgrade from the dashboard (#59).** With `dashboard.control.enabled` on, a release
+  install shows an **Upgrade to vX.Y.Z** button next to the existing new-release badge (#224).
+  After a typed `UPGRADE` confirm, the host-side control runner performs the documented update —
+  download the new release bundle, run `pithead upgrade` — surviving the dashboard container's own
+  recreation, and the page rides out the restart and reports the outcome. The intent carries only
+  the version the operator saw: the runner re-derives the latest release from the GitHub API over
+  Tor and refuses a mismatch, an older-or-equal version, a source checkout, or more than one
+  attempt per 10 minutes, and audits every attempt. A failed release lookup or bundle download
+  changes nothing; a failure inside `pithead upgrade` leaves not-yet-recreated containers on the
+  previous images and is finished with `./pithead upgrade` on the host.
 - **`status` shows per-chain sync progress (#384).** While a chain is still syncing, `./pithead
   status` reads the dashboard's own `/api/state` and prints each chain's percent and blocks
   remaining inline, instead of only pointing you at the dashboard. No ETA is shown — block rate

@@ -4,7 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 
 import { ChartCard } from "./chart.mjs";
-import { ConfigView } from "./configview.mjs";
+import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
   computeEarnings,
   computeXvbTier,
@@ -71,8 +71,8 @@ const VersionBadge = ({ version }) =>
     : null;
 
 // New-release callout (#224). Shown only when the server reports a newer GitHub release is available
-// (opt-in `dashboard.check_for_updates`, off by default). Notify-only — it's a link to the release,
-// not an upgrade button (#59). Accent so it's noticeable; opens the release page in a new tab.
+// (`dashboard.check_for_updates`). Notify-only — a link to the release notes; the one-click upgrade
+// is the separate UpgradeControl (#59). Accent so it's noticeable; opens the release page in a new tab.
 const UpdateBadge = ({ update }) =>
   update && update.available && update.url
     ? html`<a class="badge badge-accent version-badge ml-2" href=${update.url}
@@ -137,6 +137,7 @@ function Header({ state }) {
                         <${Badges} badges=${state.badges} />
                         <${VersionBadge} version=${state.version} />
                         <${UpdateBadge} update=${state.update} />
+                        <${UpgradeControl} update=${state.update} enabled=${state.control_enabled} />
                     </div>
                     <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
                 </div>

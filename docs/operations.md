@@ -89,6 +89,11 @@ on, and remove them when it is off:
 - `pithead-control.service` — a root oneshot running `pithead control-run-pending` from the
   install directory. Fixed command, no parameters from the container.
 
+The runner dispatches exactly three actions: `apply --dry-run --porcelain` (preview), `apply -y`
+(commit), and a release upgrade — the dashboard's
+[Upgrade button](dashboard.md#upgrading-from-the-dashboard), for which the runner re-derives the
+target from the GitHub release API itself and refuses any other version.
+
 The spool lives under `./data/control/`: `requests/` (the only directory the dashboard container
 can write), `staged/` (host-only), and `results/` + `audit/` (container read-only).
 `audit/control.log` records one JSON line per handled request — timestamp, the logged-in dashboard
@@ -106,6 +111,11 @@ the CLI.
 ## Updating the stack
 
 The update path depends on how you installed (see [Getting Started](getting-started.md#2-get-the-code)).
+
+**From the dashboard:** with `dashboard.control.enabled: true`, a release install can run this
+whole sequence from the browser — see
+[Dashboard › Upgrading from the dashboard](dashboard.md#upgrading-from-the-dashboard). The steps
+below are what that button performs, and the only path for source checkouts.
 
 **Release bundle (the default):** from the install directory, re-download the latest bundle over it,
 then upgrade. `upgrade` **pulls** the new published images:

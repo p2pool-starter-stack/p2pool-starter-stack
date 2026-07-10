@@ -112,14 +112,18 @@ def merge_secrets(proposed):
     return proposed
 
 
-def submit(action, cfg=None, actor="", intent_id=None):
+def submit(action, cfg=None, actor="", intent_id=None, version=None):
     """Write one intent into the requests spool (atomic: temp + rename, so the runner never
     reads a half-written file). Returns the request id — always a UUID, because the id becomes
-    a host-side filename and the runner rejects anything else."""
+    a host-side filename and the runner rejects anything else. ``version`` rides only on the
+    upgrade intent (#59): the version the operator confirmed, which the host re-verifies
+    against the GitHub release API — a proposal, never a target the container picks."""
     rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())
     request = {"id": rid, "action": action, "actor": actor}
     if cfg is not None:
         request["config"] = cfg
+    if version is not None:
+        request["version"] = version
     tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
     with open(tmp, "w") as f:
         json.dump(request, f)

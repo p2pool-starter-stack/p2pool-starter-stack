@@ -469,6 +469,11 @@ tr:last-child td {
 .version-badge.version-dev {
   border-style: dashed;
 }
+/* One-click upgrade button (#59): a badge-shaped <button>, so reset the UA button chrome. */
+button.upgrade-btn {
+  border: none;
+  cursor: pointer;
+}
 
 .wallet-text {
   font-size: 0.7rem;
