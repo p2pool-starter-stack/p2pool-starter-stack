@@ -832,7 +832,7 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
             {
                 "text": label,
                 "variant": "warn",
-                "title": "Tari is still syncing — merge mining resumes when it catches up; Monero mining continues",
+                "title": "Tari is still syncing — merge-mining resumes when it catches up; Monero mining continues",
             }
         )
     # Monero pruned/full badge (Issue #32) — only when known (local node).
@@ -1009,9 +1009,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
 
     return {
         "syncing": metrics.global_syncing,
-        "page_title": "Mining Dashboard - Syncing"
+        "page_title": "Pithead Dashboard - Syncing"
         if metrics.global_syncing
-        else "Mining Dashboard",
+        else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),

@@ -404,7 +404,7 @@ class EarningsCard extends Component {
 function TariCard({ tari }) {
   return html`
     <div class="card card-advanced" id="card-tari">
-        <h3>Tari Merge Mining</h3>
+        <h3>Tari Merge-Mining</h3>
         <div class="stat-grid">
             <div class="stat-card"><h5>Status</h5><${TariStatus} tari=${tari} /></div>
             <${StatCard} label="Reward" value=${tari.reward} />

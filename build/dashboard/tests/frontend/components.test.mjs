@@ -85,7 +85,7 @@ test('operational App renders the remaining advanced cards', () => {
     const html = renderApp();
     assert.match(html, /Global P2Pool Stats/);
     assert.match(html, /XMR Network/);
-    assert.match(html, /Tari Merge Mining/);
+    assert.match(html, /Tari Merge-Mining/);
     assert.match(html, /P2Pool Earnings \(estimated\)/);
 });
 

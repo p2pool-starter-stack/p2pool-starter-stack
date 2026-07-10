@@ -1262,7 +1262,7 @@ class TestBuildState:
     def test_syncing_flag_and_title(self):
         st = build_state(_data(global_sync=True), _state_mgr(), "all")
         assert st["syncing"] is True
-        assert st["page_title"] == "Mining Dashboard - Syncing"
+        assert st["page_title"] == "Pithead Dashboard - Syncing"
 
     def test_proxy_workers_from_metrics(self):
         data = _data(
