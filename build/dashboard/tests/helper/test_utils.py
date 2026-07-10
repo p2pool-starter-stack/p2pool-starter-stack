@@ -9,6 +9,7 @@ from mining_dashboard.helper.utils import (
     format_duration,
     format_hashrate,
     format_time_abs,
+    format_xmr,
     get_tier_info,
     is_ip_address,
     parse_hashrate,
@@ -117,6 +118,21 @@ class TestFormatHashrate:
         assert format_hashrate(0) == "0.00 H/s"
         assert format_hashrate("invalid") == "0 H/s"
         assert format_hashrate(None) == "0 H/s"
+
+
+class TestFormatXmr:
+    """#387: mirrors formatXmr in web/static/logic.mjs so dashboard and Telegram agree."""
+
+    def test_precision_scales_with_magnitude(self):
+        assert format_xmr(2.5) == "2.5000 XMR"  # >= 1 -> 4 dp
+        assert format_xmr(0.1234567) == "0.123457 XMR"  # >= 0.001 -> 6 dp
+        assert format_xmr(0.00000123) == "0.00000123 XMR"  # tiny -> 8 dp, not rounded to 0
+
+    def test_zero_and_bad_data(self):
+        assert format_xmr(0) == "0 XMR"
+        assert format_xmr(None) == "—"
+        assert format_xmr("invalid") == "—"
+        assert format_xmr(float("inf")) == "—"
 
 
 class TestFormatDuration:

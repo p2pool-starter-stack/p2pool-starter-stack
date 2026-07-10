@@ -16,7 +16,7 @@
 // gestures hand the visible window up via onZoom, which refetches that window from the server at
 // duration-adaptive resolution — so zooming in reveals finer data.
 
-import { bandBorderWidth, clampZoomWindow, fmtTimestamp } from "./logic.mjs";
+import { bandBorderWidth, clampZoomWindow, fmtHashrate, fmtTimestamp } from "./logic.mjs";
 import { Component, createRef, html } from "./preact.mjs";
 
 const RANGES = [
@@ -257,7 +257,8 @@ export class ChartCard extends Component {
                 if (context.dataset.label === "Events") return context.raw.label;
                 let label = context.dataset.label || "";
                 if (label) label += ": ";
-                if (context.parsed.y !== null) label += context.parsed.y + " H/s";
+                // Same abbreviated style as the cards/Telegram (#387), e.g. "12.35 kH/s".
+                if (context.parsed.y !== null) label += fmtHashrate(context.parsed.y);
                 return label;
               },
             },

@@ -16,7 +16,7 @@ import {
     SERIES_KEYS, normalizeSeries,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
+    parseHashrate, fmtHashrate, computeEarnings, formatXmr, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -40,9 +40,9 @@ test('sortWorkers: numeric columns sort numerically, not lexically', () => {
 });
 
 test('sortWorkers: hashrate column also sorts numerically', () => {
-    const ws = [{ h10: 5000 }, { h10: 250 }, { h10: 12000 }];
+    const ws = [{ h15: 5000 }, { h15: 250 }, { h15: 12000 }];
     assert.deepEqual(
-        sortWorkers(ws, col('h10'), true).map((w) => w.h10),
+        sortWorkers(ws, col('h15'), true).map((w) => w.h15),
         [250, 5000, 12000],
     );
 });
@@ -73,8 +73,17 @@ test('sortWorkers: does not mutate the input array', () => {
 test('WORKER_COLUMNS: keys match the worker fields the server sends', () => {
     assert.deepEqual(
         WORKER_COLUMNS.map((c) => c.key),
-        ['name', 'ip_sort', 'uptime', 'h10', 'h60', 'h15', 'accepted', 'rejected'],
+        ['name', 'ip_sort', 'uptime', 'h60', 'h15', 'accepted', 'rejected'],
     );
+});
+
+test('WORKER_COLUMNS: hashrate windows are labelled by what the data is (#387)', () => {
+    // h60 holds the 1m rate and h15 the 10m rate (legacy key names; see data_service). The labels
+    // must say 1m / 10m so the table matches the chart toggle and Telegram's "(10m avg)".
+    const labels = Object.fromEntries(WORKER_COLUMNS.map((c) => [c.key, c.label]));
+    assert.equal(labels.h60, '1m');
+    assert.equal(labels.h15, '10m');
+    assert.equal(labels.h10, undefined); // dropped — via the proxy it duplicated the 1m rate
 });
 
 test('sortWorkers: rejected column sorts numerically (find problem rigs)', () => {
@@ -173,6 +182,16 @@ test('parseHashrate: rejects empty / unparseable input', () => {
     assert.equal(parseHashrate('abc'), null);
     assert.equal(parseHashrate(null), null);
     assert.equal(parseHashrate(undefined), null);
+});
+
+test('fmtHashrate: mirrors the server format_hashrate unit boundaries (#387)', () => {
+    // Same cases as tests/helper/test_utils.py TestFormatHashrate — the two must stay in lockstep.
+    assert.equal(fmtHashrate(1_500_000_000), '1.50 GH/s');
+    assert.equal(fmtHashrate(2_500_000), '2.50 MH/s');
+    assert.equal(fmtHashrate(1_500), '1.50 kH/s');
+    assert.equal(fmtHashrate(500), '500.00 H/s');
+    assert.equal(fmtHashrate(0), '0.00 H/s');
+    assert.equal(fmtHashrate('invalid'), '0 H/s');
 });
 
 test('computeEarnings: scales the daily rate to day/month/year + time-to-share', () => {

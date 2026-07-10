@@ -6,13 +6,15 @@
 // Worker table columns, each carrying the state key it sorts on. Hashrate/uptime/IP and the
 // accepted/rejected share counts sort numerically (raw values the server includes alongside the
 // formatted strings); name sorts as text. The order matches the rendered <th>s.
+// The hashrate windows are named for what the proxy data is — 1m and 10m (#387) — matching the
+// chart's averaging toggle and Telegram's "(10m avg)". The legacy h10 field isn't shown: via the
+// proxy it's just a second copy of the 1m rate.
 export const WORKER_COLUMNS = [
   { label: "Worker", key: "name" },
   { label: "IP", key: "ip_sort" },
   { label: "Uptime", key: "uptime" },
-  { label: "10s", key: "h10" },
-  { label: "60s", key: "h60" },
-  { label: "15m", key: "h15" },
+  { label: "1m", key: "h60" },
+  { label: "10m", key: "h15" },
   { label: "Accepted", key: "accepted" },
   { label: "Rejected", key: "rejected" },
 ];
@@ -179,6 +181,18 @@ export function parseHashrate(str) {
   if (!Number.isFinite(val) || val < 0) return null;
   const unit = (m[2] || "").toLowerCase();
   return val * (unit === "g" ? 1e9 : unit === "m" ? 1e6 : unit === "k" ? 1e3 : 1);
+}
+
+// Format raw H/s for display. Mirrors helper/utils.format_hashrate on the server side (same
+// thresholds, 2 decimals, same unit strings — the parseHashrate precedent) so client-rendered
+// figures like the chart tooltip read identically to the server-formatted cards (#387).
+export function fmtHashrate(hs) {
+  const val = Number(hs);
+  if (!Number.isFinite(val)) return "0 H/s";
+  if (val >= 1e9) return (val / 1e9).toFixed(2) + " GH/s";
+  if (val >= 1e6) return (val / 1e6).toFixed(2) + " MH/s";
+  if (val >= 1e3) return (val / 1e3).toFixed(2) + " kH/s";
+  return val.toFixed(2) + " H/s";
 }
 
 // Scale the server's daily rate to expected XMR over day/month/year for `hashrateHs`, plus the
