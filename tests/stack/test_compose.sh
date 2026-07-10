@@ -230,6 +230,25 @@ else
     fails=$((fails + 1))
 fi
 
+# Control-channel spool mounts (#33): the rw/ro split IS the trust boundary. requests/ is the
+# dashboard's ONLY writable leg; results/, audit/ and the config prefill are read-only; staged/
+# is never mounted at all — so the container can ask, but cannot forge a result, rewrite the
+# audit log, or alter a staged intent.
+jq_assert "dashboard control requests/ mounted read-write (#33)" \
+    '.services.dashboard.volumes | any((.target == "/control/requests") and ((.read_only // false) == false))'
+jq_assert "dashboard control results/ mounted read-only (#33)" \
+    '.services.dashboard.volumes | any((.target == "/control/results") and (.read_only == true))'
+jq_assert "dashboard control audit/ mounted read-only (#33)" \
+    '.services.dashboard.volumes | any((.target == "/control/audit") and (.read_only == true))'
+jq_assert "dashboard config.json prefill mounted read-only (#33)" \
+    '.services.dashboard.volumes | any((.target == "/host-config/config.json") and (.read_only == true))'
+jq_assert "dashboard config.reference.json prefill mounted read-only (#33)" \
+    '.services.dashboard.volumes | any((.target == "/host-config/config.reference.json") and (.read_only == true))'
+jq_assert "control staged/ dir never enters the container (#33)" \
+    '.services.dashboard.volumes | any(.target | contains("staged")) | not'
+jq_assert "control channel defaults off in the dashboard env (#33)" \
+    '.services.dashboard.environment["DASHBOARD_CONTROL_ENABLED"] == "false"'
+
 # Configurable bridge subnet (#180): a custom network.subnet must rebase every static IP, the bridge
 # CIDR, and the dashboard's derived bridge endpoints — the host address-space-collision install fix.
 CUSTOM_ENV="$(mktemp)"

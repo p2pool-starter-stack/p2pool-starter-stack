@@ -46,7 +46,9 @@ const ui = {
   avg: normalizeAvgWindow(localStorage.getItem("dashboardAvgWindow")),
   sortIndex: null,
   sortAsc: true,
-  view: localStorage.getItem("dashboardView") === "advanced" ? "advanced" : "simple",
+  view: ["advanced", "config"].includes(localStorage.getItem("dashboardView"))
+    ? localStorage.getItem("dashboardView")
+    : "simple",
   // Theme is persisted in localStorage so it survives reloads and stack restarts (Issue #43).
   // theme-init.js already applied it to <html> before first paint; we mirror it into the UI
   // state and re-apply on toggle.
