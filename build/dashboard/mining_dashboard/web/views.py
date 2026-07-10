@@ -33,7 +33,7 @@ from mining_dashboard.helper.utils import (
     format_time_abs,
     is_ip_address,
 )
-from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.version import resolve_version
@@ -930,8 +930,10 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
 
 _EARNINGS_DISCLAIMER = (
     "Estimated XMR from P2Pool mining only — excludes XvB donations (donated hashrate earns no "
-    "P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so "
-    "real payouts swing well above and below these figures. Estimates, not guarantees."
+    "P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and "
+    "its estimate assumes the merge-mine channel stays connected. Expected values only; mining "
+    "is variance-heavy, so real payouts swing well above and below these figures. Estimates, "
+    "not guarantees."
 )
 
 
@@ -943,8 +945,12 @@ def build_earnings(data, metrics):
     ``p2pool_1h`` — the **same P2Pool 1h-average hashrate shown in the header / Overview / My Node
     cards** (a time-weighted average of the recorded P2Pool hashrate), so the figure here matches
     those exactly. That recorded average already excludes any XvB-donated slice (XvB hashrate is a
-    separate series), which is why an active XvB split doesn't inflate the estimate. Tari
-    merge-mining earnings are a separate thing entirely (deferred, #117).
+    separate series), which is why an active XvB split doesn't inflate the estimate.
+
+    Tari merge-mining rides along (#117): the same P2Pool hashrate simultaneously works the Tari
+    aux chain, so the payload carries a second rate — XTM per H/s per day, over the Tari
+    difficulty and block reward p2pool's merge-mine stats report. ``tari_available`` is gated on
+    ``tari_mining`` as well as the rate, so a dead merge-mine channel can't show phantom XTM.
 
     Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus that
     P2Pool hashrate and the P2Pool share difficulty. The client scales the rate to the entered
@@ -960,11 +966,16 @@ def build_earnings(data, metrics):
     # hashrate is consistent with the rest of the dashboard — and because that recorded average
     # already excludes the XvB-donated portion, it's the honest basis for a P2Pool estimate.
     p2pool_hr = metrics.p2pool_1h
+    # Tari rate (#117). We take p2pool's aux `reward` field as the current Tari block reward —
+    # it refreshes every poll, so the linear model tracks the decaying emission.
+    tari_coeff_day = xtm_per_hs_day(metrics.tari_reward, metrics.tari_difficulty)
     return {
         "available": coeff_day > 0,
         "p2pool_hr": p2pool_hr,  # raw H/s — the what-if default
         "p2pool_hr_str": format_hashrate(p2pool_hr),
         "coeff_day": coeff_day,  # XMR per H/s per day
+        "tari_available": tari_coeff_day > 0 and metrics.tari_mining,
+        "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (merge-mined alongside)
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,

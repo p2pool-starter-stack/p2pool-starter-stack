@@ -1188,6 +1188,34 @@ class TestEarnings:
         e = build_earnings(self._NET, _metrics(p2pool_1h=10543.7))
         assert e["p2pool_hr"] == 10543.7
 
+    def test_tari_rate_published_when_merge_mining(self):
+        # #117: with live Tari figures + merge-mining active, the payload carries the XTM rate
+        # (reward_xtm / difficulty * 86400) for the client to scale — same shape as coeff_day.
+        e = build_earnings(
+            self._NET,
+            _metrics(tari_mining=True, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        )
+        assert e["tari_available"] is True
+        assert e["tari_coeff_day"] == pytest.approx(13_000.0 / 420_000_000_000 * 86_400)
+
+    def test_tari_unavailable_without_figures_or_mining(self):
+        # No difficulty collected (inactive/syncing) → unavailable; and a positive rate with
+        # merge-mining OFF must also read unavailable (a dead channel earns no phantom XTM).
+        e = build_earnings(self._NET, _metrics(tari_mining=True, tari_reward=13_000.0))
+        assert e["tari_available"] is False
+        assert e["tari_coeff_day"] == 0.0
+        e = build_earnings(
+            self._NET,
+            _metrics(tari_mining=False, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        )
+        assert e["tari_available"] is False
+
+    def test_tari_unavailability_leaves_xmr_estimate_intact(self):
+        # Tari degrading to "—" must not drag the XMR side down: available stays True.
+        e = build_earnings(self._NET, _metrics(tari_mining=False))
+        assert e["available"] is True
+        assert e["coeff_day"] > 0
+
 
 # --- build_state integration ----------------------------------------------------------
 

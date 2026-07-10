@@ -217,9 +217,9 @@ choice is remembered across reloads.
 
 ### P2Pool Earnings (estimated)
 
-A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2Pool mining only,
-from your P2Pool hashrate and the live Monero network figures. It is scoped to P2Pool — **not** an
-XvB or a Tari calculator:
+A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2Pool mining, plus
+the XTM the same hashrate merge-mines alongside it, from your P2Pool hashrate and the live network
+figures. It is scoped to P2Pool — **not** an XvB calculator:
 
 - **XvB donations are excluded.** Hashrate you route to XvB earns no P2Pool payout, so it isn't
   counted. The default is your P2Pool 1h-average hashrate, the *same* `P2Pool (1h)` figure shown
@@ -228,20 +228,26 @@ XvB or a Tari calculator:
   total, and it stays consistent with the hashrate shown elsewhere on the page. (When that average
   is 0, a fresh start with no history yet, or donating everything to XvB, the estimate is 0 until
   you enter a what-if value.)
-- **Tari merge-mining is excluded.** Tari is earned alongside Monero but is a separate payout
-  (its own calculator is planned).
+- **Tari merge-mining is included — earned alongside, not instead.** Merge-mining puts the same
+  P2Pool hashrate to work on the Tari chain at no cost to the XMR side, so the XTM rows are
+  additional income, computed as `E[XTM/day] = hashrate × reward ÷ difficulty × 86400` over the
+  Tari block reward and difficulty p2pool's merge-mine stats report. The estimate assumes the
+  merge-mine channel stays connected; while merge-mining is inactive or Tari is still syncing,
+  the XTM rows show `—` and the XMR figures are unaffected. XvB-donated hashrate does not
+  merge-mine, so the same P2Pool-only default keeps the XTM estimate honest too.
 
 | Field | Meaning |
 |---|---|
 | **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
 | **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty`, the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
+| **XTM / day · month · year** | Expected Tari merge-mined **alongside** the XMR by the same hashrate — the identical linear expectation over the Tari block reward and difficulty. `—` while merge-mining is inactive or Tari is still syncing. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
 | **XMR Block Reward** | The current Monero block reward, for context. |
 
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
-> network figures aren't available yet, the card shows `—` rather than a bogus number. Tari
-> earnings and an XvB tier projection aren't included yet.
+> network figures aren't available yet, the card shows `—` rather than a bogus number. An XvB
+> tier projection isn't included yet.
 
 ### Pool Cadence & Luck
 

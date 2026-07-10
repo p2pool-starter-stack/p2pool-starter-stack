@@ -104,6 +104,11 @@ class Metrics:
     # expected = p2pool_1h * (pplns_window * block_time) / pool_difficulty;
     # luck_pct = shares_in_window / expected * 100. >100% = running lucky. 0.0 when unknowable.
     luck_pct: float = 0.0
+    # Tari merge-mining earnings inputs (#117), from p2pool's merge-mine stats file. Both 0 while
+    # Tari is inactive or still syncing — that IS the degradation signal (calculator shows "—").
+    # Defaulted so direct Metrics(...) constructors needn't set them.
+    tari_difficulty: float = 0.0  # Tari AUX-chain difficulty (not P2Pool sidechain, not Monero)
+    tari_reward: float = 0.0  # Tari block reward, XTM (collector converts p2pool's µT figure)
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -223,6 +228,8 @@ def build_metrics(latest_data, state_mgr, history=None):
         tari=_sync_metric(data.get("tari_sync", {})),
         monero_mode=_monero_mode(),
         tari_mining=bool(data.get("tari", {}).get("active", False)),
+        tari_difficulty=data.get("tari", {}).get("difficulty", 0) or 0,
+        tari_reward=data.get("tari", {}).get("reward", 0) or 0,
         xvb_registered_at=xvb_stats.get("registered_at", 0) or 0,
         xvb_registration_state=xvb_stats.get("registration_state", "") or "",
         xvb_stale=bool(ENABLE_XVB and xvb_stats_are_stale(xvb_stats)),

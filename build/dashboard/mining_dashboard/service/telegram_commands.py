@@ -13,7 +13,7 @@ from mining_dashboard.config.config import (
     TOR_SOCKS_PROXY,
 )
 from mining_dashboard.helper.utils import effective_hashrate, format_duration, format_hashrate
-from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
@@ -361,9 +361,10 @@ def format_xvb(metrics, host_label=""):
 
 
 def format_earnings(metrics, network, host_label=""):
-    """Estimated P2Pool XMR earnings — the answer to '/earnings'. Reuses the same rate the dashboard
-    calculator uses (``xmr_per_hs_day``) applied to the displayed P2Pool 1h-average hashrate; Tari
-    merge-mining earnings are a separate thing and not included (#12)."""
+    """Estimated P2Pool XMR earnings — the answer to '/earnings'. Reuses the same rates the
+    dashboard calculator uses (``xmr_per_hs_day``/``xtm_per_hs_day``) applied to the displayed
+    P2Pool 1h-average hashrate. The Tari line appears only while merge-mining figures are live —
+    the same hashrate earns the XTM alongside the XMR, in addition, not instead (#12, #117)."""
     reward_atomic = (network or {}).get("reward", 0) or 0
     coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
     if coeff_day <= 0:
@@ -383,7 +384,13 @@ def format_earnings(metrics, network, host_label=""):
         )
     else:
         lines.append(f"~{daily_1h * 30:.5f} XMR/30d")
-    lines.append("Estimate only — excludes XvB-donated hashrate and Tari merge-mining.")
+    # Tari rides along (#117): the same 1h-average hashrate merge-mines the aux chain, so the
+    # line is a second rate over the same figure. Omitted while the Tari inputs aren't collected
+    # (inactive / still syncing) — never a phantom 0.000000 XTM.
+    tari_daily = metrics.p2pool_1h * xtm_per_hs_day(metrics.tari_reward, metrics.tari_difficulty)
+    if tari_daily > 0:
+        lines.append(f"Tari (merge-mined alongside): ~{tari_daily:.2f} XTM/day")
+    lines.append("Estimate only — excludes XvB-donated hashrate.")
     return "\n".join(lines)
 
 

@@ -12,6 +12,7 @@ from mining_dashboard.service.earnings import (
     ATOMIC_PER_XMR,
     SECONDS_PER_DAY,
     xmr_per_hs_day,
+    xtm_per_hs_day,
 )
 
 
@@ -50,3 +51,34 @@ class TestXmrPerHsDay:
         # A zero rate is the dashboard's "unavailable" signal (shows "—"); never raise or divide
         # by zero on incomplete live data.
         assert xmr_per_hs_day(reward, diff) == 0.0
+
+
+class TestXtmPerHsDay:
+    """Tari merge-mining rate (#117) — same linear expectation, reward already in XTM."""
+
+    def test_matches_closed_form(self):
+        # reward_xtm / difficulty * seconds_per_day — no atomic conversion (the collector already
+        # converts p2pool's µT figure to XTM).
+        assert xtm_per_hs_day(13_000, 400_000_000_000) == pytest.approx(
+            13_000 / 400_000_000_000 * SECONDS_PER_DAY
+        )
+
+    def test_linear_in_inputs(self):
+        # Double the reward -> double the rate; double the difficulty -> half the rate.
+        base = xtm_per_hs_day(10_000, 1_000_000)
+        assert xtm_per_hs_day(20_000, 1_000_000) == pytest.approx(2 * base)
+        assert xtm_per_hs_day(10_000, 2_000_000) == pytest.approx(base / 2)
+
+    @pytest.mark.parametrize(
+        "reward,diff",
+        [
+            (0, 400_000_000_000),  # Tari inactive / still syncing: no reward collected
+            (13_000, 0),  # no difficulty yet
+            (0, 0),  # nothing collected
+            (-1, 400_000_000_000),  # defensive: negative reward
+            (13_000, -5),  # defensive: negative difficulty
+        ],
+    )
+    def test_missing_or_bad_inputs_are_zero(self, reward, diff):
+        # Zero is the "unavailable" signal — the card shows "—" and Telegram omits the line.
+        assert xtm_per_hs_day(reward, diff) == 0.0
