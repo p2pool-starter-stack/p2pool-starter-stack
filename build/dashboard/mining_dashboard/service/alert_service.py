@@ -73,6 +73,11 @@ class AlertService:
       kv_store baseline (#375): the highest-value tamper against the stack. Fires on every
       change, including a legitimate ``pithead apply`` — a confirmation, not only an intrusion
       signal. Addresses are truncated to 8 chars; the full address never leaves the host.
+    - **block found / payout incoming** — p2pool's cumulative ``totalBlocksFound`` counter
+      advancing (#336): the sidechain found a Monero block (pool-wide good news), plus a second
+      alert when this node held a PPLNS share at that poll — PPLNS pays every miner with a share
+      in the window, so that block pays *you*. Good news, not incidents — never tallied in the
+      daily incident log.
 
     Edge state is seeded silently on the first observation (``None`` baselines), so a dashboard
     restart can't replay a stale transition as a fresh alert. The exception is the persistent
@@ -106,6 +111,8 @@ class AlertService:
     EVT_LOW_RAM = "low_ram"
     EVT_WALLET_CHANGED = "wallet_changed"
     EVT_HIGH_REJECT_RATE = "high_reject_rate"
+    EVT_BLOCK_FOUND = "block_found"
+    EVT_PAYOUT_FOUND = "payout_found"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -145,6 +152,7 @@ class AlertService:
         self._prev_update_available = None
         self._prev_hashrate_low = None
         self._prev_reject_high = None
+        self._prev_blocks_found = None
         # Persistent host-perf advisories (#104): unlike the transient edges above, these fire on the
         # FIRST observation of the problem (a stable low-RAM box would never "transition"), so their
         # baseline is "no problem" (False) rather than None — a problem present on the first cycle is
@@ -189,6 +197,8 @@ class AlertService:
         low_ram=False,
         observed_wallet="",
         reject_rate_1h=None,
+        blocks_found_total=0,
+        block_height=0,
         now=None,
     ):
         """Fold this cycle's signals into the list of ``(event_key, text)`` to send, filtered to
@@ -257,6 +267,9 @@ class AlertService:
         alerts += self._release_edges(update_available)
         alerts += self._hashrate_low_edges(low_hr_warning)
         alerts += self._reject_rate_edges(reject_rate_1h)
+
+        # --- Good news: the pool found a Monero block / that block pays this node (#336) ---
+        alerts += self._block_edges(blocks_found_total, block_height, shares_in_window)
 
         # --- Persistent host-perf advisories (#104): HugePages not reserved, low RAM ---
         alerts += self._advisory_edge(
@@ -573,6 +586,39 @@ class AlertService:
                 ),
             )
         ]
+
+    def _block_edges(self, blocks_found_total, block_height, shares_in_window):
+        """Alert when the pool's cumulative ``totalBlocksFound`` counter advances (#336): the
+        P2Pool sidechain found a Monero block. Pool-wide news; when this node also held a PPLNS
+        share at that poll, a second alert says the block pays *this* node (PPLNS pays every
+        miner with a share in the window on every pool block). Same counter semantics as
+        ``_shares_to_record``: the first observation seeds silently (a dashboard restart must not
+        replay the last block), and a counter that went backwards (p2pool restart, or the stats
+        file briefly reading 0) rebaselines silently. A burst between polls alerts once, with the
+        count. Good news, not incidents — never recorded in the daily incident log."""
+        prev = self._prev_blocks_found
+        self._prev_blocks_found = blocks_found_total
+        if prev is None or blocks_found_total <= prev:
+            return []
+        delta = blocks_found_total - prev
+        if delta > 1:
+            block_text = (
+                f"\U0001f389 ⛏️ P2Pool found {delta} Monero blocks! (latest height {block_height:,})"
+            )
+        else:
+            block_text = f"\U0001f389 ⛏️ P2Pool found a Monero block! (height {block_height:,})"
+        alerts = [(self.EVT_BLOCK_FOUND, self._fmt(block_text))]
+        if shares_in_window > 0:
+            alerts.append(
+                (
+                    self.EVT_PAYOUT_FOUND,
+                    self._fmt(
+                        f"\U0001f4b0 Payout incoming — you held {shares_in_window} PPLNS "
+                        "share(s) when the block was found."
+                    ),
+                )
+            )
+        return alerts
 
     def _advisory_edge(self, problem, attr, event, problem_text, recovery_text=None):
         """Persistent host-perf advisory (#104): fires once when ``problem`` is first observed true

@@ -978,6 +978,8 @@ class TestRunIteration:
             "low_hr_warning",
             "hugepages_reserved",
             "low_ram",
+            "blocks_found_total",
+            "block_height",
         }
         # ...sourced from the real computed values, not placeholders.
         assert kw["db_healthy"] is True  # from state_manager.is_db_healthy()

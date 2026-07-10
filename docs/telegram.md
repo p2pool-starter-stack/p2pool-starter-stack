@@ -37,7 +37,9 @@ transition, not a stream:
 | ⚠️ **Hashrate drop** | Total fleet hashrate fell sharply below its recent normal and **stayed down** — a rig gone dark, a network cut, or a stalled miner. The dashboard also drops a marker on the hashrate chart at the moment it happened. Fires once on the drop and again on recovery. Thresholds are tunable (`dashboard.hashrate_drop_threshold`, `dashboard.hashrate_drop_minutes`). |
 | 🧠 **HugePages not reserved** | RandomX runs capped until HugePages are reserved. Fires when the dashboard first sees them missing and again once a reboot applies them — so you know the tuning took. |
 | 💾 **Low RAM** | This host has less RAM than the stack wants (syncing is memory-heavy; Tari can OOM). Sent once when first detected — a heads-up that instability may be under-provisioning, not a bug. |
-| 🚨 **Payout wallet changed** | The wallet p2pool mines to differs from the last one seen — every future reward goes to the new address. Fires on **every** change, including one you made yourself with `pithead apply`, so treat it as a confirmation; if you didn't change it, your rewards are being redirected. Addresses appear truncated to 8 characters (full addresses never leave the host), and the dashboard shows a matching top-bar warning for 72 hours. |
+| 🚨 **Payout wallet changed** | The wallet p2pool mines to differs from the last one seen — every future reward goes to the new address. Fires on **every** change, including one you made yourself with `./pithead apply`, so treat it as a confirmation; if you didn't change it, your rewards are being redirected. Addresses appear truncated to 8 characters (full addresses never leave the host), and the dashboard shows a matching top-bar warning for 72 hours. |
+| 🎉 **Block found** | The P2Pool sidechain found a Monero block. Pool-wide: every miner with a PPLNS share gets paid from it. |
+| 💰 **Payout incoming** | That block pays **you** — this node held a share in the PPLNS window when it was found. The amount lands in your wallet once the block matures (about two hours). |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
 | 📅 **Daily summary** | A once-a-day retrospective of the last 24h across your whole fleet — date/time, an **incident roll-up** (what went wrong during the day, or an all-clear), **24h hashrate** with the **P2Pool / XvB split**, **shares found in the day**, an **estimated daily earnings** figure, and a **per-machine 24h breakdown** — pushed at a set local time (**08:00** by default; `telegram.daily_summary_time`). |
@@ -166,8 +168,10 @@ block and set it to `false` — any event you don't list stays on:
 | `hashrate_loss` | `true` | Total hashrate dropped sharply and stayed down (outage / rig dark) / recovered |
 | `hugepages` | `true` | HugePages not reserved (RandomX capped) / reserved after a reboot |
 | `low_ram` | `true` | Host has less RAM than the stack wants (one-shot heads-up) |
-| `wallet_changed` | `true` | The payout wallet p2pool mines to changed — fires on every change, including your own `pithead apply` (old/new addresses truncated to 8 chars) |
+| `wallet_changed` | `true` | The payout wallet p2pool mines to changed — fires on every change, including your own `./pithead apply` (old/new addresses truncated to 8 chars) |
 | `high_reject_rate` | `true` | Pool-wide reject rate over the trailing hour crossed 5% (the same threshold as the dashboard's ⚠ flag) / dropped back |
+| `block_found` | `true` | The P2Pool sidechain found a Monero block (pool-wide — every miner with a PPLNS share gets paid) |
+| `payout_found` | `true` | That block pays you — this node held a share in the PPLNS window when it was found |
 
 Run `./pithead apply` after editing.
 
