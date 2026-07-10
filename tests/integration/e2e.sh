@@ -28,6 +28,11 @@
 
 set -uo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# For rig_lock/rig_lock_remote (#430): the shared-bench flock protocol from rigforge#183.
+# shellcheck source=tests/integration/lib.sh
+source "$HERE/lib.sh"
+
 # --- Config (override via env or flags) -------------------------------------
 BENCH_HOST="${BENCH_HOST:-}"
 MINER_HOST="${MINER_HOST:-}"
@@ -268,6 +273,13 @@ preflight() {
         on_miner 'echo ok >/dev/null' || die "Cannot SSH to miner '$MINER_HOST' (use --no-miner to skip)."
         on_miner "test -f '$MINER_XMRIG_CONFIG'" || die "No xmrig config at $MINER_XMRIG_CONFIG on $MINER_HOST."
         ok "SSH to $MINER_HOST + xmrig config found"
+        # Loaner-rig lock (#430/rigforge#183): the borrow repoints (and may restart) the rig's
+        # xmrig, so claim the rig's EXCLUSIVE flock now — before anything is mutated — and hold it
+        # until this process dies. rigforge's gates on the same rig refuse (exit 75, holder named)
+        # instead of colliding mid-borrow, and a busy rig fails us fast, before the bench is
+        # touched. The kernel releases the lock on exit, AFTER the EXIT-trap restore has run.
+        rig_lock_remote pithead "e2e.sh loaner-borrow" "" "$MINER_HOST" "${SSH_OPTS[@]}"
+        ok "rig lock held on $MINER_HOST (loaner) for the life of this run"
     fi
 }
 
