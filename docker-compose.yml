@@ -361,6 +361,22 @@ services:
       # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
       # the same dir read-only. Holds only non-secret state markers.
       - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
+      # Control-channel spool (#33). requests/ is the container's ONLY writable leg — the dashboard
+      # drops typed JSON intents there; the host-side runner answers via the read-only results/ and
+      # audit/ mounts. staged/ is never mounted at all. This rw/ro split is the trust boundary: the
+      # container can only ask; it cannot forge a result, rewrite the audit log, or alter a staged
+      # intent between preview and commit.
+      - ${CONTROL_DIR:-./data/control}/requests:/control/requests
+      - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
+      - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
+      # The live config, read-only, prefills the Configuration view (#33). Secret leaves are masked
+      # server-side (control_service.read_config); the raw values never leave the API. NOTE: this
+      # bind-mount — not the API masking — is the real secret trust boundary; a backend compromise
+      # reads config.json plaintext here (see SECURITY.md).
+      - ./config.json:/host-config/config.json:ro
+      # config.reference.json (every key with its default), read-only, so the editor form covers the
+      # full schema even for keys the operator's sparse config.json omits (#33). No secrets.
+      - ./config.reference.json:/host-config/config.reference.json:ro
     environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
@@ -421,6 +437,10 @@ services:
       # bridge Tor SOCKS as TOR_SOCKS_PROXY so it leaks neither the host IP nor a DNS lookup (safe to
       # default on). Set dashboard.check_for_updates:false to opt out. See docs/privacy.md.
       - DASHBOARD_CHECK_UPDATES=${DASHBOARD_CHECK_UPDATES:-true}
+      # Dashboard config editing (#33, config.json: dashboard.control.enabled). Default OFF.
+      # When off, the control routes are not registered at all (they 404); the spool mounts above
+      # are inert because no host-side runner is installed.
+      - DASHBOARD_CONTROL_ENABLED=${DASHBOARD_CONTROL_ENABLED:-false}
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
       # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
       # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the

@@ -4,6 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 
 import { ChartCard } from "./chart.mjs";
+import { ConfigView } from "./configview.mjs";
 import {
   computeEarnings,
   computeXvbTier,
@@ -720,6 +721,7 @@ function DashboardView({
   onAvgWindow,
 }) {
   const advanced = ui.view === "advanced";
+  const configView = ui.view === "config";
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
   // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
   // context as reference at the bottom — "mine" first, "the world" last.
@@ -727,10 +729,16 @@ function DashboardView({
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
             <div class="toggle-group">
-                <button class=${"btn-toggle" + (!advanced ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
+                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
                 <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
+                <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
+        ${configView ? html`<${ConfigView} />` : null}
+        ${
+          configView
+            ? null
+            : html`
         <div class="grid">
             <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
                           avgWindow=${ui.avg}
@@ -750,7 +758,8 @@ function DashboardView({
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />
             <${ComponentHealth} topology=${state.topology} egress=${state.egress} />
-        </div>
+        </div>`
+        }
     </div>`;
 }
 
