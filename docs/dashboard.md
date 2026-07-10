@@ -235,7 +235,15 @@ choice is remembered across reloads.
 
 A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2Pool mining, plus
 the XTM the same hashrate merge-mines alongside it, from your P2Pool hashrate and the live network
-figures. It is scoped to P2Pool — **not** an XvB calculator:
+figures.
+
+The card is split into three tabs — **Monero**, **Tari**, and **XvB** — driven by one **what-if
+hashrate** input that sits above the tabs, so switching tabs keeps the value you entered. Monero
+holds the XMR/day·month·year figures, time-to-share, and block reward; Tari holds the solo
+time-to-block, per-block reward, and per-day average; XvB holds the tier/cost block and the
+per-tier payout comparison. The XvB tab appears only when XvB is enabled.
+
+It is scoped to P2Pool — **not** an XvB calculator:
 
 - **XvB donations are excluded.** Hashrate you route to XvB earns no P2Pool payout, so it isn't
   counted. The default is your P2Pool 1h-average hashrate, the *same* `P2Pool (1h)` figure shown

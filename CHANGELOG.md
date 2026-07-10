@@ -14,7 +14,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 <!-- Placeholder date — set at release cut. -->
 
 A patch release: an honest Tari earnings headline for solo merge-mining, a fail-safe for the XvB
-donation controller during a prolonged stats outage, and an XvB per-tier payout comparison.
+donation controller during a prolonged stats outage, an XvB per-tier payout comparison, and a
+tabbed earnings panel.
 
 ### Added
 
@@ -27,6 +28,9 @@ donation controller during a prolonged stats outage, and an XvB per-tier payout 
   degrades to "estimate unavailable" — never a stale number implied fresh, and never a fabricated
   one. The card keeps its standing note that a tier is raffle status, not a payout, and that
   donating above the threshold buys no extra win chance.
+- **Tabbed earnings panel.** The earnings card now splits into `Monero`, `Tari`, and `XvB` tabs,
+  driven by one shared what-if hashrate input, so the (now three-domain) card isn't one long wall of
+  figures. The XvB tab appears only when XvB is enabled.
 
 ### Fixed
 

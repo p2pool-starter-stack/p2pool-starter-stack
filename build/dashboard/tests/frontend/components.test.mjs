@@ -159,6 +159,42 @@ test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it 
     assert.match(off, /Your P2Pool Hashrate/);
 });
 
+test('EarningsCard splits into Monero / Tari / XvB tabs, Monero active by default (#118)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    // XvB on → three tabs; the XvB tab only exists when XvB is enabled.
+    const html = renderApp({ state: s });
+    assert.match(html, /role="tablist"/);
+    assert.match(html, /id="etab-monero"[^>]*>Monero</);
+    assert.match(html, /id="etab-tari"[^>]*>Tari</);
+    assert.match(html, /id="etab-xvb"[^>]*>XvB</);
+    // Default active tab = Monero: it is aria-selected and its panel is visible; the others hidden.
+    assert.match(html, /id="etab-monero"[^>]*aria-selected="true"/);
+    assert.match(html, /id="etab-tari"[^>]*aria-selected="false"/);
+    assert.match(html, /id="epanel-monero"[^>]*aria-labelledby="etab-monero">/); // no `hidden` → shown
+    assert.match(html, /id="epanel-tari"[^>]*hidden>/); // inactive panel hidden
+    assert.match(html, /id="epanel-xvb"[^>]*hidden>/);
+    // The shared what-if input sits above the tab strip, so it drives all three tabs.
+    assert.match(html, /id="whatif-hr"/);
+    // The Monero panel carries the XMR figures, the Tari panel the solo time-to-block, the XvB
+    // panel the tier block — all present in the DOM (inactive ones just hidden).
+    assert.match(html, /XMR \/ day/);
+    assert.match(html, /Est\. Time to Tari Block/);
+    assert.match(html, /XvB Tier \(raffle\)/);
+});
+
+test('EarningsCard drops the XvB tab entirely when XvB is disabled (#118)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.xvb_calc = { enabled: false };
+    const html = renderApp({ state: s });
+    assert.match(html, /id="etab-monero"/);
+    assert.match(html, /id="etab-tari"/);
+    assert.doesNotMatch(html, /id="etab-xvb"/); // no XvB tab
+    assert.doesNotMatch(html, /id="epanel-xvb"/);
+    assert.doesNotMatch(html, /XvB Tier \(raffle\)/);
+});
+
 test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
     const base = clone();
     base.earnings.available = true;

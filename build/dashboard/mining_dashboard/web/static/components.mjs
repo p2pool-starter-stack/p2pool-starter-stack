@@ -446,8 +446,11 @@ function XvbTierBlock({ calc, hr, coeffDay }) {
 class EarningsCard extends Component {
   constructor(props) {
     super(props);
-    this.state = { input: null };
+    // `input` (what-if hashrate) is SHARED across tabs — it lives above the tab strip so switching
+    // tabs keeps the entered value. `tab` is the active earnings tab (Monero / Tari / XvB).
+    this.state = { input: null, tab: "monero" };
     this.onInput = (e) => this.setState({ input: e.target.value });
+    this.onTab = (tab) => this.setState({ tab });
   }
 
   render() {
@@ -459,12 +462,21 @@ class EarningsCard extends Component {
                 <p class="text-muted text-small">Network stats unavailable — the estimate can't be computed right now.</p>
             </div>`;
     }
-    const { input } = this.state;
+    const { input, tab } = this.state;
     const useDefault = input === null;
     // Default to your P2Pool 1h-average hashrate (the figure shown in the header / Overview,
     // already excluding the XvB-donated slice); once edited, use the parsed what-if value.
     const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
     const est = computeEarnings(hr, e);
+    const xvb = this.props.xvb;
+    // Tabs split the (now three-domain) card body. XvB only appears when it's enabled — there's no
+    // tier to show otherwise. The one what-if input above the strip drives every tab's estimate.
+    const tabs = [
+      { id: "monero", label: "Monero" },
+      { id: "tari", label: "Tari" },
+    ];
+    if (xvb && xvb.enabled) tabs.push({ id: "xvb", label: "XvB" });
+    const active = tabs.some((t) => t.id === tab) ? tab : "monero";
     return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
@@ -475,20 +487,46 @@ class EarningsCard extends Component {
                        autocomplete="off" value=${useDefault ? e.p2pool_hr_str : input}
                        onInput=${this.onInput} />
             </div>
-            <div class="stat-grid">
-                <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
-                <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
-                <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
-                <${StatCard} label="Est. Time to Tari Block" value=${formatTimeToShare(est.tariTimeToBlockSec)}
-                             title="Tari is merge-mined SOLO: the whole block reward lands at once when your hashrate finds a Tari block, roughly this often (difficulty ÷ your hashrate). Shows — while merge-mining is inactive or syncing." />
-                <${StatCard} label="XTM per Block" value=${formatXtm(est.tariRewardPerBlock)}
-                             title="The full Tari block reward paid when you solo-find a block — you get all of it at once, not spread over time." />
-                <${StatCard} label="XTM / day (avg)" value=${formatXtm(est.tariDay)}
-                             title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — this per-day figure just spreads that lumpy payout out on paper." />
-                <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
-                <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
+            <div class="earnings-tabs" role="tablist" aria-label="Earnings breakdown">
+                ${tabs.map(
+                  (t) => html`
+                    <button role="tab" type="button"
+                            id=${"etab-" + t.id} aria-controls=${"epanel-" + t.id}
+                            aria-selected=${active === t.id ? "true" : "false"}
+                            class=${"earnings-tab" + (active === t.id ? " is-active" : "")}
+                            onClick=${() => this.onTab(t.id)}>${t.label}</button>`,
+                )}
             </div>
-            <${XvbTierBlock} calc=${this.props.xvb} hr=${hr} coeffDay=${e.coeff_day} />
+
+            <div role="tabpanel" id="epanel-monero" aria-labelledby="etab-monero" hidden=${active !== "monero"}>
+                <div class="stat-grid">
+                    <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
+                    <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
+                    <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                    <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
+                    <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
+                </div>
+            </div>
+
+            <div role="tabpanel" id="epanel-tari" aria-labelledby="etab-tari" hidden=${active !== "tari"}>
+                <div class="stat-grid">
+                    <${StatCard} label="Est. Time to Tari Block" value=${formatTimeToShare(est.tariTimeToBlockSec)}
+                                 title="Tari is merge-mined SOLO: the whole block reward lands at once when your hashrate finds a Tari block, roughly this often (difficulty ÷ your hashrate). Shows — while merge-mining is inactive or syncing." />
+                    <${StatCard} label="XTM per Block" value=${formatXtm(est.tariRewardPerBlock)}
+                                 title="The full Tari block reward paid when you solo-find a block — you get all of it at once, not spread over time." />
+                    <${StatCard} label="XTM / day (avg)" value=${formatXtm(est.tariDay)}
+                                 title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — this per-day figure just spreads that lumpy payout out on paper." />
+                </div>
+            </div>
+
+            ${
+              xvb && xvb.enabled
+                ? html`
+            <div role="tabpanel" id="epanel-xvb" aria-labelledby="etab-xvb" hidden=${active !== "xvb"}>
+                <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} />
+            </div>`
+                : null
+            }
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }
