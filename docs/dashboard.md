@@ -351,12 +351,13 @@ The flow mirrors the CLI's `apply`:
    commit runs `pithead apply -y` on the host and recreates only the containers whose config
    changed.
 
-Security-sensitive settings cannot be committed from the dashboard at all — the host-side runner
-default-denies any change, in any direction, to the dashboard login and onion settings, the
-control channel itself, payout wallets, the Tor egress firewall, clearnet initial sync, the
-stratum password, RPC/stratum bind addresses, and the Telegram bot credentials — and likewise
-refuses anything the preview flags disruptive (⚠). Apply those from the host with
-`./pithead apply`; out-of-band approval from the dashboard is tracked in
+Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
+allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
+memory limits, time zone, …) and default-denies a change, in any direction, to anything else:
+wallets, the dashboard login and onion settings, the control channel itself, the Tor egress
+firewall, clearnet toggles, node endpoints, and every credential. It likewise refuses anything
+the preview flags disruptive (⚠). Apply those from the host with `./pithead apply`; out-of-band
+approval from the dashboard is tracked in
 [#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
 
 A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new

@@ -2967,6 +2967,41 @@ gate_try "$C/cand.json"
 assert_eq "onion client-auth downgrade commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_eq "config.json keeps onion client-auth on" "$(jq -r '.dashboard.onion.client_auth' "$C/config.json")" "true"
 
+# TRUE default-deny (#33 re-review round 2): the gate is an ALLOWLIST of editable keys, not a
+# blocklist of sensitive ones, so a key nobody thought to enumerate still refuses. Each candidate
+# below was committable under the blocklist gate — these assertions are the teeth.
+# p2pool clearnet flip: dials sidechain peers over clearnet, deanonymizing the host IP, no
+# auto-revert.
+jq '.p2pool.clearnet=true' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "p2pool clearnet flip commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps p2pool on Tor" "$(jq -r '.p2pool.clearnet // false' "$C/config.json")" "false"
+# XvB stats over clearnet: correlates the host IP with the payout wallet.
+jq '.xvb.tor=false' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "xvb tor-disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps xvb on Tor" "$(jq -r '.xvb.tor // true' "$C/config.json")" "true"
+# Healthchecks ping-URL repoint: exfiltrates liveness / silences the dead-man's switch.
+jq '.healthchecks={ping_url:"https://attacker.example/ping"}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "healthchecks ping-url repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps healthchecks unset" "$(jq -r '.healthchecks.ping_url // "unset"' "$C/config.json")" "unset"
+# XvB pool-URL repoint: redirects donated hashrate to an attacker's pool.
+jq '.xvb.url="attacker.example:4247"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "xvb pool-url repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps the default xvb url" "$(jq -r '.xvb.url // "unset"' "$C/config.json")" "unset"
+# The tamper-evidence alert toggles stay host-only even though sibling event toggles are
+# editable: silencing WALLET_CHANGED would blind the future #338 approval channel.
+jq '.telegram.events={wallet_changed:false}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "wallet-changed alert silencing is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+# An allowlisted operational toggle on the same baseline still commits.
+jq '.telegram.events={node_down:false}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "allowlisted alert toggle still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "alert toggle landed in config.json" "$(jq -r '.telegram.events.node_down' "$C/config.json")" "false"
+
 # Forged-flag bypass: the container tampers its visible copy of the preview result to
 # destructive:false AND sends a commit request carrying its own destructive:false field. The
 # extra request key is rejected outright; a clean follow-up commit is still refused because the

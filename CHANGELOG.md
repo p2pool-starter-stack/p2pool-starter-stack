@@ -23,10 +23,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `./data/control/requests/` (its only writable spool leg; results and the audit log are mounted
   read-only), and a root systemd path unit (`pithead-control`) validates each intent with
   pithead's own config validation and dispatches only `apply --dry-run --porcelain` or `apply -y`.
-  A **destructive** change (wallet, Tor egress firewall, clearnet sync, or auth) is refused at the
-  host — the client-side confirm is not a security control, since a compromised container writes
-  the spool directly — and must be applied from the host CLI until out-of-band approval (#338)
-  lands. Every mutation lands in a host-side audit log with the logged-in user (Caddy forwards it
+  A change outside a small allowlist of operational settings (wallets, auth, onion exposure,
+  clearnet toggles, credentials, and anything destructive) is refused at the host — the
+  client-side confirm is not a security control, since a compromised container writes the spool
+  directly — and must be applied from the host CLI until out-of-band approval (#338) lands. Every mutation lands in a host-side audit log with the logged-in user (Caddy forwards it
   as `X-Auth-User`); a failed apply keeps the previous config at `config.json.bak-control`. This is
   the canonical host-mutation channel that the upgrade button (#59) and the first-boot wizard (#77)
   build on.
@@ -49,10 +49,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `dashboard.control` while `dashboard.onion` is on now fails validation unless
   `dashboard.onion.client_auth` is true (the default). A root-capable, funds-redirecting mutation
   channel must not sit behind only a brute-forceable password on an anonymously-reachable onion.
-- **Refuse destructive commits at the host (#33).** The control approval gate now fails closed on a
-  commit whose staged change is destructive (wallet, egress firewall, clearnet sync, auth),
-  re-deriving destructiveness host-side rather than trusting the container's result. Non-destructive
-  commits proceed; the hook is shaped for #338 to drop in out-of-band Telegram approval.
+- **Default-deny commit gate at the host (#33).** The control approval gate refuses any commit
+  that changes an env key outside an explicit allowlist of operational settings (pool tier, XvB
+  enable and donation level, alert toggles, memory limits, time zone, …) — in either direction,
+  enable or disable — plus anything the change preview flags destructive. An allowlist, not a
+  blocklist: wallets, auth, onion exposure, the control channel itself, Tor egress and clearnet
+  toggles, node endpoints, the XvB pool URL and donor id, and every credential stay host-CLI-only,
+  and so does any key added in the future until it is deliberately listed. The changed-key set and
+  destructiveness are re-derived host-side from the staged config — the container's result is
+  never trusted. The hook is shaped for #338 to drop in out-of-band Telegram approval.
 - **Bound the root-runner spool (#33).** Intents over 64 KB are refused before `jq` parses them, a
   run drains at most 50 intents, and `staged/` + `requests/` files older than an hour are swept at
   run start. Symlinked or non-regular claimed files are refused (never followed), and the intent-id

@@ -50,12 +50,13 @@ The stack's defaults:
   and dispatches exactly two fixed actions (`apply --dry-run`, `apply -y`); no string from the
   container is ever executed. Enabling the channel without a dashboard password is a validation
   error, on a published onion it additionally requires Tor client authorization, and every
-  mutation is audited host-side. Commits are default-denied on an explicit security-sensitive key
-  set — dashboard auth and onion exposure, the control channel itself, payout wallets, the Tor
-  egress firewall, clearnet initial sync, the stratum password, RPC/stratum bind addresses, and
-  the Telegram bot credentials — in every direction (enabling, changing, or disabling), plus
-  anything the change preview flags destructive. Those edits must be applied from the host CLI;
-  out-of-band approval is tracked in
+  mutation is audited host-side. Commits are default-denied against an explicit allowlist of
+  operational settings: a commit that changes any env key off that list — in every direction
+  (enabling, changing, or disabling) — is refused, as is anything the change preview flags
+  destructive. Wallets, dashboard auth and onion exposure, the control channel itself, the Tor
+  egress firewall, clearnet toggles, node endpoints, binds, and every credential are off the
+  list, and a key added in the future stays un-committable until deliberately listed. Those
+  edits must be applied from the host CLI; out-of-band approval is tracked in
   [#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
 
 ### Secret trust boundary for dashboard config editing

@@ -3602,13 +3602,15 @@ apply() {
 # a compromised/XSS'd container writes the request spool directly and never renders that modal, so
 # the only trustworthy gate is here, host-side. FAIL CLOSED, two independent checks:
 #
-#   1. DEFAULT-DENY on security-sensitive keys: a commit that changes ANY key in
-#      CONTROL_SENSITIVE_KEYS — in EITHER direction (enable, change, or DISABLE) — is refused.
-#      Deliberately decoupled from describe_change's cosmetic INFO/DEST flag: that flag labels only
-#      the disruptive direction (enabling auth is DEST, disabling is INFO), so a compromised
+#   1. TRUE DEFAULT-DENY: a commit that changes ANY env key NOT in
+#      CONTROL_DASHBOARD_EDITABLE_KEYS — in EITHER direction (enable, change, or DISABLE) — is
+#      refused. An allowlist, not a blocklist: a key added to render_env tomorrow is
+#      un-committable from the dashboard until someone deliberately lists it here. Deliberately
+#      decoupled from describe_change's cosmetic INFO/DEST flag: that flag labels only the
+#      disruptive direction (enabling auth is DEST, disabling is INFO), so a compromised
 #      container could otherwise switch security controls OFF with zero DEST rows.
 #   2. Anything describe_change still flags DEST (pruning, data dirs, node-mode switch, ...) is
-#      refused as disruptive.
+#      refused as disruptive, even for allowlisted keys.
 #
 # Both checks re-derive the changed keys from the staged config via the SAME dry-run path a preview
 # runs — nothing is trusted from the container's request or its (host-written but container-visible)
@@ -3617,16 +3619,30 @@ apply() {
 # here, replacing the refusal with a real second factor. Until then, these edits must be made from
 # the host CLI. Echoes a reason on stdout when it refuses.
 
-# The security-sensitive env keys, default-denied from the dashboard: dashboard auth + onion
-# exposure + the control channel itself, payout wallets, Tor egress firewall, clearnet initial
-# sync, the stratum access password, RPC/stratum bind interfaces, and the Telegram bot credentials
-# (the alert — and future #338 approval — channel an attacker must not repoint). Extend HERE, not
-# via describe_change flags. Space-separated exact env-key names.
-CONTROL_SENSITIVE_KEYS='DASHBOARD_AUTH_USER DASHBOARD_AUTH_HASH_B64 DASHBOARD_AUTH_PW_FP
-    DASHBOARD_ONION_ENABLED DASHBOARD_ONION_CLIENT_AUTH DASHBOARD_CONTROL_ENABLED
-    MONERO_WALLET_ADDRESS TARI_WALLET_ADDRESS TOR_EGRESS_FIREWALL
-    MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC PROXY_STRATUM_PASSWORD
-    MONERO_RPC_BIND STRATUM_BIND TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID'
+# The env keys committable from the dashboard: operational tuning only, and only keys whose value
+# is derived from a validated enum, boolean, or number — never a free-form string that reaches a
+# command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
+# channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
+# and donor id, tokens and passwords — stays host-CLI-only. The WALLET_CHANGED and
+# CLEARNET_EXPOSED alert toggles are excluded on purpose: they are the tamper-evidence alarms on
+# the Telegram channel (the future #338 approval channel), so the dashboard must not silence
+# them. Space-separated exact env-key names.
+CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
+    XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED
+    DASHBOARD_CHECK_UPDATES DASHBOARD_TZ
+    MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS
+    HASHRATE_DROP_THRESHOLD_PCT HASHRATE_DROP_MINUTES TELEGRAM_DAILY_SUMMARY_TIME
+    TELEGRAM_EVENT_NODE_DOWN TELEGRAM_EVENT_NODE_RECOVERED
+    TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
+    TELEGRAM_EVENT_WORKER_JOINED TELEGRAM_EVENT_WORKER_LEFT
+    TELEGRAM_EVENT_SYNC_FINISHED TELEGRAM_EVENT_DISK_SPACE
+    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_XVB_NO_SHARE
+    TELEGRAM_EVENT_XVB_REGISTRATION TELEGRAM_EVENT_NEW_RELEASE
+    TELEGRAM_EVENT_STACK_ONLINE TELEGRAM_EVENT_DAILY_SUMMARY
+    TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
+    TELEGRAM_EVENT_HUGEPAGES TELEGRAM_EVENT_LOW_RAM
+    TELEGRAM_EVENT_HIGH_REJECT_RATE TELEGRAM_EVENT_BLOCK_FOUND
+    TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
 
 control_approval_gate() { # <staged-file>
     local staged="$1" porcelain
@@ -3636,12 +3652,16 @@ control_approval_gate() { # <staged-file>
         printf 'could not re-validate the staged change host-side — refusing to commit'
         return 1
     fi
-    # Default-deny: refuse if any changed env key is security-sensitive, whatever its flag says.
-    local sensitive_re hit
-    sensitive_re=$(printf '%s' "$CONTROL_SENSITIVE_KEYS" | tr -s ' \n' '|')
-    hit=$(printf '%s\n' "$porcelain" | cut -f2 | grep -m1 -xE "$sensitive_re" || true)
-    if [ -n "$hit" ]; then
-        printf 'this change alters a security-sensitive setting (%s) and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$hit" "$0"
+    # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
+    # flag says. Refusal keys off a violation COUNT, not the matched text, so a blank or
+    # malformed porcelain row (empty KEY column) still refuses instead of slipping past an
+    # emptiness test.
+    local editable_re bad hit
+    editable_re=$(printf '%s' "$CONTROL_DASHBOARD_EDITABLE_KEYS" | tr -s ' \n' '|')
+    bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
+    if [ "${bad:-0}" -gt 0 ]; then
+        hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
+        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "${hit:-unparseable change row}" "$0"
         return 1
     fi
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
