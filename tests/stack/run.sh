@@ -151,6 +151,85 @@ assert_eq "setup is quiet: bind narrowed to a LAN IP" "$out" ""
 out="$(STRATUM_BIND=192.168.1.5 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure doctor 2>&1)"
 assert_contains "doctor OK: bind narrowed to a LAN IP" "$out" "not all interfaces"
 
+echo "== unit: doctor runtime checks — egress firewall / stratum listening / dashboard probe (#383) =="
+# Each check degrades to an info skip on every can't-check path and only judges what it confirmed.
+# Stub the whole toolchain: docker answers the running-container filter from RUNNING_CONTAINERS,
+# sudo denies via SUDO_DENY or execs through to the iptables stub (tag presence via IPT_TAGGED),
+# ss prints SS_OUT, curl exits CURL_RC.
+DRBIN="$SANDBOX/drbin"
+mkdir -p "$DRBIN"
+cat >"$DRBIN/docker" <<'EOF'
+#!/usr/bin/env bash
+name=$(printf '%s' "$*" | sed -n 's/.*name=\^\([a-z-]*\)\$.*/\1/p')
+case " ${RUNNING_CONTAINERS:-} " in *" $name "*) echo cid123 ;; esac
+exit 0
+EOF
+cat >"$DRBIN/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "${SUDO_DENY:-0}" = "1" ] && exit 1
+[ "$1" = "-n" ] && shift
+exec "$@"
+EOF
+cat >"$DRBIN/iptables" <<'EOF'
+#!/usr/bin/env bash
+if [ "${IPT_TAGGED:-0}" = "1" ]; then
+    echo '-A DOCKER-USER -m comment --comment "pithead-tor-egress" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
+else
+    echo '-P DOCKER-USER ACCEPT'
+fi
+EOF
+cat >"$DRBIN/ss" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${SS_OUT:-}"
+EOF
+cat >"$DRBIN/curl" <<'EOF'
+#!/usr/bin/env bash
+exit "${CURL_RC:-0}"
+EOF
+chmod +x "$DRBIN"/*
+
+# container_is_running: filter answered vs not.
+RUNNING_CONTAINERS="tor" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" container_is_running tor
+assert_rc "container_is_running: running container" "$?" "0"
+RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" container_is_running tor
+assert_rc "container_is_running: stopped container" "$?" "1"
+
+# Egress firewall: opted out -> info skip (reads the toggle from .env).
+echo "TOR_EGRESS_FIREWALL=false" >"$SANDBOX/.env"
+out="$(RUNNING_CONTAINERS="tor" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: opted out -> info" "$out" "opted out"
+rm -f "$SANDBOX/.env"
+# Stack down (tor not running) -> info skip: rules are legitimately absent after 'down'.
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: stack down -> info" "$out" "isn't running"
+# Running + tagged rules present -> OK.
+out="$(RUNNING_CONTAINERS="tor" IPT_TAGGED=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: rules installed -> OK" "$out" "installed"
+# Running + rules ABSENT -> FAIL (the post-reboot gap this check exists for).
+out="$(RUNNING_CONTAINERS="tor" IPT_TAGGED=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: rules missing -> FAIL" "$out" "MISSING"
+# sudo -n denied -> info skip with the manual command, never a prompt or a false FAIL.
+out="$(RUNNING_CONTAINERS="tor" SUDO_DENY=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: no passwordless sudo -> info" "$out" "passwordless sudo"
+
+# Stratum listening: proxy not running -> info (a sync hold must not FAIL).
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: proxy down -> info" "$out" "isn't running"
+# Running + a :3333 listener -> OK.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 0.0.0.0:3333 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: listening -> OK" "$out" "workers can connect"
+# Running + nothing on :3333 -> FAIL.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: nothing on :3333 -> FAIL" "$out" "NOTHING is listening"
+
+# Dashboard probe: container running + app answers -> OK; running + no answer -> WARN (not FAIL).
+out="$(RUNNING_CONTAINERS="dashboard" CURL_RC=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
+assert_contains "dashboard probe: answers -> OK" "$out" "answers on 127.0.0.1:8000"
+out="$(RUNNING_CONTAINERS="dashboard" CURL_RC=22 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
+assert_contains "dashboard probe: no answer -> WARN" "$out" "WARN"
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
+assert_contains "dashboard probe: container down -> info" "$out" "isn't running"
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0" >/dev/null 2>&1
 assert_rc "accepts 0.0.0.0" "$?" "0"
