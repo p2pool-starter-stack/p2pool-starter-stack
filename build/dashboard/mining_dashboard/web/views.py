@@ -237,8 +237,11 @@ def _filter_events(events, range_arg, window=None):
 
 def build_share_stats(share_stats, range_arg, window=None):
     """The persisted per-poll share-health deltas (#116) as chart-ready points, restricted to the
-    selected range/window — same bounds as ``_filter_events``. Each point is
-    ``{x: ms epoch, a, r, i, e}`` (accepted/rejected/invalid/expired deltas for that interval)."""
+    selected range/window — same bounds as ``_filter_events`` — and bounded at
+    ``_MAX_CHART_POINTS`` like the hashrate series (the default "all" range over the 30-day
+    retention is ~86k rows, which /api/state would otherwise ship every poll). Each point is
+    ``{x: ms epoch, a, r, i, e}`` (accepted/rejected/invalid/expired deltas for that interval).
+    ``reject_pct_24h`` stays exact — it is computed from the raw rows, never this thinned series."""
     return [
         {
             "x": int(s["ts"] * 1000),
@@ -247,8 +250,28 @@ def build_share_stats(share_stats, range_arg, window=None):
             "i": s.get("invalid", 0),
             "e": s.get("expired", 0),
         }
-        for s in _filter_share_stats(share_stats, range_arg, window)
+        for s in _downsample_share_stats(_filter_share_stats(share_stats, range_arg, window))
     ]
+
+
+def _downsample_share_stats(rows, target=_MAX_CHART_POINTS):
+    """Bucket the delta rows down to ``target`` points. Unlike ``_downsample_history`` (which
+    averages a rate), the counts are per-interval DELTAS, so each bucket is **summed** — totals
+    and the reject ratio survive thinning exactly. The bucket's mid-row timestamp positions the
+    point, matching the hashrate downsampler."""
+    if len(rows) <= target:
+        return rows
+    chunk_size = len(rows) / target
+    out = []
+    for i in range(target):
+        chunk = rows[int(i * chunk_size) : int((i + 1) * chunk_size)]
+        if not chunk:
+            continue
+        bucket = {"ts": chunk[len(chunk) // 2]["ts"]}
+        for col in ("accepted", "rejected", "invalid", "expired"):
+            bucket[col] = sum(r.get(col, 0) or 0 for r in chunk)
+        out.append(bucket)
+    return out
 
 
 def _filter_share_stats(rows, range_arg, window=None):

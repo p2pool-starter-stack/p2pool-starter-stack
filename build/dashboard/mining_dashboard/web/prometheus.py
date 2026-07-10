@@ -7,6 +7,11 @@ Hand-rendered on purpose: the format is ``# TYPE name gauge`` + ``name value`` l
 ``prometheus_client`` dependency would buy nothing.
 """
 
+import time
+
+# Exposition content type. The version parameter tells scrapers this is the 0.0.4 text format.
+CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
 
 def _fmt(value):
     """One sample value as Prometheus text: bools as 0/1, ints bare, floats via repr
@@ -18,10 +23,27 @@ def _fmt(value):
     return repr(float(value))
 
 
-def render_prometheus(metrics, disk_percent, db_healthy):
-    """Render the exposition body from a ``Metrics`` snapshot plus the two values that live
-    outside it (raw disk percent from the system snapshot, DB health from the state manager)."""
+def render_prometheus(
+    metrics,
+    disk_percent,
+    db_healthy,
+    *,
+    reject_pct_1h=None,
+    shares_accepted=0,
+    shares_rejected=0,
+    pool_blocks_found=0,
+    snapshot_ts=0.0,
+    now=None,
+):
+    """Render the exposition body from a ``Metrics`` snapshot plus the values that live outside
+    it: raw disk percent from the system snapshot, DB health from the state manager, the
+    trailing-1h reject rate (``share_reject_pct`` — ``None`` when no shares were submitted, in
+    which case the sample is omitted rather than lying 0%), the proxy's cumulative
+    accepted/rejected share counters, p2pool's cumulative blocks-found counter, and the data
+    loop's snapshot timestamp — exposed as ``pithead_snapshot_age_seconds`` so a wedged loop
+    stops scraping as healthy. ``now`` is injectable for tests."""
     m = metrics
+    age = max(0.0, (now if now is not None else time.time()) - (snapshot_ts or 0))
     samples = [
         ("pithead_hashrate_15m_hs", "", m.total_h15),
         ("pithead_p2pool_hashrate_hs", '{window="1h"}', m.p2pool_1h),
@@ -51,12 +73,23 @@ def render_prometheus(metrics, disk_percent, db_healthy):
         ("pithead_xvb_enabled", "", m.xvb_enabled),
         ("pithead_disk_used_percent", "", disk_percent),
         ("pithead_db_healthy", "", db_healthy),
+        ("pithead_luck_pct", "", m.luck_pct),
+        ("pithead_expected_share_seconds", "", m.expected_share_sec),
+        ("pithead_snapshot_age_seconds", "", age),
+    ]
+    if reject_pct_1h is not None:
+        samples.append(("pithead_share_reject_pct", '{window="1h"}', reject_pct_1h))
+    counters = [
+        ("pithead_shares_accepted_total", "", shares_accepted),
+        ("pithead_shares_rejected_total", "", shares_rejected),
+        ("pithead_pool_blocks_found_total", "", pool_blocks_found),
     ]
     lines = []
     typed = set()
-    for name, labels, value in samples:
-        if name not in typed:
-            typed.add(name)
-            lines.append(f"# TYPE {name} gauge")
-        lines.append(f"{name}{labels} {_fmt(value)}")
+    for family, metric_type in ((samples, "gauge"), (counters, "counter")):
+        for name, labels, value in family:
+            if name not in typed:
+                typed.add(name)
+                lines.append(f"# TYPE {name} {metric_type}")
+            lines.append(f"{name}{labels} {_fmt(value)}")
     return "\n".join(lines) + "\n"

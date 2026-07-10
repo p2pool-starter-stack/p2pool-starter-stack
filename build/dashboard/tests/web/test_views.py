@@ -18,6 +18,7 @@ from mining_dashboard.config import config as egress_config
 from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
+    _MAX_CHART_POINTS,
     _chart_tension,
     _mode_palette,
     _reject_flag,
@@ -1074,6 +1075,37 @@ class TestShareStatsSeries:
         assert _window_reject_pct([], 24 * 3600) == "—"
         idle = [{"ts": time.time(), "accepted": 0, "rejected": 0, "invalid": 3, "expired": 0}]
         assert _window_reject_pct(idle, 24 * 3600) == "—"
+
+    def test_long_series_is_bounded_and_bucket_summed(self):
+        # 30 days of 30s polls ≈ 86k rows; /api/state must ship at most _MAX_CHART_POINTS,
+        # like the hashrate chart. The deltas are additive, so bucket-summing keeps the
+        # series' totals exact through the thinning.
+        now = time.time()
+        rows = [
+            {"ts": now - i * 30, "accepted": 2, "rejected": 1, "invalid": 0, "expired": 0}
+            for i in range(86_400, 0, -1)  # ascending ts, like the DB returns them
+        ]
+        pts = build_share_stats(rows, "all")
+        assert len(pts) <= _MAX_CHART_POINTS
+        assert sum(p["a"] for p in pts) == 2 * 86_400
+        assert sum(p["r"] for p in pts) == 86_400
+        # Timestamps stay ordered ms-epoch positions from within the data.
+        xs = [p["x"] for p in pts]
+        assert xs == sorted(xs)
+
+    def test_reject_pct_24h_stays_exact_on_long_series(self):
+        # The trailing 24h reject rate is computed from the RAW rows, never the thinned
+        # series — thinning the chart must not move the number.
+        now = time.time()
+        rows = [
+            {"ts": now - i * 30, "accepted": 9, "rejected": 1, "invalid": 0, "expired": 0}
+            for i in range(86_400)
+        ]
+        assert _window_reject_pct(rows, 24 * 3600) == "10.00%"
+
+    def test_short_series_is_untouched(self):
+        pts = build_share_stats(self._rows(time.time()), "all")
+        assert len(pts) == 3  # under the cap -> native resolution, no bucketing
 
 
 # --- pool/network passthrough ---------------------------------------------------------
