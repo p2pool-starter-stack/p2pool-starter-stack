@@ -21,7 +21,7 @@ stack. The other guides cover individual topics once you're running.
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference, upgrades, backups, and troubleshooting. |
 | [Testing Strategy](testing-strategy.md) | The four test tiers (unit → contract → fake-daemon mini-stack → live matrix), the full scenario catalog, and which tier proves each situation. |
 | [Testing Guide](testing-guide.md) | For developers: how to write and run tests, per-change recipes, conventions, and real-hardware gotchas. |
-| [Test Inventory](test-inventory.md) | Generated, exhaustive list of every test/scenario across all suites: what's covered. |
+| Test Inventory | An exhaustive list of every test/scenario across all suites — generated on demand by `make test-inventory` (not committed). |
 | [Integration Testing](integration-testing.md) | The end-to-end config-matrix suite that validates the stack against real Monero + Tari nodes: the blocking pre-release gate. |
 | [Releasing](releasing.md) | How Pithead is versioned and released: one product, one version, the `VERSION` source of truth, and the GHCR stage→promote pipeline. |
 | [Release / Validation Server](release-server.md) | Why end-to-end validation needs a dedicated server (and what GitHub Actions does free on every PR), how to provision and harden it, and the safe self-hosted-runner setup. |

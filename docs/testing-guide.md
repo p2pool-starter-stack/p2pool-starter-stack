@@ -1,8 +1,8 @@
 # Testing Guide (for developers)
 
 Where to put a test for a change you just made, and how to run it. The
-[Testing Strategy](testing-strategy.md) explains why the tiers exist; the generated
-[Test Inventory](test-inventory.md) lists what exists today.
+[Testing Strategy](testing-strategy.md) explains why the tiers exist; `make test-inventory`
+generates a list of what exists today (git-ignored — read it locally).
 
 ## Principles
 
@@ -24,7 +24,7 @@ make test-dashboard       # dashboard pytest + 80% coverage gate
 make test-stack           # pithead shell suite
 make test-fakes           # tier-2 contract test (real clients vs fakes)
 make test-integration-selftest   # the integration harness's own logic
-make test-inventory       # regenerate docs/test-inventory.md (do this when adding/removing tests)
+make test-inventory       # write a generated (git-ignored) coverage list to docs/test-inventory.md
 make test-mini-stack      # tier-3 docker mini-stack (needs docker)
 make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 live, non-destructive
 ```
@@ -86,8 +86,8 @@ Add a scenario to `tests/integration/mini-stack/run-mini-stack.sh`: drive the fa
 - Shell: pure logic goes in `lib.sh`/`scenarios.sh` and is tested by `selftest.sh`. I/O (ssh,
   docker, RPC) is thin wrappers that aren't unit-tested. Everything stays
   `shellcheck --severity=warning` clean.
-- Regenerate the inventory (`make test-inventory`) when you add or remove a test. CI's drift check
-  (`make test-inventory-check`) fails otherwise.
+- `make test-inventory` writes a generated (git-ignored) coverage list you can read locally — handy
+  for seeing what already exists before you add a test.
 - Secrets: never print tokens, creds, or onions. The harness redacts artifacts and hashes secrets
   on the box. If you add a secret-bearing field, confirm `redact()` covers it (there's a self-test
   for the patterns).

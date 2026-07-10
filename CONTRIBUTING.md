@@ -51,8 +51,6 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    - **test-compose** — `docker-compose.yml` interpolation validation.
    - **test-integration-selftest** — the integration harness's own pure logic.
    - **test-fakes** — the tier-2 contract test (real dashboard clients vs controllable fakes).
-   - the **test-inventory drift check** — fails if a test was added/removed without
-     regenerating [`docs/test-inventory.md`](docs/test-inventory.md) (`make test-inventory`).
 
    Bigger, infra-dependent suites run separately: `make test-mini-stack` (tier-3 docker) and
    `make test-integration` (tier-4 live, against a real box; start with `--check`).
@@ -61,7 +59,8 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    the line. The [Testing Guide](docs/testing-guide.md) has per-change recipes; the
    [Testing Strategy](docs/testing-strategy.md) explains the tiers.
 5. Update the docs in [`docs/`](docs/) (and the README, if relevant) for any
-   user-facing change, and run `make test-inventory` if you touched the test suites.
+   user-facing change. To see what the suites cover, `make test-inventory` writes a
+   generated (git-ignored) inventory you can read locally.
 
 ## Opening a pull request
 
