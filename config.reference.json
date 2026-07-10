@@ -113,7 +113,8 @@
             "wallet_changed": true,
             "high_reject_rate": true,
             "block_found": true,
-            "payout_found": true
+            "payout_found": true,
+            "container_unhealthy": true
         },
         "daily_summary_time": "08:00",
         "commands": {
