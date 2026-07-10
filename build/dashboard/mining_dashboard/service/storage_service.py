@@ -44,6 +44,7 @@ class StateManager:
             "hashrate_history": deque(),
             "shares": [],
             "events": [],  # degradation / recovery markers for the chart (#99)
+            "share_stats": [],  # per-poll accepted/rejected/invalid/expired deltas (#116)
             "xvb": {
                 "total_donated_time": 0.0,
                 "current_mode": "P2POOL",
@@ -123,12 +124,21 @@ class StateManager:
         # Degradation / recovery event markers for the chart (#99). No PK — two events can share a
         # timestamp; type is "hashrate_loss"|"hashrate_recovered"|... and detail is the tooltip text.
         self._conn.execute("CREATE TABLE IF NOT EXISTS events (ts REAL, type TEXT, detail TEXT)")
+        # Pool-wide share-health deltas per poll (#116): what the proxy's cumulative counters
+        # gained since the previous poll, never the counters themselves — so a proxy restart
+        # re-baselines instead of poisoning the series. No PK — it's a rate series, duplicate
+        # timestamps are harmless. Additive table, mirroring events: no _migrate_db change needed.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS share_stats "
+            "(ts REAL, accepted INTEGER, rejected INTEGER, invalid INTEGER, expired INTEGER)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
         exist even on a database created by an older schema version."""
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON history(timestamp)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_ts ON shares(ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_stats_ts ON share_stats(ts)")
 
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
@@ -248,6 +258,17 @@ class StateManager:
                         self.state["events"] = [dict(row) for row in cursor.fetchall()]
                     except sqlite3.Error:
                         self.state["events"] = []
+
+                    # 5. Load share-stat deltas (#116) — additive table, same pre-migration guard.
+                    try:
+                        cursor.execute(
+                            "SELECT ts, accepted, rejected, invalid, expired FROM share_stats "
+                            "WHERE ts > ? ORDER BY ts ASC",
+                            (history_cutoff,),
+                        )
+                        self.state["share_stats"] = [dict(row) for row in cursor.fetchall()]
+                    except sqlite3.Error:
+                        self.state["share_stats"] = []
 
                 self.logger.info(f"State successfully loaded from {self.db_path}")
         except sqlite3.Error as e:
@@ -412,6 +433,46 @@ class StateManager:
         with self._lock:
             return list(self.state.get("events", []))
 
+    def add_share_stats(
+        self, ts: float, accepted: int = 0, rejected: int = 0, invalid: int = 0, expired: int = 0
+    ):
+        """Record one poll's pool-wide share-health DELTAS (#116) — how much each cumulative
+        proxy counter advanced since the previous poll — in memory and in the DB. Mirrors
+        add_event: retention-pruned in memory, probabilistically pruned on disk."""
+        row = {
+            "ts": ts,
+            "accepted": accepted,
+            "rejected": rejected,
+            "invalid": invalid,
+            "expired": expired,
+        }
+        with self._lock:
+            self.state.setdefault("share_stats", []).append(row)
+            cutoff = time.time() - HISTORY_RETENTION_SEC
+            self.state["share_stats"] = [s for s in self.state["share_stats"] if s["ts"] >= cutoff]
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT INTO share_stats (ts, accepted, rejected, invalid, expired) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (ts, accepted, rejected, invalid, expired),
+                    )
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM share_stats WHERE ts < ?",
+                            (time.time() - HISTORY_RETENTION_SEC,),
+                        )
+        except sqlite3.Error as e:
+            self._db_error("Share Stats Insert Error", e)
+
+    def get_share_stats(self) -> list[dict[str, Any]]:
+        """Returns a copy of the per-poll share-health deltas (#116)."""
+        with self._lock:
+            return list(self.state.get("share_stats", []))
+
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""
         with self._lock:
@@ -503,6 +564,35 @@ class StateManager:
                         )
             except sqlite3.Error as e:
                 self._db_error("XVB Update Error", e)
+
+    def get_kv(self, key: str) -> str | None:
+        """Read one value from the kv_store, or None if absent / unreadable (#375)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return None
+                cursor = self._conn.cursor()
+                cursor.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row[0] if row else None
+        except sqlite3.Error as e:
+            self.logger.error(f"KV Read Error: {e}")
+            return None
+
+    def set_kv(self, key: str, value):
+        """Insert-or-replace one kv_store value (#375). Values are stored as strings, mirroring
+        the XvB stats writes above."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+                        (key, str(value)),
+                    )
+        except sqlite3.Error as e:
+            self._db_error("KV Write Error", e)
 
     def save_snapshot(self, data: dict[str, Any]):
         """Persists the full application state snapshot to the KV store."""

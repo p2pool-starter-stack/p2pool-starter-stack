@@ -12,8 +12,13 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TOR_SOCKS_PROXY,
 )
-from mining_dashboard.helper.utils import effective_hashrate, format_duration, format_hashrate
-from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.helper.utils import (
+    effective_hashrate,
+    format_duration,
+    format_hashrate,
+    format_xmr,
+)
+from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
@@ -41,6 +46,7 @@ COMMANDS = (
     "pool",
     "xvb",
     "earnings",
+    "luck",
     "help",
 )
 
@@ -55,6 +61,7 @@ HELP_TEXT = (
     "/pool — P2Pool sidechain + Monero network\n"
     "/xvb — XvB mode, tier, and raffle eligibility\n"
     "/earnings — estimated P2Pool XMR per day\n"
+    "/luck — pool cadence: time-to-share, luck, PPLNS weight\n"
     "/help — this message"
 )
 
@@ -107,6 +114,15 @@ def _human_count(n):
     return f"{n:.2f} E"
 
 
+def _xvb_split_frac(p2pool_24h, xvb_routed_24h):
+    """Fraction of the last 24h routed to XvB, or ``None`` when there is no routed history yet.
+    Shared by ``format_status`` and ``format_daily_summary`` so the two can never disagree (#365)."""
+    total = (p2pool_24h or 0) + (xvb_routed_24h or 0)
+    if not total:
+        return None
+    return (xvb_routed_24h or 0) / total
+
+
 def format_status(metrics, mining_active, host_label="", warnings=None, merge_mining=None):
     """Overall stack health — the answer to '/status'. Pure: folds a :class:`Metrics` (plus the
     mining-active flag the loop derives from the sync gate, any active warning/error badges, and the
@@ -129,6 +145,13 @@ def format_status(metrics, mining_active, host_label="", warnings=None, merge_mi
     lines.append(f"Workers: {metrics.workers_online}/{metrics.workers_total} online")
     lines.append(f"Hashrate: {format_hashrate(metrics.total_h15)} (10m avg)")
     lines.append(f"PPLNS shares: {metrics.shares_in_window} in window")
+    if metrics.xvb_enabled:
+        frac = _xvb_split_frac(metrics.p2pool_24h, metrics.xvb_routed_24h)
+        if frac is not None:
+            lines.append(
+                f"24h split: \U0001f535 P2Pool {format_hashrate(metrics.p2pool_24h)} · "
+                f"\U0001f3b2 XvB {format_hashrate(metrics.xvb_routed_24h)} ({frac * 100:.0f}% to XvB)"
+            )
     # Surface the same warning/error badges the dashboard's top bar shows (#104), so /status is a
     # one-glance "anything wrong?" — or an explicit all-clear.
     if warnings:
@@ -294,6 +317,28 @@ def format_pool(metrics, data=None, host_label=""):
     return "\n".join(lines)
 
 
+def format_luck(metrics, host_label=""):
+    """Pool cadence & luck — the answer to '/luck' (#84). Reads the same Metrics fields the
+    dashboard's cadence card renders: time since the pool's last block (pool-wide, not a payout),
+    expected time-to-share for this miner's hashrate, luck (actual vs expected shares in the PPLNS
+    window; >100% = lucky), and the miner's own PPLNS share-weight."""
+    prefix = _prefix(host_label)
+    lines = [f"{prefix}\U0001f340 Pool cadence & luck"]
+    if metrics.last_block_ts:
+        since = format_duration(time.time() - metrics.last_block_ts)
+        lines.append(f"Since pool's last block: {since}")
+    else:
+        lines.append("Since pool's last block: n/a")
+    if metrics.expected_share_sec > 0:
+        lines.append(f"Est. time to a share: {format_duration(metrics.expected_share_sec)}")
+        lines.append(f"Luck: {metrics.luck_pct:.0f}% (actual vs expected shares in PPLNS window)")
+    else:
+        lines.append("Est. time to a share: n/a (waiting on hashrate history)")
+        lines.append("Luck: n/a")
+    lines.append(f"Your PPLNS weight: {metrics.own_pplns_weight:,.0f}")
+    return "\n".join(lines)
+
+
 def format_xvb(metrics, host_label=""):
     """XvB mode / tier / raffle eligibility — the answer to '/xvb'."""
     prefix = _prefix(host_label)
@@ -304,6 +349,20 @@ def format_xvb(metrics, host_label=""):
         f"Mode: {metrics.mode}",
         f"Current tier: {metrics.current_tier}",
         f"Target tier: {metrics.target_tier}",
+    ]
+    # Tier cost framing (#118), all from existing Metrics fields: what the target tier demands and
+    # what holding it costs. A tier is raffle status, never an XMR payout — say so explicitly.
+    if metrics.target_threshold > 0:
+        sust = "sustainable" if metrics.target_sustainable else "NOT sustainable at your hashrate"
+        lines.append(f"Target threshold: {format_hashrate(metrics.target_threshold)} ({sust})")
+        lines.append(
+            f"Holding it costs ~{format_hashrate(metrics.target_threshold)} donated continuously "
+            "(both the 1h and 24h credited averages must clear it)."
+        )
+    else:
+        lines.append("No donor tier is sustainable at your hashrate.")
+    lines += [
+        "A tier is raffle status, not an XMR payout — donated hashrate earns no P2Pool shares.",
         f"Routed to XvB: {format_hashrate(metrics.xvb_routed_1h)} (1h)",
         # Credited averages are what XvB itself measures — the figures that actually set your tier
         # (routed above is what we send; credited is what counts). Showing both explains the tier.
@@ -321,9 +380,10 @@ def format_xvb(metrics, host_label=""):
 
 
 def format_earnings(metrics, network, host_label=""):
-    """Estimated P2Pool XMR earnings — the answer to '/earnings'. Reuses the same rate the dashboard
-    calculator uses (``xmr_per_hs_day``) applied to the displayed P2Pool 1h-average hashrate; Tari
-    merge-mining earnings are a separate thing and not included (#12)."""
+    """Estimated P2Pool XMR earnings — the answer to '/earnings'. Reuses the same rates the
+    dashboard calculator uses (``xmr_per_hs_day``/``xtm_per_hs_day``) applied to the displayed
+    P2Pool 1h-average hashrate. The Tari line appears only while merge-mining figures are live —
+    the same hashrate earns the XTM alongside the XMR, in addition, not instead (#12, #117)."""
     reward_atomic = (network or {}).get("reward", 0) or 0
     coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
     if coeff_day <= 0:
@@ -331,19 +391,25 @@ def format_earnings(metrics, network, host_label=""):
     daily_1h = coeff_day * metrics.p2pool_1h
     lines = [
         f"{_prefix(host_label)}\U0001f4b0 Estimated P2Pool earnings",
-        f"1h avg {format_hashrate(metrics.p2pool_1h)} → ~{daily_1h:.6f} XMR/day",
+        f"1h avg {format_hashrate(metrics.p2pool_1h)} → ~{format_xmr(daily_1h)}/day",
     ]
     # The 24h average smooths the variance a 1h window carries, so it's the steadier projection —
     # shown (and used for the 30-day figure) only once there's a day of history to average.
     if metrics.p2pool_24h > 0:
         daily_24h = coeff_day * metrics.p2pool_24h
         lines.append(
-            f"24h avg {format_hashrate(metrics.p2pool_24h)} → ~{daily_24h:.6f} XMR/day "
-            f"· ~{daily_24h * 30:.5f} XMR/30d"
+            f"24h avg {format_hashrate(metrics.p2pool_24h)} → ~{format_xmr(daily_24h)}/day "
+            f"· ~{format_xmr(daily_24h * 30)}/30d"
         )
     else:
-        lines.append(f"~{daily_1h * 30:.5f} XMR/30d")
-    lines.append("Estimate only — excludes XvB-donated hashrate and Tari merge-mining.")
+        lines.append(f"~{format_xmr(daily_1h * 30)}/30d")
+    # Tari rides along (#117): the same 1h-average hashrate merge-mines the aux chain, so the
+    # line is a second rate over the same figure. Omitted while the Tari inputs aren't collected
+    # (inactive / still syncing) — never a phantom 0.000000 XTM.
+    tari_daily = metrics.p2pool_1h * xtm_per_hs_day(metrics.tari_reward, metrics.tari_difficulty)
+    if tari_daily > 0:
+        lines.append(f"Tari (merge-mined alongside): ~{tari_daily:.2f} XTM/day")
+    lines.append("Estimate only — excludes XvB-donated hashrate.")
     return "\n".join(lines)
 
 
@@ -358,6 +424,7 @@ _INCIDENT_LABELS = {
     "clearnet_exposed": "clearnet exposure",
     "hashrate_low": "hashrate low",
     "hashrate_loss": "hashrate drop",
+    "container_unhealthy": "container unhealthy",
 }
 
 
@@ -396,8 +463,7 @@ def format_daily_summary(metrics, data, host_label="", now=None, incidents=None)
         lines.append(incident_line)
     lines.append(f"⚡ 24h hashrate: {format_hashrate(fleet_24h)}")
     if metrics.xvb_enabled:
-        routed = (metrics.p2pool_24h or 0) + (metrics.xvb_routed_24h or 0)
-        xvb_frac = (metrics.xvb_routed_24h or 0) / routed if routed else 0
+        xvb_frac = _xvb_split_frac(metrics.p2pool_24h, metrics.xvb_routed_24h) or 0
         xvb_hr = fleet_24h * xvb_frac
         lines.append(
             f"   \U0001f535 P2Pool {format_hashrate(fleet_24h - xvb_hr)} · "
@@ -410,7 +476,7 @@ def format_daily_summary(metrics, data, host_label="", now=None, incidents=None)
     coeff = xmr_per_hs_day(reward, metrics.network_difficulty)
     if coeff > 0:
         lines.append(
-            f"\U0001f4b0 Est. earnings: ~{coeff * (metrics.p2pool_24h or 0):.6f} XMR/day (P2Pool)"
+            f"\U0001f4b0 Est. earnings: ~{format_xmr(coeff * (metrics.p2pool_24h or 0))}/day (P2Pool)"
         )
 
     lines.append(f"\U0001f477 Miners: {metrics.workers_online}/{metrics.workers_total} online")
@@ -530,6 +596,8 @@ class TelegramCommandBot:
             return format_xvb(metrics, self.host_label)
         if cmd == "earnings":
             return format_earnings(metrics, data.get("network", {}), self.host_label)
+        if cmd == "luck":
+            return format_luck(metrics, self.host_label)
         return None
 
     async def run(self):

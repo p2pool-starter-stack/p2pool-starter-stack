@@ -9,10 +9,12 @@ from mining_dashboard.helper.utils import (
     format_duration,
     format_hashrate,
     format_time_abs,
+    format_xmr,
     get_tier_info,
     is_ip_address,
     parse_hashrate,
     pplns_block_time,
+    pplns_weight_in_window,
     resolve_target_threshold,
     shares_in_pplns_window,
     xvb_stats_are_stale,
@@ -62,6 +64,28 @@ class TestPplnsWindow:
     def test_empty_shares_is_zero(self):
         assert shares_in_pplns_window([], 2160, 10, now=10_000) == 0
 
+    def test_weight_sums_difficulty_inside_the_window(self):
+        # #84: same cutoff as the count above, but summing the persisted per-share difficulty.
+        now = 10_000
+        shares = [
+            {"ts": now - 5, "difficulty": 100.0},
+            {"ts": now - 20, "difficulty": 250.0},  # boundary inclusive
+            {"ts": now - 21, "difficulty": 999.0},  # outside — dropped
+        ]
+        assert pplns_weight_in_window(shares, 2, 10, now=now) == 350.0
+
+    def test_weight_missing_or_null_difficulty_counts_zero(self):
+        now = 10_000
+        shares = [
+            {"ts": now - 1},
+            {"ts": now - 2, "difficulty": None},
+            {"ts": now - 3, "difficulty": 40},
+        ]
+        assert pplns_weight_in_window(shares, 2, 10, now=now) == 40
+
+    def test_weight_empty_shares_is_zero(self):
+        assert pplns_weight_in_window([], 2160, 10, now=10_000) == 0
+
 
 class TestParseHashrate:
     def test_plain_numbers(self):
@@ -94,6 +118,21 @@ class TestFormatHashrate:
         assert format_hashrate(0) == "0.00 H/s"
         assert format_hashrate("invalid") == "0 H/s"
         assert format_hashrate(None) == "0 H/s"
+
+
+class TestFormatXmr:
+    """#387: mirrors formatXmr in web/static/logic.mjs so dashboard and Telegram agree."""
+
+    def test_precision_scales_with_magnitude(self):
+        assert format_xmr(2.5) == "2.5000 XMR"  # >= 1 -> 4 dp
+        assert format_xmr(0.1234567) == "0.123457 XMR"  # >= 0.001 -> 6 dp
+        assert format_xmr(0.00000123) == "0.00000123 XMR"  # tiny -> 8 dp, not rounded to 0
+
+    def test_zero_and_bad_data(self):
+        assert format_xmr(0) == "0 XMR"
+        assert format_xmr(None) == "—"
+        assert format_xmr("invalid") == "—"
+        assert format_xmr(float("inf")) == "—"
 
 
 class TestFormatDuration:

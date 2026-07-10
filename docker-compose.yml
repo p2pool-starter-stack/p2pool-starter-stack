@@ -460,6 +460,11 @@ services:
       - TELEGRAM_EVENT_HASHRATE_LOSS=${TELEGRAM_EVENT_HASHRATE_LOSS:-true}
       - TELEGRAM_EVENT_HUGEPAGES=${TELEGRAM_EVENT_HUGEPAGES:-true}
       - TELEGRAM_EVENT_LOW_RAM=${TELEGRAM_EVENT_LOW_RAM:-true}
+      - TELEGRAM_EVENT_WALLET_CHANGED=${TELEGRAM_EVENT_WALLET_CHANGED:-true}
+      - TELEGRAM_EVENT_HIGH_REJECT_RATE=${TELEGRAM_EVENT_HIGH_REJECT_RATE:-true}
+      - TELEGRAM_EVENT_BLOCK_FOUND=${TELEGRAM_EVENT_BLOCK_FOUND:-true}
+      - TELEGRAM_EVENT_PAYOUT_FOUND=${TELEGRAM_EVENT_PAYOUT_FOUND:-true}
+      - TELEGRAM_EVENT_CONTAINER_UNHEALTHY=${TELEGRAM_EVENT_CONTAINER_UNHEALTHY:-true}
       - TELEGRAM_DAILY_SUMMARY_TIME=${TELEGRAM_DAILY_SUMMARY_TIME:-08:00}
       # Hashrate-degradation detector (#99).
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}
@@ -497,8 +502,8 @@ services:
     # published to the host loopback — the host-networked dashboard reaches it at 127.0.0.1:12375,
     # but no mining container (monerod/tari/p2pool/xmrig-proxy) can. Inspect (`/containers/<id>/json`
     # → Config.Env → secrets) is thus unreachable from a compromised mining container. The dashboard
-    # itself only calls `GET /containers/<id>/logs`; fully closing inspect against the dashboard would
-    # need a logs-only shim (see #345).
+    # calls `GET /containers/<id>/logs` and, for the container-health alert (#337), inspect itself —
+    # so the shim contemplated in #345 would need a logs+inspect allowance, not logs-only.
     ports:
       - "127.0.0.1:12375:2375"
     networks:

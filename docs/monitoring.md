@@ -1,7 +1,9 @@
 # Monitoring & alerting
 
 Pithead can ping an external **dead-man's switch** so you find out when your mining host
-goes down — even when it can't tell you itself.
+goes down — even when it can't tell you itself. It also serves a
+[Prometheus `/metrics` endpoint](#prometheus-metrics) for operators who run their own
+monitoring stack.
 
 ## Why an *external* monitor?
 
@@ -193,6 +195,45 @@ Use a **separate** check for the host timer if you want to tell "the host is up"
 - **Test it end to end.** Stop the stack (`./pithead stop`) and wait for the period + grace to
   elapse — you should get the alert. Start it again and the check recovers.
 - **Too many false alarms.** Increase the **period** and/or **grace** on Healthchecks.io.
+
+---
+
+## Prometheus metrics
+
+The dashboard exposes its live operational figures in Prometheus text format at `/metrics` —
+hashrate averages, worker counts, PPLNS shares, luck and expected time-to-share, the trailing-1h
+reject rate, node sync/health, XvB state, disk usage, and database health as gauges named
+`pithead_*`, plus three counters: cumulative accepted shares (`pithead_shares_accepted_total`),
+rejected shares (`pithead_shares_rejected_total`), and pool blocks found
+(`pithead_pool_blocks_found_total`). `pithead_snapshot_age_seconds` reports how old the data
+loop's snapshot is — alert on it growing past a few update intervals to catch a wedged loop
+that would otherwise keep scraping as healthy. The reject-rate gauge is omitted while no shares
+were submitted in the window (no shares is not 0% rejected). The endpoint renders the same
+metrics snapshot the dashboard UI uses; it is always on and needs no configuration.
+
+`/metrics` is served on the same routes as the dashboard itself: Caddy fronts it on the
+dashboard port, and when a dashboard password is set (`dashboard.auth.password`, see
+[Configuration](configuration.md)), the scrape needs the same credentials. A minimal
+`scrape_configs` entry:
+
+```yaml
+scrape_configs:
+  - job_name: pithead
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true   # the stack's certificate is self-signed
+    basic_auth:                    # only when dashboard.auth.password is set
+      username: admin
+      password: <your dashboard password>
+    static_configs:
+      - targets: ["<host>"]
+```
+
+The exposed values are current only — no history; the dashboard's own database keeps the
+persisted series. Scraping over Tor from outside the LAN (e.g. via the
+[onion service](configuration.md#remote-access-over-tor-onion-service)) is out of scope here;
+scrape from the same network.
 
 ---
 

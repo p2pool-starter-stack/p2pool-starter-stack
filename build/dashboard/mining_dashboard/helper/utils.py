@@ -1,4 +1,5 @@
 import ipaddress
+import math
 import socket
 import time
 
@@ -71,6 +72,26 @@ def format_hashrate(hashrate):
 
     except (ValueError, TypeError):
         return "0 H/s"
+
+
+def format_xmr(amount):
+    """Format an XMR amount with magnitude-adaptive precision — 4 decimal places at >= 1 XMR,
+    6 at >= 0.001, 8 below that — so a small daily estimate isn't truncated to zeros.
+
+    Mirrors ``formatXmr`` in ``web/static/logic.mjs`` (the dashboard earnings card) so the same
+    estimate reads the same on every surface (#387). Returns "0 XMR" for zero and an em dash for
+    non-numeric input.
+    """
+    try:
+        val = float(amount)
+    except (ValueError, TypeError):
+        return "—"
+    if not math.isfinite(val):
+        return "—"
+    if val == 0:
+        return "0 XMR"
+    dp = 4 if val >= 1 else 6 if val >= 0.001 else 8
+    return f"{val:.{dp}f} XMR"
 
 
 def format_duration(seconds):
@@ -162,6 +183,19 @@ def shares_in_pplns_window(shares, pplns_window, block_time, now=None):
         now = time.time()
     cutoff = now - pplns_window * block_time
     return sum(1 for s in shares if s.get("ts", 0) >= cutoff)
+
+
+def pplns_weight_in_window(shares, pplns_window, block_time, now=None):
+    """Sum the persisted per-share ``difficulty`` over the shares inside the PPLNS window (#84).
+
+    Same cutoff math as :func:`shares_in_pplns_window`, but weighted: this is the miner's own
+    PPLNS share-weight — the figure that sizes their slice of a pool payout — NOT p2pool's
+    pool-wide ``pplnsWeight``. ``now`` defaults to ``time.time()`` and is injectable for tests.
+    """
+    if now is None:
+        now = time.time()
+    cutoff = now - pplns_window * block_time
+    return sum(s.get("difficulty", 0) or 0 for s in shares if s.get("ts", 0) >= cutoff)
 
 
 def get_tier_info(hashrate, tiers=None):

@@ -16,7 +16,7 @@ import {
     SERIES_KEYS, normalizeSeries,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, computeEarnings, formatXmr, formatTimeToShare,
+    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, formatXmr, formatXtm, formatTimeToShare,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -40,9 +40,9 @@ test('sortWorkers: numeric columns sort numerically, not lexically', () => {
 });
 
 test('sortWorkers: hashrate column also sorts numerically', () => {
-    const ws = [{ h10: 5000 }, { h10: 250 }, { h10: 12000 }];
+    const ws = [{ h15: 5000 }, { h15: 250 }, { h15: 12000 }];
     assert.deepEqual(
-        sortWorkers(ws, col('h10'), true).map((w) => w.h10),
+        sortWorkers(ws, col('h15'), true).map((w) => w.h15),
         [250, 5000, 12000],
     );
 });
@@ -73,8 +73,17 @@ test('sortWorkers: does not mutate the input array', () => {
 test('WORKER_COLUMNS: keys match the worker fields the server sends', () => {
     assert.deepEqual(
         WORKER_COLUMNS.map((c) => c.key),
-        ['name', 'ip_sort', 'uptime', 'h10', 'h60', 'h15', 'accepted', 'rejected'],
+        ['name', 'ip_sort', 'uptime', 'h60', 'h15', 'accepted', 'rejected'],
     );
+});
+
+test('WORKER_COLUMNS: hashrate windows are labelled by what the data is (#387)', () => {
+    // h60 holds the 1m rate and h15 the 10m rate (legacy key names; see data_service). The labels
+    // must say 1m / 10m so the table matches the chart toggle and Telegram's "(10m avg)".
+    const labels = Object.fromEntries(WORKER_COLUMNS.map((c) => [c.key, c.label]));
+    assert.equal(labels.h60, '1m');
+    assert.equal(labels.h15, '10m');
+    assert.equal(labels.h10, undefined); // dropped — via the proxy it duplicated the 1m rate
 });
 
 test('sortWorkers: rejected column sorts numerically (find problem rigs)', () => {
@@ -175,6 +184,16 @@ test('parseHashrate: rejects empty / unparseable input', () => {
     assert.equal(parseHashrate(undefined), null);
 });
 
+test('fmtHashrate: mirrors the server format_hashrate unit boundaries (#387)', () => {
+    // Same cases as tests/helper/test_utils.py TestFormatHashrate — the two must stay in lockstep.
+    assert.equal(fmtHashrate(1_500_000_000), '1.50 GH/s');
+    assert.equal(fmtHashrate(2_500_000), '2.50 MH/s');
+    assert.equal(fmtHashrate(1_500), '1.50 kH/s');
+    assert.equal(fmtHashrate(500), '500.00 H/s');
+    assert.equal(fmtHashrate(0), '0.00 H/s');
+    assert.equal(fmtHashrate('invalid'), '0 H/s');
+});
+
 test('computeEarnings: scales the daily rate to day/month/year + time-to-share', () => {
     const earnings = { available: true, coeff_day: 1e-7, pool_difficulty: 250_000_000 };
     const est = computeEarnings(50_000, earnings);
@@ -187,17 +206,85 @@ test('computeEarnings: scales the daily rate to day/month/year + time-to-share',
 
 test('computeEarnings: returns nulls when unavailable or hashrate is non-positive', () => {
     const ok = { available: true, coeff_day: 1e-7, pool_difficulty: 1 };
-    assert.deepEqual(computeEarnings(0, ok), { day: null, month: null, year: null, timeToShareSec: null });
-    assert.deepEqual(computeEarnings(null, ok), { day: null, month: null, year: null, timeToShareSec: null });
+    const allNull = { day: null, month: null, year: null, timeToShareSec: null,
+                      tariDay: null, tariMonth: null, tariYear: null };
+    assert.deepEqual(computeEarnings(0, ok), allNull);
+    assert.deepEqual(computeEarnings(null, ok), allNull);
     // available:false (network stats missing) -> graceful "—" path even with a valid hashrate.
     assert.equal(computeEarnings(50_000, { available: false, coeff_day: 1e-7 }).day, null);
     assert.equal(computeEarnings(50_000, null).day, null);
+});
+
+test('computeEarnings: Tari figures scale with the same what-if input (#117)', () => {
+    const earnings = { available: true, coeff_day: 1e-7, pool_difficulty: 1,
+                       tari_available: true, tari_coeff_day: 2e-3 };
+    const est = computeEarnings(50_000, earnings);
+    assert.equal(est.tariDay, 50_000 * 2e-3);
+    assert.equal(est.tariMonth, est.tariDay * DAYS_PER_MONTH);
+    assert.equal(est.tariYear, est.tariDay * DAYS_PER_YEAR);
+    // Doubling the hashrate doubles the XTM figures — one input drives both estimates.
+    assert.equal(computeEarnings(100_000, earnings).tariDay, 2 * est.tariDay);
+});
+
+test('computeEarnings: Tari figures are null when merge-mining is unavailable (#117)', () => {
+    const est = computeEarnings(50_000, {
+        available: true, coeff_day: 1e-7, pool_difficulty: 1,
+        tari_available: false, tari_coeff_day: 0,
+    });
+    assert.equal(est.tariDay, null);
+    assert.equal(est.tariMonth, null);
+    assert.equal(est.tariYear, null);
+    assert.ok(est.day > 0);   // the XMR estimate is unaffected
 });
 
 test('computeEarnings: no time-to-share when share difficulty is unknown', () => {
     const est = computeEarnings(50_000, { available: true, coeff_day: 1e-7, pool_difficulty: 0 });
     assert.equal(est.timeToShareSec, null);
     assert.ok(est.day > 0);   // earnings still computed
+});
+
+// --- computeXvbTier (#118) — transcription of resolve_target_threshold's auto rule ------
+
+const XVB_CALC = {
+    enabled: true,
+    max_fraction: 0.85,
+    tiers: [
+        { name: 'Donor (1.00 kH/s+)', threshold: 1_000 },
+        { name: 'Vip (10.00 kH/s+)', threshold: 10_000 },
+        { name: 'Whale (100.00 kH/s+)', threshold: 100_000 },
+        { name: 'Mega (1.00 MH/s+)', threshold: 1_000_000 },
+    ],
+};
+
+test('computeXvbTier: pinned against the Python resolve_target_threshold auto case', () => {
+    // Same inputs as tests/helper/test_utils.py::test_auto_picks_highest_sustainable:
+    // 15,000 H/s × 0.85 = 12,750 sustains exactly the 10k (Vip) tier — the transcription
+    // cross-check that keeps the JS and helper/utils.py rules from drifting silently.
+    const t = computeXvbTier(15_000, XVB_CALC);
+    assert.equal(t.threshold, 10_000);
+    assert.equal(t.cost, 10_000);    // cost = the threshold itself (continuous donation)
+    assert.match(t.tier, /Vip/);
+});
+
+test('computeXvbTier: below the lowest tier → null', () => {
+    assert.equal(computeXvbTier(100, XVB_CALC), null);  // 100 × 0.85 = 85 < 1,000
+});
+
+test('computeXvbTier: exactly threshold / max_fraction clears the tier (boundary)', () => {
+    assert.equal(computeXvbTier(10_000 / 0.85, XVB_CALC).threshold, 10_000);
+});
+
+test('computeXvbTier: between tiers picks the lower one', () => {
+    // 60,000 × 0.85 = 51,000 — clears 10k, not 100k.
+    assert.equal(computeXvbTier(60_000, XVB_CALC).threshold, 10_000);
+});
+
+test('computeXvbTier: null when disabled, calc missing, empty tiers, or bad hashrate', () => {
+    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, enabled: false }), null);
+    assert.equal(computeXvbTier(15_000, null), null);
+    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, tiers: [] }), null);
+    assert.equal(computeXvbTier(0, XVB_CALC), null);
+    assert.equal(computeXvbTier(null, XVB_CALC), null);
 });
 
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {
@@ -207,6 +294,12 @@ test('formatXmr: precision scales with magnitude; "—" for null/invalid', () =>
     assert.equal(formatXmr(0), '0 XMR');
     assert.equal(formatXmr(null), '—');
     assert.equal(formatXmr(Infinity), '—');
+});
+
+test('formatXtm: same adaptive precision with the XTM unit; "—" for null (#117)', () => {
+    assert.equal(formatXtm(2.5), '2.5000 XTM');
+    assert.equal(formatXtm(0), '0 XTM');
+    assert.equal(formatXtm(null), '—');   // the Tari-unavailable "—" state
 });
 
 test('formatTimeToShare: formats seconds, "—" for null / non-positive', () => {

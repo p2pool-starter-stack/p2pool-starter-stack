@@ -278,6 +278,76 @@ class TestSharesWindow:
         assert build_metrics(data, _mgr()).block_time == 30
 
 
+class TestCadenceAndLuck:
+    """#84: pool cadence & luck — expected time-to-share, luck %, own PPLNS weight, last block."""
+
+    @staticmethod
+    def _hist(rate):
+        # Two fresh samples at a constant v_p2pool so p2pool_1h averages to exactly `rate`.
+        now = time.time()
+        return [
+            {"timestamp": now - 30, "v": rate, "v_p2pool": rate, "v_xvb": 0},
+            {"timestamp": now - 60, "v": rate, "v_p2pool": rate, "v_xvb": 0},
+        ]
+
+    def test_expected_share_sec_is_diff_over_hashrate(self):
+        data = _data(pool={"pool": {"difficulty": 100_000}})
+        m = build_metrics(data, _mgr(history=self._hist(1000)))
+        assert m.expected_share_sec == 100.0  # 100_000 H·s / 1000 H/s
+
+    def test_zero_hashrate_or_difficulty_reads_zero(self):
+        # A fresh start (no history → p2pool_1h == 0) or an unknown pool difficulty must read 0.0
+        # so the view layer hides luck/tts instead of showing inf/0s.
+        no_hist = build_metrics(_data(pool={"pool": {"difficulty": 100_000}}), _mgr())
+        no_diff = build_metrics(_data(), _mgr(history=self._hist(1000)))
+        for m in (no_hist, no_diff):
+            assert m.expected_share_sec == 0.0
+            assert m.luck_pct == 0.0
+
+    def test_zero_pplns_window_reads_zero_not_raise(self):
+        # A partially-written stats file can carry sidechainDifficulty without pplnsWindowSize —
+        # the collector then defaults pplns_window to 0. Luck must read the unavailable state
+        # (0.0, hidden by the view layer), not divide by an expected_shares of 0 and 500 every
+        # /api/state until the next poll.
+        data = _data(pool={"pool": {"difficulty": 100_000, "pplns_window": 0}})
+        m = build_metrics(data, _mgr(history=self._hist(1000)))
+        assert m.luck_pct == 0.0
+        assert m.expected_share_sec == 0.0
+
+    def test_luck_at_exactly_expected_is_100(self):
+        # expected = 1000 H/s * (2160 * 10 s) / 21_600_000 H·s = 1 share; 1 actual share => 100 %.
+        now = time.time()
+        data = _data(
+            pool={"pool": {"difficulty": 21_600_000}},
+            shares=[{"ts": now - 5, "difficulty": 50}],
+        )
+        m = build_metrics(data, _mgr(history=self._hist(1000)))
+        assert m.luck_pct == 100.0
+
+    def test_no_shares_is_luck_zero(self):
+        data = _data(pool={"pool": {"difficulty": 21_600_000}})
+        assert build_metrics(data, _mgr(history=self._hist(1000))).luck_pct == 0.0
+
+    def test_own_weight_sums_share_difficulty_in_window(self):
+        now = time.time()
+        data = _data(
+            pool={"pool": {"pplns_window": 10}},  # 10 blocks * 10 s = 100 s window
+            shares=[
+                {"ts": now - 5, "difficulty": 100.0},
+                {"ts": now - 50, "difficulty": 200.0},
+                {"ts": now - 10_000, "difficulty": 999.0},  # outside the window
+            ],
+        )
+        assert build_metrics(data, _mgr()).own_pplns_weight == 300.0
+
+    def test_last_block_ts_passthrough_and_default(self):
+        assert (
+            build_metrics(_data(pool={"pool": {"last_block_ts": 1700000000}}), _mgr()).last_block_ts
+            == 1700000000
+        )
+        assert build_metrics(_data(), _mgr()).last_block_ts == 0
+
+
 class TestSyncMetrics:
     def test_loading_when_no_target(self):
         m = build_metrics(_data(monero_sync={"percent": 0, "target": 0}), _mgr())
@@ -338,6 +408,22 @@ class TestCalculatorInputs:
     def test_tari_mining_flag(self):
         assert build_metrics(_data(tari={"active": True}), _mgr()).tari_mining is True
         assert build_metrics(_data(tari={"active": False}), _mgr()).tari_mining is False
+
+    def test_tari_earnings_inputs(self):
+        # #117: the Tari aux-chain difficulty and XTM block reward come off the collected tari
+        # snapshot (p2pool's merge-mine stats, already µT→XTM converted by the collector).
+        m = build_metrics(
+            _data(tari={"active": True, "difficulty": 420_000_000_000, "reward": 13_000.5}),
+            _mgr(),
+        )
+        assert m.tari_difficulty == 420_000_000_000
+        assert m.tari_reward == 13_000.5
+
+    def test_tari_earnings_inputs_zero_when_absent(self):
+        # Tari inactive / still syncing: no tari snapshot → safe zeros (the "unavailable" signal).
+        m = build_metrics(_data(), _mgr())
+        assert m.tari_difficulty == 0
+        assert m.tari_reward == 0
 
 
 class TestRobustness:

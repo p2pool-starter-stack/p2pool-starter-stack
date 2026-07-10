@@ -26,13 +26,8 @@ test-fakes: ## Fake-daemon contract test — real dashboard clients vs controlla
 test-mini-stack: ## Fake-daemon docker mini-stack end-to-end (needs docker; CI)
 	bash tests/integration/mini-stack/run-mini-stack.sh
 
-test-inventory: ## Regenerate the test coverage inventory (docs/test-inventory.md)
+test-inventory: ## Write the test coverage inventory to docs/test-inventory.md (generated, git-ignored)
 	bash tests/inventory.sh > docs/test-inventory.md
-
-test-inventory-check: ## Fail if docs/test-inventory.md is stale (CI drift guard)
-	@bash tests/inventory.sh | diff -u docs/test-inventory.md - \
-		&& echo "test-inventory is up to date" \
-		|| { echo "docs/test-inventory.md is stale — run 'make test-inventory'"; exit 1; }
 
 # End-to-end matrix against a REAL test server (issue #54). Needs a provisioned box; pass
 # connection + options through ARGS, e.g.:

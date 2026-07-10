@@ -93,9 +93,11 @@ MATRIX:
   --fault-injection      also run the fault-injection phase: deliberately break monerod
                          (stop / SIGSTOP / remove) and assert pithead's status verdicts
                          (down / unhealthy / missing) and the failover→recovery cycle. Also
-                         forces a real `iptables -I` failure and asserts the #270 firewall
-                         rolls back fail-closed (no half-open ruleset). DESTRUCTIVE-then-
-                         restored; local mode only. Slow (healthcheck + node-health debounce).
+                         makes the dashboard data dir read-only and asserts /api/state flags
+                         db_healthy:false, then restores it (#202), and forces a real
+                         `iptables -I` failure and asserts the #270 firewall rolls back
+                         fail-closed (no half-open ruleset). DESTRUCTIVE-then-restored;
+                         local mode only. Slow (healthcheck + node-health debounce).
   --auth-fail-closed     also run the fail-closed auth phase (#153/#203): empty PROXY_AUTH_TOKEN
                          in .env and assert `pithead up` REFUSES to start (the live counterpart
                          to the tier-1 compose-config check), then restore the exact token and
@@ -641,6 +643,71 @@ assert_xvb_over_tor() {
     assert_eq "XvB stats + auto-register wired to the Tor SOCKS (#206/#163)" "$proxy" "$want"
 }
 
+# /metrics through the operator path (#379): curl the Prometheus endpoint THROUGH host-networked
+# Caddy — scheme from DASHBOARD_SECURE, vhost from HOST_IP, pinned to loopback so the box needn't
+# resolve its own hostname — and assert a pithead_ sample line survives the trip. This is the
+# wiring api_state (which hits the app directly on 127.0.0.1:8000) can't prove: the route a real
+# scraper uses, behind the proxy and its basic_auth (#8). Only the bcrypt HASH of the dashboard
+# password lives in .env, so when a login is set the plaintext must come via IT_DASHBOARD_PASSWORD
+# (it stays out of logs/artifacts; it does ride the remote curl argv on the operator's own box) —
+# without it the check skips rather than false-FAILs on the 401 Caddy returns by design.
+assert_metrics_via_caddy() {
+    local host secure scheme port curl_auth="" body
+    host="$(env_on_box HOST_IP)"
+    if [ -z "$host" ]; then
+        it_warn "skipping /metrics-via-Caddy (no HOST_IP in .env)"
+        return 0
+    fi
+    secure="$(env_on_box DASHBOARD_SECURE)"
+    if [ "$secure" = "false" ]; then
+        scheme="http" port=80
+    else
+        scheme="https" port=443
+    fi
+    if [ -n "$(env_on_box DASHBOARD_AUTH_HASH_B64)" ]; then
+        if [ -z "${IT_DASHBOARD_PASSWORD:-}" ]; then
+            it_warn "skipping /metrics-via-Caddy (dashboard login is set — export IT_DASHBOARD_PASSWORD to test through it)"
+            return 0
+        fi
+        curl_auth="-u $(quote_arg "$(env_on_box DASHBOARD_AUTH_USER):$IT_DASHBOARD_PASSWORD")"
+    fi
+    # -k: the LAN cert is Caddy's internal CA (tls internal); trust isn't what this asserts.
+    body="$(rx "curl -ksS --max-time 15 --resolve $(quote_arg "$host:$port:127.0.0.1") $curl_auth $(quote_arg "$scheme://$host/metrics")" 2>/dev/null)"
+    if metrics_has_pithead_sample "$body"; then
+        it_pass "/metrics serves pithead_ samples through Caddy (#379)"
+    else
+        it_fail "/metrics serves pithead_ samples through Caddy (#379)" "no pithead_ sample line in the response [$(printf '%s' "$body" | head -c 120)]"
+    fi
+}
+
+# pithead doctor on the real box (#383): exit 0 plus the three runtime OK verdicts — egress
+# firewall installed, stratum :3333 listening, dashboard answering. Tier 1 proves each verdict's
+# decision logic against stubs; this proves the real toolchain (docker/sudo/iptables/ss/curl)
+# feeds them on a healthy box. The firewall line is config-gated the same way doctor itself is.
+assert_doctor_ok() {
+    local out rc
+    out="$(pithead doctor 2>&1)"
+    rc=$?
+    assert_rc "doctor exits 0 on a healthy box (#383)" "$rc" "0"
+    if [ "$(env_on_box TOR_EGRESS_FIREWALL)" = "false" ]; then
+        it_log "   doctor: egress firewall opted out — skipping that OK line"
+    else
+        assert_contains "doctor: egress firewall installed (#383)" "$out" "egress firewall rules are installed"
+    fi
+    assert_contains "doctor: stratum :3333 listening (#383)" "$out" "workers can connect"
+    assert_contains "doctor: dashboard answers (#383)" "$out" "answers on 127.0.0.1:8000"
+}
+
+# Share-health capture is live (#116): .share_stats must be non-empty on a mining box — proof the
+# per-poll delta capture is writing rows, not just that the key exists (tier 1 covers the shape).
+assert_share_stats_live() {
+    if wait_for 120 5 "share-stats series non-empty (#116)" _pred_share_stats_nonempty; then
+        it_pass "share_stats non-empty on a mining box (#116)"
+    else
+        it_fail "share_stats non-empty on a mining box (#116)" ".share_stats stayed empty"
+    fi
+}
+
 # Non-destructive --check: assert the box's CURRENT live state (its own config), no apply.
 assert_current_state() {
     IT_CURRENT_SCENARIO="check"
@@ -650,6 +717,9 @@ assert_current_state() {
     assert_running_state "check" "$BASELINE_CONFIG"
     assert_egress_posture
     assert_xvb_over_tor
+    assert_metrics_via_caddy
+    assert_share_stats_live
+    assert_doctor_ok
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "check" "$OUT_DIR"
 }
 
@@ -929,6 +999,39 @@ fault_missing() {
     wait_for 240 5 "monerod healthy" _pred_monerod_healthy || true
 }
 
+# Live counterpart to the tier-1 #131 flag-logic tests: make the dashboard's data dir read-only on
+# the REAL filesystem and prove /api/state flags db_healthy:false while the dashboard keeps serving,
+# then restore write access and prove recovery (#202). Two facts dictate the restarts: chmod cannot
+# fail writes on already-open file descriptors (the dashboard holds a live sqlite connection with
+# WAL/shm sidecars open), so the fault only trips when a fresh process re-runs _init_db; and
+# db_healthy is a one-way latch per process (storage_service only sets it True in __init__), so
+# recovery needs a fresh process too — a successful write can't clear the flag.
+fault_db_readonly() {
+    local ddir
+    ddir="$(env_on_box DASHBOARD_DATA_DIR)"
+    if [ -z "$ddir" ]; then
+        it_warn "skipping db-readonly fault (no DASHBOARD_DATA_DIR in .env)"
+        return 0
+    fi
+    it_step "fault: make the dashboard data dir read-only (#131/#202)…"
+    # The data dir is uid-1000-owned (#255) and the deploy user usually isn't uid 1000, so both
+    # chmods need sudo (already an assumed capability: fault_firewall_rollback uses it). -R covers
+    # the -wal/-shm sidecar files too.
+    rx "sudo chmod -R a-w $(quote_arg "$ddir")" >/dev/null 2>&1
+    rx "docker compose restart dashboard" >/dev/null 2>&1
+    wait_for 90 5 "dashboard to report db_healthy=false" _pred_db_healthy_is false || true
+    # api_state answering at all is part of the assertion: the #131 design keeps the web server
+    # serving (reads still work) while persistence is broken.
+    assert_eq "db_healthy false while data dir is read-only" \
+        "$(jq_get "$(api_state)" '.db_healthy')" "false"
+    it_step "recover: restore write access and restart the dashboard…"
+    rx "sudo chmod -R u+w $(quote_arg "$ddir")" >/dev/null 2>&1
+    rx "docker compose restart dashboard" >/dev/null 2>&1
+    wait_for 90 5 "dashboard to report db_healthy=true" _pred_db_healthy_is true || true
+    assert_eq "db_healthy true after write access restored" \
+        "$(jq_get "$(api_state)" '.db_healthy')" "true"
+}
+
 # Live counterpart to the tier-1 stubbed rollback (tests/stack/run.sh #270): force a REAL
 # `iptables -I` to fail mid-apply and prove the box ends fail-closed — the partial ruleset is
 # rolled BACK, not left half-open (a stubbed iptables can't prove the real kernel strips a partial
@@ -978,13 +1081,16 @@ run_fault_injection() {
     fault_node_down
     fault_unhealthy
     fault_missing
+    fault_db_readonly
     fault_firewall_rollback
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "fault-injection" "$OUT_DIR"
 
-    # Belt-and-braces: whatever happened above, leave monerod up, the firewall reinstated, and the
-    # stack healthy (the firewall reinstate is unconditional so a mid-phase abort can't leave the box
-    # with clearnet egress open).
+    # Belt-and-braces: whatever happened above, leave monerod up, the dashboard data dir writable,
+    # the firewall reinstated, and the stack healthy (the writability and firewall reinstates are
+    # unconditional so a mid-phase abort can't leave the box read-only or with clearnet egress open).
     rx "docker compose up -d monerod" >/dev/null 2>&1 || true
+    rx "sudo chmod -R u+w $(quote_arg "$(env_on_box DASHBOARD_DATA_DIR)")" >/dev/null 2>&1 || true
+    rx "docker compose restart dashboard" >/dev/null 2>&1 || true
     rx 'bash -c "source ./pithead && apply_tor_egress_firewall" >/dev/null 2>&1' || true
     wait_for 240 5 "monerod healthy after fault phase" _pred_monerod_healthy || true
     wait_status_ok 240 || true

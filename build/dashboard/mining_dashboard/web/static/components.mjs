@@ -6,9 +6,12 @@
 import { ChartCard } from "./chart.mjs";
 import {
   computeEarnings,
+  computeXvbTier,
   egressRoute,
+  fmtHashrate,
   formatTimeToShare,
   formatXmr,
+  formatXtm,
   heroKpis,
   parseHashrate,
   raffleCls,
@@ -351,12 +354,39 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
+// XvB tier / raffle block (#118), inside the earnings card and driven by the same what-if
+// hashrate: the highest XMRvsBeast tier that hashrate sustains (computeXvbTier — the server's
+// own auto rule), what holding it costs, and the current vs target tier for context. Labelled
+// raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
+// above the threshold. Hidden entirely while XvB is disabled.
+function XvbTierBlock({ calc, hr }) {
+  if (!calc || !calc.enabled) return null;
+  const t = computeXvbTier(hr, calc);
+  return html`
+    <div class="xvb-tier-block">
+        <h4>XvB Tier (raffle)</h4>
+        <div class="stat-grid">
+            <${StatCard} label="Sustainable Tier" value=${t ? t.tier : "None"} cls="c-purple"
+                         title="The highest XvB donor tier this hashrate sustains while leaving P2Pool its share — the same auto rule the donation controller uses." />
+            <${StatCard} label="Hashrate Cost" value=${t ? fmtHashrate(t.cost) : "—"}
+                         title="Holding the tier means continuously donating about its threshold — hashrate that earns no P2Pool shares while donated." />
+            <${StatCard} label="Current Tier" value=${calc.current_tier}
+                         title="The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages)." />
+            <${StatCard} label="Target Tier" value=${calc.target_tier}
+                         title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
+        </div>
+        <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
+    </div>`;
+}
+
 // P2Pool earnings calculator (Issue #12). A power-user card (Advanced view) over the metrics
-// layer that estimates XMR from *P2Pool mining only* — explicitly not XvB or Tari. The server
-// sends the daily XMR rate per H/s; this card scales it to a what-if hashrate. Stateful because
-// the what-if input is local UI: `input` is null until the user edits it, so the field tracks the
-// live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header / Overview show, which
-// already excludes the XvB-donated slice) until they take control, then holds their raw text.
+// layer that estimates XMR from *P2Pool mining only* — explicitly not XvB — plus the Tari the
+// same hashrate merge-mines alongside it (#117; "—" while merge-mining is inactive). The server
+// sends the daily XMR and XTM rates per H/s; this card scales both to a what-if hashrate.
+// Stateful because the what-if input is local UI: `input` is null until the user edits it, so
+// the field tracks the live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header /
+// Overview show, which already excludes the XvB-donated slice) until they take control, then
+// holds their raw text.
 class EarningsCard extends Component {
   constructor(props) {
     super(props);
@@ -382,7 +412,7 @@ class EarningsCard extends Component {
     return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
-            <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining only — excludes XvB donations and Tari merge-mining.</p>
+            <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining plus the Tari merge-mined alongside it — excludes XvB donations.</p>
             <div class="earnings-input">
                 <label for="whatif-hr">Your P2Pool Hashrate</label>
                 <input id="whatif-hr" type="text" inputmode="decimal" spellcheck="false"
@@ -393,18 +423,45 @@ class EarningsCard extends Component {
                 <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
                 <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
                 <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                <${StatCard} label="XTM / day" value=${formatXtm(est.tariDay)}
+                             title="Tari merge-mined alongside the XMR by the same hashrate — earned in addition, not instead. Shows — while merge-mining is inactive or syncing." />
+                <${StatCard} label="XTM / month" value=${formatXtm(est.tariMonth)} />
+                <${StatCard} label="XTM / year" value=${formatXtm(est.tariYear)} />
                 <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                 <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
             </div>
+            <${XvbTierBlock} calc=${this.props.xvb} hr=${hr} />
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }
 }
 
+// Pool cadence & luck (#84). Read-only Advanced card over server-formatted figures: time since the
+// pool's last block (pool-wide, not a payout to you), the expected time for your hashrate to find a
+// sidechain share, luck, and YOUR PPLNS share-weight (sum of your share difficulty in the window —
+// not p2pool's pool-wide pplnsWeight shown in the node stats).
+function CadenceCard({ cadence }) {
+  if (!cadence) return null;
+  return html`
+    <div class="card card-advanced" id="card-cadence">
+        <h3>Pool Cadence & Luck</h3>
+        <div class="stat-grid">
+            <${StatCard} label="Since Pool's Last Block" value=${cadence.since_block}
+                         title=${"Last block the pool found (" + cadence.last_block + ") — pool-wide, not a payout to you."} />
+            <${StatCard} label="Est. Time / Share" value=${cadence.tts}
+                         title="Expected time for your P2Pool hashrate to find one sidechain share (share difficulty ÷ your 1h average)." />
+            <${StatCard} label="Luck" value=${cadence.luck}
+                         title="Actual vs expected shares in the PPLNS window, as a percentage. Over 100% = running lucky." />
+            <${StatCard} label="Your PPLNS Weight" value=${cadence.weight}
+                         title="Sum of your share difficulty inside the PPLNS window — your slice of the next payout. Not the pool-wide PPLNS weight." />
+        </div>
+    </div>`;
+}
+
 function TariCard({ tari }) {
   return html`
     <div class="card card-advanced" id="card-tari">
-        <h3>Tari Merge Mining</h3>
+        <h3>Tari Merge-Mining</h3>
         <div class="stat-grid">
             <div class="stat-card"><h5>Status</h5><${TariStatus} tari=${tari} /></div>
             <${StatCard} label="Reward" value=${tari.reward} />
@@ -438,7 +495,23 @@ const ProxyTotals = ({ summary }) => {
     </div>`;
 };
 
-function WorkersTable({ workers, summary, ui, onSort }) {
+function WorkersTable({ workers, summary, ui, onSort, hostIp }) {
+  // First-run empty state (#385): until the proxy has ever reported a worker, the table would be
+  // eight headers over nothing — show the one action the operator must take instead. `workers`
+  // includes offline rigs, so a fleet that is temporarily all-offline keeps its (red) table.
+  if ((workers || []).length === 0) {
+    const addr = hostIp && hostIp !== "Unknown Host" ? hostIp : "YOUR_STACK_IP";
+    return html`
+        <div class="card">
+            <h3>Workers Alive</h3>
+            <div class="workers-empty">
+                <p>No workers connected yet.</p>
+                <p class="text-muted">Point each rig at <code>${addr}:3333</code> and it appears here —${" "}
+                    see the <a href="https://github.com/p2pool-starter-stack/pithead/blob/main/docs/workers.md"
+                        target="_blank" rel="noopener noreferrer">workers guide</a>.</p>
+            </div>
+        </div>`;
+  }
   const rows = sortWorkers(workers, ui.sortIndex, ui.sortAsc);
   return html`
     <div class="card">
@@ -459,7 +532,6 @@ function WorkersTable({ workers, summary, ui, onSort }) {
                             }</td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
-                            <td>${w.h10_str}</td>
                             <td>${w.h60_str}</td>
                             <td>${w.h15_str}</td>
                             <td>${w.accepted_str}</td>
@@ -557,13 +629,14 @@ function DashboardView({
                           onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
         <div class="grid">
-            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} />
+            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} />
         </div>
         <div class="grid">
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
-            <${EarningsCard} earnings=${state.earnings} />
+            <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} />
+            <${CadenceCard} cadence=${state.cadence} />
             <${TariCard} tari=${state.tari} />
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />
@@ -597,7 +670,7 @@ export function App({
   }
   return html`<${Fragment}>
         <${Header} state=${state} />
-        ${!connected ? html`<div class="disconnected-banner">Disconnected — showing last known data. Retrying…</div>` : null}
+        ${!connected ? html`<div class="disconnected-banner">Disconnected — showing data from ${state.last_update}. Retrying…</div>` : null}
         ${
           state.syncing
             ? html`<${SyncView} sync=${state.sync} />`

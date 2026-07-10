@@ -16,10 +16,12 @@ client (instant, no re-derivation, no round trip) — see ``web/static/logic.mjs
 rate here (one source of truth) is the #61 principle: presentation layers read the metrics, they
 don't re-derive the math.
 
-XMR only for now: Tari network difficulty / block reward aren't collected anywhere yet, and the
-XvB tier estimate is deferred (both per the Issue #12 discussion). Hashrate currently donated to
-XvB isn't subtracted here — the estimate assumes the supplied hashrate mines Monero via P2Pool,
-which the dashboard states in its disclaimer.
+The same expectation covers Tari (#117): merge-mining puts the full P2Pool hashrate to work on
+the Tari aux chain *alongside* Monero, so ``xtm_per_hs_day`` is the identical linear rate over the
+Tari difficulty and block reward p2pool's merge-mine stats already report (``collector/pools.py``).
+The XvB tier estimate is still deferred (per the Issue #12 discussion), and hashrate currently
+donated to XvB isn't subtracted here — the estimate assumes the supplied hashrate mines via
+P2Pool, which the dashboard states in its disclaimer.
 """
 
 # Monero amounts are reported in atomic units (piconero); 1 XMR = 1e12 atomic.
@@ -39,3 +41,19 @@ def xmr_per_hs_day(block_reward_atomic, network_difficulty):
         return 0.0
     reward_xmr = block_reward_atomic / ATOMIC_PER_XMR
     return reward_xmr / network_difficulty * SECONDS_PER_DAY
+
+
+def xtm_per_hs_day(block_reward_xtm, network_difficulty):
+    """Expected XTM earned per **1 H/s per day** from Tari merge-mining (#117).
+
+    Same linear expectation as :func:`xmr_per_hs_day` — the aux-chain target block time cancels
+    identically. ``block_reward_xtm`` is the Tari block reward **already in XTM** (the collector
+    converts p2pool's µT figure; ``collector/pools.py``) and ``network_difficulty`` the Tari
+    aux-chain difficulty p2pool reports — not the P2Pool sidechain or Monero difficulty. We take
+    p2pool's aux ``reward`` field as the current Tari block reward; it refreshes every poll, so
+    the linear model tracks the decaying emission either way. Returns ``0.0`` when either input
+    is missing or non-positive — zero is the "unavailable" signal (the card shows ``—``).
+    """
+    if block_reward_xtm <= 0 or network_difficulty <= 0:
+        return 0.0
+    return block_reward_xtm / network_difficulty * SECONDS_PER_DAY

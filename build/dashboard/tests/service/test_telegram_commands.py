@@ -80,6 +80,8 @@ def _metrics(**over):
         ("/pool", "pool"),
         ("/xvb", "xvb"),
         ("/earnings", "earnings"),
+        ("/luck", "luck"),
+        ("/luck@Bot", "luck"),
         ("/status@PitheadBot", "status"),  # group @mention suffix stripped
         ("/workers now please", "workers"),  # only the first word matters
         ("/help", "help"),
@@ -117,6 +119,26 @@ def test_status_node_down_and_not_mining():
     out = tc.format_status(_metrics(monero=_DOWN), mining_active=False)
     assert "Monero node: 🔴 down" in out
     assert "Mining: 🔴 not mining" in out
+
+
+def test_status_xvb_split_line():
+    # XvB on with routed history → one "24h split" line, same math as the daily summary.
+    out = tc.format_status(_metrics(), mining_active=True)
+    assert "24h split" in out
+    assert "P2Pool 8.10 kH/s" in out
+    assert "XvB 2.05 kH/s" in out
+    assert "20% to XvB" in out  # 2050 / (8100 + 2050) ≈ 20%
+
+
+def test_status_xvb_off_omits_split():
+    out = tc.format_status(_metrics(xvb_enabled=False), mining_active=True)
+    assert "to XvB" not in out
+
+
+def test_status_xvb_no_history_omits_split():
+    # No routed history yet (both 24h averages zero) → the line is absent, not "0%".
+    out = tc.format_status(_metrics(p2pool_24h=0, xvb_routed_24h=0), mining_active=True)
+    assert "24h split" not in out
 
 
 def test_hashrate_lists_online_workers_desc():
@@ -263,6 +285,27 @@ def test_xvb_enabled_with_share():
     assert "Credited by XvB: 2.10 kH/s (1h) · 2.30 kH/s (24h)" in out
 
 
+def test_xvb_tier_threshold_cost_and_not_a_payout_label():
+    # #118: /xvb carries the target threshold, the cost framing (holding a tier ≈ donating its
+    # threshold continuously), and the explicit not-a-payout labelling.
+    out = tc.format_xvb(_metrics(target_threshold=10_000.0, target_sustainable=True))
+    assert "Target threshold: 10.00 kH/s (sustainable)" in out
+    assert "costs ~10.00 kH/s donated continuously" in out
+    assert "not an XMR payout" in out
+
+
+def test_xvb_unsustainable_target_flagged():
+    out = tc.format_xvb(_metrics(target_threshold=10_000.0, target_sustainable=False))
+    assert "NOT sustainable at your hashrate" in out
+
+
+def test_xvb_no_sustainable_tier():
+    # Auto mode with too little hashrate resolves to threshold 0 — say so instead of "0 H/s".
+    out = tc.format_xvb(_metrics(target_threshold=0.0, target_sustainable=False))
+    assert "No donor tier is sustainable" in out
+    assert "Target threshold:" not in out
+
+
 def test_xvb_stale_warns():
     out = tc.format_xvb(_metrics(xvb_enabled=True, shares_in_window=5, xvb_stale=True))
     assert "stale" in out
@@ -288,13 +331,16 @@ def test_status_merge_mining_line():
 
 
 def test_earnings_estimate():
-    # network reward present + a real difficulty → a positive daily figure.
+    # network reward present + a real difficulty → a positive daily figure, rendered with the
+    # dashboard card's adaptive-precision XMR rule (#387): these figures sit in the 6-dp band.
+    # coeff = 0.6 XMR / 380e9 * 86400 ≈ 1.364e-7 XMR per H/s per day.
     out = tc.format_earnings(
         _metrics(p2pool_1h=8000.0, p2pool_24h=8100.0), {"reward": 600_000_000_000}
     )
-    assert "1h avg" in out and "XMR/day" in out
+    assert "1h avg" in out and "~0.001091 XMR/day" in out
     # The 24h average is shown once available and drives the steadier 30d projection.
-    assert "24h avg" in out and "XMR/30d" in out
+    assert "24h avg" in out and "~0.001105 XMR/day" in out
+    assert "~0.033150 XMR/30d" in out
 
 
 def test_earnings_falls_back_to_1h_30d_without_24h_history():
@@ -309,6 +355,50 @@ def test_earnings_falls_back_to_1h_30d_without_24h_history():
 def test_earnings_unavailable_without_network_data():
     out = tc.format_earnings(_metrics(), {})  # no reward → coeff 0
     assert "unavailable" in out
+
+
+def test_earnings_includes_tari_line_when_merge_mining():
+    # #117: live Tari figures → a second line from the SAME 1h-average hashrate (merge-mined
+    # alongside the XMR), at the same rate the dashboard calculator publishes.
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        {"reward": 600_000_000_000},
+    )
+    expected = 8000.0 * (13_000.0 / 420_000_000_000 * 86_400)
+    assert f"Tari (merge-mined alongside): ~{expected:.2f} XTM/day" in out
+    assert "excludes XvB-donated hashrate" in out  # Tari no longer listed as excluded
+
+
+def test_earnings_omits_tari_line_without_tari_figures():
+    # Tari inactive / still syncing (reward+difficulty at 0) → no phantom XTM line.
+    out = tc.format_earnings(_metrics(p2pool_1h=8000.0), {"reward": 600_000_000_000})
+    assert "XTM" not in out
+    assert "XMR/day" in out  # the XMR estimate is unaffected
+
+
+def test_luck_reads_the_cadence_metrics():
+    # #84: the four figures come straight off Metrics — the same fields the dashboard card shows.
+    out = tc.format_luck(
+        _metrics(
+            last_block_ts=1,  # ancient → the "since" duration renders (days), not "n/a"
+            expected_share_sec=3600.0,
+            luck_pct=123.4,
+            own_pplns_weight=1_234_567.0,
+        )
+    )
+    assert "Since pool's last block: " in out and "n/a" not in out
+    assert "Est. time to a share: 1h 0m" in out
+    assert "Luck: 123%" in out
+    assert "Your PPLNS weight: 1,234,567" in out
+
+
+def test_luck_na_before_hashrate_history():
+    # Cold stack (#84 pitfall): no p2pool_1h / pool difficulty yet → n/a, never inf or "0s".
+    out = tc.format_luck(_metrics())  # cadence fields at their 0.0 defaults
+    assert "Since pool's last block: n/a" in out
+    assert "Est. time to a share: n/a" in out
+    assert "Luck: n/a" in out
+    assert "Your PPLNS weight: 0" in out
 
 
 def test_daily_summary_is_a_24h_retrospective():
@@ -415,6 +505,12 @@ def test_reply_for_pool_reads_share_snapshot(monkeypatch):
     bot = _bot(monkeypatch, latest_data=data, pool_type="Mini")
     out = bot.reply_for("/pool")
     assert "Best share: 💎 555" in out and "999 ✓ / 1 ✗" in out
+
+
+def test_reply_for_luck(monkeypatch):
+    bot = _bot(monkeypatch, expected_share_sec=3600.0, luck_pct=100.0, own_pplns_weight=42.0)
+    out = bot.reply_for("/luck")
+    assert "Luck: 100%" in out and "Your PPLNS weight: 42" in out
 
 
 def test_reply_for_workers_reads_snapshot(monkeypatch):

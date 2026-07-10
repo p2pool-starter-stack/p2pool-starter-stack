@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Generate a coverage inventory across every test suite in the repo and print it as Markdown.
-# Source of truth for "what is covered" (issue #54). Regenerate with `make test-inventory`,
-# which writes docs/test-inventory.md — that file is generated, do not hand-edit it.
+# Answers "what is covered" (issue #54). `make test-inventory` runs this and writes
+# docs/test-inventory.md — a generated, git-ignored file you read on demand (#414).
 #
 # Static (grep-based): no test run, no dependencies, deterministic — so it never drifts from
 # whether a daemon/server happens to be available.

@@ -46,8 +46,9 @@ test('App always renders the theme switcher, even before the first load', () => 
 });
 
 test('operational App shows a disconnected banner when not connected', () => {
-    assert.match(renderApp({ connected: false }), /Disconnected — showing last known data/);
-    assert.doesNotMatch(renderApp({ connected: true }), /Disconnected — showing last known data/);
+    // The banner names the timestamp of the data on screen (#382) — the fixture's last_update.
+    assert.match(renderApp({ connected: false }), /Disconnected — showing data from 00:00:00/);
+    assert.doesNotMatch(renderApp({ connected: true }), /Disconnected — showing data from/);
 });
 
 // --- Header -----------------------------------------------------------------------------
@@ -84,7 +85,7 @@ test('operational App renders the remaining advanced cards', () => {
     const html = renderApp();
     assert.match(html, /Global P2Pool Stats/);
     assert.match(html, /XMR Network/);
-    assert.match(html, /Tari Merge Mining/);
+    assert.match(html, /Tari Merge-Mining/);
     assert.match(html, /P2Pool Earnings \(estimated\)/);
 });
 
@@ -99,6 +100,81 @@ test('EarningsCard shows the fallback when stats are down, the calculator when a
     const up = renderApp({ state: s });
     assert.match(up, /Your P2Pool Hashrate/);
     assert.match(up, /id="whatif-hr"/);
+});
+
+test('EarningsCard renders the Tari rows: figures when merge-mining, "—" when not (#117)', () => {
+    // Merge-mining live: the XTM rows scale the server rate by the default what-if hashrate.
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.tari_available = true;
+    s.earnings.tari_coeff_day = 2e-3;   // × p2pool_hr (8050) → 16.1 XTM/day
+    const up = renderApp({ state: s });
+    assert.match(up, /XTM \/ day/);
+    assert.match(up, /XTM \/ month/);
+    assert.match(up, /XTM \/ year/);
+    assert.match(up, /16\.1000 XTM/);
+    // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
+    const off = clone();
+    off.earnings.available = true;
+    off.earnings.tari_available = false;
+    const down = renderApp({ state: off });
+    assert.match(down, /XTM \/ day/);
+    assert.match(down, /—/);
+    assert.doesNotMatch(down, /NaN/);
+});
+
+test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it when off (#118)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.xvb_calc = {
+        enabled: true,
+        max_fraction: 0.85,
+        tiers: [
+            { name: 'Donor (1.00 kH/s+)', threshold: 1000 },
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000 },
+        ],
+        current_tier: 'None',
+        target_tier: 'Donor (1.00 kH/s+)',
+        target_threshold: 1000,
+        sustainable: true,
+        note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null,
+    };
+    const up = renderApp({ state: s });
+    assert.match(up, /XvB Tier \(raffle\)/);
+    // Default what-if hashrate (p2pool_hr ≈ 8k) × 0.85 sustains the Donor tier, not Vip —
+    // the client-side transcription of the server's auto rule, with cost = the threshold.
+    assert.match(up, /Sustainable Tier/);
+    assert.match(up, /Donor \(1\.00 kH\/s\+\)/);
+    assert.match(up, /Hashrate Cost/);
+    assert.match(up, /1\.00 kH\/s/);
+    assert.match(up, /not an XMR payout/);   // the required labelling rides on the card
+    // XvB disabled → the whole block disappears; the XMR calculator stays.
+    s.xvb_calc = { enabled: false };
+    const off = renderApp({ state: s });
+    assert.doesNotMatch(off, /XvB Tier \(raffle\)/);
+    assert.match(off, /Your P2Pool Hashrate/);
+});
+
+test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
+    // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
+    const cold = renderApp();
+    assert.match(cold, /Pool Cadence & Luck/);
+    assert.match(cold, /Since Pool's Last Block/);
+    assert.match(cold, /Est\. Time \/ Share/);
+    assert.match(cold, /Your PPLNS Weight/);
+    assert.match(cold, /—/);
+    // With server-computed figures, the card renders them verbatim (no client-side math).
+    const s = clone();
+    s.cadence = {
+        last_block: '12:34:56', since_block: '5m 0s', tts: '1h 0m',
+        luck: '123%', weight: '1,234,567', available: true,
+    };
+    const up = renderApp({ state: s });
+    assert.match(up, /5m 0s/);
+    assert.match(up, /1h 0m/);
+    assert.match(up, /123%/);
+    assert.match(up, /1,234,567/);
 });
 
 test('XvBStats greys the credited figures and flags the footer when the fetch is stale (#311)', () => {
@@ -131,13 +207,30 @@ test('WorkersTable renders headers and a row per worker with status classes', ()
     assert.match(html, /badge-ok">P2Pool/); // PoolBadge for a p2pool worker
 });
 
-test('WorkersTable with no workers still renders the headers but no rows', () => {
+test('WorkersTable with no workers shows the connect hint instead of a bare table (#385)', () => {
+    // The fixture's host_ip is "Unknown Host" — the hint must fall back to the docs placeholder.
     const s = clone();
     s.workers = [];
     const html = renderApp({ state: s });
     assert.match(html, /Workers Alive/);
-    assert.match(html, />Worker</);
+    assert.match(html, /No workers connected yet/);
+    assert.match(html, /YOUR_STACK_IP:3333/);
+    assert.match(html, /docs\/workers\.md/); // links the workers guide
+    assert.doesNotMatch(html, /workers-table/); // no empty table skeleton
     assert.doesNotMatch(html, /rig-alpha/);
+});
+
+test('WorkersTable connect hint uses the real host IP when known (#385)', () => {
+    const s = clone();
+    s.workers = [];
+    s.host_ip = '192.168.1.10';
+    const html = renderApp({ state: s });
+    assert.match(html, /192\.168\.1\.10:3333/);
+    assert.doesNotMatch(html, /Unknown Host:3333/);
+    // A populated fleet — even all-offline — keeps the table, never the hint.
+    const offline = clone();
+    offline.workers = offline.workers.map((w) => ({ ...w, status: 'offline' }));
+    assert.doesNotMatch(renderApp({ state: offline }), /No workers connected yet/);
 });
 
 test('ProxyTotals footer is hidden until the proxy reports data', () => {

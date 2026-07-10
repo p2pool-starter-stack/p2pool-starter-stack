@@ -25,17 +25,19 @@ from mining_dashboard.config.config import (
     HOST_IP,
     LOW_RAM_GB,
     UPDATE_INTERVAL,
+    XVB_MAX_DONATION_FRACTION,
 )
 from mining_dashboard.helper.utils import (
     detect_host_ipv4,
     format_duration,
     format_hashrate,
     format_time_abs,
+    get_tier_info,
     is_ip_address,
 )
-from mining_dashboard.service.earnings import xmr_per_hs_day
+from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
-from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
@@ -233,6 +235,67 @@ def _filter_events(events, range_arg, window=None):
     return [e for e in events if e["ts"] >= cutoff]
 
 
+def build_share_stats(share_stats, range_arg, window=None):
+    """The persisted per-poll share-health deltas (#116) as chart-ready points, restricted to the
+    selected range/window — same bounds as ``_filter_events`` — and bounded at
+    ``_MAX_CHART_POINTS`` like the hashrate series (the default "all" range over the 30-day
+    retention is ~86k rows, which /api/state would otherwise ship every poll). Each point is
+    ``{x: ms epoch, a, r, i, e}`` (accepted/rejected/invalid/expired deltas for that interval).
+    ``reject_pct_24h`` stays exact — it is computed from the raw rows, never this thinned series."""
+    return [
+        {
+            "x": int(s["ts"] * 1000),
+            "a": s.get("accepted", 0),
+            "r": s.get("rejected", 0),
+            "i": s.get("invalid", 0),
+            "e": s.get("expired", 0),
+        }
+        for s in _downsample_share_stats(_filter_share_stats(share_stats, range_arg, window))
+    ]
+
+
+def _downsample_share_stats(rows, target=_MAX_CHART_POINTS):
+    """Bucket the delta rows down to ``target`` points. Unlike ``_downsample_history`` (which
+    averages a rate), the counts are per-interval DELTAS, so each bucket is **summed** — totals
+    and the reject ratio survive thinning exactly. The bucket's mid-row timestamp positions the
+    point, matching the hashrate downsampler."""
+    if len(rows) <= target:
+        return rows
+    chunk_size = len(rows) / target
+    out = []
+    for i in range(target):
+        chunk = rows[int(i * chunk_size) : int((i + 1) * chunk_size)]
+        if not chunk:
+            continue
+        bucket = {"ts": chunk[len(chunk) // 2]["ts"]}
+        for col in ("accepted", "rejected", "invalid", "expired"):
+            bucket[col] = sum(r.get(col, 0) or 0 for r in chunk)
+        out.append(bucket)
+    return out
+
+
+def _filter_share_stats(rows, range_arg, window=None):
+    """Restrict share-stat deltas (#116) to the selected window — same bounds as
+    ``_filter_events``, for the ``ts``-keyed delta rows."""
+    if window is not None:
+        lo, hi = window
+        return [s for s in rows if lo <= s["ts"] <= hi]
+    if range_arg == "all":
+        return rows
+    secs = _RANGE_SECONDS.get(range_arg, 0)
+    if secs <= 0:
+        return rows
+    cutoff = time.time() - secs
+    return [s for s in rows if s["ts"] >= cutoff]
+
+
+def _window_reject_pct(rows, seconds):
+    """Trailing reject rate over ``seconds`` from the delta series (#116), as a display string.
+    "—" when no shares were submitted in the window (a 0% would read as falsely healthy)."""
+    pct = share_reject_pct(rows, seconds)
+    return "—" if pct is None else f"{pct:.2f}%"
+
+
 def _window_duration(filtered_history, range_arg, window):
     """Seconds the chart currently spans — drives adaptive resolution/smoothing. From the
     window if zoomed, else the preset length, else (``all``/unknown) the actual data extent."""
@@ -422,6 +485,27 @@ def build_hashrate(metrics, mode_tok, p2p_tok, xvb_tok):
     }
 
 
+def build_cadence(metrics):
+    """Pool cadence & luck display values (#84). Formatting only — the figures live on Metrics.
+
+    Durations (not localtime stamps) for the "since" figure so no timezone appears; ``available``
+    gates luck/time-to-share, which are meaningless until there is hashrate history AND a pool
+    difficulty (0 for the first samples after a wipe — never show inf/0s). ``weight`` is the
+    miner's OWN PPLNS share-weight, not p2pool's pool-wide ``pplnsWeight``.
+    """
+    available = metrics.expected_share_sec > 0
+    return {
+        "last_block": format_time_abs(metrics.last_block_ts),
+        "since_block": format_duration(time.time() - metrics.last_block_ts)
+        if metrics.last_block_ts
+        else "—",
+        "tts": format_duration(metrics.expected_share_sec) if available else "—",
+        "luck": f"{metrics.luck_pct:.0f}%" if available else "—",
+        "weight": f"{metrics.own_pplns_weight:,.0f}",
+        "available": available,
+    }
+
+
 def build_pool_network(data, metrics):
     """P2Pool / Stratum / Monero-network display values (computed bits come from Metrics)."""
     stratum = data.get("stratum", {})
@@ -578,7 +662,6 @@ def build_workers(workers):
                 pool = "unknown"
 
             uptime = worker.get("uptime", 0)
-            h10 = worker.get("h10", 0)
             h60 = worker.get("h60", 0)
             h15 = worker.get("h15", 0)
             # Per-worker share health (Issue #82). Raw counts for client-side sorting; a display
@@ -597,8 +680,8 @@ def build_workers(workers):
                     "status": "online" if worker["status"] == "online" else "offline",
                     "uptime": uptime,
                     "uptime_str": format_duration(uptime),
-                    "h10": h10,
-                    "h10_str": format_hashrate(h10),
+                    # No h10 here: the table shows the 1m (h60) and 10m (h15) windows — via the
+                    # proxy the legacy h10 field is just a second copy of the 1m rate (#387).
                     "h60": h60,
                     "h60_str": format_hashrate(h60),
                     "h15": h15,
@@ -703,10 +786,45 @@ def build_sync(metrics, monero_db_size):
     }
 
 
-def build_badges(data, metrics, mode_variant, db_healthy=True):
+# How long the "payout wallet changed" banner stays in the top bar after a change (#375).
+WALLET_CHANGED_BADGE_SEC = 72 * 3600
+
+
+def recent_wallet_change(state_mgr, now=None):
+    """The payout-wallet tripwire's change record (#375) if one happened within the banner
+    window: ``{"old8", "new8", "ts"}`` (addresses pre-truncated to 8 chars by the alerter),
+    else ``None``. Reads the kv_store keys AlertService persists; any unreadable value reads
+    as "no recent change" rather than breaking ``/api/state``."""
+    try:
+        ts = float(state_mgr.get_kv("payout_wallet_changed_ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not ts or (now if now is not None else time.time()) - ts >= WALLET_CHANGED_BADGE_SEC:
+        return None
+    return {
+        "old8": state_mgr.get_kv("payout_wallet_prev8") or "?",
+        "new8": (state_mgr.get_kv("payout_wallet") or "")[:8],
+        "ts": ts,
+    }
+
+
+def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=None):
     """Top-bar status badges as data: ``{text, variant, title?}`` (Issues #27/#31/#35/#51/#32/#131).
-    The client renders them (variant -> ``badge-<variant>``)."""
+    The client renders them (variant -> ``badge-<variant>``). ``wallet_change`` is the
+    payout-wallet tripwire's recent-change record (#375) from :func:`recent_wallet_change`, or
+    ``None``."""
     badges = []
+    # Payout wallet changed within the last 72h (#375): the loudest possible tamper signal, shown
+    # even during sync. Addresses are truncated to 8 chars — full addresses stay off the wire.
+    if wallet_change:
+        badges.append(
+            {
+                "text": "⚠ Payout wallet changed",
+                "variant": "warn",
+                "title": f"{wallet_change['old8']}… → {wallet_change['new8']}… at "
+                f"{format_time_abs(wallet_change['ts'])}",
+            }
+        )
     # Persistence health (#131): the dashboard keeps serving live data even if its SQLite DB can't
     # be written, but history/shares/stats would silently vanish on restart — surface it loudly.
     if not db_healthy:
@@ -797,7 +915,7 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
             {
                 "text": label,
                 "variant": "warn",
-                "title": "Tari is still syncing — merge mining resumes when it catches up; Monero mining continues",
+                "title": "Tari is still syncing — merge-mining resumes when it catches up; Monero mining continues",
             }
         )
     # Monero pruned/full badge (Issue #32) — only when known (local node).
@@ -874,8 +992,10 @@ def build_badges(data, metrics, mode_variant, db_healthy=True):
 
 _EARNINGS_DISCLAIMER = (
     "Estimated XMR from P2Pool mining only — excludes XvB donations (donated hashrate earns no "
-    "P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so "
-    "real payouts swing well above and below these figures. Estimates, not guarantees."
+    "P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and "
+    "its estimate assumes the merge-mine channel stays connected. Expected values only; mining "
+    "is variance-heavy, so real payouts swing well above and below these figures. Estimates, "
+    "not guarantees."
 )
 
 
@@ -887,8 +1007,12 @@ def build_earnings(data, metrics):
     ``p2pool_1h`` — the **same P2Pool 1h-average hashrate shown in the header / Overview / My Node
     cards** (a time-weighted average of the recorded P2Pool hashrate), so the figure here matches
     those exactly. That recorded average already excludes any XvB-donated slice (XvB hashrate is a
-    separate series), which is why an active XvB split doesn't inflate the estimate. Tari
-    merge-mining earnings are a separate thing entirely (deferred, #117).
+    separate series), which is why an active XvB split doesn't inflate the estimate.
+
+    Tari merge-mining rides along (#117): the same P2Pool hashrate simultaneously works the Tari
+    aux chain, so the payload carries a second rate — XTM per H/s per day, over the Tari
+    difficulty and block reward p2pool's merge-mine stats report. ``tari_available`` is gated on
+    ``tari_mining`` as well as the rate, so a dead merge-mine channel can't show phantom XTM.
 
     Publishes the earnings **rate** (XMR per H/s per day, from ``service/earnings``) plus that
     P2Pool hashrate and the P2Pool share difficulty. The client scales the rate to the entered
@@ -904,14 +1028,75 @@ def build_earnings(data, metrics):
     # hashrate is consistent with the rest of the dashboard — and because that recorded average
     # already excludes the XvB-donated portion, it's the honest basis for a P2Pool estimate.
     p2pool_hr = metrics.p2pool_1h
+    # Tari rate (#117). We take p2pool's aux `reward` field as the current Tari block reward —
+    # it refreshes every poll, so the linear model tracks the decaying emission.
+    tari_coeff_day = xtm_per_hs_day(metrics.tari_reward, metrics.tari_difficulty)
     return {
         "available": coeff_day > 0,
         "p2pool_hr": p2pool_hr,  # raw H/s — the what-if default
         "p2pool_hr_str": format_hashrate(p2pool_hr),
         "coeff_day": coeff_day,  # XMR per H/s per day
+        "tari_available": tari_coeff_day > 0 and metrics.tari_mining,
+        "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (merge-mined alongside)
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,
+    }
+
+
+# XvB tier calculator copy (#118). A tier is RAFFLE status, never an XMR payout, and the winner is
+# drawn at random among qualifiers — donating above the threshold buys zero extra win chance, so
+# the honest framing is cost, not reward.
+_XVB_TIER_NOTE = (
+    "An XvB tier is raffle status, not an XMR payout. Donated hashrate earns no P2Pool shares; "
+    "holding a tier costs about its threshold in continuous donation (XvB qualifies a tier on "
+    "both the 1h and 24h credited averages), and donating above the threshold adds nothing — "
+    "the raffle winner is drawn at random among qualifiers."
+)
+
+_XVB_SIDECHAIN_NOTE = (
+    "Note: switching the P2Pool sidechain resets your PPLNS shares, and collecting an XvB win "
+    "needs a share in the window."
+)
+
+
+def build_xvb_calc(metrics, state_mgr):
+    """XvB tier/raffle calculator inputs for the Advanced view (Issue #118).
+
+    Same pattern as ``build_earnings``'s ``coeff_day``: the server publishes the tier table and
+    the sustainability rule once (single source of truth — ``state_mgr.get_tiers()``, so a
+    ``TIER_CONFIG`` override flows through, plus ``XVB_MAX_DONATION_FRACTION``), and the client
+    does the what-if math (``computeXvbTier`` in ``logic.mjs``, a transcription of
+    ``resolve_target_threshold``'s auto rule). Current/target tier state comes straight off
+    ``Metrics`` — no tier math is re-derived here.
+
+    Deliberately carries NO raffle-entry or win-probability figures: the raffle draw is random
+    among qualifiers, so tier + threshold + cost is everything the operator can act on. Returns
+    ``{"enabled": False}`` alone when XvB is off — there is no tier to calculate."""
+    if not metrics.xvb_enabled:
+        return {"enabled": False}
+    tiers = state_mgr.get_tiers()
+    return {
+        "enabled": True,
+        # Ascending tier table for the client's what-if; names via get_tier_info so they read
+        # exactly like the tier strings everywhere else (threshold already embedded in the name).
+        "tiers": sorted(
+            (
+                {"name": get_tier_info(t, tiers)[0], "threshold": float(t)}
+                for t in tiers.values()
+                if t > 0
+            ),
+            key=lambda entry: entry["threshold"],
+        ),
+        "max_fraction": XVB_MAX_DONATION_FRACTION,  # donation headroom rule (sustainability)
+        "current_tier": metrics.current_tier,
+        "target_tier": metrics.target_tier,
+        "target_threshold": metrics.target_threshold,
+        "sustainable": metrics.target_sustainable,
+        "note": _XVB_TIER_NOTE,
+        # #33 mode context, display-only: off the Main sidechain a pool switch costs your PPLNS
+        # shares — and with them XvB win collectability. None on Main (nothing to warn about).
+        "mode_note": _XVB_SIDECHAIN_NOTE if metrics.pool_type != "Main" else None,
     }
 
 
@@ -957,6 +1142,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     (e.g. ``state_mgr.get_history`` failing); the caller turns that into a sanitized 500."""
     data = data or {}
     history = state_mgr.get_history()
+    share_stats = state_mgr.get_share_stats()  # per-poll share-health deltas (#116)
     metrics = build_metrics(data, state_mgr, history)
     db_healthy = state_mgr.is_db_healthy()
 
@@ -967,14 +1153,16 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     topology = (
         topology_from_config()
     )  # full stack wiring for the topology panel (#170); shares summary
-    badges = build_badges(data, metrics, mode_tok, db_healthy)
+    badges = build_badges(
+        data, metrics, mode_tok, db_healthy, wallet_change=recent_wallet_change(state_mgr)
+    )
     badges.append(_egress_badge(egress["summary"]))  # glanceable Tor-only / leak header badge
 
     return {
         "syncing": metrics.global_syncing,
-        "page_title": "Mining Dashboard - Syncing"
+        "page_title": "Pithead Dashboard - Syncing"
         if metrics.global_syncing
-        else "Mining Dashboard",
+        else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
@@ -994,12 +1182,18 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "network": pool_net["network"],
         "monero": pool_net["monero"],
         "shares_window": pool_net["shares_window"],
+        "cadence": build_cadence(metrics),
         "raffle_eligible": build_raffle_eligibility(metrics),
         "proxy_workers": metrics.workers_online,
         "earnings": build_earnings(data, metrics),
+        "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),
+        # Persisted per-poll share-health deltas + trailing 24h reject rate (#116). Kept out of
+        # proxy_summary so its (cumulative) shape stays unchanged for existing clients.
+        "share_stats": build_share_stats(share_stats, range_arg, window),
+        "reject_pct_24h": _window_reject_pct(share_stats, 24 * 3600),
         "egress": egress,
         "topology": topology,
         "chart": build_chart(

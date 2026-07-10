@@ -18,26 +18,32 @@ from mining_dashboard.config import config as egress_config
 from mining_dashboard.config.config import DEFAULT_HASHRATE_WINDOW, HASHRATE_WINDOWS
 from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
+    _MAX_CHART_POINTS,
     _chart_tension,
     _mode_palette,
     _reject_flag,
     _target_points,
+    _window_reject_pct,
     build_badges,
+    build_cadence,
     build_chart,
     build_earnings,
     build_hashrate,
     build_pool_network,
     build_proxy_summary,
     build_raffle_eligibility,
+    build_share_stats,
     build_state,
     build_sync,
     build_system,
     build_tari,
     build_workers,
+    build_xvb_calc,
     canonical_window,
     get_shell_html,
     host_display_addr,
     parse_window,
+    recent_wallet_change,
 )
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
@@ -669,6 +675,64 @@ class TestBadges:
         )
 
 
+# --- Payout-wallet tripwire banner (#375) ----------------------------------------------
+
+
+class TestWalletChangedBadge:
+    _NEW = "4B" + "b" * 93
+
+    def _kv_mgr(self, **kv):
+        sm = MagicMock()
+        sm.get_kv.side_effect = kv.get
+        return sm
+
+    def test_recent_change_within_72h(self):
+        sm = self._kv_mgr(
+            payout_wallet_changed_ts="1000",
+            payout_wallet=self._NEW,
+            payout_wallet_prev8="4Aaaaaaa",
+        )
+        wc = recent_wallet_change(sm, now=1000 + 71 * 3600)
+        assert wc == {"old8": "4Aaaaaaa", "new8": self._NEW[:8], "ts": 1000.0}
+
+    def test_expired_after_72h(self):
+        sm = self._kv_mgr(payout_wallet_changed_ts="1000", payout_wallet=self._NEW)
+        assert recent_wallet_change(sm, now=1000 + 72 * 3600) is None
+
+    def test_no_change_recorded(self):
+        assert recent_wallet_change(self._kv_mgr()) is None
+
+    def test_unreadable_ts_is_no_change(self):
+        assert recent_wallet_change(self._kv_mgr(payout_wallet_changed_ts="junk")) is None
+
+    def test_badge_rendered_and_truncated(self):
+        wc = {"old8": "4Aaaaaaa", "new8": self._NEW[:8], "ts": 1000.0}
+        out = build_badges({}, _metrics(), "ok", wallet_change=wc)
+        badge = next(b for b in out if "Payout wallet changed" in b["text"])
+        assert badge["variant"] == "warn"
+        assert "4Aaaaaaa…" in badge["title"] and f"{self._NEW[:8]}…" in badge["title"]
+        assert self._NEW not in badge["title"]  # never the full address
+
+    def test_shown_even_while_syncing(self):
+        wc = {"old8": "4Aaaaaaa", "new8": self._NEW[:8], "ts": 1000.0}
+        out = build_badges({}, _metrics(global_syncing=True), "ok", wallet_change=wc)
+        assert any("Payout wallet changed" in b["text"] for b in out)
+
+    def test_no_badge_without_recent_change(self):
+        out = build_badges({}, _metrics(), "ok", wallet_change=None)
+        assert not any("Payout wallet" in b["text"] for b in out)
+
+    def test_build_state_surfaces_the_badge_from_kv(self):
+        sm = _state_mgr()
+        sm.get_kv.side_effect = {
+            "payout_wallet_changed_ts": str(time.time() - 60),
+            "payout_wallet": self._NEW,
+            "payout_wallet_prev8": "4Aaaaaaa",
+        }.get
+        st = build_state(_data(), sm, "all")
+        assert any("Payout wallet changed" in b["text"] for b in st["badges"])
+
+
 # --- System (presentation thresholds) -------------------------------------------------
 
 
@@ -745,7 +809,9 @@ class TestWorkers:
             ]
         )[0]
         assert row["uptime"] == 3600 and row["uptime_str"]
-        assert row["h10"] == 5000 and "kH/s" in row["h10_str"]
+        assert row["h60"] == 5100 and "kH/s" in row["h60_str"]
+        assert row["h15"] == 5200 and "kH/s" in row["h15_str"]
+        assert "h10" not in row  # dropped from the payload — the table shows 1m/10m (#387)
 
     def test_api_ok_passes_through(self):
         # The probe verdict reaches the client so it can badge a misconfigured worker API; a worker
@@ -971,6 +1037,77 @@ class TestProxySummary:
         assert ps["best"] == "—"
 
 
+class TestShareStatsSeries:
+    """#116: the persisted per-poll share-health deltas surfaced in /api/state."""
+
+    def _rows(self, now):
+        return [
+            {"ts": now - 3 * 24 * 3600, "accepted": 50, "rejected": 9, "invalid": 0, "expired": 0},
+            {"ts": now - 3600, "accepted": 90, "rejected": 10, "invalid": 1, "expired": 2},
+            {"ts": now - 60, "accepted": 10, "rejected": 0, "invalid": 0, "expired": 0},
+        ]
+
+    def test_points_shape_and_ms_epoch(self):
+        now = time.time()
+        pts = build_share_stats(self._rows(now), "all")
+        assert len(pts) == 3
+        assert pts[1] == {"x": int((now - 3600) * 1000), "a": 90, "r": 10, "i": 1, "e": 2}
+
+    def test_range_filters_old_rows(self):
+        # The 24h preset drops the 3-day-old row, same bounds as the chart's event filter.
+        assert len(build_share_stats(self._rows(time.time()), "24h")) == 2
+
+    def test_unknown_range_keeps_everything(self):
+        assert len(build_share_stats(self._rows(time.time()), "bogus")) == 3
+
+    def test_custom_window_bounds_both_ends(self):
+        now = time.time()
+        pts = build_share_stats(self._rows(now), "all", window=(now - 7200, now - 600))
+        assert len(pts) == 1 and pts[0]["a"] == 90
+
+    def test_window_reject_pct(self):
+        now = time.time()
+        # Trailing 24h: 100 accepted + 10 rejected -> 9.09%; the 3-day-old row is excluded.
+        assert _window_reject_pct(self._rows(now), 24 * 3600) == "9.09%"
+
+    def test_window_reject_pct_dash_when_no_shares(self):
+        # Zero submitted shares in the window must read "—", not a falsely-healthy 0%.
+        assert _window_reject_pct([], 24 * 3600) == "—"
+        idle = [{"ts": time.time(), "accepted": 0, "rejected": 0, "invalid": 3, "expired": 0}]
+        assert _window_reject_pct(idle, 24 * 3600) == "—"
+
+    def test_long_series_is_bounded_and_bucket_summed(self):
+        # 30 days of 30s polls ≈ 86k rows; /api/state must ship at most _MAX_CHART_POINTS,
+        # like the hashrate chart. The deltas are additive, so bucket-summing keeps the
+        # series' totals exact through the thinning.
+        now = time.time()
+        rows = [
+            {"ts": now - i * 30, "accepted": 2, "rejected": 1, "invalid": 0, "expired": 0}
+            for i in range(86_400, 0, -1)  # ascending ts, like the DB returns them
+        ]
+        pts = build_share_stats(rows, "all")
+        assert len(pts) <= _MAX_CHART_POINTS
+        assert sum(p["a"] for p in pts) == 2 * 86_400
+        assert sum(p["r"] for p in pts) == 86_400
+        # Timestamps stay ordered ms-epoch positions from within the data.
+        xs = [p["x"] for p in pts]
+        assert xs == sorted(xs)
+
+    def test_reject_pct_24h_stays_exact_on_long_series(self):
+        # The trailing 24h reject rate is computed from the RAW rows, never the thinned
+        # series — thinning the chart must not move the number.
+        now = time.time()
+        rows = [
+            {"ts": now - i * 30, "accepted": 9, "rejected": 1, "invalid": 0, "expired": 0}
+            for i in range(86_400)
+        ]
+        assert _window_reject_pct(rows, 24 * 3600) == "10.00%"
+
+    def test_short_series_is_untouched(self):
+        pts = build_share_stats(self._rows(time.time()), "all")
+        assert len(pts) == 3  # under the cap -> native resolution, no bucketing
+
+
 # --- pool/network passthrough ---------------------------------------------------------
 
 
@@ -1012,6 +1149,37 @@ class TestPoolNetwork:
     def test_db_size_dash_when_unknown(self):
         pn = build_pool_network({"monero_sync": {"db_size": 0}}, _metrics())
         assert pn["monero"]["db_size"] == "—"
+
+
+# --- Pool cadence & luck (#84) ---------------------------------------------------------
+
+
+class TestCadence:
+    def test_formats_available_figures(self):
+        c = build_cadence(
+            _metrics(
+                last_block_ts=time.time() - 90,
+                expected_share_sec=3600.0,
+                luck_pct=123.4,
+                own_pplns_weight=1_234_567.0,
+            )
+        )
+        assert c["available"] is True
+        assert c["since_block"] == "1m 30s"
+        assert c["tts"] == "1h 0m"
+        assert c["luck"] == "123%"
+        assert c["weight"] == "1,234,567"
+
+    def test_dash_fallbacks_when_unavailable(self):
+        # No hashrate history / pool difficulty yet (#84 pitfall): everything reads "—", never
+        # inf/0s, and available gates the card's luck + time-to-share.
+        c = build_cadence(_metrics())  # _BASE leaves the cadence fields at their 0.0 defaults
+        assert c["available"] is False
+        assert c["since_block"] == "—"
+        assert c["tts"] == "—"
+        assert c["luck"] == "—"
+        assert c["weight"] == "0"
+        assert c["last_block"] == "Never"
 
 
 # --- Host address beside the hostname (Issue #119) ------------------------------------
@@ -1097,6 +1265,89 @@ class TestEarnings:
         e = build_earnings(self._NET, _metrics(p2pool_1h=10543.7))
         assert e["p2pool_hr"] == 10543.7
 
+    def test_tari_rate_published_when_merge_mining(self):
+        # #117: with live Tari figures + merge-mining active, the payload carries the XTM rate
+        # (reward_xtm / difficulty * 86400) for the client to scale — same shape as coeff_day.
+        e = build_earnings(
+            self._NET,
+            _metrics(tari_mining=True, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        )
+        assert e["tari_available"] is True
+        assert e["tari_coeff_day"] == pytest.approx(13_000.0 / 420_000_000_000 * 86_400)
+
+    def test_tari_unavailable_without_figures_or_mining(self):
+        # No difficulty collected (inactive/syncing) → unavailable; and a positive rate with
+        # merge-mining OFF must also read unavailable (a dead channel earns no phantom XTM).
+        e = build_earnings(self._NET, _metrics(tari_mining=True, tari_reward=13_000.0))
+        assert e["tari_available"] is False
+        assert e["tari_coeff_day"] == 0.0
+        e = build_earnings(
+            self._NET,
+            _metrics(tari_mining=False, tari_reward=13_000.0, tari_difficulty=420_000_000_000),
+        )
+        assert e["tari_available"] is False
+
+    def test_tari_unavailability_leaves_xmr_estimate_intact(self):
+        # Tari degrading to "—" must not drag the XMR side down: available stays True.
+        e = build_earnings(self._NET, _metrics(tari_mining=False))
+        assert e["available"] is True
+        assert e["coeff_day"] > 0
+
+
+# --- XvB tier / raffle calculator (Issue #118) -----------------------------------------
+
+
+class TestXvbCalc:
+    # Includes a zero-threshold entry to prove it's filtered out of the published table.
+    _TIERS = {
+        "donor_mega": 1_000_000,
+        "donor_whale": 100_000,
+        "donor_vip": 10_000,
+        "donor": 1_000,
+        "off": 0,
+    }
+
+    def _sm(self):
+        sm = MagicMock()
+        sm.get_tiers.return_value = self._TIERS
+        return sm
+
+    def test_disabled_returns_enabled_false_only(self):
+        # XvB off → nothing to calculate; the whole payload is the single flag.
+        assert build_xvb_calc(_metrics(xvb_enabled=False), self._sm()) == {"enabled": False}
+
+    def test_tier_table_sorted_ascending_and_zero_thresholds_dropped(self):
+        out = build_xvb_calc(_metrics(), self._sm())
+        assert [t["threshold"] for t in out["tiers"]] == [1_000, 10_000, 100_000, 1_000_000]
+        # Names come from get_tier_info, threshold already embedded — same string as everywhere.
+        assert out["tiers"][1]["name"] == "Vip (10.00 kH/s+)"
+
+    def test_mirrors_metrics_and_config(self):
+        # Current/target state is passed straight through from Metrics — no tier math re-derived
+        # here — and max_fraction is the configured sustainability headroom rule.
+        m = _metrics(
+            current_tier="Donor (1.00 kH/s+)",
+            target_tier="Vip (10.00 kH/s+)",
+            target_threshold=10_000.0,
+            target_sustainable=False,
+        )
+        out = build_xvb_calc(m, self._sm())
+        assert out["enabled"] is True
+        assert out["current_tier"] == "Donor (1.00 kH/s+)"
+        assert out["target_tier"] == "Vip (10.00 kH/s+)"
+        assert out["target_threshold"] == 10_000.0
+        assert out["sustainable"] is False
+        assert out["max_fraction"] == views.XVB_MAX_DONATION_FRACTION
+        # The labelling the issue demands: tier = raffle status, never a payout.
+        assert "not an XMR payout" in out["note"]
+
+    def test_sidechain_mode_note_only_off_main(self):
+        # #33 context: off the Main sidechain, a pool switch resets PPLNS shares (and with them
+        # XvB win collectability) — display-only text, absent on Main.
+        assert build_xvb_calc(_metrics(pool_type="Main"), self._sm())["mode_note"] is None
+        note = build_xvb_calc(_metrics(pool_type="Mini"), self._sm())["mode_note"]
+        assert "PPLNS" in note
+
 
 # --- build_state integration ----------------------------------------------------------
 
@@ -1104,11 +1355,12 @@ class TestEarnings:
 # ponytail: this _state_mgr()/_data() pair looks near-duplicated with the ones in test_metrics.py,
 # but the per-module defaults differ on purpose (e.g. tari_sync, the get_tiers/xvb shapes). A shared
 # builder would need enough params that it reads worse than the local copy — left duplicated.
-def _state_mgr(history=None, mode="P2POOL"):
+def _state_mgr(history=None, mode="P2POOL", share_stats=None):
     sm = MagicMock()
     sm.get_history.return_value = history or []
     sm.get_xvb_stats.return_value = {"current_mode": mode}
     sm.get_tiers.return_value = {}
+    sm.get_share_stats.return_value = share_stats or []
     sm.is_db_healthy.return_value = True
     return sm
 
@@ -1147,11 +1399,15 @@ class TestBuildState:
             "network",
             "monero",
             "shares_window",
+            "cadence",
             "proxy_workers",
             "earnings",
+            "xvb_calc",
             "tari",
             "workers",
             "proxy_summary",
+            "share_stats",
+            "reject_pct_24h",
             "egress",
             "topology",
             "chart",
@@ -1175,6 +1431,18 @@ class TestBuildState:
 
     def test_is_json_serializable(self):
         json.dumps(build_state(_data(), _state_mgr(), "all"))
+
+    def test_share_stats_series_and_24h_rate_surfaced(self):
+        # #116: the persisted delta series rides on /api/state with a trailing-24h reject rate;
+        # proxy_summary keeps its cumulative shape untouched.
+        rows = [{"ts": time.time() - 60, "accepted": 95, "rejected": 5, "invalid": 0, "expired": 0}]
+        st = build_state(_data(), _state_mgr(share_stats=rows), "all")
+        assert st["share_stats"][0]["a"] == 95 and st["share_stats"][0]["r"] == 5
+        assert st["reject_pct_24h"] == "5.00%"
+        assert "reject_pct_24h" not in st["proxy_summary"]
+        # No rows (fresh install / proxy idle) -> empty series and an honest dash.
+        empty = build_state(_data(), _state_mgr(), "all")
+        assert empty["share_stats"] == [] and empty["reject_pct_24h"] == "—"
 
     def test_db_unhealthy_surfaces_field_and_badge(self):
         # When persistence is broken, /api/state must carry db_healthy=False and a loud badge (#131).
@@ -1203,7 +1471,7 @@ class TestBuildState:
     def test_syncing_flag_and_title(self):
         st = build_state(_data(global_sync=True), _state_mgr(), "all")
         assert st["syncing"] is True
-        assert st["page_title"] == "Mining Dashboard - Syncing"
+        assert st["page_title"] == "Pithead Dashboard - Syncing"
 
     def test_proxy_workers_from_metrics(self):
         data = _data(

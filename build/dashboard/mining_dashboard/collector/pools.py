@@ -117,7 +117,7 @@ def get_stratum_stats():
 
 
 def get_tari_stats():
-    """Retrieves Tari merge mining status and rewards."""
+    """Retrieves Tari merge-mining status and rewards."""
     raw = _read_json(TARI_STATS_PATH)
     chains = raw.get("chains", [])
     if chains:

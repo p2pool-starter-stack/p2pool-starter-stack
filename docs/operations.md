@@ -14,7 +14,7 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead upgrade` | Re-render the generated config, then **pull** (release bundle) or **rebuild** (source checkout) the images and restart. Run after downloading a newer bundle or a `git pull`. |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
-| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status. A paste-able health report. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus three runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, and the dashboard app answers behind its container. A paste-able health report. |
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
@@ -52,6 +52,14 @@ finish their initial sync. Check the dashboard to see which.
 
 **Change a setting:** edit `config.json`, then run `./pithead apply`. See
 [Configuration › Changing settings later](configuration.md#changing-settings-later).
+
+**Changing the payout wallet:** `apply` asks you to type the first 8 characters of the new address
+(a bare `y` is not enough for the one change that redirects every future reward; `apply -y` skips
+the prompt for automation). Changing both the Monero and Tari addresses in one `apply` prompts
+once per address. The dashboard also watches the wallet p2pool actually mines to: any
+change raises a `wallet_changed` [Telegram alert](telegram.md) and a 72-hour top-bar banner —
+including a change you made yourself. Treat that pair as confirmation; if you didn't change it,
+your rewards are being redirected — check `config.json` and re-apply the correct address.
 
 **Reboot resilience:** every service runs with `restart: unless-stopped`, so the stack restarts
 after a reboot or power loss, provided the Docker daemon starts at boot. Ubuntu's packaged Docker
@@ -109,7 +117,7 @@ so confirm yours is a `4…`/95-char address first (see [Configuration](configur
 > copying the stack to a different path (or running a second checkout) points it at a *different,
 > empty* `data/`: a full re-sync, and the dashboard history is orphaned. If you move the install,
 > move its `data/` with it, or set absolute `data_dir` paths in `config.json` and run `./pithead
-> apply`. `pithead up` and `pithead doctor` now warn when a data directory named in `.env` is missing.
+> apply`. `./pithead up` and `./pithead doctor` now warn when a data directory named in `.env` is missing.
 
 ---
 
@@ -139,7 +147,8 @@ This writes a timestamped `tar.gz` under `backups/` holding the irreplaceable st
 `.env` (secrets), the `Caddyfile` (if present), the Tor onion keys, and the dashboard database
 (hashrate history and settings). Blockchains are excluded (they re-sync), so the archive is small.
 The archive is `chmod 600`, and `pithead` prints its path when done. Before writing, `backup` checks
-free space and prompts if it looks tight.
+free space and prompts if it looks tight. On a source checkout, `backups/` is git-ignored — the
+archive carries `.env` and the onion private keys, and secret scanners can't see inside a tarball.
 
 If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
 `-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).

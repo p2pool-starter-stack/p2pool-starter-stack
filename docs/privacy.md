@@ -50,7 +50,7 @@ address): monerod, Tari, and P2Pool each get one from the built-in Tor daemon. S
   plain stratum, unauthenticated by default, and must never face the internet: `pithead
   setup`/`doctor` warn if your host has a public IP. Lock it down with `p2pool.stratum_bind`, a
   firewall, and/or an optional `p2pool.stratum_password` that requires each rig to authenticate.
-  See [Connecting miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
+  See [Connecting Miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
 - The **dashboard** can get a fourth, optional onion (`dashboard.onion.enabled`, default off) so you
   can reach it remotely over Tor without a port-forward or public IP. It fronts the authenticated
   Caddy login, defaults to Tor v3 client authorization (the onion won't respond without your client
@@ -130,7 +130,7 @@ dials go through Tor. No action needed.
 
 Opt out for maximum yield (lower stale/uncle rate plus a larger peer set, at the cost of exposing
 your IP, worse on `--mini`/`--nano`): set `p2pool.clearnet: true` in `config.json` and re-run
-`pithead apply`. For the strictest posture, refuse clearnet peers entirely (onion-only): P2Pool also
+`./pithead apply`. For the strictest posture, refuse clearnet peers entirely (onion-only): P2Pool also
 has a `--no-clearnet-p2p` flag, not yet wired to its own config knob.
 
 Trade-off (measured): Tor adds latency to share propagation, costing ~10 % of yield on `mini` (#256,
@@ -148,7 +148,7 @@ XvB pool object it pushes to xmrig-proxy (the pool's DNS is resolved proxy-side,
 in #163), so donation mining no longer exposes your home IP. No action needed.
 
 Opt out for maximum yield (stratum-over-Tor adds latency that can raise rejected shares, scaling with
-hashrate): set `xvb.tor: false` and re-run `pithead apply`; the donation connection then dials
+hashrate): set `xvb.tor: false` and re-run `./pithead apply`; the donation connection then dials
 direct. To stop the egress entirely instead, disable XvB (`"xvb": { "enabled": false }`), which also
 stops the (already Tor-routed, #163) stats fetch.
 
@@ -267,9 +267,9 @@ single-purpose appliance. One consequence is worth recording explicitly:
 - [ ] Leave `monero.clearnet_initial_sync` / `tari.clearnet_initial_sync` off (the default) to keep all node P2P on Tor. If you do use a clearnet sync, the dashboard switches each node back to Tor automatically once it's synced; `pithead doctor` flags it while exposed and clears when done.
 - [ ] Run the initial install/build behind a VPN or `torsocks`.
 - [ ] Telegram (#121) and Healthchecks (#79) both always run over Tor (Telegram sees only a Tor exit, #340), so either is safe to enable — for Healthchecks, make sure its ping URL is Tor-reachable (hosted `hc-ping.com`, or an onion/public self-hosted instance).
-- [ ] Run `pithead doctor`; it surfaces the public-IP exposure check among its diagnostics.
+- [ ] Run `./pithead doctor`; it surfaces the public-IP exposure check among its diagnostics.
 
 ---
 
 See also: [Architecture › Privacy by design](architecture.md#privacy-by-design) ·
-[Connecting miners › Firewall](workers.md#firewall) · the privacy-egress epic (#160).
+[Connecting Miners › Firewall](workers.md#firewall) · the privacy-egress epic (#160).

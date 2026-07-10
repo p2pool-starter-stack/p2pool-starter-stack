@@ -130,6 +130,42 @@ class TestSharesAndHistory:
             sm2.close()
 
 
+class TestKvStore:
+    def test_get_missing_key_is_none(self, state_manager):
+        assert state_manager.get_kv("payout_wallet") is None
+
+    def test_set_then_get_roundtrip(self, state_manager):
+        state_manager.set_kv("payout_wallet", "4Aaaa")
+        assert state_manager.get_kv("payout_wallet") == "4Aaaa"
+        state_manager.set_kv("payout_wallet", "4Bbbb")  # insert-or-replace
+        assert state_manager.get_kv("payout_wallet") == "4Bbbb"
+
+    def test_non_string_values_stored_as_strings(self, state_manager):
+        state_manager.set_kv("payout_wallet_changed_ts", 1234.5)
+        assert state_manager.get_kv("payout_wallet_changed_ts") == "1234.5"
+
+    def test_kv_survives_restart(self, tmp_path):
+        # The wallet-tripwire baseline (#375) must outlive a dashboard container recreate —
+        # that recreate (a `pithead apply`) is exactly the attack window.
+        db = str(tmp_path / "kv.db")
+        sm = StateManager(db_path=db)
+        sm.set_kv("payout_wallet", "4Aaaa")
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            assert sm2.get_kv("payout_wallet") == "4Aaaa"
+        finally:
+            sm2.close()
+
+    def test_write_error_flags_db_unhealthy(self):
+        sm = StateManager(":memory:")
+        sm._conn.execute("DROP TABLE kv_store")
+        sm.set_kv("payout_wallet", "x")  # INSERT fails -> caught -> #131 flag flips
+        assert sm.is_db_healthy() is False
+        assert sm.get_kv("payout_wallet") is None  # read error -> None, never raises
+        sm.close()
+
+
 class TestDbHealth:
     def test_healthy_by_default(self, state_manager):
         assert state_manager.is_db_healthy() is True
@@ -430,6 +466,20 @@ class TestChartEvents:
         finally:
             sm2.close()
 
+    def test_load_tolerates_missing_share_stats_table(self, tmp_path):
+        # Same upgrade path for the #116 table: a pre-migration DB must open without error and
+        # report an empty series.
+        db = str(tmp_path / "legacy2.db")
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+        conn.commit()
+        conn.close()
+        sm = StateManager(db_path=db)
+        try:
+            assert sm.get_share_stats() == []
+        finally:
+            sm.close()
+
     def test_load_tolerates_missing_events_table(self, tmp_path):
         # Upgrade path: a DB written by a pre-#99 build has no events table. Opening it must not
         # crash and must report no events. (StateManager creates the table on open, so load() then
@@ -442,5 +492,84 @@ class TestChartEvents:
         sm = StateManager(db_path=db)
         try:
             assert sm.get_events() == []
+        finally:
+            sm.close()
+
+
+class TestShareStatsSeries:
+    """Per-poll share-health deltas (#116): in-memory tally, disk persistence, retention pruning.
+    (Pre-migration-DB tolerance rides with the events check in TestChartEvents above.)"""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_share_stats(t0, accepted=10, rejected=1)
+        state_manager.add_share_stats(t0 + 30, accepted=8, invalid=2, expired=1)
+        rows = state_manager.get_share_stats()
+        assert rows[0] == {"ts": t0, "accepted": 10, "rejected": 1, "invalid": 0, "expired": 0}
+        assert rows[1] == {
+            "ts": t0 + 30,
+            "accepted": 8,
+            "rejected": 0,
+            "invalid": 2,
+            "expired": 1,
+        }
+        # returns a copy — mutating it doesn't corrupt stored state
+        rows.clear()
+        assert len(state_manager.get_share_stats()) == 2
+
+    def test_old_rows_pruned_from_memory(self, state_manager):
+        state_manager.add_share_stats(1.0, accepted=1)  # ts well before the retention cutoff
+        state_manager.add_share_stats(time.time(), accepted=2)
+        assert [r["accepted"] for r in state_manager.get_share_stats()] == [2]
+
+    def test_rows_survive_reload(self, tmp_path):
+        db = str(tmp_path / "share_stats.db")
+        sm = StateManager(db_path=db)
+        sm.add_share_stats(time.time(), accepted=10, rejected=1)
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            rows = sm2.get_share_stats()
+            assert len(rows) == 1 and rows[0]["accepted"] == 10 and rows[0]["rejected"] == 1
+        finally:
+            sm2.close()
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        # Force the probabilistic 5% prune path deterministically, like the history prune test.
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO share_stats (ts, accepted, rejected, invalid, expired) "
+                "VALUES (?,?,?,?,?)",
+                (old_ts, 1, 0, 0, 0),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_share_stats(time.time(), accepted=5)
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM share_stats WHERE ts < ?",
+                (time.time() - HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0, "expired delta rows are pruned"
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        # Route failures through _db_error so the #131 persistence badge trips.
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE share_stats")
+        state_manager.add_share_stats(time.time(), accepted=1)
+        assert state_manager.is_db_healthy() is False
+
+    def test_load_tolerates_unreadable_table(self, tmp_path):
+        # Defence-in-depth guard in load(): a share_stats table with an alien schema (SELECT
+        # fails) must load as an empty series, not crash the whole startup load.
+        db = str(tmp_path / "alien.db")
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE share_stats (wrong TEXT)")
+        conn.commit()
+        conn.close()
+        sm = StateManager(db_path=db)
+        try:
+            assert sm.get_share_stats() == []
         finally:
             sm.close()

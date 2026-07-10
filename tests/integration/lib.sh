@@ -223,6 +223,11 @@ pithead() { rx "$IT_PITHEAD $*"; }
 # network). Empty output on failure so callers can detect unreachable.
 api_state() { rx "curl -fsS --max-time 10 http://127.0.0.1:8000/api/state" 2>/dev/null; }
 
+# Pure: does a /metrics response body carry at least one pithead_ SAMPLE line (#379)? Samples
+# start the line with the metric name; a "# HELP pithead_…" comment line must NOT count — a body
+# of only comments means the route exists but the exporter produced no data.
+metrics_has_pithead_sample() { printf '%s\n' "$1" | grep -q '^pithead_'; }
+
 # Split a "<state> <health>" string (from service_state) into its two fields. Pure helpers so
 # the self-test can verify the fault-injection predicates classify correctly.
 svc_state_of() { printf '%s' "${1%% *}"; }
@@ -334,6 +339,31 @@ _pred_hashes_flowing() {
     local h
     h="$(jq_get "$st" '.stratum.total_hashes')"
     [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null
+}
+
+# Predicate: the dashboard's persistence flag (#131) reads exactly <expected> ("true"/"false").
+# Parameterized because the db-readonly fault (#202) waits on both edges. db_healthy is a one-way
+# latch per process — storage_service only sets it True in __init__ — so the fault choreography in
+# run.sh restarts the dashboard around each wait instead of polling for a self-heal that can't
+# happen. jq_get preserves boolean false (it doesn't fall through `// empty`), so "false" here
+# means the flag really reads false, not that the key is missing.
+_pred_db_healthy_is() { # _pred_db_healthy_is <true|false>
+    local st
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
+    [ "$(jq_get "$st" '.db_healthy')" = "$1" ]
+}
+
+# Predicate: the dashboard's share-health series (#116) has at least one row — proof the poll
+# loop is actually CAPTURING per-poll share deltas on a mining box, not just serving the key.
+# The series fills as polls land, so right after a dashboard recreate it is legitimately empty —
+# poll, don't read cold (issue #54).
+_pred_share_stats_nonempty() {
+    local st n
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
+    n="$(jq_get "$st" '.share_stats | length')"
+    [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null
 }
 
 wait_status_ok() { wait_for "${1:-180}" 5 "pithead status OK" _pred_status_ok; }

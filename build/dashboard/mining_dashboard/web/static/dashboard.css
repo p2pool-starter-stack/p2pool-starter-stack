@@ -268,6 +268,20 @@ h3 {
 .earnings-disclaimer {
   line-height: 1.4;
 }
+/* XvB tier / raffle block inside the earnings card (#118) — visually separated from the
+ * XMR/XTM payout figures, since a tier is raffle status, not a payout. */
+.xvb-tier-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.xvb-tier-block h4 {
+  margin: 0 0 10px 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 
 /* Table */
 table {
@@ -294,6 +308,16 @@ tr:last-child td {
 /* Pool-wide proxy share totals under the Workers table (Issue #82). */
 .proxy-totals {
   margin-top: 12px;
+}
+
+/* First-run empty state in the Workers card (#385): shown until the proxy has ever reported a
+ * worker, pointing the operator at the one action left — connecting a rig. */
+.workers-empty {
+  padding: 24px 12px;
+  text-align: center;
+}
+.workers-empty code {
+  font-family: monospace;
 }
 
 /* Horizontal-scroll wrapper for the workers table (Issue #83): the table can be wider than a

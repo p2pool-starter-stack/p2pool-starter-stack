@@ -65,7 +65,10 @@ Once both nodes are synced, the dashboard shows the operational view.
 </picture>
 
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
-position, the worker-table sort column, and the chart stay put between updates.
+position, the worker-table sort column, and the chart stay put between updates. A poll that fails —
+or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
+timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
+successful refresh.
 
 ### Top bar
 
@@ -99,10 +102,12 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | `⚠ HugePages off` | HugePages aren't reserved — RandomX hashrate is capped. | Run setup's tuning (or edit GRUB) and reboot; the badge clears once they're reserved. |
 | `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
+| `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
 
 The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
-on; AVX2 is badge-only (see [Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active
-warning badges are echoed in the bot's `/status` reply.
+on; the wallet badge pairs with the `wallet_changed` alert; AVX2 is badge-only (see
+[Telegram Bot](telegram.md#choosing-which-alerts-you-get)). All active warning badges are echoed in
+the bot's `/status` reply.
 
 ### Hero band
 
@@ -138,7 +143,7 @@ stack doesn't manage that node.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's
-progress until it catches up and merge mining resumes.
+progress until it catches up and merge-mining resumes.
 
 ### Hashrate chart
 
@@ -180,16 +185,19 @@ The summary panel pulls the key numbers together:
 | **XvB 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually **routed** to XvB. (The XvB-API *credited* figure, XvB's definitive record, appears in the **Advanced** view's *XvB Donation Stats* card.) |
 | **Current Tier** | The XvB tier you're currently holding, the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
 | **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
-| **Tari Mining** | Whether merge mining of Tari is active and healthy. |
+| **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallets** | Your configured Monero and Tari payout addresses. |
 
 ### Workers Alive
 
-A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over several
-windows (e.g. 10s / 60s / 15m), for spotting a rig that has dropped off or is underperforming. A
+A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over the 1m
+and 10m windows — the same 10m window the chart's averaging toggle and Telegram's totals report —
+for spotting a rig that has dropped off or is underperforming. A
 worker whose direct API is unreachable still counts (with proxy-derived hashrate); a worker whose
 miner has stopped drops out of the total. On a narrow screen the table scrolls sideways within its
-card so columns stay readable.
+card so columns stay readable. Until the first worker ever connects, the card shows a connect hint
+("point each rig at `<host-ip>:3333`") in place of the empty table; see
+[Connecting Miners](workers.md).
 
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
@@ -202,12 +210,20 @@ Below the table, a **Proxy totals** line sums the stack's share health as report
 total accepted / rejected (with aggregate reject %) / invalid shares submitted upstream, plus the
 best difficulty any share has hit. Hidden until the proxy submits its first shares.
 
+The dashboard also persists these pool-wide counts as a time series: each 30-second poll stores how
+much the accepted / rejected / invalid / expired counters advanced (a proxy restart re-baselines the
+counters without corrupting the series), retained for 30 days like the hashrate history. `/api/state`
+serves the series as `share_stats` and a trailing-24-hour reject rate as `reject_pct_24h` — a rate
+over recent shares rather than the cumulative-since-proxy-start percentage in Proxy totals. The same
+series drives the `high_reject_rate` [Telegram alert](telegram.md) when the trailing-hour rate
+crosses 5%.
+
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the
 Overview summary, and the worker table. **Advanced** swaps the Overview for cards that break out the
 same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**,
-**XMR Network**, **Tari Merge Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+**XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
 choice is remembered across reloads.
 
 <picture>
@@ -217,9 +233,9 @@ choice is remembered across reloads.
 
 ### P2Pool Earnings (estimated)
 
-A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2Pool mining only,
-from your P2Pool hashrate and the live Monero network figures. It is scoped to P2Pool — **not** an
-XvB or a Tari calculator:
+A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2Pool mining, plus
+the XTM the same hashrate merge-mines alongside it, from your P2Pool hashrate and the live network
+figures. It is scoped to P2Pool — **not** an XvB calculator:
 
 - **XvB donations are excluded.** Hashrate you route to XvB earns no P2Pool payout, so it isn't
   counted. The default is your P2Pool 1h-average hashrate, the *same* `P2Pool (1h)` figure shown
@@ -228,20 +244,66 @@ XvB or a Tari calculator:
   total, and it stays consistent with the hashrate shown elsewhere on the page. (When that average
   is 0, a fresh start with no history yet, or donating everything to XvB, the estimate is 0 until
   you enter a what-if value.)
-- **Tari merge-mining is excluded.** Tari is earned alongside Monero but is a separate payout
-  (its own calculator is planned).
+- **Tari merge-mining is included — earned alongside, not instead.** Merge-mining puts the same
+  P2Pool hashrate to work on the Tari chain at no cost to the XMR side, so the XTM rows are
+  additional income, computed as `E[XTM/day] = hashrate × reward ÷ difficulty × 86400` over the
+  Tari block reward and difficulty p2pool's merge-mine stats report. The estimate assumes the
+  merge-mine channel stays connected; while merge-mining is inactive or Tari is still syncing,
+  the XTM rows show `—` and the XMR figures are unaffected. XvB-donated hashrate does not
+  merge-mine, so the same P2Pool-only default keeps the XTM estimate honest too.
 
 | Field | Meaning |
 |---|---|
 | **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
 | **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty`, the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
+| **XTM / day · month · year** | Expected Tari merge-mined **alongside** the XMR by the same hashrate — the identical linear expectation over the Tari block reward and difficulty. `—` while merge-mining is inactive or Tari is still syncing. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
 | **XMR Block Reward** | The current Monero block reward, for context. |
 
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
-> network figures aren't available yet, the card shows `—` rather than a bogus number. Tari
-> earnings and an XvB tier projection aren't included yet.
+> network figures aren't available yet, the card shows `—` rather than a bogus number.
+
+### XvB Tier (raffle)
+
+A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
+XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
+disabled (`xvb.enabled: false`). It shows tier status only — deliberately no raffle entries or win
+odds, because there are none to show: the raffle winner is drawn at random among everyone above
+the threshold, so donating more than the threshold buys zero extra win chance.
+
+| Field | Meaning |
+|---|---|
+| **Sustainable Tier** | The highest XvB donor tier the entered hashrate sustains while leaving P2Pool its share of the split — the same auto rule the donation controller uses (`hashrate × max donation fraction ≥ tier threshold`, default fraction 0.85). `None` when even the lowest tier is out of reach. |
+| **Hashrate Cost** | What holding that tier costs: about its threshold in **continuous** donation, because XvB qualifies a tier on both the 1h and 24h credited averages. This hashrate earns no P2Pool shares while donated. |
+| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
+| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
+
+Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
+tier threshold on both credited averages; a win terminates if the 1h average then drops below the
+round minimum; and collecting any win needs a share in the P2Pool PPLNS window (what XvB calls
+being a "VIP"). So the optimum donation is the minimum that clears your tier — never more. A tier
+is raffle status, not an XMR payout, and the card says so. The tier thresholds come from the
+server's tier table — the same one the donation controller steers by — so the two can't disagree.
+
+NOTE: on the mini/nano sidechains the block adds a reminder that switching the P2Pool sidechain
+resets your PPLNS shares — and with them XvB win collectability until a new share lands.
+
+### Pool Cadence & Luck
+
+A read-only card (Advanced view) that answers "is my share-finding on pace?" with four figures:
+
+| Field | Meaning |
+|---|---|
+| **Since Pool's Last Block** | Time since the pool found a Monero block — **pool-wide**, not a payout to you specifically. Pool blocks are what trigger PPLNS payouts, so a long gap here means the whole pool is waiting, not that your rigs are misbehaving. |
+| **Est. Time / Share** | How long your P2Pool hashrate takes, on average, to find one sidechain share: `share difficulty ÷ your P2Pool 1h average`. The same figure the earnings calculator shows as Time / Share. |
+| **Luck** | Actual vs. expected shares in the PPLNS window, as a percentage: `expected = your 1h average × window length ÷ share difficulty`, `luck = actual ÷ expected × 100`. Over 100 % means you found shares faster than the math predicts (running lucky); under 100 %, slower. |
+| **Your PPLNS Weight** | The sum of the difficulty of **your** shares inside the PPLNS window — the figure that sizes your slice of the next pool payout. Distinct from the pool-wide PPLNS Weight in the My P2Pool Node Stats card, which covers *everyone's* shares. |
+
+Luck and Est. Time / Share need a P2Pool hashrate average and a live share difficulty; on a fresh
+start (no history yet) the card shows `—` until the first samples land. Every figure derives from
+data the dashboard already stores — the per-share difficulty recorded with each found share — so
+there is nothing to configure.
 
 ---
 

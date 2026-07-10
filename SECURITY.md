@@ -3,7 +3,7 @@
 The security policy for Pithead: supported versions, how to report a vulnerability,
 and the stack's default security posture.
 
-Pithead runs a Monero full node, P2Pool, Tari merge mining, and a dashboard on your
+Pithead runs a Monero full node, P2Pool, Tari merge-mining, and a dashboard on your
 hardware, and it handles wallet payout addresses.
 
 ## Supported versions

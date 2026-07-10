@@ -13,6 +13,7 @@ from mining_dashboard.client.xvb_client import (
     REG_NOT_ELIGIBLE,
     REG_OK,
 )
+from mining_dashboard.collector.containers import get_container_health
 from mining_dashboard.collector.logs import get_monero_sync_status
 from mining_dashboard.collector.pools import (
     get_network_stats,
@@ -38,6 +39,7 @@ from mining_dashboard.config.config import (
     HOST_IP,
     LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
+    MONERO_WALLET_ADDRESS,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
@@ -59,7 +61,7 @@ from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
-from mining_dashboard.service.metrics import build_metrics
+from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.service.node_health import NodeHealthMonitor
 from mining_dashboard.service.telegram_commands import format_daily_summary
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
@@ -277,6 +279,26 @@ def _aggregate_window_hashrates(workers):
     return totals
 
 
+# The four cumulative share counters the proxy /summary carries and the share_stats series stores.
+_SHARE_STAT_KEYS = ("accepted", "rejected", "invalid", "expired")
+
+
+def _summary_deltas(last_totals, current_totals):
+    """Per-poll share-health deltas from two consecutive cumulative proxy /summary totals (#116).
+
+    Both args are dicts keyed by ``_SHARE_STAT_KEYS``. Returns ``(deltas, new_baseline)`` where
+    ``deltas`` is None — record nothing — on the first poll (``last_totals`` is None: re-baseline,
+    never backfill), when ANY counter went backwards (proxy restart: segment break, never a
+    negative delta), or when nothing advanced (``_merge_proxy_summary`` repeats last-good totals
+    on a bad poll, and an idle proxy submits nothing — don't write empty rows every cycle)."""
+    if last_totals is None or any(current_totals[k] < last_totals[k] for k in _SHARE_STAT_KEYS):
+        return None, current_totals
+    deltas = {k: current_totals[k] - last_totals[k] for k in _SHARE_STAT_KEYS}
+    if not any(deltas.values()):
+        return None, current_totals
+    return deltas, current_totals
+
+
 def _shares_to_record(last_known_total, current_total):
     """How many P2Pool shares to record this poll, plus the new baseline, from the previous and
     current cumulative ``shares_found`` counters. P2Pool's stratum reports a CUMULATIVE counter and
@@ -366,6 +388,9 @@ class DataService:
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
         )
+        # Share-health delta baseline (#116): the previous poll's cumulative proxy /summary
+        # totals; None until the first poll seeds it (and again after a counter reset).
+        self._last_share_totals = None
         # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
         # None until the wallet is first entered. Drives the daily re-register cadence below.
         self._xvb_last_registered = None
@@ -419,8 +444,12 @@ class DataService:
         # Notifications-only Telegram alerter (Issue #121). Consumes the loop's existing edges
         # (node down/recovered, sync gate open) plus a debounced per-worker presence tracker.
         # Disabled unless telegram.enabled + bot_token + chat_id are configured, so this is a
-        # cheap no-op for the default stack.
-        self.alert_service = AlertService()
+        # cheap no-op for the default stack. The payout-wallet tripwire baseline (#375) is backed
+        # by the SQLite kv_store, not AlertService memory — `apply` recreates this container, and
+        # an in-memory baseline would silently re-seed to a tampered wallet.
+        self.alert_service = AlertService(
+            kv_get=self.state_manager.get_kv, kv_set=self.state_manager.set_kv
+        )
         # Hashrate-degradation detector (Issue #99): flags a sustained total-hashrate drop and its
         # recovery. Runs every cycle (cheap, self-contained EMA baseline) so it can mark the chart
         # even with Telegram off; a loss also drives a hashrate_loss alert.
@@ -676,6 +705,19 @@ class DataService:
                     except Exception as e:
                         logger.error(f"Proxy Summary Fetch Error: {e}")
 
+                    # 2c. Persist this poll's share-health deltas (#116): what the cumulative
+                    # counters gained since the last poll, reset-safe and skipping all-zero rows
+                    # (see _summary_deltas). Feeds the reject-rate trend + high_reject_rate alert.
+                    if proxy_summary:
+                        deltas, self._last_share_totals = _summary_deltas(
+                            self._last_share_totals,
+                            {k: proxy_summary.get(k, 0) or 0 for k in _SHARE_STAT_KEYS},
+                        )
+                        if deltas:
+                            await asyncio.to_thread(
+                                self.state_manager.add_share_stats, time.time(), **deltas
+                            )
+
                     # 3. Augment with Direct Worker Stats (Uptime, Hashrate) via Local API
                     tasks = [worker_client.get_stats(w["ip"], w["name"]) for w in proxy_workers]
                     worker_results = await asyncio.gather(*tasks)
@@ -821,6 +863,12 @@ class DataService:
                         if self.alert_service.enabled
                         else None
                     )
+                    # Per-container restart/health snapshot for the crash-loop/unhealthy alert
+                    # (#337) — 9 inspect calls against the read-only docker-proxy, skipped
+                    # entirely while Telegram is off (same cost discipline as alert_metrics).
+                    container_states = (
+                        await get_container_health() if self.alert_service.enabled else {}
+                    )
                     await self.alert_service.process(
                         monero_down=monero_down,
                         tari_down=tari_down,
@@ -849,6 +897,22 @@ class DataService:
                         # threshold. avx2 is badge-only (no alert), so it isn't passed here.
                         hugepages_reserved=(hugepages[0] != "Disabled"),
                         low_ram=(0 < (memory.get("total_gb") or 0) < LOW_RAM_GB),
+                        # Trailing-1h reject rate from the delta series (#116); None while no
+                        # shares were submitted in the window, which the edge treats as "no
+                        # verdict" rather than healthy.
+                        reject_rate_1h=share_reject_pct(self.state_manager.get_share_stats(), 3600),
+                        # Payout-wallet tripwire (#375): what p2pool itself reports mining to —
+                        # the same stratum field the dashboard's Stratum card shows — with the
+                        # env address as fallback while p2pool is down/restarting. Empty => no-op.
+                        observed_wallet=stratum_raw.get("wallet") or MONERO_WALLET_ADDRESS,
+                        # Block-found / payout-found edges (#336): p2pool's cumulative pool-wide
+                        # block counter and the height of the last one. 0 while the stats file is
+                        # missing/unparsable, which the edge treats as a silent rebaseline.
+                        blocks_found_total=pool_local.get("blocks_found", 0) or 0,
+                        block_height=pool_local.get("last_block_found", 0) or 0,
+                        # Container crash-loop / stuck-unhealthy edges (#337), read above from
+                        # the read-only docker-proxy.
+                        containers=container_states,
                     )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).

@@ -195,6 +195,36 @@ FIXTURE='{"stratum":{"conns":0,"total_hashes":0}}'
 if _pred_hashes_flowing; then it_fail "_pred_hashes_flowing false when hashes==0" "passed on 0"; else it_pass "_pred_hashes_flowing false when hashes==0"; fi
 FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
 
+echo "== _pred_db_healthy_is: gates on the top-level db_healthy flag (#202) =="
+FIXTURE='{"db_healthy":true}'
+if _pred_db_healthy_is true; then it_pass "_pred_db_healthy_is true on a healthy flag"; else it_fail "_pred_db_healthy_is true on a healthy flag" "returned non-zero on db_healthy:true"; fi
+if _pred_db_healthy_is false; then it_fail "_pred_db_healthy_is holds the false edge on a healthy flag" "passed on db_healthy:true"; else it_pass "_pred_db_healthy_is holds the false edge on a healthy flag"; fi
+# Boolean false must read as the real false edge — jq_get's `values` keeps it (a `// empty`
+# fallback would swallow it and the fault wait would never trip).
+FIXTURE='{"db_healthy":false}'
+if _pred_db_healthy_is false; then it_pass "_pred_db_healthy_is true on an unhealthy flag"; else it_fail "_pred_db_healthy_is true on an unhealthy flag" "returned non-zero on db_healthy:false"; fi
+# A payload missing the key entirely must match NEITHER edge — absent is not evidence.
+FIXTURE='{"sync":{}}'
+if _pred_db_healthy_is true; then it_fail "_pred_db_healthy_is holds when the key is missing" "passed on a missing key"; else it_pass "_pred_db_healthy_is holds when the key is missing"; fi
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
+
+echo "== _pred_share_stats_nonempty: gates on .share_stats rows (#116) =="
+FIXTURE='{"share_stats":[{"total":10,"rejected":0}]}'
+if _pred_share_stats_nonempty; then it_pass "_pred_share_stats_nonempty true on a populated series"; else it_fail "_pred_share_stats_nonempty true on a populated series" "returned non-zero on 1 row"; fi
+# Empty right after a dashboard recreate — the gate must hold so callers keep polling.
+FIXTURE='{"share_stats":[]}'
+if _pred_share_stats_nonempty; then it_fail "_pred_share_stats_nonempty false on an empty series" "passed on []"; else it_pass "_pred_share_stats_nonempty false on an empty series"; fi
+# A payload missing the key entirely must not pass — absent is not evidence.
+FIXTURE='{"sync":{}}'
+if _pred_share_stats_nonempty; then it_fail "_pred_share_stats_nonempty false when the key is missing" "passed on a missing key"; else it_pass "_pred_share_stats_nonempty false when the key is missing"; fi
+FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
+
+echo "== metrics_has_pithead_sample: samples vs comments (#379) =="
+if metrics_has_pithead_sample $'# HELP pithead_workers_online Workers online\npithead_workers_online 2'; then it_pass "sample line counts"; else it_fail "sample line counts" "missed a real sample"; fi
+# '# HELP pithead_…' alone is a registered route with no data — must NOT count.
+if metrics_has_pithead_sample '# HELP pithead_workers_online Workers online'; then it_fail "comment-only body does not count" "passed on HELP-only"; else it_pass "comment-only body does not count"; fi
+if metrics_has_pithead_sample ''; then it_fail "empty body does not count" "passed on empty"; else it_pass "empty body does not count"; fi
+
 echo "== dispatch loop: a stdin-draining child must not skip iterations =="
 # Reproduces the matrix bug class: an ssh inside `while read … done < <(…)` that inherits stdin
 # drains the loop and silently runs only the first scenario. The guard is `</dev/null` on the

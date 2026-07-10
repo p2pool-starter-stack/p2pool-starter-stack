@@ -27,7 +27,16 @@
       "variant": "ok"
     }
   ],
+  "cadence": {
+    "available": false,
+    "last_block": "Never",
+    "luck": "\u2014",
+    "since_block": "\u2014",
+    "tts": "\u2014",
+    "weight": "0"
+  },
   "chart": {
+    "events": [],
     "p2pool": [
       {
         "x": 1735689000000,
@@ -63,10 +72,12 @@
     "available": false,
     "block_reward": "0.0000 XMR",
     "coeff_day": 0.0,
-    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout) and Tari merge-mining. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
+    "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is earned alongside the XMR by the same hashrate (merge-mining), and its estimate assumes the merge-mine channel stays connected. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
     "p2pool_hr": 8050.0,
     "p2pool_hr_str": "8.05 kH/s",
-    "pool_difficulty": 0
+    "pool_difficulty": 0,
+    "tari_available": false,
+    "tari_coeff_day": 0.0
   },
   "egress": {
     "components": [
@@ -135,6 +146,14 @@
           {
             "route": "tor",
             "to": "update check (github)"
+          },
+          {
+            "route": "inactive",
+            "to": "Healthchecks.io ping"
+          },
+          {
+            "route": "inactive",
+            "to": "Telegram bot"
           }
         ],
         "firewalled": false,
@@ -193,7 +212,7 @@
     "reward": "0.0000 XMR",
     "ts": "Never"
   },
-  "page_title": "Mining Dashboard",
+  "page_title": "Pithead Dashboard",
   "pool": {
     "blocks": 0,
     "diff": "0.00 M",
@@ -225,6 +244,8 @@
     "label": "No"
   },
   "range": "all",
+  "reject_pct_24h": "\u2014",
+  "share_stats": [],
   "shares_window": {
     "count": 1,
     "ok": true
@@ -354,6 +375,20 @@
         "kind": "egress",
         "label": "XvB stats",
         "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "Healthchecks ping",
+        "route": "inactive",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "Telegram bot",
+        "route": "inactive",
         "to": "tor"
       },
       {
@@ -503,8 +538,6 @@
       "accepted": 1200,
       "accepted_str": "1,200",
       "api_ok": null,
-      "h10": 0,
-      "h10_str": "0.00 H/s",
       "h15": 0,
       "h15_str": "0.00 H/s",
       "h60": 0,
@@ -525,8 +558,6 @@
       "accepted": 800,
       "accepted_str": "800",
       "api_ok": null,
-      "h10": 0,
-      "h10_str": "0.00 H/s",
       "h15": 0,
       "h15_str": "0.00 H/s",
       "h60": 0,
@@ -543,5 +574,16 @@
       "uptime": 0,
       "uptime_str": "0m 0s"
     }
-  ]
+  ],
+  "xvb_calc": {
+    "current_tier": "None",
+    "enabled": true,
+    "max_fraction": 0.85,
+    "mode_note": null,
+    "note": "An XvB tier is raffle status, not an XMR payout. Donated hashrate earns no P2Pool shares; holding a tier costs about its threshold in continuous donation (XvB qualifies a tier on both the 1h and 24h credited averages), and donating above the threshold adds nothing \u2014 the raffle winner is drawn at random among qualifiers.",
+    "sustainable": false,
+    "target_threshold": 0.0,
+    "target_tier": "None",
+    "tiers": []
+  }
 }

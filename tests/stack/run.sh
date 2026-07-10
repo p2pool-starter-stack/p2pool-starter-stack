@@ -151,6 +151,89 @@ assert_eq "setup is quiet: bind narrowed to a LAN IP" "$out" ""
 out="$(STRATUM_BIND=192.168.1.5 PATH="$IPBIN:$PATH" run_sourced "$SANDBOX" check_stratum_exposure doctor 2>&1)"
 assert_contains "doctor OK: bind narrowed to a LAN IP" "$out" "not all interfaces"
 
+echo "== unit: doctor runtime checks — egress firewall / stratum listening / dashboard probe (#383) =="
+# Each check degrades to an info skip on every can't-check path and only judges what it confirmed.
+# Stub the whole toolchain: docker answers the running-container filter from RUNNING_CONTAINERS,
+# sudo denies via SUDO_DENY or execs through to the iptables stub (tag presence via IPT_TAGGED),
+# ss prints SS_OUT, curl exits CURL_RC.
+DRBIN="$SANDBOX/drbin"
+mkdir -p "$DRBIN"
+cat >"$DRBIN/docker" <<'EOF'
+#!/usr/bin/env bash
+name=$(printf '%s' "$*" | sed -n 's/.*name=\^\([a-z-]*\)\$.*/\1/p')
+case " ${RUNNING_CONTAINERS:-} " in *" $name "*) echo cid123 ;; esac
+exit 0
+EOF
+cat >"$DRBIN/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "${SUDO_DENY:-0}" = "1" ] && exit 1
+[ "$1" = "-n" ] && shift
+exec "$@"
+EOF
+cat >"$DRBIN/iptables" <<'EOF'
+#!/usr/bin/env bash
+if [ "${IPT_TAGGED:-0}" = "1" ]; then
+    echo '-A DOCKER-USER -m comment --comment "pithead-tor-egress" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
+else
+    echo '-P DOCKER-USER ACCEPT'
+fi
+EOF
+cat >"$DRBIN/ss" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${SS_OUT:-}"
+EOF
+cat >"$DRBIN/curl" <<'EOF'
+#!/usr/bin/env bash
+exit "${CURL_RC:-0}"
+EOF
+chmod +x "$DRBIN"/*
+
+# container_is_running: filter answered vs not.
+RUNNING_CONTAINERS="tor" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" container_is_running tor
+assert_rc "container_is_running: running container" "$?" "0"
+RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" container_is_running tor
+assert_rc "container_is_running: stopped container" "$?" "1"
+
+# Egress firewall: opted out -> info skip (reads the toggle from .env).
+echo "TOR_EGRESS_FIREWALL=false" >"$SANDBOX/.env"
+out="$(RUNNING_CONTAINERS="tor" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: opted out -> info" "$out" "opted out"
+rm -f "$SANDBOX/.env"
+# Stack down (tor not running) -> info skip: rules are legitimately absent after 'down'.
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: stack down -> info" "$out" "isn't running"
+# Running + tagged rules present -> OK.
+out="$(RUNNING_CONTAINERS="tor" IPT_TAGGED=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: rules installed -> OK" "$out" "installed"
+# Running + rules ABSENT -> FAIL (the post-reboot gap this check exists for).
+out="$(RUNNING_CONTAINERS="tor" IPT_TAGGED=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: rules missing -> FAIL" "$out" "MISSING"
+# sudo -n denied -> info skip with the manual command, never a prompt or a false FAIL.
+out="$(RUNNING_CONTAINERS="tor" SUDO_DENY=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check: no passwordless sudo -> info" "$out" "passwordless sudo"
+
+# Stratum listening: proxy not running -> info (a sync hold must not FAIL).
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: proxy down -> info" "$out" "isn't running"
+# Running + a :3333 listener -> OK.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 0.0.0.0:3333 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: listening -> OK" "$out" "workers can connect"
+# An IPv6-only listener ([::]:3333, what ss reports on a dual-stack box) must also read OK —
+# pins the ':3333 ' match against the bracketed v6 local-address format.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 [::]:3333 [::]:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: IPv6 listener -> OK" "$out" "workers can connect"
+# Running + nothing on :3333 -> FAIL.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: nothing on :3333 -> FAIL" "$out" "NOTHING is listening"
+
+# Dashboard probe: container running + app answers -> OK; running + no answer -> WARN (not FAIL).
+out="$(RUNNING_CONTAINERS="dashboard" CURL_RC=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
+assert_contains "dashboard probe: answers -> OK" "$out" "answers on 127.0.0.1:8000"
+out="$(RUNNING_CONTAINERS="dashboard" CURL_RC=22 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
+assert_contains "dashboard probe: no answer -> WARN" "$out" "WARN"
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
+assert_contains "dashboard probe: container down -> info" "$out" "isn't running"
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0" >/dev/null 2>&1
 assert_rc "accepts 0.0.0.0" "$?" "0"
@@ -1919,6 +2002,60 @@ while IFS= read -r ev; do
         "$compose_text" "TELEGRAM_EVENT_$up="
 done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
 
+echo "== black-box: payout-wallet change needs a typed confirm (#375) =="
+# Swapping the payout wallet is the highest-value tamper: apply must demand the first 8 chars of
+# the new address typed back (a pasted 'y' can't wave it through), while -y keeps automation alive.
+WALLET2="4$(printf 'B%.0s' $(seq 94))" # a second valid mainnet primary; first 8 chars = 4BBBBBBB
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)" # baseline .env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" >"$V/config.json"
+# (1) A bare 'y' — the old destructive confirm — must NOT pass; .env stays untouched.
+out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+rc=$?
+assert_rc "wallet change with 'y' aborts cleanly" "$rc" "0"
+assert_contains "wallet prompt shows the new address's first 8 chars" "$out" "(4BBBBBBB)"
+assert_contains "wallet change cancelled" "$out" "Apply cancelled"
+assert_eq "wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+# The preview/prompt never echoes the full new address (only its first 8 chars).
+assert_not_contains "full new address not echoed by apply" "$out" "$WALLET2"
+# (2) Typing the first 8 chars confirms and applies.
+out="$(cd "$V" && printf '4BBBBBBB\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "typed confirm applies" "$?" "0"
+assert_eq "wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
+# (3) -y still bypasses the prompt for automation.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1 </dev/null)"
+assert_rc "apply -y skips the typed confirm" "$?" "0"
+assert_eq "wallet updated with -y" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+
+# A TARI-only wallet change demands the same typed confirm (the suite above only drove Monero).
+TARI2="TARITARITARI2" # first 8 chars = TARITARI
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" "$TARI2" >"$V/config.json"
+out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "tari wallet change with 'y' aborts cleanly" "$?" "0"
+assert_contains "tari wallet prompt shows the new address's first 8 chars" "$out" "(TARITARI)"
+assert_eq "tari wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "T"
+out="$(cd "$V" && printf 'TARITARI\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "tari typed confirm applies" "$?" "0"
+assert_eq "tari wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
+
+# BOTH wallets changing in one apply needs TWO typed confirms — one prefix must never wave both
+# through (env_changed_keys sorts, so Monero prompts first, then Tari).
+TARI3="TARIXTARIX3" # first 8 chars = TARIXTAR
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" "$TARI3" >"$V/config.json"
+out="$(cd "$V" && printf '4BBBBBBB\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "both-wallet change with one prefix aborts cleanly" "$?" "0"
+assert_contains "both-wallet change prompts for the Monero prefix" "$out" "(4BBBBBBB)"
+assert_contains "both-wallet change prompts for the Tari prefix too" "$out" "(TARIXTAR)"
+assert_contains "both-wallet change with one prefix is cancelled" "$out" "Apply cancelled"
+assert_eq "monero wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
+assert_eq "tari wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
+out="$(cd "$V" && printf '4BBBBBBB\nTARIXTAR\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_rc "both typed confirms apply" "$?" "0"
+assert_eq "monero wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
+assert_eq "tari wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI3"
+
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
@@ -1936,6 +2073,31 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"ping_url":"https://hc-ping.com/abc"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "healthchecks ping_url propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
+
+echo "== unit+black-box: secret files are owner-only from creation (#368) =="
+# The subshell umask must make the secret-bearing files 600 from the FIRST byte — a chmod after
+# the write leaves a world-readable window on a shared host, and a silently failed chmod used to
+# leave them 644 forever. The mv shim captures the credential temp file's mode BEFORE it lands on
+# config.json, proving the mode at creation, not just the end state.
+# GNU form first: `stat -c` errors cleanly on BSD/macOS, so the `||` fallback fires there. The
+# reverse order is wrong — on Linux `stat -f` is a VALID flag (filesystem status) that succeeds
+# with the wrong output, so the fallback never runs and CI (Linux) reads garbage.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+PB="$SANDBOX/perm368"
+mkdir -p "$PB/bin"
+printf '{ "monero": {} }\n' >"$PB/config.json"
+cat >"$PB/bin/mv" <<'EOF'
+#!/usr/bin/env bash
+stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null # GNU form first (see file_mode note)
+exec /usr/bin/mv "$@" # absolute path — a bare `mv` re-resolves to this stub and loops forever
+EOF
+chmod +x "$PB/bin/mv"
+out="$( (umask 022 && PATH="$PB/bin:$PATH" run_sourced "$PB" persist_node_credentials user secret))"
+assert_eq "credential temp file is 600 at creation (umask 022)" "$out" "600"
+assert_eq "config.json is 600 after credential persist" "$(file_mode "$PB/config.json")" "600"
+# Black-box: a full apply under the default umask must leave .env owner-only.
+out="$( (cd "$V" && umask 022 && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1))"
+assert_eq ".env is owner-only after apply (umask 022)" "$(file_mode "$V/.env")" "600"
 
 echo "== black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level) =="
 # stratum_password "auto" generates + persists a stable secret and surfaces it for rigs; an explicit

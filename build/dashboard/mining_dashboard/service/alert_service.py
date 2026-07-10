@@ -12,10 +12,16 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TELEGRAM_EVENTS,
 )
+from mining_dashboard.service.container_health import ContainerHealthMonitor
 from mining_dashboard.service.telegram_notifier import TelegramNotifier
 from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
 logger = logging.getLogger("AlertService")
+
+# Trailing-1h reject rate (percent) above which the high_reject_rate alert fires (#116). Matches
+# the dashboard's presentational _REJECT_FLAG_RATE (5%) so the alert and the on-screen warning
+# flag agree on what "high" means.
+REJECT_ALERT_PCT = 5.0
 
 
 def build_default_notifier():
@@ -61,6 +67,24 @@ class AlertService:
       corrupts monerod's DB mid-write.
     - **DB write failing** — ``StateManager.is_db_healthy`` flipping false (#131): the dashboard
       keeps serving but history/shares/stats stop persisting.
+    - **high reject rate** — the trailing-1h reject rate (from the persisted per-poll share
+      deltas, #116) crossing ``REJECT_ALERT_PCT``: sustained rejects waste hashrate (bad
+      overclock, clock drift, flaky network). Recovers when the rate drops back below.
+    - **payout wallet changed** — the wallet p2pool actually mines to differing from the
+      kv_store baseline (#375): the highest-value tamper against the stack. Fires on every
+      change, including a legitimate ``pithead apply`` — a confirmation, not only an intrusion
+      signal. Addresses are truncated to 8 chars; the full address never leaves the host.
+    - **block found / payout incoming** — p2pool's cumulative ``totalBlocksFound`` counter
+      advancing (#336): the sidechain found a Monero block (pool-wide good news), plus a second
+      alert when this node held a PPLNS share at that poll — PPLNS pays every miner with a share
+      in the window, so that block pays *you*. Good news, not incidents — never tallied in the
+      daily incident log.
+    - **container crash-loop / unhealthy / recovered** — a debounced
+      :class:`ContainerHealthMonitor` over the per-container inspect snapshots from the
+      read-only docker-proxy (#337): a stack container restarting repeatedly (OOM, bad config)
+      or stuck failing its healthcheck. Keys ONLY off restart deltas / ``restarting`` /
+      ``health=="unhealthy"`` — never off "exited", because the stack stops p2pool and
+      xmrig-proxy on purpose (#35/#31).
 
     Edge state is seeded silently on the first observation (``None`` baselines), so a dashboard
     restart can't replay a stale transition as a fresh alert. The exception is the persistent
@@ -92,6 +116,11 @@ class AlertService:
     EVT_HASHRATE_LOSS = "hashrate_loss"
     EVT_HUGEPAGES = "hugepages"
     EVT_LOW_RAM = "low_ram"
+    EVT_WALLET_CHANGED = "wallet_changed"
+    EVT_HIGH_REJECT_RATE = "high_reject_rate"
+    EVT_BLOCK_FOUND = "block_found"
+    EVT_PAYOUT_FOUND = "payout_found"
+    EVT_CONTAINER_UNHEALTHY = "container_unhealthy"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -101,15 +130,40 @@ class AlertService:
         "left": (EVT_WORKER_LEFT, "\U0001f44b Worker left: {name}"),
     }
 
+    # ContainerHealthMonitor edge -> (event key, message template). One toggle for all three
+    # edges (#337) — problem and recovery are the same conversation.
+    _CONTAINER_EDGES = {
+        "crash_loop": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f534 \U0001f4e6 Container {name} is crash-looping — restarting repeatedly "
+            "(OOM or bad config?). Check: docker logs {name}",
+        ),
+        "unhealthy": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f7e0 \U0001f4e6 Container {name} is running but unhealthy — its healthcheck "
+            "keeps failing.",
+        ),
+        "recovered": (
+            EVT_CONTAINER_UNHEALTHY,
+            "\U0001f7e2 \U0001f4e6 Container {name} recovered.",
+        ),
+    }
+
     def __init__(
         self,
         notifier=None,
         worker_monitor=None,
+        container_monitor=None,
         host_label=HOST_IP,
         daily_time=TELEGRAM_DAILY_SUMMARY_TIME,
+        kv_get=None,
+        kv_set=None,
     ):
         self.notifier = notifier if notifier is not None else build_default_notifier()
         self.workers = worker_monitor if worker_monitor is not None else WorkerPresenceMonitor()
+        self.containers = (
+            container_monitor if container_monitor is not None else ContainerHealthMonitor()
+        )
         # Once-daily digest: target local minute-of-day (HH:MM → h*60+m), and the day we last sent
         # (so it fires once per day). A malformed time disables it.
         self._daily_target_min = _parse_hhmm(daily_time)
@@ -128,6 +182,13 @@ class AlertService:
         self._prev_xvb_reg = None
         self._prev_update_available = None
         self._prev_hashrate_low = None
+        self._prev_reject_high = None
+        self._prev_blocks_found = None
+        # Two-step rebaseline for the block counter (#336): a backwards move (p2pool restart, or
+        # a partially-written stats file briefly reading 0) arms this; the NEXT observation then
+        # seeds the baseline silently. Without it, the transient 7→0→7 glitch would read the
+        # restored 7 as "found 7 blocks".
+        self._blocks_rebaselining = False
         # Persistent host-perf advisories (#104): unlike the transient edges above, these fire on the
         # FIRST observation of the problem (a stable low-RAM box would never "transition"), so their
         # baseline is "no problem" (False) rather than None — a problem present on the first cycle is
@@ -139,6 +200,13 @@ class AlertService:
         self._incidents = {}
         # One-shot "stack is online" ping, sent on the first cycle after the dashboard starts.
         self._announced_online = False
+        # Payout-wallet tamper tripwire (#375): the baseline lives in the SQLite kv_store, NOT in
+        # an in-memory `_prev_*` attr, because `pithead apply` recreates the dashboard container —
+        # exactly the moment an attacker swaps the wallet — and an in-memory baseline would
+        # silently re-seed to the attacker's address. Injected as callables so the edge stays
+        # unit-testable with a plain dict. Both None => the tripwire is off.
+        self._kv_get = kv_get
+        self._kv_set = kv_set
 
     @property
     def enabled(self):
@@ -163,10 +231,16 @@ class AlertService:
         low_hr_warning=False,
         hugepages_reserved=True,
         low_ram=False,
+        observed_wallet="",
+        reject_rate_1h=None,
+        blocks_found_total=0,
+        block_height=0,
+        containers=None,
         now=None,
     ):
-        """Pure: fold this cycle's signals into the list of ``(event_key, text)`` to send,
-        filtered to the events the operator left enabled."""
+        """Fold this cycle's signals into the list of ``(event_key, text)`` to send, filtered to
+        the events the operator left enabled. No I/O except the injected wallet-baseline kv
+        callables (#375), which tests back with a plain dict."""
         alerts = []
 
         # --- Stack online (one-shot on the first cycle after the dashboard starts) ---
@@ -214,9 +288,22 @@ class AlertService:
         else:
             self.workers.reset()
 
+        # --- Container crash-loop / stuck-unhealthy / recovered (#337) ---
+        # Driven by the read-proxy inspect snapshots; None = no data this cycle (collector
+        # skipped), which is no verdict — the monitor isn't fed, so streaks stay put.
+        if containers is not None:
+            for name, edge in self.containers.update(containers, now=now):
+                evt, template = self._CONTAINER_EDGES[edge]
+                if edge != "recovered":
+                    self._record_incident(self.EVT_CONTAINER_UNHEALTHY)
+                alerts.append((evt, self._fmt(template.format(name=name))))
+
         # --- Host health: data disk filling up, dashboard DB write failing ---
         alerts += self._disk_edges(disk_percent)
         alerts += self._db_edges(db_healthy)
+
+        # --- Payout-wallet tamper tripwire (#375) — kv-backed, so it survives container recreate ---
+        alerts += self._wallet_edges(observed_wallet)
 
         # --- Revenue / privacy: XvB PPLNS-share gate, clearnet-sync exposure ---
         alerts += self._xvb_share_edges(xvb_enabled, shares_in_window)
@@ -226,6 +313,10 @@ class AlertService:
         alerts += self._registration_edges(xvb_enabled, xvb_registration_state)
         alerts += self._release_edges(update_available)
         alerts += self._hashrate_low_edges(low_hr_warning)
+        alerts += self._reject_rate_edges(reject_rate_1h)
+
+        # --- Good news: the pool found a Monero block / that block pays this node (#336) ---
+        alerts += self._block_edges(blocks_found_total, block_height, shares_in_window)
 
         # --- Persistent host-perf advisories (#104): HugePages not reserved, low RAM ---
         alerts += self._advisory_edge(
@@ -329,6 +420,38 @@ class AlertService:
             (
                 self.EVT_DB_UNHEALTHY,
                 self._fmt("\U0001f7e2 \U0001f5c4️ Dashboard DB writes recovered."),
+            )
+        ]
+
+    def _wallet_edges(self, observed):
+        """Payout-wallet tamper tripwire (#375). ``observed`` is the wallet p2pool itself reports
+        mining to (stratum stats), with the env address as fallback — ground truth of where
+        rewards go. Baseline in the kv_store so an `apply`-driven container recreate can't wipe
+        it (that recreate IS the attack window). Empty/Unknown observations no-op: p2pool briefly
+        reports no wallet while restarting, and that must not read as "changed to ''" or re-seed.
+        The first-ever observation seeds silently. Only the first 8 chars of each address are
+        ever put in a message."""
+        if not observed or observed == "Unknown" or self._kv_get is None or self._kv_set is None:
+            return []
+        baseline = self._kv_get("payout_wallet")
+        if not baseline:
+            self._kv_set("payout_wallet", observed)
+            return []
+        if observed == baseline:
+            return []
+        old8, new8 = baseline[:8], observed[:8]
+        self._kv_set("payout_wallet", observed)
+        self._kv_set("payout_wallet_prev8", old8)  # for the dashboard banner's tooltip
+        self._kv_set("payout_wallet_changed_ts", time.time())
+        self._record_incident(self.EVT_WALLET_CHANGED)
+        return [
+            (
+                self.EVT_WALLET_CHANGED,
+                self._fmt(
+                    f"\U0001f6a8 Payout wallet CHANGED: {old8}… → {new8}… — if you did not do "
+                    "this, your rewards are being redirected. Check config.json and run "
+                    "'pithead status'."
+                ),
             )
         ]
 
@@ -476,6 +599,83 @@ class AlertService:
             )
         ]
 
+    def _reject_rate_edges(self, reject_rate_pct):
+        """Alert on the trailing-1h reject rate (from the #116 delta series) crossing
+        ``REJECT_ALERT_PCT``, and on it dropping back. ``None`` — no shares submitted in the
+        window (proxy idle or held) — is no verdict either way: stay quiet and drop the baseline
+        so resumed mining seeds fresh instead of replaying a stale edge."""
+        if reject_rate_pct is None:
+            self._prev_reject_high = None
+            return []
+        high = reject_rate_pct >= REJECT_ALERT_PCT
+        prev = self._prev_reject_high
+        self._prev_reject_high = high
+        if prev is None or high == prev:
+            return []
+        if high:
+            self._record_incident(self.EVT_HIGH_REJECT_RATE)
+            return [
+                (
+                    self.EVT_HIGH_REJECT_RATE,
+                    self._fmt(
+                        f"⚠️ ⛏️ High reject rate: {reject_rate_pct:.1f}% of shares rejected over "
+                        "the last hour — check the rigs' Workers table for the ⚠ flag (bad "
+                        "overclock, clock drift, flaky network)."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_HIGH_REJECT_RATE,
+                self._fmt(
+                    f"\U0001f7e2 ⛏️ Reject rate back to normal "
+                    f"({reject_rate_pct:.1f}% over the last hour)."
+                ),
+            )
+        ]
+
+    def _block_edges(self, blocks_found_total, block_height, shares_in_window):
+        """Alert when the pool's cumulative ``totalBlocksFound`` counter advances (#336): the
+        P2Pool sidechain found a Monero block. Pool-wide news; when this node also held a PPLNS
+        share at that poll, a second alert says the block pays *this* node (PPLNS pays every
+        miner with a share in the window on every pool block). The first observation seeds
+        silently (a dashboard restart must not replay the last block). A counter that went
+        backwards (p2pool restart, or the stats file briefly reading 0 mid-write) arms a
+        TWO-STEP rebaseline: the next observation seeds the baseline silently, whatever it is —
+        so a transient 7→0→7 blank never fires "found 7 blocks", while a genuine restart
+        (7→0→0→1) still fires for the 1. A burst between polls alerts once, with the count.
+        Good news, not incidents — never recorded in the daily incident log."""
+        if self._blocks_rebaselining:
+            self._blocks_rebaselining = False
+            self._prev_blocks_found = blocks_found_total
+            return []
+        prev = self._prev_blocks_found
+        if prev is not None and blocks_found_total < prev:
+            self._blocks_rebaselining = True
+            return []
+        self._prev_blocks_found = blocks_found_total
+        if prev is None or blocks_found_total <= prev:
+            return []
+        delta = blocks_found_total - prev
+        if delta > 1:
+            block_text = (
+                f"\U0001f389 ⛏️ P2Pool found {delta} Monero blocks! (latest height {block_height:,})"
+            )
+        else:
+            block_text = f"\U0001f389 ⛏️ P2Pool found a Monero block! (height {block_height:,})"
+        alerts = [(self.EVT_BLOCK_FOUND, self._fmt(block_text))]
+        if shares_in_window > 0:
+            alerts.append(
+                (
+                    self.EVT_PAYOUT_FOUND,
+                    self._fmt(
+                        f"\U0001f4b0 Payout incoming — you held {shares_in_window} PPLNS "
+                        "share(s) when the block was found."
+                    ),
+                )
+            )
+        return alerts
+
     def _advisory_edge(self, problem, attr, event, problem_text, recovery_text=None):
         """Persistent host-perf advisory (#104): fires once when ``problem`` is first observed true
         (including on the first cycle — a stable bad state must still alert, unlike the seed-silent
@@ -504,10 +704,19 @@ class AlertService:
         return f"[{self.host_label}] {text}" if self.host_label else text
 
     async def process(self, **signals):
-        """Evaluate this cycle's signals and dispatch any alerts. No-op (and cheap) when the
-        notifier is disabled. Each send runs off-thread so a slow Telegram call can't stall
-        the data loop. Returns the alerts that were dispatched (handy for tests/logging)."""
+        """Evaluate this cycle's signals and dispatch any alerts. Near-no-op when the notifier
+        is disabled — except the payout-wallet baseline (#375), which must persist every cycle
+        regardless: the dashboard's 72h tamper banner reads the kv keys ``_wallet_edges``
+        writes, and Telegram-off is the default stack. Each send runs off-thread so a slow
+        Telegram call can't stall the data loop. Returns the alerts that were dispatched
+        (handy for tests/logging)."""
         if not self.notifier.enabled:
+            try:
+                # Seed/update the kv baseline and change record; the returned alert (the
+                # Telegram message) is the only part that stays notifier-gated.
+                self._wallet_edges(signals.get("observed_wallet", ""))
+            except Exception as exc:  # never let the tripwire break the data loop
+                logger.debug("Wallet baseline update failed (%s)", type(exc).__name__)
             return []
         try:
             alerts = self.evaluate(**signals)

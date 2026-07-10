@@ -26,6 +26,7 @@ from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
     get_tier_info,
     pplns_block_time,
+    pplns_weight_in_window,
     resolve_target_threshold,
     shares_in_pplns_window,
     xvb_stats_are_stale,
@@ -95,6 +96,19 @@ class Metrics:
     # True when the xmrvsbeast.com fetch has gone quiet (#311) — credited 1h/24h are frozen,
     # so the UI greys them and the controller holds its split. Same predicate as the controller.
     xvb_stale: bool = False
+    # Pool cadence & luck (#84). Defaulted so direct Metrics(...) constructors needn't set them.
+    own_pplns_weight: float = 0.0  # sum of YOUR share difficulty in the window (not pool-wide)
+    last_block_ts: float = 0.0  # epoch secs of the pool's last found block; 0.0 = unknown
+    expected_share_sec: float = 0.0  # pool_difficulty / p2pool_1h; 0.0 when either is unknown
+    # Luck % = actual vs expected shares in the PPLNS window:
+    # expected = p2pool_1h * (pplns_window * block_time) / pool_difficulty;
+    # luck_pct = shares_in_window / expected * 100. >100% = running lucky. 0.0 when unknowable.
+    luck_pct: float = 0.0
+    # Tari merge-mining earnings inputs (#117), from p2pool's merge-mine stats file. Both 0 while
+    # Tari is inactive or still syncing — that IS the degradation signal (calculator shows "—").
+    # Defaulted so direct Metrics(...) constructors needn't set them.
+    tari_difficulty: float = 0.0  # Tari AUX-chain difficulty (not P2Pool sidechain, not Monero)
+    tari_reward: float = 0.0  # Tari block reward, XTM (collector converts p2pool's µT figure)
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -161,6 +175,23 @@ def build_metrics(latest_data, state_mgr, history=None):
     block_time = pplns_block_time(pool_type)
     pplns_window = local_pool.get("pplns_window", DEFAULT_PPLNS_WINDOW)
     shares_in_window = shares_in_pplns_window(data.get("shares", []), pplns_window, block_time)
+    own_pplns_weight = pplns_weight_in_window(data.get("shares", []), pplns_window, block_time)
+
+    # Cadence & luck (#84). Sidechain share difficulty is H·s, so diff/hashrate = expected seconds
+    # per share (the same formula the client's earnings calculator uses for time-to-share). Both
+    # figures need a real p2pool_1h (0 for the first samples after a wipe), a real pool
+    # difficulty AND a real PPLNS window — a partially-written stats file can carry the
+    # difficulty but not pplnsWindowSize (collector defaults it to 0), which would make
+    # expected_shares 0 and the luck division raise. Otherwise both stay 0.0 and the view
+    # layer hides them.
+    pool_difficulty = local_pool.get("difficulty", 0) or 0
+    if pool_difficulty > 0 and p2pool_1h > 0 and pplns_window > 0:
+        expected_share_sec = pool_difficulty / p2pool_1h
+        expected_shares = p2pool_1h * (pplns_window * block_time) / pool_difficulty
+        luck_pct = shares_in_window / expected_shares * 100
+    else:
+        expected_share_sec = 0.0
+        luck_pct = 0.0
 
     workers = data.get("workers", [])
     workers_online = sum(1 for w in workers if w.get("status") == "online")
@@ -192,7 +223,7 @@ def build_metrics(latest_data, state_mgr, history=None):
         block_time=block_time,
         pool_type=pool_type,
         pool_hashrate=local_pool.get("hashrate", 0) or 0,
-        pool_difficulty=local_pool.get("difficulty", 0) or 0,
+        pool_difficulty=pool_difficulty,
         network_difficulty=network.get("difficulty", 0) or 0,
         network_height=network.get("height", 0) or 0,
         global_syncing=bool(data.get("global_sync", False)),
@@ -200,9 +231,15 @@ def build_metrics(latest_data, state_mgr, history=None):
         tari=_sync_metric(data.get("tari_sync", {})),
         monero_mode=_monero_mode(),
         tari_mining=bool(data.get("tari", {}).get("active", False)),
+        tari_difficulty=data.get("tari", {}).get("difficulty", 0) or 0,
+        tari_reward=data.get("tari", {}).get("reward", 0) or 0,
         xvb_registered_at=xvb_stats.get("registered_at", 0) or 0,
         xvb_registration_state=xvb_stats.get("registration_state", "") or "",
         xvb_stale=bool(ENABLE_XVB and xvb_stats_are_stale(xvb_stats)),
+        own_pplns_weight=own_pplns_weight,
+        last_block_ts=local_pool.get("last_block_ts", 0) or 0,
+        expected_share_sec=expected_share_sec,
+        luck_pct=luck_pct,
     )
 
 
@@ -288,3 +325,20 @@ def _monero_mode():
     if MONERO_NODE_HOST == LOCAL_MONERO_HOST:
         return "Pruned" if MONERO_PRUNE else "Full"
     return "Unknown"
+
+
+def share_reject_pct(rows, window_sec, now=None):
+    """Trailing reject rate (percent) from the per-poll share-health deltas (#116).
+
+    ``rows`` are StateManager.get_share_stats() rows (per-interval deltas, ts-keyed). Sums the
+    accepted/rejected deltas over the trailing ``window_sec`` and returns
+    ``rejected / (accepted + rejected) * 100``, or ``None`` when the window has no submitted
+    shares (proxy idle or held) — callers must not read that as 0% healthy."""
+    cutoff = (now if now is not None else time.time()) - window_sec
+    accepted = rejected = 0
+    for r in rows:
+        if r["ts"] >= cutoff:
+            accepted += r.get("accepted", 0) or 0
+            rejected += r.get("rejected", 0) or 0
+    total = accepted + rejected
+    return (rejected / total * 100) if total > 0 else None
