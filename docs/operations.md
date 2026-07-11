@@ -10,11 +10,11 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead apply` | Preview and apply `config.json` changes. Warns before disruptive ones and recreates only what changed. `-y` / `--yes` skips the prompt. |
 | `./pithead up` | Start the stack. |
 | `./pithead down` | Stop the stack. |
-| `./pithead restart` | Restart the stack. |
+| `./pithead restart [tor]` | Restart the stack. `restart tor` restarts only the tor container so it picks fresh guards when Tor clearnet egress is stuck (#424) — every Tor circuit drops and rebuilds, mining onions included. See [Tor egress broken while mining works](#troubleshooting). |
 | `./pithead upgrade` | Re-render the generated config, then **pull** (release bundle) or **rebuild** (source checkout) the images and restart. Run after downloading a newer bundle or a `git pull`. |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
-| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus four runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, the dashboard app answers behind its container, and a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — restart the tor container to pick fresh guards). A paste-able health report. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus four runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, the dashboard app answers behind its container, and a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — fix with `./pithead restart tor`, or set `tor.auto_heal: true` to automate it). A paste-able health report. |
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped, passphrase-encrypted archive under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--no-encrypt` writes a plaintext `tar.gz`; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
@@ -49,7 +49,8 @@ stray argument), so run flagged commands separately.
 ### Tab completion
 
 `pithead-completion.bash` (in the repo root and the release bundle) completes subcommands for
-`./pithead <TAB>` and service names for `./pithead logs <TAB>`.
+`./pithead <TAB>`, service names for `./pithead logs <TAB>`, and `tor` for
+`./pithead restart <TAB>`.
 
 bash — add to `~/.bashrc`:
 
@@ -396,6 +397,26 @@ by P2Pool. Public "open node" endpoints don't qualify; use a node you run and co
 **HugePages shows as disabled / low.**
 Persistent HugePages require a GRUB change and a **reboot**. Re-run `./pithead setup` (without
 `--skip-optimize`) and reboot when prompted.
+
+**Tor egress broken while mining works.**
+Healthchecks reports the host down and Telegram commands go quiet, yet workers keep hashing.
+Tor can bootstrap to 100% and then sit on a **failing guard**: new circuits time out, so every
+feature that exits Tor to the clearnet — Healthchecks pings, the Telegram bot, XvB stats — breaks
+at once, while mining rides established onion circuits and keeps working. `./pithead doctor`
+confirms it: the Tor clearnet-egress check WARNs while everything else reads healthy. Fix:
+
+```bash
+./pithead restart tor
+```
+
+The restart makes Tor reselect guards; all Tor circuits drop and rebuild (p2pool/monerod re-peer
+on their own within minutes). Re-run `./pithead doctor` to confirm egress recovered. To have the
+stack do this itself, set `tor.auto_heal: true` in `config.json` and run `./pithead apply`: the
+dashboard then probes Tor clearnet egress every 5 minutes and restarts tor once egress has been
+broken for 15 minutes — at most 3 restarts per outage, 30 minutes apart, each logged and followed
+by a Telegram note once the path is back. If the Tor network itself is overloaded, it stops
+restarting and keeps warning instead. Off by default: a tor restart drops every circuit, so the
+stack does not restart its privacy boundary unbidden. (#424)
 
 **The dashboard data looks broken and you want a clean slate.**
 `./pithead reset-dashboard` wipes and recreates the dashboard and P2Pool data. This is

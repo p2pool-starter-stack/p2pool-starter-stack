@@ -13,6 +13,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
+  circuits time out, so every Tor-clearnet feature — Healthchecks pings, the Telegram bot, XvB
+  stats — breaks at once while mining (established onion circuits) keeps working. v1.3.1 added
+  the doctor check that detects this; this adds the heal. `./pithead restart tor` restarts only
+  the tor container so it picks fresh guards (the `restart` command now takes an optional `tor`
+  argument, tab-completed). Opt-in `tor.auto_heal: true` makes the dashboard do it automatically:
+  it probes Tor clearnet egress every 5 minutes (the doctor check's `generate_204`-through-SOCKS
+  probe) and restarts tor — through the same start/stop-only docker-control proxy as the #31
+  failover — once egress has been broken for 15 minutes. At most 3 restarts per outage, 30
+  minutes apart, every restart logged at WARNING and recovery followed by a one-time Telegram
+  note; if egress stays broken (the Tor network itself overloaded), it stops restarting and keeps
+  warning. Off by default: a tor restart drops all circuits, so the stack never restarts its
+  privacy boundary unbidden. The doctor WARN now names both fixes. See
+  [Operations › Troubleshooting](docs/operations.md#troubleshooting).
 - **Subcommand chaining + bash/zsh tab-completion (#94).** `./pithead apply upgrade` runs both
   commands in order, failing fast on the first non-zero step and reporting what did and didn't
   run. The whole chain is validated first: non-chainable commands (`setup`, `logs`, `restore`,
