@@ -4426,6 +4426,45 @@ assert_rc "apply with scattered data dirs succeeds" "$?" "0"
 assert_eq "no shared root -> dashboard default stays ./data/dashboard" \
     "$(run_sourced "$L" env_get_file "$L/.env" DASHBOARD_DATA_DIR)" "$L/data/dashboard"
 
+echo "== control channel: Telegram lifecycle verbs (#338) =="
+# The #33 runner dispatches the two bounded Telegram control verbs to FIXED pithead commands and
+# audits them; an unknown verb is rejected and no host command runs. PITHEAD_SELF points the runner
+# at a stub that only records the literal verb it was handed, so nothing real is applied/restarted.
+CC="$SANDBOX/ctrl338"
+mkdir -p "$CC/staged" "$CC/results" "$CC/audit"
+cat >"$CC/self" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >>"$SELF_LOG"
+exit 0
+EOF
+chmod +x "$CC/self"
+export SELF_LOG="$CC/self.log"
+export PITHEAD_SELF="$CC/self"
+uid_r="11111111-1111-4111-8111-111111111111"
+uid_a="22222222-2222-4222-8222-222222222222"
+uid_x="33333333-3333-4333-8333-333333333333"
+
+: >"$SELF_LOG"
+printf '{"id":"%s","action":"restart","actor":"tg-7"}\n' "$uid_r" >"$CC/req_r.json"
+run_sourced "$SANDBOX" control_process_request "$CC/req_r.json" "$CC" >/dev/null 2>&1
+assert_eq "restart intent runs the fixed 'restart' verb" "$(cat "$SELF_LOG")" "restart"
+assert_eq "restart result is applied" "$(jq -r .status "$CC/results/$uid_r.json")" "applied"
+assert_contains "restart is audited with the actor + action" \
+    "$(cat "$CC/audit/control.log")" '"actor":"tg-7","action":"restart","status":"applied"'
+
+: >"$SELF_LOG"
+printf '{"id":"%s","action":"apply","actor":"tg-7"}\n' "$uid_a" >"$CC/req_a.json"
+run_sourced "$SANDBOX" control_process_request "$CC/req_a.json" "$CC" >/dev/null 2>&1
+assert_eq "apply intent runs the fixed 'apply -y' verb (config re-apply, no edit)" "$(cat "$SELF_LOG")" "apply -y"
+assert_eq "apply result is applied" "$(jq -r .status "$CC/results/$uid_a.json")" "applied"
+
+: >"$SELF_LOG"
+printf '{"id":"%s","action":"frobnicate","actor":"tg-7"}\n' "$uid_x" >"$CC/req_x.json"
+run_sourced "$SANDBOX" control_process_request "$CC/req_x.json" "$CC" >/dev/null 2>&1
+assert_eq "unknown verb rejected (bounded action set)" "$(jq -r .error "$CC/results/$uid_x.json")" "unknown action"
+assert_eq "unknown verb never runs a host command" "$(cat "$SELF_LOG")" ""
+unset PITHEAD_SELF SELF_LOG
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

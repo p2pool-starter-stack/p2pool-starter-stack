@@ -13,6 +13,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Telegram control commands: `/restart` and `/apply` (#338).** The Telegram bot, until now
+  strictly read-only, can accept two commands that act on the host: `/restart` recreates the stack
+  and `/apply` re-applies the current on-disk config. Off by default (`telegram.control.enabled`)
+  and gated as a remotely-reachable control surface: honoured only from the numeric Telegram **user
+  ids** in `telegram.control.allowed_ids` (being in the chat, or knowing the bot token, is not
+  enough), and each command needs an explicit in-chat **confirmation** (an inline button) from the
+  same operator within `confirm_timeout` seconds — an unconfirmed command is **denied**, never
+  queued. The two verbs are the whole action set (no arbitrary execution), and they ride the same
+  host-control spool the config editor uses (#33) rather than a new privileged path: the root runner
+  validates and runs the fixed verb and audits the actor (`tg-<user-id>`) and outcome. Requires
+  `dashboard.control` (the spool + runner) and the read-only command bot; a config-*changing* apply
+  stays in the dashboard editor behind its default-deny allowlist. See
+  [Telegram › Control commands](docs/telegram.md#control-commands).
+
 - **Alert sinks beyond Telegram: generic JSON webhook + ntfy (#380).** Every alert the stack
   produces — node down/recovered, worker offline/joined/left, sync, disk, DB, XvB, clearnet
   exposure, blocks and payouts, the daily digest — can now also be pushed to a **generic JSON

@@ -123,6 +123,11 @@
         "daily_summary_time": "08:00",
         "commands": {
             "enabled": false
+        },
+        "control": {
+            "enabled": false,
+            "allowed_ids": [],
+            "confirm_timeout": 60
         }
     },
 

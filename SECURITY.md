@@ -62,8 +62,9 @@ The stack's defaults:
   default off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
   directory whose other legs (staged configs, results, the audit log) are host-owned and mounted
   read-only. A root systemd unit re-validates every intent with pithead's own config validation
-  and dispatches exactly three fixed actions (`apply --dry-run`, `apply -y`, and a release
-  upgrade); no string from the container is ever executed. The upgrade intent carries only the
+  and dispatches a fixed, small set of actions (`apply --dry-run` for a preview, `apply -y` for a
+  config commit, a release upgrade, and — for the Telegram control commands (#338) — a stack
+  `restart` and a config re-`apply`); no string from the container is ever executed. The upgrade intent carries only the
   version the operator confirmed: the runner re-derives the target itself from the GitHub release
   API (over the stack's Tor SOCKS), refuses any mismatch or non-release tag, and limits attempts
   to one per 10 minutes — the container cannot choose an image, tag, or registry. Enabling the
@@ -85,6 +86,32 @@ The stack's defaults:
   anonymous prober stored XSS against the operator. Both logs are size-bounded (Caddy's native
   rolling; a trim-before-append cap in the audit writer). Neither ever records a secret: Caddy
   redacts credential headers by default, and the audit writer logs key names only.
+
+### Telegram control commands (#338)
+
+The Telegram bot can accept two **control** commands, `/restart` and `/apply`, gated behind
+`telegram.control` (default off). This is a remotely-reachable control surface — a Telegram message
+is untrusted pre-auth input — so it fails closed at every step and adds **no new privileged path**:
+it is a thin client of the host-control channel above.
+
+- **Allow-list, not the chat.** A control command is honoured only from the numeric Telegram **user
+  ids** in `telegram.control.allowed_ids`; being in the configured chat is not enough, and the bot
+  token being known is not authorization. Any other sender is refused, logged, and dropped silently
+  (no reply — no oracle for who is authorised), and never earns a write into the host spool. An
+  empty allow-list disables the feature.
+- **Per-action confirmation, deny-on-timeout.** Each command requires an explicit in-chat
+  confirmation (an inline button carrying a one-time token) from the same operator that issued it,
+  within a timeout — transaction-signing semantics, so even a fully compromised dashboard session
+  cannot restart or re-apply without a human approving the exact action. An unconfirmed command is
+  **denied**, never queued; prompts are rate-limited so a compromised host can't fatigue the
+  operator into tapping approve.
+- **Bounded verbs, shared channel.** A message only selects one of two fixed verbs — there is no
+  arbitrary execution. Confirmed, the verb rides the same request spool the config editor uses; the
+  root runner validates and runs it and records the actor (`tg-<user-id>`) and outcome in the
+  host-side audit log. `telegram.control` therefore requires `dashboard.control` (the spool + runner)
+  and the read-only command bot; `apply` refuses to enable it otherwise. A **config-changing** apply
+  is deliberately not a Telegram command — config edits still go through the editor's default-deny
+  allowlist; `/apply` only re-applies the config already on the host.
 
 ### Secret trust boundary for dashboard config editing
 
