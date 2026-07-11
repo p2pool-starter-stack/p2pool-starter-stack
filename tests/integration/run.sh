@@ -1149,27 +1149,25 @@ _wait_control_status() { # <control-dir> <id> <exclude-status> <timeout>
     return 1
 }
 
-# Probe clearnet egress THROUGH the tor container's SOCKS — the exact curl the doctor check and the
-# #424 healer use (`--socks5-hostname` also resolves DNS through Tor). A 204 proves a working
-# clearnet exit; a timeout is the stuck-guard symptom. Runs on the box (the bench host reaches the
-# tor bridge IP, same as doctor).
-_tor_egress_ok() {
-    local prefix
-    prefix="$(env_on_box NETWORK_PREFIX)"
-    prefix="${prefix:-172.28.0}"
-    rx "curl -fsS --max-time 15 --socks5-hostname ${prefix}.25:9050 -o /dev/null https://www.google.com/generate_204 >/dev/null 2>&1"
-}
-
-# Poll _tor_egress_ok up to <timeout>s — after a restart, Tor has to bootstrap and build fresh
-# circuits before a clearnet request can complete.
-_wait_tor_egress() { # <timeout>
-    local timeout="${1:-120}" waited=0
-    while [ "$waited" -lt "$timeout" ]; do
-        _tor_egress_ok && return 0
-        sleep 10
-        waited=$((waited + 10))
-    done
-    return 1
+# Reach the dashboard onion from an INDEPENDENT external Tor client — its own tor + curl, its own
+# circuits, sharing nothing with the stack (tests/integration/tor-client/). It reaches the onion
+# over the REAL Tor network exactly as a remote user would, so a pass proves the whole inbound path
+# (hidden service published + reachable, client-auth key accepted, Caddy answering) from OUTSIDE the
+# trust boundary — using none of the stack's own SOCKS/plumbing. Returns 0 if Caddy answered (200 or
+# 401 — we deliberately don't hold the login, so its auth challenge counts as reachable). The client
+# key is piped pithead->container stdin entirely on the box: it never crosses to the harness, an ssh
+# argument, or `docker inspect`. Everything runs on the bench (it has docker + the Tor network).
+_onion_reachable_external() {
+    local onion
+    onion="$(env_on_box DASHBOARD_ONION_ADDRESS)"
+    [ -n "$onion" ] && [ "$onion" != "placeholder" ] || return 2
+    rx "docker build -q -t pithead-tor-client-test tests/integration/tor-client/ >/dev/null 2>&1" || return 3
+    # onion is [a-z2-7]{56}.onion (safe to embed); the client key stays on the box.
+    local snippet
+    snippet="line=\$(./pithead onion-client-key 2>/dev/null | grep -E 'descriptor:x25519:' | head -1);"
+    snippet="$snippet if [ -n \"\$line\" ]; then printf '%s\n' \"\$line\" | docker run -i --rm -e ONION_ADDR=$onion -e AUTH_STDIN=1 pithead-tor-client-test;"
+    snippet="$snippet else docker run --rm -e ONION_ADDR=$onion pithead-tor-client-test; fi"
+    rx "$snippet" | grep -q "PROBE-OK"
 }
 
 # Tier-4 hardening phase (#377/#33/#424): the v1.4 host-mutation + hardening surfaces that ONLY a
@@ -1201,30 +1199,39 @@ run_hardening() {
         fi
     done
 
-    # 2. Tor guard heal RECOVERY action (#424). The stuck-guard TRIGGER is guard-selection luck and
-    #    not reproducible, but the heal's action — restart tor — must bring the stack back: the
-    #    #278/#313 socat bridges + merge-mine gRPC re-establish, AND clearnet egress works again
-    #    through fresh circuits. We assert egress with the stack's own probe (curl a no-content
-    #    endpoint through the tor SOCKS), gated on a pre-restart baseline so a genuinely-bad live Tor
-    #    exit (outside our code, the exact #424 condition) can't false-fail the gate: we only assert
-    #    RECOVERY when egress was working to begin with.
-    it_step "checking clearnet egress through Tor before the restart (baseline)…"
-    local pre_egress=0
-    _wait_tor_egress 30 && pre_egress=1
-    it_step "restart tor (the #424 heal action) and verify the stack recovers…"
-    pithead restart tor >/dev/null 2>&1
-    wait_status_ok 240 || true
-    pithead status >/dev/null 2>&1
-    assert_rc "stack healthy after a tor restart (#424 heal action)" "$?" "0"
-    if [ "$pre_egress" = "1" ]; then
-        it_step "waiting for clearnet egress to recover through Tor's fresh circuits…"
-        if _wait_tor_egress 120; then
-            it_pass "clearnet egress works through Tor after the restart (#424)"
-        else
-            it_fail "clearnet egress works through Tor after the restart (#424)" "generate_204 through the Tor SOCKS never returned within 120s"
-        fi
+    # 2. The onion is reachable from OUTSIDE (privacy surface, #343/#360) and SURVIVES the #424 heal
+    #    action. An independent external Tor client (its own image/tor/circuits) fetches the dashboard
+    #    onion over the real Tor network — no stack SOCKS or plumbing involved. First a baseline; then
+    #    we restart tor (the heal's action — the stuck-guard TRIGGER is guard-selection luck and not
+    #    reproducible) and assert the onion comes back, proving tor rebuilt circuits + republished its
+    #    descriptor. Gated on the baseline so a genuinely-bad live Tor network can't false-fail the
+    #    gate: recovery is only asserted when the onion was reachable to begin with.
+    #    (Reachability is INBOUND; the clearnet-EXIT half of #424 is not externally observable and
+    #    stays with the doctor egress check, which is the stack self-checking its own egress.)
+    local pre_onion=0
+    if [ "$(env_on_box DASHBOARD_ONION_ADDRESS)" = "placeholder" ] || [ -z "$(env_on_box DASHBOARD_ONION_ADDRESS)" ]; then
+        it_warn "dashboard onion not provisioned on this box — skipping the external-reachability checks (#424/#343)"
     else
-        it_warn "egress was already down before the restart (a bad Tor exit is outside our code) — can't prove recovery, skipping the post-restart egress assertion (#424)"
+        it_step "external Tor client: reach the dashboard onion before the restart (baseline)…"
+        _onion_reachable_external && pre_onion=1
+        if [ "$pre_onion" = "1" ]; then
+            it_pass "dashboard onion reachable from an independent external Tor client (#343/#360)"
+        else
+            it_warn "dashboard onion not reachable from outside before the restart (live Tor network) — can't prove recovery, skipping the post-restart check (#424)"
+        fi
+        it_step "restart tor (the #424 heal action)…"
+        pithead restart tor >/dev/null 2>&1
+        wait_status_ok 240 || true
+        pithead status >/dev/null 2>&1
+        assert_rc "stack healthy after a tor restart (#424 heal action)" "$?" "0"
+        if [ "$pre_onion" = "1" ]; then
+            it_step "external Tor client: dashboard onion must come back after the restart…"
+            if _onion_reachable_external; then
+                it_pass "dashboard onion reachable from outside AFTER the tor restart (#424 recovery)"
+            else
+                it_fail "dashboard onion reachable from outside AFTER the tor restart (#424 recovery)" "external client could not reach the onion within the probe window"
+            fi
+        fi
     fi
 
     # 3. The #33 control channel end-to-end THROUGH THE REAL SYSTEMD PATH UNIT. Tier-1 runs
