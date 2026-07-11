@@ -161,6 +161,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
+  environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
+  file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
+  refused with "would be overwritten." Provisioning now forces a pristine tree (`checkout -f` +
+  `reset --hard` + `clean -fdx`, keeping the harness's `results/` and the gitignored
+  `config.json`/`.env`/`data/`/`backups/`). And the restore path ran `pithead apply/up` from
+  `CANONICAL_DIR`, but on a release box the live stack runs from a per-version bundle dir — so the
+  source checkout took over the `pithead` project with locally-built `:dev` images and Tari
+  crash-looped. Restore now targets the directory the live stack actually ran from, read at preflight
+  off the running container's `com.docker.compose.project.working_dir` label, and falls back to
+  `CANONICAL_DIR` only when the stack is down.
 - **The XvB donation controller no longer overshoots the target tier in steady state (#423).**
   During a split cycle the p2pool remainder dwell ended on its first 30-second check, because the
   dwell's early-exit asked "would we donate at all?" — a question the held split answers yes to by

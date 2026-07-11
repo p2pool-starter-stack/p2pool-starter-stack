@@ -160,6 +160,9 @@ on_miner() { ssh "${SSH_OPTS[@]}" "$MINER_HOST" "$1"; }
 SAFETY_ARCHIVE=""
 MINER_CFG_BACKUP=""
 RESTORED=0
+# Where the LIVE stack actually runs from — resolved in preflight (#454). Defaults to CANONICAL_DIR
+# so the EXIT trap always has a target even if it fires before preflight refines it.
+RESTORE_DIR="$CANONICAL_DIR"
 
 # --- Restore (runs on EXIT, even on failure / Ctrl-C) -----------------------
 restore_all() {
@@ -184,13 +187,16 @@ restore_all() {
         fi
     fi
 
-    # 2. Stack: stop the branch (e2e checkout) and bring the canonical baseline back up healthy.
-    step "bringing the canonical baseline stack ($CANONICAL_DIR) back up"
+    # 2. Stack: stop the branch (e2e checkout) and bring the LIVE baseline back up healthy. Restore
+    #    from RESTORE_DIR — the dir the live stack actually ran from (#454), which on a release box is a
+    #    per-version bundle dir, not CANONICAL_DIR. Restoring from the wrong dir hands the "pithead"
+    #    project locally-built :dev images.
+    step "bringing the baseline stack ($RESTORE_DIR) back up"
     on_bench "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
-    if on_bench "cd '$CANONICAL_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
-        wait_bench_healthy 300 && ok "canonical baseline stack healthy again" || warn "canonical stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
+    if on_bench "cd '$RESTORE_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
+        wait_bench_healthy 300 && ok "baseline stack healthy again" || warn "baseline stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
     else
-        warn "canonical 'pithead apply/up' returned non-zero — check $BENCH_HOST by hand."
+        warn "baseline 'pithead apply/up' returned non-zero in $RESTORE_DIR — check $BENCH_HOST by hand."
         warn "  Safety backup to roll back to: $SAFETY_ARCHIVE"
     fi
 
@@ -207,7 +213,7 @@ trap restore_all EXIT INT TERM
 wait_bench_healthy() { # <timeout_s>
     local deadline=$(($(date +%s) + ${1:-300}))
     while :; do
-        on_bench "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" && return 0
+        on_bench "cd '$RESTORE_DIR' && ./pithead status >/dev/null 2>&1" && return 0
         [ "$(date +%s)" -ge "$deadline" ] && return 1
         sleep 10
     done
@@ -269,6 +275,22 @@ preflight() {
     on_bench "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" &&
         ok "canonical stack is currently healthy" ||
         warn "canonical stack is NOT healthy right now — continuing, but check the box."
+    # Resolve where the LIVE stack actually runs from (#454). The "pithead" Compose project name is
+    # fixed, so exactly one project runs on the box; read its working_dir off a running container's
+    # label. On a release box that's a per-version bundle dir (e.g. /srv/code/pithead-v1.3.1), NOT
+    # CANONICAL_DIR — the restore must target it or it hands the project locally-built :dev images.
+    # Captured NOW, before deploy_branch rewrites the label to E2E_DIR.
+    local live_cid live_dir=""
+    live_cid="$(on_bench "docker ps -q --filter label=com.docker.compose.project=pithead 2>/dev/null | head -n1" || true)"
+    [ -n "$live_cid" ] && live_dir="$(on_bench "docker inspect --format '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' '$live_cid' 2>/dev/null" || true)"
+    if [ -n "$live_dir" ] && [ "$live_dir" != "$E2E_DIR" ] && on_bench "test -x '$live_dir/pithead'"; then
+        RESTORE_DIR="$live_dir"
+        [ "$RESTORE_DIR" = "$CANONICAL_DIR" ] &&
+            ok "live stack runs from $RESTORE_DIR" ||
+            warn "live stack runs from $RESTORE_DIR (not CANONICAL_DIR=$CANONICAL_DIR) — restore will target it (#454)."
+    else
+        warn "couldn't resolve the live stack's working dir — restore will use CANONICAL_DIR=$CANONICAL_DIR."
+    fi
     if [ "$BORROW_MINER" = "1" ]; then
         on_miner 'echo ok >/dev/null' || die "Cannot SSH to miner '$MINER_HOST' (use --no-miner to skip)."
         on_miner "test -f '$MINER_XMRIG_CONFIG'" || die "No xmrig config at $MINER_XMRIG_CONFIG on $MINER_HOST."
@@ -296,8 +318,14 @@ provision() {
         fi
         git -C '$E2E_DIR' remote set-url origin '$GIT_REMOTE_URL'
         git -C '$E2E_DIR' fetch --quiet origin '$BRANCH'
-        git -C '$E2E_DIR' checkout -q -B '$BRANCH' FETCH_HEAD
+        # The e2e checkout is DEDICATED and disposable, so force a pristine tree instead of assuming
+        # one (#454): drop stray untracked files (e.g. a leftover bench script) that would otherwise
+        # abort 'checkout' with \"would be overwritten\". clean skips gitignored paths (config.json/
+        # .env/data/backups), and -e keeps the harness's own results/ — so the shared chains and the
+        # rollback anchors are never touched. -x plus the excludes clears ignored build cruft too.
+        git -C '$E2E_DIR' checkout -q -f -B '$BRANCH' FETCH_HEAD
         git -C '$E2E_DIR' reset -q --hard FETCH_HEAD
+        git -C '$E2E_DIR' clean -qfdx -e /results -e /backups -e /data
     " || die "Failed to provision/checkout '$BRANCH' in $E2E_DIR."
     local head
     head="$(on_bench "git -C '$E2E_DIR' rev-parse --short HEAD")"
