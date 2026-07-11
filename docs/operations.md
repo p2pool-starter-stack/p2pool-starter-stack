@@ -250,6 +250,47 @@ so confirm yours is a `4…`/95-char address first (see [Configuration](configur
 
 ---
 
+## The deploy-box layout
+
+A box that installs each release into its own directory keeps code and data apart. This is the
+canonical layout — one parent directory holds the version dirs, a `current` symlink, and a shared
+data root:
+
+```
+~/mining/
+├── current -> pithead-v1.5.0      # the live install — maintained by setup/upgrade
+├── pithead-v1.5.0/                # code + config.json + generated config (.env, Caddyfile)
+├── pithead-v1.4.0/                # ONE previous version dir, kept for rollback
+└── data/                          # shared data root — survives every upgrade
+    ├── monero/  tari/  p2pool/  tor/
+    └── dashboard/                 # the dashboard database lives here too (see below)
+```
+
+- **`current`** — `./pithead setup` and `./pithead upgrade` update it (`ln -sfn`) whenever the
+  install directory is named `pithead-vX.Y.Z`; the dashboard's one-click upgrade runs the same
+  `upgrade` and moves it too. Only a *successful* upgrade moves the pointer, so `current` always
+  names the version that last came up. It is informational — the containers mount the absolute
+  paths in `.env` — but it makes the live install discoverable without `docker inspect`. Any
+  other directory name (a source checkout, a plain `pithead/` extract) leaves the symlink alone.
+- **Version dirs** — keep `current`'s target plus one older dir for rollback; delete anything
+  older. Each release lands in a fresh dir: extract the bundle, copy `config.json` and `.env`
+  from the previous dir, run `./pithead upgrade`. Rollback is the same two steps from the older
+  dir. The single-directory overlay under [Updating the stack](#updating-the-stack) also works;
+  the per-version layout is what a long-lived box converges to.
+- **Shared data root** — point `monero.data_dir`, `tari.data_dir`, `p2pool.data_dir`, and
+  `tor.data_dir` at absolute paths under one parent (here `~/mining/data`). When all four share
+  a parent, the dashboard database defaults there as well (`<root>/dashboard`) instead of inside
+  the version dir — no data moves with the code. Installs that pre-date this carry the dashboard
+  data at the old in-install default (`./data/dashboard`); the first `upgrade` (or `apply`)
+  moves it to the shared root automatically, stops the dashboard for the move, and verifies the
+  database arrived. An explicit `dashboard.data_dir` is never touched — a warning names the
+  leftover instead — and data at *both* locations stops the run rather than guessing which
+  database is live.
+- **Config archives** — `./pithead backup` writes under `backups/` inside the dir that ran it.
+  Before deleting an old version dir, keep any `backups/` archives you still want.
+
+---
+
 ## Backups
 
 State lives in the data directories (by default under `./data/`, or wherever each `*.data_dir`
