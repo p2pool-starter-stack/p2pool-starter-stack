@@ -128,6 +128,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
+- **The deploy-box layout is a product feature (#455).** `./pithead setup` and `./pithead upgrade`
+  now maintain a `current -> pithead-vX.Y.Z` symlink beside the install when the install directory
+  is version-named — one authoritative pointer to the live install, updated (`ln -sfn`) only on a
+  successful upgrade; the dashboard's one-click upgrade (#59) runs the same `upgrade` and moves it
+  too. The dashboard database also stops living inside the install directory: when the four other
+  `*.data_dir` share one parent, `dashboard.data_dir`'s default joins them there, and a one-time
+  migration in `upgrade`/`apply` moves data from the old `./data/dashboard` default (stop the
+  dashboard, move, verify the DB arrived; an explicit `dashboard.data_dir` is warned about and
+  left alone, and data at both locations stops the run instead of guessing). The canonical layout
+  — `current`, one rollback version dir, the shared data root — is documented in
+  [Operations › The deploy-box layout](docs/operations.md#the-deploy-box-layout), replacing the
+  hand-written per-box READMEs.
 - **`build/tor/Dockerfile`** now pins Alpine to a named minor version (`alpine:3.24`) alongside its
   digest, instead of the floating `latest` tag, so Dependabot has a real version line to track
   (#373).
