@@ -350,6 +350,25 @@ TELEGRAM_COMMANDS_ENABLED = (
     os.environ.get("TELEGRAM_COMMANDS_ENABLED", "false").strip().lower() == "true"
 )
 
+# Two-way control commands (#338): /restart and /apply, handled by the same bot. OFF by default and
+# independent of the read-only commands above. It rides the #33 host-control spool (so it also needs
+# DASHBOARD_CONTROL_ENABLED) and acts only for the allow-listed Telegram USER ids, each action gated
+# by an explicit in-chat confirmation that fails closed on timeout. Empty allow-list ⇒ inert (no id
+# can ever confirm). The bot token being known is NOT authorization. See telegram_commands.py.
+TELEGRAM_CONTROL_ENABLED = (
+    os.environ.get("TELEGRAM_CONTROL_ENABLED", "false").strip().lower() == "true"
+)
+# Allow-list of Telegram numeric user ids, rendered by pithead as a comma list; split on commas or
+# whitespace and kept as strings for exact equality against the id Telegram sends.
+TELEGRAM_CONTROL_ALLOWED_IDS = frozenset(
+    tok
+    for tok in re.split(r"[,\s]+", os.environ.get("TELEGRAM_CONTROL_ALLOWED_IDS", "").strip())
+    if tok
+)
+# Deny-on-timeout window (seconds): an issued control command must be confirmed within this, else it
+# is denied — never queued.
+TELEGRAM_CONTROL_CONFIRM_S = float(os.environ.get("TELEGRAM_CONTROL_CONFIRM_S", 60))
+
 
 def _telegram_event_enabled(name, default=True):
     """Read one per-event toggle from TELEGRAM_EVENT_<NAME> (rendered from config.json's

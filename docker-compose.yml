@@ -547,6 +547,12 @@ services:
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}
       - HASHRATE_DROP_MINUTES=${HASHRATE_DROP_MINUTES:-10}
       - TELEGRAM_COMMANDS_ENABLED=${TELEGRAM_COMMANDS_ENABLED:-false}
+      # Two-way control commands (#338): /restart, /apply through the #33 host-control spool. Off by
+      # default and gated to the allow-listed operator user ids below, each action confirmed in-chat
+      # with a deny-on-timeout window. Needs DASHBOARD_CONTROL_ENABLED (the spool + runner).
+      - TELEGRAM_CONTROL_ENABLED=${TELEGRAM_CONTROL_ENABLED:-false}
+      - TELEGRAM_CONTROL_ALLOWED_IDS=${TELEGRAM_CONTROL_ALLOWED_IDS:-}
+      - TELEGRAM_CONTROL_CONFIRM_S=${TELEGRAM_CONTROL_CONFIRM_S:-60}
       # --- Operator alerts: webhook + ntfy sinks (#380) ---
       # Push-only siblings of the Telegram alerter: every alert also POSTs as JSON to each
       # webhook URL and as plain text to the ntfy topic URL. Off by default (no URLs). The

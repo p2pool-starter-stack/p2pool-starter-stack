@@ -2517,6 +2517,25 @@ parse_and_validate_config() {
     if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_CLIENT_AUTH" != "true" ]; then
         error "dashboard.control.enabled is true on a published onion (dashboard.onion.enabled) but dashboard.onion.client_auth is false. A root-capable config-mutation channel must not sit behind only a brute-forceable password on an anonymously-reachable .onion. Set dashboard.onion.client_auth: true (the default) and re-run."
     fi
+
+    # Telegram two-way control commands (#338). Opt-in, default off. This is a REMOTELY-REACHABLE
+    # host-control surface, so it fails closed on every leg — refuse to enable it unless the whole
+    # chain is present:
+    #   - It rides the #33 spool + root runner, so dashboard.control.enabled must be on (the spool and
+    #     the systemd path unit that drains it only exist then); otherwise a /restart intent would
+    #     pile up unprocessed.
+    #   - The bot must actually be polling for commands (telegram.commands.enabled), which itself
+    #     needs telegram.enabled plus a bot_token and chat_id (guarded by the dashboard too).
+    #   - At least one allow-listed Telegram user id, or nobody could ever confirm an action and the
+    #     feature would be inert — better to say so at apply time than to fail silently at runtime.
+    if [ "$(normalize_bool "$(config_bool '.telegram.control.enabled' false)")" == "true" ]; then
+        [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] ||
+            error "telegram.control.enabled is true but dashboard.control.enabled is false. The Telegram /restart and /apply commands ride the #33 host-control spool, which only exists when the dashboard control channel is on. Enable dashboard.control (and its login) first, or turn telegram.control off."
+        [ "$(normalize_bool "$(config_bool '.telegram.commands.enabled' false)")" == "true" ] ||
+            error "telegram.control.enabled is true but telegram.commands.enabled is false. The control commands are handled by the same bot that answers the read-only commands — enable telegram.commands (and telegram itself) first."
+        [ "$(jq -r '(.telegram.control.allowed_ids // []) | length' "$CONFIG_FILE")" -gt 0 ] ||
+            error "telegram.control.enabled is true but telegram.control.allowed_ids is empty. A remotely-reachable host-control command must be gated to specific operator Telegram user ids — with none listed every command is refused. Add your numeric Telegram user id to telegram.control.allowed_ids."
+    fi
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
@@ -3161,6 +3180,13 @@ render_env() {
     tg_token=$(jq -r '.telegram.bot_token // empty' "$CONFIG_FILE")
     tg_chat=$(jq -r '.telegram.chat_id // empty' "$CONFIG_FILE")
     tg_commands=$(jq -r 'if .telegram.commands.enabled != null then .telegram.commands.enabled | tostring else "false" end' "$CONFIG_FILE")
+    # Two-way control commands (#338): /restart, /apply from the bot, through the #33 host channel.
+    # Default off; gated to specific operator Telegram user ids (numbers → comma list) and validated
+    # above (needs dashboard.control + telegram.commands). confirm_timeout is the deny-on-timeout window.
+    local tg_control tg_control_ids tg_control_confirm
+    tg_control=$(jq -r 'if .telegram.control.enabled != null then .telegram.control.enabled | tostring else "false" end' "$CONFIG_FILE")
+    tg_control_ids=$(jq -r '(.telegram.control.allowed_ids // []) | map(tostring) | join(",")' "$CONFIG_FILE")
+    tg_control_confirm=$(jq -r '.telegram.control.confirm_timeout // 60' "$CONFIG_FILE")
     # One toggle per event, defaulting to true when the key is absent.
     tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
     local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
@@ -3301,6 +3327,9 @@ TELEGRAM_ENABLED=$tg_enabled
 TELEGRAM_BOT_TOKEN=$tg_token
 TELEGRAM_CHAT_ID=$tg_chat
 TELEGRAM_COMMANDS_ENABLED=$tg_commands
+TELEGRAM_CONTROL_ENABLED=$tg_control
+TELEGRAM_CONTROL_ALLOWED_IDS=$tg_control_ids
+TELEGRAM_CONTROL_CONFIRM_S=$tg_control_confirm
 TELEGRAM_EVENT_NODE_DOWN=$tg_ev_node_down
 TELEGRAM_EVENT_NODE_RECOVERED=$tg_ev_node_recovered
 TELEGRAM_EVENT_WORKER_OFFLINE=$tg_ev_worker_offline
@@ -3988,6 +4017,16 @@ describe_change() {
         ;;
     TELEGRAM_COMMANDS_ENABLED)
         msg="Telegram command interface → $([ "$new" == "true" ] && echo on || echo off) (#45) — the bot $([ "$new" == "true" ] && echo "now answers" || echo "no longer answers") /status, /hashrate, /workers, /sync from the configured chat; the dashboard container is recreated."
+        ;;
+    TELEGRAM_CONTROL_ENABLED)
+        msg="Telegram control commands → $([ "$new" == "true" ] && echo on || echo off) (#338) — the bot $([ "$new" == "true" ] && echo "now accepts" || echo "no longer accepts") /restart and /apply from allow-listed operator ids, each with an in-chat confirmation; the dashboard container is recreated."
+        ;;
+    TELEGRAM_CONTROL_ALLOWED_IDS)
+        # Telegram user ids are not secret, but they are the control-command allow-list — report the change.
+        msg="Telegram control allow-list: [$old] → [$new] (#338) — only these operator user ids may run /restart or /apply."
+        ;;
+    TELEGRAM_CONTROL_CONFIRM_S)
+        msg="Telegram control confirmation timeout: ${old}s → ${new}s (#338) — an unconfirmed control command is denied after this."
         ;;
     TELEGRAM_EVENT_*)
         msg="Telegram alert toggle ($key): $old → $new (#121)."
@@ -4710,6 +4749,36 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
 # Validate + dispatch one CLAIMED request file. Trusts no byte of it: must be JSON, only the keys
 # id/action/config/actor/version, the id must be a UUID (it becomes the result/staged FILENAME —
 # anything else is rejected before it can touch a path), and the action one of the three known verbs.
+# Lifecycle verbs for the Telegram control commands (#338): the only two host actions the bot can
+# trigger, both FIXED — `restart` runs `$0 restart` (recreate the running stack) and `apply` runs
+# `$0 apply -y` (re-render + re-apply the CURRENT on-disk config.json). The container's `action`
+# string only SELECTS between these two hardcoded commands; nothing from the request is ever
+# interpolated into a command, and `apply` here carries no config change (the default-deny config
+# allowlist is only relevant to a config-editing commit, not a re-apply of the source of truth).
+# Access control + the deny-on-timeout confirmation are enforced dashboard-side before the intent is
+# ever spooled; this side records the actor and outcome in the same tamper-evidence audit log.
+control_lifecycle() { # <verb: restart|apply> <id> <actor> <control-dir>
+    local verb="$1" id="$2" actor="$3" cdir="$4" rc=0
+    local logf="$cdir/staged/.$id.log"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "$verb" "started"
+    # ${PITHEAD_SELF:-$0} is this script (run_chain uses the same handle); the verb is a FIXED
+    # literal picked by the case, never a string from the request.
+    local self="${PITHEAD_SELF:-$0}"
+    case "$verb" in
+    restart) "$self" restart >"$logf" 2>&1 || rc=$? ;;
+    apply) "$self" apply -y >"$logf" 2>&1 || rc=$? ;;
+    *) return 0 ;; # unreachable: the dispatch already gated the verb
+    esac
+    if [ "$rc" -eq 0 ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg a "$verb" '{status:"applied",action:$a,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "$verb" "applied"
+    else
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg a "$verb" --arg e "$(tail -c 2000 "$logf")" '{status:"failed",action:$a,error:$e,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "$verb" "failed"
+    fi
+    rm -f "$logf"
+}
+
 control_process_request() { # <claimed-file> <control-dir>
     local file="$1" cdir="$2" id action actor size
     # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
@@ -4752,6 +4821,7 @@ control_process_request() { # <claimed-file> <control-dir>
     preview) control_preview "$file" "$id" "$actor" "$cdir" ;;
     commit) control_commit "$id" "$actor" "$cdir" ;;
     upgrade) control_upgrade "$file" "$id" "$actor" "$cdir" ;;
+    restart | apply) control_lifecycle "$action" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "${action:-none}" "rejected"
