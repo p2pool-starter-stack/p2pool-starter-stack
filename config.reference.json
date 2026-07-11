@@ -6,6 +6,8 @@
         "wallet_address": "your_monero_wallet_address",
         "node_username": "",
         "node_password": "",
+        "view_key": "",
+        "payout_scan_height": "auto",
 
         "prune": true,
         "clearnet_initial_sync": false,

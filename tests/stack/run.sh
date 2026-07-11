@@ -2147,7 +2147,7 @@ echo "== completion: suggestions (#94) =="
 out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
 assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
 out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
-assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod wallet-rpc tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
 
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
@@ -2375,6 +2375,59 @@ case "$(cat "$V/Caddyfile")" in
 *basic_auth*) bad "auth disable drops basic_auth" "basic_auth still present in the Caddyfile" ;;
 *) ok "auth disable drops basic_auth" ;;
 esac
+
+echo "== black-box: payout confirmation view key (#381) =="
+# The private view key gates the view-only wallet-rpc service. Empty (default) -> feature off, no
+# profile, no container. Set on a LOCAL node -> the payout_confirm profile is added, the key +
+# generated wallet-rpc creds render into .env, and PAYOUT_CONFIRM_ENABLED flips true. The key is a
+# secret: it must never be echoed to stdout by apply (BOTSECRET pattern), only land in the 600 .env.
+VIEWKEY="$(printf 'a%.0s' $(seq 64))" # 64 hex chars — a well-formed private view key
+# (1) OFF by default: no view key -> feature disabled, wallet-rpc profile absent.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "payout confirm off by default" "$(run_sourced "$V" env_get_file "$V/.env" PAYOUT_CONFIRM_ENABLED)" "false"
+case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
+*payout_confirm*) bad "no wallet-rpc profile when view key unset" "payout_confirm leaked into COMPOSE_PROFILES" ;;
+*) ok "no wallet-rpc profile when view key unset" ;;
+esac
+# (2) ON (local node): view key set -> profile added, key + creds rendered, flag true.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with a view key succeeds" "$?" "0"
+assert_eq "payout confirm enabled renders true" "$(run_sourced "$V" env_get_file "$V/.env" PAYOUT_CONFIRM_ENABLED)" "true"
+assert_eq "view key rendered into .env" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_VIEW_KEY)" "$VIEWKEY"
+assert_contains "wallet-rpc profile added" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "payout_confirm"
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)" ] && ok "wallet-rpc password generated" || bad "wallet-rpc password generated" "empty"
+# The view key must NEVER be echoed to stdout by apply — only land in the owner-only .env (#90).
+case "$out" in
+*"$VIEWKEY"*) bad "view key never printed by apply" "the view key leaked into apply stdout" ;;
+*) ok "view key never printed by apply" ;;
+esac
+# The wallet-rpc password stays off the .env command line too — it's in .env but never on stdout.
+case "$out" in
+*"$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)"*) bad "wallet-rpc password not printed" "leaked into apply stdout" ;;
+*) ok "wallet-rpc password not printed" ;;
+esac
+# The wallet-rpc password is preserved across a re-apply (like PROXY_AUTH_TOKEN), so both containers
+# keep matching creds and the wallet-rpc isn't needlessly recreated.
+pw1="$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "wallet-rpc password preserved across apply" "$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)" "$pw1"
+# (3) REMOTE node + view key -> refused loudly (Phase 1 is local-only; scanning a third-party node
+# changes the trust story).
+seed_env
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "view key on a remote node rejected" "$?" "1"
+assert_contains "remote view-key message names the mode" "$out" "monero.view_key"
+# (4) A malformed view key (not 64 hex) is rejected before it reaches the wallet.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"not-a-view-key"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "malformed view key rejected" "$?" "1"
+assert_contains "malformed view-key message" "$out" "64-character hex"
 
 echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never

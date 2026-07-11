@@ -80,6 +80,17 @@ XVB_MIN_TIME_SEND_MS = 15000
 # Wallet address used for fetching XvB bonus history and pool identification
 MONERO_WALLET_ADDRESS = os.environ.get("MONERO_WALLET_ADDRESS", "")
 
+# On-chain payout confirmation (#381). When enabled, the dashboard polls a view-only
+# monero-wallet-rpc (scanning the local node) for confirmed incoming payouts, persists them, and
+# fires a payout_confirmed alert. pithead renders PAYOUT_CONFIRM_ENABLED=true only when a view key
+# is set on a local node, so an unset view key (the default) means the wallet-rpc container isn't
+# started and this poll never runs. The wallet-rpc login is a capability cred (owner-only .env); the
+# URL is the host-loopback publish reachable via the dashboard's host networking.
+PAYOUT_CONFIRM_ENABLED = os.environ.get("PAYOUT_CONFIRM_ENABLED", "false").strip().lower() == "true"
+MONERO_WALLET_RPC_URL = os.environ.get("MONERO_WALLET_RPC_URL", "http://127.0.0.1:18082/json_rpc")
+WALLET_RPC_USERNAME = os.environ.get("WALLET_RPC_USERNAME", "wallet")
+WALLET_RPC_PASSWORD = os.environ.get("WALLET_RPC_PASSWORD", "")
+
 # Unique Donor ID for the XMRvsBeast pool
 XVB_DONOR_ID = os.environ.get("XVB_DONOR_ID", "")
 
@@ -324,6 +335,7 @@ TELEGRAM_EVENTS = {
     "high_reject_rate": _telegram_event_enabled("high_reject_rate"),
     "block_found": _telegram_event_enabled("block_found"),
     "payout_found": _telegram_event_enabled("payout_found"),
+    "payout_confirmed": _telegram_event_enabled("payout_confirmed"),
     "container_unhealthy": _telegram_event_enabled("container_unhealthy"),
 }
 # ponytail: daily_summary is a scheduled push, not an edge — it lives in the events dict only so it

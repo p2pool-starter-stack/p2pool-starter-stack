@@ -138,6 +138,16 @@ class StateManager:
             "CREATE TABLE IF NOT EXISTS share_stats "
             "(ts REAL, accepted INTEGER, rejected INTEGER, invalid INTEGER, expired INTEGER)"
         )
+        # Confirmed on-chain payouts from the view-only wallet (#381). Keyed (chain, txid) — NOT
+        # txid alone — so the Tari sibling (#462) reuses this exact table with chain="tari"; the
+        # payout_confirmed alert carries the chain too. Additive, forward-only: mirrors events /
+        # share_stats, so no _migrate_db change is needed. amount_atomic keeps the wallet's native
+        # atomic units; the view layer converts to XMR at the edge.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS payouts "
+            "(chain TEXT, txid TEXT, height INTEGER, ts REAL, amount_atomic INTEGER, "
+            "PRIMARY KEY (chain, txid))"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -478,6 +488,83 @@ class StateManager:
         """Returns a copy of the per-poll share-health deltas (#116)."""
         with self._lock:
             return list(self.state.get("share_stats", []))
+
+    def add_payouts(self, chain: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Persist confirmed on-chain payouts (#381), idempotent on ``(chain, txid)``, and return
+        only the rows that were NEWLY inserted this call.
+
+        The returned "new" list is what drives the ``payout_confirmed`` alert: an already-stored
+        payout is silently ignored (INSERT OR IGNORE), so a dashboard restart re-fetching the tip
+        never re-alerts. Not held in memory (payouts are read straight from the DB by the view /
+        alert paths) — unlike the retention-pruned series, payout history is small and permanent."""
+        if not rows:
+            return []
+        new_rows = []
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                with self._conn:
+                    for r in rows:
+                        cur = self._conn.execute(
+                            "INSERT OR IGNORE INTO payouts "
+                            "(chain, txid, height, ts, amount_atomic) VALUES (?, ?, ?, ?, ?)",
+                            (
+                                chain,
+                                r["txid"],
+                                int(r.get("height", 0) or 0),
+                                float(r.get("ts", 0) or 0),
+                                int(r.get("amount_atomic", 0) or 0),
+                            ),
+                        )
+                        # rowcount == 1 means the row was actually inserted (not an ignored dup),
+                        # so it's a genuinely new payout worth alerting on exactly once.
+                        if cur.rowcount == 1:
+                            new_rows.append(r)
+        except (sqlite3.Error, KeyError, ValueError, TypeError) as e:
+            self._db_error("Payout Insert Error", e)
+            return []
+        return new_rows
+
+    def get_payouts(self, chain: str | None = None) -> list[dict[str, Any]]:
+        """Return stored confirmed payouts, newest first. Filters to ``chain`` when given (the
+        dashboard's Monero card reads chain="monero"); omit it for the cross-chain total."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                if chain is None:
+                    cursor.execute(
+                        "SELECT chain, txid, height, ts, amount_atomic FROM payouts "
+                        "ORDER BY ts DESC"
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT chain, txid, height, ts, amount_atomic FROM payouts "
+                        "WHERE chain = ? ORDER BY ts DESC",
+                        (chain,),
+                    )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Payout Read Error: {e}")
+            return []
+
+    def get_payout_max_height(self, chain: str) -> int:
+        """Highest stored block height for ``chain`` (0 if none) — the wallet-poll seed. Fetching
+        transfers from this height forward re-scans only the tip; idempotent add_payouts drops the
+        overlap, so a restart replays nothing (#381)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return 0
+                cursor = self._conn.cursor()
+                cursor.execute("SELECT MAX(height) FROM payouts WHERE chain = ?", (chain,))
+                row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        except sqlite3.Error as e:
+            self.logger.error(f"Payout Height Read Error: {e}")
+            return 0
 
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

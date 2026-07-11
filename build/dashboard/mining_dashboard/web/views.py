@@ -38,6 +38,7 @@ from mining_dashboard.helper.utils import (
     xvb_stats_are_stale,
 )
 from mining_dashboard.service.earnings import (
+    ATOMIC_PER_XMR,
     tari_seconds_to_block_per_hs,
     xmr_per_hs_day,
     xtm_per_hs_day,
@@ -1006,8 +1007,43 @@ _EARNINGS_DISCLAIMER = (
 )
 
 
-def build_earnings(data, metrics):
+def _confirmed_payouts_summary(payouts, now=None):
+    """Roll confirmed on-chain payouts (#381) into 24h / 7d / all-time XMR totals + a count.
+
+    ``payouts`` is the stored-payout list (``storage.get_payouts("monero")``): each carries
+    ``ts`` (unix seconds) and ``amount_atomic``. Sums are converted atomic→XMR at this edge only.
+    ``enabled`` is False when the feature is off (``payouts is None``) — the UI then shows only the
+    estimate; an empty list means "on, nothing confirmed yet" (shows 0.000000)."""
+    if payouts is None:
+        return {"enabled": False}
+    now = now if now is not None else time.time()
+    day, week = now - 86_400, now - 7 * 86_400
+    atomic_24h = atomic_7d = atomic_all = 0
+    for p in payouts:
+        amt = p.get("amount_atomic", 0) or 0
+        ts = p.get("ts", 0) or 0
+        atomic_all += amt
+        if ts >= week:
+            atomic_7d += amt
+        if ts >= day:
+            atomic_24h += amt
+    last_ts = max((p.get("ts", 0) or 0 for p in payouts), default=0)
+    return {
+        "enabled": True,
+        "count": len(payouts),
+        "xmr_24h": atomic_24h / ATOMIC_PER_XMR,
+        "xmr_7d": atomic_7d / ATOMIC_PER_XMR,
+        "xmr_all": atomic_all / ATOMIC_PER_XMR,
+        "last_ts": last_ts,
+    }
+
+
+def build_earnings(data, metrics, payouts=None):
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
+
+    ``payouts`` (#381), when the view-only wallet feature is on, is the stored confirmed-payout
+    list; it's rolled into a ``confirmed`` block (24h / 7d / all-time XMR) shown beside this
+    estimate — the estimate is a model, the confirmed figure is ground truth from the wallet.
 
     This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
     actually mining on your P2Pool node — *not* the rig's total output. The what-if default is
@@ -1055,6 +1091,9 @@ def build_earnings(data, metrics):
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,
+        # Confirmed on-chain payouts (#381), beside the estimate above. {"enabled": False} when the
+        # view-only wallet feature is off — the UI then shows only the estimate.
+        "confirmed": _confirmed_payouts_summary(payouts),
     }
 
 
@@ -1221,7 +1260,13 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "cadence": build_cadence(metrics),
         "raffle_eligible": build_raffle_eligibility(metrics),
         "proxy_workers": metrics.workers_online,
-        "earnings": build_earnings(data, metrics),
+        # Confirmed payouts (#381): pass the stored list when the feature is on, else None (feature
+        # off → earnings shows only the estimate). config read at call time so tests can flip it.
+        "earnings": build_earnings(
+            data,
+            metrics,
+            payouts=state_mgr.get_payouts("monero") if config.PAYOUT_CONFIRM_ENABLED else None,
+        ),
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),

@@ -2197,6 +2197,31 @@ parse_and_validate_config() {
     *) error "monero.mode must be \"local\" or \"remote\" (got \"$MONERO_MODE\")." ;;
     esac
 
+    # On-chain payout confirmation (#381). The operator supplies the PRIVATE VIEW KEY for
+    # monero.wallet_address; the stack runs a view-only monero-wallet-rpc against the LOCAL node to
+    # confirm payouts actually landed. The view key is a SECRET (it reveals all incoming amounts and
+    # timing to anyone who can read config.json/.env) — handled like node_password: never logged or
+    # echoed. Empty (the default) = feature off, nothing new runs. Phase 1 is LOCAL NODE ONLY:
+    # scanning through a third-party daemon changes the trust story, so a view key set on a remote
+    # node is refused, loudly — the wrong way to fail is silent.
+    MONERO_VIEW_KEY=$(jq -r '.monero.view_key // empty' "$CONFIG_FILE")
+    PAYOUT_SCAN_HEIGHT=$(jq -r '.monero.payout_scan_height // "auto"' "$CONFIG_FILE")
+    PAYOUT_CONFIRM_ENABLED=false
+    if [ -n "$MONERO_VIEW_KEY" ]; then
+        if [ "$MONERO_MODE" != "local" ]; then
+            error "monero.view_key is set but monero.mode is \"$MONERO_MODE\". On-chain payout confirmation (#381) scans against the LOCAL node only — a remote/third-party daemon changes the trust story. Unset monero.view_key, or switch to a local node."
+        fi
+        # A view key is 64 lowercase hex chars. Reject a malformed value before it reaches the wallet.
+        if ! printf '%s' "$MONERO_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
+            error "monero.view_key must be the 64-character hex PRIVATE VIEW KEY for monero.wallet_address (get it from your wallet: 'View Key' / 'wallet_secret_view_key'). Got ${#MONERO_VIEW_KEY} chars."
+        fi
+        case "$PAYOUT_SCAN_HEIGHT" in
+        '' | auto | [0-9]*) ;;
+        *) error "monero.payout_scan_height must be \"auto\" or a block height (integer). Got \"$PAYOUT_SCAN_HEIGHT\"." ;;
+        esac
+        PAYOUT_CONFIRM_ENABLED=true
+    fi
+
     # Bridge network subnet (#180): configurable so the stack can avoid colliding with a 172.28.0.0/24
     # already in use on the host (Docker else errors "Pool overlaps with other one on this address
     # space" and the install fails). The structured fixed-IP layout is preserved — services keep their
@@ -2442,6 +2467,9 @@ parse_and_validate_config() {
 # Generates a fresh proxy token only when none exists yet.
 load_preserved_state() {
     PROXY_AUTH_TOKEN=$(env_get PROXY_AUTH_TOKEN)
+    # View-only wallet-rpc login (#381): the dashboard→wallet-rpc password. Generated once and
+    # preserved across applies (like PROXY_AUTH_TOKEN) so both containers keep matching creds.
+    WALLET_RPC_PASSWORD=$(env_get WALLET_RPC_PASSWORD)
     MONERO_ONION=$(env_get MONERO_ONION_ADDRESS)
     TARI_ONION=$(env_get TARI_ONION_ADDRESS)
     P2POOL_ONION=$(env_get P2POOL_ONION_ADDRESS)
@@ -2451,6 +2479,7 @@ load_preserved_state() {
     PRESERVED_HOST_IP=$(env_get HOST_IP)
 
     [ -n "$PROXY_AUTH_TOKEN" ] || PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
+    [ -n "$WALLET_RPC_PASSWORD" ] || WALLET_RPC_PASSWORD=$(openssl rand -hex 12)
     [ -n "$MONERO_ONION" ] || MONERO_ONION="placeholder"
     [ -n "$TARI_ONION" ] || TARI_ONION="placeholder"
     [ -n "$P2POOL_ONION" ] || P2POOL_ONION="placeholder"
@@ -2486,6 +2515,7 @@ readonly CONTROL_SECRET_PATHS='[
     ["workers","api_token"],
     ["monero","node_username"],
     ["monero","node_password"],
+    ["monero","view_key"],
     ["p2pool","stratum_password"],
     ["healthchecks","ping_url"]]'
 
@@ -2961,6 +2991,14 @@ render_env() {
         profiles="" # Empty profile disables local monerod
     fi
 
+    # On-chain payout confirmation (#381): the view-only wallet-rpc service only starts when its
+    # compose profile is active, which is only when a view key is set on a local node. Off = no
+    # container, dashboard unchanged. PAYOUT_CONFIRM_ENABLED is set by parse_and_validate_config
+    # (which also refuses a view key on a remote node and validates the key/height).
+    if [ "${PAYOUT_CONFIRM_ENABLED:-false}" == "true" ]; then
+        profiles="${profiles:+$profiles,}payout_confirm"
+    fi
+
     # Pruning is on unless config explicitly sets monero.prune:false (config_bool honours that
     # explicit false rather than coercing it back to the default — see #294).
     local prune
@@ -3188,6 +3226,12 @@ TOR_DATA_DIR=$TOR_DATA_DIR
 MONERO_NODE_USERNAME=$MONERO_USER
 MONERO_NODE_PASSWORD=$MONERO_PASS
 MONERO_WALLET_ADDRESS=$MONERO_WALLET
+MONERO_VIEW_KEY=$MONERO_VIEW_KEY
+PAYOUT_SCAN_HEIGHT=$PAYOUT_SCAN_HEIGHT
+PAYOUT_CONFIRM_ENABLED=$PAYOUT_CONFIRM_ENABLED
+WALLET_RPC_USERNAME=wallet
+WALLET_RPC_PASSWORD=$WALLET_RPC_PASSWORD
+MONERO_WALLET_RPC_URL=http://127.0.0.1:18082/json_rpc
 TARI_WALLET_ADDRESS=$TARI_WALLET
 MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
@@ -3946,6 +3990,33 @@ describe_change() {
             msg="Tari clearnet sync DISABLED (#183) — the Tari base node returns to Tor-only transport. tari is recreated."
         fi
         ;;
+    MONERO_VIEW_KEY)
+        # Secret (#381): the private view key reveals every incoming payout amount/time — never
+        # echo its value into the change preview / logs.
+        if [ -z "$new" ]; then
+            msg="Payout confirmation view key CLEARED (#381) — the view-only wallet-rpc is removed."
+        elif [ -z "$old" ]; then
+            flag=DEST
+            msg="Payout confirmation view key SET (#381) — a view-only monero-wallet-rpc starts and scans the local node for confirmed payouts (it can see incoming amounts, never spend)."
+        else
+            flag=DEST
+            msg="Payout confirmation view key CHANGED (#381) — the view-only wallet-rpc is recreated and rescans."
+        fi
+        ;;
+    WALLET_RPC_PASSWORD)
+        # Secret (#381): auto-generated wallet-rpc login — never echo the value.
+        msg="Payout wallet-rpc credential updated (#381)."
+        ;;
+    PAYOUT_CONFIRM_ENABLED)
+        msg="On-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off) (#381)."
+        ;;
+    PAYOUT_SCAN_HEIGHT)
+        msg="Payout wallet restore height: $old → $new (#381) — only affects a first-time wallet creation."
+        ;;
+    WALLET_RPC_USERNAME | MONERO_WALLET_RPC_URL)
+        # Fixed internal values that co-change with the view key toggle; keep the preview to one line.
+        msg=""
+        ;;
     *)
         msg="$key: $old → $new."
         ;;
@@ -4259,7 +4330,10 @@ run_chain() {
 # is derived from a validated enum, boolean, or number — never a free-form string that reaches a
 # command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
 # channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
-# and donor id, tokens and passwords — stays host-CLI-only. The WALLET_CHANGED and
+# and donor id, tokens and passwords, and the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
+# WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED / PAYOUT_SCAN_HEIGHT — stays host-CLI-only. The
+# view key reveals every incoming payout amount/time, so it is never dashboard-committable (default-
+# deny already refuses it; named here deliberately). The WALLET_CHANGED and
 # CLEARNET_EXPOSED alert toggles are excluded on purpose: they are the tamper-evidence alarms on
 # the Telegram channel (the future #338 approval channel), so the dashboard must not silence
 # them. Space-separated exact env-key names.
