@@ -241,6 +241,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `cosign.pub` (bundles up to v1.3.x) keep today's TLS-to-GitHub + tag-pinning behaviour with a
   loud warning, and `doctor` reports the verification state. See
   [Releasing › Signed releases](docs/releasing.md#signed-releases).
+- **Image verification is bound to the pulled bytes (#451).** `verify_release_images` now cosign-
+  verifies the immutable `@sha256` digest the bundled compose pins each first-party image to (#461),
+  not the mutable tag. Verify and pull resolve the same content-addressed bytes, so a tampered
+  registry can no longer serve the signed manifest to cosign and a different one to docker in a
+  separate dial. With a key present, an image whose compose line is not digest-pinned aborts too —
+  there is nothing to bind the check to.
+- **First install verifies signatures, not just upgrades (#452).** A fresh release install's first
+  `pithead up` pulled the five first-party images with no signature check; the gate now runs on that
+  path as well, under the same rules as `upgrade` — source checkouts skip, a missing `cosign.pub`
+  warns and proceeds (signing is opt-in), a present key that fails aborts before anything starts.
+  (`apply` and `rotate-secrets` recreate from the already-verified local images, so the two
+  registry-pull paths — first `up` and `upgrade` — are now both gated.)
 - **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
   and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
   did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a

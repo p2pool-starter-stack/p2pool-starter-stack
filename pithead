@@ -182,6 +182,11 @@ stack_up() {
     # first closes the startup window in which a clearnet app (e.g. Tari) could open a connection that
     # the ESTABLISHED rule would then grandfather past the DROP.
     apply_tor_egress_firewall
+    # #452: a fresh release install's first `up` pulls the 5 first-party images (pull policy
+    # `missing`) — gate that pull on the same cosign check `upgrade` uses, so first install is not
+    # the one unverified pull. Same guard: source checkouts skip, a missing cosign.pub warns and
+    # proceeds (signing is opt-in, #461), a present key that fails aborts before anything starts.
+    verify_release_images
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     if ! compose_up_checked -d; then
         error "Stack failed to start — see the error above."
@@ -313,16 +318,36 @@ apply_tor_egress_firewall() {
     log "Tor-only egress enforced (#270): clearnet dials from $subnet dropped except via Tor ($tor_ip)."
 }
 
-# Cryptographic gate on a release upgrade (#376): every first-party image the pull would fetch
-# must carry a cosign signature that verifies against the cosign.pub shipped next to this script.
-# Key-based signing from the release box — no Rekor transparency log, hence --private-infrastructure
-# (a plain key signature carries no Rekor bundle, and cosign would otherwise demand one). The
-# decision table, fail-closed where a key exists:
-#   source checkout                        -> skip: locally built images are unsigned by design
-#   no cosign.pub (an older install)       -> today's behaviour, plus one loud warning
-#   cosign.pub present, cosign missing     -> ABORT with an install pointer — an absent verifier
-#                                             must not silently disable verification
-#   any signature that fails to verify     -> ABORT naming the image; nothing pulled or restarted
+# The @sha256 digest the bundled compose pins pithead-<suffix> to (#461 writes these into the
+# released compose). Empty if the image line carries no digest (an un-pinned/dev compose). Mirrors
+# the caddy-digest read at bcrypt-hash time (grep straight from docker-compose.yml at cwd).
+compose_pinned_digest() {
+    grep -oE "pithead-$1:[^[:space:]]*@sha256:[0-9a-f]+" docker-compose.yml |
+        grep -oE 'sha256:[0-9a-f]+' | head -1
+}
+
+# Cryptographic gate on a release pull (#376). Runs before both the upgrade pull and the
+# first-install pull (#452), so every first-party image the pull would fetch must carry a cosign
+# signature that verifies against the cosign.pub shipped next to this script. Key-based signing from
+# the release box — no Rekor transparency log, hence --private-infrastructure (a plain key signature
+# carries no Rekor bundle, and cosign would otherwise demand one).
+#
+# #451 — verification and the pull are bound to the SAME bytes: the released bundle pins each
+# first-party image to an immutable @sha256 digest (#461), and compose pulls by that digest. We
+# cosign-verify that SAME digest, not the mutable tag. A tampered registry cannot serve one manifest
+# to cosign and another to docker — both are content-addressed to the identical sha256, and docker
+# rejects a pull whose bytes don't hash to the pinned digest. Verifying the tag left a window open:
+# cosign and the pull resolved the tag in separate registry dials.
+#
+# The decision table, fail-closed where a key exists:
+#   source checkout                          -> skip: locally built images are unsigned by design
+#   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (signing is opt-in per
+#                                               #461; the digest-pinned bundle is the protection)
+#   cosign.pub present, cosign missing       -> ABORT with an install pointer — an absent verifier
+#                                               must not silently disable verification
+#   cosign.pub present, image not pinned     -> ABORT: with no digest there's nothing to bind the
+#                                               verification to the pulled bytes (the #451 window)
+#   any signature that fails to verify       -> ABORT naming the image; nothing pulled or restarted
 verify_release_images() {
     is_source_checkout && return 0
     if [ ! -f cosign.pub ]; then
@@ -330,19 +355,23 @@ verify_release_images() {
         return 0
     fi
     command -v cosign >/dev/null 2>&1 ||
-        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified upgrade (#376). Install cosign (docs/releasing.md § Verifying a release) and re-run '$0 upgrade'."
-    # The 5 first-party images, expanded exactly as docker-compose.yml expands its image: refs.
-    local suffix image out
+        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull (#376). Install cosign (docs/releasing.md § Verifying a release) and re-run '$0'."
+    # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
+    local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
-        image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}:${STACK_VERSION:-dev}"
+        repo="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}"
+        sha="$(compose_pinned_digest "$suffix")"
+        [ -n "$sha" ] ||
+            error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing (#451). A signed release bundle pins every first-party image by @sha256 (#461)."
+        image="${repo}@${sha}"
         if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
             # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
             # prints via `echo -e`, so an attacker-controlled registry response could otherwise
             # inject ANSI escapes into the operator's terminal (#376 review).
-            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to upgrade, nothing was pulled or restarted (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
+            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to pull or restart, nothing was changed (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
         fi
     done
-    log "All 5 release images carry a valid signature (cosign.pub, #376)."
+    log "All 5 release images verify against their pinned digest (cosign.pub, #451/#376)."
 }
 
 stack_upgrade() {
@@ -703,15 +732,15 @@ doctor() {
     else
         dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
     fi
-    # Release-signature verification (#376): report the state the next `upgrade` will act on.
+    # Release-signature verification (#376): report the state the next pull (up or upgrade) will act on.
     if is_source_checkout; then
         dr_info "Source checkout — images build locally and are not signature-verified (#376)."
     elif [ ! -f cosign.pub ]; then
-        dr_warn "No cosign.pub next to pithead — upgrades are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
     elif command -v cosign >/dev/null 2>&1; then
-        dr_ok "cosign found — 'upgrade' verifies the release images against cosign.pub (#376)."
+        dr_ok "cosign found — 'up' and 'upgrade' verify the release images against cosign.pub (#376/#452)."
     else
-        dr_warn "cosign.pub is present but cosign is not installed — 'upgrade' refuses to proceed until it is (#376). Install: docs/releasing.md § Verifying a release."
+        dr_warn "cosign.pub is present but cosign is not installed — 'up'/'upgrade' refuse to pull until it is (#376). Install: docs/releasing.md § Verifying a release."
     fi
 
     # --- Docker daemon ---
