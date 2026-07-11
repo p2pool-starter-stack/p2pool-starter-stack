@@ -18,20 +18,20 @@ DAEMON_ADDRESS="${MONERO_NODE_HOST:-127.0.0.1}:${MONERO_RPC_PORT:-18081}"
 # daemon's current height" (fetched via get_info) so a fresh wallet doesn't rescan years of chain
 # for payout history that predates the feature. A pruned node scans fine — outputs are never pruned.
 resolve_scan_height() {
-  local want="${PAYOUT_SCAN_HEIGHT:-auto}"
-  case "$want" in
+    local want="${PAYOUT_SCAN_HEIGHT:-auto}"
+    case "$want" in
     '' | auto)
-      curl -fsS --digest -u "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
-        "http://$DAEMON_ADDRESS/get_info" 2>/dev/null |
-        grep -o '"height": *[0-9]*' | grep -o '[0-9]*' | head -1
-      ;;
+        curl -fsS --digest -u "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
+            "http://$DAEMON_ADDRESS/get_info" 2>/dev/null |
+            grep -o '"height": *[0-9]*' | grep -o '[0-9]*' | head -1
+        ;;
     *) printf '%s\n' "$want" ;;
-  esac
+    esac
 }
 
 # When sourced by the shell test harness, expose the functions and stop — don't render or exec.
 if [ "${PITHEAD_TEST_SOURCE:-0}" = "1" ]; then
-  return 0 2>/dev/null || exit 0
+    return 0 2>/dev/null || exit 0
 fi
 
 mkdir -p "$WALLET_DIR"
@@ -41,24 +41,24 @@ mkdir -p "$WALLET_DIR"
 # monerod RPC cred (same value p2pool already passes on its command line). Bind 0.0.0.0 so the
 # 127.0.0.1:18082 host publish works; the rpc-login + loopback-only publish is the access control.
 set -- \
-  --daemon-address "$DAEMON_ADDRESS" \
-  --daemon-login "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
-  --trusted-daemon \
-  --rpc-bind-ip 0.0.0.0 --confirm-external-bind \
-  --rpc-bind-port 18082 \
-  --rpc-login "${WALLET_RPC_USERNAME:-wallet}:${WALLET_RPC_PASSWORD:-}" \
-  --password "" \
-  --log-level 0 \
-  --non-interactive
+    --daemon-address "$DAEMON_ADDRESS" \
+    --daemon-login "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
+    --trusted-daemon \
+    --rpc-bind-ip 0.0.0.0 --confirm-external-bind \
+    --rpc-bind-port 18082 \
+    --rpc-login "${WALLET_RPC_USERNAME:-wallet}:${WALLET_RPC_PASSWORD:-}" \
+    --password "" \
+    --log-level 0 \
+    --non-interactive
 
 if [ ! -f "$WALLET_FILE" ]; then
-  height="$(resolve_scan_height)"
-  [ -n "$height" ] || height=0
-  echo "Creating view-only payout wallet at restore height $height (#381)..."
-  # The view key lives ONLY in this tmpfs file, never on argv. umask 077 so it's owner-only.
-  (
-    umask 077
-    cat >"$GEN_JSON" <<EOF
+    height="$(resolve_scan_height)"
+    [ -n "$height" ] || height=0
+    echo "Creating view-only payout wallet at restore height $height (#381)..."
+    # The view key lives ONLY in this tmpfs file, never on argv. umask 077 so it's owner-only.
+    (
+        umask 077
+        cat >"$GEN_JSON" <<EOF
 {
   "version": 1,
   "filename": "$WALLET_FILE",
@@ -69,9 +69,9 @@ if [ ! -f "$WALLET_FILE" ]; then
   "spendkey": ""
 }
 EOF
-  )
-  # --generate-from-json creates + opens the wallet, then keeps serving the RPC.
-  exec monero-wallet-rpc "$@" --generate-from-json "$GEN_JSON"
+    )
+    # --generate-from-json creates + opens the wallet, then keeps serving the RPC.
+    exec monero-wallet-rpc "$@" --generate-from-json "$GEN_JSON"
 fi
 
 echo "Opening existing view-only payout wallet (#381)..."

@@ -96,12 +96,23 @@ class MoneroWalletClient:
             amount = t.get("amount")
             if not txid or amount is None:
                 continue  # a transfer with no txid/amount is unusable — skip rather than store junk
-            amount_atomic = int(amount)
+            try:
+                # A non-numeric or out-of-range field from a malformed reply would otherwise abort
+                # the whole scan before min_height advances, re-fetching the poison every cycle. Skip
+                # the bad transfer instead; the 64-bit bound also keeps add_payouts' INTEGER insert
+                # from raising OverflowError. The local, authed monero-wallet-rpc always sends ints.
+                amount_atomic = int(amount)
+                height = int(t.get("height", 0) or 0)
+                ts = float(t.get("timestamp", 0) or 0)
+            except (ValueError, TypeError):
+                continue
+            if not 0 <= amount_atomic < 2**63:
+                continue
             payouts.append(
                 {
                     "txid": txid,
-                    "height": int(t.get("height", 0) or 0),
-                    "ts": float(t.get("timestamp", 0) or 0),
+                    "height": height,
+                    "ts": ts,
                     "amount_atomic": amount_atomic,
                     "amount_xmr": amount_atomic / ATOMIC_PER_XMR,
                 }

@@ -9,8 +9,8 @@
 set -eu
 
 curl -fsS --digest \
-  -u "${WALLET_RPC_USERNAME:-wallet}:${WALLET_RPC_PASSWORD:-}" \
-  -o /dev/null \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' \
-  http://localhost:18082/json_rpc
+    -u "${WALLET_RPC_USERNAME:-wallet}:${WALLET_RPC_PASSWORD:-}" \
+    -o /dev/null \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":"0","method":"get_version"}' \
+    http://localhost:18082/json_rpc

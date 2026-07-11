@@ -78,6 +78,22 @@ class TestGetConfirmedPayouts:
             out = self._client().get_confirmed_payouts()
         assert [p["txid"] for p in out] == ["dd"]
 
+    def test_malformed_numeric_fields_are_skipped(self):
+        # A non-numeric or out-of-64-bit-range field from a malformed reply must skip that transfer,
+        # not abort the whole scan (which would re-fetch the poison forever and never advance
+        # min_height). The bad rows drop; the good one still parses.
+        rows = [
+            {"txid": "aa", "amount": "not-a-number", "height": 1, "timestamp": 1},
+            {"txid": "bb", "amount": 2**63, "height": 2, "timestamp": 2},  # overflows INTEGER
+            {"txid": "cc", "amount": 10, "height": "x", "timestamp": 3},  # bad height
+            {"txid": "dd", "amount": 20, "height": 4, "timestamp": 5},  # good
+        ]
+        with patch.object(
+            wallet_mod.requests, "post", return_value=_resp(json_data=_transfers(rows))
+        ):
+            out = self._client().get_confirmed_payouts()
+        assert [p["txid"] for p in out] == ["dd"]
+
     def test_network_error_returns_empty(self):
         with patch.object(
             wallet_mod.requests, "post", side_effect=requests.RequestException("refused")
