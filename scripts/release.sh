@@ -606,12 +606,19 @@ make_bundle() {
     # root-running image under the same tag. Pinning each to the immutable @sha256 digest promote just
     # published makes the pull content-addressed — this is what actually closes that vector (cosign
     # signing, when on, is the additional layer). The tag stays for readability; the digest wins.
-    local suffix digest
+    local suffix digest sha
     for suffix in "${IMAGES[@]}"; do
         digest="$(get_digest "$suffix")"
         [ -n "$digest" ] ||
             die "make_bundle: no promoted digest for $suffix — refusing to ship an un-pinned bundle (#376)."
-        sed -i.bak "s|\(pithead-${suffix}:\${STACK_VERSION:-dev}\)|\1@${digest}|" "$d/docker-compose.yml"
+        # get_digest stores a FULL ref ($repo@sha256:…); we append only the @sha256 part to the
+        # existing image line (which already has the repo + tag), so pin by the bare digest.
+        sha="${digest##*@}"
+        case "$sha" in
+        sha256:*) ;;
+        *) die "make_bundle: digest for $suffix is not a sha256 ref ('$digest') — cannot pin (#376)." ;;
+        esac
+        sed -i.bak "s|\(pithead-${suffix}:\${STACK_VERSION:-dev}\)|\1@${sha}|" "$d/docker-compose.yml"
     done
     rm -f "$d/docker-compose.yml.bak"
     # Post-condition: NEVER ship a partially-pinned bundle. Every first-party image line must now

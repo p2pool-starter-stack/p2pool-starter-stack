@@ -1439,11 +1439,23 @@ assert_contains "bundle ships the tari config dir" "$BUILD_MOUNTS" "./build/tari
     TAG=v9.9.9
     REGISTRY=ghcr.io/test
     DRY_RUN=0
+    # make_bundle now digest-pins the first-party images (#376), so it needs the promoted digests
+    # promote would have captured -- a full repo@sha256 ref, as set_digest stores them.
+    for _s in "${IMAGES[@]}"; do set_digest "$_s" "ghcr.io/test/pithead-$_s@sha256:feed${_s}dad"; done
     make_bundle "$WORKDIR/pithead.tar.gz" >/dev/null 2>&1
+    cp "$WORKDIR/pithead/docker-compose.yml" "$SANDBOX/bundle-compose.yml" 2>/dev/null || true
     tar tzf "$WORKDIR/pithead.tar.gz" 2>/dev/null
 ) >"$SANDBOX/bundle.list" 2>/dev/null
 grep -q '^pithead/config.minimal.json$' "$SANDBOX/bundle.list" && ok "bundle ships config.minimal.json (basic quick-start config)" || bad "bundle ships config.minimal.json" "absent from the bundle"
 grep -q '^pithead/$' "$SANDBOX/bundle.list" && ok "bundle unpacks to versionless pithead/" || bad "bundle unpacks to pithead/" "top-level dir is not pithead/"
+# Every first-party image line in the bundled compose must be digest-pinned (#376).
+_bundle_unpinned=$(grep -E 'pithead-(tor|monero|p2pool|xmrig-proxy|dashboard):' "$SANDBOX/bundle-compose.yml" 2>/dev/null | grep -cv '@sha256:')
+[ "${_bundle_unpinned:-1}" -eq 0 ] && ok "bundle compose digest-pins all 5 first-party images (#376)" || bad "bundle digest-pins first-party images (#376)" "unpinned lines: ${_bundle_unpinned:-?}"
+if grep -q 'pithead-dashboard:${STACK_VERSION:-dev}@sha256:feeddashboarddad' "$SANDBOX/bundle-compose.yml" 2>/dev/null; then
+    ok "digest pin appends only the bare sha256, no double-repo (#376)"
+else
+    bad "digest pin format (#376)" "expected tag@sha256:digest on the dashboard image line"
+fi
 _bm_missing=""
 for _m in $BUILD_MOUNTS; do [ -e "$ROOT/$_m" ] || _bm_missing="$_bm_missing $_m"; done
 assert_eq "every compose ./build runtime mount exists in the tree" "${_bm_missing:-none}" "none"
@@ -1618,6 +1630,7 @@ sign_out="$(
     set +eu
     WORKDIR="$SIGN"
     DRY_RUN=0
+    COSIGN_ENABLED=1
     COSIGN_KEY="/release-box/cosign.key"
     export COSIGN_LOG="$SIGN/cosign.log"
     PATH="$SIGN/bin:$PATH"
@@ -1629,6 +1642,24 @@ assert_eq "all 5 promoted digests signed" "$(grep -c '^\[cosign\] sign ' "$SIGN/
 assert_contains "signs the digest with the box key, no Rekor upload" "$(cat "$SIGN/cosign.log")" \
     "sign --key /release-box/cosign.key --tlog-upload=false --yes ghcr.io/test/pithead-dashboard@sha256:feeddashboard"
 assert_not_contains "never signs a mutable tag" "$(cat "$SIGN/cosign.log")" ":v"
+# Opt-in (#376): with signing OFF, sign_images is a no-op -- no cosign calls, and it says why.
+: >"$SIGN/cosign-off.log"
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034  # dynamic source; the globals are consumed inside sign_images
+sign_off_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    WORKDIR="$SIGN"
+    DRY_RUN=0
+    COSIGN_ENABLED=0
+    export COSIGN_LOG="$SIGN/cosign-off.log"
+    PATH="$SIGN/bin:$PATH"
+    for s in "${IMAGES[@]}"; do set_digest "$s" "ghcr.io/test/pithead-$s@sha256:feed$s"; done
+    sign_images 2>&1
+)"
+assert_eq "signing off means no cosign invocations (#376 opt-in)" "$(grep -c '^\[cosign\]' "$SIGN/cosign-off.log")" "0"
+assert_contains "signing off announces the skip (#376 opt-in)" "$sign_off_out" "skipping image signatures"
 # The bundle gets a detached signature the #59 runner can fetch (pithead.tar.gz.sig), and the
 # committed public key ships INSIDE the bundle so a release install has its verifier beside pithead.
 # shellcheck disable=SC1090,SC2030,SC2031,SC2034
