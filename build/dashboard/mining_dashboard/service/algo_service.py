@@ -211,14 +211,20 @@ class AlgoService:
         if (XVB_TIME_ALGO_MS - needed_time_ms) < 30000:
             needed_time_ms = XVB_TIME_ALGO_MS
 
+        # The decision log is what a live soak watches converge: keep target and the
+        # credited 1h/24h averages on one line, plus the instantaneous donated rate
+        # (fraction * current hashrate) — the gap between "inst" and "1h/24h" is the
+        # routed-vs-credited gap, the crux of any over-donation diagnosis (#423).
         if needed_time_ms >= XVB_TIME_ALGO_MS:
             logger.info(
-                f"Decision: Full XVB cycle (target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})"
+                f"Decision: Full XVB cycle (inst ~{current_hr:.0f} H/s; "
+                f"target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})"
             )
             return "XVB", XVB_TIME_ALGO_MS
 
         logger.info(
             f"Decision: Split ({needed_time_ms}ms to XvB; frac {fraction:.3f}; "
+            f"inst ~{fraction * current_hr:.0f} H/s; "
             f"target {target_hr:.0f}; 1h {avg_1h:.0f} / 24h {avg_24h:.0f})"
         )
         return "SPLIT", int(needed_time_ms)
@@ -317,13 +323,60 @@ class AlgoService:
             return xvb_duration_ms / XVB_TIME_ALGO_MS
         return 0.0
 
-    async def _smart_sleep(self, duration_sec, check_interval_sec=None):
+    def _dwell_should_end(
+        self, held_decision, current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares
+    ):
         """
-        Sleep through a P2Pool dwell in chunks, re-running the decision each chunk.
-        Returns early if the algorithm would now donate (hashrate dropped or a
-        trailing average fell below tier), so the next cycle reacts in seconds
-        instead of waiting out the full window. Uses only cached state — no extra
-        external API calls.
+        Whether a p2pool dwell should end early. Re-runs the decision WITHOUT
+        advancing the calibration loop and ends the dwell only when it *changed*
+        from the decision the dwell was started under, or when a fresh 1h average
+        has slipped below the tier (catch-up — undershoot loses the tier, which is
+        worse than waste).
+
+        Comparing against ``held_decision`` is the #423 fix. The old test —
+        "would we donate at all?" (``decision in ("XVB", "SPLIT")``) — is a
+        tautology during a SPLIT remainder: the fraction is static while
+        ``advance=False``, so the recomputed decision is SPLIT by construction and
+        every remainder collapsed to a single check tick. The actuated donation
+        duty became slice/(slice + tick) instead of slice/cycle — an order of
+        magnitude above the commanded fraction at small fractions — and the
+        controller could not unwind it (its command was already near 0). That is
+        the sustained credited overshoot of #423.
+        """
+        decision, _ = self.get_decision(
+            current_hr,
+            stable_hr,
+            p2pool_stats,
+            p2p_stats,
+            xvb_stats,
+            shares,
+            advance=False,
+        )
+        # The "under tier -> catch up early" override acts directly on avg_1h,
+        # so suppress it when the read is stale (#311): a frozen below-tier
+        # number would otherwise cut every p2pool dwell short and drift the
+        # effective split far past the computed fraction. A *changed* decision
+        # still ends the dwell — only the avg-driven override pauses.
+        target_hr = self._get_target_donation_hr(stable_hr)
+        under_tier = (
+            not self._stats_are_stale(xvb_stats)
+            and target_hr > 0
+            and xvb_stats.get("avg_1h", 0) < target_hr
+        )
+        return decision != held_decision or under_tier
+
+    async def _smart_sleep(self, duration_sec, check_interval_sec=None, held_decision="P2POOL"):
+        """
+        Sleep through a p2pool dwell in chunks, re-running the decision each chunk.
+        Returns early if the decision changed from ``held_decision`` (hashrate
+        dropped, a constraint tripped) or a trailing average fell below tier, so
+        the next cycle reacts in seconds instead of waiting out the full window.
+        Uses only cached state — no extra external API calls.
+
+        ``held_decision`` names the decision this dwell belongs to: "P2POOL" for a
+        full no-donation cycle, "SPLIT" for the p2pool remainder of a split cycle
+        (which must run its course, or the actuated donation exceeds the commanded
+        fraction — #423).
         """
         if check_interval_sec is None:
             check_interval_sec = UPDATE_INTERVAL
@@ -343,31 +396,9 @@ class AlgoService:
                 p2pool_stats = latest.get("pool", {}).get("pool", {})
                 p2p_stats = latest.get("pool", {}).get("p2p", {})
 
-                # Re-read WITHOUT advancing the calibration loop (that happens once
-                # per real cycle in run()). Bail early if we'd now donate, or if
-                # XvB's 1h average has slipped below the tier and we need to catch
-                # up — so the next cycle reacts in seconds, not after the full dwell.
-                decision, _ = self.get_decision(
-                    current_hr,
-                    stable_hr,
-                    p2pool_stats,
-                    p2p_stats,
-                    xvb_stats,
-                    shares,
-                    advance=False,
-                )
-                # The "under tier -> catch up early" override acts directly on avg_1h,
-                # so suppress it when the read is stale (#311): a frozen below-tier
-                # number would otherwise cut every p2pool dwell short and drift the
-                # effective split far past the computed fraction. The held decision
-                # (XVB/SPLIT) still ends the dwell — only the avg-driven override pauses.
-                target_hr = self._get_target_donation_hr(stable_hr)
-                under_tier = (
-                    not self._stats_are_stale(xvb_stats)
-                    and target_hr > 0
-                    and xvb_stats.get("avg_1h", 0) < target_hr
-                )
-                if decision in ("XVB", "SPLIT") or under_tier:
+                if self._dwell_should_end(
+                    held_decision, current_hr, stable_hr, p2pool_stats, p2p_stats, xvb_stats, shares
+                ):
                     logger.info(
                         "Smart-sleep: donation target needs attention — ending P2Pool dwell early."
                     )
@@ -440,7 +471,10 @@ class AlgoService:
                     remainder = (XVB_TIME_ALGO_MS - xvb_duration) / 1000
                     if remainder > 0:
                         await self.switch_miners("P2POOL", state_label="P2POOL (Split)")
-                        await self._smart_sleep(remainder)
+                        # held_decision="SPLIT": the remainder belongs to the split we
+                        # just decided — a re-read that still says SPLIT must NOT end
+                        # it (#423); only a changed decision or under-tier does.
+                        await self._smart_sleep(remainder, held_decision="SPLIT")
 
             except Exception as e:
                 logger.error(f"Algorithm Error: {e}")

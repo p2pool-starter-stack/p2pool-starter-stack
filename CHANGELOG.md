@@ -27,6 +27,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   warning. Off by default: a tor restart drops all circuits, so the stack never restarts its
   privacy boundary unbidden. The doctor WARN now names both fixes. See
   [Operations › Troubleshooting](docs/operations.md#troubleshooting).
+- **Simple view points at the Advanced-only calculators (#425).** The P2Pool Earnings card — the
+  XMR/XTM estimates and the XvB tier calculator — renders only in Advanced view, and operators on
+  the default Simple view concluded it didn't exist. Simple view now shows a one-time dismissible
+  banner linking to Advanced view; dismissing it (or opening Advanced view) retires it for good
+  in that browser.
 - **Subcommand chaining + bash/zsh tab-completion (#94).** `./pithead apply upgrade` runs both
   commands in order, failing fast on the first non-zero step and reporting what did and didn't
   run. The whole chain is validated first: non-chainable commands (`setup`, `logs`, `restore`,
@@ -131,6 +136,21 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The XvB donation controller no longer overshoots the target tier in steady state (#423).**
+  During a split cycle the p2pool remainder dwell ended on its first 30-second check, because the
+  dwell's early-exit asked "would we donate at all?" — a question the held split answers yes to by
+  construction. The donated share of wall-clock time became slice/(slice + tick) instead of
+  slice/cycle, an order of magnitude above the commanded fraction, and the controller couldn't
+  unwind it: its command was already near zero. Live on v1.3.0 that held the credited averages
+  26-44% above the tier threshold — donation above threshold buys zero extra raffle chance —
+  and the resulting sawtooth intermittently dipped *below* tier too. The dwell now ends early only
+  when the decision actually *changed* (or the fresh 1h average slips under tier — the catch-up
+  path is untouched). A new wall-clock simulation (`run_actuated` in
+  `mining_dashboard/sim/donation_model.py`) replays the run loop through the real dwell rules —
+  the layer the fixed-step #70 sim was blind to — and pins steady state at 1.03x target with the
+  tier held; pre-fix it reproduces the overshoot at 1.17-1.21x with the tier intermittently lost.
+  The split decision log now also carries the instantaneous donated rate (`inst ~N H/s`) next to
+  the credited 1h/24h averages, so a live soak can watch the routed-vs-credited gap directly.
 - **`release.sh` rides out GHCR's read-after-push lag (#429).** A tag the registry just accepted can
   fail to resolve for a few seconds; the digest-capture and smoke-stage manifest reads killed the
   v1.3.1 cut twice this way. Both reads now retry with backoff (5 tries by default, tunable via

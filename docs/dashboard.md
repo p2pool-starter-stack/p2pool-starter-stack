@@ -229,6 +229,10 @@ same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **X
 **XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
 choice is remembered across reloads.
 
+The earnings estimates and the XvB tier calculator live only in Advanced view. Simple view shows a
+one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and stays
+away across reloads.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
   <img alt="Dashboard — Advanced view" src="../images/launch/advanced-light.png">
