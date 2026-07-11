@@ -1311,6 +1311,44 @@ class TestEarnings:
         assert e["available"] is True
         assert e["coeff_day"] > 0
 
+    def test_confirmed_disabled_by_default(self):
+        # No payouts passed (feature off) → the confirmed block reports disabled; UI shows only estimate.
+        e = build_earnings(self._NET, _metrics())
+        assert e["confirmed"] == {"enabled": False}
+
+    def test_confirmed_totals_windowed(self):
+        # #381: 24h / 7d / all-time XMR sums from stored confirmed payouts, atomic→XMR at the edge.
+        now = 1_000_000.0
+        payouts = [
+            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000_000_000},  # in 24h
+            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000_000_000},  # in 7d
+            {
+                "txid": "c",
+                "ts": now - 30 * 86_400,
+                "amount_atomic": 1_000_000_000_000,
+            },  # all-time only
+        ]
+        from mining_dashboard.web.views import _confirmed_payouts_summary
+
+        s = _confirmed_payouts_summary(payouts, now=now)
+        assert s["enabled"] is True and s["count"] == 3
+        assert s["xmr_24h"] == pytest.approx(0.25)
+        assert s["xmr_7d"] == pytest.approx(0.75)
+        assert s["xmr_all"] == pytest.approx(1.75)
+        assert s["last_ts"] == now - 100
+
+    def test_confirmed_enabled_but_empty(self):
+        # Feature on, nothing confirmed yet → enabled with zeroed totals (shows 0.000000, not "—").
+        e = build_earnings(self._NET, _metrics(), payouts=[])
+        assert e["confirmed"] == {
+            "enabled": True,
+            "count": 0,
+            "xmr_24h": 0.0,
+            "xmr_7d": 0.0,
+            "xmr_all": 0.0,
+            "last_ts": 0,
+        }
+
 
 # --- XvB tier / raffle calculator (Issue #118) -----------------------------------------
 

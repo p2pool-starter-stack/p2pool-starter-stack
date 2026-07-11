@@ -13,6 +13,23 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Confirm payouts on-chain with a view-only wallet (#381).** Every earnings figure the dashboard
+  shows is an *estimate*; nothing checked that a P2Pool payout actually landed in your wallet.
+  Now, when you set `monero.view_key` (the private **view** key for your payout address), the stack
+  runs a view-only `monero-wallet-rpc` against your **local** node and confirms payouts from the
+  chain — the coinbase outputs P2Pool pays you are the only ground truth. The earnings card gains a
+  **Confirmed** total (24h / 7d / all-time XMR) beside the estimate, and a new `payout_confirmed`
+  alert fires once per payout across every sink (Telegram, webhook, ntfy). It polls on a slow
+  cadence and records each payout locally, so a restart never re-alerts; coinbase outputs are
+  recorded when confirmed in a block, not when they mature 60 blocks later; a pruned node works
+  fine. **Security:** a view key can scan but never spend, yet it reveals every incoming amount and
+  its timing — so it's handled exactly like `node_password` (owner-only `.env`, never logged or
+  echoed, off the dashboard config editor, never on a container command line). The wallet-rpc runs
+  non-root with a read-only root filesystem, is published only to the host loopback
+  (`127.0.0.1:18082`), and is password-authenticated. Off by default (empty view key = nothing new
+  runs); **local node only** — a view key set with `monero.mode: remote` is refused. See
+  [Dashboard › Payout confirmation](docs/dashboard.md#payout-confirmation).
+
 - **Telegram control commands: `/restart` and `/apply` (#338).** The Telegram bot, until now
   strictly read-only, can accept two commands that act on the host: `/restart` recreates the stack
   and `/apply` re-applies the current on-disk config. Off by default (`telegram.control.enabled`)

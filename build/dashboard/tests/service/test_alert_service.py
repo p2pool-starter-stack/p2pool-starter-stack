@@ -767,6 +767,26 @@ class TestSinkFanout:
         assert hook.sent == [text]
         assert hook.sent_events == [AlertService.EVT_HASHRATE_LOSS]
 
+    async def test_payout_confirmed_alert_fans_out(self):
+        # #381: fans to every sink that carries payout_confirmed, carries the chain + short txid,
+        # and formats atomic→XMR. Telegram off, webhook on → only the webhook receives it.
+        tg, hook = _FakeNotifier(enabled=False), _FakeNotifier()
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        text = await svc.payout_confirmed_alert("monero", 250_000_000_000, "abcdef1234567890")
+        assert text and tg.sent == []
+        assert hook.sent == [text]
+        assert hook.sent_events == [AlertService.EVT_PAYOUT_CONFIRMED]
+        assert "0.250000" in text and "MONERO" in text and "abcdef12" in text
+        # The full txid is never put in the message — only the 8-char prefix.
+        assert "abcdef1234567890" not in text
+
+    async def test_payout_confirmed_alert_noop_when_toggled_off(self):
+        # Event toggled off on the only sink → no send, returns None (the caller still records it).
+        hook = _FakeNotifier(allow=set())  # enabled transport, but no events allowed
+        svc = _svc(notifier=hook, sinks=[hook])
+        assert await svc.payout_confirmed_alert("monero", 1, "tx") is None
+        assert hook.sent == []
+
     async def test_default_sinks_are_just_the_notifier(self):
         # No webhook/ntfy config in the test env → the sink list is exactly [notifier], so the
         # default stack's behaviour is unchanged.

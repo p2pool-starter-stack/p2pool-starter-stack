@@ -6,6 +6,7 @@ import time
 from aiohttp import ClientSession
 
 from mining_dashboard.client.docker.docker_control import DockerControl
+from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.xvb_client import (
@@ -40,6 +41,7 @@ from mining_dashboard.config.config import (
     LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     MONERO_WALLET_ADDRESS,
+    PAYOUT_CONFIRM_ENABLED,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
@@ -451,6 +453,10 @@ class DataService:
         self.alert_service = AlertService(
             kv_get=self.state_manager.get_kv, kv_set=self.state_manager.set_kv
         )
+        # On-chain payout confirmation (#381): a view-only wallet-rpc client, polled on the slow
+        # cadence below. Only constructed when the feature is on (view key set on a local node);
+        # off, this stays None and no payout polling ever runs.
+        self.wallet_client = MoneroWalletClient() if PAYOUT_CONFIRM_ENABLED else None
         # Tor guard self-heal (#424), opt-in via tor.auto_heal — a no-op (no probes, no
         # restarts) unless enabled. Reuses the #31 docker-control proxy (start/stop only)
         # to restart tor when clearnet egress is stuck on a failing guard; the recovery
@@ -677,6 +683,29 @@ class DataService:
                 await asyncio.to_thread(
                     self.state_manager.update_xvb_stats, registration_state="failing"
                 )
+
+    async def _sync_payouts(self):
+        """Confirm on-chain payouts from the view-only wallet-rpc (#381), throttled by the caller.
+
+        Seeds the query from the highest stored Monero payout height, so a restart re-scans only
+        the tip; ``add_payouts`` is idempotent on ``(chain, txid)``, so the overlap is dropped and
+        nothing replays. Every genuinely-new confirmed payout fires exactly one ``payout_confirmed``
+        alert. A wallet still doing its first-run scan (or briefly unreachable) returns ``[]`` — a
+        quiet no-op, no error. chain="monero" here; the Tari sibling (#462) reuses the same table."""
+        chain = "monero"
+        min_height = await asyncio.to_thread(self.state_manager.get_payout_max_height, chain)
+        payouts = await asyncio.to_thread(self.wallet_client.get_confirmed_payouts, min_height)
+        if not payouts:
+            return
+        new_rows = await asyncio.to_thread(self.state_manager.add_payouts, chain, payouts)
+        for r in new_rows:
+            logger.info(
+                "Payout confirmed on-chain: %.6f XMR (tx %s…) at height %d (#381)",
+                r["amount_atomic"] / 1e12,
+                r["txid"][:8],
+                r["height"],
+            )
+            await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
 
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
@@ -1056,6 +1085,12 @@ class DataService:
                         # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS
                         # share existing — before then the endpoint is a no-op, so we just retry.
                         await self._maybe_register_xvb(shares_list, p2pool_stats)
+
+                    # 7c. On-chain payout confirmation (#381), every 10th poll (~5 min). Independent
+                    # of XvB — gated on the view-only wallet-rpc being configured (local node + view
+                    # key). Polls get_transfers, persists new confirmed payouts, fires one alert each.
+                    if self.wallet_client is not None and iteration_count % 10 == 0:
+                        await self._sync_payouts()
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to

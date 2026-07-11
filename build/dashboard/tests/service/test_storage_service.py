@@ -588,3 +588,71 @@ class TestShareStatsSeries:
             assert sm.get_share_stats() == []
         finally:
             sm.close()
+
+
+class TestPayouts:
+    """Confirmed on-chain payouts (#381), keyed (chain, txid) so the Tari sibling (#462) reuses it."""
+
+    def _rows(self):
+        return [
+            {"txid": "aa", "height": 100, "ts": 1000.0, "amount_atomic": 250_000_000_000},
+            {"txid": "bb", "height": 101, "ts": 2000.0, "amount_atomic": 500_000_000_000},
+        ]
+
+    def test_add_returns_only_new_rows(self, state_manager):
+        new = state_manager.add_payouts("monero", self._rows())
+        assert {r["txid"] for r in new} == {"aa", "bb"}
+
+    def test_add_is_idempotent_on_chain_txid(self, state_manager):
+        state_manager.add_payouts("monero", self._rows())
+        # Re-adding the same rows (a restart re-scanning the tip) inserts nothing new → no re-alert.
+        again = state_manager.add_payouts("monero", self._rows())
+        assert again == []
+        assert len(state_manager.get_payouts("monero")) == 2
+
+    def test_same_txid_different_chain_is_a_distinct_payout(self, state_manager):
+        # The PK is (chain, txid): the same txid string on another chain must NOT collide (#462).
+        state_manager.add_payouts("monero", [self._rows()[0]])
+        new = state_manager.add_payouts("tari", [self._rows()[0]])
+        assert len(new) == 1
+        assert len(state_manager.get_payouts()) == 2  # both chains, cross-chain query
+        assert len(state_manager.get_payouts("monero")) == 1
+
+    def test_get_payouts_newest_first(self, state_manager):
+        state_manager.add_payouts("monero", self._rows())
+        got = state_manager.get_payouts("monero")
+        assert [p["txid"] for p in got] == ["bb", "aa"]  # ts DESC
+        assert got[0]["amount_atomic"] == 500_000_000_000
+
+    def test_max_height_seeds_the_wallet_poll(self, state_manager):
+        assert state_manager.get_payout_max_height("monero") == 0
+        state_manager.add_payouts("monero", self._rows())
+        assert state_manager.get_payout_max_height("monero") == 101
+        # Another chain's rows don't move Monero's seed.
+        state_manager.add_payouts(
+            "tari", [{"txid": "zz", "height": 9, "ts": 5.0, "amount_atomic": 1}]
+        )
+        assert state_manager.get_payout_max_height("monero") == 101
+
+    def test_empty_input_is_a_noop(self, state_manager):
+        assert state_manager.add_payouts("monero", []) == []
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE payouts")
+        assert state_manager.add_payouts("monero", self._rows()) == []
+        assert state_manager.is_db_healthy() is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        # A DB whose payouts table is gone (alien/older schema) reads as empty / height 0, not crash.
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE payouts")
+        assert state_manager.get_payouts("monero") == []
+        assert state_manager.get_payout_max_height("monero") == 0
+
+    def test_reads_and_writes_after_close_are_safe(self, state_manager):
+        # After close() the connection is None — every payout accessor must no-op, never raise.
+        state_manager.close()
+        assert state_manager.add_payouts("monero", [{"txid": "x", "amount_atomic": 1}]) == []
+        assert state_manager.get_payouts("monero") == []
+        assert state_manager.get_payout_max_height("monero") == 0

@@ -283,6 +283,34 @@ It is scoped to P2Pool — **not** an XvB calculator:
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
 > network figures aren't available yet, the card shows `—` rather than a bogus number.
 
+### Payout confirmation
+
+Everything above is a **model**. The earnings card also shows what actually landed in your wallet,
+when you give the stack a way to check the chain. Set `monero.view_key` (the private **view** key
+for your payout address) and the stack runs a **view-only** `monero-wallet-rpc` against your local
+node, scanning for confirmed incoming payouts. P2Pool pays each miner's share directly in a Monero
+block's coinbase, so the wallet is the only ground truth that a payout arrived. The card then shows
+**Confirmed** totals — 24 hours, 7 days, and all-time XMR — beside the estimate, and a
+`payout_confirmed` alert fires once per payout (Telegram and the other sinks).
+
+The dashboard polls the wallet on a slow cadence (about every 5 minutes) and records each confirmed
+payout to a small local table, so a restart never re-alerts. Coinbase outputs become spendable only
+after 60 blocks; a payout is recorded and announced when it's **confirmed in a block**, not when it
+matures — once, never twice. A pruned node confirms payouts fine (coinbase outputs are never pruned). If the
+wallet is still doing its first scan or is briefly unreachable, the confirmed figure stays put
+rather than erroring.
+
+> **The view key is a secret. Treat it like a password.** A view key **cannot spend** — it can only
+> scan — but it reveals every incoming payout amount and its timing to anyone who can read it. The
+> stack keeps it in the owner-only `.env`, never logs or echoes it, keeps it off the dashboard
+> Configuration editor, and never puts it on a container command line. It stays on the box: the
+> view-only `monero-wallet-rpc` is published only to the host loopback (`127.0.0.1:18082`), runs
+> non-root with a read-only root filesystem, and authenticates the dashboard with a generated
+> password. **Phase 1 is local node only** — scanning through a third-party daemon would change the
+> trust story, so a view key set with `monero.mode: remote` is refused. To rotate it, get a fresh
+> view key from your wallet and replace `monero.view_key`. Leave `monero.view_key` empty (the
+> default) and none of this runs — the card shows only the estimate.
+
 ### XvB Tier (raffle)
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which

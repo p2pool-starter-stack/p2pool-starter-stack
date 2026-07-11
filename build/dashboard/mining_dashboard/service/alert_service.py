@@ -122,6 +122,7 @@ class AlertService:
     EVT_HIGH_REJECT_RATE = "high_reject_rate"
     EVT_BLOCK_FOUND = "block_found"
     EVT_PAYOUT_FOUND = "payout_found"
+    EVT_PAYOUT_CONFIRMED = "payout_confirmed"
     EVT_CONTAINER_UNHEALTHY = "container_unhealthy"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
@@ -759,6 +760,25 @@ class AlertService:
             text = self._fmt("\U0001f7e2 \U0001f4c8 Hashrate recovered.")
         for sink in sinks:
             await asyncio.to_thread(sink.send, text, self.EVT_HASHRATE_LOSS)
+        return text
+
+    async def payout_confirmed_alert(self, chain, amount_atomic, txid):
+        """Push a payout-confirmed alert (#381): the view-only wallet saw an incoming payout land
+        on-chain — the ground truth behind the earnings estimate. "Alert once" is enforced upstream
+        (the caller only invokes this for genuinely-new ``(chain, txid)`` rows the idempotent
+        ``payouts`` table just inserted), so a dashboard restart re-scanning the tip replays nothing.
+        Carries the chain so the shared table/event serves Tari's sibling (#462). No-op when the
+        event is toggled off. Returns the text sent (handy for tests), else ``None``."""
+        sinks = self._event_sinks(self.EVT_PAYOUT_CONFIRMED)
+        if not sinks:
+            return None
+        amount_xmr = (amount_atomic or 0) / 1_000_000_000_000
+        text = self._fmt(
+            f"\U0001f4b0 Payout CONFIRMED on-chain: {amount_xmr:.6f} {chain.upper()} "
+            f"landed in your wallet (tx {txid[:8]}…)."
+        )
+        for sink in sinks:
+            await asyncio.to_thread(sink.send, text, self.EVT_PAYOUT_CONFIRMED)
         return text
 
     async def tor_heal_alert(self, text):
