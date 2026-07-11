@@ -607,18 +607,19 @@ const ProxyTotals = ({ summary }) => {
     </div>`;
 };
 
-function WorkersTable({ workers, summary, ui, onSort, hostIp }) {
+function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort }) {
   // First-run empty state (#385): until the proxy has ever reported a worker, the table would be
   // eight headers over nothing — show the one action the operator must take instead. `workers`
   // includes offline rigs, so a fleet that is temporarily all-offline keeps its (red) table.
   if ((workers || []).length === 0) {
     const addr = hostIp && hostIp !== "Unknown Host" ? hostIp : "YOUR_STACK_IP";
+    const port = stratumPort || 3333; // configurable via p2pool.stratum_port (#172)
     return html`
         <div class="card">
             <h3>Workers Alive</h3>
             <div class="workers-empty">
                 <p>No workers connected yet.</p>
-                <p class="text-muted">Point each rig at <code>${addr}:3333</code> and it appears here —${" "}
+                <p class="text-muted">Point each rig at <code>${addr}:${port}</code> and it appears here —${" "}
                     see the <a href="https://github.com/p2pool-starter-stack/pithead/blob/main/docs/workers.md"
                         target="_blank" rel="noopener noreferrer">workers guide</a>.</p>
             </div>
@@ -767,7 +768,7 @@ function DashboardView({
                           onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
         <div class="grid">
-            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} />
+            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} stratumPort=${state.stratum_port} />
         </div>
         <div class="grid">
             <${Overview} state=${state} />

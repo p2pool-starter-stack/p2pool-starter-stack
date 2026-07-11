@@ -371,8 +371,10 @@ services:
       # The stratum endpoint your rigs connect to. Published on 0.0.0.0 (all interfaces) by
       # default so LAN workers can reach it; set p2pool.stratum_bind in config.json to a specific
       # address (e.g. your LAN IP, or 127.0.0.1 to disable LAN access) to narrow exposure on a
-      # public-IP host. Either way, firewall :3333 to your LAN — see docs/workers.md.
-      - "${STRATUM_BIND:-0.0.0.0}:3333:3333"
+      # public-IP host. The port itself is p2pool.stratum_port (#172, default 3333) — every rig
+      # must dial the same port (RigForge: pool.port). Either way, firewall it to your LAN — see
+      # docs/workers.md.
+      - "${STRATUM_BIND:-0.0.0.0}:${STRATUM_PORT:-3333}:${STRATUM_PORT:-3333}"
     environment:
       - PROXY_API_PORT=${PROXY_API_PORT}
       - PROXY_AUTH_TOKEN=${PROXY_AUTH_TOKEN}
@@ -387,7 +389,9 @@ services:
       - -u
       - ${MONERO_WALLET_ADDRESS}
       - -b
-      - 0.0.0.0:3333
+      # Bind matches the published container port (p2pool.stratum_port, #172). The UPSTREAM leg
+      # (-o ${P2POOL_URL}) is p2pool's container-internal stratum and stays fixed at :3333.
+      - 0.0.0.0:${STRATUM_PORT:-3333}
       - -m
       - simple
       - --coin
@@ -541,9 +545,14 @@ services:
       # How the dashboard reads each worker's own xmrig /1/summary (config.json: workers.*). One
       # configured way, no auto-detection. Defaults = stock RigForge worker (open read-only API,
       # no token, port 8080). api_auth: none (default) | name (Bearer=worker name) | token.
+      # Per-worker overrides (dashboard.workers[], #172) are NOT env — the dashboard reads them
+      # from the read-only /host-config/config.json mount above (they carry per-rig tokens).
       - XMRIG_API_PORT=${XMRIG_API_PORT:-8080}
       - XMRIG_API_AUTH=${XMRIG_API_AUTH:-none}
       - XMRIG_API_TOKEN=${XMRIG_API_TOKEN}
+      # The operator-facing stratum port (#172), display-only here: the "point your rigs at
+      # host:PORT" hint and the egress topology label track the real published port.
+      - STRATUM_PORT=${STRATUM_PORT:-3333}
       # Socket proxies are isolated on proxy_net and published only to the host loopback (#345), so
       # the host-networked dashboard reaches them here — mining containers cannot.
       - DOCKER_PROXY_URL=tcp://127.0.0.1:12375
@@ -615,6 +624,12 @@ services:
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}
       - HASHRATE_DROP_MINUTES=${HASHRATE_DROP_MINUTES:-10}
       - TELEGRAM_COMMANDS_ENABLED=${TELEGRAM_COMMANDS_ENABLED:-false}
+      # Two-way control commands (#338): /restart, /apply through the #33 host-control spool. Off by
+      # default and gated to the allow-listed operator user ids below, each action confirmed in-chat
+      # with a deny-on-timeout window. Needs DASHBOARD_CONTROL_ENABLED (the spool + runner).
+      - TELEGRAM_CONTROL_ENABLED=${TELEGRAM_CONTROL_ENABLED:-false}
+      - TELEGRAM_CONTROL_ALLOWED_IDS=${TELEGRAM_CONTROL_ALLOWED_IDS:-}
+      - TELEGRAM_CONTROL_CONFIRM_S=${TELEGRAM_CONTROL_CONFIRM_S:-60}
       # --- Operator alerts: webhook + ntfy sinks (#380) ---
       # Push-only siblings of the Telegram alerter: every alert also POSTs as JSON to each
       # webhook URL and as plain text to the ntfy topic URL. Off by default (no URLs). The
