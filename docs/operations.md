@@ -214,6 +214,11 @@ the new release *before* pulling/rebuilding, so a release that changes a config 
 `.env` var takes effect, not just the new image. Data directories and `config.json` are untouched, so
 blockchain sync and settings survive an upgrade.
 
+On a release install with the release public key on disk (`cosign.pub`, shipped in every signed
+bundle), `upgrade` verifies each image's cosign signature before pulling and aborts on any failure —
+including when the `cosign` binary itself is missing. Install cosign once and the check runs on
+every upgrade; see [Releasing › Verifying a release](releasing.md#verifying-a-release).
+
 Run `./pithead version` to see what is currently installed before and after an upgrade.
 
 ### Switching a source checkout to release images

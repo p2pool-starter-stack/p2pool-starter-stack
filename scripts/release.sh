@@ -10,7 +10,8 @@
 #   4. Stage          push to a staging tag (:vX.Y.Z-rc.N) on GHCR and capture immutable digests
 #   5. Smoke          pull the STAGED images back and verify they resolve to the right version
 #   6. Promote        re-tag the smoke-tested digests to :vX.Y.Z + :latest (no rebuild) and push
-#   7. Publish        git tag, GitHub Release from CHANGELOG, attach the ingredients manifest + bundle
+#   6b. Sign          cosign-sign the promoted digests + the install bundle with the box's key (#376)
+#   7. Publish        git tag, GitHub Release from CHANGELOG, attach the manifest + bundle + bundle sig
 #
 # Nothing user-facing is published until every gate is green. Promotion is by digest, so the released
 # bundle is bit-for-bit what was smoke-tested. The script NEVER starts the live stack on this host and
@@ -37,6 +38,9 @@
 #   GHCR_USER / GHCR_TOKEN  Registry login. Token falls back to GITHUB_TOKEN, then `gh auth token`.
 #   RELEASE_INTEGRATION_ARGS  Extra args passed to `make test-integration ARGS=...` (the #54 gate).
 #   RELEASE_SMOKE_CMD       Optional command run during the smoke stage for a fuller functional check.
+#   COSIGN_KEY / COSIGN_PASSWORD  Release signing (#376): path to the cosign private key on this box
+#                           and its passphrase. Promoted digests + the bundle get key signatures;
+#                           the committed cosign.pub (repo root, shipped in the bundle) verifies them.
 #
 set -euo pipefail
 
@@ -128,7 +132,7 @@ while [ $# -gt 0 ]; do
     --allow-dirty) ALLOW_DIRTY=1 ;;
     -y | --yes) ASSUME_YES=1 ;;
     -h | --help)
-        sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -223,6 +227,18 @@ preflight() {
     # Only the test gate needs the lint toolchain — skip the check on the paths that don't run it.
     if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_TESTS" -eq 0 ] && [ "$RESUME_PROMOTE" -eq 0 ]; then
         check_release_toolchain
+    fi
+    # Release signing (#376): every promoted digest and the install bundle are cosign-signed with the
+    # key that lives ONLY on this box (COSIGN_KEY/COSIGN_PASSWORD, same handling as GHCR_TOKEN — never
+    # echoed, never in the repo); the committed cosign.pub is what installs verify against. Checked
+    # here so a missing binary/key stops the release before any build, not after promote.
+    if [ "$DRY_RUN" -eq 0 ]; then
+        command -v cosign >/dev/null 2>&1 ||
+            die "cosign is required to sign the release (#376) — install the pinned build: docs/release-server.md § The release signing key."
+        [ -n "${COSIGN_KEY:-}" ] && [ -f "$COSIGN_KEY" ] ||
+            die "COSIGN_KEY must point at the cosign private key on this box (#376) — one-time setup: docs/release-server.md § The release signing key."
+        [ -f cosign.pub ] ||
+            die "cosign.pub is missing from the repo root (#376) — commit the public half of the release key so installs can verify what this pipeline signs."
     fi
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
@@ -439,6 +455,35 @@ promote() {
     ok "Promoted all 5 images to $TAG + latest."
 }
 
+# --- Stage 6b: sign the promoted digests (#376) ----------------------------------------------------
+
+# A cosign key signature on each promoted image so `pithead upgrade` can refuse a re-pointed tag or
+# a tampered registry. Sign the manifest-LIST digest promote just re-tagged — NEVER a per-arch child
+# digest (that makes `cosign verify <tag>` fail) and never the tag (a tag is mutable; the signature
+# must pin the bytes that were smoke-tested). No Rekor upload (--tlog-upload=false): the key is
+# private infrastructure, installs verify with the committed cosign.pub via
+# `cosign verify --key cosign.pub --private-infrastructure`. COSIGN_PASSWORD is read by cosign from
+# the environment — it never touches argv, run(), or the log.
+sign_images() {
+    stage "6b/7 Sign the promoted digests (cosign, #376)"
+    local suffix digest
+    for suffix in "${IMAGES[@]}"; do
+        digest="$(get_digest "$suffix")"
+        [ -n "$digest" ] || die "No staged digest for $suffix — nothing to sign."
+        log "Signing $digest"
+        run cosign sign --key "${COSIGN_KEY:-}" --tlog-upload=false --yes "$digest"
+    done
+    ok "Signed all 5 promoted digests (verify with the committed cosign.pub)."
+}
+
+# Detached signature for the install bundle (#376): the #59 dashboard upgrade downloads
+# pithead.tar.gz (not images) and verifies it against the cosign.pub already on the host BEFORE
+# extracting, so the tarball needs its own signature published next to it on the GitHub Release.
+sign_bundle() { # <bundle> <sig-out>
+    log "Signing the install bundle -> $(basename "$2")"
+    run cosign sign-blob --key "${COSIGN_KEY:-}" --tlog-upload=false --yes --output-signature "$2" "$1"
+}
+
 # --- Stage 7: publish (git tag, GitHub Release, manifest, bundle) ---------------------------------
 
 publish() {
@@ -447,6 +492,8 @@ publish() {
     write_manifest "$manifest"
     local bundle="$WORKDIR/pithead.tar.gz" # versionless name → stable /releases/latest/download/ URL
     make_bundle "$bundle"
+    local bundle_sig="$bundle.sig" # pithead.tar.gz.sig — the #59 upgrade runner fetches it by name
+    sign_bundle "$bundle" "$bundle_sig"
 
     confirm "Create git tag $TAG, push it, and publish the GitHub Release?" ||
         {
@@ -466,10 +513,10 @@ publish() {
         # The images are already promoted, so the draft's install bundle works the moment it's published.
         local gh_args=(release create "$TAG" --title "Pithead $TAG" --notes-file "$notes")
         [ "$DRAFT" -eq 1 ] && gh_args+=(--draft)
-        run gh "${gh_args[@]}" "$bundle" "$manifest"
+        run gh "${gh_args[@]}" "$bundle" "$bundle_sig" "$manifest"
         ok "GitHub Release $TAG $([ "$DRAFT" -eq 1 ] && echo 'created as a DRAFT (publish it from the Releases page when ready)' || echo published)."
     else
-        warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $manifest"
+        warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $bundle_sig $manifest"
     fi
 }
 
@@ -522,7 +569,9 @@ make_bundle() {
     # own "copy config.minimal.json" guidance); the advanced example is "for more options".
     local out="$1" d="$WORKDIR/pithead"
     mkdir -p "$d"
-    cp pithead pithead-completion.bash VERSION docker-compose.yml config.minimal.json config.reference.json "$d/" 2>/dev/null || true
+    # cosign.pub rides in the bundle (#376) so a release install (no git checkout) has the verifier
+    # next to pithead; preflight guarantees it exists on a real run.
+    cp pithead pithead-completion.bash VERSION docker-compose.yml config.minimal.json config.reference.json cosign.pub "$d/" 2>/dev/null || true
     local m
     while IFS= read -r m; do
         [ -e "$m" ] || {
@@ -587,6 +636,7 @@ main() {
         smoke_test
     fi
     promote
+    sign_images # #376 — signs the digests promote re-tagged; --resume-promote reaches this too
     publish
 
     printf '\n'

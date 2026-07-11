@@ -422,12 +422,17 @@ the host, with no SSH:
    it says the new version is up.
 
 The version the container proposes is never trusted as the target: the host independently fetches
-the latest tag from GitHub, and the bundle it downloads is for that host-derived tag. Today the
-bundle's authenticity rests on TLS to GitHub (over Tor) plus that tag pinning — it is not yet
-cryptographically signed, so a compromise of the release pipeline or GitHub account could serve a
-malicious bundle. Signing releases and verifying the signature in `pithead upgrade` is tracked in
-[#376](https://github.com/p2pool-starter-stack/pithead/issues/376); until it lands, treat the
-one-click upgrade with the same trust you place in GitHub itself.
+the latest tag from GitHub, and the bundle it downloads is for that host-derived tag. The bundle
+is also cryptographically verified
+([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): with the release public key
+on disk (`cosign.pub`, shipped in every signed bundle), the runner fetches the release's
+`pithead.tar.gz.sig` and checks the download against the key it **already holds** before
+extracting a byte — a bad or missing signature, or a missing cosign binary, fails the upgrade
+with nothing changed, and a swapped key inside a malicious bundle cannot vouch for itself. The
+`pithead upgrade` that follows verifies each image's signature the same way before pulling. An
+install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
+(over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
+picks up the key. See [Releasing › Signed releases](releasing.md#signed-releases).
 
 The button never appears on a source checkout — the runner refuses the request there, since a dev
 install updates with `git pull`. If the upgrade fails, the result says so in the view: a failed
