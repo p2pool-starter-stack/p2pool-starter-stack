@@ -682,6 +682,28 @@ upg_sig_order=$(
 assert_eq "upgrade verifies release-image signatures before 'compose up' (#376)" \
     "$(printf '%s\n' "$upg_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
 
+# #452: the FIRST-install `up` must also verify before it pulls — the same wiring guarantee as
+# upgrade. A fresh release install's first `up` is where the 5 images are first fetched; if verify
+# goes missing or lands after "compose", this fails.
+up_sig_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    warn_missing_data_dirs() { :; }
+    migrate_compose_project() { :; }
+    apply_tor_egress_firewall() { :; }
+    print_clearnet_banner() { :; }
+    announce_dashboard_url() { :; }
+    print_first_run_epilogue() { :; }
+    log() { :; }
+    verify_release_images() { echo verify; }
+    compose_up_checked() { echo compose; }
+    stack_up
+)
+assert_eq "first-install up verifies release-image signatures before 'compose up' (#452)" \
+    "$(printf '%s\n' "$up_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
+
 echo "== black-box: verify_release_images fail-closed gate (#376) =="
 # The verification decision itself, against a fake cosign on a PINNED PATH ($VRI/bin:/usr/bin:/bin
 # — coreutils stay, any real cosign install on the host disappears, so the host can never decide
@@ -695,35 +717,66 @@ exit "${COSIGN_RC:-0}"
 EOF
 chmod +x "$VRI/bin/cosign"
 
+# A deterministic 64-hex digest per image, and a digest-pinned compose (#461) so verify has the same
+# @sha256 bytes to check that a release install's compose would pull (#451). TOR_DG is what the tor
+# assertions expect the tor image to be verified/failed against.
+hex64() { printf "$1%.0s" $(seq 1 64); }
+TOR_DG="sha256:$(hex64 1)"
+write_pinned_compose() { # $1=dir  — one image: line per first-party suffix, each pinned by @sha256
+    local d="$1" n=1 suffix
+    : >"$d/docker-compose.yml"
+    for suffix in tor monero p2pool xmrig-proxy dashboard; do
+        printf '    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-%s:${STACK_VERSION:-dev}@sha256:%s\n' \
+            "$suffix" "$(hex64 "$n")" >>"$d/docker-compose.yml"
+        n=$((n + 1))
+    done
+}
+write_pinned_compose "$VRI"
+
 # No cosign.pub (an install older than the first signed release): documented fallback — proceed,
 # but say loudly that nothing was verified.
 out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "no pubkey -> upgrade proceeds (documented fallback)" "$?" "0"
+assert_rc "no pubkey -> pull proceeds (documented fallback)" "$?" "0"
 assert_contains "no pubkey -> loud NOT-verified warning" "$out" "NOT be signature-verified"
 
 # cosign.pub present but no cosign binary anywhere on PATH: FAIL CLOSED with an install pointer —
 # a missing verifier must not silently disable verification.
 printf 'fake release public key' >"$VRI/cosign.pub"
 out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "pubkey without cosign -> upgrade aborts" "$?" "1"
+assert_rc "pubkey without cosign -> pull aborts" "$?" "1"
 assert_contains "cosign-missing abort points at the install doc" "$out" "not installed"
 
 # Valid signatures (fake cosign exits 0): all 5 images verified with the committed key, no Rekor
-# (--private-infrastructure), against the digest-bearing tag compose will pull.
+# (--private-infrastructure), against the EXACT @sha256 digest compose pins and pulls (#451 — bound
+# to the same bytes, not the mutable tag).
 : >"$VRI/cosign.log"
 out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" \
     PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "valid signatures -> upgrade proceeds" "$?" "0"
+assert_rc "valid signatures -> pull proceeds" "$?" "0"
 assert_eq "all 5 first-party images verified" "$(grep -c '^\[cosign\] verify ' "$VRI/cosign.log")" "5"
-assert_contains "verify uses the committed key + --private-infrastructure" \
-    "$(cat "$VRI/cosign.log")" "verify --key cosign.pub --private-infrastructure ghcr.io/test/pithead-tor:v9.9.9"
+assert_contains "verify binds to the pinned digest, not the tag (#451)" \
+    "$(cat "$VRI/cosign.log")" "verify --key cosign.pub --private-infrastructure ghcr.io/test/pithead-tor@$TOR_DG"
+assert_not_contains "verify never resolves the mutable tag (#451)" "$(cat "$VRI/cosign.log")" "pithead-tor:v9.9.9"
 
 # A signature that does not verify (fake cosign exits 1): FAIL CLOSED. This is the red test for the
 # whole feature — bypass or soften the verification and it goes green-to-broken.
 out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 \
     PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "bad signature -> upgrade aborts (fail closed)" "$?" "1"
-assert_contains "bad-signature abort names the image" "$out" "Signature verification FAILED for ghcr.io/test/pithead-tor:v9.9.9"
+assert_rc "bad signature -> pull aborts (fail closed)" "$?" "1"
+assert_contains "bad-signature abort names the pinned image" "$out" "Signature verification FAILED for ghcr.io/test/pithead-tor@$TOR_DG"
+
+# cosign.pub present but the compose is NOT digest-pinned (a pre-#461 or tampered bundle): FAIL
+# CLOSED (#451). Without a digest there's nothing to bind verification to the pulled bytes, so the
+# verify-then-pull window can't be closed — refuse rather than fall back to verifying the tag.
+UNPINNED="$SANDBOX/verify451-unpinned"
+mkdir -p "$UNPINNED"
+printf 'fake release public key' >"$UNPINNED/cosign.pub"
+printf '    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-tor:${STACK_VERSION:-dev}\n' >"$UNPINNED/docker-compose.yml"
+: >"$VRI/cosign.log"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" run_sourced "$UNPINNED" verify_release_images 2>&1)"
+assert_rc "un-pinned compose + key -> pull aborts (#451)" "$?" "1"
+assert_contains "un-pinned abort explains the missing digest bind" "$out" "not digest-pinned"
+assert_eq "un-pinned -> cosign never asked to verify a tag" "$(cat "$VRI/cosign.log")" ""
 
 # Source checkout: locally built images are unsigned by design — skipped, silently and completely.
 mkdir -p "$VRI/build/dashboard"
