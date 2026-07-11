@@ -32,10 +32,10 @@ chmod 700 "$DATA"
 mkdir -p "$DATA/auth"
 CFG="$DATA/torrc"
 {
-  echo "SocksPort 9050"
-  echo "DataDirectory $DATA"
-  echo "ClientOnionAuthDir $DATA/auth"
-  echo "Log notice stdout"
+    echo "SocksPort 9050"
+    echo "DataDirectory $DATA"
+    echo "ClientOnionAuthDir $DATA/auth"
+    echo "Log notice stdout"
 } >"$CFG"
 
 # Provision the client-auth private key (if the onion needs it) into ClientOnionAuthDir. Preferred
@@ -44,11 +44,11 @@ CFG="$DATA/torrc"
 # The key is never echoed; the file is 600.
 AUTHF="$DATA/auth/dashboard.auth_private"
 if [ "${AUTH_STDIN:-0}" = "1" ]; then
-  head -n1 >"$AUTHF"
-  chmod 600 "$AUTHF"
+    head -n1 >"$AUTHF"
+    chmod 600 "$AUTHF"
 elif [ -n "${AUTH_FILE:-}" ] && [ -s "$AUTH_FILE" ]; then
-  cp "$AUTH_FILE" "$AUTHF"
-  chmod 600 "$AUTHF"
+    cp "$AUTH_FILE" "$AUTHF"
+    chmod 600 "$AUTHF"
 fi
 
 tor -f "$CFG" >"$DATA/tor.log" 2>&1 &
@@ -58,14 +58,14 @@ trap 'kill "$TORPID" 2>/dev/null || true' EXIT INT TERM
 # Wait for a fully-bootstrapped client before any fetch — a partial bootstrap can't reach an onion.
 waited=0
 while [ "$waited" -lt "$BOOT_TIMEOUT" ]; do
-  grep -q "Bootstrapped 100%" "$DATA/tor.log" && break
-  sleep 2
-  waited=$((waited + 2))
+    grep -q "Bootstrapped 100%" "$DATA/tor.log" && break
+    sleep 2
+    waited=$((waited + 2))
 done
 if ! grep -q "Bootstrapped 100%" "$DATA/tor.log"; then
-  echo "PROBE-FAIL: tor did not bootstrap within ${BOOT_TIMEOUT}s"
-  grep -iE "err|warn" "$DATA/tor.log" | tail -3 || true
-  exit 2
+    echo "PROBE-FAIL: tor did not bootstrap within ${BOOT_TIMEOUT}s"
+    grep -iE "err|warn" "$DATA/tor.log" | tail -3 || true
+    exit 2
 fi
 
 # Onion rendezvous can take a few attempts even once bootstrapped — retry until a code matches or we
@@ -74,19 +74,19 @@ fi
 code=000
 waited=0
 while [ "$waited" -lt "$FETCH_TIMEOUT" ]; do
-  code="$(curl -k -s -o /dev/null -w '%{http_code}' --max-time 25 \
-    --socks5-hostname 127.0.0.1:9050 "${SCHEME}://${ONION_ADDR}/" 2>/dev/null || echo 000)"
-  case "$code" in
+    code="$(curl -k -s -o /dev/null -w '%{http_code}' --max-time 25 \
+        --socks5-hostname 127.0.0.1:9050 "${SCHEME}://${ONION_ADDR}/" 2>/dev/null || echo 000)"
+    case "$code" in
     000) : ;; # not reachable yet — keep retrying
     *) echo "$code" | grep -qE "^(${EXPECT_CODES})$" && break ;;
-  esac
-  sleep 5
-  waited=$((waited + 5))
+    esac
+    sleep 5
+    waited=$((waited + 5))
 done
 
 if echo "$code" | grep -qE "^(${EXPECT_CODES})$"; then
-  echo "PROBE-OK: ${ONION_ADDR} reachable over Tor -> HTTP ${code}"
-  exit 0
+    echo "PROBE-OK: ${ONION_ADDR} reachable over Tor -> HTTP ${code}"
+    exit 0
 fi
 echo "PROBE-FAIL: ${ONION_ADDR} -> HTTP ${code} (wanted ${EXPECT_CODES})"
 exit 1
