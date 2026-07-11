@@ -1186,16 +1186,21 @@ run_hardening() {
         return 0
     fi
 
-    # 1. Read-only rootfs is LIVE at runtime (#377), not just declared in compose. Each hardened
-    #    service must reject a write to its own root filesystem; the writable /tmp tmpfs is
-    #    deliberately excluded (we probe /, the image layer, not the scratch mount).
-    local svc
+    # 1. Read-only rootfs is LIVE at runtime (#377), not just declared in compose. We must assert
+    #    the failure is specifically EROFS ("Read-only file system"), NOT just any error: the
+    #    containers run non-root (#255), so `touch /` on a WRITABLE rootfs already fails with EACCES
+    #    ("Permission denied") — treating any failure as a pass would green-light a service that
+    #    silently lost read_only. Only a read-only mount returns EROFS (verified: a writable
+    #    non-root container gives Permission denied; a read-only one gives Read-only file system).
+    #    /tmp is a writable tmpfs by design — we probe /, the image layer, not the scratch mount.
+    local svc probe_out
     for svc in tor monerod p2pool tari xmrig-proxy dashboard; do
-        if rx "docker exec $svc sh -c 'touch /.rootfs-write-probe' >/dev/null 2>&1"; then
-            it_fail "read-only rootfs rejects writes on $svc (#377)" "write to / SUCCEEDED — rootfs is not read-only"
-            rx "docker exec $svc rm -f /.rootfs-write-probe >/dev/null 2>&1" || true
+        probe_out="$(rx "docker exec $svc sh -c 'touch /.rootfs-write-probe 2>&1 && rm -f /.rootfs-write-probe'" 2>&1)"
+        if printf '%s' "$probe_out" | grep -q "Read-only file system"; then
+            it_pass "read-only rootfs rejects writes with EROFS on $svc (#377)"
         else
-            it_pass "read-only rootfs rejects writes on $svc (#377)"
+            it_fail "read-only rootfs rejects writes with EROFS on $svc (#377)" \
+                "expected 'Read-only file system', got: ${probe_out:-<write SUCCEEDED — rootfs is writable>}"
         fi
     done
 
