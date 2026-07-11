@@ -53,6 +53,9 @@ const ui = {
   // theme-init.js already applied it to <html> before first paint; we mirror it into the UI
   // state and re-apply on toggle.
   theme: normalizeTheme(localStorage.getItem("dashboardTheme")),
+  // Simple-view pointer to the Advanced-only earnings/XvB calculators (#425). Persisted once
+  // dismissed — either explicitly or by visiting Advanced view — so it shows once per browser.
+  hintDismissed: localStorage.getItem("dashboardCalcHint") === "dismissed",
 };
 
 // Reflect the current theme onto <html data-theme>; the CSS palette (and the chart, which reads
@@ -70,7 +73,7 @@ function rerender() {
     html`<${App} state=${state} connected=${connected} ui=${ui}
                      onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme}
                      onZoom=${setZoom} onResetZoom=${resetZoom} onToggleSeries=${toggleSeries}
-                     onAvgWindow=${setAvgWindow} />`,
+                     onAvgWindow=${setAvgWindow} onDismissHint=${dismissHint} />`,
     root,
   );
 }
@@ -132,6 +135,18 @@ function onSort(idx) {
 function setView(mode) {
   ui.view = mode;
   localStorage.setItem("dashboardView", mode);
+  // Visiting Advanced retires the calculators hint (#425) — its discoverability job is done.
+  if (mode === "advanced" && !ui.hintDismissed) {
+    ui.hintDismissed = true;
+    localStorage.setItem("dashboardCalcHint", "dismissed");
+  }
+  rerender();
+}
+
+// Dismiss the Simple-view calculators hint (#425) without leaving Simple view.
+function dismissHint() {
+  ui.hintDismissed = true;
+  localStorage.setItem("dashboardCalcHint", "dismissed");
   rerender();
 }
 

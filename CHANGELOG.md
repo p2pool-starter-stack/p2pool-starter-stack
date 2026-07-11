@@ -13,6 +13,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Simple view points at the Advanced-only calculators (#425).** The P2Pool Earnings card — the
+  XMR/XTM estimates and the XvB tier calculator — renders only in Advanced view, and operators on
+  the default Simple view concluded it didn't exist. Simple view now shows a one-time dismissible
+  banner linking to Advanced view; dismissing it (or opening Advanced view) retires it for good
+  in that browser.
 - **Subcommand chaining + bash/zsh tab-completion (#94).** `./pithead apply upgrade` runs both
   commands in order, failing fast on the first non-zero step and reporting what did and didn't
   run. The whole chain is validated first: non-chainable commands (`setup`, `logs`, `restore`,
