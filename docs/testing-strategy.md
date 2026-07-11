@@ -86,8 +86,10 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 |---|---|---|
 | Disabled / zero shares / `fail_count ≥ 3` / no sustainable tier → P2POOL | guards | 1 ✅ |
 | Closed-loop ramp/back-off, cold-start seed, VIP-reserve anti-overshoot (#70) | controller | 1 ✅ |
+| Actuated run-loop duty: split remainder dwell honored, steady state at tier + cushion (#423) | wall-clock sim | 1 ✅ |
 | P2POOL / XVB / SPLIT modes, tiers, smart-sleep early exit | decision | 1 ✅ |
 | Real XvB endpoint reachable / failing | network | 4 (real endpoint) |
+| Credited 1h/24h averages converge to tier on live XvB (soak) | live donation | 4 (real endpoint) |
 
 ### F. Dashboard `/api/state` field states
 
