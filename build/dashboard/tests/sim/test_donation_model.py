@@ -18,6 +18,7 @@ from mining_dashboard.sim.donation_model import (
     Scenario,
     build_controller,
     make_algo_controller,
+    run_actuated,
     run_algo,
 )
 
@@ -125,6 +126,54 @@ class TestSelfCalibration:
         last_day = r.credited_1h[-CYCLES_PER_DAY:]
         spread = (max(last_day) - min(last_day)) / sc.target_hr
         assert spread < 0.10  # settled, not oscillating
+
+
+class TestActuatedRunLoop:
+    """The #423 regression, pinned at the tier the fixed-step sim is blind to.
+
+    `run_algo` models the decision and *assumes* the SPLIT remainder dwell runs
+    its course — it was green while prod overshot 26-44%, because the shipping
+    `_smart_sleep` collapsed every remainder to one 30s tick (its early-exit
+    fired on the held SPLIT decision itself). `run_actuated` replays the run()
+    loop in wall-clock seconds through the real dwell predicate, so these tests
+    fail against that pre-fix predicate (steady ~1.17-1.21x AND the tier
+    intermittently lost as the loop sawtooths) and pass with the held-decision
+    fix (steady 1.03x = target + cushion, tier held throughout)."""
+
+    @pytest.mark.parametrize(
+        "current_hr",
+        [46_300, 57_000],  # the #70 field rig, and a prod-#423-sized fleet
+    )
+    def test_actuated_steady_state_converges_to_reference(self, current_hr):
+        sc = Scenario(
+            name=f"actuated-{current_hr}",
+            target_hr=10_000,
+            current_hr=current_hr,
+            p2pool_difficulty=DIFFICULTY,
+            cycles=3 * CYCLES_PER_DAY,
+        )
+        r = run_actuated(sc)
+        # Held: both credited averages stay at/above threshold across steady state
+        # (undershoot drops the tier — worse than the waste this issue is about).
+        assert r.tier_held()
+        # Converged: a hair above threshold (the noise cushion), no sustained
+        # overshoot on either window. Pre-fix this sits at 1.17-1.21x.
+        assert r.steady_overshoot_1h <= 1.06
+        assert r.steady_overshoot_24h <= 1.06
+
+    def test_actuated_duty_matches_command_not_dwell_collapse(self):
+        """The actuated share of time on XvB must be what holding the reference
+        needs (~ref/hr + ramp compensation), not the slice/(slice+tick) duty the
+        collapsed dwell produced (pre-fix: ~32% for a 22% requirement)."""
+        sc = Scenario(
+            name="duty",
+            target_hr=10_000,
+            current_hr=46_300,
+            p2pool_difficulty=DIFFICULTY,
+            cycles=3 * CYCLES_PER_DAY,
+        )
+        r = run_actuated(sc)
+        assert r.donated_duty <= 0.27  # ~10.3k/46.3k plus switch-ramp compensation
 
 
 class TestVipReserve:
