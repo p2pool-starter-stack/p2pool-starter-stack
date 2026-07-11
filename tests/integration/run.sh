@@ -909,7 +909,7 @@ run_lifecycle() {
     # restore brings them back. We change the pool, restore, and assert the pool reverted and
     # secrets survived — exercising both CLI verbs end-to-end (not just the rollback net).
     it_step "backup → restore round-trip…"
-    if pithead backup -y >/dev/null 2>&1; then
+    if pithead backup -y --no-encrypt >/dev/null 2>&1; then
         local arch
         arch="$(rx 'ls -t backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1')"
         if [ -n "$arch" ]; then
@@ -1156,7 +1156,7 @@ run_auth_fail_closed() {
 safety_backup() {
     [ "$SAFETY_BACKUP" = "1" ] || return 0
     it_log "Taking a safety backup before destructive scenarios (pithead backup -y)…"
-    if ! pithead backup -y >"$OUT_DIR/backup.log" 2>&1; then
+    if ! pithead backup -y --no-encrypt >"$OUT_DIR/backup.log" 2>&1; then
         it_fail "safety backup created" "see $OUT_DIR/backup.log"
         return 0
     fi
