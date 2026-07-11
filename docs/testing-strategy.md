@@ -86,8 +86,10 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 |---|---|---|
 | Disabled / zero shares / `fail_count ≥ 3` / no sustainable tier → P2POOL | guards | 1 ✅ |
 | Closed-loop ramp/back-off, cold-start seed, VIP-reserve anti-overshoot (#70) | controller | 1 ✅ |
+| Actuated run-loop duty: split remainder dwell honored, steady state at tier + cushion (#423) | wall-clock sim | 1 ✅ |
 | P2POOL / XVB / SPLIT modes, tiers, smart-sleep early exit | decision | 1 ✅ |
 | Real XvB endpoint reachable / failing | network | 4 (real endpoint) |
+| Credited 1h/24h averages converge to tier on live XvB (soak) | live donation | 4 (real endpoint) |
 
 ### F. Dashboard `/api/state` field states
 
@@ -110,6 +112,8 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `upgrade` (image pull/rebuild) | real box | release staging smoke (docs) |
 | `backup`/`restore`, `reset-dashboard` | real box | 1 ✅ (partial) · 4 ▶ (`--lifecycle`/`--safety-backup`) |
 | `doctor` runtime verdicts (#383): egress firewall, stratum listening, dashboard answers | real box | 1 ✅ (stubbed toolchain) · 4 ▶ (`--check`) |
+| Control channel (#33): `apply --dry-run` preview, runner claim/validate/commit, fail-closed flag, rw/ro spool mounts | spool files / sourced fns | 1 ✅ (shell + pytest + compose) · 4 (systemd path unit on a real box — not yet a matrix row) |
+| Audit + access logs (#349): key-names-not-values audit entries, bounded log growth, Caddyfile log block, hostile log content served inert | spool/log fixtures | 1 ✅ (shell + pytest + node) · 4 (real Caddy writes over Tor — covered by the same onion matrix row) |
 
 ### H. Host / infrastructure (real-only)
 

@@ -10,18 +10,64 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead apply` | Preview and apply `config.json` changes. Warns before disruptive ones and recreates only what changed. `-y` / `--yes` skips the prompt. |
 | `./pithead up` | Start the stack. |
 | `./pithead down` | Stop the stack. |
-| `./pithead restart` | Restart the stack. |
+| `./pithead restart [tor]` | Restart the stack. `restart tor` restarts only the tor container so it picks fresh guards when Tor clearnet egress is stuck (#424) — every Tor circuit drops and rebuilds, mining onions included. See [Tor egress broken while mining works](#troubleshooting). |
 | `./pithead upgrade` | Re-render the generated config, then **pull** (release bundle) or **rebuild** (source checkout) the images and restart. Run after downloading a newer bundle or a `git pull`. |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
-| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus four runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, the dashboard app answers behind its container, and a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — restart the tor container to pick fresh guards). A paste-able health report. |
-| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped `tar.gz` under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
-| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus four runtime checks: the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333`, the dashboard app answers behind its container, and a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — fix with `./pithead restart tor`, or set `tor.auto_heal: true` to automate it). A paste-able health report. |
+| `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped, passphrase-encrypted archive under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--no-encrypt` writes a plaintext `tar.gz`; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
+| `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
+| `./pithead rotate-secrets` | Regenerate the stack's internal credentials after a suspected leak: the local Monero RPC password, the stratum access-password (only when `p2pool.stratum_password` is `"auto"`), and the xmrig-proxy control-API token. Recreates the affected containers. `-y` / `--yes` skips the prompt. See [Rotating the internal secrets](#rotating-the-internal-secrets). |
+| `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
 Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
 `tor`, `dashboard`, `docker-proxy`, `docker-control`, `caddy`.
+
+### Chaining commands
+
+Run several commands in one invocation — each step in order, left to right:
+
+```bash
+./pithead apply upgrade      # apply config changes, then upgrade
+./pithead upgrade status     # upgrade, then health-check the result
+```
+
+Chainable commands: `apply`, `up`, `down`, `restart`, `upgrade`, `status`, `doctor`, `backup`.
+The whole chain is validated before anything runs; a nonsense chain is rejected with nothing
+executed. Rejected: a command that isn't chainable (`setup`, `logs`, `restore`,
+`reset-dashboard`, and the info commands run alone), a duplicated command, more than one of
+`up`/`down`/`restart` in the same chain (`up down` contradicts itself), and `down` anywhere but
+last (the steps after it would act on a stopped stack).
+
+A chain fails fast: the first step that exits non-zero stops it, pithead reports which step
+failed and what did and didn't run, and the failing step's exit code becomes the chain's.
+Flags don't chain — `apply -y upgrade` is a single `apply` invocation (and `apply` rejects the
+stray argument), so run flagged commands separately.
+
+### Tab completion
+
+`pithead-completion.bash` (in the repo root and the release bundle) completes subcommands for
+`./pithead <TAB>`, service names for `./pithead logs <TAB>`, and `tor` for
+`./pithead restart <TAB>`.
+
+bash — add to `~/.bashrc`:
+
+```bash
+source /path/to/pithead/pithead-completion.bash
+```
+
+zsh — add to `~/.zshrc` (`bashcompinit` needs `compinit` loaded first):
+
+```zsh
+autoload -U +X compinit && compinit
+autoload -U +X bashcompinit && bashcompinit
+source /path/to/pithead/pithead-completion.bash
+```
+
+Service-name completion reads `docker-compose.yml` next to the `pithead` you're completing, so
+it works from any checkout or bundle directory.
 
 ---
 
@@ -40,7 +86,11 @@ running (and healthy) service, and a ⚠/✗ for anything unhealthy, restarting,
 It exits non-zero when something needs attention, so you can wire it into a cron/monitoring check.
 A stopped `p2pool`/`xmrig-proxy` is reported as intentional, not an error: the dashboard stops it
 either to fail workers over a node-down outage or while the miner is held until the required chains
-finish their initial sync. Check the dashboard to see which.
+finish their initial sync. When a chain is still syncing, `status` reads the dashboard's own
+`/api/state` and prints its progress inline — a line per chain with the percent and the number of
+blocks left, so you don't have to open the dashboard to see how far off release is. No ETA is
+shown: block rate isn't sampled, so the blocks-remaining count is the honest figure. The lines are
+skipped once both chains are synced, or when the dashboard app isn't answering yet.
 
 **Start / stop / restart:**
 
@@ -52,6 +102,10 @@ finish their initial sync. Check the dashboard to see which.
 
 **Change a setting:** edit `config.json`, then run `./pithead apply`. See
 [Configuration › Changing settings later](configuration.md#changing-settings-later).
+
+**Preview without applying:** `./pithead apply --dry-run` prints the change rows and stops —
+nothing is written or recreated. `--porcelain` makes the output machine-readable
+(`FLAG<TAB>KEY<TAB>MESSAGE` per row); the dashboard control runner uses exactly this.
 
 **Changing the payout wallet:** `apply` asks you to type the first 8 characters of the new address
 (a bare `y` is not enough for the one change that redirects every future reward; `apply -y` skips
@@ -69,9 +123,77 @@ enables this by default; a custom/rootless install (or `setup --skip-deps`) may 
 
 ---
 
+## Editing config from the dashboard
+
+With `dashboard.control.enabled: true` (default off; needs a `dashboard.auth.password`), the
+dashboard gains a [Configuration view](dashboard.md#configuration-view) that stages config changes
+for a host-side runner. `apply` (and `setup`/`upgrade`) install two systemd units when the flag is
+on, and remove them when it is off:
+
+- `pithead-control.path` — watches `./data/control/requests/` for request files.
+- `pithead-control.service` — a root oneshot running `pithead control-run-pending` from the
+  install directory. Fixed command, no parameters from the container.
+
+The runner dispatches exactly three actions: `apply --dry-run --porcelain` (preview), `apply -y`
+(commit), and a release upgrade — the dashboard's
+[Upgrade button](dashboard.md#upgrading-from-the-dashboard), for which the runner re-derives the
+target from the GitHub release API itself and refuses any other version.
+
+The spool lives under `./data/control/`: `requests/` (the only directory the dashboard container
+can write), `staged/` (host-only), and `results/` + `audit/` (container read-only).
+`audit/control.log` records one JSON line per handled request — timestamp, the logged-in dashboard
+user, action, outcome, and the names of the changed settings (never their values) — and the
+container cannot rewrite it. The writer trims the log to its newest 2000 entries once it passes
+512 KiB, so it never grows unbounded.
+
+To disable the channel, set `dashboard.control.enabled: false` and run `./pithead apply`: the
+units are disabled and removed, the routes disappear from the dashboard (404), and the spool
+directory is left in place. To inspect or drain the queue by hand, run
+`./pithead control-run-pending`. A commit keeps the previous config at `config.json.bak-control`;
+a failed apply names it in the result and retries container recreation on the next apply, same as
+the CLI.
+
+---
+
+## Watching for intruders
+
+Caddy writes a JSON access log — one line per dashboard request, with timestamp, HTTP status,
+method, path, and the authenticated user — to `./data/caddy-logs/access.log`
+([#349](https://github.com/p2pool-starter-stack/pithead/issues/349)). It is always on. Caddy
+redacts credential headers by default, so no password material lands in it, and Caddy's native
+rolling caps it at 4 MiB per file, the current file plus two rolled ones (~12 MiB worst case).
+The dashboard's Configuration view surfaces the same data:
+[recent accesses and a failed-login count](dashboard.md#access-log-and-recent-config-changes).
+
+How to read it, given the dashboard is reachable over a Tor onion
+([#343](https://github.com/p2pool-starter-stack/pithead/issues/343)): every request arrives via
+the local Tor daemon, so there is **no source IP** to trace or block — the attack signal is the
+rate and pattern of failures, not identity.
+
+- **A burst of 401s** means someone who can already reach the dashboard — they have the onion
+  address, and the client-auth key if `dashboard.onion.client_auth` is on (the default) — is
+  guessing the password. Rotate it: set a new `dashboard.auth.password` in `config.json` and run
+  `./pithead apply`.
+- **Unexplained traffic on a client-auth-off onion** means the address itself has leaked (it is
+  online-guessable in that mode). Rotate the address: `./pithead rotate-dashboard-onion` mints a
+  fresh onion and client key; the old ones stop working immediately
+  ([details](configuration.md#remote-access-over-tor-onion-service)).
+
+Config tampering shows in the other log: `./data/control/audit/control.log` (above) names every
+change staged through the dashboard and who committed it. A change you didn't make is the same
+rotate-now signal. Secret rotation beyond the dashboard password is tracked in
+[#378](https://github.com/p2pool-starter-stack/pithead/issues/378).
+
+---
+
 ## Updating the stack
 
 The update path depends on how you installed (see [Getting Started](getting-started.md#2-get-the-code)).
+
+**From the dashboard:** with `dashboard.control.enabled: true`, a release install can run this
+whole sequence from the browser — see
+[Dashboard › Upgrading from the dashboard](dashboard.md#upgrading-from-the-dashboard). The steps
+below are what that button performs, and the only path for source checkouts.
 
 **Release bundle (the default):** from the install directory, re-download the latest bundle over it,
 then upgrade. `upgrade` **pulls** the new published images:
@@ -92,6 +214,13 @@ Either way, `upgrade` re-renders the generated config (`.env`, the Caddyfile, an
 the new release *before* pulling/rebuilding, so a release that changes a config template or adds an
 `.env` var takes effect, not just the new image. Data directories and `config.json` are untouched, so
 blockchain sync and settings survive an upgrade.
+
+On a release install with the release public key on disk (`cosign.pub`, shipped in every signed
+bundle), `upgrade` verifies each image's cosign signature before pulling and aborts on any failure —
+including when the `cosign` binary itself is missing. Install cosign once and the check runs on
+every upgrade; see [Releasing › Verifying a release](releasing.md#verifying-a-release).
+
+Run `./pithead version` to see what is currently installed before and after an upgrade.
 
 ### Switching a source checkout to release images
 
@@ -143,12 +272,29 @@ Instead of copying files by hand, run:
 ./pithead backup
 ```
 
-This writes a timestamped `tar.gz` under `backups/` holding the irreplaceable state: `config.json`,
-`.env` (secrets), the `Caddyfile` (if present), the Tor onion keys, and the dashboard database
-(hashrate history and settings). Blockchains are excluded (they re-sync), so the archive is small.
-The archive is `chmod 600`, and `pithead` prints its path when done. Before writing, `backup` checks
-free space and prompts if it looks tight. On a source checkout, `backups/` is git-ignored — the
-archive carries `.env` and the onion private keys, and secret scanners can't see inside a tarball.
+This prompts for a passphrase, then writes a timestamped, encrypted `tar.gz.enc` under `backups/`
+holding the irreplaceable state: `config.json`, `.env` (secrets), the `Caddyfile` (if present), the
+Tor onion keys, and the dashboard database (hashrate history and settings). Blockchains are
+excluded (they re-sync), so the archive is small. The archive is `chmod 600`, and `pithead` prints
+its path when done. Before writing, `backup` checks free space and prompts if it looks tight. On a
+source checkout, `backups/` is git-ignored — the archive carries `.env` and the onion private keys,
+and secret scanners can't see inside a tarball.
+
+Encryption is `openssl enc -aes-256-cbc -pbkdf2` with 600,000 PBKDF2 iterations (`openssl` is
+already a stack dependency; AEAD modes like GCM are not available through `openssl enc`, so CBC is
+the portable choice). The tar stream pipes straight into `openssl` — no plaintext archive ever
+touches the disk — and the passphrase passes over a file descriptor, never the command line.
+`chmod 600` protects the archive on this disk only; the encryption is what protects it once it is
+copied off-box. The archive is unreadable without the passphrase, onion keys included, so store the
+passphrase somewhere other than this host.
+
+Losing the passphrase loses the backup — there is no recovery!
+
+For unattended runs (cron), set `PITHEAD_BACKUP_PASSPHRASE` in the environment. An unattended run
+(`--yes`) with no passphrase set **refuses** rather than downgrading — a job whose passphrase line
+is typo'd away must fail loudly, not archive your onion keys in plaintext while reporting success.
+To write a plaintext archive on purpose, pass `--no-encrypt` (an empty passphrase at the interactive
+prompt does the same, with a warning).
 
 If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
 `-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
@@ -163,16 +309,57 @@ To recover (on a new machine, or after a wipe) copy the archive back and run:
 
 ```bash
 ./pithead down                       # stop the stack first so files restore cleanly
-./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz
+./pithead restore backups/pithead-backup-YYYYmmdd-HHMMSS.tar.gz.enc
 ./pithead up
 ```
 
-`restore` prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back,
-fixes Tor key ownership so the onion address returns unchanged, and restores hashrate history and
+`restore` detects the format from the archive itself — encrypted backups ask for the passphrase
+(or read `PITHEAD_BACKUP_PASSPHRASE`), and plaintext archives from earlier releases restore
+unchanged, no flag needed. A wrong passphrase fails before anything on disk is touched. `restore`
+prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back, fixes
+Tor key ownership so the onion address returns unchanged, and restores hashrate history and
 dashboard settings.
 
 > NOTE: After a restore, Caddy regenerates the dashboard's HTTPS certificate, so the browser shows
 > its "not trusted" warning once. Accept it as on first setup.
+
+---
+
+## Rotating the internal secrets
+
+`.env` and `config.json` carry three credentials that are generated once and otherwise live
+forever. If either file may have leaked — a backup left the box, a `.env` was pasted into a bug
+report, an operator with access left — rotate them:
+
+```bash
+./pithead rotate-secrets
+```
+
+The command previews exactly what your config rotates, asks for confirmation (`-y` / `--yes`
+skips it), regenerates the secrets, re-renders `.env`, and recreates the containers that consume
+them (a brief restart; chain data and dashboard history are untouched):
+
+- **Monero node RPC password** (`monero.node_password`) — rotated in local mode only; internal to
+  the stack, no follow-up needed. With `monero.mode: "remote"` the credential belongs to the
+  remote node and is skipped.
+- **Stratum access-password** (`PROXY_STRATUM_PASSWORD`) — rotated only when
+  `p2pool.stratum_password` is `"auto"`. The new value is printed at the end. Every rig is
+  rejected until its stratum `pass` is updated to it — see
+  [Workers › Authentication](workers.md#authentication). A literal password lives in
+  `config.json`: change it there and run `./pithead apply`. When stratum auth is off there is
+  nothing to rotate.
+- **xmrig-proxy control-API token** (`PROXY_AUTH_TOKEN`) — always rotated; internal to the stack,
+  no follow-up needed.
+
+Before changing anything, `rotate-secrets` saves owner-only copies of `config.json` and `.env` as
+`config.json.bak-<timestamp>` and `.env.bak-<timestamp>`. They hold the OLD secrets: delete them
+once the stack is confirmed healthy. If the container recreate fails, the new values are already
+committed — fix the cause and run `./pithead apply` to retry the recreate, or restore the two
+copies and run `./pithead apply` to roll back.
+
+The dashboard's `.onion` address and client-auth key have their own command,
+`./pithead rotate-dashboard-onion` — see
+[Configuration › Dashboard onion](configuration.md#reaching-the-dashboard-from-anywhere-tor-onion).
 
 ---
 
@@ -215,6 +402,26 @@ by P2Pool. Public "open node" endpoints don't qualify; use a node you run and co
 **HugePages shows as disabled / low.**
 Persistent HugePages require a GRUB change and a **reboot**. Re-run `./pithead setup` (without
 `--skip-optimize`) and reboot when prompted.
+
+**Tor egress broken while mining works.**
+Healthchecks reports the host down and Telegram commands go quiet, yet workers keep hashing.
+Tor can bootstrap to 100% and then sit on a **failing guard**: new circuits time out, so every
+feature that exits Tor to the clearnet — Healthchecks pings, the Telegram bot, XvB stats — breaks
+at once, while mining rides established onion circuits and keeps working. `./pithead doctor`
+confirms it: the Tor clearnet-egress check WARNs while everything else reads healthy. Fix:
+
+```bash
+./pithead restart tor
+```
+
+The restart makes Tor reselect guards; all Tor circuits drop and rebuild (p2pool/monerod re-peer
+on their own within minutes). Re-run `./pithead doctor` to confirm egress recovered. To have the
+stack do this itself, set `tor.auto_heal: true` in `config.json` and run `./pithead apply`: the
+dashboard then probes Tor clearnet egress every 5 minutes and restarts tor once egress has been
+broken for 15 minutes — at most 3 restarts per outage, 30 minutes apart, each logged and followed
+by a Telegram note once the path is back. If the Tor network itself is overloaded, it stops
+restarting and keeps warning instead. Off by default: a tor restart drops every circuit, so the
+stack does not restart its privacy boundary unbidden. (#424)
 
 **The dashboard data looks broken and you want a clean slate.**
 `./pithead reset-dashboard` wipes and recreates the dashboard and P2Pool data. This is

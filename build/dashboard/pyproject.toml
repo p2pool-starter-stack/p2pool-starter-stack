@@ -7,7 +7,7 @@ name = "mining-dashboard"
 # Keep in lockstep with the top-level VERSION file — the single source of truth for the stack version
 # (#44). A shell test (tests/stack/run.sh) fails if these drift; the dashboard *displays* the version
 # from VERSION (baked in as PITHEAD_VERSION, #58), so this is packaging metadata only.
-version = "1.3.1"
+version = "1.4.0"
 description = "Monitoring dashboard and XvB switching engine for Pithead"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,7 @@ dependencies = [
   # grpcio/protobuf floors are dictated by the checked-in Tari gRPC stubs
   # (mining_dashboard/client/tari/generated/*_pb2*.py), which assert these at
   # import time. Do not resolve lower; regenerate the stubs if bumping.
-  "grpcio>=1.82.0",
+  "grpcio>=1.82.1",
   "protobuf>=6.31.1,<7",
   "aiofiles>=24.1",
 ]
@@ -87,9 +87,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests: asserts are the idiom (S101); fixtures use dummy creds (S106); broad
+# Tests: asserts are the idiom (S101); fixtures use dummy creds (S105/S106); broad
 # pytest.raises(Exception) is fine (B017); os.path in async test bodies is harmless (ASYNC240).
-"tests/**" = ["S101", "S106", "B017", "ASYNC240"]
+"tests/**" = ["S101", "S105", "S106", "B017", "ASYNC240"]
 # Generated-stub imports are intentionally grouped below the logger + the generation guidance.
 "mining_dashboard/client/tari/tari_client.py" = ["E402"]
 

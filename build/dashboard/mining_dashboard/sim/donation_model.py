@@ -321,6 +321,147 @@ def run_simulation(controller: Controller, scenario: Scenario) -> SimResult:
     return result
 
 
+# --- actuated run-loop simulation (#423) ------------------------------------
+# `run_simulation` models the *decision* (one fixed 10-minute step per cycle) and
+# assumes a SPLIT's p2pool remainder actually runs its course. #423 proved that
+# assumption can break: the remainder is `_smart_sleep`'s to honor, and its
+# early-exit rules set the *actuated* donation duty. This variant replays the
+# `run()` branch structure in wall-clock seconds, calling the real `get_decision`
+# once per cycle and the real `_dwell_should_end` on every dwell tick — so a
+# dwell-rule bug shows up here as credited overshoot, where the fixed-step sim
+# is blind to it (it gave #70 a false all-clear while prod overshot 26-44%).
+
+_SMART_SLEEP_TICK_S = 30  # UPDATE_INTERVAL default: the live _smart_sleep check cadence
+
+
+class _SecondsWindow:
+    """Rolling per-second average over a fixed span, pre-filled with zeros
+    ("fixed" semantics: the average ramps up from 0 like a fresh XvB window)."""
+
+    def __init__(self, span_s: int):
+        from collections import deque
+
+        self.span = span_s
+        self._buf = deque([0.0] * span_s, maxlen=span_s)
+        self._sum = 0.0
+
+    def push(self, rate: float) -> None:
+        self._sum += rate - self._buf[0]  # deque is always full: append evicts left
+        self._buf.append(rate)
+
+    def average(self) -> float:
+        return self._sum / self.span
+
+
+@dataclass
+class ActuatedResult:
+    """Metrics from `run_actuated`. Window averages are sampled once per minute."""
+
+    target_hr: float
+    avg_1h: list[float] = field(default_factory=list)
+    avg_24h: list[float] = field(default_factory=list)
+    donated_s: float = 0.0
+    total_s: float = 0.0
+
+    @property
+    def _tail(self) -> slice:
+        # Steady state: the final day of minute samples (or the back half of short runs).
+        n = len(self.avg_1h)
+        return slice(max(n // 2, n - 24 * 60), n)
+
+    @property
+    def steady_overshoot_1h(self) -> float:
+        tail = self.avg_1h[self._tail]
+        return (sum(tail) / len(tail) / self.target_hr) if tail and self.target_hr else 0.0
+
+    @property
+    def steady_overshoot_24h(self) -> float:
+        tail = self.avg_24h[self._tail]
+        return (sum(tail) / len(tail) / self.target_hr) if tail and self.target_hr else 0.0
+
+    @property
+    def donated_duty(self) -> float:
+        """Share of wall-clock time actually routed to XvB (the actuated duty)."""
+        return self.donated_s / self.total_s if self.total_s else 0.0
+
+    def tier_held(self, tol: float = 0.02) -> bool:
+        """Both credited averages at/above threshold across steady state — the
+        raffle qualification condition (undershoot loses the tier)."""
+        t = self.target_hr * (1 - tol)
+        return (
+            min(self.avg_1h[self._tail], default=0.0) >= t
+            and min(self.avg_24h[self._tail], default=0.0) >= t
+        )
+
+
+def run_actuated(
+    scenario: Scenario, donation_level="vip", tick_s=_SMART_SLEEP_TICK_S, **tuning
+) -> ActuatedResult:
+    """Drive the production `AlgoService` through `scenario` in wall-clock time,
+    honoring the run() loop's actual dwell behavior (see block comment above).
+
+    Models a steady rig only (no noise/drop/lag — the #423 overshoot reproduces
+    without them); `credit_factor`, `ramp_loss_ms` and `p2pool_difficulty` from
+    the scenario apply as in `run_simulation`.
+    """
+    algo = build_controller(donation_level, **tuning)
+    cycle_s = XVB_TIME_ALGO_MS / 1000.0
+    pool_stats = {"pplns_window": _PPLNS_WINDOW, "difficulty": scenario.p2pool_difficulty}
+    win_1h, win_24h = _SecondsWindow(3600), _SecondsWindow(24 * 3600)
+    result = ActuatedResult(target_hr=scenario.target_hr)
+    total_s = scenario.cycles * cycle_s
+    hr = scenario.current_hr
+    ramp_s = scenario.ramp_loss_ms / 1000.0
+    t = 0
+
+    def stats():
+        return {"avg_1h": win_1h.average(), "avg_24h": win_24h.average(), "fail_count": 0}
+
+    def elapse(seconds, rate):
+        nonlocal t
+        for _ in range(int(round(seconds))):
+            win_1h.push(rate)
+            win_24h.push(rate)
+            t += 1
+            if t % 60 == 0:
+                result.avg_1h.append(win_1h.average())
+                result.avg_24h.append(win_24h.average())
+
+    def donate(seconds):
+        # XvB credits the full rig rate during a donated slice, after the
+        # reconnect ramp at the slice start (nothing lands during the ramp).
+        r = min(ramp_s, seconds)
+        elapse(r, 0.0)
+        elapse(seconds - r, hr * scenario.credit_factor)
+        result.donated_s += seconds
+
+    def dwell(seconds, held_decision):
+        # The run() p2pool dwell: sleep in ticks, ending early only when the real
+        # _dwell_should_end predicate says so (the shipping early-exit rules).
+        elapsed = 0.0
+        while elapsed < seconds:
+            step = min(tick_s, seconds - elapsed)
+            elapse(step, 0.0)
+            elapsed += step
+            if algo._dwell_should_end(
+                held_decision, hr, hr, pool_stats, _P2P_MAIN, stats(), _RECENT_SHARES
+            ):
+                return
+
+    while t < total_s:
+        decision, dur_ms = algo.get_decision(hr, hr, pool_stats, _P2P_MAIN, stats(), _RECENT_SHARES)
+        if decision == "P2POOL":
+            dwell(cycle_s, "P2POOL")
+        elif decision == "XVB":
+            donate(cycle_s)
+        else:  # SPLIT: donated slice, then the p2pool remainder dwell
+            donate(dur_ms / 1000.0)
+            dwell((XVB_TIME_ALGO_MS - dur_ms) / 1000.0, "SPLIT")
+
+    result.total_s = t
+    return result
+
+
 def build_controller(donation_level="vip", *, gain=None, reserve_factor=None, tiers=None):
     """Construct the production `AlgoService` wired to a fixed tier table, with
     optional tuning overrides, for simulation. Returns the service so callers can
@@ -412,6 +553,15 @@ def main():  # pragma: no cover - human-facing report, not a test path
             sc = replace(base, measurement=semantics)
             print(f"{sc.name}\n  {_fmt(run_algo(sc))}")
         print()
+
+    print("--- actuated run-loop (wall clock, real dwell rules — #423) ---")
+    for base in DEFAULT_SCENARIOS[:2]:
+        a = run_actuated(base)
+        print(
+            f"{base.name}\n"
+            f"  steady 1h {a.steady_overshoot_1h:4.2f}x  24h {a.steady_overshoot_24h:4.2f}x  "
+            f"duty {a.donated_duty * 100:4.1f}%  tier {a.tier_held()}"
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

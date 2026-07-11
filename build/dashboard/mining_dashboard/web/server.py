@@ -1,9 +1,12 @@
 import logging
 import mimetypes
 import os
+import re
 
 from aiohttp import web
 
+from mining_dashboard.config import config
+from mining_dashboard.service import audit_service, control_service
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
@@ -81,6 +84,132 @@ async def handle_metrics(request):
         return web.Response(text="Failed to render metrics.", status=500, content_type="text/plain")
 
 
+# --- Dashboard control channel (#33) ---------------------------------------------------------
+# Registered only when DASHBOARD_CONTROL_ENABLED (absent routes 404 when the feature is off).
+# Every mutating POST must carry this custom header: a cross-site request with a custom header
+# forces a CORS preflight, which the self-only CSP origin never grants — a cheap CSRF guard in
+# the same spirit as the CSP below. The actor is Caddy's authenticated X-Auth-User (header_up
+# overwrites any client-supplied value), threaded through to the host-side audit log.
+
+CONTROL_HEADER = "X-Pithead-Control"
+
+
+def _require_control_header(request):
+    if request.headers.get(CONTROL_HEADER) != "1":
+        raise web.HTTPForbidden(text="Missing X-Pithead-Control header.")
+
+
+async def handle_config(request):
+    """The live config for form prefill, every set secret masked to the sentinel."""
+    try:
+        return web.json_response(control_service.read_config())
+    except Exception:
+        logger.exception("Error reading host config")
+        return web.json_response({"error": "Failed to read the stack config."}, status=500)
+
+
+async def handle_control_preview(request):
+    """Stage a proposed config for a host-side dry-run preview. Returns the runner's result,
+    or 202 + the request id if the runner hasn't answered within the wait window."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    proposed = body.get("config")
+    if not isinstance(proposed, dict):
+        raise web.HTTPBadRequest(text="'config' must be a JSON object.")
+    actor = request.headers.get("X-Auth-User", "")
+    try:
+        merged = control_service.merge_secrets(proposed)
+        rid = control_service.submit("preview", merged, actor)
+        res = await control_service.wait_result(rid)
+    except Exception:
+        logger.exception("Error submitting control preview")
+        return web.json_response({"error": "Failed to submit the preview request."}, status=500)
+    if res is None:
+        return web.json_response({"id": rid, "status": "pending"}, status=202)
+    return web.json_response({"id": rid, **res})
+
+
+async def handle_control_commit(request):
+    """Ask the runner to apply a previously previewed intent, by id only — the config it applies
+    is the host-side staged copy, so a tampered commit can't swap it."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+        rid = control_service.submit(
+            "commit", actor=request.headers.get("X-Auth-User", ""), intent_id=body.get("id")
+        )
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON with a valid intent 'id'.") from None
+    # The preview result (same id) is still on disk; wait for the runner to overwrite it.
+    res = await control_service.wait_result(rid, done=lambda r: r.get("status") != "previewed")
+    if res is None:
+        return web.json_response({"id": rid, "status": "pending"}, status=202)
+    return web.json_response({"id": rid, **res})
+
+
+async def handle_control_upgrade(request):
+    """Ask the host runner to upgrade the stack to the latest release (#59). The body's version
+    is only what the operator confirmed seeing ("upgrade to vX.Y.Z"); the host re-derives the real
+    target from the GitHub release API and refuses a mismatch — the container cannot choose what
+    gets installed. Returns 202 immediately: the upgrade recreates this very container, so the
+    client polls /api/control/result and rides out the restart."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    version = body.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        raise web.HTTPBadRequest(text="'version' must look like vX.Y.Z.")
+    try:
+        rid = control_service.submit(
+            "upgrade", actor=request.headers.get("X-Auth-User", ""), version=version
+        )
+    except Exception:
+        logger.exception("Error submitting control upgrade")
+        return web.json_response({"error": "Failed to submit the upgrade request."}, status=500)
+    return web.json_response({"id": rid, "status": "pending"}, status=202)
+
+
+async def handle_control_result(request):
+    """Client-side polling endpoint for a 202'd preview/commit."""
+    try:
+        res = control_service.result(request.query.get("id", ""))
+    except ValueError:
+        raise web.HTTPBadRequest(text="'id' must be a UUID.") from None
+    if res is None:
+        return web.json_response({"status": "pending"}, status=202)
+    return web.json_response(res)
+
+
+# --- Security logs (#349) ---------------------------------------------------------------------
+# Read-only views over host-written files; audit_service sanitizes every field (whitelisted
+# charset) before it reaches the browser — log content is attacker-influenceable input.
+
+
+async def handle_audit_log(request):
+    """Recent config-change audit entries, from the read-only /control/audit mount. Registered
+    only alongside the control channel — the log is a #33 artifact."""
+    try:
+        return web.json_response({"entries": audit_service.recent_changes()})
+    except Exception:
+        logger.exception("Error reading the control audit log")
+        return web.json_response({"error": "Failed to read the audit log."}, status=500)
+
+
+async def handle_access_log(request):
+    """Recent dashboard accesses + failed-login count, from Caddy's JSON access log. Always
+    registered (Caddy always writes the log); behind the same Caddy basic_auth as every route."""
+    try:
+        return web.json_response(audit_service.access_summary())
+    except Exception:
+        logger.exception("Error reading the access log")
+        return web.json_response({"error": "Failed to read the access log."}, status=500)
+
+
 def _apply_security_headers(response):
     """Baseline hardening headers. CSP is self-only: HTML shell, CSS/JS (the vendored Preact,
     htm and Chart.js, plus the dashboard's own modules) and the JSON API are all same-origin,
@@ -125,8 +254,23 @@ def create_app(state_manager, latest_data_ref):
             web.get("/", handle_index),
             web.get("/api/state", handle_state),
             web.get("/metrics", handle_metrics),
+            web.get("/api/access", handle_access_log),
         ]
     )
+    # Control channel (#33): routes exist only when the feature is on — off means 404, not 403,
+    # so a disabled stack exposes no hint that the endpoints exist. Read at call time (not
+    # import) so tests can flip the flag per-app.
+    if config.DASHBOARD_CONTROL_ENABLED:
+        app.add_routes(
+            [
+                web.get("/api/config", handle_config),
+                web.post("/api/control/preview", handle_control_preview),
+                web.post("/api/control/commit", handle_control_commit),
+                web.post("/api/control/upgrade", handle_control_upgrade),
+                web.get("/api/control/result", handle_control_result),
+                web.get("/api/audit", handle_audit_log),
+            ]
+        )
 
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.router.add_static("/static", static_path)

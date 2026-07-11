@@ -16,6 +16,7 @@ import math
 import os
 import time
 
+from mining_dashboard.config import config
 from mining_dashboard.config.config import (
     DEFAULT_HASHRATE_WINDOW,
     DISK_CRITICAL_PERCENT,
@@ -1198,6 +1199,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "host_addr": host_display_addr(HOST_IP),
         "version": resolve_version(),
         "update": data.get("update"),  # {available, latest, url} | None — new-release badge (#224)
+        # Whether the control channel is on (#33) — gates the header Upgrade button (#59). The
+        # routes 404 when off, so this is display gating only, not a security control. Read at
+        # call time (module attribute, not from-import) so tests can flip the flag per-app.
+        "control_enabled": config.DASHBOARD_CONTROL_ENABLED,
         "last_update": format_time_abs(time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,

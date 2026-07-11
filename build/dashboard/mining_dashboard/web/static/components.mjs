@@ -4,6 +4,7 @@
 // classes — it does no number formatting or business logic of its own.
 
 import { ChartCard } from "./chart.mjs";
+import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
   computeEarnings,
   computeXvbTier,
@@ -23,6 +24,7 @@ import {
   xvbTierComparison,
 } from "./logic.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
+import { SecurityPanel } from "./securityview.mjs";
 import { StackTopology } from "./topology.mjs";
 
 // Palette token -> text-colour class (defined in dashboard.css).
@@ -70,8 +72,8 @@ const VersionBadge = ({ version }) =>
     : null;
 
 // New-release callout (#224). Shown only when the server reports a newer GitHub release is available
-// (opt-in `dashboard.check_for_updates`, off by default). Notify-only — it's a link to the release,
-// not an upgrade button (#59). Accent so it's noticeable; opens the release page in a new tab.
+// (`dashboard.check_for_updates`). Notify-only — a link to the release notes; the one-click upgrade
+// is the separate UpgradeControl (#59). Accent so it's noticeable; opens the release page in a new tab.
 const UpdateBadge = ({ update }) =>
   update && update.available && update.url
     ? html`<a class="badge badge-accent version-badge ml-2" href=${update.url}
@@ -136,6 +138,7 @@ function Header({ state }) {
                         <${Badges} badges=${state.badges} />
                         <${VersionBadge} version=${state.version} />
                         <${UpdateBadge} update=${state.update} />
+                        <${UpgradeControl} update=${state.update} enabled=${state.control_enabled} />
                     </div>
                     <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
                 </div>
@@ -708,6 +711,23 @@ function ComponentHealth({ topology, egress }) {
     </div>`;
 }
 
+// One-time discoverability hint (#425). The earnings + XvB tier calculators are Advanced-view
+// cards, so an operator on the default Simple view never sees them and concludes they don't
+// exist. This banner points at Advanced view until the operator acts on it: the inline button
+// switches views (dashboard.js retires the hint on any visit to Advanced), and the × dismisses
+// it outright. `ui.hintDismissed` is persisted in localStorage by dashboard.js like the other
+// UI state, so the hint shows once per browser, not once per reload.
+function AdvancedHint({ ui, onView, onDismissHint }) {
+  if (ui.view !== "simple" || ui.hintDismissed) return null;
+  return html`
+    <div class="advanced-hint" id="advanced-hint">
+        <span>Looking for earnings estimates or the XvB tier calculator? They live in${" "}
+            <button type="button" class="btn-link" onClick=${() => onView("advanced")}>Advanced view</button>.</span>
+        <button type="button" class="advanced-hint-dismiss" aria-label="Dismiss hint"
+                title="Dismiss" onClick=${onDismissHint}>×</button>
+    </div>`;
+}
+
 function DashboardView({
   state,
   ui,
@@ -718,8 +738,10 @@ function DashboardView({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onDismissHint,
 }) {
   const advanced = ui.view === "advanced";
+  const configView = ui.view === "config";
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
   // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
   // context as reference at the bottom — "mine" first, "the world" last.
@@ -727,10 +749,17 @@ function DashboardView({
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
             <div class="toggle-group">
-                <button class=${"btn-toggle" + (!advanced ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
+                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
                 <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
+                <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
+        <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
+        ${configView ? html`<${ConfigView} /><${SecurityPanel} />` : null}
+        ${
+          configView
+            ? null
+            : html`
         <div class="grid">
             <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
                           avgWindow=${ui.avg}
@@ -750,7 +779,8 @@ function DashboardView({
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />
             <${ComponentHealth} topology=${state.topology} egress=${state.egress} />
-        </div>
+        </div>`
+        }
     </div>`;
 }
 
@@ -768,6 +798,7 @@ export function App({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onDismissHint,
 }) {
   // The theme toggle is fixed-position and always available, even before the first data load.
   const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
@@ -787,7 +818,8 @@ export function App({
                 <${HeroBand} state=${state} />
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
+                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow}
+                                  onDismissHint=${onDismissHint} />
               <//>`
         }
         ${switcher}

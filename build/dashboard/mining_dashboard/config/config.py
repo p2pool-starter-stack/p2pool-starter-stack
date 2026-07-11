@@ -144,6 +144,33 @@ P2POOL_CLEARNET = os.environ.get("P2POOL_CLEARNET", "false").strip().lower() == 
 # as XvB (socks5h, so DNS goes through Tor too), so it reveals neither the host IP nor a DNS lookup to
 # GitHub — which is why it's safe to default on; it fails silently offline. Opt out with `false`.
 CHECK_FOR_UPDATES = os.environ.get("DASHBOARD_CHECK_UPDATES", "true").strip().lower() == "true"
+
+# --- Dashboard control channel (#33, config.json: dashboard.control.enabled) ---
+# Default OFF. When on, the config-editing routes (/api/config, /api/control/*) are registered and
+# the dashboard may write typed JSON intents into the requests/ spool, which a host-side runner
+# (pithead control-run-pending) validates and applies. The container's only write access is
+# CONTROL_REQUESTS_DIR; results/ and audit/ are mounted read-only and staged intents never enter
+# the container at all — that rw/ro split is the trust boundary (see docker-compose.yml).
+DASHBOARD_CONTROL_ENABLED = (
+    os.environ.get("DASHBOARD_CONTROL_ENABLED", "false").strip().lower() == "true"
+)
+CONTROL_REQUESTS_DIR = os.environ.get("CONTROL_REQUESTS_DIR", "/control/requests")
+CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
+# Host-written security logs, surfaced read-only (#349). control.log is the #33 audit trail
+# (one JSON line per handled control request); access.log is Caddy's JSON access log — both are
+# written and rotated host-side, and every field read from them is sanitized before serving.
+CONTROL_AUDIT_LOG = os.environ.get("CONTROL_AUDIT_LOG", "/control/audit/control.log")
+ACCESS_LOG_PATH = os.environ.get("ACCESS_LOG_PATH", "/access-log/access.log")
+# The live config.json, bind-mounted read-only for form prefill; secrets are masked before serving.
+HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+# config.reference.json (every key with its default), bind-mounted read-only. read_config merges it
+# UNDER the operator's sparse config.json so the editor form covers the full schema, not just the
+# keys the operator happens to have set (#33 "edit every setting"). A missing reference degrades to
+# the host config alone.
+HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config.reference.json")
+# How long a preview/commit POST waits for the host-side runner's result before returning 202 and
+# leaving the client to poll /api/control/result. The systemd path unit fires within seconds.
+CONTROL_WAIT_S = float(os.environ.get("CONTROL_WAIT_S", 30))
 GITHUB_RELEASES_API = os.environ.get(
     "GITHUB_RELEASES_API",
     "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest",
@@ -227,6 +254,14 @@ NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 # a clearnet beacon — paste a Tor-reachable URL (hosted hc-ping.com, or a self-hosted onion/public
 # instance; a LAN-only self-hosted address is unreachable through Tor).
 HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
+
+# --- Tor guard self-heal (#424) ---
+# Opt-in (tor.auto_heal in config.json): when true, the dashboard probes Tor clearnet egress (the
+# same generate_204-through-SOCKS probe as the doctor check) and restarts the tor container when
+# exits stay stuck on a failing guard — bounded retries, long cooldown, loud logging (see
+# service/tor_heal.py). Off by default: a tor restart drops every circuit, mining onions included,
+# so the stack must not restart its privacy boundary unbidden.
+TOR_AUTO_HEAL = os.environ.get("TOR_AUTO_HEAL", "false").strip().lower() == "true"
 
 # --- Operator alerts: Telegram (Issue #121) ---
 # Notifications-only Telegram pusher: a thin notifier that pushes a small, high-value set of

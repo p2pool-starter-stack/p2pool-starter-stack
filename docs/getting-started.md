@@ -121,10 +121,13 @@ Setup walks through five stages. It's interactive on the first run and safe to r
 
 The first time the stack starts, your Monero and Tari nodes download and verify the blockchain
 from the network. Until both are fully synced, the dashboard shows a dedicated Sync Mode screen
-with live progress for each chain, and no hashrate is routed yet.
+with live progress for each chain, and no hashrate is routed yet. When the stack first comes up,
+`pithead` prints a short "what happens next" note saying the miner is held until both chains sync,
+then starts automatically — it shows once, not on every restart.
 
 This can take anywhere from a few hours to a day or more depending on your hardware, disk, and
-network. Watch progress on the dashboard or in the logs:
+network. Watch progress on the dashboard, with `./pithead status` (it prints each chain's percent
+and blocks remaining while syncing), or in the logs:
 
 ```bash
 ./pithead logs monerod

@@ -46,9 +46,12 @@ finishes syncing in the background.
 > **Want to skip most of the wait?** Point the stack at an existing synced blockchain, or connect
 > to a remote node. See [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
-You can also follow sync progress from the command line:
+You can also follow sync progress from the command line. `./pithead status` prints each chain's
+percent and blocks remaining while it's still syncing (no ETA — block rate isn't sampled), or watch
+the node logs directly:
 
 ```bash
+./pithead status
 ./pithead logs monerod
 ./pithead logs tari
 ```
@@ -87,10 +90,13 @@ report shows the build. To switch a `dev` build to a published release, see
 [Switching a source checkout to release images](operations.md#switching-a-source-checkout-to-release-images).
 
 When a newer Pithead release is out, a clickable `New release vX.Y.Z available ↗` badge appears next
-to the version badge, linking to the GitHub release. It never updates anything; upgrade with
-`./pithead upgrade` when ready. The check is on by default and routed over Tor, so it does not reveal
-your IP. Turn it off with `dashboard.check_for_updates: false` (see
-[Configuration](configuration.md#configuration-reference)).
+to the version badge, linking to the GitHub release. The badge itself never updates anything. The
+check is on by default and routed over Tor, so it does not reveal your IP. Turn it off with
+`dashboard.check_for_updates: false` (see [Configuration](configuration.md#configuration-reference)).
+
+With the [control channel](#configuration-view) enabled, an **Upgrade to vX.Y.Z** button appears
+beside the badge — see [Upgrading from the dashboard](#upgrading-from-the-dashboard). Without it,
+upgrade from the host per [Operations › Updating the stack](operations.md#updating-the-stack).
 
 ### Host & performance warnings
 
@@ -226,6 +232,10 @@ same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **X
 **XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
 choice is remembered across reloads.
 
+The earnings estimates and the XvB tier calculator live only in Advanced view. Simple view shows a
+one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and stays
+away across reloads.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
   <img alt="Dashboard — Advanced view" src="../images/launch/advanced-light.png">
@@ -330,6 +340,114 @@ data the dashboard already stores — the per-share difficulty recorded with eac
 there is nothing to configure.
 
 ---
+
+## Configuration view
+
+Edit `config.json` from the dashboard. Off by default: set `dashboard.control.enabled: true` in
+`config.json`, set a `dashboard.auth.password` (required — this channel can change the payout
+wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
+button then appears next to the Simple/Advanced toggle.
+
+The flow mirrors the CLI's `apply`:
+
+1. The form is prefilled from the live `config.json`, grouped by section. Secrets (the dashboard
+   password, the Telegram bot token, node RPC credentials, the stratum password) show as
+   "set — leave blank to keep"; their values are never sent to the browser.
+2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
+   the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
+   (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own
+   error message; nothing is applied.
+3. Confirm. If the preview flags any change disruptive (⚠), you must type `APPLY` first. The
+   commit runs `pithead apply -y` on the host and recreates only the containers whose config
+   changed.
+
+Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
+allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
+memory limits, time zone, …) and default-denies a change, in any direction, to anything else:
+wallets, the dashboard login and onion settings, the control channel itself, the Tor egress
+firewall, clearnet toggles, node endpoints, and every credential. It likewise refuses anything
+the preview flags disruptive (⚠). Apply those from the host with `./pithead apply`; out-of-band
+approval from the dashboard is tracked in
+[#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
+
+A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new
+sidechain and your PPLNS window (and XvB shares) reset.
+
+How it works underneath: the dashboard container cannot run `pithead` or write host files. It
+drops a typed JSON change request into `./data/control/requests/` — its only writable leg of the
+spool — and a root systemd path unit (`pithead-control`) runs `pithead control-run-pending`, which
+validates the request, dry-runs or applies the staged copy, and writes the outcome to the
+read-only `results/` mount plus an audit line (timestamp, logged-in user, action, outcome, and
+the names of the changed settings) to `audit/control.log`. The container cannot forge results,
+alter a staged config between preview and commit, or rewrite the audit log. A failed apply keeps
+the previous config at `config.json.bak-control` and surfaces pithead's error in the view.
+Operational details:
+[Operations › Editing config from the dashboard](operations.md#editing-config-from-the-dashboard).
+
+### Access log and recent config changes
+
+Below the form, the Configuration view shows two read-only security panels
+([#349](https://github.com/p2pool-starter-stack/pithead/issues/349)):
+
+- **Access log.** Recent dashboard requests from Caddy's access log — time, HTTP status, method,
+  path, and the logged-in user — plus a count of failed logins (401s) in the last 24 hours. Over
+  Tor there is no source IP to trace or block, so the signal is the *rate* of failures: five or
+  more in a day shows a warning to rotate the dashboard password (set a new
+  `dashboard.auth.password`, run `./pithead apply`) and, if the onion address may have leaked,
+  `./pithead rotate-dashboard-onion`. The log is always on; entries appear once Caddy has handled
+  a request on this version.
+- **Recent config changes.** The control channel's host-side audit trail: one row per handled
+  request — timestamp, dashboard user, preview/commit, outcome, and the *names* of the settings
+  that changed. Values are never recorded (several are secrets). Shown only when
+  `dashboard.control.enabled` is on.
+
+Both panels read host-written files through read-only mounts, and the dashboard treats every
+field in them as hostile input — a request path is attacker-chosen bytes — so each string is
+stripped to a safe character set before it is served. See
+[Operations › Watching for intruders](operations.md#watching-for-intruders) for the log paths,
+size bounds, and rotation steps.
+
+## Upgrading from the dashboard
+
+With `dashboard.control.enabled: true` (the same flag as the Configuration view) and a newer
+release detected, an **Upgrade to vX.Y.Z** button appears next to the new-release badge. It runs
+the release install's documented update — download the new bundle, run `./pithead upgrade` — on
+the host, with no SSH:
+
+1. Click the button and type `UPGRADE` to confirm. An upgrade recreates every container, so the
+   dashboard disconnects briefly and miners reconnect to the stratum port; config, wallet, and
+   chain data are untouched.
+2. The dashboard drops an upgrade request into the same control spool the Configuration view
+   uses. The host-side runner asks the GitHub release API (over Tor) for the latest release
+   itself and refuses the request unless the version you confirmed **is** that latest release and
+   it is newer than the running version — the container proposes, the host decides what gets
+   installed. Attempts are limited to one per 10 minutes, and every one is written to the audit
+   log.
+3. The runner downloads the release bundle (over Tor), extracts it over the install directory,
+   and runs the new release's `./pithead upgrade`, which re-renders the generated config and
+   pulls the new images. The page rides out its own restart and reports the outcome; reload when
+   it says the new version is up.
+
+The version the container proposes is never trusted as the target: the host independently fetches
+the latest tag from GitHub, and the bundle it downloads is for that host-derived tag. The bundle
+is also cryptographically verified
+([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): with the release public key
+on disk (`cosign.pub`, shipped in every signed bundle), the runner fetches the release's
+`pithead.tar.gz.sig` and checks the download against the key it **already holds** before
+extracting a byte — a bad or missing signature, or a missing cosign binary, fails the upgrade
+with nothing changed, and a swapped key inside a malicious bundle cannot vouch for itself. The
+`pithead upgrade` that follows verifies each image's signature the same way before pulling. An
+install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
+(over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
+picks up the key. See [Releasing › Signed releases](releasing.md#signed-releases).
+
+The button never appears on a source checkout — the runner refuses the request there, since a dev
+install updates with `git pull`. If the upgrade fails, the result says so in the view: a failed
+release lookup or bundle download changes nothing; a failure during `pithead upgrade` leaves
+containers that were not yet recreated on the previous images, and finishing up is one
+`./pithead upgrade` on the host. There is no automatic rollback — the images of the previous
+release stay on disk, and `docker compose` state is recoverable the same way as a failed
+CLI upgrade.
 
 ## Tips
 

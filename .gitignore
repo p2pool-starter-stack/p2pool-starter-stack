@@ -1,12 +1,16 @@
 # Secrets and Env
 .env
 .env.new
+.env.dryrun
 .env.apply-incomplete
 config.json
+config.json.bak-control
 /data/
 /build/monero/bitmonero.conf
 /build/tari/config.toml
 Caddyfile
+# One-time first-run epilogue marker (#384), dropped beside .env at runtime.
+.pithead-first-run-done
 # pithead backup archives bundle .env, config.json, the Caddyfile, and the Tor onion private keys
 # into one tarball; secret scanners can't see inside a gzipped tar, so keep the whole dir out (#369).
 /backups/

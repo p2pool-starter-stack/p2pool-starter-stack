@@ -10,7 +10,8 @@
 #   4. Stage          push to a staging tag (:vX.Y.Z-rc.N) on GHCR and capture immutable digests
 #   5. Smoke          pull the STAGED images back and verify they resolve to the right version
 #   6. Promote        re-tag the smoke-tested digests to :vX.Y.Z + :latest (no rebuild) and push
-#   7. Publish        git tag, GitHub Release from CHANGELOG, attach the ingredients manifest + bundle
+#   6b. Sign          cosign-sign the promoted digests + the install bundle with the box's key (#376)
+#   7. Publish        git tag, GitHub Release from CHANGELOG, attach the manifest + bundle + bundle sig
 #
 # Nothing user-facing is published until every gate is green. Promotion is by digest, so the released
 # bundle is bit-for-bit what was smoke-tested. The script NEVER starts the live stack on this host and
@@ -37,6 +38,9 @@
 #   GHCR_USER / GHCR_TOKEN  Registry login. Token falls back to GITHUB_TOKEN, then `gh auth token`.
 #   RELEASE_INTEGRATION_ARGS  Extra args passed to `make test-integration ARGS=...` (the #54 gate).
 #   RELEASE_SMOKE_CMD       Optional command run during the smoke stage for a fuller functional check.
+#   COSIGN_KEY / COSIGN_PASSWORD  Release signing (#376): path to the cosign private key on this box
+#                           and its passphrase. Promoted digests + the bundle get key signatures;
+#                           the committed cosign.pub (repo root, shipped in the bundle) verifies them.
 #
 set -euo pipefail
 
@@ -128,7 +132,7 @@ while [ $# -gt 0 ]; do
     --allow-dirty) ALLOW_DIRTY=1 ;;
     -y | --yes) ASSUME_YES=1 ;;
     -h | --help)
-        sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -148,11 +152,36 @@ WORKDIR="" # scratch dir for digests, the manifest and the bundle (created in ma
 set_digest() { printf '%s' "$2" >"$WORKDIR/digest.$1"; }
 get_digest() { cat "$WORKDIR/digest.$1" 2>/dev/null || true; }
 
+# GHCR is read-after-push eventually-consistent: a tag it JUST accepted can fail to resolve for a few
+# seconds (#429 — this killed stage-4 digest capture twice on the v1.3.1 cut). Retry a registry read up
+# to $REGISTRY_READ_RETRIES times, with $REGISTRY_READ_BACKOFF-second backoff, requiring non-empty
+# output. Emits the read's stdout; returns non-zero only after every attempt fails, so a genuinely-
+# missing image still stops the release (the caller's `[ -n "$digest" ] || die` fires as before).
+REGISTRY_READ_RETRIES="${PITHEAD_REGISTRY_READ_RETRIES:-5}"
+REGISTRY_READ_BACKOFF="${PITHEAD_REGISTRY_READ_BACKOFF:-3}"
+
+# The registry inspect, wrapped in a function so the tests can stub it (fail N times, then succeed).
+buildx_inspect() { docker buildx imagetools inspect "$@"; }
+
+retry_registry_read() {
+    local attempt=1 out
+    while :; do
+        if out="$("$@" 2>/dev/null)" && [ -n "$out" ]; then
+            printf '%s' "$out"
+            return 0
+        fi
+        [ "$attempt" -ge "$REGISTRY_READ_RETRIES" ] && return 1
+        warn "registry read failed (attempt $attempt/$REGISTRY_READ_RETRIES): $* — GHCR read-after-push lag? retrying in ${REGISTRY_READ_BACKOFF}s..."
+        sleep "$REGISTRY_READ_BACKOFF"
+        attempt=$((attempt + 1))
+    done
+}
+
 # The manifest-LIST (index) digest of a pushed tag — the sha that spans every built platform, which
 # promote re-tags by digest. NOTE: `imagetools inspect --format '{{.Manifest.Digest}}'` does NOT work
 # for a buildx OCI index (it renders the whole descriptor block, not the digest), so parse the human
 # `Digest:` line instead. Verified equal to `imagetools inspect --raw | shasum -a 256`.
-manifest_digest() { docker buildx imagetools inspect "$1" 2>/dev/null | awk '/^Digest:/{print $2; exit}'; }
+manifest_digest() { retry_registry_read buildx_inspect "$1" | awk '/^Digest:/{print $2; exit}'; }
 
 # Resolve a single upstream component pin on demand (the "ingredients" each release bundles).
 pin() {
@@ -169,6 +198,24 @@ pin() {
 
 # --- Stage 1: preflight --------------------------------------------------------------------------
 
+# The CLI tools the blocking test gate (`make test` → `make lint`) shells out to: shellcheck + shfmt
+# (lint-sh), node/npx (lint-js/md/toml), uv/uvx (lint-py/lint-yaml). A reimaged release box loses these
+# (#426 — the v1.3.0 cut died ~1 min in with a bare `shellcheck: not found`). docker/jq are checked
+# elsewhere. Verify them here so a missing tool fails preflight with an actionable message, before any
+# build, instead of mid-gate.
+LINT_TOOLCHAIN=(shellcheck shfmt node npx uv uvx)
+
+check_release_toolchain() {
+    local tool missing=()
+    for tool in "${LINT_TOOLCHAIN[@]}"; do
+        command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        die "Missing lint/test tool(s): ${missing[*]} — the release box needs the lint toolchain before the test gate can run. Provision it (apt + the pinned uv installer): see docs/release-server.md § Provisioning the server. (Or --skip-tests to bypass the gate — NOT recommended.)"
+    fi
+    ok "Lint/test toolchain present (${LINT_TOOLCHAIN[*]})."
+}
+
 preflight() {
     stage "1/7  Preflight"
 
@@ -177,6 +224,26 @@ preflight() {
     [ -f VERSION ] && [ -f docker-compose.yml ] || die "VERSION / docker-compose.yml not found at the repo root."
     command -v docker >/dev/null 2>&1 || die "docker is required."
     docker buildx version >/dev/null 2>&1 || die "docker buildx is required (for digest-level promotion)."
+    # Only the test gate needs the lint toolchain — skip the check on the paths that don't run it.
+    if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_TESTS" -eq 0 ] && [ "$RESUME_PROMOTE" -eq 0 ]; then
+        check_release_toolchain
+    fi
+    # Release signing (#376) is OPT-IN and pure defense-in-depth. The tag-substitution vector it
+    # exists for — the first-party images pull by mutable `:vX.Y.Z` tag, so a re-pointed tag / leaked
+    # registry token could serve a malicious root-running image — is ALREADY closed by digest-pinning
+    # those images in the bundle (make_bundle). cosign additionally signs the promoted digests + the
+    # bundle for operators who want to verify. So a normal cut needs NOTHING off-repo: signing turns
+    # on only when a key is configured on this box AND cosign.pub is committed; otherwise we warn and
+    # skip it rather than block the release.
+    COSIGN_ENABLED=0
+    if [ "$DRY_RUN" -eq 0 ]; then
+        if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ] && [ -f "${COSIGN_KEY:-/nonexistent}" ] && [ -f cosign.pub ]; then
+            COSIGN_ENABLED=1
+            ok "Release signing ON (cosign key + committed cosign.pub present)."
+        else
+            warn "Release signing OFF — shipping digest-pinned images + bundle without cosign signatures (#376 is opt-in). Installs are protected by the pinned digests; to also sign, see docs/release-server.md § The release signing key."
+        fi
+    fi
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
     is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
@@ -352,8 +419,11 @@ smoke_test() {
             # The pushed manifest MUST carry every target platform — a wrong-arch image here means the
             # build host's arch leaked through (the v1.0.0 bug: an arm64 host produced an arm64-labelled
             # image that doesn't run on x86_64). Read the raw manifest list and require each $PLATFORMS.
-            local arches
-            arches="$(docker buildx imagetools inspect "$repo:$STAGING_TAG" --raw 2>/dev/null |
+            # The read retries GHCR's read-after-push lag (#429) so a slow-to-resolve tag doesn't fail smoke.
+            local arches raw
+            raw="$(retry_registry_read buildx_inspect "$repo:$STAGING_TAG" --raw)" ||
+                die "Smoke: could not read the pushed manifest for $repo:$STAGING_TAG from the registry (after $REGISTRY_READ_RETRIES tries)."
+            arches="$(printf '%s' "$raw" |
                 python3 -c 'import sys,json;d=json.load(sys.stdin);print(" ".join(sorted({m.get("platform",{}).get("os","")+"/"+m["platform"]["architecture"] for m in d.get("manifests",[]) if m.get("platform",{}).get("architecture") not in (None,"unknown")})))' 2>/dev/null || true)"
             local p
             for p in ${PLATFORMS//,/ }; do
@@ -389,6 +459,39 @@ promote() {
     ok "Promoted all 5 images to $TAG + latest."
 }
 
+# --- Stage 6b: sign the promoted digests (#376) ----------------------------------------------------
+
+# A cosign key signature on each promoted image so `pithead upgrade` can refuse a re-pointed tag or
+# a tampered registry. Sign the manifest-LIST digest promote just re-tagged — NEVER a per-arch child
+# digest (that makes `cosign verify <tag>` fail) and never the tag (a tag is mutable; the signature
+# must pin the bytes that were smoke-tested). No Rekor upload (--tlog-upload=false): the key is
+# private infrastructure, installs verify with the committed cosign.pub via
+# `cosign verify --key cosign.pub --private-infrastructure`. COSIGN_PASSWORD is read by cosign from
+# the environment — it never touches argv, run(), or the log.
+sign_images() {
+    if [ "${COSIGN_ENABLED:-0}" -ne 1 ]; then
+        log "Release signing off — skipping image signatures (the bundle is digest-pinned; #376 opt-in)."
+        return 0
+    fi
+    stage "6b/7 Sign the promoted digests (cosign, #376)"
+    local suffix digest
+    for suffix in "${IMAGES[@]}"; do
+        digest="$(get_digest "$suffix")"
+        [ -n "$digest" ] || die "No staged digest for $suffix — nothing to sign."
+        log "Signing $digest"
+        run cosign sign --key "${COSIGN_KEY:-}" --tlog-upload=false --yes "$digest"
+    done
+    ok "Signed all 5 promoted digests (verify with the committed cosign.pub)."
+}
+
+# Detached signature for the install bundle (#376): the #59 dashboard upgrade downloads
+# pithead.tar.gz (not images) and verifies it against the cosign.pub already on the host BEFORE
+# extracting, so the tarball needs its own signature published next to it on the GitHub Release.
+sign_bundle() { # <bundle> <sig-out>
+    log "Signing the install bundle -> $(basename "$2")"
+    run cosign sign-blob --key "${COSIGN_KEY:-}" --tlog-upload=false --yes --output-signature "$2" "$1"
+}
+
 # --- Stage 7: publish (git tag, GitHub Release, manifest, bundle) ---------------------------------
 
 publish() {
@@ -397,6 +500,11 @@ publish() {
     write_manifest "$manifest"
     local bundle="$WORKDIR/pithead.tar.gz" # versionless name → stable /releases/latest/download/ URL
     make_bundle "$bundle"
+    local bundle_sig="" # pithead.tar.gz.sig — only when signing is on (#376 opt-in)
+    if [ "${COSIGN_ENABLED:-0}" -eq 1 ]; then
+        bundle_sig="$bundle.sig" # the #59 upgrade runner fetches it by name
+        sign_bundle "$bundle" "$bundle_sig"
+    fi
 
     confirm "Create git tag $TAG, push it, and publish the GitHub Release?" ||
         {
@@ -416,10 +524,13 @@ publish() {
         # The images are already promoted, so the draft's install bundle works the moment it's published.
         local gh_args=(release create "$TAG" --title "Pithead $TAG" --notes-file "$notes")
         [ "$DRAFT" -eq 1 ] && gh_args+=(--draft)
-        run gh "${gh_args[@]}" "$bundle" "$manifest"
+        gh_args+=("$bundle")
+        [ -n "$bundle_sig" ] && gh_args+=("$bundle_sig") # the .sig only exists when signing is on
+        gh_args+=("$manifest")
+        run gh "${gh_args[@]}"
         ok "GitHub Release $TAG $([ "$DRAFT" -eq 1 ] && echo 'created as a DRAFT (publish it from the Releases page when ready)' || echo published)."
     else
-        warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $manifest"
+        warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $bundle_sig $manifest"
     fi
 }
 
@@ -472,7 +583,9 @@ make_bundle() {
     # own "copy config.minimal.json" guidance); the advanced example is "for more options".
     local out="$1" d="$WORKDIR/pithead"
     mkdir -p "$d"
-    cp pithead VERSION docker-compose.yml config.minimal.json config.reference.json "$d/" 2>/dev/null || true
+    # cosign.pub rides in the bundle (#376) so a release install (no git checkout) has the verifier
+    # next to pithead; preflight guarantees it exists on a real run.
+    cp pithead pithead-completion.bash VERSION docker-compose.yml config.minimal.json config.reference.json cosign.pub "$d/" 2>/dev/null || true
     local m
     while IFS= read -r m; do
         [ -e "$m" ] || {
@@ -488,6 +601,32 @@ make_bundle() {
         printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"
         return 0
     fi
+    # Digest-pin the first-party images in the BUNDLED compose (#376). The released images pull by
+    # mutable `:vX.Y.Z` tag, so a re-pointed tag / leaked registry token could substitute a
+    # root-running image under the same tag. Pinning each to the immutable @sha256 digest promote just
+    # published makes the pull content-addressed — this is what actually closes that vector (cosign
+    # signing, when on, is the additional layer). The tag stays for readability; the digest wins.
+    local suffix digest sha
+    for suffix in "${IMAGES[@]}"; do
+        digest="$(get_digest "$suffix")"
+        [ -n "$digest" ] ||
+            die "make_bundle: no promoted digest for $suffix — refusing to ship an un-pinned bundle (#376)."
+        # get_digest stores a FULL ref ($repo@sha256:…); we append only the @sha256 part to the
+        # existing image line (which already has the repo + tag), so pin by the bare digest.
+        sha="${digest##*@}"
+        case "$sha" in
+        sha256:*) ;;
+        *) die "make_bundle: digest for $suffix is not a sha256 ref ('$digest') — cannot pin (#376)." ;;
+        esac
+        sed -i.bak "s|\(pithead-${suffix}:\${STACK_VERSION:-dev}\)|\1@${sha}|" "$d/docker-compose.yml"
+    done
+    rm -f "$d/docker-compose.yml.bak"
+    # Post-condition: NEVER ship a partially-pinned bundle. Every first-party image line must now
+    # carry an @sha256 digest.
+    local unpinned
+    unpinned="$(grep -E "pithead-(tor|monero|p2pool|xmrig-proxy|dashboard):" "$d/docker-compose.yml" | grep -v "@sha256:" || true)"
+    [ -z "$unpinned" ] ||
+        die "make_bundle: first-party image(s) left un-pinned in the bundle compose (#376):"$'\n'"$unpinned"
     # --no-xattrs: we cut releases on macOS, where tar is bsdtar and stores each file's extended
     # attributes (incl. macOS's com.apple.provenance) as LIBARCHIVE.xattr.* pax headers. GNU tar on
     # a user's Linux box doesn't know that keyword and warns once per file on extract (#252). Stripping
@@ -537,6 +676,7 @@ main() {
         smoke_test
     fi
     promote
+    sign_images # #376 — signs the digests promote re-tagged; --resume-promote reaches this too
     publish
 
     printf '\n'

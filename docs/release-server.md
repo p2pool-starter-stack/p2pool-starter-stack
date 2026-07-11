@@ -92,6 +92,77 @@ It asserts: chains synced (reusable), the prune axis is exercisable (the live ch
 snapshot-capable **or** a pre-built variant chain is supplied), disk headroom, `.env` is
 owner-only, the dashboard is bound to localhost, and the backup/rollback net is usable.
 
+### The lint/release toolchain
+
+`make release`'s blocking test gate runs `make lint`, which shells out to `shellcheck`, `shfmt`,
+`node`/`npx`, and `uv`/`uvx`. A reimaged box loses these, so the release preflight
+([#426](https://github.com/p2pool-starter-stack/pithead/issues/426)) stops early and names the
+missing tool rather than dying mid-gate. Restore them with the same pinned versions CI uses
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) — apt's `shellcheck`/`shfmt` are older
+and reformat differently, so a version skew would fail `make lint` on the box for diffs the merge
+gate never saw:
+
+```bash
+# node 20 (brings npx) + the basics the harness also needs
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs jq curl git tar
+
+# shellcheck 0.11.0 + shfmt 3.13.1 (pinned, not apt's)
+curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ -C /tmp
+sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+sudo curl -fsSL -o /usr/local/bin/shfmt https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+sudo chmod 0755 /usr/local/bin/shfmt
+
+# uv 0.10.10 (pinned installer; brings uvx, and adds ~/.local/bin to PATH)
+curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
+```
+
+### The release signing key
+
+The pipeline signs every promoted image digest and the install bundle with cosign
+([#376](https://github.com/p2pool-starter-stack/pithead/issues/376), key-based — see
+[Releasing › Signed releases](releasing.md#signed-releases) for what installs verify and how).
+The private key lives only on this box, like the GHCR token; the public key is committed in the
+repo as `cosign.pub`. The release preflight refuses to run without cosign, `COSIGN_KEY`, and
+`cosign.pub` all in place.
+
+Install cosign (pinned — there is no Ubuntu apt package; the same snippet works on any host that
+wants to verify):
+
+```bash
+curl -fsSL -o /tmp/cosign https://github.com/sigstore/cosign/releases/download/v2.6.3/cosign-linux-amd64
+echo '7c78a7f2efc00088bd788a758db6e0928e79f3e0eb83eb5d3c499ed98da4c4f4  /tmp/cosign' | sha256sum -c
+sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
+```
+
+Generate the key pair once, on this box:
+
+```bash
+cosign generate-key-pair      # prompts for a passphrase; writes cosign.key + cosign.pub
+mkdir -p ~/.config/pithead-release
+mv cosign.key ~/.config/pithead-release/cosign.key
+chmod 600 ~/.config/pithead-release/cosign.key
+```
+
+Commit the `cosign.pub` it wrote at the repo root (it is the only half that ever enters the
+repo), and point the release shell at the private half:
+
+```bash
+export COSIGN_KEY=~/.config/pithead-release/cosign.key
+read -rs COSIGN_PASSWORD && export COSIGN_PASSWORD   # typed, not in shell history
+```
+
+cosign reads `COSIGN_PASSWORD` from the environment to decrypt the key; neither the key nor the
+passphrase ever appears on a command line, in the repo, in an image, or in the release log. Keep
+an offline backup of `cosign.key` with the passphrase stored separately — losing it means
+rotating the key. To rotate: generate a new pair the same way, commit the new `cosign.pub`, and
+cut a transition release **signed with the old key** (leave `COSIGN_KEY` on the old key for that
+one cut) — installs verify the bundle with the key they already hold and come out holding the new
+one; switch `COSIGN_KEY` to the new key for the next release. If the old key is lost or
+compromised, sign with the new key immediately: the transition release then fails the bundle
+check on existing installs, so call it out in the release notes and have operators verify that
+one by hand against the new committed key.
+
 ### Recipe: prune-axis coverage, and the storage that matters
 
 Put the active chain on fast storage. The biggest factor is the disk, not the filesystem:
@@ -144,6 +215,43 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 > patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest
 > to leave the free pages.
 
+## Bench allocation and the rig lock
+
+Ten boxes are shared between this repo's tier-4 harness, RigForge's release gates, and
+production mining. Two automations cycling the same rig's services corrupt each other's results
+(the 2026-07-10 miner-0 incident: an operator "fixed" a service an e2e run had deliberately
+stopped), so ownership is static and every run takes a kernel lock.
+
+Static allocation — each box states its owner in `/etc/bench-role`:
+
+| Box | Owner | Use |
+|---|---|---|
+| miner-0 | RigForge | `e2e-real` / tune gates. Pithead never touches its services. |
+| miner-1, miner-2 | Pithead | Tier-4 loaner rigs: `e2e.sh` repoints one at the test bench for a run, then reverts it. Verify `systemctl is-active xmrig` after any remote restart. |
+| miner-3 … miner-7 | Production | Mining only. No test traffic. |
+| gouda | Pithead | Test bench + release box (the tier-4 target). |
+| pithead-prod | Production | Production stack; deploys only. |
+
+The run lock. Both harnesses take a `flock` on `/var/lock/rig-e2e.lock` before the first
+service-touching action and hold it on an inherited FD for the whole run, so the kernel releases
+it the moment the run dies — `kill -9` included, no stale-lock cleanup. rigforge#183 defines the
+mechanism; [#430](https://github.com/p2pool-starter-stack/pithead/issues/430) is this repo's
+mirror; the shared path on every box is the protocol. Mutating runs hold it exclusive; read-only
+runs (`run.sh --check` / `--readiness`) hold it shared, so concurrent readers coexist but still
+exclude mutators. `tests/integration/run.sh` takes it on the target box (over SSH for `--host`);
+`e2e.sh` also takes it on the loaner rig it borrows. A busy box makes the run exit 75
+(`EX_TEMPFAIL`) naming the holder; set `RIG_LOCK_WAIT=1` to queue instead.
+`/run/rig-e2e.holder` is a display-only sidecar naming the holder — the flock is authoritative,
+and a stale sidecar is harmless.
+
+Off-box actors (a human or an agent over SSH) touch services on a shared box only after the same
+check:
+
+```bash
+ssh <box> 'flock -n -x /var/lock/rig-e2e.lock true' || ssh <box> 'cat /run/rig-e2e.holder'
+ssh <box> 'cat /etc/bench-role'   # the box's static owner
+```
+
 ## Hardening checklist (the pitfalls)
 
 Treat the box as production-sensitive. It holds keys and it's the thing that signs off releases.
@@ -152,7 +260,9 @@ Treat the box as production-sensitive. It holds keys and it's the thing that sig
   private keys) must be owner-only (`chmod 600 .env`; the `--readiness` check verifies this).
   Never print secrets in logs; the harness hashes them on the box and redacts artifacts. If the
   box also publishes releases, the GHCR token lives in the environment / a secret store, never in
-  the repo.
+  the repo — and so does the release signing key (`cosign.key` + `COSIGN_PASSWORD`,
+  [#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): owner-only on this box,
+  only its public half (`cosign.pub`) is committed.
 - Network. Firewall to least exposure: inbound SSH (key-only, no root login, fail2ban) and the
   stratum port scoped to the LAN ([workers › firewall](workers.md#firewall)); the dashboard
   stays on localhost behind Caddy and the monerod RPC on localhost (both asserted by

@@ -35,6 +35,13 @@ services:
       # Client-auth toggle (#343): the entrypoint doesn't read it, but listing it here means a change
       # recreates tor so it re-reads authorized_clients/ (pithead writes/clears that before recreate).
       - DASHBOARD_ONION_CLIENT_AUTH=${DASHBOARD_ONION_CLIENT_AUTH:-false}
+    # Immutable root filesystem (#377). The entrypoint renders torrc to /tmp (the unprivileged
+    # 'tor' user can't write /etc/tor); everything else Tor writes — onion keys, the control auth
+    # cookie, its state — lives in DataDirectory /var/lib/tor, the bind mount below. No PidFile,
+    # logs go to stdout.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     volumes:
       - ${TOR_DATA_DIR}:/var/lib/tor
     networks:
@@ -80,6 +87,13 @@ services:
       - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
       # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
+    # Immutable root filesystem (#377). The entrypoint renders bitmonero.conf INTO the bind-mounted
+    # data dir (/home/ubuntu/.bitmonero/bitmonero.conf), and monerod keeps everything — chain DB,
+    # logs, p2pstate — under that same data-dir mount, so /tmp scratch is the only tmpfs needed.
+    # /dev/hugepages is a bind mount, unaffected by the read-only rootfs.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     volumes:
       - ${MONERO_DATA_DIR}:/home/ubuntu/.bitmonero
       - /dev/hugepages:/dev/hugepages
@@ -147,6 +161,13 @@ services:
       # shared marker to decide clearnet-vs-Tor per start. Surfaced here so a flag change recreates
       # tari (a bind-mount content change alone won't trigger a recreate).
       - TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC:-false}
+    # Immutable root filesystem (#377). The wrapper entrypoint copies the canonical config to
+    # /tmp/tari-runtime-config.toml; the upstream start_tari_app.sh (verified in the pinned image:
+    # APP_NAME=node → TARI_BASE=/var/tari/node, it only mkdir+cd there) then runs minotari_node with
+    # --base-path /var/tari/node — the data bind mount, which holds the DB, logs and peer DB.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     volumes:
       - ${TARI_DATA_DIR}:/var/tari/node
       - ./build/tari:/var/tari/config
@@ -199,6 +220,12 @@ services:
       memlock:
         soft: -1
         hard: -1
+    # Immutable root filesystem (#377). p2pool writes its cache, p2pool.log and peer list to its
+    # cwd /home/ubuntu and the data-api to /stats — both bind mounts below. The entrypoint's socat
+    # bridges (#278) write nothing; /dev/hugepages is a bind mount, unaffected.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     volumes:
       - ${P2POOL_DATA_DIR}:/home/ubuntu
       - ${P2POOL_DATA_DIR}/stats:/stats
@@ -266,6 +293,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Immutable root filesystem (#377). Pure network proxy, no bind mounts; the wrapper entrypoint
+    # writes nothing, but the cwd /home/ubuntu exists only in the image and xmrig-proxy may drop a
+    # config/log there (e.g. persisting an API-driven pool switch), so give it uid-1000 tmpfs
+    # scratch. Ephemeral by design — the config is re-rendered from the compose command every start.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /home/ubuntu:size=64m,uid=1000,gid=1000
     ports:
       # The stratum endpoint your rigs connect to. Published on 0.0.0.0 (all interfaces) by
       # default so LAN workers can reach it; set p2pool.stratum_bind in config.json to a specific
@@ -354,6 +389,12 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Immutable root filesystem (#377). The dashboard writes its SQLite history to /data and the
+    # clearnet-sync markers to /clearnet-state — both bind mounts below; /app and the venv are only
+    # read/executed. /tmp covers Python's tempfile default and SQLite's temp-file fallback.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     volumes:
       - ${P2POOL_DATA_DIR}/stats:/app/stats:ro
       - ${DASHBOARD_DATA_DIR}:/data
@@ -361,6 +402,26 @@ services:
       # node finishes a clearnet initial sync, then restarts it onto Tor (#234). monerod/tari mount
       # the same dir read-only. Holds only non-secret state markers.
       - ${CLEARNET_STATE_DIR:-./data/clearnet-state}:/clearnet-state
+      # Control-channel spool (#33). requests/ is the container's ONLY writable leg — the dashboard
+      # drops typed JSON intents there; the host-side runner answers via the read-only results/ and
+      # audit/ mounts. staged/ is never mounted at all. This rw/ro split is the trust boundary: the
+      # container can only ask; it cannot forge a result, rewrite the audit log, or alter a staged
+      # intent between preview and commit.
+      - ${CONTROL_DIR:-./data/control}/requests:/control/requests
+      - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
+      - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
+      # Caddy's JSON access log (#349), read-only: the dashboard tails it to show recent accesses
+      # and a failed-login count (a burst of 401s = rotate the password / onion). Caddy owns the
+      # write side and the rotation; every field read from here is treated as hostile input.
+      - ${CADDY_LOG_DIR:-./data/caddy-logs}:/access-log:ro
+      # The live config, read-only, prefills the Configuration view (#33). Secret leaves are masked
+      # server-side (control_service.read_config); the raw values never leave the API. NOTE: this
+      # bind-mount — not the API masking — is the real secret trust boundary; a backend compromise
+      # reads config.json plaintext here (see SECURITY.md).
+      - ./config.json:/host-config/config.json:ro
+      # config.reference.json (every key with its default), read-only, so the editor form covers the
+      # full schema even for keys the operator's sparse config.json omits (#33). No secrets.
+      - ./config.reference.json:/host-config/config.reference.json:ro
     environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
@@ -383,6 +444,9 @@ services:
       # Egress-posture panel (#170): the #270 firewall state + p2pool's clearnet toggle, so the
       # dashboard can show each component's real egress route rather than a guess.
       - TOR_EGRESS_FIREWALL=${TOR_EGRESS_FIREWALL:-true}
+      # Tor guard self-heal (#424): opt-in; when true the dashboard probes Tor clearnet egress
+      # and restarts tor (via docker-control) if it's stuck on a failing guard. Default off.
+      - TOR_AUTO_HEAL=${TOR_AUTO_HEAL:-false}
       - P2POOL_CLEARNET=${P2POOL_CLEARNET:-false}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
@@ -421,6 +485,10 @@ services:
       # bridge Tor SOCKS as TOR_SOCKS_PROXY so it leaks neither the host IP nor a DNS lookup (safe to
       # default on). Set dashboard.check_for_updates:false to opt out. See docs/privacy.md.
       - DASHBOARD_CHECK_UPDATES=${DASHBOARD_CHECK_UPDATES:-true}
+      # Dashboard config editing (#33, config.json: dashboard.control.enabled). Default OFF.
+      # When off, the control routes are not registered at all (they 404); the spool mounts above
+      # are inert because no host-side runner is installed.
+      - DASHBOARD_CONTROL_ENABLED=${DASHBOARD_CONTROL_ENABLED:-false}
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
       # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
       # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the
@@ -543,7 +611,8 @@ services:
     # Isolated from the mining bridge (#345): same posture as docker-proxy. The tecnativa ruleset
     # can't scope start/stop to specific containers, so keeping this proxy off `mining_net` and only
     # on the host loopback is what stops a compromised mining container from start/stopping the whole
-    # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy.
+    # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy —
+    # plus tor for the opt-in guard self-heal restart (#424).
     ports:
       - "127.0.0.1:12376:2375"
     networks:
@@ -579,6 +648,9 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+      # JSON access log (#349): Caddy rolls it natively (4 MiB × 3 files, see generate_caddyfile);
+      # the dashboard mounts the same dir read-only to show recent accesses and failed logins.
+      - ${CADDY_LOG_DIR:-./data/caddy-logs}:/var/log/caddy
 
 # --- Volumes ---
 volumes:
