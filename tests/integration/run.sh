@@ -38,6 +38,7 @@ READINESS=0
 RUN_LIFECYCLE=0
 RUN_FAULTS=0
 RUN_AUTH_FAIL_CLOSED=0
+RUN_HARDENING=0
 SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
@@ -102,6 +103,11 @@ MATRIX:
                          in .env and assert `pithead up` REFUSES to start (the live counterpart
                          to the tier-1 compose-config check), then restore the exact token and
                          recover. DESTRUCTIVE-then-restored; works in both ssh and local mode.
+  --hardening            also run the v1.4 hardening phase (#377/#33/#424), local mode only:
+                         read-only rootfs rejects writes live, the systemd control path unit fires
+                         on a spooled request (allowlisted change applies, sensitive change
+                         refused), and the stack recovers from a tor restart. DESTRUCTIVE-then-
+                         restored (enables then disables the control channel).
   --keep                 do NOT restore the original config.json at the end (leaves the box
                          on the last scenario — useful for debugging)
 
@@ -183,6 +189,10 @@ parse_args() {
             ;;
         --auth-fail-closed)
             RUN_AUTH_FAIL_CLOSED=1
+            shift
+            ;;
+        --hardening)
+            RUN_HARDENING=1
             shift
             ;;
         --safety-backup)
@@ -289,7 +299,12 @@ preflight() {
         fi
     done
 
+    # Start from a clean results dir: a prior run's per-scenario artifacts (e2e.sh preserves
+    # results/ across runs) otherwise linger and read as THIS run's state when diagnosing a failure
+    # — a stale capture from another branch bit us during the v1.4 gate (#454). Keep the dir itself
+    # (callers may have pointed --out at it); wipe its contents.
     mkdir -p "$OUT_DIR"
+    find "$OUT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
     record_manifest
 
     # Snapshot the baseline so we can restore it and compare secrets later.
@@ -482,8 +497,22 @@ assert_running_state() {
         *) it_fail "monero display mode determinate" "got [$dmode], want Pruned|Full" ;; esac
     fi
 
-    # 5. Sidechain selection matches the pool axis.
-    assert_eq "pool type" "$(jq_get "$st" '.pool.type')" "$(pool_label "$pool")"
+    # 5. Sidechain selection matches the pool axis. p2pool classifies the pool by counting peer
+    #    ports, so a freshly-(re)started stack reads "Unknown" until peers connect — and nano (a tiny
+    #    sidechain, slowest to find peers over Tor) can stay Unknown past wait_pool_ready's window.
+    #    "Unknown" is a peer-discovery-timing state, NOT a misclassification: warn on it (don't fail
+    #    the gate on peer luck), but a WRONG determinate type (Main when we set Mini) is a real
+    #    config/render bug — fail that (#454).
+    local got_pool want_pool
+    got_pool="$(jq_get "$st" '.pool.type')"
+    want_pool="$(pool_label "$pool")"
+    if [ "$got_pool" = "$want_pool" ]; then
+        it_pass "pool type ($got_pool)"
+    elif [ "$got_pool" = "Unknown" ] || [ -z "$got_pool" ]; then
+        it_warn "pool type still Unknown for $want_pool — peers not classified in time (nano/Tor is slow to populate); not a misclassification (#454)"
+    else
+        it_fail "pool type" "got [$got_pool], want [$want_pool] — wrong sidechain, not a timing lag"
+    fi
 
     # 6. End-to-end mining: workers online + hashes accumulating (#28). proxy_workers is the
     #    reliable liveness signal; stratum.conns is reported but informational (can be 0).
@@ -1112,6 +1141,191 @@ _set_env_token() { # _set_env_token <value>
     rx "awk -v t=$(quote_arg "$1") '/^PROXY_AUTH_TOKEN=/{print \"PROXY_AUTH_TOKEN=\" t; next} {print}' .env > .env.itest && mv .env.itest .env"
 }
 
+# Drop a file into the control spool on the box (mirrors push_config's stdin-over-ssh transfer so
+# no JSON quoting has to survive the remote shell string). <abs-path> is on the box.
+_spool_write() { # _spool_write <abs-path-on-box> <content>
+    if [ "$IT_MODE" = "local" ]; then
+        printf '%s\n' "$2" >"$1"
+    else
+        printf '%s\n' "$2" | ssh "${IT_SSH_OPTS[@]}" "$IT_SSH_DEST" "cat > $(quote_arg "$1")"
+    fi
+}
+
+# Wait up to <timeout>s for the systemd path unit to write results/<id>.json with a status OTHER
+# than <exclude> (so a leftover preview result doesn't satisfy a wait for the commit result).
+# Returns 0 and echoes the status when it settles; 1 on timeout. Proof the unit actually fired.
+_wait_control_status() { # <control-dir> <id> <exclude-status> <timeout>
+    local cdir="$1" id="$2" exclude="$3" timeout="${4:-90}" waited=0 st
+    while [ "$waited" -lt "$timeout" ]; do
+        st="$(rx "jq -r '.status // empty' $(quote_arg "$cdir/results/$id.json") 2>/dev/null")"
+        if [ -n "$st" ] && [ "$st" != "$exclude" ]; then
+            echo "$st"
+            return 0
+        fi
+        sleep 3
+        waited=$((waited + 3))
+    done
+    return 1
+}
+
+# Reach the dashboard onion from an INDEPENDENT external Tor client — its own tor + curl, its own
+# circuits, sharing nothing with the stack (tests/integration/tor-client/). It reaches the onion
+# over the REAL Tor network exactly as a remote user would, so a pass proves the whole inbound path
+# (hidden service published + reachable, client-auth key accepted, Caddy answering) from OUTSIDE the
+# trust boundary — using none of the stack's own SOCKS/plumbing. Returns 0 if Caddy answered (200 or
+# 401 — we deliberately don't hold the login, so its auth challenge counts as reachable). The client
+# key is piped pithead->container stdin entirely on the box: it never crosses to the harness, an ssh
+# argument, or `docker inspect`. Everything runs on the bench (it has docker + the Tor network).
+_onion_reachable_external() {
+    local onion
+    onion="$(env_on_box DASHBOARD_ONION_ADDRESS)"
+    [ -n "$onion" ] && [ "$onion" != "placeholder" ] || return 2
+    rx "docker build -q -t pithead-tor-client-test tests/integration/tor-client/ >/dev/null 2>&1" || return 3
+    # onion is [a-z2-7]{56}.onion (safe to embed); the client key stays on the box.
+    local snippet
+    snippet="line=\$(./pithead onion-client-key 2>/dev/null | grep -E 'descriptor:x25519:' | head -1);"
+    snippet="$snippet if [ -n \"\$line\" ]; then printf '%s\n' \"\$line\" | docker run -i --rm -e ONION_ADDR=$onion -e AUTH_STDIN=1 pithead-tor-client-test;"
+    snippet="$snippet else docker run --rm -e ONION_ADDR=$onion pithead-tor-client-test; fi"
+    rx "$snippet" | grep -q "PROBE-OK"
+}
+
+# Tier-4 hardening phase (#377/#33/#424): the v1.4 host-mutation + hardening surfaces that ONLY a
+# real box proves — a read-only rootfs actually rejecting a write, the systemd path unit actually
+# firing on a spooled request, and a tor restart restoring real clearnet egress. Local mode only
+# (needs the real containers, data dirs, and systemd). Everything it changes is reverted by the
+# end-of-run config restore; it also re-applies the baseline itself so the root path unit never lingers.
+run_hardening() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
+    IT_CURRENT_SCENARIO="hardening"
+    echo ""
+    it_log "── v1.4 hardening phase (#377/#33/#424) ────────────"
+
+    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+        it_warn "skipping hardening phase (remote mode: no local containers/systemd to exercise)"
+        return 0
+    fi
+
+    # 1. Read-only rootfs is LIVE at runtime (#377), not just declared in compose. We must assert
+    #    the failure is specifically EROFS ("Read-only file system"), NOT just any error: the
+    #    containers run non-root (#255), so `touch /` on a WRITABLE rootfs already fails with EACCES
+    #    ("Permission denied") — treating any failure as a pass would green-light a service that
+    #    silently lost read_only. Only a read-only mount returns EROFS (verified: a writable
+    #    non-root container gives Permission denied; a read-only one gives Read-only file system).
+    #    /tmp is a writable tmpfs by design — we probe /, the image layer, not the scratch mount.
+    local svc probe_out
+    for svc in tor monerod p2pool tari xmrig-proxy dashboard; do
+        probe_out="$(rx "docker exec $svc sh -c 'touch /.rootfs-write-probe 2>&1 && rm -f /.rootfs-write-probe'" 2>&1)"
+        if printf '%s' "$probe_out" | grep -q "Read-only file system"; then
+            it_pass "read-only rootfs rejects writes with EROFS on $svc (#377)"
+        else
+            it_fail "read-only rootfs rejects writes with EROFS on $svc (#377)" \
+                "expected 'Read-only file system', got: ${probe_out:-<write SUCCEEDED — rootfs is writable>}"
+        fi
+    done
+
+    # 2. The onion is reachable from OUTSIDE (privacy surface, #343/#360) and SURVIVES the #424 heal
+    #    action. An independent external Tor client (its own image/tor/circuits) fetches the dashboard
+    #    onion over the real Tor network — no stack SOCKS or plumbing involved. First a baseline; then
+    #    we restart tor (the heal's action — the stuck-guard TRIGGER is guard-selection luck and not
+    #    reproducible) and assert the onion comes back, proving tor rebuilt circuits + republished its
+    #    descriptor. Gated on the baseline so a genuinely-bad live Tor network can't false-fail the
+    #    gate: recovery is only asserted when the onion was reachable to begin with.
+    #    (Reachability is INBOUND; the clearnet-EXIT half of #424 is not externally observable and
+    #    stays with the doctor egress check, which is the stack self-checking its own egress.)
+    local pre_onion=0
+    if [ "$(env_on_box DASHBOARD_ONION_ADDRESS)" = "placeholder" ] || [ -z "$(env_on_box DASHBOARD_ONION_ADDRESS)" ]; then
+        it_warn "dashboard onion not provisioned on this box — skipping the external-reachability checks (#424/#343)"
+    else
+        it_step "external Tor client: reach the dashboard onion before the restart (baseline)…"
+        _onion_reachable_external && pre_onion=1
+        if [ "$pre_onion" = "1" ]; then
+            it_pass "dashboard onion reachable from an independent external Tor client (#343/#360)"
+        else
+            it_warn "dashboard onion not reachable from outside before the restart (live Tor network) — can't prove recovery, skipping the post-restart check (#424)"
+        fi
+        it_step "restart tor (the #424 heal action)…"
+        pithead restart tor >/dev/null 2>&1
+        wait_status_ok 240 || true
+        pithead status >/dev/null 2>&1
+        assert_rc "stack healthy after a tor restart (#424 heal action)" "$?" "0"
+        if [ "$pre_onion" = "1" ]; then
+            it_step "external Tor client: dashboard onion must come back after the restart…"
+            if _onion_reachable_external; then
+                it_pass "dashboard onion reachable from outside AFTER the tor restart (#424 recovery)"
+            else
+                it_fail "dashboard onion reachable from outside AFTER the tor restart (#424 recovery)" "external client could not reach the onion within the probe window"
+            fi
+        fi
+    fi
+
+    # 3. The #33 control channel end-to-end THROUGH THE REAL SYSTEMD PATH UNIT. Tier-1 runs
+    #    control-run-pending by hand; only here does pithead-control.path actually fire on a spooled
+    #    file. Needs a dashboard password (control refuses to enable without one). Enable control,
+    #    let apply install + enable the unit, then drop requests and let systemd act.
+    local ctrl_config
+    ctrl_config="$(printf '%s' "$BASELINE_CONFIG" | jq '.dashboard.secure=true | .dashboard.auth={username:"admin",password:"a tier4 control passphrase"} | .dashboard.control={enabled:true}')"
+    push_config "$ctrl_config"
+    it_step "apply with dashboard.control enabled (installs the systemd path unit)…"
+    pithead apply -y >/dev/null 2>&1
+    wait_status_ok 180 || true
+    if rx "systemctl is-enabled pithead-control.path >/dev/null 2>&1"; then
+        it_pass "pithead-control.path installed + enabled by apply (#33)"
+    else
+        it_fail "pithead-control.path installed + enabled by apply (#33)" "unit not enabled"
+    fi
+
+    local cdir
+    cdir="$(env_on_box CONTROL_DIR)"
+    if [ -z "$cdir" ]; then
+        it_warn "CONTROL_DIR not set on the box — skipping the spool round-trips"
+    else
+        # 3a. A NON-sensitive change (an allowlisted alert toggle) committed via the spool must be
+        #     applied BY THE PATH UNIT — not by us calling control-run-pending.
+        # Use an allowlisted key that renders UNCONDITIONALLY: DASHBOARD_CHECK_UPDATES is always
+        # emitted (a telegram event toggle only renders when telegram is configured, so it reads
+        # empty on a telegram-off baseline — a test-only pitfall, not a control-channel bug).
+        local uuid_ok="a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1" ok_cfg st
+        ok_cfg="$(printf '%s' "$ctrl_config" | jq -c '.dashboard.check_for_updates=false')"
+        _spool_write "$cdir/requests/$uuid_ok.json" \
+            "$(jq -nc --argjson c "$ok_cfg" '{id:"'"$uuid_ok"'",action:"preview",actor:"itest",config:$c}')"
+        if st="$(_wait_control_status "$cdir" "$uuid_ok" "" 60)"; then
+            it_pass "systemd path unit fired on a spooled request (#33) [preview=$st]"
+        else
+            it_fail "systemd path unit fired on a spooled request (#33)" "no result after 60s"
+        fi
+        _spool_write "$cdir/requests/$uuid_ok.json" \
+            "{\"id\":\"$uuid_ok\",\"action\":\"commit\",\"actor\":\"itest\"}"
+        st="$(_wait_control_status "$cdir" "$uuid_ok" "previewed" 90 || echo timeout)"
+        assert_eq "spool commit applied by the path unit (#33)" "$st" "applied"
+        assert_eq "the allowlisted change landed host-side (#33)" "$(env_on_box DASHBOARD_CHECK_UPDATES)" "false"
+        assert_contains "control mutation audited (#33)" \
+            "$(rx "cat $(quote_arg "$cdir/audit/control.log") 2>/dev/null")" '"action":"commit"'
+
+        # 3b. A SENSITIVE change (wallet swap) MUST be refused host-side, .env untouched — the
+        #     default-deny gate, exercised through the real spool rather than a unit test.
+        local uuid_bad="b2b2b2b2-2222-4222-8222-b2b2b2b2b2b2" bad_cfg wallet_before
+        wallet_before="$(env_on_box MONERO_WALLET_ADDRESS)"
+        bad_cfg="$(printf '%s' "$ctrl_config" | jq -c '.monero.wallet_address="4TIER4TESTWALLETdoNotApplyThisIsAnIntegrationTestRejectionProbe0000000000000000000000000000000000"')"
+        _spool_write "$cdir/requests/$uuid_bad.json" \
+            "$(jq -nc --argjson c "$bad_cfg" '{id:"'"$uuid_bad"'",action:"preview",actor:"itest",config:$c}')"
+        _wait_control_status "$cdir" "$uuid_bad" "" 60 >/dev/null || true
+        _spool_write "$cdir/requests/$uuid_bad.json" \
+            "{\"id\":\"$uuid_bad\",\"action\":\"commit\",\"actor\":\"itest\"}"
+        st="$(_wait_control_status "$cdir" "$uuid_bad" "previewed" 90 || echo timeout)"
+        assert_eq "sensitive (wallet) spool commit refused host-side (#33)" "$st" "rejected"
+        assert_eq "refused wallet change did NOT touch .env (#33)" "$(env_on_box MONERO_WALLET_ADDRESS)" "$wallet_before"
+    fi
+
+    # Restore the baseline ourselves: re-applying with control off uninstalls the path unit, so the
+    # root systemd unit never outlives the phase even though the end-of-run restore would also do it.
+    it_step "restoring baseline (disables control, removes the path unit)…"
+    push_config "$BASELINE_CONFIG"
+    pithead apply -y >/dev/null 2>&1
+    # 240s: this apply follows the control enable/disable + a tor restart, so the stack has more to
+    # re-settle than a plain apply (180s timed out here on a real run).
+    wait_status_ok 240 || true
+}
+
 run_auth_fail_closed() {
     # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="auth-fail-closed"
@@ -1293,6 +1507,7 @@ main() {
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
     [ "$RUN_FAULTS" = "1" ] && run_fault_injection
     [ "$RUN_AUTH_FAIL_CLOSED" = "1" ] && run_auth_fail_closed
+    [ "$RUN_HARDENING" = "1" ] && run_hardening
 
     # Failure → roll the box back to the safety backup; success → leave it (restore_baseline
     # just puts config.json back to where we found it). Then drop the generated archive.
