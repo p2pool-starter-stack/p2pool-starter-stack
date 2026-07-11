@@ -26,6 +26,8 @@ P2Pool, which the dashboard states in its disclaimer.
 
 # Monero amounts are reported in atomic units (piconero); 1 XMR = 1e12 atomic.
 ATOMIC_PER_XMR = 1_000_000_000_000
+# Tari amounts are reported in microTari (µT); 1 XTM = 1e6 µT (#462).
+MICRO_PER_XTM = 1_000_000
 SECONDS_PER_DAY = 86_400
 
 

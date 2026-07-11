@@ -23,11 +23,13 @@ sys.path.insert(0, str(_HERE))
 
 from fake_monerod import FakeMonerod  # noqa: E402
 from fake_tari import start_server  # noqa: E402
+from fake_tari_wallet import start_server as start_wallet_server  # noqa: E402
 from fake_wallet_rpc import FakeWalletRpc  # noqa: E402
 
 from mining_dashboard.client.monero.monero_client import MoneroClient  # noqa: E402
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient  # noqa: E402
 from mining_dashboard.client.tari.tari_client import TariClient  # noqa: E402
+from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient  # noqa: E402
 
 
 # --- Monero (HTTP get_info) -------------------------------------------------
@@ -175,3 +177,40 @@ def test_tari_serves_cached_reading_when_briefly_unreachable():
     first, second = asyncio.run(_impl())
     assert first["reachable"] is True and first["is_syncing"] is False
     assert second["reachable"] is False and second["is_syncing"] is False
+
+
+# --- Tari payout wallet (view-only minotari console wallet, #462) ------------
+async def _tari_confirmed_payouts(transactions, min_height=0):
+    state = {"transactions": transactions}
+    server, bound = await start_wallet_server(0, state)
+    client = TariWalletClient(grpc_address=f"127.0.0.1:{bound}")
+    try:
+        return await client.get_confirmed_payouts(min_height=min_height)
+    finally:
+        await client.close()
+        await server.stop(None)
+
+
+def test_tari_wallet_confirmed_payouts_parse_and_convert():
+    txs = [
+        {"tx_id": 11, "amount": 250_000, "mined_in_block_height": 100, "timestamp": 1000},
+        {"tx_id": 22, "amount": 500_000, "mined_in_block_height": 200, "timestamp": 2000},
+    ]
+    out = asyncio.run(_tari_confirmed_payouts(txs))
+    assert [p["txid"] for p in out] == ["11", "22"]
+    assert out[0]["amount_atomic"] == 250_000 and out[0]["amount_xtm"] == 0.25  # µT ÷ 1e6
+
+
+def test_tari_wallet_min_height_filters_the_tip():
+    # The client seeds min_height from the last stored payout; only newer confirmations return
+    # (idempotent storage then drops any overlap), so a restart replays nothing.
+    txs = [
+        {"tx_id": 1, "amount": 1, "mined_in_block_height": 100, "timestamp": 1},
+        {"tx_id": 2, "amount": 2, "mined_in_block_height": 300, "timestamp": 2},
+    ]
+    out = asyncio.run(_tari_confirmed_payouts(txs, min_height=200))
+    assert [p["txid"] for p in out] == ["2"]
+
+
+def test_tari_wallet_no_transactions_reads_empty():
+    assert asyncio.run(_tari_confirmed_payouts([])) == []

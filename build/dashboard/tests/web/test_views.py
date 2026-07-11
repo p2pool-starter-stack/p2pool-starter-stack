@@ -1349,6 +1349,39 @@ class TestEarnings:
             "last_ts": 0,
         }
 
+    def test_tari_confirmed_disabled_by_default(self):
+        # No tari_payouts passed (Tari feature off) → tari_confirmed reports disabled.
+        e = build_earnings(self._NET, _metrics())
+        assert e["tari_confirmed"] == {"enabled": False}
+
+    def test_tari_confirmed_totals_windowed_in_xtm(self):
+        # #462: XTM sums (microTari ÷1e6) with xtm_* keys, distinct from the monero xmr_* block.
+        now = 1_000_000.0
+        tari_payouts = [
+            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000},  # in 24h
+            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000},  # in 7d
+            {"txid": "c", "ts": now - 30 * 86_400, "amount_atomic": 1_000_000},  # all-time only
+        ]
+        from mining_dashboard.web.views import MICRO_PER_XTM, _confirmed_payouts_summary
+
+        s = _confirmed_payouts_summary(tari_payouts, now=now, divisor=MICRO_PER_XTM, unit="xtm")
+        assert s["enabled"] is True and s["count"] == 3
+        assert s["xtm_24h"] == pytest.approx(0.25)
+        assert s["xtm_7d"] == pytest.approx(0.75)
+        assert s["xtm_all"] == pytest.approx(1.75)
+        assert s["last_ts"] == now - 100
+
+    def test_tari_confirmed_enabled_but_empty(self):
+        e = build_earnings(self._NET, _metrics(), tari_payouts=[])
+        assert e["tari_confirmed"] == {
+            "enabled": True,
+            "count": 0,
+            "xtm_24h": 0.0,
+            "xtm_7d": 0.0,
+            "xtm_all": 0.0,
+            "last_ts": 0,
+        }
+
 
 # --- XvB tier / raffle calculator (Issue #118) -----------------------------------------
 

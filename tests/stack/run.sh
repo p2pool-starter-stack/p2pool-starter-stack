@@ -2211,7 +2211,7 @@ echo "== completion: suggestions (#94) =="
 out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
 assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
 out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
-assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod wallet-rpc tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod wallet-rpc tari tari-wallet p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
 
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
@@ -2532,6 +2532,59 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "malformed view key rejected" "$?" "1"
 assert_contains "malformed view-key message" "$out" "64-character hex"
+
+echo "== black-box: Tari payout confirmation view key (#462) =="
+# The Tari sibling of #381: tari.view_key + tari.spend_public_key gate the view-only tari-wallet.
+# Empty (default) -> feature off, no profile. Set on a LOCAL Tari node -> the tari_payout_confirm
+# profile is added, the keys render into .env, the secret file is written 600, and the view key is
+# never echoed to stdout. Obvious dummy keys (all-a / all-b) so gitleaks can't mistake them.
+TVIEW="$(printf 'a%.0s' $(seq 64))"  # 64 hex — a well-formed Tari private view key
+TSPEND="$(printf 'b%.0s' $(seq 64))" # 64 hex — a well-formed Tari public spend key
+# (1) OFF by default: no tari view key -> feature disabled, tari_payout_confirm profile absent.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tari payout confirm off by default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_PAYOUT_CONFIRM_ENABLED)" "false"
+case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
+*tari_payout_confirm*) bad "no tari-wallet profile when view key unset" "tari_payout_confirm leaked into COMPOSE_PROFILES" ;;
+*) ok "no tari-wallet profile when view key unset" ;;
+esac
+# (2) ON (local node): tari view key + spend key set -> profile added, keys rendered, flag true.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with a tari view key succeeds" "$?" "0"
+assert_eq "tari payout confirm enabled renders true" "$(run_sourced "$V" env_get_file "$V/.env" TARI_PAYOUT_CONFIRM_ENABLED)" "true"
+assert_eq "tari view key rendered into .env" "$(run_sourced "$V" env_get_file "$V/.env" TARI_VIEW_KEY)" "$TVIEW"
+assert_contains "tari-wallet profile added" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "tari_payout_confirm"
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)" ] && ok "tari wallet password generated" || bad "tari wallet password generated" "empty"
+# The secret file is written owner-only (600) and contains the view key; it is NOT world-readable.
+secret_file="$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_SECRET_FILE)"
+[ -f "$secret_file" ] && ok "tari wallet secret file written" || bad "tari wallet secret file written" "missing $secret_file"
+perms="$(stat -c '%a' "$secret_file" 2>/dev/null || stat -f '%Lp' "$secret_file" 2>/dev/null)"
+assert_eq "tari wallet secret file is owner-only (600)" "$perms" "600"
+assert_contains "secret file carries the view key for the container" "$(cat "$secret_file")" "$TVIEW"
+# The view key must NEVER be echoed to stdout by apply — only land in the owner-only .env / secret file.
+case "$out" in
+*"$TVIEW"*) bad "tari view key never printed by apply" "the tari view key leaked into apply stdout" ;;
+*) ok "tari view key never printed by apply" ;;
+esac
+# The tari wallet password is preserved across a re-apply so the existing wallet DB can be reopened.
+tpw1="$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tari wallet password preserved across apply" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)" "$tpw1"
+# (3) A view key WITHOUT the spend key -> refused (a view-only wallet needs both).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari view key without spend key rejected" "$?" "1"
+assert_contains "missing-spend-key message" "$out" "tari.spend_public_key"
+# (4) A malformed tari view key (not 64 hex) is rejected before it reaches the wallet.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"nope","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "malformed tari view key rejected" "$?" "1"
+assert_contains "malformed tari view-key message" "$out" "64-character hex"
 
 echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never

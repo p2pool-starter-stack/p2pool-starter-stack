@@ -13,6 +13,23 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Confirm Tari payouts on-chain, too (#462).** The Tari sibling of #381, for the other half of
+  the merge-mine. Tari merge-mining here is solo — the whole block reward lands at once when your
+  hashrate finds a Tari block — so a payout is a rare, large event worth ground-truth confirmation.
+  Set `tari.view_key` and `tari.spend_public_key` (exported from your Tari wallet) and the stack runs
+  a view-only `minotari_console_wallet` against your **local** Tari node; the Tari tab of the
+  earnings card gains a **Confirmed** total (24h / 7d / all-time XTM) beside the time-to-block
+  estimate, and the shared `payout_confirmed` alert fires once per Tari payout (it carries the
+  chain). Confirmed payouts persist to the same local table as the Monero side, so a restart never
+  re-alerts; the restore point is a **birthday** (`tari.payout_scan_birthday`, days since the Unix
+  epoch), not a block height, so a fresh wallet doesn't rescan from genesis. **Security:** the Tari
+  view key is handled exactly like `monero.view_key` (scan-only, never spend; owner-only `.env`;
+  never logged, echoed, on a container command line, or in the dashboard editor), with one extra
+  safeguard — because Tari has no key-import file, the wallet secrets reach the container through a
+  tmpfs secret mount, so they never appear in `docker inspect`. Off by default (empty view key =
+  nothing new runs); **local Tari node only.** See
+  [Dashboard › Payout confirmation](docs/dashboard.md#payout-confirmation).
+
 - **Confirm payouts on-chain with a view-only wallet (#381).** Every earnings figure the dashboard
   shows is an *estimate*; nothing checked that a P2Pool payout actually landed in your wallet.
   Now, when you set `monero.view_key` (the private **view** key for your payout address), the stack

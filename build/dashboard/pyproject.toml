@@ -92,6 +92,7 @@ ignore = [
 "tests/**" = ["S101", "S105", "S106", "B017", "ASYNC240"]
 # Generated-stub imports are intentionally grouped below the logger + the generation guidance.
 "mining_dashboard/client/tari/tari_client.py" = ["E402"]
+"mining_dashboard/client/tari/tari_wallet_client.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["mining_dashboard"]

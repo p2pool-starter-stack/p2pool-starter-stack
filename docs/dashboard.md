@@ -311,6 +311,19 @@ rather than erroring.
 > view key from your wallet and replace `monero.view_key`. Leave `monero.view_key` empty (the
 > default) and none of this runs — the card shows only the estimate.
 
+The **Tari** side of the merge-mine works the same way (#462). Tari merge-mining here is solo — the
+whole block reward lands at once when your hashrate finds a Tari block, so a payout is a rare, large
+event worth confirming. Set `tari.view_key` and `tari.spend_public_key` (both exported from your
+Tari wallet) and the stack runs a **view-only** `minotari_console_wallet` against your local Tari
+node. The Tari tab of the earnings card then shows **Confirmed** XTM totals (24 hours, 7 days,
+all-time) beside the time-to-block estimate, and the same `payout_confirmed` alert fires once per
+Tari payout, carrying the chain. The Tari view key is a secret and is handled exactly like the
+Monero one — owner-only `.env`, never logged or on a container command line, off the Configuration
+editor — with one extra safeguard: because Tari has no key-import file, the three wallet secrets are
+delivered to the container through a tmpfs secret mount, so they never appear in `docker inspect`.
+Local Tari node only. Its restore point is a **birthday** (`tari.payout_scan_birthday`, days since
+the Unix epoch), not a block height. Leave `tari.view_key` empty and none of the Tari half runs.
+
 ### XvB Tier (raffle)
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which

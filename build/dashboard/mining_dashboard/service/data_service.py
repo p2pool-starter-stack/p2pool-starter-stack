@@ -8,6 +8,7 @@ from aiohttp import ClientSession
 from mining_dashboard.client.docker.docker_control import DockerControl
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
 from mining_dashboard.client.tari.tari_client import TariClient
+from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient
 from mining_dashboard.client.xmrig_client import XMRigWorkerClient
 from mining_dashboard.client.xvb_client import (
     REG_INVALID,
@@ -45,6 +46,7 @@ from mining_dashboard.config.config import (
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
+    TARI_PAYOUT_CONFIRM_ENABLED,
     TARI_REQUIRED,
     TOR_SOCKS_PROXY,
     UPDATE_CHECK_INTERVAL,
@@ -457,6 +459,10 @@ class DataService:
         # cadence below. Only constructed when the feature is on (view key set on a local node);
         # off, this stays None and no payout polling ever runs.
         self.wallet_client = MoneroWalletClient() if PAYOUT_CONFIRM_ENABLED else None
+        # Tari on-chain payout confirmation (#462): a view-only console-wallet gRPC client, polled on
+        # the same slow cadence. Only constructed when the Tari feature is on (tari view key set on a
+        # local Tari node); off, this stays None and no Tari payout polling ever runs.
+        self.tari_wallet_client = TariWalletClient() if TARI_PAYOUT_CONFIRM_ENABLED else None
         # Tor guard self-heal (#424), opt-in via tor.auto_heal — a no-op (no probes, no
         # restarts) unless enabled. Reuses the #31 docker-control proxy (start/stop only)
         # to restart tor when clearnet egress is stuck on a failing guard; the recovery
@@ -702,6 +708,31 @@ class DataService:
             logger.info(
                 "Payout confirmed on-chain: %.6f XMR (tx %s…) at height %d (#381)",
                 r["amount_atomic"] / 1e12,
+                r["txid"][:8],
+                r["height"],
+            )
+            await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
+
+    async def _sync_tari_payouts(self):
+        """Confirm Tari on-chain payouts from the view-only console wallet (#462), throttled by the
+        caller — the Tari sibling of ``_sync_payouts``.
+
+        Identical shape: seed from the highest stored Tari payout height, stream new confirmed
+        payouts, persist to the shared ``payouts`` table with chain="tari" (idempotent on
+        ``(chain, txid)`` so a restart replays nothing), and fire one ``payout_confirmed`` alert per
+        genuinely-new payout. ``amount_atomic`` is microTari here; the shared alert divides by the
+        Tari divisor. The Tari client is async (grpc.aio), so it's awaited directly rather than via
+        ``asyncio.to_thread``. An empty/unreachable scan is a quiet no-op."""
+        chain = "tari"
+        min_height = await asyncio.to_thread(self.state_manager.get_payout_max_height, chain)
+        payouts = await self.tari_wallet_client.get_confirmed_payouts(min_height)
+        if not payouts:
+            return
+        new_rows = await asyncio.to_thread(self.state_manager.add_payouts, chain, payouts)
+        for r in new_rows:
+            logger.info(
+                "Tari payout confirmed on-chain: %.6f XTM (tx %s…) at height %d (#462)",
+                r["amount_atomic"] / 1e6,
                 r["txid"][:8],
                 r["height"],
             )
@@ -1091,6 +1122,11 @@ class DataService:
                     # key). Polls get_transfers, persists new confirmed payouts, fires one alert each.
                     if self.wallet_client is not None and iteration_count % 10 == 0:
                         await self._sync_payouts()
+
+                    # 7d. Tari on-chain payout confirmation (#462), same cadence — gated on the
+                    # view-only Tari console wallet being configured (local node + tari view key).
+                    if self.tari_wallet_client is not None and iteration_count % 10 == 0:
+                        await self._sync_tari_payouts()
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to

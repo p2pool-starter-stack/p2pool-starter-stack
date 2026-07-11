@@ -2293,6 +2293,42 @@ parse_and_validate_config() {
         PAYOUT_CONFIRM_ENABLED=true
     fi
 
+    # Tari on-chain payout confirmation (#462), the sibling of #381 for the merge-mine half. The
+    # operator supplies the PRIVATE VIEW KEY plus the PUBLIC SPEND KEY for the Tari payout address;
+    # the stack runs a view-only minotari_console_wallet against the LOCAL Tari node to confirm a
+    # merge-mine coinbase actually landed. The view key is a SECRET (reveals all incoming amounts and
+    # timing) — handled like node_password: never logged or echoed, delivered to the container via a
+    # tmpfs-mounted compose secret, never the command line or `docker inspect`. Empty (the default) =
+    # feature off. Phase 1 is LOCAL NODE ONLY: a view key with a remote Tari node (#103, v1.6) is
+    # refused, mirroring monero.mode. tari.payout_scan_birthday is Tari's restore point: DAYS SINCE
+    # THE UNIX EPOCH (a u16, not a block height), so a fresh wallet doesn't rescan from genesis.
+    TARI_VIEW_KEY=$(jq -r '.tari.view_key // empty' "$CONFIG_FILE")
+    TARI_SPEND_PUBLIC_KEY=$(jq -r '.tari.spend_public_key // empty' "$CONFIG_FILE")
+    TARI_WALLET_BIRTHDAY=$(jq -r '.tari.payout_scan_birthday // "auto"' "$CONFIG_FILE")
+    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
+    TARI_PAYOUT_CONFIRM_ENABLED=false
+    if [ -n "$TARI_VIEW_KEY" ]; then
+        if [ "$TARI_MODE" != "local" ]; then
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Tari payout confirmation (#462) scans against the LOCAL Tari node only — remote Tari (#103) is v1.6 and changes the trust story. Unset tari.view_key, or use a local Tari node."
+        fi
+        # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
+        if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
+            error "tari.view_key must be the 64-character hex PRIVATE VIEW KEY for the Tari payout address (from your Tari wallet: 'export-view-key-and-spend-key'). Got ${#TARI_VIEW_KEY} chars."
+        fi
+        # A view-only Tari wallet needs the PUBLIC spend key too — require both together.
+        if ! printf '%s' "$TARI_SPEND_PUBLIC_KEY" | grep -qE '^[0-9a-f]{64}$'; then
+            error "tari.spend_public_key must be the 64-character hex PUBLIC SPEND KEY for the Tari payout address (exported alongside the view key). Set it whenever tari.view_key is set."
+        fi
+        # Birthday is "auto" (resolved to today's days-since-epoch at wallet creation) or an explicit
+        # u16 days-since-epoch (0–65535). Reject anything else before it reaches the wallet.
+        case "$TARI_WALLET_BIRTHDAY" in
+        '' | auto) ;;
+        *[!0-9]*) error "tari.payout_scan_birthday must be \"auto\" or DAYS SINCE THE UNIX EPOCH (an integer 0–65535, NOT a block height). Got \"$TARI_WALLET_BIRTHDAY\"." ;;
+        *) [ "$TARI_WALLET_BIRTHDAY" -le 65535 ] || error "tari.payout_scan_birthday must be ≤ 65535 (days since the Unix epoch, a u16). Got \"$TARI_WALLET_BIRTHDAY\"." ;;
+        esac
+        TARI_PAYOUT_CONFIRM_ENABLED=true
+    fi
+
     # Bridge network subnet (#180): configurable so the stack can avoid colliding with a 172.28.0.0/24
     # already in use on the host (Docker else errors "Pool overlaps with other one on this address
     # space" and the install fails). The structured fixed-IP layout is preserved — services keep their
@@ -2571,6 +2607,9 @@ load_preserved_state() {
     # View-only wallet-rpc login (#381): the dashboard→wallet-rpc password. Generated once and
     # preserved across applies (like PROXY_AUTH_TOKEN) so both containers keep matching creds.
     WALLET_RPC_PASSWORD=$(env_get WALLET_RPC_PASSWORD)
+    # View-only Tari wallet password (#462): encrypts the wallet DB on its named volume. MUST stay
+    # stable across applies or the existing wallet file can't be reopened — preserve like the above.
+    TARI_WALLET_PASSWORD=$(env_get TARI_WALLET_PASSWORD)
     MONERO_ONION=$(env_get MONERO_ONION_ADDRESS)
     TARI_ONION=$(env_get TARI_ONION_ADDRESS)
     P2POOL_ONION=$(env_get P2POOL_ONION_ADDRESS)
@@ -2581,6 +2620,7 @@ load_preserved_state() {
 
     [ -n "$PROXY_AUTH_TOKEN" ] || PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
     [ -n "$WALLET_RPC_PASSWORD" ] || WALLET_RPC_PASSWORD=$(openssl rand -hex 12)
+    [ -n "$TARI_WALLET_PASSWORD" ] || TARI_WALLET_PASSWORD=$(openssl rand -hex 16)
     [ -n "$MONERO_ONION" ] || MONERO_ONION="placeholder"
     [ -n "$TARI_ONION" ] || TARI_ONION="placeholder"
     [ -n "$P2POOL_ONION" ] || P2POOL_ONION="placeholder"
@@ -2617,6 +2657,7 @@ readonly CONTROL_SECRET_PATHS='[
     ["monero","node_username"],
     ["monero","node_password"],
     ["monero","view_key"],
+    ["tari","view_key"],
     ["p2pool","stratum_password"],
     ["healthchecks","ping_url"]]'
 
@@ -3106,6 +3147,15 @@ render_env() {
         profiles="${profiles:+$profiles,}payout_confirm"
     fi
 
+    # Tari on-chain payout confirmation (#462): the view-only tari-wallet service only starts when
+    # its own compose profile is active, which is only when a tari view key is set on the local Tari
+    # node. Separate from monero's payout_confirm so the two features toggle independently.
+    # TARI_PAYOUT_CONFIRM_ENABLED is set by parse_and_validate_config (which also refuses a view key
+    # on a remote Tari node and validates the key/spend key/birthday).
+    if [ "${TARI_PAYOUT_CONFIRM_ENABLED:-false}" == "true" ]; then
+        profiles="${profiles:+$profiles,}tari_payout_confirm"
+    fi
+
     # Pruning is on unless config explicitly sets monero.prune:false (config_bool honours that
     # explicit false rather than coercing it back to the default — see #294).
     local prune
@@ -3327,6 +3377,26 @@ render_env() {
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
+    # Tari view-only wallet secret delivery (#462). The view key, public spend key, and wallet
+    # password must NOT ride the tari-wallet's compose `environment:` (those show in `docker
+    # inspect`). Instead render them into a dedicated owner-only file that compose mounts as a
+    # `secrets:` entry — Docker serves it on a tmpfs at /run/secrets, owner-readable only, and the
+    # wrapper entrypoint exports them into the wallet child process only. Kept under data/ (gitignored
+    # like .env). Written for the REAL .env target only, so a dry-run render never mutates it; the
+    # values are empty (harmless) when the feature is off, so the compose secret always resolves.
+    local tari_secret_file="$PWD/data/tari-wallet-secret.env"
+    if [ "$target" != "${ENV_FILE}.dryrun" ]; then
+        mkdir -p "$PWD/data"
+        (
+            umask 077
+            cat >"$tari_secret_file" <<EOF
+MINOTARI_WALLET_VIEW_PRIVATE_KEY=$TARI_VIEW_KEY
+MINOTARI_WALLET_SPEND_KEY=$TARI_SPEND_PUBLIC_KEY
+MINOTARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
+EOF
+        )
+    fi
+
     # Subshell umask (#368): .env carries the RPC, stratum, and Telegram secrets — it must be
     # owner-only from its FIRST byte, not after a post-write chmod window.
     (
@@ -3347,6 +3417,13 @@ WALLET_RPC_USERNAME=wallet
 WALLET_RPC_PASSWORD=$WALLET_RPC_PASSWORD
 MONERO_WALLET_RPC_URL=http://127.0.0.1:18082/json_rpc
 TARI_WALLET_ADDRESS=$TARI_WALLET
+TARI_VIEW_KEY=$TARI_VIEW_KEY
+TARI_SPEND_PUBLIC_KEY=$TARI_SPEND_PUBLIC_KEY
+TARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
+TARI_WALLET_BIRTHDAY=$TARI_WALLET_BIRTHDAY
+TARI_PAYOUT_CONFIRM_ENABLED=$TARI_PAYOUT_CONFIRM_ENABLED
+TARI_WALLET_GRPC_ADDRESS=127.0.0.1:18143
+TARI_WALLET_SECRET_FILE=$tari_secret_file
 MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
@@ -4154,6 +4231,33 @@ describe_change() {
         # Fixed internal values that co-change with the view key toggle; keep the preview to one line.
         msg=""
         ;;
+    TARI_VIEW_KEY)
+        # Secret (#462): the Tari private view key reveals every incoming payout amount/time — never
+        # echo its value into the change preview / logs.
+        if [ -z "$new" ]; then
+            msg="Tari payout confirmation view key CLEARED (#462) — the view-only tari-wallet is removed."
+        elif [ -z "$old" ]; then
+            flag=DEST
+            msg="Tari payout confirmation view key SET (#462) — a view-only minotari_console_wallet starts and scans the local Tari node for confirmed payouts (it can see incoming amounts, never spend)."
+        else
+            flag=DEST
+            msg="Tari payout confirmation view key CHANGED (#462) — the view-only tari-wallet is recreated and rescans."
+        fi
+        ;;
+    TARI_WALLET_PASSWORD)
+        # Secret (#462): auto-generated wallet-DB password — never echo the value.
+        msg="Tari payout wallet credential updated (#462)."
+        ;;
+    TARI_PAYOUT_CONFIRM_ENABLED)
+        msg="Tari on-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off) (#462)."
+        ;;
+    TARI_WALLET_BIRTHDAY)
+        msg="Tari payout wallet birthday: $old → $new (#462, days since the Unix epoch) — only affects a first-time wallet creation."
+        ;;
+    TARI_SPEND_PUBLIC_KEY | TARI_WALLET_GRPC_ADDRESS | TARI_WALLET_SECRET_FILE)
+        # Public/fixed internal values that co-change with the Tari view key toggle; keep to one line.
+        msg=""
+        ;;
     *)
         msg="$key: $old → $new."
         ;;
@@ -4467,10 +4571,12 @@ run_chain() {
 # is derived from a validated enum, boolean, or number — never a free-form string that reaches a
 # command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
 # channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
-# and donor id, tokens and passwords, and the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
-# WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED / PAYOUT_SCAN_HEIGHT — stays host-CLI-only. The
-# view key reveals every incoming payout amount/time, so it is never dashboard-committable (default-
-# deny already refuses it; named here deliberately). The WALLET_CHANGED and
+# and donor id, tokens and passwords, the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
+# WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED / PAYOUT_SCAN_HEIGHT, and their #462 Tari siblings
+# (TARI_VIEW_KEY, TARI_WALLET_PASSWORD, TARI_SPEND_PUBLIC_KEY) plus TARI_PAYOUT_CONFIRM_ENABLED /
+# TARI_WALLET_BIRTHDAY / TARI_WALLET_GRPC_ADDRESS / TARI_WALLET_SECRET_FILE — stays host-CLI-only.
+# Each view key reveals every incoming payout amount/time, so it is never dashboard-committable
+# (default-deny already refuses it; named here deliberately). The WALLET_CHANGED and
 # CLEARNET_EXPOSED alert toggles are excluded on purpose: they are the tamper-evidence alarms on
 # the Telegram channel (the future #338 approval channel), so the dashboard must not silence
 # them. Space-separated exact env-key names.

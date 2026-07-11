@@ -767,14 +767,17 @@ class AlertService:
         on-chain — the ground truth behind the earnings estimate. "Alert once" is enforced upstream
         (the caller only invokes this for genuinely-new ``(chain, txid)`` rows the idempotent
         ``payouts`` table just inserted), so a dashboard restart re-scanning the tip replays nothing.
-        Carries the chain so the shared table/event serves Tari's sibling (#462). No-op when the
-        event is toggled off. Returns the text sent (handy for tests), else ``None``."""
+        Carries the chain so the shared table/event serves Tari's sibling (#462), and the chain
+        also picks the atomic-unit divisor — Monero stores piconero (1e12/XMR), Tari microTari
+        (1e6/XTM) — so the same alert formats both correctly. No-op when the event is toggled off.
+        Returns the text sent (handy for tests), else ``None``."""
         sinks = self._event_sinks(self.EVT_PAYOUT_CONFIRMED)
         if not sinks:
             return None
-        amount_xmr = (amount_atomic or 0) / 1_000_000_000_000
+        divisor = 1_000_000 if chain == "tari" else 1_000_000_000_000
+        amount = (amount_atomic or 0) / divisor
         text = self._fmt(
-            f"\U0001f4b0 Payout CONFIRMED on-chain: {amount_xmr:.6f} {chain.upper()} "
+            f"\U0001f4b0 Payout CONFIRMED on-chain: {amount:.6f} {chain.upper()} "
             f"landed in your wallet (tx {txid[:8]}…)."
         )
         for sink in sinks:
