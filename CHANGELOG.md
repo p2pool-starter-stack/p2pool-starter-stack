@@ -27,6 +27,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   stays in the dashboard editor behind its default-deny allowlist. See
   [Telegram › Control commands](docs/telegram.md#control-commands).
 
+- **Configurable stratum port & per-worker endpoints (#172).** `p2pool.stratum_port` (default
+  `3333`) sets the port the stratum endpoint your rigs connect to is published on — thread through
+  the `xmrig-proxy` bind, the compose publish, the `:PORT` healthcheck, and the "point your rigs
+  at host:PORT" hint. The default preserves today's behaviour; changing it repoints every rig
+  (RigForge: `pool.port`) and `apply` flags it destructive. P2Pool's container-internal stratum
+  stays fixed at `3333`. New `dashboard.workers[]` — a list of `{name, host?, port?, token?}` —
+  overrides the worker-API probe per rig when one differs from the fleet defaults: per-worker
+  field > fleet default (`workers.api_port`/`api_auth`/`api_token`) > inherit. Entries match by
+  stratum name, then by connecting IP against an operator-set `host` (first-declared wins on
+  duplicate names); a per-worker `token` forces token-auth for that rig only. The `host` must be
+  operator-set in `config.json` and is never taken from a miner-advertised value — the dashboard
+  never sends a configured token to a miner-controlled host (SSRF guard, #122). The standard path
+  (3333 / 8080 / token = rig name) needs no config. Pairs with rigforge#21 (`pool.port`) and
+  rigforge#23 (`api.port`). See [Connecting Miners](docs/workers.md).
 - **Alert sinks beyond Telegram: generic JSON webhook + ntfy (#380).** Every alert the stack
   produces — node down/recovered, worker offline/joined/left, sync, disk, DB, XvB, clearnet
   exposure, blocks and payouts, the daily digest — can now also be pushed to a **generic JSON
@@ -175,6 +189,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
+  environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
+  file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
+  refused with "would be overwritten." Provisioning now forces a pristine tree (`checkout -f` +
+  `reset --hard` + `clean -fdx`, keeping the harness's `results/` and the gitignored
+  `config.json`/`.env`/`data/`/`backups/`). And the restore path ran `pithead apply/up` from
+  `CANONICAL_DIR`, but on a release box the live stack runs from a per-version bundle dir — so the
+  source checkout took over the `pithead` project with locally-built `:dev` images and Tari
+  crash-looped. Restore now targets the directory the live stack actually ran from, read at preflight
+  off the running container's `com.docker.compose.project.working_dir` label, and falls back to
+  `CANONICAL_DIR` only when the stack is down.
 - **The XvB donation controller no longer overshoots the target tier in steady state (#423).**
   During a split cycle the p2pool remainder dwell ended on its first 30-second check, because the
   dwell's early-exit asked "would we donate at all?" — a question the held split answers yes to by
@@ -230,6 +255,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `cosign.pub` (bundles up to v1.3.x) keep today's TLS-to-GitHub + tag-pinning behaviour with a
   loud warning, and `doctor` reports the verification state. See
   [Releasing › Signed releases](docs/releasing.md#signed-releases).
+- **Image verification is bound to the pulled bytes (#451).** `verify_release_images` now cosign-
+  verifies the immutable `@sha256` digest the bundled compose pins each first-party image to (#461),
+  not the mutable tag. Verify and pull resolve the same content-addressed bytes, so a tampered
+  registry can no longer serve the signed manifest to cosign and a different one to docker in a
+  separate dial. With a key present, an image whose compose line is not digest-pinned aborts too —
+  there is nothing to bind the check to.
+- **First install verifies signatures, not just upgrades (#452).** A fresh release install's first
+  `pithead up` pulled the five first-party images with no signature check; the gate now runs on that
+  path as well, under the same rules as `upgrade` — source checkouts skip, a missing `cosign.pub`
+  warns and proceeds (signing is opt-in), a present key that fails aborts before anything starts.
+  (`apply` and `rotate-secrets` recreate from the already-verified local images, so the two
+  registry-pull paths — first `up` and `upgrade` — are now both gated.)
 - **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
   and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
   did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a

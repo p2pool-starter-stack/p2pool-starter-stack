@@ -159,10 +159,13 @@ tests/integration/e2e.sh claude/my-feature --mode matrix   # full config sweep (
 What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` trap):
 
 1. Dedicated checkout. Provisions `/srv/code/pithead-e2e` (clone-once, then `git fetch`) and checks
-   out `<branch>` there. The canonical `/srv/code/pithead` is the baseline and is never git-touched.
-   Because the Compose project name is pinned to `pithead`, the two checkouts drive the same
-   containers and the same shared chains. They're two code copies of one stack, run one at a time, so
-   borrow→test→restore is a fast code/image swap, never a re-sync.
+   out `<branch>` there. The checkout is disposable, so provisioning forces a pristine tree
+   (`checkout -f` + `reset --hard` + `clean -fdx`) — a leftover untracked file from an earlier run
+   can't abort the checkout. `clean` keeps the harness's `results/` and the seeded `config.json`/
+   `.env`/`data/`/`backups/` (all gitignored). The canonical `/srv/code/pithead` is the baseline and
+   is never git-touched. Because the Compose project name is pinned to `pithead`, the two checkouts
+   drive the same containers and the same shared chains. They're two code copies of one stack, run one
+   at a time, so borrow→test→restore is a fast code/image swap, never a re-sync.
 2. Seeds the e2e checkout with the canonical `config.json`/`.env` (same wallet, secrets, onion keys,
    and shared `monero/tari/p2pool` data dirs), so only the branch's code differs.
 3. Safety backup (`pithead backup`) as the rollback anchor.
@@ -170,8 +173,12 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    bench so the matrix has a real worker mining through this stack (1 worker → run with `--workers 1`).
 5. Deploys the branch (`pithead apply` builds the branch's images) and runs `run.sh` detached on the
    box (survives an SSH drop on a long matrix), streaming a heartbeat and the full log at the end.
-6. Restores the miner's original pool config and the canonical baseline stack. The synced chains are
-   never touched (asserted post-restore).
+6. Restores the miner's original pool config and the baseline stack. Restore targets the directory
+   the live stack actually ran from — read at preflight off the running container's
+   `com.docker.compose.project.working_dir` label — which on a release box is the per-version bundle
+   dir, not `CANONICAL_DIR`. That keeps the restore from handing the `pithead` project locally-built
+   `:dev` images. If the label can't be read (stack down), it falls back to `CANONICAL_DIR`; override
+   with `CANONICAL_DIR=<dir>`. The synced chains are never touched (asserted post-restore).
 
 `--mode`: `targeted` (default, lean) validates the dashboard and the sync logic against the
 already-synced node: `check` + `--lifecycle` (one controlled restart exercises the sync gate /

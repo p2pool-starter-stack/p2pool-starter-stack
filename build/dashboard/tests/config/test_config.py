@@ -84,3 +84,77 @@ class TestConfig:
         for v in ("off", "none", "FALSE", "disabled", "0"):
             with patch.dict(os.environ, {"XVB_SUBMIT_URL": v}):
                 assert _reload_config().XVB_SUBMIT_URL == "", f"{v!r} should disable"
+
+
+class TestWorkerEndpoints:
+    """dashboard.workers[] loader (#172): validated per-worker endpoint descriptors, read from
+    the read-only config.json mount. Every field bar `name` is optional; an entry with any
+    invalid field is dropped WHOLE (fail closed — a typo'd host must not leave its token
+    attached to the miner-IP fallback path)."""
+
+    def _load(self, tmp_path, payload):
+        from mining_dashboard.config.config import load_worker_endpoints
+
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps(payload))
+        return load_worker_endpoints(str(p))
+
+    def test_valid_entries_load_with_only_set_fields(self, tmp_path):
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "workers": [
+                        {"name": "rig1", "host": "10.0.0.5", "port": 18088, "token": "s3cr3t"},
+                        {"name": "rig2"},
+                    ]
+                }
+            },
+        )
+        assert got == [
+            {"name": "rig1", "host": "10.0.0.5", "port": 18088, "token": "s3cr3t"},
+            {"name": "rig2"},
+        ]
+
+    def test_duplicate_names_first_declared_wins(self, tmp_path):
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "workers": [{"name": "rig1", "port": 1111}, {"name": "rig1", "port": 2222}]
+                }
+            },
+        )
+        assert got == [{"name": "rig1", "port": 1111}]
+
+    def test_invalid_entries_are_dropped_whole(self, tmp_path):
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "workers": [
+                        "not-a-dict",
+                        {"port": 8080},  # no name
+                        {"name": ""},  # empty name
+                        {"name": "bad host", "host": "10.0.0.5 evil"},  # unsafe chars
+                        {"name": "badhost2", "host": "10.0.0.5/path"},  # URL structure
+                        {"name": "badhost3", "host": "a:b@c"},  # credential/port smuggling
+                        {"name": "badport", "port": 0},
+                        {"name": "badport2", "port": 65536},
+                        {"name": "badport3", "port": True},  # bool is not a port
+                        {"name": "badport4", "port": "8080"},  # string is not a port
+                        {"name": "badtoken", "token": "has space"},
+                        {"name": "badtoken2", "token": "x" * 129},
+                        {"name": "ok", "port": 8081},
+                    ]
+                }
+            },
+        )
+        assert got == [{"name": "ok", "port": 8081}]
+
+    def test_missing_file_and_missing_key_read_empty(self, tmp_path):
+        from mining_dashboard.config.config import load_worker_endpoints
+
+        assert load_worker_endpoints(str(tmp_path / "absent.json")) == []
+        assert self._load(tmp_path, {"dashboard": {}}) == []
+        assert self._load(tmp_path, {"dashboard": {"workers": "nope"}}) == []
