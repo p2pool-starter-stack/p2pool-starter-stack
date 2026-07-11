@@ -299,7 +299,12 @@ preflight() {
         fi
     done
 
+    # Start from a clean results dir: a prior run's per-scenario artifacts (e2e.sh preserves
+    # results/ across runs) otherwise linger and read as THIS run's state when diagnosing a failure
+    # — a stale capture from another branch bit us during the v1.4 gate (#454). Keep the dir itself
+    # (callers may have pointed --out at it); wipe its contents.
     mkdir -p "$OUT_DIR"
+    find "$OUT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
     record_manifest
 
     # Snapshot the baseline so we can restore it and compare secrets later.
@@ -492,8 +497,22 @@ assert_running_state() {
         *) it_fail "monero display mode determinate" "got [$dmode], want Pruned|Full" ;; esac
     fi
 
-    # 5. Sidechain selection matches the pool axis.
-    assert_eq "pool type" "$(jq_get "$st" '.pool.type')" "$(pool_label "$pool")"
+    # 5. Sidechain selection matches the pool axis. p2pool classifies the pool by counting peer
+    #    ports, so a freshly-(re)started stack reads "Unknown" until peers connect — and nano (a tiny
+    #    sidechain, slowest to find peers over Tor) can stay Unknown past wait_pool_ready's window.
+    #    "Unknown" is a peer-discovery-timing state, NOT a misclassification: warn on it (don't fail
+    #    the gate on peer luck), but a WRONG determinate type (Main when we set Mini) is a real
+    #    config/render bug — fail that (#454).
+    local got_pool want_pool
+    got_pool="$(jq_get "$st" '.pool.type')"
+    want_pool="$(pool_label "$pool")"
+    if [ "$got_pool" = "$want_pool" ]; then
+        it_pass "pool type ($got_pool)"
+    elif [ "$got_pool" = "Unknown" ] || [ -z "$got_pool" ]; then
+        it_warn "pool type still Unknown for $want_pool — peers not classified in time (nano/Tor is slow to populate); not a misclassification (#454)"
+    else
+        it_fail "pool type" "got [$got_pool], want [$want_pool] — wrong sidechain, not a timing lag"
+    fi
 
     # 6. End-to-end mining: workers online + hashes accumulating (#28). proxy_workers is the
     #    reliable liveness signal; stratum.conns is reported but informational (can be 0).
