@@ -3805,16 +3805,16 @@ EOF
 chmod +x "$UPG/bin/curl"
 # The fake v9.9.9 release bundle: a pithead that logs its invocation (and can be told to fail).
 UPGB="$SANDBOX/upgrade59-bundle"
-mkdir -p "$UPGB/pithead-src"
-cat >"$UPGB/pithead-src/pithead" <<'EOF'
+mkdir -p "$UPGB/pithead"
+cat >"$UPGB/pithead/pithead" <<'EOF'
 #!/usr/bin/env bash
 echo "new-pithead $*" >>upgrade-invocations.log
 [ "${NEW_PITHEAD_FAIL:-}" = "1" ] && exit 1
 exit 0
 EOF
-chmod +x "$UPGB/pithead-src/pithead"
-printf '9.9.9' >"$UPGB/pithead-src/VERSION"
-tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead-src
+chmod +x "$UPGB/pithead/pithead"
+printf '9.9.9' >"$UPGB/pithead/VERSION"
+tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead
 printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel"}' >"$UPGB/api.json"
 seed_upgrade_env() { # <control-enabled true|false>
     cat >"$UPG/.env" <<EOF
@@ -3953,6 +3953,24 @@ assert_eq "both GitHub dials went over Tor SOCKS" "$(grep -c -- '--socks5-hostna
 assert_eq "no cosign.pub -> no signature dial (documented fallback)" "$(grep -c '\.sig' "$UPG/curl.log" || true)" "0"
 assert_contains "upgrade start audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"started\""
 assert_contains "upgrade completion audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+
+# #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
+# bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
+# runner refuses BEFORE extraction. A cosign signature binds bytes, not a version, so without
+# this check a validly-signed old bundle would silently downgrade the stack.
+reset_upgrade_state
+mkdir -p "$UPGB/rollback/pithead"
+cp "$UPGB/pithead/pithead" "$UPGB/rollback/pithead/pithead"
+printf '1.0.0' >"$UPGB/rollback/pithead/VERSION"
+tar -czf "$UPGB/rollback.tar.gz" -C "$UPGB/rollback" pithead
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+    CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/rollback.tar.gz" \
+    ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "version-mismatched (rollback) bundle is refused" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "rollback refusal names the mismatch" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rollback"
+assert_eq "rollback bundle extracts nothing (VERSION untouched)" "$(cat "$UPG/VERSION")" "1.3.1"
+assert_eq "rollback bundle never ran a new pithead" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null || echo none)" "none"
 
 # Throttle: a second attempt straight after is refused for 10 minutes (egress-beacon guard).
 # The happy path replaced $U/pithead with the fake bundle's script — restore the real runner

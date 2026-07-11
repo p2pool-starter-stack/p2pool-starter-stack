@@ -321,7 +321,10 @@ verify_release_images() {
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
         image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}:${STACK_VERSION:-dev}"
         if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
-            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to upgrade, nothing was pulled or restarted (#376). cosign said: $(printf '%s' "$out" | tail -c 300)"
+            # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
+            # prints via `echo -e`, so an attacker-controlled registry response could otherwise
+            # inject ANSI escapes into the operator's terminal (#376 review).
+            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to upgrade, nothing was pulled or restarted (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
         fi
     done
     log "All 5 release images carry a valid signature (cosign.pub, #376)."
@@ -4333,6 +4336,19 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         rm -f "$sig"
     else
         warn "No cosign.pub next to pithead — bundle authenticity rests on TLS to GitHub plus tag pinning only (#376)."
+    fi
+    # Rollback guard (#376): a cosign signature binds BYTES, not a version — an attacker who
+    # controls the release response could serve an OLDER genuinely-signed bundle at the $tag URL
+    # and silently downgrade the stack to a patched-vulnerable version, and the signature would
+    # still verify. Refuse unless the bundle's own top-level VERSION matches the host-derived
+    # $tag, read WITHOUT extracting (the bundle unpacks to a fixed `pithead/` dir) so a mismatch
+    # touches nothing on disk.
+    local bundle_version
+    bundle_version=$(tar -xzOf "$bundle" pithead/VERSION 2>/dev/null | tr -d '[:space:]')
+    if [ "v$bundle_version" != "$tag" ]; then
+        rm -f "$bundle"
+        _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
+        return 0
     fi
     # -U (unlink first): the archive contains THIS running script — replacing it via unlink keeps
     # the running copy executing from its old inode, where an in-place truncate would corrupt it.

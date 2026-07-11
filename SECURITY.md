@@ -46,9 +46,13 @@ The stack's defaults:
   dashboard's one-click upgrade verify against it before anything is pulled or extracted, and fail
   closed while a key is present — a bad signature, a stripped `.sig`, or a missing cosign binary
   aborts the upgrade. The bundle check anchors trust in the key *already on disk*, so a malicious
-  bundle cannot vouch for itself with a swapped key. Limits: installs without `cosign.pub`
-  (releases before signing landed) upgrade unverified with a warning, and a compromise of the
-  release box itself — which holds the private key — is outside what a signature can prove. See
+  bundle cannot vouch for itself with a swapped key, and because a signature binds bytes rather
+  than a version, the dashboard upgrade also refuses a bundle whose own `VERSION` does not match
+  the requested tag — closing a rollback to an older, validly-signed release. Limits: installs
+  without `cosign.pub` (releases before signing landed) upgrade unverified with a warning; a
+  compromise of the release box itself — which holds the private key — is outside what a signature
+  can prove; and the CLI image-verify checks the tag, then pulls it in a separate step (a
+  verify-then-pull window tracked as a follow-up). See
   [Releasing › Signed releases](docs/releasing.md#signed-releases).
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
