@@ -92,6 +92,31 @@ class TestSecretMasking:
             "p2pool": {"pool": "nano"}
         }
 
+    def test_per_worker_tokens_masked_and_restored(self, spool, tmp_path):
+        # dashboard.workers[] tokens (#172) live inside an ARRAY, which the fixed-path
+        # SECRET_PATHS walk can't reach — they get their own mask/restore pass.
+        cfg = json.loads((tmp_path / "config.json").read_text())
+        cfg["dashboard"]["workers"] = [
+            {"name": "rig1", "host": "10.0.0.5", "token": "rig1-secret"},
+            {"name": "rig2"},
+        ]
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        served = control_service.read_config()
+        assert served["dashboard"]["workers"][0]["token"] == {"__secret__": True}
+        assert "rig1-secret" not in json.dumps(served)
+        assert "token" not in served["dashboard"]["workers"][1]  # unset stays unset
+
+        # Round trip: the sentinel is swapped back for the live token (matched by name).
+        merged = control_service.merge_secrets(served)
+        assert merged["dashboard"]["workers"][0]["token"] == "rig1-secret"
+
+    def test_forged_worker_token_sentinel_collapses_to_empty(self, spool, tmp_path):
+        # A sentinel for a rig that has no live token must not leak a dict into config.json.
+        proposed = {"dashboard": {"workers": [{"name": "ghost", "token": {"__secret__": True}}]}}
+        merged = control_service.merge_secrets(proposed)
+        assert merged["dashboard"]["workers"][0]["token"] == ""
+
 
 class TestSubmit:
     def test_submit_writes_request_json(self, spool):

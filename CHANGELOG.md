@@ -13,6 +13,21 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Configurable stratum port & per-worker endpoints (#172).** `p2pool.stratum_port` (default
+  `3333`) sets the port the stratum endpoint your rigs connect to is published on — thread through
+  the `xmrig-proxy` bind, the compose publish, the `:PORT` healthcheck, and the "point your rigs
+  at host:PORT" hint. The default preserves today's behaviour; changing it repoints every rig
+  (RigForge: `pool.port`) and `apply` flags it destructive. P2Pool's container-internal stratum
+  stays fixed at `3333`. New `dashboard.workers[]` — a list of `{name, host?, port?, token?}` —
+  overrides the worker-API probe per rig when one differs from the fleet defaults: per-worker
+  field > fleet default (`workers.api_port`/`api_auth`/`api_token`) > inherit. Entries match by
+  stratum name, then by connecting IP against an operator-set `host` (first-declared wins on
+  duplicate names); a per-worker `token` forces token-auth for that rig only. The `host` must be
+  operator-set in `config.json` and is never taken from a miner-advertised value — the dashboard
+  never sends a configured token to a miner-controlled host (SSRF guard, #122). The standard path
+  (3333 / 8080 / token = rig name) needs no config. Pairs with rigforge#21 (`pool.port`) and
+  rigforge#23 (`api.port`). See [Connecting Miners](docs/workers.md).
+
 - **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
   circuits time out, so every Tor-clearnet feature — Healthchecks pings, the Telegram bot, XvB
   stats — breaks at once while mining (established onion circuits) keeps working. v1.3.1 added

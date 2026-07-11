@@ -352,6 +352,13 @@ test('WorkersTable connect hint uses the real host IP when known (#385)', () => 
     const html = renderApp({ state: s });
     assert.match(html, /192\.168\.1\.10:3333/);
     assert.doesNotMatch(html, /Unknown Host:3333/);
+    // A custom p2pool.stratum_port (#172) flows into the hint — the UI never lies about where
+    // rigs must point.
+    const custom = clone();
+    custom.workers = [];
+    custom.host_ip = '192.168.1.10';
+    custom.stratum_port = 4444;
+    assert.match(renderApp({ state: custom }), /192\.168\.1\.10:4444/);
     // A populated fleet — even all-offline — keeps the table, never the hint.
     const offline = clone();
     offline.workers = offline.workers.map((w) => ({ ...w, status: 'offline' }));

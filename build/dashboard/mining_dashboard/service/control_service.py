@@ -96,6 +96,11 @@ def read_config():
         found, value = _get(cfg, path)
         if found and value:
             _set(cfg, path, dict(SECRET_SENTINEL))
+    # Per-worker tokens (#172) live inside the dashboard.workers ARRAY, out of reach of the
+    # fixed-path walk above — mask them entry by entry.
+    for entry in _worker_entries(cfg):
+        if entry.get("token"):
+            entry["token"] = dict(SECRET_SENTINEL)
     return cfg
 
 
@@ -109,7 +114,27 @@ def merge_secrets(proposed):
         if found and is_secret_sentinel(value):
             raw_found, raw_value = _get(raw, path)
             _set(proposed, path, raw_value if raw_found else "")
+    # Per-worker token sentinels (#172): restore the live token matched by worker name; a
+    # sentinel for a rig with no live token collapses to empty, same as the fixed paths above.
+    live = {
+        e["name"]: e.get("token", "")
+        for e in reversed(_worker_entries(raw))  # reversed => first-declared wins
+        if isinstance(e.get("name"), str)
+    }
+    for entry in _worker_entries(proposed):
+        if is_secret_sentinel(entry.get("token")):
+            entry["token"] = live.get(entry.get("name"), "")
     return proposed
+
+
+def _worker_entries(cfg):
+    """The dict entries of cfg's dashboard.workers list, [] for any other shape."""
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("dashboard"), dict):
+        return []
+    workers = cfg["dashboard"].get("workers")
+    if not isinstance(workers, list):
+        return []
+    return [e for e in workers if isinstance(e, dict)]
 
 
 def submit(action, cfg=None, actor="", intent_id=None, version=None):

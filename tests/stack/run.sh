@@ -225,6 +225,12 @@ assert_contains "stratum listen: IPv6 listener -> OK" "$out" "workers can connec
 # Running + nothing on :3333 -> FAIL.
 out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
 assert_contains "stratum listen: nothing on :3333 -> FAIL" "$out" "NOTHING is listening"
+# A custom p2pool.stratum_port (#172) moves the check: a :3333 listener no longer satisfies it,
+# the configured port does.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" STRATUM_PORT=4444 SS_OUT='LISTEN 0 4096 0.0.0.0:3333 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: custom port not listening -> FAIL" "$out" "NOTHING is listening on :4444"
+out="$(RUNNING_CONTAINERS="xmrig-proxy" STRATUM_PORT=4444 SS_OUT='LISTEN 0 4096 0.0.0.0:4444 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: custom port listening -> OK" "$out" "Stratum :4444 is listening"
 
 # Dashboard probe: container running + app answers -> OK; running + no answer -> WARN (not FAIL).
 out="$(RUNNING_CONTAINERS="dashboard" CURL_RC=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
@@ -368,6 +374,11 @@ assert_contains "prune is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO
 assert_contains "rpc lan is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum open is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum lan is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 0.0.0.0 127.0.0.1)" "INFO"
+# Stratum port (#172): changing it disconnects every rig until repointed — DEST; the key's first
+# appearance (an upgrade from a pre-#172 .env) is a no-op INFO row, never a scary repoint warning.
+assert_contains "stratum port change is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "DEST"
+assert_contains "stratum port change says repoint" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "repoint"
+assert_contains "stratum port first render is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT '' 3333)" "INFO"
 # Stratum access-password (#152): enabling/changing is DEST (rigs need the new pass), disabling is
 # INFO — and the secret value must NEVER appear in the change preview.
 assert_contains "stratum pw enable is DEST" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "DEST"
@@ -2203,6 +2214,46 @@ rc=$?
 assert_rc "unsafe stratum_password rejected" "$rc" "1"
 assert_contains "stratum_password message" "$out" "p2pool.stratum_password"
 
+# p2pool.stratum_port (#172) must be an integer 1-65535; junk and out-of-range values fail apply
+# before they can render an unparseable compose port mapping.
+for bad_port in '"abc"' 0 65536; do
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_port":%s}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$bad_port" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "invalid stratum_port $bad_port rejected" "$rc" "1"
+    assert_contains "stratum_port message ($bad_port)" "$out" "p2pool.stratum_port"
+done
+
+# dashboard.workers (#172): malformed per-worker descriptors fail apply loudly — a typo must not
+# be silently dropped at dashboard runtime. host charset is the #122 guard (no port/path/userinfo).
+dw_case() { # <workers-json> <label> <expected-msg-fragment>
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "$2 rejected" "$rc" "1"
+    assert_contains "$2 message" "$out" "$3"
+}
+dw_case '{"name":"rig1"}' "non-array dashboard.workers" "must be an array"
+dw_case '[{"host":"10.0.0.5"}]' "worker entry without a name" "name"
+dw_case '[{"name":"rig1","host":"10.0.0.5/path"}]' "worker host with URL structure" "dashboard.workers[rig1].host"
+dw_case '[{"name":"rig1","host":"attacker:8080"}]' "worker host smuggling a port" "dashboard.workers[rig1].host"
+dw_case '[{"name":"rig1","port":65536}]' "out-of-range worker port" "dashboard.workers[rig1].port"
+dw_case '[{"name":"rig1","port":"8080"}]' "string worker port" "dashboard.workers[rig1].port"
+dw_case '[{"name":"rig1","token":"has space"}]' "unsafe worker token" "dashboard.workers[rig1].token"
+
+# Duplicate names are legal (first-declared wins) but warned about, and a valid list applies.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "valid dashboard.workers applies" "$rc" "0"
+assert_contains "duplicate worker names are warned" "$out" "first-declared"
+# Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
+# per-worker token must not leak into a second secrets file.
+if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
+
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
 seed_env
@@ -2377,6 +2428,10 @@ assert_contains "pool flag propagated" "$(run_sourced "$V" env_get_file "$V/.env
 # pool flag AND the Tor SOCKS flags (no p2pool.clearnet set in this config).
 assert_contains "outbound P2P via Tor by default (#165)" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)" "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
 assert_eq "stratum_bind default" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_BIND)" "0.0.0.0"
+# stratum_port (#172) defaults to 3333, so an unconfigured stack keeps today's behaviour, and the
+# internal proxy→p2pool leg (P2POOL_URL) stays :3333 whatever the operator-facing port says.
+assert_eq "stratum_port default" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_PORT)" "3333"
+assert_eq "P2POOL_URL keeps the internal :3333" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_URL)" "172.28.0.28:3333"
 assert_eq "token preserved" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
@@ -2415,6 +2470,14 @@ case "$mem" in
     ;;
 *) bad "tari mem auto has m suffix" "got [$mem]" ;;
 esac
+
+# A custom p2pool.stratum_port (#172) propagates to STRATUM_PORT; the internal proxy→p2pool leg
+# (P2POOL_URL) is deliberately untouched — only the operator-facing published port moves.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_port":4444}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "stratum_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_PORT)" "4444"
+assert_eq "custom stratum_port leaves P2POOL_URL internal" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_URL)" "172.28.0.28:3333"
 
 # Non-blocking Tari (dashboard.tari_required:false) propagates as TARI_REQUIRED=false.
 seed_env
@@ -3756,6 +3819,14 @@ jq '.telegram.events={node_down:false}' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "allowlisted alert toggle still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "alert toggle landed in config.json" "$(jq -r '.telegram.events.node_down' "$C/config.json")" "false"
+# dashboard.workers (#172) never renders to .env, so the env-diff allowlist can't see it — yet it
+# carries per-rig hosts and API tokens (a committed attacker host would point token-bearing probes
+# at it). The gate must refuse it via its explicit config-level check.
+jq '.dashboard.workers=[{name:"rig1",host:"attacker.example",token:"stolen"}]' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
+assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
 
 # Forged-flag bypass: the container tampers its visible copy of the preview result to
 # destructive:false AND sends a commit request carrying its own destructive:false field. The

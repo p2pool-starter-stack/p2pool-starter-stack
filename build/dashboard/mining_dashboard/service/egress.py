@@ -231,7 +231,7 @@ def compute_topology(
 
     edges = [
         # Ingress from your LAN — the only listeners actually exposed to the network.
-        _edge("rigs", "xmrig-proxy", LOCAL, "stratum :3333", "ingress"),
+        _edge("rigs", "xmrig-proxy", LOCAL, f"stratum :{config.STRATUM_PORT}", "ingress"),
         _edge("browser", "caddy", LOCAL, "https :443", "ingress"),
         # Daemon P2P: bidirectional (outbound peers + inbound via Tor onion services).
         _edge("p2pool", _ext(sidechain), sidechain, "sidechain P2P", "p2p"),

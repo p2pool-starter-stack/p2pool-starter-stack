@@ -31,6 +31,7 @@
     "p2pool": {
         "pool": "main",
         "stratum_bind": "0.0.0.0",
+        "stratum_port": 3333,
         "stratum_password": "",
         "clearnet": false,
         "data_dir": "auto"
@@ -72,7 +73,8 @@
         },
         "control": {
             "enabled": false
-        }
+        },
+        "workers": []
     },
 
     "workers": {
