@@ -313,6 +313,38 @@ apply_tor_egress_firewall() {
     log "Tor-only egress enforced (#270): clearnet dials from $subnet dropped except via Tor ($tor_ip)."
 }
 
+# Cryptographic gate on a release upgrade (#376): every first-party image the pull would fetch
+# must carry a cosign signature that verifies against the cosign.pub shipped next to this script.
+# Key-based signing from the release box — no Rekor transparency log, hence --private-infrastructure
+# (a plain key signature carries no Rekor bundle, and cosign would otherwise demand one). The
+# decision table, fail-closed where a key exists:
+#   source checkout                        -> skip: locally built images are unsigned by design
+#   no cosign.pub (an older install)       -> today's behaviour, plus one loud warning
+#   cosign.pub present, cosign missing     -> ABORT with an install pointer — an absent verifier
+#                                             must not silently disable verification
+#   any signature that fails to verify     -> ABORT naming the image; nothing pulled or restarted
+verify_release_images() {
+    is_source_checkout && return 0
+    if [ ! -f cosign.pub ]; then
+        warn "No cosign.pub next to pithead — the release images will NOT be signature-verified (#376). Releases up to v1.3.x shipped no key; the first signed bundle brings it."
+        return 0
+    fi
+    command -v cosign >/dev/null 2>&1 ||
+        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified upgrade (#376). Install cosign (docs/releasing.md § Verifying a release) and re-run '$0 upgrade'."
+    # The 5 first-party images, expanded exactly as docker-compose.yml expands its image: refs.
+    local suffix image out
+    for suffix in tor monero p2pool xmrig-proxy dashboard; do
+        image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}:${STACK_VERSION:-dev}"
+        if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
+            # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
+            # prints via `echo -e`, so an attacker-controlled registry response could otherwise
+            # inject ANSI escapes into the operator's terminal (#376 review).
+            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to upgrade, nothing was pulled or restarted (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
+        fi
+    done
+    log "All 5 release images carry a valid signature (cosign.pub, #376)."
+}
+
 stack_upgrade() {
     log "Upgrading stack (rebuilding containers)..."
     # A release (git pull) may change config templates, add/rename .env vars, or restructure the
@@ -358,6 +390,7 @@ stack_upgrade() {
         docker compose pull --ignore-buildable 2>/dev/null || true
         compose_up_checked -d --build || error "Upgrade failed during 'docker compose up' — see the error above."
     else
+        verify_release_images # #376: fail closed BEFORE the pull when a release key is on disk
         PITHEAD_PULL=always compose_up_checked -d || error "Upgrade failed during 'docker compose up' — see the error above."
     fi
     # #356: if the dashboard onion (#343) was just turned on, the recreated tor generated its hostname —
@@ -665,6 +698,16 @@ doctor() {
         dr_ok "docker compose (v2 plugin) found."
     else
         dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
+    fi
+    # Release-signature verification (#376): report the state the next `upgrade` will act on.
+    if is_source_checkout; then
+        dr_info "Source checkout — images build locally and are not signature-verified (#376)."
+    elif [ ! -f cosign.pub ]; then
+        dr_warn "No cosign.pub next to pithead — upgrades are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+    elif command -v cosign >/dev/null 2>&1; then
+        dr_ok "cosign found — 'upgrade' verifies the release images against cosign.pub (#376)."
+    else
+        dr_warn "cosign.pub is present but cosign is not installed — 'upgrade' refuses to proceed until it is (#376). Install: docs/releasing.md § Verifying a release."
     fi
 
     # --- Docker daemon ---
@@ -4285,6 +4328,12 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "already up to date (running v$PITHEAD_VERSION; latest release is $tag)."
         return 0
     fi
+    # #376: with a release key on disk the bundle WILL be verified below — so an install that can't
+    # verify (cosign.pub present, cosign binary missing) is refused here, before the download.
+    if [ -f cosign.pub ] && ! command -v cosign >/dev/null 2>&1; then
+        _upg_reject "cosign.pub is present but cosign is not installed on the host — refusing an unverified bundle (#376). Install cosign (docs/releasing.md § Verifying a release) and retry."
+        return 0
+    fi
     control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"
     control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
     # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.
@@ -4293,6 +4342,41 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz" 2>/dev/null; then
         rm -f "$bundle"
         _upg_fail "could not download the $tag release bundle over Tor — the stack keeps running v$PITHEAD_VERSION."
+        return 0
+    fi
+    # #376: verify the bundle against the cosign.pub ALREADY on disk before a byte of it is
+    # extracted. The new bundle ships its own cosign.pub, but a key that arrives inside the
+    # artifact it vouches for proves nothing — trust anchors at the key installed with the
+    # release this host already runs. No local key (an older install) keeps today's behaviour —
+    # TLS to GitHub plus tag pinning — with one loud line in the journal.
+    if [ -f cosign.pub ]; then
+        local sig="$cdir/staged/.$id.tar.gz.sig"
+        if ! curl -fsSL --max-time 120 --socks5-hostname "$socks" -o "$sig" \
+            "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz.sig" 2>/dev/null; then
+            rm -f "$bundle" "$sig"
+            _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
+            return 0
+        fi
+        if ! cosign verify-blob --key cosign.pub --signature "$sig" --insecure-ignore-tlog=true "$bundle" >/dev/null 2>&1; then
+            rm -f "$bundle" "$sig"
+            _upg_fail "bundle signature verification FAILED for $tag — the download does not match the release key; refusing to extract it (#376). The stack keeps running v$PITHEAD_VERSION."
+            return 0
+        fi
+        rm -f "$sig"
+    else
+        warn "No cosign.pub next to pithead — bundle authenticity rests on TLS to GitHub plus tag pinning only (#376)."
+    fi
+    # Rollback guard (#376): a cosign signature binds BYTES, not a version — an attacker who
+    # controls the release response could serve an OLDER genuinely-signed bundle at the $tag URL
+    # and silently downgrade the stack to a patched-vulnerable version, and the signature would
+    # still verify. Refuse unless the bundle's own top-level VERSION matches the host-derived
+    # $tag, read WITHOUT extracting (the bundle unpacks to a fixed `pithead/` dir) so a mismatch
+    # touches nothing on disk.
+    local bundle_version
+    bundle_version=$(tar -xzOf "$bundle" pithead/VERSION 2>/dev/null | tr -d '[:space:]')
+    if [ "v$bundle_version" != "$tag" ]; then
+        rm -f "$bundle"
+        _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
     # -U (unlink first): the archive contains THIS running script — replacing it via unlink keeps

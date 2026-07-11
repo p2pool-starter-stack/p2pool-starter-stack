@@ -39,6 +39,21 @@ The stack's defaults:
   run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
   Docker-socket-facing services also use a read-only root filesystem.
 - SHA256-verified, version-pinned binaries.
+- Signed releases, verified before upgrade
+  ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): every published image
+  digest and the install bundle carry a cosign key signature made on the release box; only the
+  public key (`cosign.pub`) is committed, and it ships in every bundle. `pithead upgrade` and the
+  dashboard's one-click upgrade verify against it before anything is pulled or extracted, and fail
+  closed while a key is present — a bad signature, a stripped `.sig`, or a missing cosign binary
+  aborts the upgrade. The bundle check anchors trust in the key *already on disk*, so a malicious
+  bundle cannot vouch for itself with a swapped key, and because a signature binds bytes rather
+  than a version, the dashboard upgrade also refuses a bundle whose own `VERSION` does not match
+  the requested tag — closing a rollback to an older, validly-signed release. Limits: installs
+  without `cosign.pub` (releases before signing landed) upgrade unverified with a warning; a
+  compromise of the release box itself — which holds the private key — is outside what a signature
+  can prove; and the CLI image-verify checks the tag, then pulls it in a separate step (a
+  verify-then-pull window tracked as a follow-up). See
+  [Releasing › Signed releases](docs/releasing.md#signed-releases).
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.

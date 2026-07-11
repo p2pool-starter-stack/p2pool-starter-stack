@@ -168,6 +168,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- **Signed releases, verified before upgrade (#376).** The release pipeline now cosign-signs the
+  five promoted image digests and the install bundle with a key that lives only on the release
+  box; the public key is committed as `cosign.pub` and ships in every bundle. On a release
+  install, `pithead upgrade` verifies every image signature against `cosign.pub` before pulling,
+  and the dashboard's one-click upgrade (#59) verifies the downloaded bundle against the key
+  already on disk before extracting — a new bundle's own key never vouches for itself.
+  Verification fails closed: with the key present, a bad signature, a stripped `.sig`, or a
+  missing cosign binary aborts the upgrade with nothing pulled or restarted. Installs without
+  `cosign.pub` (bundles up to v1.3.x) keep today's TLS-to-GitHub + tag-pinning behaviour with a
+  loud warning, and `doctor` reports the verification state. See
+  [Releasing › Signed releases](docs/releasing.md#signed-releases).
 - **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
   and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
   did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a

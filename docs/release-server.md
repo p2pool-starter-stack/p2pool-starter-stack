@@ -117,6 +117,52 @@ sudo chmod 0755 /usr/local/bin/shfmt
 curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
 ```
 
+### The release signing key
+
+The pipeline signs every promoted image digest and the install bundle with cosign
+([#376](https://github.com/p2pool-starter-stack/pithead/issues/376), key-based — see
+[Releasing › Signed releases](releasing.md#signed-releases) for what installs verify and how).
+The private key lives only on this box, like the GHCR token; the public key is committed in the
+repo as `cosign.pub`. The release preflight refuses to run without cosign, `COSIGN_KEY`, and
+`cosign.pub` all in place.
+
+Install cosign (pinned — there is no Ubuntu apt package; the same snippet works on any host that
+wants to verify):
+
+```bash
+curl -fsSL -o /tmp/cosign https://github.com/sigstore/cosign/releases/download/v2.6.3/cosign-linux-amd64
+echo '7c78a7f2efc00088bd788a758db6e0928e79f3e0eb83eb5d3c499ed98da4c4f4  /tmp/cosign' | sha256sum -c
+sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
+```
+
+Generate the key pair once, on this box:
+
+```bash
+cosign generate-key-pair      # prompts for a passphrase; writes cosign.key + cosign.pub
+mkdir -p ~/.config/pithead-release
+mv cosign.key ~/.config/pithead-release/cosign.key
+chmod 600 ~/.config/pithead-release/cosign.key
+```
+
+Commit the `cosign.pub` it wrote at the repo root (it is the only half that ever enters the
+repo), and point the release shell at the private half:
+
+```bash
+export COSIGN_KEY=~/.config/pithead-release/cosign.key
+read -rs COSIGN_PASSWORD && export COSIGN_PASSWORD   # typed, not in shell history
+```
+
+cosign reads `COSIGN_PASSWORD` from the environment to decrypt the key; neither the key nor the
+passphrase ever appears on a command line, in the repo, in an image, or in the release log. Keep
+an offline backup of `cosign.key` with the passphrase stored separately — losing it means
+rotating the key. To rotate: generate a new pair the same way, commit the new `cosign.pub`, and
+cut a transition release **signed with the old key** (leave `COSIGN_KEY` on the old key for that
+one cut) — installs verify the bundle with the key they already hold and come out holding the new
+one; switch `COSIGN_KEY` to the new key for the next release. If the old key is lost or
+compromised, sign with the new key immediately: the transition release then fails the bundle
+check on existing installs, so call it out in the release notes and have operators verify that
+one by hand against the new committed key.
+
 ### Recipe: prune-axis coverage, and the storage that matters
 
 Put the active chain on fast storage. The biggest factor is the disk, not the filesystem:
@@ -214,7 +260,9 @@ Treat the box as production-sensitive. It holds keys and it's the thing that sig
   private keys) must be owner-only (`chmod 600 .env`; the `--readiness` check verifies this).
   Never print secrets in logs; the harness hashes them on the box and redacts artifacts. If the
   box also publishes releases, the GHCR token lives in the environment / a secret store, never in
-  the repo.
+  the repo — and so does the release signing key (`cosign.key` + `COSIGN_PASSWORD`,
+  [#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): owner-only on this box,
+  only its public half (`cosign.pub`) is committed.
 - Network. Firewall to least exposure: inbound SSH (key-only, no root login, fail2ban) and the
   stratum port scoped to the LAN ([workers › firewall](workers.md#firewall)); the dashboard
   stays on localhost behind Caddy and the monerod RPC on localhost (both asserted by

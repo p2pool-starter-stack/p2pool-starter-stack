@@ -628,6 +628,90 @@ upg_onion_order=$(
 assert_eq "upgrade runs ensure_onion_password before config validation (#355)" \
     "$(printf '%s\n' "$upg_onion_order" | grep -xE 'onionpw|validate' | tr '\n' ',')" "onionpw,validate,"
 
+# #376: on a release install, `upgrade` must verify the image signatures BEFORE anything is pulled
+# or recreated. If a refactor drops or reorders the verify_release_images call, "verify" goes
+# missing or lands after "compose" and this fails — the wiring half of the fail-closed guarantee
+# (the decision itself is black-boxed below).
+upg_sig_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 1; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    verify_release_images() { echo verify; }
+    compose_up_checked() { echo compose; }
+    stack_upgrade
+)
+assert_eq "upgrade verifies release-image signatures before 'compose up' (#376)" \
+    "$(printf '%s\n' "$upg_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
+
+echo "== black-box: verify_release_images fail-closed gate (#376) =="
+# The verification decision itself, against a fake cosign on a PINNED PATH ($VRI/bin:/usr/bin:/bin
+# — coreutils stay, any real cosign install on the host disappears, so the host can never decide
+# the outcome). A release install is a dir without build/dashboard/Dockerfile.
+VRI="$SANDBOX/verify376"
+mkdir -p "$VRI/bin"
+cat >"$VRI/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+exit "${COSIGN_RC:-0}"
+EOF
+chmod +x "$VRI/bin/cosign"
+
+# No cosign.pub (an install older than the first signed release): documented fallback — proceed,
+# but say loudly that nothing was verified.
+out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "no pubkey -> upgrade proceeds (documented fallback)" "$?" "0"
+assert_contains "no pubkey -> loud NOT-verified warning" "$out" "NOT be signature-verified"
+
+# cosign.pub present but no cosign binary anywhere on PATH: FAIL CLOSED with an install pointer —
+# a missing verifier must not silently disable verification.
+printf 'fake release public key' >"$VRI/cosign.pub"
+out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "pubkey without cosign -> upgrade aborts" "$?" "1"
+assert_contains "cosign-missing abort points at the install doc" "$out" "not installed"
+
+# Valid signatures (fake cosign exits 0): all 5 images verified with the committed key, no Rekor
+# (--private-infrastructure), against the digest-bearing tag compose will pull.
+: >"$VRI/cosign.log"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" \
+    PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "valid signatures -> upgrade proceeds" "$?" "0"
+assert_eq "all 5 first-party images verified" "$(grep -c '^\[cosign\] verify ' "$VRI/cosign.log")" "5"
+assert_contains "verify uses the committed key + --private-infrastructure" \
+    "$(cat "$VRI/cosign.log")" "verify --key cosign.pub --private-infrastructure ghcr.io/test/pithead-tor:v9.9.9"
+
+# A signature that does not verify (fake cosign exits 1): FAIL CLOSED. This is the red test for the
+# whole feature — bypass or soften the verification and it goes green-to-broken.
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 \
+    PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "bad signature -> upgrade aborts (fail closed)" "$?" "1"
+assert_contains "bad-signature abort names the image" "$out" "Signature verification FAILED for ghcr.io/test/pithead-tor:v9.9.9"
+
+# Source checkout: locally built images are unsigned by design — skipped, silently and completely.
+mkdir -p "$VRI/build/dashboard"
+touch "$VRI/build/dashboard/Dockerfile"
+: >"$VRI/cosign.log"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 COSIGN_LOG="$VRI/cosign.log" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "source checkout -> verification skipped" "$?" "0"
+assert_eq "source checkout -> cosign never invoked" "$(cat "$VRI/cosign.log")" ""
+rm -rf "$VRI/build"
+
 # apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
 # the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
 # diff (env_changed_keys returns nothing; a pre-seeded .apply-incomplete marker forces the retry).
@@ -1513,6 +1597,55 @@ tc_rc=$?
 assert_rc "missing tool -> preflight fails fast (rc 1)" "$tc_rc" "1"
 assert_contains "the missing tool is named" "$tc_out" "shfmt"
 assert_contains "error points at the provisioning doc" "$tc_out" "release-server.md"
+
+echo "== unit: release.sh signs the promoted digests (#376) =="
+# sign_images must sign the recorded manifest-LIST digest (repo@sha256:… — never the mutable tag,
+# never a per-arch child) with the box's key and no Rekor upload; the password never reaches argv.
+# A fake cosign records exactly what it was asked to sign.
+SIGN="$SANDBOX/sign376"
+mkdir -p "$SIGN/bin"
+cat >"$SIGN/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+exit 0
+EOF
+chmod +x "$SIGN/bin/cosign"
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034  # dynamic source; the globals are consumed inside sign_images
+sign_out="$(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    WORKDIR="$SIGN"
+    DRY_RUN=0
+    COSIGN_KEY="/release-box/cosign.key"
+    export COSIGN_LOG="$SIGN/cosign.log"
+    PATH="$SIGN/bin:$PATH"
+    for s in "${IMAGES[@]}"; do set_digest "$s" "ghcr.io/test/pithead-$s@sha256:feed$s"; done
+    sign_images 2>&1
+)"
+assert_contains "sign stage announces itself" "$sign_out" "Sign the promoted digests"
+assert_eq "all 5 promoted digests signed" "$(grep -c '^\[cosign\] sign ' "$SIGN/cosign.log")" "5"
+assert_contains "signs the digest with the box key, no Rekor upload" "$(cat "$SIGN/cosign.log")" \
+    "sign --key /release-box/cosign.key --tlog-upload=false --yes ghcr.io/test/pithead-dashboard@sha256:feeddashboard"
+assert_not_contains "never signs a mutable tag" "$(cat "$SIGN/cosign.log")" ":v"
+# The bundle gets a detached signature the #59 runner can fetch (pithead.tar.gz.sig), and the
+# committed public key ships INSIDE the bundle so a release install has its verifier beside pithead.
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034
+(
+    cd "$ROOT" || exit
+    set --
+    source "$REL" 2>/dev/null
+    set +eu
+    DRY_RUN=0
+    COSIGN_KEY="/release-box/cosign.key"
+    export COSIGN_LOG="$SIGN/cosign.log"
+    PATH="$SIGN/bin:$PATH"
+    sign_bundle "$SIGN/pithead.tar.gz" "$SIGN/pithead.tar.gz.sig" >/dev/null 2>&1
+)
+assert_contains "bundle signed as a detached blob signature" "$(cat "$SIGN/cosign.log")" \
+    "sign-blob --key /release-box/cosign.key --tlog-upload=false --yes --output-signature $SIGN/pithead.tar.gz.sig"
+assert_contains "the bundle ships cosign.pub (the install-side verifier)" "$(cat "$REL")" "config.reference.json cosign.pub"
 
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
@@ -3703,6 +3836,7 @@ for a in "$@"; do
 done
 case "$url" in
 *api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+*releases/download/*.sig) cp "${CURL_SIG:?}" "$out" ;;
 *releases/download/*) cp "${CURL_BUNDLE:?}" "$out" ;;
 *) exit 22 ;;
 esac
@@ -3710,16 +3844,16 @@ EOF
 chmod +x "$UPG/bin/curl"
 # The fake v9.9.9 release bundle: a pithead that logs its invocation (and can be told to fail).
 UPGB="$SANDBOX/upgrade59-bundle"
-mkdir -p "$UPGB/pithead-src"
-cat >"$UPGB/pithead-src/pithead" <<'EOF'
+mkdir -p "$UPGB/pithead"
+cat >"$UPGB/pithead/pithead" <<'EOF'
 #!/usr/bin/env bash
 echo "new-pithead $*" >>upgrade-invocations.log
 [ "${NEW_PITHEAD_FAIL:-}" = "1" ] && exit 1
 exit 0
 EOF
-chmod +x "$UPGB/pithead-src/pithead"
-printf '9.9.9' >"$UPGB/pithead-src/VERSION"
-tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead-src
+chmod +x "$UPGB/pithead/pithead"
+printf '9.9.9' >"$UPGB/pithead/VERSION"
+tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead
 printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel"}' >"$UPGB/api.json"
 seed_upgrade_env() { # <control-enabled true|false>
     cat >"$UPG/.env" <<EOF
@@ -3854,8 +3988,28 @@ assert_eq "upgrade result carries the host-derived version" "$(jq -r '.version' 
 assert_eq "bundle extracted over the install" "$(cat "$UPG/VERSION")" "9.9.9"
 assert_contains "the NEW pithead ran the upgrade" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null)" "new-pithead upgrade"
 assert_eq "both GitHub dials went over Tor SOCKS" "$(grep -c -- '--socks5-hostname 10.9.0.25:9050' "$UPG/curl.log")" "2"
+# #376 fallback: this install has no cosign.pub, so no signature is fetched — today's behaviour.
+assert_eq "no cosign.pub -> no signature dial (documented fallback)" "$(grep -c '\.sig' "$UPG/curl.log" || true)" "0"
 assert_contains "upgrade start audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"started\""
 assert_contains "upgrade completion audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+
+# #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
+# bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
+# runner refuses BEFORE extraction. A cosign signature binds bytes, not a version, so without
+# this check a validly-signed old bundle would silently downgrade the stack.
+reset_upgrade_state
+mkdir -p "$UPGB/rollback/pithead"
+cp "$UPGB/pithead/pithead" "$UPGB/rollback/pithead/pithead"
+printf '1.0.0' >"$UPGB/rollback/pithead/VERSION"
+tar -czf "$UPGB/rollback.tar.gz" -C "$UPGB/rollback" pithead
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+    CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/rollback.tar.gz" \
+    ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "version-mismatched (rollback) bundle is refused" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "rollback refusal names the mismatch" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rollback"
+assert_eq "rollback bundle extracts nothing (VERSION untouched)" "$(cat "$UPG/VERSION")" "1.3.1"
+assert_eq "rollback bundle never ran a new pithead" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null || echo none)" "none"
 
 # Throttle: a second attempt straight after is refused for 10 minutes (egress-beacon guard).
 # The happy path replaced $U/pithead with the fake bundle's script — restore the real runner
@@ -3864,6 +4018,68 @@ cp "$STACK" "$UPG/pithead"
 upgrade_intent "$UUPG" "v9.9.9"
 urun >/dev/null
 assert_contains "immediate second upgrade attempt is throttled" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
+reset_upgrade_state
+
+echo "== black-box: control upgrade verifies the bundle signature (#376) =="
+# Give the install a trust anchor (cosign.pub next to pithead — what a signed release bundle
+# ships) plus a fake cosign; the runner must fetch pithead.tar.gz.sig over the same Tor SOCKS and
+# verify the download against the EXISTING key before a byte of it is extracted.
+cat >"$UPG/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+exit "${COSIGN_RC:-0}"
+EOF
+chmod +x "$UPG/bin/cosign"
+printf 'fake release public key' >"$UPG/cosign.pub"
+printf 'fake signature' >"$UPGB/bundle.sig"
+usign() { # <extra env VAR=val...> — one signed-mode runner invocation
+    (cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" COSIGN_LOG="$UPG/cosign.log" \
+        CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/bundle.sig" \
+        env "$@" ./pithead control-run-pending 2>&1)
+}
+
+# Valid signature: the upgrade goes through, and the verification demonstrably happened.
+: >"$UPG/cosign.log"
+upgrade_intent "$UUPG" "v9.9.9"
+usign >/dev/null
+assert_eq "signed bundle with a valid signature upgrades" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "signature fetched over Tor SOCKS" "$(grep -c -- '--socks5-hostname 10.9.0.25:9050.*pithead\.tar\.gz\.sig' "$UPG/curl.log")" "1"
+assert_contains "bundle verified against the existing key, no Rekor" \
+    "$(cat "$UPG/cosign.log")" "verify-blob --key cosign.pub --signature"
+# Bad signature: FAIL CLOSED — nothing extracted, the install untouched. The red test for the
+# control path: bypass the verify-blob call and this goes green-to-broken.
+reset_upgrade_state
+: >"$UPG/cosign.log"
+upgrade_intent "$UUPG" "v9.9.9"
+usign COSIGN_RC=1 >/dev/null
+assert_eq "bad bundle signature reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "bad-signature failure says verification FAILED" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "verification FAILED"
+assert_eq "bad signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+[ ! -f "$UPG/upgrade-invocations.log" ] && ok "bad signature never runs the new pithead" || bad "bad signature never runs the new pithead" "it ran"
+
+# Missing signature asset: a signed install refuses a release that carries no .sig (fail closed —
+# a stripped signature must not downgrade verification to nothing).
+reset_upgrade_state
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/missing.sig" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "missing signature asset reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "missing-signature failure names the asset" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "no bundle signature"
+assert_eq "missing signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+
+# cosign.pub present but no cosign binary: refused BEFORE the download, with an install pointer.
+# PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't leak in; jq rides
+# along as a symlink since the pinned PATH may not carry it.
+reset_upgrade_state
+ln -sf "$(command -v jq)" "$UPG/bin/jq"
+rm -f "$UPG/bin/cosign"
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/bundle.sig" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "pubkey without cosign rejects the upgrade" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "cosign-missing rejection points at the install doc" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "not installed"
+assert_eq "cosign-missing refusal downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
+rm -f "$UPG/cosign.pub" "$UPG/bin/jq"
 reset_upgrade_state
 
 # The runner refuses to run at all when the channel is off (fail-closed).

@@ -90,10 +90,13 @@ every gate is green.
 6. Promote by digest: re-tag the exact digests just smoke-tested to `:vX.Y.Z` and `:latest`,
    then push. Promotion is by digest (no rebuild), so the released bundle is bit-for-bit what was
    validated. Same version on every image.
-7. Publish GitHub Release: create the git tag `vX.Y.Z`, write the `CHANGELOG.md` entry / release
+7. Sign ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): cosign-sign each
+   promoted manifest-list digest and the install bundle with the key on the release server. See
+   [Signed releases](#signed-releases).
+8. Publish GitHub Release: create the git tag `vX.Y.Z`, write the `CHANGELOG.md` entry / release
    notes, and attach release assets: a pinned `docker-compose.yml` / config bundle referencing
-   `${STACK_VERSION}=vX.Y.Z`, plus the ingredients manifest (exact component versions + promoted
-   image digests).
+   `${STACK_VERSION}=vX.Y.Z`, its detached signature (`pithead.tar.gz.sig`), plus the ingredients
+   manifest (exact component versions + promoted image digests).
 
 ### Pre-release gate (#54)
 
@@ -101,6 +104,59 @@ The [#54](https://github.com/p2pool-starter-stack/pithead/issues/54) integration
 required, blocking pre-release gate. A release must not be promoted or published unless that
 matrix is green against the real Monero + Tari nodes. This is what makes every published version
 a single, validated bundle.
+
+## Signed releases
+
+Every promoted image digest and the install bundle carry a cosign key signature
+([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)). The private key lives only
+on the release server (`COSIGN_KEY` / `COSIGN_PASSWORD`, provisioned once — see
+[Release / Validation Server › The release signing key](release-server.md#the-release-signing-key));
+the public key is committed at the repo root as `cosign.pub` and ships inside
+every release bundle, next to `pithead`. Signing is key-based, not Sigstore keyless: releases are
+cut from a private box with no CI OIDC identity, and `--tlog-upload=false` keeps release activity
+out of the public transparency log — which is why verification passes `--private-infrastructure`
+(images) / `--insecure-ignore-tlog` (the bundle blob). Signatures pin the promoted manifest-list
+digests — the exact bytes the smoke stage validated — never a mutable tag.
+
+`pithead` verifies before it changes anything:
+
+- `pithead upgrade` on a release install with `cosign.pub` present verifies all five first-party
+  images (`cosign verify --key cosign.pub --private-infrastructure`) and aborts on the first
+  failure. Nothing is pulled or restarted.
+- The dashboard upgrade ([#59](https://github.com/p2pool-starter-stack/pithead/issues/59))
+  additionally fetches `pithead.tar.gz.sig` and verifies the downloaded bundle against the key
+  **already on disk** before extracting a byte. The new bundle's own `cosign.pub` is never the
+  trust anchor for its own verification, so a malicious bundle cannot vouch for itself; a key
+  rotation reaches installs through a bundle signed with the previous key.
+- Verification fails closed. With `cosign.pub` present, a bad signature, a stripped
+  `pithead.tar.gz.sig`, or a missing `cosign` binary each abort the upgrade with a message naming
+  the fix. Only an install with no `cosign.pub` at all — older than the first signed release —
+  proceeds unverified, with a warning saying exactly that; `pithead doctor` reports the state.
+- Source checkouts skip verification: locally built images are unsigned by design.
+
+What the signature does and does not prove: it proves the artifact was produced by the holder of
+the release key, so a re-pointed GHCR tag, a tampered registry, or a swapped GitHub release asset
+fails verification. It cannot protect against a compromise of the release server itself, which
+holds the key and cuts the releases.
+
+### Verifying a release
+
+`pithead upgrade` runs the checks automatically once `cosign` is installed
+(pinned install: [release-server.md](release-server.md#the-release-signing-key) — the same
+snippet works on any host). To verify by hand against the committed
+`cosign.pub`:
+
+```bash
+# An image (repeat per image, or pin the digest from the ingredients manifest):
+cosign verify --key cosign.pub --private-infrastructure \
+    ghcr.io/p2pool-starter-stack/pithead-dashboard:vX.Y.Z
+
+# The install bundle:
+curl -fsSLO https://github.com/p2pool-starter-stack/pithead/releases/download/vX.Y.Z/pithead.tar.gz.sig
+cosign verify-blob --key cosign.pub --signature pithead.tar.gz.sig --insecure-ignore-tlog=true pithead.tar.gz
+```
+
+Releases up to v1.3.x are unsigned; verification gates every release from the first signed one.
 
 ## Conventions
 
@@ -147,6 +203,10 @@ What exists today:
   assets, never starts the live stack on the build host, and never prints the registry token.
   Preview any run with `make release ARGS="--dry-run"`.
 
+- ✅ Signed releases ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): the
+  pipeline cosign-signs the promoted digests + the bundle, `pithead upgrade` and the dashboard
+  upgrade verify against the committed `cosign.pub` and fail closed. See
+  [Signed releases](#signed-releases).
 - ✅ Pull-based install: `${STACK_VERSION}` wired through `docker-compose.yml`. Each first-party
   service now carries an `image: ${PITHEAD_REGISTRY:-…}/pithead-<svc>:${STACK_VERSION:-dev}` ref
   alongside its `build:`. pithead picks build-vs-pull automatically: a source checkout (the image
