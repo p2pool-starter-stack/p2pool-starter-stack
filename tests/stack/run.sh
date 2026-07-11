@@ -250,6 +250,29 @@ assert_contains "tor egress probe: WARN never fails doctor (rc 0)" "$out" "rc=0"
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
 assert_contains "tor egress probe: tor down -> info skip" "$out" "isn't running"
 
+echo "== unit: stack_restart — scoped tor restart (#424) =="
+# `restart` bare restarts the whole stack; `restart tor` restarts ONLY tor (fresh guard
+# selection when clearnet egress is stuck); anything else is rejected — other containers must
+# go through apply/upgrade so a recreate applies current args (#273).
+RSTBIN="$SANDBOX/rstbin"
+make_stubs "$RSTBIN"
+RSTLOG="$SANDBOX/restart-docker.log"
+: >"$RSTLOG"
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart 2>&1)"
+assert_contains "bare restart restarts the whole stack" "$(cat "$RSTLOG")" "compose restart"
+assert_not_contains "bare restart is not tor-scoped" "$(cat "$RSTLOG")" "compose restart tor"
+: >"$RSTLOG"
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart tor 2>&1)"
+assert_contains "restart tor restarts only the tor container" "$(cat "$RSTLOG")" "compose restart tor"
+assert_contains "restart tor warns that circuits drop" "$out" "circuits drop"
+assert_contains "restart tor points at the doctor verify" "$out" "doctor"
+: >"$RSTLOG"
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart p2pool 2>&1)"
+rc=$?
+assert_rc "restart rejects any service but tor" "$rc" "1"
+assert_contains "restart rejection names the contract" "$out" "takes no argument, or 'tor'"
+assert_eq "rejected restart touches no container" "$(cat "$RSTLOG")" ""
+
 echo "== unit: is_ipv4 =="
 run_sourced "$SANDBOX" is_ipv4 "0.0.0.0" >/dev/null 2>&1
 assert_rc "accepts 0.0.0.0" "$?" "0"
@@ -354,6 +377,10 @@ case "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD oldpw newp
 *DEST*) ok "stratum pw change hides the secret (DEST, no value shown)" ;;
 *) bad "stratum pw change hides the secret" "expected DEST" ;;
 esac
+# Tor guard self-heal toggle (#424): INFO either way, and the enable warns about circuits dropping.
+assert_contains "tor auto-heal enable is INFO" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "INFO"
+assert_contains "tor auto-heal enable names the cost" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "drops ALL Tor circuits"
+assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" "restart tor"
 # Dev-fee donate-level (#173): a brief restart (INFO), shown as a percentage.
 assert_contains "donate-level is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "INFO"
 assert_contains "donate-level shows pct" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "0% → 1%"
@@ -2162,6 +2189,18 @@ case "$(cat "$V/Caddyfile")" in
 *basic_auth*) bad "auth disable drops basic_auth" "basic_auth still present in the Caddyfile" ;;
 *) ok "auth disable drops basic_auth" ;;
 esac
+
+echo "== black-box: tor.auto_heal renders to .env (#424) =="
+# The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
+# restarts its privacy boundary unbidden); explicit true -> on.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tor.auto_heal defaults to off" "$(run_sourced "$V" env_get_file "$V/.env" TOR_AUTO_HEAL)" "false"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "tor":{"auto_heal":true}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tor.auto_heal opt-in renders true" "$(run_sourced "$V" env_get_file "$V/.env" TOR_AUTO_HEAL)" "true"
 
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env

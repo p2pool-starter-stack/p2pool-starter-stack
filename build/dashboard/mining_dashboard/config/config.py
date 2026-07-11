@@ -255,6 +255,14 @@ NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 # instance; a LAN-only self-hosted address is unreachable through Tor).
 HEALTHCHECKS_PING_URL = os.environ.get("HEALTHCHECKS_PING_URL", "").strip()
 
+# --- Tor guard self-heal (#424) ---
+# Opt-in (tor.auto_heal in config.json): when true, the dashboard probes Tor clearnet egress (the
+# same generate_204-through-SOCKS probe as the doctor check) and restarts the tor container when
+# exits stay stuck on a failing guard — bounded retries, long cooldown, loud logging (see
+# service/tor_heal.py). Off by default: a tor restart drops every circuit, mining onions included,
+# so the stack must not restart its privacy boundary unbidden.
+TOR_AUTO_HEAL = os.environ.get("TOR_AUTO_HEAL", "false").strip().lower() == "true"
+
 # --- Operator alerts: Telegram (Issue #121) ---
 # Notifications-only Telegram pusher: a thin notifier that pushes a small, high-value set of
 # operational edges (node down/recovered, worker offline/back, sync finished) to one chat.

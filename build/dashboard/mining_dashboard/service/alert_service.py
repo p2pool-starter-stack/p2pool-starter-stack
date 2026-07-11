@@ -745,6 +745,17 @@ class AlertService:
         await asyncio.to_thread(self.notifier.send, text)
         return text
 
+    async def tor_heal_alert(self, text):
+        """Push the Tor guard self-heal note (#424). Deliberately not behind a per-event toggle:
+        it fires at most once per outage, only after a heal restored the very path Telegram rides
+        (so a broken egress can never even attempt it), and an operator who opted into the heal
+        wants to know it acted. No-op when the notifier is off."""
+        if not self.notifier.enabled:
+            return None
+        text = self._fmt(text)
+        await asyncio.to_thread(self.notifier.send, text)
+        return text
+
     async def maybe_daily_summary(self, now, summary_provider):
         """Push a once-daily status digest at the configured local time.
 

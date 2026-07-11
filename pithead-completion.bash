@@ -33,6 +33,12 @@ _pithead() {
         COMPREPLY=($(compgen -W "$(_pithead_services "$compose")" -- "$cur"))
         return
     fi
+    # `restart` takes exactly one optional argument: tor (fresh guard selection, #424).
+    if [ "$prev" = "restart" ]; then
+        # shellcheck disable=SC2207
+        COMPREPLY=($(compgen -W "tor" -- "$cur"))
+        return
+    fi
     # shellcheck disable=SC2207  # command names never contain whitespace
     COMPREPLY=($(compgen -W "$_pithead_commands" -- "$cur"))
 }

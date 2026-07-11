@@ -142,7 +142,11 @@ Two things to know:
 - **Tor is part of the ping path.** If the Tor container is down while the host is up, the ping
   can't get out and the check will eventually alert — a *false* "host down". The 5-minute grace
   absorbs brief Tor blips, and pings retry every cycle, so only a sustained Tor outage trips it.
-  That's usually what you want (Tor down *is* a problem worth knowing about).
+  That's usually what you want (Tor down *is* a problem worth knowing about). One such outage is
+  Tor stuck on a **failing guard** — bootstrapped, mining fine, but clearnet exits dead (#424):
+  `./pithead doctor` diagnoses it, `./pithead restart tor` fixes it, and `tor.auto_heal: true`
+  automates the fix. See
+  [Operations › Troubleshooting](operations.md#troubleshooting).
 - **Your ping URL must be Tor-reachable.** Hosted `hc-ping.com` is. A self-hosted instance must be
   public or, better, an **onion service** — paste its `.onion` URL and the ping stays on Tor end to
   end with no exit node in the middle. A LAN-only address won't work (Tor can't route to it).
