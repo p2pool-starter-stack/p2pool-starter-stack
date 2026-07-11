@@ -15,6 +15,7 @@ from mining_dashboard.service.tor_heal import (
     COOLDOWN_SEC,
     MAX_RESTARTS,
     PROBE_INTERVAL_SEC,
+    RECOVERY_CONFIRM_PROBES,
     TorEgressHealer,
 )
 
@@ -40,6 +41,21 @@ class _FakeDocker:
     async def start(self, container, **kwargs):
         self.calls.append(("start", container))
         return True
+
+
+class _FailingDocker:
+    """docker-control unreachable: records the attempt, reports failure."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def stop(self, container, **kwargs):
+        self.calls.append(("stop", container))
+        return False
+
+    async def start(self, container, **kwargs):
+        self.calls.append(("start", container))
+        return False
 
 
 def _healer(clock=None, enabled=True, probe=None, notify=None, docker=None):
@@ -111,13 +127,66 @@ class TestDecide:
         clock.t += 100 * COOLDOWN_SEC
         assert h.decide(False, clock.t) == "exhausted"
 
+    def test_recovery_needs_sustained_ok_before_resetting_the_budget(self):
+        # After a heal, ONE OK probe is not enough — recovery must be sustained
+        # (RECOVERY_CONFIRM_PROBES consecutive OKs) before the outage closes and the budget
+        # resets. This is the #424-review fix: a lone lucky 204 must not refill the cap.
+        clock = _Clock()
+        h = _healer(clock)
+        _break_egress(h, clock)
+        assert h.decide(False, clock.t) == "heal"
+        clock.t += PROBE_INTERVAL_SEC
+        # First OK: provisional only, no "recovered" yet.
+        for _ in range(RECOVERY_CONFIRM_PROBES - 1):
+            assert h.decide(True, clock.t) is None
+            clock.t += PROBE_INTERVAL_SEC
+        # The confirming OK closes the outage.
+        assert h.decide(True, clock.t) == "recovered"
+        # Only NOW does the next outage get a fresh budget.
+        _break_egress(h, clock)
+        assert h.decide(False, clock.t) == "heal"
+
+    def test_flapping_egress_cannot_refill_the_budget(self):
+        # The issue's own scenario: an overloaded Tor with egress flapping. A single OK between
+        # failures must NOT reset the cap, or "max 3 per outage" becomes 3-every-cooldown forever.
+        clock = _Clock()
+        h = _healer(clock)
+        _break_egress(h, clock)
+        for _ in range(MAX_RESTARTS):
+            assert h.decide(False, clock.t) == "heal"
+            clock.t += PROBE_INTERVAL_SEC
+            # One lucky probe succeeds, then egress drops again before recovery is confirmed.
+            assert h.decide(True, clock.t) is None  # provisional, budget preserved
+            clock.t += COOLDOWN_SEC
+        # Budget is spent and a lone OK never refilled it: warn-only, not another heal.
+        assert h.decide(False, clock.t) == "exhausted"
+
+    async def test_failed_restart_refunds_the_budget(self):
+        # If docker-control is unreachable, the stop/start no-op and the budget slot is refunded,
+        # so a flaky proxy doesn't burn the cap and abandon a real outage (#424 review, Finding 3).
+        clock = _Clock()
+        docker = _FailingDocker()
+        h = _healer(clock, docker=docker, probe=lambda: False)
+        h._last_probe = None
+        _break_egress(h, clock)
+        clock.t += PROBE_INTERVAL_SEC
+        await h.check()  # decides "heal", docker fails, refunds
+        assert docker.calls  # a restart was attempted
+        assert h._restarts == 0  # ...but refunded
+        assert h._last_restart is None
+        # So the next probe (still broken, cooldown cleared) heals again rather than giving up.
+        clock.t += PROBE_INTERVAL_SEC
+        assert h.decide(False, clock.t) == "heal"
+
     def test_recovery_after_heal_reports_and_resets_the_budget(self):
         clock = _Clock()
         h = _healer(clock)
         _break_egress(h, clock)
         assert h.decide(False, clock.t) == "heal"
         clock.t += PROBE_INTERVAL_SEC
-        assert h.decide(True, clock.t) == "recovered"
+        for _ in range(RECOVERY_CONFIRM_PROBES):
+            h.decide(True, clock.t)
+            clock.t += PROBE_INTERVAL_SEC
         # The next outage gets a fresh budget and must re-earn the sustained threshold.
         _break_egress(h, clock)
         assert h.decide(False, clock.t) == "heal"

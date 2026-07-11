@@ -24,7 +24,9 @@ Tor network is overloaded", so fresh guards may be just as bad):
   new guards actually work before another attempt is allowed.
 - **Bounded.** At most :data:`MAX_RESTARTS` restarts per outage; past that it only warns
   (the doctor check and the Healthchecks dead-man's switch remain the operator's signal).
-  A successful probe closes the outage and resets the budget.
+  The budget resets only after :data:`RECOVERY_CONFIRM_PROBES` consecutive OK probes —
+  sustained recovery, so a lone lucky 204 during a flapping outage can't refill the cap and
+  turn "3 per outage" into 3-every-half-hour-forever.
 - **Loud.** Every restart and give-up is logged at WARNING; recovery after a restart sends a
   one-time Telegram note — deliverable exactly then, since Telegram rides the path that just
   healed.
@@ -54,6 +56,11 @@ PROBE_INTERVAL_SEC = 5 * 60  # active probe cadence (only while the heal is enab
 BROKEN_AFTER_SEC = 15 * 60  # sustained failure before the first restart (issue #424's "N minutes")
 COOLDOWN_SEC = 30 * 60  # minimum gap between restarts — verify-then-retry, never thrash
 MAX_RESTARTS = 3  # restart budget per outage; after this, warn only
+# Consecutive OK probes required to declare an outage OVER once we've spent a restart. A single
+# lucky 204 must NOT close the outage: under the issue's own scenario (overloaded Tor, egress
+# flapping) that would refill the restart budget and clear the cooldown every blip, so tor gets
+# restarted indefinitely — the exact storm MAX_RESTARTS promises to prevent (#424 review).
+RECOVERY_CONFIRM_PROBES = 2  # ~10 min sustained egress before the budget resets
 
 
 class TorEgressHealer:
@@ -77,6 +84,8 @@ class TorEgressHealer:
         self._failing_since = None  # start of the current unbroken failure streak
         self._restarts = 0  # restarts spent on the current outage
         self._last_restart = None  # cooldown anchor
+        self._ok_streak = 0  # consecutive OK probes (sustained-recovery counter, post-restart)
+        self._warned_exhausted = False  # give-up warning is logged once per outage, not every probe
         if self.enabled:
             logger.info(
                 "Tor guard self-heal enabled (#424): probing clearnet egress every %ds; "
@@ -105,14 +114,31 @@ class TorEgressHealer:
 
         Returns ``None`` (nothing to do / keep waiting), ``"heal"`` (restart budget granted
         and spent — caller must restart tor), ``"exhausted"`` (still broken, budget gone:
-        warn only), or ``"recovered"`` (egress is back after at least one restart).
+        warn only), or ``"recovered"`` (egress is back, sustained, after at least one restart).
         """
         if ok:
-            healed = self._restarts > 0
+            if self._restarts == 0:
+                # No restart spent yet — a single healthy probe just clears a sub-threshold
+                # blip. Nothing to protect, so reset immediately (unchanged blip semantics).
+                self._failing_since = None
+                self._ok_streak = 0
+                return None
+            # We have already restarted this outage. Require SUSTAINED recovery before
+            # refilling the budget and clearing the cooldown: a lone 204 during a flapping,
+            # overloaded-Tor outage must not reset the cap (#424 review). Budget and cooldown
+            # anchor are preserved until the streak confirms, so a relapse resumes where it
+            # left off instead of getting a fresh set of restarts.
+            self._ok_streak += 1
+            if self._ok_streak < RECOVERY_CONFIRM_PROBES:
+                return None
             self._failing_since = None
             self._restarts = 0
             self._last_restart = None
-            return "recovered" if healed else None
+            self._ok_streak = 0
+            self._warned_exhausted = False
+            return "recovered"
+        # ok is False — any failure breaks a would-be recovery streak.
+        self._ok_streak = 0
         if self._failing_since is None:
             self._failing_since = now
         # Transient blip guard: not broken until the failure streak spans the threshold.
@@ -127,6 +153,15 @@ class TorEgressHealer:
         self._restarts += 1
         self._last_restart = now
         return "heal"
+
+    def refund_restart(self):
+        """Undo the budget slot decide() spent on a "heal" that could not be issued (the
+        docker-control proxy was unreachable), so a flaky proxy doesn't burn the cap on
+        no-ops and give up on a real outage (#424 review). Leaves _failing_since intact so
+        the outage is retried on the next probe."""
+        if self._restarts > 0:
+            self._restarts -= 1
+        self._last_restart = None
 
     async def check(self):
         """Probe (throttled) and act. Called every data-loop cycle; never raises."""
@@ -148,16 +183,29 @@ class TorEgressHealer:
                     self._restarts,
                     MAX_RESTARTS,
                 )
-                await self._docker.stop(self.CONTAINER, stop_timeout=15, request_timeout=60)
-                await self._docker.start(self.CONTAINER, request_timeout=60)
-            elif action == "exhausted":
-                logger.warning(
-                    "Tor clearnet egress is STILL broken after %d tor restarts — the Tor "
-                    "network itself is likely overloaded; not restarting again (#424). "
-                    "Healthchecks/Telegram/XvB stay down until egress recovers; "
-                    "'./pithead doctor' shows the live state.",
-                    MAX_RESTARTS,
+                stopped = await self._docker.stop(
+                    self.CONTAINER, stop_timeout=15, request_timeout=60
                 )
+                started = await self._docker.start(self.CONTAINER, request_timeout=60)
+                if not (stopped and started):
+                    # The restart never actually happened (docker-control unreachable) — give the
+                    # budget slot back so a transiently-flaky proxy doesn't exhaust the cap on
+                    # no-ops and abandon a real outage (#424 review).
+                    self.refund_restart()
+                    logger.warning(
+                        "tor restart could not be issued via docker-control (unreachable) — "
+                        "the attempt was refunded and will be retried on the next probe (#424)."
+                    )
+            elif action == "exhausted":
+                if not self._warned_exhausted:
+                    self._warned_exhausted = True
+                    logger.warning(
+                        "Tor clearnet egress is STILL broken after %d tor restarts — the Tor "
+                        "network itself is likely overloaded; not restarting again (#424). "
+                        "Healthchecks/Telegram/XvB stay down until egress recovers; "
+                        "'./pithead doctor' shows the live state.",
+                        MAX_RESTARTS,
+                    )
             elif action == "recovered":
                 logger.info("Tor clearnet egress recovered after a tor restart (#424).")
                 if self._notify is not None:
