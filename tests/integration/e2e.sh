@@ -364,7 +364,7 @@ run_harness() {
     case "$MODE" in
     check) phases="--check" ;;
     targeted) phases="--readiness --auth-fail-closed --lifecycle" ;; # --readiness/--check run first below
-    matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed" ;;
+    matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed --hardening" ;;
     esac
     log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"

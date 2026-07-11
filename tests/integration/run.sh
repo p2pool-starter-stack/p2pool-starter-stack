@@ -38,6 +38,7 @@ READINESS=0
 RUN_LIFECYCLE=0
 RUN_FAULTS=0
 RUN_AUTH_FAIL_CLOSED=0
+RUN_HARDENING=0
 SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
@@ -102,6 +103,11 @@ MATRIX:
                          in .env and assert `pithead up` REFUSES to start (the live counterpart
                          to the tier-1 compose-config check), then restore the exact token and
                          recover. DESTRUCTIVE-then-restored; works in both ssh and local mode.
+  --hardening            also run the v1.4 hardening phase (#377/#33/#424), local mode only:
+                         read-only rootfs rejects writes live, the systemd control path unit fires
+                         on a spooled request (allowlisted change applies, sensitive change
+                         refused), and the stack recovers from a tor restart. DESTRUCTIVE-then-
+                         restored (enables then disables the control channel).
   --keep                 do NOT restore the original config.json at the end (leaves the box
                          on the last scenario — useful for debugging)
 
@@ -183,6 +189,10 @@ parse_args() {
             ;;
         --auth-fail-closed)
             RUN_AUTH_FAIL_CLOSED=1
+            shift
+            ;;
+        --hardening)
+            RUN_HARDENING=1
             shift
             ;;
         --safety-backup)
@@ -1112,6 +1122,135 @@ _set_env_token() { # _set_env_token <value>
     rx "awk -v t=$(quote_arg "$1") '/^PROXY_AUTH_TOKEN=/{print \"PROXY_AUTH_TOKEN=\" t; next} {print}' .env > .env.itest && mv .env.itest .env"
 }
 
+# Drop a file into the control spool on the box (mirrors push_config's stdin-over-ssh transfer so
+# no JSON quoting has to survive the remote shell string). <abs-path> is on the box.
+_spool_write() { # _spool_write <abs-path-on-box> <content>
+    if [ "$IT_MODE" = "local" ]; then
+        printf '%s\n' "$2" >"$1"
+    else
+        printf '%s\n' "$2" | ssh "${IT_SSH_OPTS[@]}" "$IT_SSH_DEST" "cat > $(quote_arg "$1")"
+    fi
+}
+
+# Wait up to <timeout>s for the systemd path unit to write results/<id>.json with a status OTHER
+# than <exclude> (so a leftover preview result doesn't satisfy a wait for the commit result).
+# Returns 0 and echoes the status when it settles; 1 on timeout. Proof the unit actually fired.
+_wait_control_status() { # <control-dir> <id> <exclude-status> <timeout>
+    local cdir="$1" id="$2" exclude="$3" timeout="${4:-90}" waited=0 st
+    while [ "$waited" -lt "$timeout" ]; do
+        st="$(rx "jq -r '.status // empty' $(quote_arg "$cdir/results/$id.json") 2>/dev/null")"
+        if [ -n "$st" ] && [ "$st" != "$exclude" ]; then
+            echo "$st"
+            return 0
+        fi
+        sleep 3
+        waited=$((waited + 3))
+    done
+    return 1
+}
+
+# Tier-4 hardening phase (#377/#33/#424): the v1.4 host-mutation + hardening surfaces that ONLY a
+# real box proves — a read-only rootfs actually rejecting a write, the systemd path unit actually
+# firing on a spooled request, and a tor restart bringing mining back. Local mode only (needs the
+# real containers, data dirs, and systemd). Everything it changes is reverted by the end-of-run
+# config restore; it also re-applies the baseline itself so the root path unit never lingers.
+run_hardening() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
+    IT_CURRENT_SCENARIO="hardening"
+    echo ""
+    it_log "── v1.4 hardening phase (#377/#33/#424) ────────────"
+
+    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+        it_warn "skipping hardening phase (remote mode: no local containers/systemd to exercise)"
+        return 0
+    fi
+
+    # 1. Read-only rootfs is LIVE at runtime (#377), not just declared in compose. Each hardened
+    #    service must reject a write to its own root filesystem; the writable /tmp tmpfs is
+    #    deliberately excluded (we probe /, the image layer, not the scratch mount).
+    local svc
+    for svc in tor monerod p2pool tari xmrig-proxy dashboard; do
+        if rx "docker exec $svc sh -c 'touch /.rootfs-write-probe' >/dev/null 2>&1"; then
+            it_fail "read-only rootfs rejects writes on $svc (#377)" "write to / SUCCEEDED — rootfs is not read-only"
+            rx "docker exec $svc rm -f /.rootfs-write-probe >/dev/null 2>&1" || true
+        else
+            it_pass "read-only rootfs rejects writes on $svc (#377)"
+        fi
+    done
+
+    # 2. Tor guard heal RECOVERY action (#424). The stuck-guard TRIGGER is guard-selection luck and
+    #    not reproducible, but the heal's action — restart tor — must bring the whole stack back:
+    #    the #278/#313 socat bridges + merge-mine gRPC re-establish and mining resumes. This proves
+    #    the restart the healer issues is safe to issue automatically.
+    it_step "restart tor (the #424 heal action) and verify the stack recovers…"
+    pithead restart tor >/dev/null 2>&1
+    wait_status_ok 240 || true
+    pithead status >/dev/null 2>&1
+    assert_rc "stack healthy after a tor restart (#424 heal action)" "$?" "0"
+
+    # 3. The #33 control channel end-to-end THROUGH THE REAL SYSTEMD PATH UNIT. Tier-1 runs
+    #    control-run-pending by hand; only here does pithead-control.path actually fire on a spooled
+    #    file. Needs a dashboard password (control refuses to enable without one). Enable control,
+    #    let apply install + enable the unit, then drop requests and let systemd act.
+    local ctrl_config
+    ctrl_config="$(printf '%s' "$BASELINE_CONFIG" | jq '.dashboard.secure=true | .dashboard.auth={username:"admin",password:"a tier4 control passphrase"} | .dashboard.control={enabled:true}')"
+    push_config "$ctrl_config"
+    it_step "apply with dashboard.control enabled (installs the systemd path unit)…"
+    pithead apply -y >/dev/null 2>&1
+    wait_status_ok 180 || true
+    if rx "systemctl is-enabled pithead-control.path >/dev/null 2>&1"; then
+        it_pass "pithead-control.path installed + enabled by apply (#33)"
+    else
+        it_fail "pithead-control.path installed + enabled by apply (#33)" "unit not enabled"
+    fi
+
+    local cdir
+    cdir="$(env_on_box CONTROL_DIR)"
+    if [ -z "$cdir" ]; then
+        it_warn "CONTROL_DIR not set on the box — skipping the spool round-trips"
+    else
+        # 3a. A NON-sensitive change (an allowlisted alert toggle) committed via the spool must be
+        #     applied BY THE PATH UNIT — not by us calling control-run-pending.
+        local uuid_ok="a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1" ok_cfg st
+        ok_cfg="$(printf '%s' "$ctrl_config" | jq -c '.telegram.events.node_down=false')"
+        _spool_write "$cdir/requests/$uuid_ok.json" \
+            "$(jq -nc --argjson c "$ok_cfg" '{id:"'"$uuid_ok"'",action:"preview",actor:"itest",config:$c}')"
+        if st="$(_wait_control_status "$cdir" "$uuid_ok" "" 60)"; then
+            it_pass "systemd path unit fired on a spooled request (#33) [preview=$st]"
+        else
+            it_fail "systemd path unit fired on a spooled request (#33)" "no result after 60s"
+        fi
+        _spool_write "$cdir/requests/$uuid_ok.json" \
+            "{\"id\":\"$uuid_ok\",\"action\":\"commit\",\"actor\":\"itest\"}"
+        st="$(_wait_control_status "$cdir" "$uuid_ok" "previewed" 90 || echo timeout)"
+        assert_eq "spool commit applied by the path unit (#33)" "$st" "applied"
+        assert_eq "the allowlisted change landed host-side (#33)" "$(env_on_box TELEGRAM_EVENT_NODE_DOWN)" "false"
+        assert_contains "control mutation audited (#33)" \
+            "$(rx "cat $(quote_arg "$cdir/audit/control.log") 2>/dev/null")" '"action":"commit"'
+
+        # 3b. A SENSITIVE change (wallet swap) MUST be refused host-side, .env untouched — the
+        #     default-deny gate, exercised through the real spool rather than a unit test.
+        local uuid_bad="b2b2b2b2-2222-4222-8222-b2b2b2b2b2b2" bad_cfg wallet_before
+        wallet_before="$(env_on_box MONERO_WALLET_ADDRESS)"
+        bad_cfg="$(printf '%s' "$ctrl_config" | jq -c '.monero.wallet_address="4TIER4TESTWALLETdoNotApplyThisIsAnIntegrationTestRejectionProbe0000000000000000000000000000000000"')"
+        _spool_write "$cdir/requests/$uuid_bad.json" \
+            "$(jq -nc --argjson c "$bad_cfg" '{id:"'"$uuid_bad"'",action:"preview",actor:"itest",config:$c}')"
+        _wait_control_status "$cdir" "$uuid_bad" "" 60 >/dev/null || true
+        _spool_write "$cdir/requests/$uuid_bad.json" \
+            "{\"id\":\"$uuid_bad\",\"action\":\"commit\",\"actor\":\"itest\"}"
+        st="$(_wait_control_status "$cdir" "$uuid_bad" "previewed" 90 || echo timeout)"
+        assert_eq "sensitive (wallet) spool commit refused host-side (#33)" "$st" "rejected"
+        assert_eq "refused wallet change did NOT touch .env (#33)" "$(env_on_box MONERO_WALLET_ADDRESS)" "$wallet_before"
+    fi
+
+    # Restore the baseline ourselves: re-applying with control off uninstalls the path unit, so the
+    # root systemd unit never outlives the phase even though the end-of-run restore would also do it.
+    it_step "restoring baseline (disables control, removes the path unit)…"
+    push_config "$BASELINE_CONFIG"
+    pithead apply -y >/dev/null 2>&1
+    wait_status_ok 180 || true
+}
+
 run_auth_fail_closed() {
     # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="auth-fail-closed"
@@ -1293,6 +1432,7 @@ main() {
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
     [ "$RUN_FAULTS" = "1" ] && run_fault_injection
     [ "$RUN_AUTH_FAIL_CLOSED" = "1" ] && run_auth_fail_closed
+    [ "$RUN_HARDENING" = "1" ] && run_hardening
 
     # Failure → roll the box back to the safety backup; success → leave it (restore_baseline
     # just puts config.json back to where we found it). Then drop the generated archive.
