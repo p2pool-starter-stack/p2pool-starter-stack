@@ -1678,10 +1678,11 @@ host_public_ips() {
 # Home/NAT hosts (no public IP on an interface) and hosts that narrowed p2pool.stratum_bind stay
 # quiet in setup. $1 = "setup" (emit via warn, only on exposure) or "doctor" (emit OK/WARN/skip).
 check_stratum_exposure() {
-    local mode="$1" bind pub msg
+    local mode="$1" bind pub msg port
     bind="${STRATUM_BIND:-}"
     if [ -z "$bind" ] && [ -f "${ENV_FILE:-.env}" ]; then bind="$(env_get STRATUM_BIND 2>/dev/null || true)"; fi
     [ -n "$bind" ] || bind="0.0.0.0"
+    port=$(stratum_port_effective)
 
     if ! command -v ip >/dev/null 2>&1; then
         [ "$mode" = doctor ] && dr_info "Skipped public-IP exposure check (no 'ip' command; Linux-only)."
@@ -1690,7 +1691,7 @@ check_stratum_exposure() {
     case "$bind" in
     0.0.0.0 | "") ;; # all interfaces — the exposed case
     *)
-        [ "$mode" = doctor ] && dr_ok "Stratum :3333 bound to $bind (not all interfaces) — not publicly exposed."
+        [ "$mode" = doctor ] && dr_ok "Stratum :$port bound to $bind (not all interfaces) — not publicly exposed."
         return 0
         ;;
     esac
@@ -1698,10 +1699,10 @@ check_stratum_exposure() {
     pub="$(host_public_ips)"
     pub="${pub//$'\n'/, }"
     if [ -n "$pub" ]; then
-        msg="This host appears to have a public IP ($pub). The stratum port 3333 is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
+        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
         if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
     else
-        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :3333 isn't directly internet-exposed."
+        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
     fi
     return 0
 }
@@ -1756,12 +1757,22 @@ check_stratum_listening() {
         dr_info "Stratum listen check skipped — no 'ss' command (Linux-only)."
         return 0
     fi
-    if ss -Hltn 2>/dev/null | grep -q ':3333 '; then
-        dr_ok "Stratum :3333 is listening — workers can connect."
+    local port
+    port=$(stratum_port_effective)
+    if ss -Hltn 2>/dev/null | grep -q ":$port "; then
+        dr_ok "Stratum :$port is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :3333 — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
+        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
     fi
     return 0
+}
+
+# The operator-facing stratum port (#172): the env wins (already-parsed config), then the rendered
+# .env, then the 3333 default — mirrors how check_stratum_exposure resolves STRATUM_BIND.
+stratum_port_effective() {
+    local port="${STRATUM_PORT:-}"
+    if [ -z "$port" ] && [ -f "${ENV_FILE:-.env}" ]; then port="$(env_get STRATUM_PORT 2>/dev/null || true)"; fi
+    printf '%s' "${port:-3333}"
 }
 
 # doctor (#383): a "running" dashboard container doesn't mean the app inside answers. Probe the
@@ -2182,6 +2193,37 @@ ensure_onion_password() {
     log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
 }
 
+# Validate the per-worker endpoint descriptors, dashboard.workers[] (#172): a list of
+# {name, host?, port?, token?} objects the dashboard uses to override the fleet worker-API
+# defaults per rig. Nothing here renders to .env — the dashboard reads the list straight off its
+# read-only config.json bind mount (tokens stay in the one owner-only file that already holds
+# secrets) — so this validation exists to fail an apply LOUDLY on a typo instead of the dashboard
+# silently dropping the entry at runtime. The `host` charset matters for #122: it must never be
+# able to smuggle a port, path, or userinfo into the dashboard's probe URL.
+validate_worker_endpoints() {
+    local dw_err
+    dw_err=$(jq -r '
+        (.dashboard.workers // []) as $w
+        | if ($w | type) != "array" then "dashboard.workers must be an array of {name, host?, port?, token?} objects."
+          else [ $w[] |
+              if type != "object" then "dashboard.workers entries must be objects (got a \(type))."
+              elif (.name | type) != "string" or (.name | test("^[!-~]{1,128}$") | not)
+                then "dashboard.workers: every entry needs a \"name\" of 1-128 printable non-space characters (its stratum worker name)."
+              elif has("host") and ((.host | type) != "string" or (.host | test("^[A-Za-z0-9._-]{1,253}$") | not))
+                then "dashboard.workers[\(.name)].host must be a hostname or IPv4 address (letters, digits, and . _ - only; no port or path)."
+              elif has("port") and ((.port | type) != "number" or .port != (.port | floor) or .port < 1 or .port > 65535)
+                then "dashboard.workers[\(.name)].port must be an integer between 1 and 65535."
+              elif has("token") and ((.token | type) != "string" or (.token | test("^[!-~]{1,128}$") | not))
+                then "dashboard.workers[\(.name)].token must be 1-128 printable non-space characters."
+              else empty end
+          ] | first // empty end' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$dw_err" ] || error "$dw_err"
+    # Duplicate names are legal but only the FIRST declaration counts — surface that, once.
+    local dw_dups
+    dw_dups=$(jq -r '[(.dashboard.workers // [])[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$dw_dups" ] || warn "dashboard.workers has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
+}
+
 parse_and_validate_config() {
     log "Parsing configuration..."
     if ! jq -e . "$CONFIG_FILE" >/dev/null 2>&1; then
@@ -2267,6 +2309,17 @@ parse_and_validate_config() {
     if ! is_ipv4 "$STRATUM_BIND"; then
         error "p2pool.stratum_bind must be an IPv4 address like \"0.0.0.0\", \"127.0.0.1\", or your LAN IP (got \"$STRATUM_BIND\")."
     fi
+
+    # Operator-facing stratum port (#172), default 3333 — the host port xmrig-proxy binds and
+    # publishes, i.e. what every rig dials. Rendered to STRATUM_PORT in .env; RigForge rigs must
+    # point at the same port (rigforge pool.port). p2pool's container-INTERNAL stratum stays fixed
+    # at :3333 (only xmrig-proxy dials it on the bridge), so P2POOL_URL is untouched by this knob.
+    STRATUM_PORT=$(jq -r '.p2pool.stratum_port // 3333' "$CONFIG_FILE")
+    if ! printf '%s' "$STRATUM_PORT" | grep -qE '^[0-9]{1,5}$' || [ "$STRATUM_PORT" -lt 1 ] || [ "$STRATUM_PORT" -gt 65535 ]; then
+        error "p2pool.stratum_port must be an integer between 1 and 65535 (got \"$STRATUM_PORT\")."
+    fi
+
+    validate_worker_endpoints
 
     # Optional miner authentication on the stratum port (#152). xmrig-proxy's --access-password
     # rejects rigs whose stratum 'pass' doesn't match, so only devices that know the secret can
@@ -2530,10 +2583,16 @@ render_masked_config() { # <control-dir>
     local mdir="$1/masked" tmp
     mkdir -p "$mdir" 2>/dev/null || true
     tmp="$mdir/.config.json.tmp"
+    # Per-worker tokens (#172) live in the variable-length .dashboard.workers[] array, out of
+    # reach of the fixed-path walk above — mask each SET .token entry by entry.
     if jq --argjson paths "$CONTROL_SECRET_PATHS" '
         reduce $paths[] as $p (.;
             if ((try getpath($p) catch null) // "") == "" then .
-            else setpath($p; {"__secret__": true}) end)' "$CONFIG_FILE" >"$tmp" 2>/dev/null; then
+            else setpath($p; {"__secret__": true}) end)
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token // "") == "" then . else .token = {"__secret__": true} end)
+          else . end' "$CONFIG_FILE" >"$tmp" 2>/dev/null; then
         chmod 644 "$tmp" 2>/dev/null || true
         mv "$tmp" "$mdir/config.json" 2>/dev/null ||
             warn "Could not write $mdir/config.json — the dashboard editor prefill may be stale."
@@ -3227,6 +3286,7 @@ DASHBOARD_ONION_CLIENT_PRIVKEY=$DASHBOARD_ONION_CLIENT_PRIVKEY
 P2POOL_FLAGS=$p2pool_flags
 P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
+STRATUM_PORT=$STRATUM_PORT
 PROXY_STRATUM_PASSWORD=$STRATUM_PASSWORD
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
@@ -3769,9 +3829,18 @@ describe_change() {
     STRATUM_BIND)
         if [ "$new" == "0.0.0.0" ]; then
             flag=DEST
-            msg="Stratum (:3333) will be published on ALL interfaces ($old → $new) — keep it firewalled to your LAN."
+            msg="The stratum port will be published on ALL interfaces ($old → $new) — keep it firewalled to your LAN."
         else
-            msg="Stratum (:3333) bind address: $old → $new (workers must reach this address)."
+            msg="Stratum bind address: $old → $new (workers must reach this address)."
+        fi
+        ;;
+    STRATUM_PORT)
+        if [ -z "$old" ]; then
+            # First render of the key (upgrade from a pre-#172 .env) — the port isn't changing.
+            msg="Stratum port recorded (:$new) — no rig change needed."
+        else
+            flag=DEST
+            msg="Stratum port: $old → $new (#172) — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
         fi
         ;;
     PROXY_STRATUM_PASSWORD)
@@ -4317,6 +4386,14 @@ control_approval_gate() { # <staged-file>
         printf 'could not re-validate the staged change host-side — refusing to commit'
         return 1
     fi
+    # dashboard.workers (#172) never renders to .env — the dashboard reads it straight off its
+    # config.json mount — so the env-diff allowlist below can't see it. It carries per-rig hosts
+    # and API tokens (exactly the "free-form string that reaches a URL or credential" class the
+    # allowlist exists to keep host-CLI-only), so refuse any change to it explicitly.
+    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.workers // []) == ($live[0].dashboard.workers // [])' "$staged" >/dev/null 2>&1; then
+        printf 'this change alters dashboard.workers (per-worker hosts/tokens, #172), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        return 1
+    fi
     # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
     # flag says. Refusal keys off a violation COUNT, not the matched text, so a blank or
     # malformed porcelain row (empty KEY column) still refuses instead of slipping past an
@@ -4394,12 +4471,25 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     # owner-only so a co-tenant on the host can't read secrets from it (#33 hardening). Created
     # under umask 077 so it is never even briefly world-readable (create-then-chmod race); the
     # chmod stays as belt-and-suspenders.
+    # Per-worker token sentinels (#172) get the same swap, but out of the fixed-path walk: they
+    # live in the .dashboard.workers[] array, so restore each from the live token matched by worker
+    # name (first-declared wins on duplicate names, matching the container's probe). A sentinel for
+    # a rig with no live token collapses to "" too.
     (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" '
-        reduce $paths[] as $p (.config;
+        (reduce (($live[0].dashboard.workers // []) | reverse | .[]) as $w ({};
+            if ($w | type) == "object" and ($w.name | type) == "string"
+            then .[$w.name] = ($w.token // "") else . end)) as $livetok
+        | reduce $paths[] as $p (.config;
             (try getpath($p) catch null) as $v
             | if ($v | type) == "object" and $v.__secret__ == true
               then setpath($p; (($live[0] | try getpath($p) catch null) // ""))
-              else . end)' "$file" >"$staged")
+              else . end)
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token | type) == "object" and .token.__secret__ == true
+              then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
+              else . end)
+          else . end' "$file" >"$staged")
     chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '

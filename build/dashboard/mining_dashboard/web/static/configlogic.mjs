@@ -42,6 +42,10 @@ function walk(node, path, out) {
       walk(value, p, out);
       continue;
     }
+    // Array values (dashboard.workers, #172) have no form rendering: skip them so they can't be
+    // mangled into a string by a text field. applyEdits clones the whole config and only folds
+    // TOUCHED fields back, so a skipped array survives the round trip verbatim.
+    if (Array.isArray(value)) continue;
     const field = { path: p, key: dotted, warning: FIELD_WARNINGS[dotted] };
     if (isSecretSentinel(value)) Object.assign(field, { type: "secret", value: "" });
     else if (typeof value === "boolean") Object.assign(field, { type: "boolean", value });
