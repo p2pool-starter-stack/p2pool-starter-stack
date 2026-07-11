@@ -193,6 +193,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
+- **The dashboard container never sees a plaintext secret (#440).** The one accepted residual
+  from the #33 control-channel reviews is closed: the dashboard no longer bind-mounts the raw
+  `config.json` to prefill its Configuration form. The host now renders a pre-masked copy —
+  every set secret (node RPC credentials, stratum and dashboard passwords, the Telegram bot
+  token, the Healthchecks ping URL) already replaced by a sentinel — into a read-only leg of the
+  control spool (`data/control/masked/`), and the form serves from that. The
+  "leave blank to keep the current value" merge moved host-side too: an untouched secret rides
+  back as the sentinel and the runner swaps in the live value at staging, so the request spool
+  is also secret-free. A fully compromised dashboard container can now read masked config,
+  results, and the audit log, and ask to change an allowlisted key — nothing else. The copy is
+  re-rendered on every `setup`/`apply`/`upgrade` and runner pass, so it never serves stale state
+  for long. See [SECURITY.md](SECURITY.md#secret-trust-boundary-for-dashboard-config-editing).
 - **Signed releases, verified before upgrade (#376).** The release pipeline now cosign-signs the
   five promoted image digests and the install bundle with a key that lives only on the release
   box; the public key is committed as `cosign.pub` and ships in every bundle. On a release

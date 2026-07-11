@@ -121,8 +121,10 @@ async def handle_control_preview(request):
         raise web.HTTPBadRequest(text="'config' must be a JSON object.")
     actor = request.headers.get("X-Auth-User", "")
     try:
-        merged = control_service.merge_secrets(proposed)
-        rid = control_service.submit("preview", merged, actor)
+        # The proposal ships as-is: an untouched secret rides as the {"__secret__": true}
+        # sentinel, and the HOST swaps it for the live value when it stages the intent (#440) —
+        # this container never holds a secret the operator didn't just type.
+        rid = control_service.submit("preview", proposed, actor)
         res = await control_service.wait_result(rid)
     except Exception:
         logger.exception("Error submitting control preview")

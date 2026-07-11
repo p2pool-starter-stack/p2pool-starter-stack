@@ -161,8 +161,10 @@ CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
 # written and rotated host-side, and every field read from them is sanitized before serving.
 CONTROL_AUDIT_LOG = os.environ.get("CONTROL_AUDIT_LOG", "/control/audit/control.log")
 ACCESS_LOG_PATH = os.environ.get("ACCESS_LOG_PATH", "/access-log/access.log")
-# The live config.json, bind-mounted read-only for form prefill; secrets are masked before serving.
-HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+# The PRE-MASKED config copy, bind-mounted read-only for form prefill (#440): the host renders it
+# with every set secret leaf already replaced by the sentinel, so the container never holds a raw
+# secret. The raw config.json is not mounted into the container at all.
+HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/control/masked/config.json")
 # config.reference.json (every key with its default), bind-mounted read-only. read_config merges it
 # UNDER the operator's sparse config.json so the editor form covers the full schema, not just the
 # keys the operator happens to have set (#33 "edit every setting"). A missing reference degrades to

@@ -140,7 +140,11 @@ The runner dispatches exactly three actions: `apply --dry-run --porcelain` (prev
 target from the GitHub release API itself and refuses any other version.
 
 The spool lives under `./data/control/`: `requests/` (the only directory the dashboard container
-can write), `staged/` (host-only), and `results/` + `audit/` (container read-only).
+can write), `staged/` (host-only), and `results/` + `audit/` + `masked/` (container read-only).
+`masked/config.json` is a host-rendered copy of the config with every set secret replaced by a
+sentinel ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)); the Configuration
+form prefills from it, and the raw `config.json` is never mounted into the container. It is
+re-rendered on every `setup`/`apply`/`upgrade` and on every runner pass.
 `audit/control.log` records one JSON line per handled request — timestamp, the logged-in dashboard
 user, action, outcome, and the names of the changed settings (never their values) — and the
 container cannot rewrite it. The writer trims the log to its newest 2000 entries once it passes

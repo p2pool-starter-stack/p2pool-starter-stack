@@ -1,5 +1,7 @@
-"""Unit tests for the dashboard side of the control channel (#33): secret masking round-trip,
-atomic request submission, result reads, and the UUID gate on ids that become host filenames."""
+"""Unit tests for the dashboard side of the control channel (#33): defense-in-depth secret
+masking, atomic request submission, result reads, and the UUID gate on ids that become host
+filenames. The host serves a PRE-MASKED config copy (#440); read_config's own masking pass is
+the second layer, so these tests feed it raw values on purpose."""
 
 import json
 import os
@@ -70,27 +72,17 @@ class TestSecretMasking:
         assert cfg["monero"]["prune"] is True
         assert cfg["p2pool"]["pool"] == "mini"
 
-    def test_merge_secrets_round_trip(self, spool):
-        # Sentinel in → live value out; an actually-edited secret passes through.
-        proposed = control_service.read_config()
-        proposed["p2pool"]["pool"] = "main"
-        proposed["telegram"]["bot_token"] = "456:new"  # explicit new value
-        merged = control_service.merge_secrets(proposed)
-        assert merged["dashboard"]["auth"]["password"] == "correct horse"
-        assert merged["monero"]["node_password"] == "hunter2"
-        assert merged["telegram"]["bot_token"] == "456:new"
-        assert merged["p2pool"]["pool"] == "main"
-
-    def test_merge_sentinel_for_unset_secret_collapses_to_empty(self, spool):
-        # A forged sentinel where no secret exists must not leak a dict into config.json.
-        proposed = {"workers": {"api_token": {"__secret__": True}}}
-        assert control_service.merge_secrets(proposed)["workers"]["api_token"] == ""
-
-    def test_merge_missing_sections_tolerated(self, spool):
-        # A proposed config that omits whole sections merges without KeyErrors.
-        assert control_service.merge_secrets({"p2pool": {"pool": "nano"}}) == {
-            "p2pool": {"pool": "nano"}
-        }
+    def test_pre_masked_host_copy_served_as_is(self, spool):
+        # The production shape (#440): the host copy already carries sentinels; read_config
+        # serves them unchanged (its own masking pass is an idempotent second layer).
+        pre_masked = json.loads(json.dumps(CONFIG))
+        pre_masked["monero"]["node_password"] = {"__secret__": True}
+        pre_masked["dashboard"]["auth"]["password"] = {"__secret__": True}
+        (spool / "config.json").write_text(json.dumps(pre_masked))
+        cfg = control_service.read_config()
+        assert cfg["monero"]["node_password"] == {"__secret__": True}
+        assert cfg["dashboard"]["auth"]["password"] == {"__secret__": True}
+        assert cfg["p2pool"]["pool"] == "mini"
 
 
 class TestSubmit:

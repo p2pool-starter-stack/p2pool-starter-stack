@@ -260,10 +260,13 @@ class TestControlRoutesEnabled:
         body = await resp.json()
         assert body["id"] == rid
         assert body["status"] == "previewed"
-        # The spooled request carries the merged config: the sentinel became the live secret.
+        # The spooled request keeps the sentinel (#440): the container never merges live secrets
+        # back in — the HOST swaps sentinels for live values when it stages the intent, so the
+        # container-readable requests/ spool stays secret-free.
         req = json.loads((control_spool / "requests" / f"{rid}.json").read_text())
         assert req["action"] == "preview"
-        assert req["config"]["dashboard"]["auth"]["password"] == "correct horse"
+        assert req["config"]["dashboard"]["auth"]["password"] == {"__secret__": True}
+        assert "correct horse" not in json.dumps(req)
 
     async def test_preview_actor_taken_from_caddy_header(self, control_client, control_spool):
         resp = await control_client.post(
@@ -368,9 +371,9 @@ class TestControlRoutesEnabled:
         assert (await control_client.get("/api/control/result?id=..%2Fx")).status == 400
 
     async def test_preview_spool_failure_is_sanitized(self, control_client, monkeypatch):
-        # A broken spool (here: the host config can't be read for the secret merge) must come
-        # back as a sanitized 500, never a traceback.
-        monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
+        # A broken spool (unwritable requests dir) must come back as a sanitized 500, never a
+        # traceback.
+        monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
         resp = await control_client.post(
             "/api/control/preview", json={"config": {"p2pool": {}}}, headers=CONTROL_HEADERS
         )
