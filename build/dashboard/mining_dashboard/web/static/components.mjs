@@ -711,6 +711,23 @@ function ComponentHealth({ topology, egress }) {
     </div>`;
 }
 
+// One-time discoverability hint (#425). The earnings + XvB tier calculators are Advanced-view
+// cards, so an operator on the default Simple view never sees them and concludes they don't
+// exist. This banner points at Advanced view until the operator acts on it: the inline button
+// switches views (dashboard.js retires the hint on any visit to Advanced), and the × dismisses
+// it outright. `ui.hintDismissed` is persisted in localStorage by dashboard.js like the other
+// UI state, so the hint shows once per browser, not once per reload.
+function AdvancedHint({ ui, onView, onDismissHint }) {
+  if (ui.view !== "simple" || ui.hintDismissed) return null;
+  return html`
+    <div class="advanced-hint" id="advanced-hint">
+        <span>Looking for earnings estimates or the XvB tier calculator? They live in${" "}
+            <button type="button" class="btn-link" onClick=${() => onView("advanced")}>Advanced view</button>.</span>
+        <button type="button" class="advanced-hint-dismiss" aria-label="Dismiss hint"
+                title="Dismiss" onClick=${onDismissHint}>×</button>
+    </div>`;
+}
+
 function DashboardView({
   state,
   ui,
@@ -721,6 +738,7 @@ function DashboardView({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onDismissHint,
 }) {
   const advanced = ui.view === "advanced";
   const configView = ui.view === "config";
@@ -736,6 +754,7 @@ function DashboardView({
                 <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
+        <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
         ${configView ? html`<${ConfigView} /><${SecurityPanel} />` : null}
         ${
           configView
@@ -779,6 +798,7 @@ export function App({
   onResetZoom,
   onToggleSeries,
   onAvgWindow,
+  onDismissHint,
 }) {
   // The theme toggle is fixed-position and always available, even before the first data load.
   const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
@@ -798,7 +818,8 @@ export function App({
                 <${HeroBand} state=${state} />
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
-                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
+                                  onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow}
+                                  onDismissHint=${onDismissHint} />
               <//>`
         }
         ${switcher}

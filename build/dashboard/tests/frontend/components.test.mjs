@@ -27,6 +27,7 @@ const noop = () => {};
 const HANDLERS = {
     onRange: noop, onSort: noop, onView: noop, onTheme: noop,
     onZoom: noop, onResetZoom: noop, onToggleSeries: noop, onAvgWindow: noop,
+    onDismissHint: noop,
 };
 
 function renderApp({ state = BASE, connected = true, ui = UI } = {}) {
@@ -87,6 +88,22 @@ test('operational App renders the remaining advanced cards', () => {
     assert.match(html, /XMR Network/);
     assert.match(html, /Tari Merge-Mining/);
     assert.match(html, /P2Pool Earnings \(estimated\)/);
+});
+
+test('Simple view shows the calculators hint until dismissed, never elsewhere (#425)', () => {
+    // Fresh browser on the default Simple view: the pointer to the Advanced-only calculators shows.
+    const simple = renderApp({ ui: { ...UI, view: 'simple', hintDismissed: false } });
+    assert.match(simple, /advanced-hint/);
+    assert.match(simple, /earnings estimates or the XvB tier calculator/);
+    assert.match(simple, /Advanced view/);
+    // Dismissed (dashboard.js persists it): gone from Simple view.
+    const dismissed = renderApp({ ui: { ...UI, view: 'simple', hintDismissed: true } });
+    assert.doesNotMatch(dismissed, /advanced-hint/);
+    // Never shown outside Simple view — Advanced already has the calculators on screen.
+    const advanced = renderApp({ ui: { ...UI, view: 'advanced', hintDismissed: false } });
+    assert.doesNotMatch(advanced, /advanced-hint/);
+    const config = renderApp({ ui: { ...UI, view: 'config', hintDismissed: false } });
+    assert.doesNotMatch(config, /advanced-hint/);
 });
 
 test('EarningsCard shows the fallback when stats are down, the calculator when available', () => {
