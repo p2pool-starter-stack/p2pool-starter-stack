@@ -1197,6 +1197,8 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
+        # The operator-facing stratum port (#172) — feeds the "point your rigs at host:PORT" hint.
+        "stratum_port": config.STRATUM_PORT,
         "version": resolve_version(),
         "update": data.get("update"),  # {available, latest, url} | None — new-release badge (#224)
         # Whether the control channel is on (#33) — gates the header Upgrade button (#59). The

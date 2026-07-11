@@ -105,6 +105,26 @@ subnet) is the belt-and-suspenders setup for a host that also has a public IP.
 If a worker doesn't show up, see
 [Operations › Troubleshooting](operations.md#troubleshooting).
 
+#### Non-standard stratum port
+
+The stratum endpoint is published on `3333` by default. That's the standard path and needs no
+configuration — every example on this page assumes it. Only change it if another service on the
+host already holds `3333`. Set the port with [`p2pool.stratum_port`](configuration.md#configuration-reference):
+
+```jsonc
+// config.json
+"p2pool": { "stratum_port": 4444 }
+```
+
+After `pithead apply`, point every rig at the new port (`YOUR_STACK_IP:4444`) — a rig still on the
+old port can't connect. `apply` flags a port change as destructive for exactly this reason, and the
+firewall rules above must allow the new port instead of `3333`. On [RigForge](https://github.com/p2pool-starter-stack/rigforge),
+set the matching `pool.port` and run `rigforge apply`.
+
+Only the operator-facing published port moves. P2Pool's own container-internal stratum stays on
+`3333` (only `xmrig-proxy` dials it, on the Docker bridge — nothing outside the stack sees it), so
+the internal wiring is untouched.
+
 ### Authentication
 
 By default `3333` accepts any rig that can reach it; the stratum `pass` is ignored. To require a
@@ -170,6 +190,43 @@ URL, status, and likely fix, so a misconfigured API reads differently from an of
 > miners still carry a token, set `workers.api_auth: name`, otherwise the new no-auth default probe
 > gets `401` and every worker shows `api ⚠`. (Reprovisioning the miners to drop the token is the
 > other option; new RigForge workers ship open by default.)
+
+#### Per-worker overrides
+
+`workers.api_auth`/`api_port`/`api_token` set the probe for the *whole* fleet. When one rig differs
+— its API is on a different port, on another interface than the address it mines from (NAT,
+multi-homed), or carries its own token — override just that rig with
+[`dashboard.workers`](configuration.md#configuration-reference), a list of
+`{name, host?, port?, token?}` objects. Every field but `name` is optional:
+
+```jsonc
+// config.json — the rest of the fleet keeps the workers.* defaults
+"dashboard": {
+    "workers": [
+        { "name": "rig-01", "port": 18080 },
+        { "name": "rig-02", "host": "10.0.0.9", "token": "rig-02-secret" }
+    ]
+}
+```
+
+The merge rule is: **per-worker field > fleet default > built-in default.** A rig with no entry (or
+an entry that only sets `port`) inherits everything else from `workers.*`. A per-worker `token`
+turns on token-auth for that one rig regardless of the fleet-wide `api_auth` mode.
+
+Entries are matched by `name` — the rig's stratum worker name (the part before any `+` suffix).
+On a name miss the dashboard falls back to matching by the rig's connecting IP against an
+operator-set `host`, which covers a rig that renamed itself but still connects from its declared
+address. Duplicate names are legal but only the first-declared entry wins, so **renaming a rig means
+updating its entry** here.
+
+`host` exists for the case where a rig's API isn't reachable at the address it mines from. It must
+be set by you in `config.json` and is never taken from anything a miner advertises: the dashboard
+will not send a configured token to a host a miner could control (the same [SSRF guard](#authentication)
+as the worker-name rule). Pinning `host` alongside `token` is the recommended pair — it stops an
+imposter that claims a listed rig's name from pulling that rig's token to its own address.
+
+The standard fleet — everyone on `8080`, token = rig name or open — needs no `dashboard.workers`
+at all.
 
 ---
 
