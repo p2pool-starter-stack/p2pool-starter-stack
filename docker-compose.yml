@@ -264,6 +264,75 @@ services:
       retries: 3
       start_period: 90s   # survive the post-OOM DB integrity check without flapping unhealthy
 
+  # --- Tari payout-confirmation wallet (minotari_console_wallet, view-only) ---
+  # Only starts if the "tari_payout_confirm" profile is active — pithead adds it to COMPOSE_PROFILES
+  # only when tari.view_key is set AND the Tari node is local (#462). A view-only Tari wallet (private
+  # view key + public spend key) can SCAN but never spend; it reveals all incoming amounts/timing, so
+  # its secrets are handled like passwords: delivered via a tmpfs `secrets:` mount, never `environment:`.
+  tari-wallet:
+    profiles: ["tari_payout_confirm"]
+    # Pinned by digest (#135), same registry/tag as the Tari node so the version-match holds.
+    image: quay.io/tarilabs/minotari_console_wallet:v5.3.1-mainnet@sha256:886ce60b1cf2a28bd01fb9ce21533bb3be834215e5bbe918533869e3d2a43622
+    container_name: tari-wallet
+    # Run non-root (#255). Pulled image, so set uid via compose to match the uid the wallet named
+    # volume is created under; the wrapper only writes the base-path (the volume) and /tmp.
+    user: "1000:1000"
+    # A view-only scanner is light; a tight cap OOM-restarts it on a regression without touching the
+    # revenue services (#132, see the Tari node / wallet-rpc).
+    mem_limit: 512m
+    memswap_limit: 512m
+    restart: unless-stopped
+    logging: *default-logging
+    # Wrapper entrypoint (mounted from the build dir, since this is a pulled image — same pattern as
+    # the Tari node): reads the three secrets from the tmpfs `secrets:` mount and exports them into
+    # the wallet child only, NEVER the command line or the container's declared env (#462).
+    entrypoint: ["/wallet-config/entrypoint.sh"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Immutable root filesystem (#377). The wallet DB lives in the named volume; the wrapper writes
+    # only /tmp (tmpfs). Nothing else is written.
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777,uid=1000,gid=1000
+    volumes:
+      - tari_wallet_data:/home/ubuntu/wallet
+      - ./build/tari-wallet:/wallet-config:ro
+    environment:
+      # NON-SECRET config only — the three MINOTARI_WALLET_* secrets are delivered via `secrets:`
+      # below, NOT here (an `environment:` value shows in `docker inspect`, the acceptance criterion).
+      - TARI_BASE_NODE_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
+      - TARI_WALLET_BIRTHDAY=${TARI_WALLET_BIRTHDAY:-auto}
+      - TARI_WALLET_GRPC_BIND=/ip4/0.0.0.0/tcp/18143
+      - WALLET_DIR=/home/ubuntu/wallet
+    secrets:
+      # Docker mounts this on a tmpfs at /run/secrets/tari_wallet_secret, owner-readable only; the
+      # wrapper sources it. The secret VALUES never appear in `docker inspect` (only the mount name).
+      - tari_wallet_secret
+    ports:
+      # Loopback-only host publish (mirror wallet-rpc): the host-networked dashboard reaches the
+      # wallet gRPC at 127.0.0.1:18143; no LAN exposure. Unlike monero-wallet-rpc, the minotari
+      # console-wallet gRPC has no built-in login — so the access controls are this loopback-only
+      # publish plus the mining_net-internal bridge (the same trust boundary as the unauthenticated
+      # Tari node gRPC at .27:18142, the operator's own containers).
+      - "127.0.0.1:18143:18143"
+    networks:
+      mining_net:
+        ipv4_address: ${NETWORK_PREFIX:-172.28.0}.31
+    depends_on:
+      tari:
+        condition: service_healthy
+    healthcheck:
+      # Process-liveness (like the Tari node) rather than a gRPC probe: the wallet's own gRPC is a
+      # long stream, and a liveness ps is enough to catch a crashed daemon. '[m]' stops grep matching
+      # its own argv. The long start_period tolerates the first-run blockchain scan.
+      test: ["CMD-SHELL", "ps | grep '[m]inotari_console_wallet' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
   # --- P2Pool Node ---
   p2pool:
     image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-p2pool:${STACK_VERSION:-dev}
@@ -528,6 +597,12 @@ services:
       - MONERO_WALLET_RPC_URL=${MONERO_WALLET_RPC_URL:-http://127.0.0.1:18082/json_rpc}
       - WALLET_RPC_USERNAME=${WALLET_RPC_USERNAME:-wallet}
       - WALLET_RPC_PASSWORD=${WALLET_RPC_PASSWORD:-}
+      # Tari on-chain payout confirmation (#462): poll the view-only tari-wallet gRPC for confirmed
+      # incoming payouts. Enabled only when a tari view key is set on a local Tari node; off = the
+      # dashboard never polls and the tari-wallet container isn't started. The gRPC is unauthenticated
+      # (like the Tari base node); reached over the host-loopback publish (network_mode: host).
+      - TARI_PAYOUT_CONFIRM_ENABLED=${TARI_PAYOUT_CONFIRM_ENABLED:-false}
+      - TARI_WALLET_GRPC_ADDRESS=${TARI_WALLET_GRPC_ADDRESS:-127.0.0.1:18143}
       - XVB_ENABLED=${XVB_ENABLED}
       - XVB_POOL_URL=${XVB_POOL_URL}
       - XVB_DONOR_ID=${XVB_DONOR_ID}
@@ -760,6 +835,19 @@ volumes:
   # View-only payout wallet DB (#381). A named volume so it survives recreates; it inherits uid-1000
   # ownership from the image's /home/ubuntu/wallets dir, so the non-root container can write it.
   wallet_data:
+  # View-only Tari payout wallet DB (#462). Named volume, survives recreates; the wrapper mkdir's the
+  # base-path under uid 1000 (the container user) on first run.
+  tari_wallet_data:
+
+# --- Secrets ---
+# View-only Tari wallet material (#462). pithead renders these three values into an owner-only file
+# (data/tari-wallet-secret.env, gitignored like .env); Docker mounts it on a TMPFS at
+# /run/secrets/tari_wallet_secret, owner-readable only, for the tari-wallet service. Delivering the
+# view key this way (not via `environment:`) keeps it out of `docker inspect` — the acceptance
+# criterion that separates #462 from #381 (Tari has no JSON-import path to hide the key behind).
+secrets:
+  tari_wallet_secret:
+    file: ${TARI_WALLET_SECRET_FILE:-./data/tari-wallet-secret.env}
 
 # --- Network Configuration ---
 networks:

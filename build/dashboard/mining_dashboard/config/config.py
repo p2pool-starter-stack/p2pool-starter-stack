@@ -507,6 +507,18 @@ CLEARNET_STATE_DIR = os.environ.get("CLEARNET_STATE_DIR", "/clearnet-state")
 # Connection details for the Tari Base Node and Block Explorer
 TARI_GRPC_ADDRESS = os.environ.get("TARI_GRPC_ADDRESS", "127.0.0.1:18142")
 
+# Tari on-chain payout confirmation (#462), the Tari sibling of #381. When enabled, the dashboard
+# streams a view-only minotari_console_wallet's completed transactions (it scans the local Tari
+# node) for confirmed incoming payouts, persists them to the shared payouts table with chain="tari",
+# and fires the shared payout_confirmed alert. pithead renders TARI_PAYOUT_CONFIRM_ENABLED=true only
+# when a tari view key is set on a LOCAL Tari node, so an unset view key (the default) means the
+# tari-wallet container isn't started and this poll never runs. The wallet gRPC is unauthenticated
+# (like the Tari base node); it is reached over the host loopback publish (127.0.0.1:18143).
+TARI_PAYOUT_CONFIRM_ENABLED = (
+    os.environ.get("TARI_PAYOUT_CONFIRM_ENABLED", "false").strip().lower() == "true"
+)
+TARI_WALLET_GRPC_ADDRESS = os.environ.get("TARI_WALLET_GRPC_ADDRESS", "127.0.0.1:18143")
+
 # --- XvB Donation Controller (Issues #9, #70) ---
 # Closed-loop controller. The raffle pays nothing above a tier threshold, so the
 # objective is: hold XvB's *reported* 1h average just above the tier on minimum

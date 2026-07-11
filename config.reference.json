@@ -25,6 +25,9 @@
 
     "tari": {
         "wallet_address": "your_tari_wallet_address",
+        "view_key": "",
+        "spend_public_key": "",
+        "payout_scan_birthday": "auto",
         "clearnet_initial_sync": false,
         "data_dir": "auto",
         "mem_limit": "auto"

@@ -787,6 +787,15 @@ class TestSinkFanout:
         assert await svc.payout_confirmed_alert("monero", 1, "tx") is None
         assert hook.sent == []
 
+    async def test_payout_confirmed_alert_tari_uses_microtari_divisor(self):
+        # #462: the shared alert must format Tari amounts as microTari (÷1e6), not piconero (÷1e12).
+        # 250_000 µT = 0.25 XTM; the label reads TARI.
+        hook = _FakeNotifier()
+        svc = _svc(notifier=hook, sinks=[hook])
+        text = await svc.payout_confirmed_alert("tari", 250_000, "abcdef1234567890")
+        assert text and "0.250000" in text and "TARI" in text and "abcdef12" in text
+        assert "abcdef1234567890" not in text  # only the 8-char prefix, never the full txid
+
     async def test_default_sinks_are_just_the_notifier(self):
         # No webhook/ntfy config in the test env → the sink list is exactly [notifier], so the
         # default stack's behaviour is unchanged.

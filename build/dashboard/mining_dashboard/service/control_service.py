@@ -32,6 +32,8 @@ SECRET_PATHS = [
     ("monero", "node_password"),
     # The private view key (#381): reveals all incoming payout amounts/timing to anyone who reads it.
     ("monero", "view_key"),
+    # The Tari private view key (#462): same exposure for the Tari side (spend_public_key is public).
+    ("tari", "view_key"),
     ("p2pool", "stratum_password"),
     # A capability secret: pithead's describe_change already refuses to echo it, but read_config
     # was serving it in cleartext to the browser. Mask it too (#33 hardening).
