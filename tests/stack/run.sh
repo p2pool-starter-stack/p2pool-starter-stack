@@ -403,6 +403,28 @@ assert_contains "telegram enable is INFO" "$(run_sourced "$SANDBOX" describe_cha
 assert_contains "telegram event is INFO" "$(run_sourced "$SANDBOX" describe_change TELEGRAM_EVENT_NODE_DOWN true false)" "INFO"
 tg_tok_msg="$(run_sourced "$SANDBOX" describe_change TELEGRAM_BOT_TOKEN oldsecret newsecret)"
 assert_contains "telegram token change noted" "$tg_tok_msg" "Telegram bot token updated"
+# Webhook/ntfy sink changes (#380): URLs and the ntfy token are secrets — the preview names the
+# change without printing any value.
+hook_msg="$(run_sourced "$SANDBOX" describe_change NOTIFY_WEBHOOK_URLS "" "https://hook.example/x?key=HOOKSEC")"
+assert_contains "webhook enable noted" "$hook_msg" "Webhook alert sink(s) ENABLED"
+case "$hook_msg" in
+*HOOKSEC*) bad "webhook url not leaked in preview" "leaked: $hook_msg" ;;
+*) ok "webhook url not leaked in preview" ;;
+esac
+ntfy_msg="$(run_sourced "$SANDBOX" describe_change NTFY_URL "https://ntfy.sh/OLDTOPIC" "https://ntfy.sh/NEWTOPIC")"
+assert_contains "ntfy url change noted" "$ntfy_msg" "ntfy topic URL updated"
+case "$ntfy_msg" in
+*OLDTOPIC* | *NEWTOPIC*) bad "ntfy topic url not leaked in preview" "leaked: $ntfy_msg" ;;
+*) ok "ntfy topic url not leaked in preview" ;;
+esac
+ntfy_tok_msg="$(run_sourced "$SANDBOX" describe_change NTFY_TOKEN oldntfysec newntfysec)"
+assert_contains "ntfy token change noted" "$ntfy_tok_msg" "ntfy access token updated"
+case "$ntfy_tok_msg" in
+*oldntfysec* | *newntfysec*) bad "ntfy token value not leaked in preview" "leaked: $ntfy_tok_msg" ;;
+*) ok "ntfy token value not leaked in preview" ;;
+esac
+assert_contains "notify tor opt-out warns about IP exposure" \
+    "$(run_sourced "$SANDBOX" describe_change NOTIFY_TOR true false)" "see this host's IP"
 case "$tg_tok_msg" in
 *oldsecret* | *newsecret*) bad "telegram token value not leaked in preview" "leaked: $tg_tok_msg" ;;
 *) ok "telegram token value not leaked in preview" ;;
@@ -2467,6 +2489,25 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","daily_summary_time":"21:30"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "daily summary time propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "21:30"
+
+# Webhook + ntfy alert sinks (#380): no notifications block => everything off, Tor default on.
+assert_eq "webhook urls default empty" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" ""
+assert_eq "ntfy url default empty" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" ""
+assert_eq "ntfy token default empty" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_TOKEN)" ""
+assert_eq "notify tor defaults on" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_TOR)" "true"
+# Configured block propagates: the webhook list joins to one space-separated value, ntfy url/token
+# land verbatim, tor:false carries through — and apply never prints the URL/token secrets.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "notifications":{"webhooks":["https://hook.example/a","https://hook2.example/b?key=HOOKSECRET"],"ntfy":{"url":"https://ntfy.sh/PITTOPIC","token":"NTFYSECRET"},"tor":false} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "webhook urls join space-separated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" "https://hook.example/a https://hook2.example/b?key=HOOKSECRET"
+assert_eq "ntfy url propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" "https://ntfy.sh/PITTOPIC"
+assert_eq "ntfy token propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_TOKEN)" "NTFYSECRET"
+assert_eq "notify tor opt-out propagated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_TOR)" "false"
+case "$out" in
+*HOOKSECRET* | *NTFYSECRET* | *PITTOPIC*) bad "webhook/ntfy secrets not printed by apply" "leaked in: $out" ;;
+*) ok "webhook/ntfy secrets not printed by apply" ;;
+esac
 
 # Hashrate-loss detector knobs (#99): default 50% over 10 min; explicit dashboard overrides propagate.
 assert_eq "hashrate drop threshold default 50" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "50"
