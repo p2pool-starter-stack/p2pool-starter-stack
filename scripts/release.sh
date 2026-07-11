@@ -228,17 +228,21 @@ preflight() {
     if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_TESTS" -eq 0 ] && [ "$RESUME_PROMOTE" -eq 0 ]; then
         check_release_toolchain
     fi
-    # Release signing (#376): every promoted digest and the install bundle are cosign-signed with the
-    # key that lives ONLY on this box (COSIGN_KEY/COSIGN_PASSWORD, same handling as GHCR_TOKEN — never
-    # echoed, never in the repo); the committed cosign.pub is what installs verify against. Checked
-    # here so a missing binary/key stops the release before any build, not after promote.
+    # Release signing (#376) is OPT-IN and pure defense-in-depth. The tag-substitution vector it
+    # exists for — the first-party images pull by mutable `:vX.Y.Z` tag, so a re-pointed tag / leaked
+    # registry token could serve a malicious root-running image — is ALREADY closed by digest-pinning
+    # those images in the bundle (make_bundle). cosign additionally signs the promoted digests + the
+    # bundle for operators who want to verify. So a normal cut needs NOTHING off-repo: signing turns
+    # on only when a key is configured on this box AND cosign.pub is committed; otherwise we warn and
+    # skip it rather than block the release.
+    COSIGN_ENABLED=0
     if [ "$DRY_RUN" -eq 0 ]; then
-        command -v cosign >/dev/null 2>&1 ||
-            die "cosign is required to sign the release (#376) — install the pinned build: docs/release-server.md § The release signing key."
-        [ -n "${COSIGN_KEY:-}" ] && [ -f "$COSIGN_KEY" ] ||
-            die "COSIGN_KEY must point at the cosign private key on this box (#376) — one-time setup: docs/release-server.md § The release signing key."
-        [ -f cosign.pub ] ||
-            die "cosign.pub is missing from the repo root (#376) — commit the public half of the release key so installs can verify what this pipeline signs."
+        if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ] && [ -f "${COSIGN_KEY:-/nonexistent}" ] && [ -f cosign.pub ]; then
+            COSIGN_ENABLED=1
+            ok "Release signing ON (cosign key + committed cosign.pub present)."
+        else
+            warn "Release signing OFF — shipping digest-pinned images + bundle without cosign signatures (#376 is opt-in). Installs are protected by the pinned digests; to also sign, see docs/release-server.md § The release signing key."
+        fi
     fi
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
@@ -465,6 +469,10 @@ promote() {
 # `cosign verify --key cosign.pub --private-infrastructure`. COSIGN_PASSWORD is read by cosign from
 # the environment — it never touches argv, run(), or the log.
 sign_images() {
+    if [ "${COSIGN_ENABLED:-0}" -ne 1 ]; then
+        log "Release signing off — skipping image signatures (the bundle is digest-pinned; #376 opt-in)."
+        return 0
+    fi
     stage "6b/7 Sign the promoted digests (cosign, #376)"
     local suffix digest
     for suffix in "${IMAGES[@]}"; do
@@ -492,8 +500,11 @@ publish() {
     write_manifest "$manifest"
     local bundle="$WORKDIR/pithead.tar.gz" # versionless name → stable /releases/latest/download/ URL
     make_bundle "$bundle"
-    local bundle_sig="$bundle.sig" # pithead.tar.gz.sig — the #59 upgrade runner fetches it by name
-    sign_bundle "$bundle" "$bundle_sig"
+    local bundle_sig="" # pithead.tar.gz.sig — only when signing is on (#376 opt-in)
+    if [ "${COSIGN_ENABLED:-0}" -eq 1 ]; then
+        bundle_sig="$bundle.sig" # the #59 upgrade runner fetches it by name
+        sign_bundle "$bundle" "$bundle_sig"
+    fi
 
     confirm "Create git tag $TAG, push it, and publish the GitHub Release?" ||
         {
@@ -513,7 +524,10 @@ publish() {
         # The images are already promoted, so the draft's install bundle works the moment it's published.
         local gh_args=(release create "$TAG" --title "Pithead $TAG" --notes-file "$notes")
         [ "$DRAFT" -eq 1 ] && gh_args+=(--draft)
-        run gh "${gh_args[@]}" "$bundle" "$bundle_sig" "$manifest"
+        gh_args+=("$bundle")
+        [ -n "$bundle_sig" ] && gh_args+=("$bundle_sig") # the .sig only exists when signing is on
+        gh_args+=("$manifest")
+        run gh "${gh_args[@]}"
         ok "GitHub Release $TAG $([ "$DRAFT" -eq 1 ] && echo 'created as a DRAFT (publish it from the Releases page when ready)' || echo published)."
     else
         warn "gh CLI not found — tag pushed, but create the release by hand. Notes: $notes  Assets: $bundle $bundle_sig $manifest"
@@ -587,6 +601,25 @@ make_bundle() {
         printf '   %s[dry-run]%s would tar -> %s\n' "$C_YELLOW" "$C_RESET" "$out"
         return 0
     fi
+    # Digest-pin the first-party images in the BUNDLED compose (#376). The released images pull by
+    # mutable `:vX.Y.Z` tag, so a re-pointed tag / leaked registry token could substitute a
+    # root-running image under the same tag. Pinning each to the immutable @sha256 digest promote just
+    # published makes the pull content-addressed — this is what actually closes that vector (cosign
+    # signing, when on, is the additional layer). The tag stays for readability; the digest wins.
+    local suffix digest
+    for suffix in "${IMAGES[@]}"; do
+        digest="$(get_digest "$suffix")"
+        [ -n "$digest" ] ||
+            die "make_bundle: no promoted digest for $suffix — refusing to ship an un-pinned bundle (#376)."
+        sed -i.bak "s|\(pithead-${suffix}:\${STACK_VERSION:-dev}\)|\1@${digest}|" "$d/docker-compose.yml"
+    done
+    rm -f "$d/docker-compose.yml.bak"
+    # Post-condition: NEVER ship a partially-pinned bundle. Every first-party image line must now
+    # carry an @sha256 digest.
+    local unpinned
+    unpinned="$(grep -E "pithead-(tor|monero|p2pool|xmrig-proxy|dashboard):" "$d/docker-compose.yml" | grep -v "@sha256:" || true)"
+    [ -z "$unpinned" ] ||
+        die "make_bundle: first-party image(s) left un-pinned in the bundle compose (#376):"$'\n'"$unpinned"
     # --no-xattrs: we cut releases on macOS, where tar is bsdtar and stores each file's extended
     # attributes (incl. macOS's com.apple.provenance) as LIBARCHIVE.xattr.* pax headers. GNU tar on
     # a user's Linux box doesn't know that keyword and warns once per file on extract (#252). Stripping
