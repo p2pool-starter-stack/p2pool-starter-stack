@@ -444,6 +444,9 @@ services:
       # Egress-posture panel (#170): the #270 firewall state + p2pool's clearnet toggle, so the
       # dashboard can show each component's real egress route rather than a guess.
       - TOR_EGRESS_FIREWALL=${TOR_EGRESS_FIREWALL:-true}
+      # Tor guard self-heal (#424): opt-in; when true the dashboard probes Tor clearnet egress
+      # and restarts tor (via docker-control) if it's stuck on a failing guard. Default off.
+      - TOR_AUTO_HEAL=${TOR_AUTO_HEAL:-false}
       - P2POOL_CLEARNET=${P2POOL_CLEARNET:-false}
       - P2POOL_URL=${P2POOL_URL}
       - MONERO_WALLET_ADDRESS=${MONERO_WALLET_ADDRESS}
@@ -608,7 +611,8 @@ services:
     # Isolated from the mining bridge (#345): same posture as docker-proxy. The tecnativa ruleset
     # can't scope start/stop to specific containers, so keeping this proxy off `mining_net` and only
     # on the host loopback is what stops a compromised mining container from start/stopping the whole
-    # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy.
+    # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy —
+    # plus tor for the opt-in guard self-heal restart (#424).
     ports:
       - "127.0.0.1:12376:2375"
     networks:

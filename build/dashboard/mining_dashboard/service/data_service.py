@@ -64,6 +64,7 @@ from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.service.node_health import NodeHealthMonitor
 from mining_dashboard.service.telegram_commands import format_daily_summary
+from mining_dashboard.service.tor_heal import TorEgressHealer
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
 
 logger = logging.getLogger("DataService")
@@ -449,6 +450,13 @@ class DataService:
         # an in-memory baseline would silently re-seed to a tampered wallet.
         self.alert_service = AlertService(
             kv_get=self.state_manager.get_kv, kv_set=self.state_manager.set_kv
+        )
+        # Tor guard self-heal (#424), opt-in via tor.auto_heal — a no-op (no probes, no
+        # restarts) unless enabled. Reuses the #31 docker-control proxy (start/stop only)
+        # to restart tor when clearnet egress is stuck on a failing guard; the recovery
+        # note rides the Telegram notifier, which works again exactly when the heal worked.
+        self.tor_healer = TorEgressHealer(
+            self.docker_control, notify=self.alert_service.tor_heal_alert
         )
         # Hashrate-degradation detector (Issue #99): flags a sustained total-hashrate drop and its
         # recovery. Runs every cycle (cheap, self-contained EMA baseline) so it can mark the chart
@@ -1028,6 +1036,11 @@ class DataService:
                     # never pings.
                     if self.healthchecks.enabled:
                         await asyncio.to_thread(self.healthchecks.ping)
+
+                    # 6c. Tor guard self-heal (#424): when opted in, probe Tor clearnet egress
+                    # (self-throttled) and restart tor if it's stuck on a failing guard —
+                    # bounded, cooled-down, loud. Off (the default) this is a plain no-op.
+                    await self.tor_healer.check()
 
                     # 7. External XvB stats sync over Tor (#163), throttled to every 10th iteration,
                     # and ONLY when XvB is enabled — disabling XvB must stop the egress entirely.
