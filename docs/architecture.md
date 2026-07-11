@@ -32,6 +32,7 @@ flowchart TB
 
     %% ── External services the dashboard calls out to (each labeled with its route) ──
     Telegram(["✈️ Telegram<br/>alerts + commands"])
+    Hooks(["🔔 Webhook / ntfy<br/>alert sinks"])
     HC(["🩺 Healthchecks.io<br/>dead-man's switch"])
     XvB(["🎲 XMRvsBeast<br/>pool + stats"])
     GitHub(["🐙 GitHub<br/>release check"])
@@ -64,6 +65,7 @@ flowchart TB
 
     %% ── Dashboard egress — every outbound call is routed through Tor (🟢), so none leak the host IP ──
     Dashboard ==>|"🚨 alerts + commands · 🟢 Tor"| Tor
+    Dashboard ==>|"🔔 webhook/ntfy alerts · 🟢 Tor"| Tor
     Dashboard ==>|"🩺 liveness ping · 🟢 Tor"| Tor
     Dashboard ==>|"📈 XvB stats · 🟢 Tor"| Tor
     Dashboard ==>|"🆕 update check · 🟢 Tor"| Tor
@@ -81,6 +83,7 @@ flowchart TB
 
     %% Tor exit reaches each external service
     Net -.-> Telegram
+    Net -.-> Hooks
     Net -.-> HC
     Net -.-> XvB
     Net -.-> GitHub
@@ -90,7 +93,7 @@ flowchart TB
     classDef priv fill:#6d28d9,stroke:#c4b5fd,color:#f5f3ff;
     classDef mine fill:#047857,stroke:#6ee7b7,color:#ecfdf5;
 
-    class You,Workers,Net,Telegram,HC,XvB,GitHub ext;
+    class You,Workers,Net,Telegram,Hooks,HC,XvB,GitHub ext;
     class Caddy,Dashboard ctrl;
     class Tor,DockerProxy priv;
     class Proxy,P2Pool,Monerod,Tari mine;
@@ -102,9 +105,11 @@ flowchart TB
 Reading the diagram: thick arrows carry inbound connections and every path that **leaves the box** —
 each egress edge is tagged with its route, and **🟢 Tor** means it exits through the Tor daemon (a Tor
 exit IP, never your host's). Dotted arrows are the dashboard's internal control and monitoring, which
-never leave the machine. The dashboard makes four outbound calls — the **Telegram** bot (alerts +
-commands), the **Healthchecks.io** liveness ping, the **XvB** stats fetch, and the **GitHub** release
-check — and all four are Tor-routed, so enabling any of them never reveals where your stack runs. Node
+never leave the machine. The dashboard makes five outbound calls — the **Telegram** bot (alerts +
+commands), the **webhook/ntfy** alert sinks, the **Healthchecks.io** liveness ping, the **XvB** stats
+fetch, and the **GitHub** release check — and all five are Tor-routed, so enabling any of them never
+reveals where your stack runs (the webhook/ntfy sinks have a `notifications.tor: false` opt-out for
+LAN endpoints Tor can't reach; see [Telegram › Webhook and ntfy sinks](telegram.md#webhook-and-ntfy-sinks)). Node
 colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy and isolation (Tor,
 Docker socket proxies), and 🟩 the mining core. In remote-node mode the bundled 🟠 Monero node isn't
 started, and P2Pool talks to your external node instead.

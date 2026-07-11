@@ -3071,6 +3071,18 @@ render_env() {
     # Local time (HH:MM) for the daily digest; default 08:00.
     tg_summary_time=$(jq -r '.telegram.daily_summary_time // "08:00"' "$CONFIG_FILE")
 
+    # Webhook + ntfy alert sinks (#380). Push-only siblings of the Telegram alerter: every alert
+    # also POSTs to each notifications.webhooks URL (as JSON) and to the notifications.ntfy.url
+    # topic (as the message body). All off by default — no URLs, nothing runs. The URLs and the
+    # ntfy token are secrets (webhook query strings often carry tokens): they live only in the
+    # owner-only .env and are never echoed or logged. notifications.tor (default true) keeps the
+    # POSTs on Tor so endpoints see a Tor exit, not this host's IP; false is the LAN carve-out.
+    local notify_webhooks ntfy_url ntfy_token notify_tor
+    notify_webhooks=$(jq -r '(.notifications.webhooks // []) | join(" ")' "$CONFIG_FILE")
+    ntfy_url=$(jq -r '.notifications.ntfy.url // empty' "$CONFIG_FILE")
+    ntfy_token=$(jq -r '.notifications.ntfy.token // empty' "$CONFIG_FILE")
+    notify_tor=$(jq -r 'if .notifications.tor != null then .notifications.tor | tostring else "true" end' "$CONFIG_FILE")
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -3186,6 +3198,10 @@ TELEGRAM_EVENT_CONTAINER_UNHEALTHY=$tg_ev_container_unhealthy
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
+NOTIFY_WEBHOOK_URLS=$notify_webhooks
+NTFY_URL=$ntfy_url
+NTFY_TOKEN=$ntfy_token
+NOTIFY_TOR=$notify_tor
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -3839,6 +3855,39 @@ describe_change() {
         ;;
     TELEGRAM_DAILY_SUMMARY_TIME)
         msg="Telegram daily summary time: $old → $new (local time; #121)."
+        ;;
+    NOTIFY_WEBHOOK_URLS)
+        # Webhook URLs often carry tokens in the query string — report the change WITHOUT
+        # printing the values (same rule as HEALTHCHECKS_PING_URL).
+        if [ -z "$new" ]; then
+            msg="Webhook alert sink(s) DISABLED (#380) — URL list cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="Webhook alert sink(s) ENABLED (#380) — every alert now also POSTs as JSON to the configured URL(s), over Tor by default; the dashboard container is recreated."
+        else
+            msg="Webhook alert URL(s) updated (#380) — the dashboard container is recreated."
+        fi
+        ;;
+    NTFY_URL)
+        # The topic URL is a capability secret (whoever knows it can read/post the topic) —
+        # never print it.
+        if [ -z "$new" ]; then
+            msg="ntfy alert sink DISABLED (#380) — topic URL cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="ntfy alert sink ENABLED (#380) — every alert now also POSTs to the configured ntfy topic, over Tor by default; the dashboard container is recreated."
+        else
+            msg="ntfy topic URL updated (#380) — the dashboard container is recreated."
+        fi
+        ;;
+    NTFY_TOKEN)
+        # Secret — never echo the token value into the change preview / logs.
+        msg="ntfy access token updated (#380) — the dashboard container is recreated."
+        ;;
+    NOTIFY_TOR)
+        if [ "$new" == "true" ]; then
+            msg="Webhook/ntfy alerts back on Tor (#380) — endpoints see a Tor exit, not this host's IP; the dashboard container is recreated."
+        else
+            msg="⚠ Webhook/ntfy alerts OFF Tor (#380) — POSTs go out directly, so clearnet endpoints see this host's IP (the LAN/self-hosted carve-out; Tor exits can't reach private addresses); the dashboard container is recreated."
+        fi
         ;;
     MONERO_CLEARNET_SYNC)
         flag=DEST

@@ -277,6 +277,52 @@ rest of the Healthchecks.io setup (creating the check, the ping URL, `config.jso
 
 ---
 
+## Webhook and ntfy sinks
+
+Telegram is not the only way out. Every alert above can also be pushed to a **generic JSON
+webhook** (Gotify, Home Assistant, n8n, anything that accepts a POST) and/or an **[ntfy](https://ntfy.sh)
+topic** — with or without Telegram. Both are **off by default** and configured in their own
+top-level `config.json` block:
+
+```json
+"notifications": {
+    "webhooks": ["https://example.com/pithead-hook"],
+    "ntfy": {
+        "url": "https://ntfy.sh/your-topic",
+        "token": ""
+    },
+    "tor": true
+}
+```
+
+- **`webhooks`** — a list of URLs. Each alert is POSTed to every URL as JSON:
+
+  ```json
+  {"event": "node_down", "text": "🔴 ⛓️ Monero node is DOWN — workers failing over to backup pools.", "ts": 1781136000}
+  ```
+
+  `event` is the same key used in `telegram.events` (the table above), `text` is the exact
+  message Telegram would get, `ts` is a Unix timestamp.
+- **`ntfy.url`** — one topic URL (`https://server/topic`; self-hosted servers work). Each alert's
+  text is POSTed as the message body. Set `ntfy.token` for an access-protected topic — it's sent
+  as an `Authorization: Bearer` header.
+- **`tor`** — keep the POSTs on Tor (the default; see below).
+
+Then `./pithead apply`. Sinks carry **every** event — the `telegram.events` toggles gate Telegram
+only. Like the Telegram alerter, sends **fail silently** (an unreachable endpoint never breaks the
+stack), and the URLs and token are **secrets**: webhook URLs often embed a key in the query
+string, so they live only in the owner-only `.env` and are never printed by `apply` or written to
+a log line.
+
+**Tor and the LAN carve-out.** With `tor: true` (the default) every POST rides the bundled Tor
+SOCKS proxy, so the endpoint sees a **Tor exit, not your host IP** — same rule as Telegram. That
+also means the endpoint must be **Tor-reachable**: Tor exits cannot reach private (RFC1918)
+addresses, so a webhook or ntfy server on your LAN needs `tor: false`. Flipping it routes the
+POSTs directly — a **clearnet** endpoint then sees your host IP on every alert, so keep `tor:
+true` unless every configured endpoint is on your own network.
+
+---
+
 ## Privacy and secrets
 
 - **The bot token is a secret.** Pithead stores it in `.env`, which is created **owner-only**
