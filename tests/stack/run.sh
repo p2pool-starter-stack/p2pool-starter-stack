@@ -3572,6 +3572,73 @@ run_pending >/dev/null
 assert_contains "expired staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "expired"
 [ ! -f "$STAGED/$UUID2.json" ] && ok "expired staged intent cleared" || bad "expired staged intent cleared" "still staged"
 
+echo "== black-box: pre-masked prefill copy + host-side secret merge (#440) =="
+# The dashboard container never mounts the raw config.json: apply/run-pending render a PRE-MASKED
+# copy into the spool's masked/ leg, and the "blank secret keeps the live value" sentinel swap
+# happens host-side at staging. Current state: pool mini committed above, node_password "p",
+# dashboard password "a control passphrase".
+MASKED="$C/data/control/masked/config.json"
+[ -f "$MASKED" ] && ok "masked prefill copy rendered by apply" || bad "masked prefill copy rendered by apply" "$MASKED missing"
+assert_eq "masked copy is world-readable for the container (644)" "$(file_mode "$MASKED")" "644"
+assert_eq "set secret masked to the sentinel" "$(jq -c '.monero.node_password' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "dashboard password masked to the sentinel" "$(jq -c '.dashboard.auth.password' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "non-secret keys survive the masking" "$(jq -r '.p2pool.pool' "$MASKED" 2>/dev/null)" "mini"
+case "$(cat "$MASKED")" in
+*"a control passphrase"* | *'"p"'*) bad "masked copy holds no secret values" "a secret leaked into $MASKED" ;;
+*) ok "masked copy holds no secret values" ;;
+esac
+
+# Staleness: a hand-edit to config.json (new BOTSECRET token) is re-masked by the next runner
+# pass — run-pending freshens the copy even with an empty request spool.
+jq '.telegram = {"bot_token":"BOTSECRET","chat_id":"-100123"}' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+run_pending >/dev/null
+assert_eq "run-pending re-renders the masked copy" "$(jq -c '.telegram.bot_token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+case "$(cat "$MASKED")" in
+*BOTSECRET*) bad "hand-edited secret never reaches the masked copy" "BOTSECRET leaked into $MASKED" ;;
+*) ok "hand-edited secret never reaches the masked copy" ;;
+esac
+
+# Sync .env with the hand-edited config so the sentinel commit below only changes allowlisted
+# P2POOL keys (TELEGRAM_BOT_TOKEN is deliberately NOT dashboard-committable).
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+
+# Host-side sentinel swap: a proposal carrying {"__secret__":true} for untouched secrets (what the
+# dashboard now submits) stages with the LIVE values merged back in, and a sentinel for an UNSET
+# secret collapses to "" instead of leaking a dict into config.json.
+UUID5="55555555-5555-4555-8555-555555555555"
+jq -n --arg w "$WALLET" --arg id "$UUID5" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:{"__secret__":true}},
+    tari:{wallet_address:"T"}, p2pool:{pool:"main"}, workers:{api_token:{"__secret__":true}},
+    telegram:{bot_token:{"__secret__":true},chat_id:"-100123"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:{"__secret__":true}},control:{enabled:true}}}}' >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "sentinel-carrying preview validates" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "previewed"
+assert_eq "sentinel swapped for the live node password at staging" "$(jq -r '.monero.node_password' "$STAGED/$UUID5.json" 2>/dev/null)" "p"
+assert_eq "sentinel swapped for the live dashboard password" "$(jq -r '.dashboard.auth.password' "$STAGED/$UUID5.json" 2>/dev/null)" "a control passphrase"
+assert_eq "sentinel swapped for the live telegram token" "$(jq -r '.telegram.bot_token' "$STAGED/$UUID5.json" 2>/dev/null)" "BOTSECRET"
+assert_eq "sentinel for an unset secret collapses to empty" "$(jq -r '.workers.api_token' "$STAGED/$UUID5.json" 2>/dev/null)" ""
+# The container-visible legs of this round trip stay secret-free (the request carried sentinels,
+# the merged copy lives only in host-only staged/).
+case "$(cat "$RESULTS/$UUID5.json")$(cat "$AUDIT")" in
+*BOTSECRET* | *"a control passphrase"*) bad "results/audit stay secret-free on a sentinel preview" "a live secret leaked" ;;
+*) ok "results/audit stay secret-free on a sentinel preview" ;;
+esac
+
+# Commit the sentinel intent: the committed config.json carries the LIVE secrets ("blank keeps"),
+# and the masked prefill copy is re-rendered to match the new state.
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live node password" "$(jq -r '.monero.node_password' "$C/config.json")" "p"
+assert_eq "committed config keeps the live telegram token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "BOTSECRET"
+assert_eq "committed config never carries a sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
+assert_eq "masked copy re-rendered after the commit" "$(jq -r '.p2pool.pool' "$MASKED" 2>/dev/null)" "main"
+case "$(cat "$MASKED")" in
+*BOTSECRET* | *"a control passphrase"*) bad "re-rendered masked copy still holds no secrets" "a secret leaked into $MASKED" ;;
+*) ok "re-rendered masked copy still holds no secrets" ;;
+esac
+
 echo "== black-box: .env line-injection guard (#33 hardening, per field) =="
 # A newline in any config string that renders into .env unquoted would inject a SECOND KEY=value
 # line — e.g. PITHEAD_REGISTRY=evil.tld — which the root apply then trusts for every image: pull

@@ -88,13 +88,16 @@ The stack's defaults:
 
 ### Secret trust boundary for dashboard config editing
 
-When `dashboard.control` is on, the dashboard reads `config.json` through a **read-only bind
-mount** to prefill the editor form. The API masks every secret leaf before serving it to the
-browser — but that masking protects the *browser*, not the container. The bind mount itself is the
-real secret boundary: a backend compromise of the dashboard container can read the plaintext
-`config.json` (including the dashboard login and stratum passwords) directly off the mount,
-regardless of the API masking. Treat the dashboard container as semi-trusted, keep the onion behind
-Tor client authorization, and do not co-host untrusted workloads in that container. Host-side
-staged copies that carry merged secrets are written mode 600.
+The dashboard container never mounts the raw `config.json` (#440). When `dashboard.control` is
+on, the host renders a **pre-masked copy** of the config into the control spool — every set
+secret leaf (node credentials, the stratum and dashboard passwords, the Telegram token, the
+Healthchecks ping URL) already replaced by a sentinel — and the editor form prefills from that
+copy, mounted read-only. An untouched secret rides back to the host as the same sentinel, and the
+host swaps it for the live value when it stages the intent, so the container never holds a secret
+the operator didn't just type into the form. A full backend compromise of the dashboard container
+can therefore read masked config, results, and the audit log, and *ask* to change an allowlisted
+key — nothing else. Host-side staged copies, which do carry the merged secrets, live outside
+every mount and are written mode 600. Still treat the container as semi-trusted and keep the
+onion behind Tor client authorization: the request spool remains a mutation-request surface.
 
 Report any gap in these.

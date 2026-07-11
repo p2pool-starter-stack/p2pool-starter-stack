@@ -410,15 +410,15 @@ services:
       - ${CONTROL_DIR:-./data/control}/requests:/control/requests
       - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
       - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
+      # Pre-masked config copy (#440), read-only: the host renders config.json with every set
+      # secret leaf replaced by a sentinel, and the Configuration view prefills from THIS file.
+      # The raw config.json is never mounted — a fully compromised container reads masked config,
+      # results, and the audit log, nothing else (see SECURITY.md).
+      - ${CONTROL_DIR:-./data/control}/masked:/control/masked:ro
       # Caddy's JSON access log (#349), read-only: the dashboard tails it to show recent accesses
       # and a failed-login count (a burst of 401s = rotate the password / onion). Caddy owns the
       # write side and the rotation; every field read from here is treated as hostile input.
       - ${CADDY_LOG_DIR:-./data/caddy-logs}:/access-log:ro
-      # The live config, read-only, prefills the Configuration view (#33). Secret leaves are masked
-      # server-side (control_service.read_config); the raw values never leave the API. NOTE: this
-      # bind-mount — not the API masking — is the real secret trust boundary; a backend compromise
-      # reads config.json plaintext here (see SECURITY.md).
-      - ./config.json:/host-config/config.json:ro
       # config.reference.json (every key with its default), read-only, so the editor form covers the
       # full schema even for keys the operator's sparse config.json omits (#33). No secrets.
       - ./config.reference.json:/host-config/config.reference.json:ro

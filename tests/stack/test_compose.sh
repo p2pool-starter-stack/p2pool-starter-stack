@@ -231,17 +231,19 @@ else
 fi
 
 # Control-channel spool mounts (#33): the rw/ro split IS the trust boundary. requests/ is the
-# dashboard's ONLY writable leg; results/, audit/ and the config prefill are read-only; staged/
-# is never mounted at all — so the container can ask, but cannot forge a result, rewrite the
-# audit log, or alter a staged intent.
+# dashboard's ONLY writable leg; results/, audit/ and the pre-masked config prefill (#440) are
+# read-only; staged/ is never mounted at all — so the container can ask, but cannot forge a
+# result, rewrite the audit log, alter a staged intent, or read a raw secret.
 jq_assert "dashboard control requests/ mounted read-write (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/requests") and ((.read_only // false) == false))'
 jq_assert "dashboard control results/ mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/results") and (.read_only == true))'
 jq_assert "dashboard control audit/ mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/audit") and (.read_only == true))'
-jq_assert "dashboard config.json prefill mounted read-only (#33)" \
-    '.services.dashboard.volumes | any((.target == "/host-config/config.json") and (.read_only == true))'
+jq_assert "dashboard pre-masked config prefill mounted read-only (#440)" \
+    '.services.dashboard.volumes | any((.target == "/control/masked") and (.read_only == true))'
+jq_assert "raw config.json never enters the dashboard container (#440)" \
+    '.services.dashboard.volumes | any(.source | tostring | endswith("/config.json")) | not'
 jq_assert "dashboard config.reference.json prefill mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/host-config/config.reference.json") and (.read_only == true))'
 jq_assert "control staged/ dir never enters the container (#33)" \
