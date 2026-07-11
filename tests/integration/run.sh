@@ -1281,8 +1281,11 @@ run_hardening() {
     else
         # 3a. A NON-sensitive change (an allowlisted alert toggle) committed via the spool must be
         #     applied BY THE PATH UNIT — not by us calling control-run-pending.
+        # Use an allowlisted key that renders UNCONDITIONALLY: DASHBOARD_CHECK_UPDATES is always
+        # emitted (a telegram event toggle only renders when telegram is configured, so it reads
+        # empty on a telegram-off baseline — a test-only pitfall, not a control-channel bug).
         local uuid_ok="a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1" ok_cfg st
-        ok_cfg="$(printf '%s' "$ctrl_config" | jq -c '.telegram.events.node_down=false')"
+        ok_cfg="$(printf '%s' "$ctrl_config" | jq -c '.dashboard.check_for_updates=false')"
         _spool_write "$cdir/requests/$uuid_ok.json" \
             "$(jq -nc --argjson c "$ok_cfg" '{id:"'"$uuid_ok"'",action:"preview",actor:"itest",config:$c}')"
         if st="$(_wait_control_status "$cdir" "$uuid_ok" "" 60)"; then
@@ -1294,7 +1297,7 @@ run_hardening() {
             "{\"id\":\"$uuid_ok\",\"action\":\"commit\",\"actor\":\"itest\"}"
         st="$(_wait_control_status "$cdir" "$uuid_ok" "previewed" 90 || echo timeout)"
         assert_eq "spool commit applied by the path unit (#33)" "$st" "applied"
-        assert_eq "the allowlisted change landed host-side (#33)" "$(env_on_box TELEGRAM_EVENT_NODE_DOWN)" "false"
+        assert_eq "the allowlisted change landed host-side (#33)" "$(env_on_box DASHBOARD_CHECK_UPDATES)" "false"
         assert_contains "control mutation audited (#33)" \
             "$(rx "cat $(quote_arg "$cdir/audit/control.log") 2>/dev/null")" '"action":"commit"'
 
@@ -1318,7 +1321,9 @@ run_hardening() {
     it_step "restoring baseline (disables control, removes the path unit)…"
     push_config "$BASELINE_CONFIG"
     pithead apply -y >/dev/null 2>&1
-    wait_status_ok 180 || true
+    # 240s: this apply follows the control enable/disable + a tor restart, so the stack has more to
+    # re-settle than a plain apply (180s timed out here on a real run).
+    wait_status_ok 240 || true
 }
 
 run_auth_fail_closed() {
