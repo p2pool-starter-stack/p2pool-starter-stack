@@ -124,5 +124,14 @@
         "commands": {
             "enabled": false
         }
+    },
+
+    "notifications": {
+        "webhooks": [],
+        "ntfy": {
+            "url": "",
+            "token": ""
+        },
+        "tor": true
     }
 }

@@ -13,6 +13,19 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Alert sinks beyond Telegram: generic JSON webhook + ntfy (#380).** Every alert the stack
+  produces — node down/recovered, worker offline/joined/left, sync, disk, DB, XvB, clearnet
+  exposure, blocks and payouts, the daily digest — can now also be pushed to a **generic JSON
+  webhook** (one POST per alert with `event`/`text`/`ts` keys, for Gotify, Home Assistant, or any
+  endpoint that accepts a POST) and/or an **[ntfy](https://ntfy.sh) topic** (the alert text as the
+  message body, optional `Authorization: Bearer` token). Configured in a new top-level
+  `notifications` block (`webhooks` list, `ntfy.url`/`ntfy.token`); all unset — the default —
+  runs nothing new, and Telegram plus its per-event toggles are unchanged (the new sinks carry
+  every event). Both sinks copy the Telegram alerter's discipline: fail-silent, secrets (webhook
+  URLs, the ntfy token) never logged or echoed, and **Tor-routed by default** so the endpoint
+  sees a Tor exit, not your host IP. `notifications.tor: false` is the LAN/self-hosted carve-out
+  (Tor exits can't reach private addresses) — with it, clearnet endpoints see your host IP. See
+  [Telegram › Webhook and ntfy sinks](docs/telegram.md#webhook-and-ntfy-sinks).
 - **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
   circuits time out, so every Tor-clearnet feature — Healthchecks pings, the Telegram bot, XvB
   stats — breaks at once while mining (established onion circuits) keeps working. v1.3.1 added
@@ -128,6 +141,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
+- **The deploy-box layout is a product feature (#455).** `./pithead setup` and `./pithead upgrade`
+  now maintain a `current -> pithead-vX.Y.Z` symlink beside the install when the install directory
+  is version-named — one authoritative pointer to the live install, updated (`ln -sfn`) only on a
+  successful upgrade; the dashboard's one-click upgrade (#59) runs the same `upgrade` and moves it
+  too. The dashboard database also stops living inside the install directory: when the four other
+  `*.data_dir` share one parent, `dashboard.data_dir`'s default joins them there, and a one-time
+  migration in `upgrade`/`apply` moves data from the old `./data/dashboard` default (stop the
+  dashboard, move, verify the DB arrived; an explicit `dashboard.data_dir` is warned about and
+  left alone, and data at both locations stops the run instead of guessing). The canonical layout
+  — `current`, one rollback version dir, the shared data root — is documented in
+  [Operations › The deploy-box layout](docs/operations.md#the-deploy-box-layout), replacing the
+  hand-written per-box READMEs.
 - **`build/tor/Dockerfile`** now pins Alpine to a named minor version (`alpine:3.24`) alongside its
   digest, instead of the floating `latest` tag, so Dependabot has a real version line to track
   (#373).

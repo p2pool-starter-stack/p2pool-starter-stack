@@ -334,6 +334,21 @@ TELEGRAM_EVENTS = {
 # the box is. Rendered from config.json telegram.daily_summary_time.
 TELEGRAM_DAILY_SUMMARY_TIME = os.environ.get("TELEGRAM_DAILY_SUMMARY_TIME", "08:00").strip()
 
+# --- Operator alerts: webhook + ntfy sinks (#380) ---
+# Push-only siblings of the Telegram alerter: every alert AlertService emits also POSTs to each
+# configured webhook URL (as JSON) and to an ntfy topic URL (as the message body). All off by
+# default — no URLs means nothing new runs. The URLs and the ntfy token are secrets (webhook
+# query strings often carry tokens): rendered into the owner-only .env and never logged.
+# Rendered from config.json's notifications block by pithead.
+NOTIFY_WEBHOOK_URLS = os.environ.get("NOTIFY_WEBHOOK_URLS", "").split()
+NTFY_URL = os.environ.get("NTFY_URL", "").strip()
+NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "").strip()
+# Route the webhook/ntfy POSTs over Tor (default), so the endpoint sees a Tor exit, not the host
+# IP — the same egress rule as Telegram (#340). notifications.tor:false opts out for LAN /
+# self-hosted endpoints (Tor exits can't reach RFC1918 addresses); flipping it makes clearnet
+# endpoints see the host IP.
+NOTIFY_TOR = os.environ.get("NOTIFY_TOR", "true").strip().lower() == "true"
+
 # Hashrate-degradation detector (Issue #99). Flags a sustained drop in total hashrate below
 # HASHRATE_DROP_THRESHOLD_PCT of its trailing baseline for HASHRATE_DROP_MINUTES minutes — surfaced
 # as a chart event marker (always on) and, when telegram.events.hashrate_loss is on, an alert.

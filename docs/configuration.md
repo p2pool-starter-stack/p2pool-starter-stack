@@ -97,7 +97,7 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `dashboard.onion.client_auth` | `true` _(on)_ | Only applies when `dashboard.onion.enabled` is `true`. Keeps Tor v3 **client authorization** on: the onion does not respond at all without your client key, so the address can't be scanned or brute-forced — the password becomes a second factor behind it. pithead generates the keypair and prints the client line via `./pithead onion-client-key`. Set to `false` for a deliberately password-only onion. |
 | `dashboard.control.enabled` | `false` _(off)_ | Security-relevant, default off. `true` turns on the dashboard's **Configuration view**: edit `config.json` from the browser, preview the changes, and apply them. The dashboard container never runs `pithead` itself — it writes a typed change request into a spool directory and a root systemd unit on the host (`pithead-control`) validates and applies it (see [Dashboard › Configuration view](dashboard.md#configuration-view)). Fails closed: enabling it without a `dashboard.auth.password` is a validation error, because this channel can change the payout wallet. |
 | `dashboard.timezone` | `auto` | Timezone for the dashboard's timestamps and charts. `auto` = the host machine's timezone (auto-detected, falling back to `Etc/UTC`); set an IANA name (e.g. `America/Chicago`) to override. |
-| `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`. |
+| `dashboard.data_dir` | `auto` | Where the dashboard's database lives. `auto` = `./data/dashboard`, unless the four other `*.data_dir` all point under one parent directory — then the dashboard joins them at `<that parent>/dashboard`, and the first `upgrade`/`apply` moves data from the old default there automatically (see [Data directories](#data-directories)). |
 | `dashboard.check_for_updates` | `true` _(on)_ | The dashboard periodically asks GitHub whether a newer Pithead release exists and, if so, shows a header badge linking to it (e.g. "New release v1.4.0 available"). Notify-only: it never updates anything; you upgrade with `./pithead upgrade` on your own terms. On by default because the check is routed over Tor (the same bridge SOCKS as the XvB fetch, `socks5h` so the DNS lookup goes through Tor too), so GitHub sees a Tor exit, not your IP. It's cached (hourly) and fails silently offline. Set to `false` to opt out entirely. See [Privacy › Runtime egress](privacy.md#runtime-egress). |
 | `dashboard.hashrate_drop_threshold` | `50` | Percent below the recent normal that counts as a hashrate drop for the `hashrate_loss` alert and its chart marker. `50` = fire when total fleet hashrate falls to half its baseline. Raise it to catch smaller dips, lower it to only flag near-total outages. |
 | `dashboard.hashrate_drop_minutes` | `10` | How many minutes the hashrate must stay below the threshold before the drop is reported — the debounce that keeps a brief blip from pinging you. |
@@ -114,6 +114,10 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 | `telegram.events.*` | all `true` | Per-event toggles: `stack_online`, `node_down`, `node_recovered`, `worker_offline`, `worker_recovered`, `worker_joined`, `worker_left`, `sync_finished`, `disk_space`, `db_unhealthy`, `xvb_no_share`, `xvb_registration`, `clearnet_exposed`, `new_release`, `daily_summary`, `hashrate_low`, `hashrate_loss`, `hugepages`, `low_ram`, `wallet_changed`, `high_reject_rate`. Each defaults to on once Telegram is enabled; set one `false` to silence just that alert. Full list: [Telegram Bot](telegram.md#choosing-which-alerts-you-get). |
 | `telegram.daily_summary_time` | `08:00` | Local time (24-hour `HH:MM`) to push the once-a-day status digest, when the `daily_summary` event is on. Uses the dashboard's timezone (`dashboard.timezone`). A malformed value disables the digest. |
 | `telegram.commands.enabled` | `false` | Turn on the interactive command interface — the bot answers read-only status queries (`/status`, `/hashrate`, `/workers`, `/luck`, `/earnings`, and more) from the configured `chat_id` (every other chat is ignored). Off by default; alerts work without it. Long-polls over Tor, so it needs no inbound port. Full command list: [Telegram › Commands](telegram.md#commands). |
+| `notifications.webhooks` | `[]` | Generic JSON webhook alert sinks (#380): every alert the stack produces is POSTed to each listed URL as `{"event", "text", "ts"}` — for Gotify, Home Assistant, or any endpoint that accepts a POST. Empty list keeps it off. The URLs are secrets (query strings often carry tokens): owner-only `.env`, never logged or printed. Sinks carry every event; `telegram.events` gates Telegram only. See [Telegram › Webhook and ntfy sinks](telegram.md#webhook-and-ntfy-sinks). |
+| `notifications.ntfy.url` | `""` | An [ntfy](https://ntfy.sh) topic URL (`https://server/topic`, self-hosted servers included); each alert's text is POSTed as the message body. Blank keeps it off. Treated as a secret like the webhook URLs. |
+| `notifications.ntfy.token` | `""` | Optional ntfy access token for a protected topic, sent as an `Authorization: Bearer` header. A secret — owner-only `.env`, never logged. |
+| `notifications.tor` | `true` _(on)_ | Privacy-relevant, default on. Routes every webhook/ntfy POST over the bundled Tor SOCKS proxy, so the endpoint sees a **Tor exit, not your host IP** — the same egress rule as Telegram. Set `false` only for endpoints on your own network (Tor exits can't reach private addresses); a clearnet endpoint then sees your host IP on every alert. |
 
 ---
 
@@ -143,7 +147,12 @@ default each one lives under `./data/<service>` inside the repo:
 | Tari | `tari.data_dir` | `./data/tari` | `/var/tari/node` |
 | P2Pool | `p2pool.data_dir` | `./data/p2pool` | `/home/ubuntu` |
 | Tor | `tor.data_dir` | `./data/tor` | `/var/lib/tor` |
-| Dashboard | `dashboard.data_dir` | `./data/dashboard` | `/data` |
+| Dashboard | `dashboard.data_dir` | `./data/dashboard` * | `/data` |
+
+\* The dashboard default follows the other four: when `monero`/`tari`/`p2pool`/`tor` all point
+under one parent directory, the dashboard database defaults to `<that parent>/dashboard` instead
+of `./data/dashboard`, so it lives beside the chain data rather than inside the install directory
+(see [Operations › The deploy-box layout](operations.md#the-deploy-box-layout)).
 
 Set any `data_dir` to an absolute path to move that service's storage. For example, to put the
 Monero blockchain on a dedicated SSD:
