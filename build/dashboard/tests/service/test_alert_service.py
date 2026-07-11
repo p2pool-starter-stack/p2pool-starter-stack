@@ -22,14 +22,16 @@ class _FakeNotifier:
         self.enabled = enabled
         self._allow = allow  # None => every event allowed
         self.sent = []
+        self.sent_events = []
 
     def event_enabled(self, event):
         if not self.enabled:
             return False
         return True if self._allow is None else event in self._allow
 
-    def send(self, text):
+    def send(self, text, event=""):
         self.sent.append(text)
+        self.sent_events.append(event)
         return True
 
 
@@ -705,6 +707,72 @@ class TestProcess:
             workers_expected=False,
         )
         assert out == []
+
+
+_PROCESS_SIGNALS = dict(
+    tari_down=False,
+    tari_required=True,
+    miner_released=True,
+    workers=[],
+    workers_expected=False,
+)
+
+
+class TestSinkFanout:
+    """Multi-sink dispatch (#380): every alert reaches every sink that carries its event."""
+
+    async def test_alert_reaches_every_sink(self):
+        tg, hook = _FakeNotifier(), _FakeNotifier()
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        await svc.process(monero_down=False, **_PROCESS_SIGNALS)  # seed
+        out = await svc.process(monero_down=True, **_PROCESS_SIGNALS)
+        assert _keys(out) == [AlertService.EVT_NODE_DOWN]
+        for sink in (tg, hook):
+            assert len(sink.sent) == 1 and "DOWN" in sink.sent[0]
+            assert sink.sent_events == [AlertService.EVT_NODE_DOWN]
+
+    async def test_telegram_disabled_webhook_still_delivers(self):
+        # A webhook-only stack (Telegram unconfigured) must still alert — `enabled` is any-sink.
+        tg, hook = _FakeNotifier(enabled=False), _FakeNotifier()
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        assert svc.enabled is True
+        await svc.process(monero_down=False, **_PROCESS_SIGNALS)
+        out = await svc.process(monero_down=True, **_PROCESS_SIGNALS)
+        assert _keys(out) == [AlertService.EVT_NODE_DOWN]
+        assert tg.sent == [] and len(hook.sent) == 1
+
+    async def test_per_event_toggle_silences_only_that_sink(self):
+        # Telegram's node_down toggled off silences Telegram; the webhook (no per-event
+        # toggles) still gets the alert.
+        tg, hook = _FakeNotifier(allow=set()), _FakeNotifier()
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        await svc.process(monero_down=False, **_PROCESS_SIGNALS)
+        out = await svc.process(monero_down=True, **_PROCESS_SIGNALS)
+        assert _keys(out) == [AlertService.EVT_NODE_DOWN]
+        assert tg.sent == [] and len(hook.sent) == 1
+
+    async def test_all_sinks_disabled_is_noop(self):
+        tg, hook = _FakeNotifier(enabled=False), _FakeNotifier(enabled=False)
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        assert svc.enabled is False
+        await svc.process(monero_down=True, **_PROCESS_SIGNALS)
+        out = await svc.process(monero_down=True, **_PROCESS_SIGNALS)
+        assert out == [] and tg.sent == [] and hook.sent == []
+
+    async def test_degradation_alert_fans_out(self):
+        tg, hook = _FakeNotifier(enabled=False), _FakeNotifier()
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        text = await svc.degradation_alert("loss", 0.5)
+        assert text and tg.sent == []
+        assert hook.sent == [text]
+        assert hook.sent_events == [AlertService.EVT_HASHRATE_LOSS]
+
+    async def test_default_sinks_are_just_the_notifier(self):
+        # No webhook/ntfy config in the test env → the sink list is exactly [notifier], so the
+        # default stack's behaviour is unchanged.
+        tg = _FakeNotifier()
+        svc = _svc(notifier=tg)
+        assert svc.sinks == [tg]
 
 
 def _fake_localtime(hour, minute, yday=100, year=2026):

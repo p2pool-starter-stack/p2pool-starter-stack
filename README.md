@@ -40,7 +40,8 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   served over HTTPS on your LAN.
 - 📟 **Telegram operator bot.** Opt-in alerts for a downed node, a worker that dropped off, sync
   finishing, low disk, a clearnet leak, or a sustained hashrate drop — plus a daily digest and
-  read-only commands (`/status`, `/hashrate`, `/workers`, `/earnings`). Routed over Tor. See the
+  read-only commands (`/status`, `/hashrate`, `/workers`, `/earnings`). Routed over Tor. The same
+  alerts also push to a generic JSON webhook or an [ntfy](https://ntfy.sh) topic. See the
   [Telegram guide](docs/telegram.md).
 - 🔔 **Dead-man's switch.** An optional [Healthchecks.io](https://healthchecks.io/) ping tells you
   when the whole box goes dark — the one failure a monitor running *on* that box can never report.
