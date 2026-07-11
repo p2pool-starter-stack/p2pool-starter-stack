@@ -320,9 +320,10 @@ provision() {
         git -C '$E2E_DIR' fetch --quiet origin '$BRANCH'
         # The e2e checkout is DEDICATED and disposable, so force a pristine tree instead of assuming
         # one (#454): drop stray untracked files (e.g. a leftover bench script) that would otherwise
-        # abort 'checkout' with \"would be overwritten\". clean skips gitignored paths (config.json/
-        # .env/data/backups), and -e keeps the harness's own results/ — so the shared chains and the
-        # rollback anchors are never touched. -x plus the excludes clears ignored build cruft too.
+        # abort 'checkout' with \"would be overwritten\". -x clears ignored build cruft too; the
+        # -e excludes keep data/backups and the harness's own results/, so the shared chains and
+        # rollback anchors are never touched. config.json/.env ARE wiped (gitignored, no -e) but the
+        # next step re-seeds them from CANONICAL_DIR — don't drop that seed thinking clean spares them.
         git -C '$E2E_DIR' checkout -q -f -B '$BRANCH' FETCH_HEAD
         git -C '$E2E_DIR' reset -q --hard FETCH_HEAD
         git -C '$E2E_DIR' clean -qfdx -e /results -e /backups -e /data
