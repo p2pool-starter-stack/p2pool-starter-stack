@@ -1149,11 +1149,34 @@ _wait_control_status() { # <control-dir> <id> <exclude-status> <timeout>
     return 1
 }
 
+# Probe clearnet egress THROUGH the tor container's SOCKS — the exact curl the doctor check and the
+# #424 healer use (`--socks5-hostname` also resolves DNS through Tor). A 204 proves a working
+# clearnet exit; a timeout is the stuck-guard symptom. Runs on the box (the bench host reaches the
+# tor bridge IP, same as doctor).
+_tor_egress_ok() {
+    local prefix
+    prefix="$(env_on_box NETWORK_PREFIX)"
+    prefix="${prefix:-172.28.0}"
+    rx "curl -fsS --max-time 15 --socks5-hostname ${prefix}.25:9050 -o /dev/null https://www.google.com/generate_204 >/dev/null 2>&1"
+}
+
+# Poll _tor_egress_ok up to <timeout>s — after a restart, Tor has to bootstrap and build fresh
+# circuits before a clearnet request can complete.
+_wait_tor_egress() { # <timeout>
+    local timeout="${1:-120}" waited=0
+    while [ "$waited" -lt "$timeout" ]; do
+        _tor_egress_ok && return 0
+        sleep 10
+        waited=$((waited + 10))
+    done
+    return 1
+}
+
 # Tier-4 hardening phase (#377/#33/#424): the v1.4 host-mutation + hardening surfaces that ONLY a
 # real box proves — a read-only rootfs actually rejecting a write, the systemd path unit actually
-# firing on a spooled request, and a tor restart bringing mining back. Local mode only (needs the
-# real containers, data dirs, and systemd). Everything it changes is reverted by the end-of-run
-# config restore; it also re-applies the baseline itself so the root path unit never lingers.
+# firing on a spooled request, and a tor restart restoring real clearnet egress. Local mode only
+# (needs the real containers, data dirs, and systemd). Everything it changes is reverted by the
+# end-of-run config restore; it also re-applies the baseline itself so the root path unit never lingers.
 run_hardening() {
     # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="hardening"
@@ -1179,14 +1202,30 @@ run_hardening() {
     done
 
     # 2. Tor guard heal RECOVERY action (#424). The stuck-guard TRIGGER is guard-selection luck and
-    #    not reproducible, but the heal's action — restart tor — must bring the whole stack back:
-    #    the #278/#313 socat bridges + merge-mine gRPC re-establish and mining resumes. This proves
-    #    the restart the healer issues is safe to issue automatically.
+    #    not reproducible, but the heal's action — restart tor — must bring the stack back: the
+    #    #278/#313 socat bridges + merge-mine gRPC re-establish, AND clearnet egress works again
+    #    through fresh circuits. We assert egress with the stack's own probe (curl a no-content
+    #    endpoint through the tor SOCKS), gated on a pre-restart baseline so a genuinely-bad live Tor
+    #    exit (outside our code, the exact #424 condition) can't false-fail the gate: we only assert
+    #    RECOVERY when egress was working to begin with.
+    it_step "checking clearnet egress through Tor before the restart (baseline)…"
+    local pre_egress=0
+    _wait_tor_egress 30 && pre_egress=1
     it_step "restart tor (the #424 heal action) and verify the stack recovers…"
     pithead restart tor >/dev/null 2>&1
     wait_status_ok 240 || true
     pithead status >/dev/null 2>&1
     assert_rc "stack healthy after a tor restart (#424 heal action)" "$?" "0"
+    if [ "$pre_egress" = "1" ]; then
+        it_step "waiting for clearnet egress to recover through Tor's fresh circuits…"
+        if _wait_tor_egress 120; then
+            it_pass "clearnet egress works through Tor after the restart (#424)"
+        else
+            it_fail "clearnet egress works through Tor after the restart (#424)" "generate_204 through the Tor SOCKS never returned within 120s"
+        fi
+    else
+        it_warn "egress was already down before the restart (a bad Tor exit is outside our code) — can't prove recovery, skipping the post-restart egress assertion (#424)"
+    fi
 
     # 3. The #33 control channel end-to-end THROUGH THE REAL SYSTEMD PATH UNIT. Tier-1 runs
     #    control-run-pending by hand; only here does pithead-control.path actually fire on a spooled
