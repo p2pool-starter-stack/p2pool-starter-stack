@@ -414,15 +414,15 @@ services:
       - ${CONTROL_DIR:-./data/control}/requests:/control/requests
       - ${CONTROL_DIR:-./data/control}/results:/control/results:ro
       - ${CONTROL_DIR:-./data/control}/audit:/control/audit:ro
+      # Pre-masked config copy (#440), read-only: the host renders config.json with every set
+      # secret leaf replaced by a sentinel, and the Configuration view prefills from THIS file.
+      # The raw config.json is never mounted — a fully compromised container reads masked config,
+      # results, and the audit log, nothing else (see SECURITY.md).
+      - ${CONTROL_DIR:-./data/control}/masked:/control/masked:ro
       # Caddy's JSON access log (#349), read-only: the dashboard tails it to show recent accesses
       # and a failed-login count (a burst of 401s = rotate the password / onion). Caddy owns the
       # write side and the rotation; every field read from here is treated as hostile input.
       - ${CADDY_LOG_DIR:-./data/caddy-logs}:/access-log:ro
-      # The live config, read-only, prefills the Configuration view (#33). Secret leaves are masked
-      # server-side (control_service.read_config); the raw values never leave the API. NOTE: this
-      # bind-mount — not the API masking — is the real secret trust boundary; a backend compromise
-      # reads config.json plaintext here (see SECURITY.md).
-      - ./config.json:/host-config/config.json:ro
       # config.reference.json (every key with its default), read-only, so the editor form covers the
       # full schema even for keys the operator's sparse config.json omits (#33). No secrets.
       - ./config.reference.json:/host-config/config.reference.json:ro
@@ -547,6 +547,16 @@ services:
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}
       - HASHRATE_DROP_MINUTES=${HASHRATE_DROP_MINUTES:-10}
       - TELEGRAM_COMMANDS_ENABLED=${TELEGRAM_COMMANDS_ENABLED:-false}
+      # --- Operator alerts: webhook + ntfy sinks (#380) ---
+      # Push-only siblings of the Telegram alerter: every alert also POSTs as JSON to each
+      # webhook URL and as plain text to the ntfy topic URL. Off by default (no URLs). The
+      # URLs and the ntfy token are secrets sourced from the owner-only .env and never logged.
+      # NOTIFY_TOR keeps the POSTs on the bridge Tor SOCKS (default), so endpoints see a Tor
+      # exit, not the host IP; false is the LAN/self-hosted carve-out. See docs/telegram.md.
+      - NOTIFY_WEBHOOK_URLS=${NOTIFY_WEBHOOK_URLS:-}
+      - NTFY_URL=${NTFY_URL:-}
+      - NTFY_TOKEN=${NTFY_TOKEN:-}
+      - NOTIFY_TOR=${NOTIFY_TOR:-true}
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.

@@ -1,5 +1,7 @@
-"""Unit tests for the dashboard side of the control channel (#33): secret masking round-trip,
-atomic request submission, result reads, and the UUID gate on ids that become host filenames."""
+"""Unit tests for the dashboard side of the control channel (#33): defense-in-depth secret
+masking, atomic request submission, result reads, and the UUID gate on ids that become host
+filenames. The host serves a PRE-MASKED config copy (#440); read_config's own masking pass is
+the second layer, so these tests feed it raw values on purpose."""
 
 import json
 import os
@@ -70,52 +72,17 @@ class TestSecretMasking:
         assert cfg["monero"]["prune"] is True
         assert cfg["p2pool"]["pool"] == "mini"
 
-    def test_merge_secrets_round_trip(self, spool):
-        # Sentinel in → live value out; an actually-edited secret passes through.
-        proposed = control_service.read_config()
-        proposed["p2pool"]["pool"] = "main"
-        proposed["telegram"]["bot_token"] = "456:new"  # explicit new value
-        merged = control_service.merge_secrets(proposed)
-        assert merged["dashboard"]["auth"]["password"] == "correct horse"
-        assert merged["monero"]["node_password"] == "hunter2"
-        assert merged["telegram"]["bot_token"] == "456:new"
-        assert merged["p2pool"]["pool"] == "main"
-
-    def test_merge_sentinel_for_unset_secret_collapses_to_empty(self, spool):
-        # A forged sentinel where no secret exists must not leak a dict into config.json.
-        proposed = {"workers": {"api_token": {"__secret__": True}}}
-        assert control_service.merge_secrets(proposed)["workers"]["api_token"] == ""
-
-    def test_merge_missing_sections_tolerated(self, spool):
-        # A proposed config that omits whole sections merges without KeyErrors.
-        assert control_service.merge_secrets({"p2pool": {"pool": "nano"}}) == {
-            "p2pool": {"pool": "nano"}
-        }
-
-    def test_per_worker_tokens_masked_and_restored(self, spool, tmp_path):
-        # dashboard.workers[] tokens (#172) live inside an ARRAY, which the fixed-path
-        # SECRET_PATHS walk can't reach — they get their own mask/restore pass.
-        cfg = json.loads((tmp_path / "config.json").read_text())
-        cfg["dashboard"]["workers"] = [
-            {"name": "rig1", "host": "10.0.0.5", "token": "rig1-secret"},
-            {"name": "rig2"},
-        ]
-        (tmp_path / "config.json").write_text(json.dumps(cfg))
-
-        served = control_service.read_config()
-        assert served["dashboard"]["workers"][0]["token"] == {"__secret__": True}
-        assert "rig1-secret" not in json.dumps(served)
-        assert "token" not in served["dashboard"]["workers"][1]  # unset stays unset
-
-        # Round trip: the sentinel is swapped back for the live token (matched by name).
-        merged = control_service.merge_secrets(served)
-        assert merged["dashboard"]["workers"][0]["token"] == "rig1-secret"
-
-    def test_forged_worker_token_sentinel_collapses_to_empty(self, spool, tmp_path):
-        # A sentinel for a rig that has no live token must not leak a dict into config.json.
-        proposed = {"dashboard": {"workers": [{"name": "ghost", "token": {"__secret__": True}}]}}
-        merged = control_service.merge_secrets(proposed)
-        assert merged["dashboard"]["workers"][0]["token"] == ""
+    def test_pre_masked_host_copy_served_as_is(self, spool):
+        # The production shape (#440): the host copy already carries sentinels; read_config
+        # serves them unchanged (its own masking pass is an idempotent second layer).
+        pre_masked = json.loads(json.dumps(CONFIG))
+        pre_masked["monero"]["node_password"] = {"__secret__": True}
+        pre_masked["dashboard"]["auth"]["password"] = {"__secret__": True}
+        (spool / "config.json").write_text(json.dumps(pre_masked))
+        cfg = control_service.read_config()
+        assert cfg["monero"]["node_password"] == {"__secret__": True}
+        assert cfg["dashboard"]["auth"]["password"] == {"__secret__": True}
+        assert cfg["p2pool"]["pool"] == "mini"
 
 
 class TestSubmit:

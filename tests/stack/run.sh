@@ -414,6 +414,28 @@ assert_contains "telegram enable is INFO" "$(run_sourced "$SANDBOX" describe_cha
 assert_contains "telegram event is INFO" "$(run_sourced "$SANDBOX" describe_change TELEGRAM_EVENT_NODE_DOWN true false)" "INFO"
 tg_tok_msg="$(run_sourced "$SANDBOX" describe_change TELEGRAM_BOT_TOKEN oldsecret newsecret)"
 assert_contains "telegram token change noted" "$tg_tok_msg" "Telegram bot token updated"
+# Webhook/ntfy sink changes (#380): URLs and the ntfy token are secrets — the preview names the
+# change without printing any value.
+hook_msg="$(run_sourced "$SANDBOX" describe_change NOTIFY_WEBHOOK_URLS "" "https://hook.example/x?key=HOOKSEC")"
+assert_contains "webhook enable noted" "$hook_msg" "Webhook alert sink(s) ENABLED"
+case "$hook_msg" in
+*HOOKSEC*) bad "webhook url not leaked in preview" "leaked: $hook_msg" ;;
+*) ok "webhook url not leaked in preview" ;;
+esac
+ntfy_msg="$(run_sourced "$SANDBOX" describe_change NTFY_URL "https://ntfy.sh/OLDTOPIC" "https://ntfy.sh/NEWTOPIC")"
+assert_contains "ntfy url change noted" "$ntfy_msg" "ntfy topic URL updated"
+case "$ntfy_msg" in
+*OLDTOPIC* | *NEWTOPIC*) bad "ntfy topic url not leaked in preview" "leaked: $ntfy_msg" ;;
+*) ok "ntfy topic url not leaked in preview" ;;
+esac
+ntfy_tok_msg="$(run_sourced "$SANDBOX" describe_change NTFY_TOKEN oldntfysec newntfysec)"
+assert_contains "ntfy token change noted" "$ntfy_tok_msg" "ntfy access token updated"
+case "$ntfy_tok_msg" in
+*oldntfysec* | *newntfysec*) bad "ntfy token value not leaked in preview" "leaked: $ntfy_tok_msg" ;;
+*) ok "ntfy token value not leaked in preview" ;;
+esac
+assert_contains "notify tor opt-out warns about IP exposure" \
+    "$(run_sourced "$SANDBOX" describe_change NOTIFY_TOR true false)" "see this host's IP"
 case "$tg_tok_msg" in
 *oldsecret* | *newsecret*) bad "telegram token value not leaked in preview" "leaked: $tg_tok_msg" ;;
 *) ok "telegram token value not leaked in preview" ;;
@@ -2531,6 +2553,25 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "daily summary time propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "21:30"
 
+# Webhook + ntfy alert sinks (#380): no notifications block => everything off, Tor default on.
+assert_eq "webhook urls default empty" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" ""
+assert_eq "ntfy url default empty" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" ""
+assert_eq "ntfy token default empty" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_TOKEN)" ""
+assert_eq "notify tor defaults on" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_TOR)" "true"
+# Configured block propagates: the webhook list joins to one space-separated value, ntfy url/token
+# land verbatim, tor:false carries through — and apply never prints the URL/token secrets.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "notifications":{"webhooks":["https://hook.example/a","https://hook2.example/b?key=HOOKSECRET"],"ntfy":{"url":"https://ntfy.sh/PITTOPIC","token":"NTFYSECRET"},"tor":false} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "webhook urls join space-separated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" "https://hook.example/a https://hook2.example/b?key=HOOKSECRET"
+assert_eq "ntfy url propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" "https://ntfy.sh/PITTOPIC"
+assert_eq "ntfy token propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_TOKEN)" "NTFYSECRET"
+assert_eq "notify tor opt-out propagated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_TOR)" "false"
+case "$out" in
+*HOOKSECRET* | *NTFYSECRET* | *PITTOPIC*) bad "webhook/ntfy secrets not printed by apply" "leaked in: $out" ;;
+*) ok "webhook/ntfy secrets not printed by apply" ;;
+esac
+
 # Hashrate-loss detector knobs (#99): default 50% over 10 min; explicit dashboard overrides propagate.
 assert_eq "hashrate drop threshold default 50" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "50"
 assert_eq "hashrate drop minutes default 10" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_MINUTES)" "10"
@@ -3635,6 +3676,73 @@ run_pending >/dev/null
 assert_contains "expired staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "expired"
 [ ! -f "$STAGED/$UUID2.json" ] && ok "expired staged intent cleared" || bad "expired staged intent cleared" "still staged"
 
+echo "== black-box: pre-masked prefill copy + host-side secret merge (#440) =="
+# The dashboard container never mounts the raw config.json: apply/run-pending render a PRE-MASKED
+# copy into the spool's masked/ leg, and the "blank secret keeps the live value" sentinel swap
+# happens host-side at staging. Current state: pool mini committed above, node_password "p",
+# dashboard password "a control passphrase".
+MASKED="$C/data/control/masked/config.json"
+[ -f "$MASKED" ] && ok "masked prefill copy rendered by apply" || bad "masked prefill copy rendered by apply" "$MASKED missing"
+assert_eq "masked copy is world-readable for the container (644)" "$(file_mode "$MASKED")" "644"
+assert_eq "set secret masked to the sentinel" "$(jq -c '.monero.node_password' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "dashboard password masked to the sentinel" "$(jq -c '.dashboard.auth.password' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "non-secret keys survive the masking" "$(jq -r '.p2pool.pool' "$MASKED" 2>/dev/null)" "mini"
+case "$(cat "$MASKED")" in
+*"a control passphrase"* | *'"p"'*) bad "masked copy holds no secret values" "a secret leaked into $MASKED" ;;
+*) ok "masked copy holds no secret values" ;;
+esac
+
+# Staleness: a hand-edit to config.json (new BOTSECRET token) is re-masked by the next runner
+# pass — run-pending freshens the copy even with an empty request spool.
+jq '.telegram = {"bot_token":"BOTSECRET","chat_id":"-100123"}' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+run_pending >/dev/null
+assert_eq "run-pending re-renders the masked copy" "$(jq -c '.telegram.bot_token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+case "$(cat "$MASKED")" in
+*BOTSECRET*) bad "hand-edited secret never reaches the masked copy" "BOTSECRET leaked into $MASKED" ;;
+*) ok "hand-edited secret never reaches the masked copy" ;;
+esac
+
+# Sync .env with the hand-edited config so the sentinel commit below only changes allowlisted
+# P2POOL keys (TELEGRAM_BOT_TOKEN is deliberately NOT dashboard-committable).
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+
+# Host-side sentinel swap: a proposal carrying {"__secret__":true} for untouched secrets (what the
+# dashboard now submits) stages with the LIVE values merged back in, and a sentinel for an UNSET
+# secret collapses to "" instead of leaking a dict into config.json.
+UUID5="55555555-5555-4555-8555-555555555555"
+jq -n --arg w "$WALLET" --arg id "$UUID5" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:{"__secret__":true}},
+    tari:{wallet_address:"T"}, p2pool:{pool:"main"}, workers:{api_token:{"__secret__":true}},
+    telegram:{bot_token:{"__secret__":true},chat_id:"-100123"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:{"__secret__":true}},control:{enabled:true}}}}' >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "sentinel-carrying preview validates" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "previewed"
+assert_eq "sentinel swapped for the live node password at staging" "$(jq -r '.monero.node_password' "$STAGED/$UUID5.json" 2>/dev/null)" "p"
+assert_eq "sentinel swapped for the live dashboard password" "$(jq -r '.dashboard.auth.password' "$STAGED/$UUID5.json" 2>/dev/null)" "a control passphrase"
+assert_eq "sentinel swapped for the live telegram token" "$(jq -r '.telegram.bot_token' "$STAGED/$UUID5.json" 2>/dev/null)" "BOTSECRET"
+assert_eq "sentinel for an unset secret collapses to empty" "$(jq -r '.workers.api_token' "$STAGED/$UUID5.json" 2>/dev/null)" ""
+# The container-visible legs of this round trip stay secret-free (the request carried sentinels,
+# the merged copy lives only in host-only staged/).
+case "$(cat "$RESULTS/$UUID5.json")$(cat "$AUDIT")" in
+*BOTSECRET* | *"a control passphrase"*) bad "results/audit stay secret-free on a sentinel preview" "a live secret leaked" ;;
+*) ok "results/audit stay secret-free on a sentinel preview" ;;
+esac
+
+# Commit the sentinel intent: the committed config.json carries the LIVE secrets ("blank keeps"),
+# and the masked prefill copy is re-rendered to match the new state.
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live node password" "$(jq -r '.monero.node_password' "$C/config.json")" "p"
+assert_eq "committed config keeps the live telegram token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "BOTSECRET"
+assert_eq "committed config never carries a sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
+assert_eq "masked copy re-rendered after the commit" "$(jq -r '.p2pool.pool' "$MASKED" 2>/dev/null)" "main"
+case "$(cat "$MASKED")" in
+*BOTSECRET* | *"a control passphrase"*) bad "re-rendered masked copy still holds no secrets" "a secret leaked into $MASKED" ;;
+*) ok "re-rendered masked copy still holds no secrets" ;;
+esac
+
 echo "== black-box: .env line-injection guard (#33 hardening, per field) =="
 # A newline in any config string that renders into .env unquoted would inject a SECOND KEY=value
 # line — e.g. PITHEAD_REGISTRY=evil.tld — which the root apply then trusts for every image: pull
@@ -3851,6 +3959,60 @@ jq '.p2pool.pool="mini"' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "non-security change on a security-laden config still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "pool tier change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+
+echo "== black-box: per-worker token mask + host-side restore (#172) =="
+# dashboard.workers[].token is a per-rig credential living in a VARIABLE-LENGTH array — out of the
+# fixed CONTROL_SECRET_PATHS walk. The masked prefill copy must sentinel each set token (extends
+# the #440 property per-rig), and the staging swap must restore each sentinel from the LIVE token
+# matched by worker NAME. Per-worker descriptors are never dashboard-EDITABLE (the commit gate
+# refuses any dashboard.workers change, asserted above) — so this restore is exactly what lets an
+# operator's OTHER edits round-trip: the workers come back as sentinels and must resolve to the
+# live values unchanged, or every dashboard commit on a stack with configured workers would fail.
+jq '.dashboard.workers=[
+    {name:"rig1",host:"10.0.0.5",token:"tok_rig1secret"},
+    {name:"rig2"},
+    {name:"rig3",token:"tok_rig3secret"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+# 1) masked prefill copy: each SET per-worker token is a sentinel, the raw token never appears,
+#    and a token-less worker stays token-less.
+assert_eq "per-worker token masked to the sentinel" "$(jq -c '.dashboard.workers[0].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "second per-worker token masked to the sentinel" "$(jq -c '.dashboard.workers[2].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "token-less worker stays token-less in the masked copy" "$(jq -r '.dashboard.workers[1] | has("token")' "$MASKED" 2>/dev/null)" "false"
+case "$(cat "$MASKED")" in
+*tok_rig1secret* | *tok_rig3secret*) bad "masked copy holds no per-worker token" "a per-worker token leaked into $MASKED" ;;
+*) ok "masked copy holds no per-worker token" ;;
+esac
+# 2) staging swap: a proposal that prefills the workers from the masked copy (sentinel tokens) and
+#    changes only an allowlisted key stages with each token restored from live BY NAME.
+UUID6="66666666-6666-4666-8666-666666666666"
+jq --arg id "$UUID6" '{id:$id, action:"preview", actor:"admin", config: (.p2pool.pool="main")}' "$MASKED" >"$REQS/$UUID6.json"
+run_pending >/dev/null
+assert_eq "worker-sentinel preview validates" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "previewed"
+assert_eq "per-worker sentinel restored to the live token by name" "$(jq -r '.dashboard.workers[0].token' "$STAGED/$UUID6.json" 2>/dev/null)" "tok_rig1secret"
+assert_eq "second per-worker sentinel restored by name" "$(jq -r '.dashboard.workers[2].token' "$STAGED/$UUID6.json" 2>/dev/null)" "tok_rig3secret"
+assert_eq "token-less worker stays token-less at staging" "$(jq -r '.dashboard.workers[1] | has("token")' "$STAGED/$UUID6.json" 2>/dev/null)" "false"
+case "$(cat "$RESULTS/$UUID6.json")$(cat "$AUDIT")" in
+*tok_rig1secret* | *tok_rig3secret*) bad "results/audit stay free of the restored per-worker token" "a per-worker token leaked" ;;
+*) ok "results/audit stay free of the restored per-worker token" ;;
+esac
+# 3) commit: workers restored to live == live, so the gate passes on the pool-only change, and the
+#    committed config KEEPS the live per-worker tokens (restored by name, not lost, never a dict).
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID6" >"$REQS/$UUID6.json"
+run_pending >/dev/null
+assert_eq "worker-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live per-worker token" "$(jq -r '.dashboard.workers[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
+# 4) duplicate names resolve first-declared-wins (staging only — a duplicate can't round-trip a
+#    commit, since the second entry's token would flip and trip the gate).
+jq '.dashboard.workers=[{name:"rig1",host:"10.0.0.5",token:"tok_first"},{name:"rig1",token:"tok_second"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+UUID7="77777777-7777-4777-8777-777777777777"
+jq --arg id "$UUID7" '{id:$id, action:"preview", actor:"admin", config: .}' "$MASKED" >"$REQS/$UUID7.json"
+run_pending >/dev/null
+assert_eq "duplicate-name sentinel restores the first-declared token" "$(jq -r '.dashboard.workers[0].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
+assert_eq "duplicate-name second entry also resolves to first-declared" "$(jq -r '.dashboard.workers[1].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
 
 echo "== black-box: audit log growth is bounded (#349) =="
 # Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
@@ -4192,6 +4354,202 @@ sed -i.bak 's/"control":{"enabled":true}/"control":{"enabled":false}/' "$C/confi
 out="$(run_pending)"
 assert_rc "runner refuses when the channel is disabled" "$?" "1"
 assert_contains "runner disabled message" "$out" "not enabled"
+
+# ---------------------------------------------------------------------------
+echo "== unit: update_current_symlink (#455) =="
+# A non-versioned install dir (source checkout, plain `pithead/` extract) gets NO symlink —
+# `current` only makes sense beside pithead-vX.Y.Z version dirs.
+mkdir -p "$SANDBOX/plainroot/pithead"
+run_sourced "$SANDBOX/plainroot/pithead" update_current_symlink >/dev/null 2>&1
+if [ -e "$SANDBOX/plainroot/current" ]; then
+    bad "no current symlink for a non-versioned dir" "created $SANDBOX/plainroot/current"
+else
+    ok "no current symlink for a non-versioned dir"
+fi
+
+# A versioned dir gets `../current -> <dirname>` (relative target, so the tree can move).
+mkdir -p "$SANDBOX/deployroot/pithead-v9.9.9" "$SANDBOX/deployroot/pithead-v9.9.10"
+run_sourced "$SANDBOX/deployroot/pithead-v9.9.9" update_current_symlink >/dev/null 2>&1
+assert_eq "current -> pithead-v9.9.9 after first run" "$(readlink "$SANDBOX/deployroot/current")" "pithead-v9.9.9"
+# Re-pointing: a later version dir takes over the same symlink (ln -sfn, no stale nesting).
+run_sourced "$SANDBOX/deployroot/pithead-v9.9.10" update_current_symlink >/dev/null 2>&1
+assert_eq "current re-pointed to pithead-v9.9.10" "$(readlink "$SANDBOX/deployroot/current")" "pithead-v9.9.10"
+# Idempotent re-run keeps it.
+run_sourced "$SANDBOX/deployroot/pithead-v9.9.10" update_current_symlink >/dev/null 2>&1
+assert_eq "current unchanged on re-run" "$(readlink "$SANDBOX/deployroot/current")" "pithead-v9.9.10"
+
+# `current` existing as a REAL directory is never clobbered (ln -sfn would nest a link inside it).
+mkdir -p "$SANDBOX/dirroot/pithead-v1.2.3" "$SANDBOX/dirroot/current"
+out="$(run_sourced "$SANDBOX/dirroot/pithead-v1.2.3" update_current_symlink 2>&1)"
+rc=$?
+assert_rc "real-dir current: still rc 0 (never fails the upgrade)" "$rc" "0"
+assert_contains "real-dir current: warns" "$out" "not a symlink"
+if [ -d "$SANDBOX/dirroot/current" ] && [ ! -L "$SANDBOX/dirroot/current" ]; then
+    ok "real-dir current left untouched"
+else
+    bad "real-dir current left untouched" "was replaced"
+fi
+
+echo "== unit: migrate_dashboard_data (#455) =="
+# Direct unit calls with the parse-time globals set by hand; docker stubbed (no daemon in tests).
+mig455() { # <workdir> <DASHBOARD_DIR> <is_default>
+    (
+        cd "$1" || exit 1
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        docker() { :; }
+        # shellcheck disable=SC2034  # read by the sourced migrate_dashboard_data
+        DASHBOARD_DIR="$2"
+        # shellcheck disable=SC2034
+        DASHBOARD_DIR_IS_DEFAULT="$3"
+        migrate_dashboard_data
+    )
+}
+M="$SANDBOX/mig"
+mkdir -p "$M/data/dashboard" "$M/shared"
+printf 'olddb' >"$M/data/dashboard/mining_data.db"
+# move-if-default: the old in-install-dir data moves to the shared-root default, DB intact.
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "move-if-default succeeds" "$?" "0"
+assert_eq "DB moved intact" "$(cat "$M/shared/dashboard/mining_data.db" 2>/dev/null)" "olddb"
+if [ -e "$M/data/dashboard" ]; then bad "old default gone after move" "still exists"; else ok "old default gone after move"; fi
+# idempotent: nothing at the old default any more -> silent no-op.
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "re-run is a no-op" "$?" "0"
+assert_eq "DB survives the re-run" "$(cat "$M/shared/dashboard/mining_data.db" 2>/dev/null)" "olddb"
+# warn-if-custom: an operator-pinned dashboard.data_dir is never migrated — warn and leave both.
+mkdir -p "$M/data/dashboard"
+printf 'olddb2' >"$M/data/dashboard/mining_data.db"
+out="$(mig455 "$M" "$M/pinned" 0 2>&1)"
+assert_rc "custom path: rc 0" "$?" "0"
+assert_contains "custom path: warns about the leftover" "$out" "$M/data/dashboard"
+assert_eq "custom path: old data untouched" "$(cat "$M/data/dashboard/mining_data.db")" "olddb2"
+if [ -e "$M/pinned/mining_data.db" ]; then bad "custom path: nothing moved" "moved anyway"; else ok "custom path: nothing moved"; fi
+# conflict: data at BOTH locations -> hard stop, nothing touched (never guess which DB is live).
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "both-populated: refuses" "$?" "1"
+assert_eq "both-populated: old DB untouched" "$(cat "$M/data/dashboard/mining_data.db")" "olddb2"
+assert_eq "both-populated: new DB untouched" "$(cat "$M/shared/dashboard/mining_data.db")" "olddb"
+# empty pre-created target (an earlier ensure_directories mkdir) is not a conflict — the move runs.
+rm -f "$M/shared/dashboard/mining_data.db"
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "empty pre-created target: move succeeds" "$?" "0"
+assert_eq "empty pre-created target: DB moved" "$(cat "$M/shared/dashboard/mining_data.db" 2>/dev/null)" "olddb2"
+
+# Wiring: stack_upgrade migrates BEFORE the containers are recreated and points `current` at the
+# install only AFTER a successful 'compose up' — a failed upgrade must not move the pointer.
+upg455_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 0; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    migrate_dashboard_data() { echo migrate; }
+    update_current_symlink() { echo symlink; }
+    compose_up_checked() { echo compose; }
+    stack_upgrade
+)
+assert_eq "upgrade: migrate -> compose -> symlink (#455)" \
+    "$(printf '%s\n' "$upg455_order" | grep -xE 'migrate|compose|symlink' | tr '\n' ',')" "migrate,compose,symlink,"
+upg455_fail=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 0; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    migrate_dashboard_data() { :; }
+    update_current_symlink() { echo symlink; }
+    compose_up_checked() { return 1; }
+    stack_upgrade
+)
+assert_not_contains "failed upgrade does NOT move the current pointer (#455)" "$upg455_fail" "symlink"
+
+echo "== black-box: deploy-box layout (#455) =="
+# A sandboxed source-checkout install whose chain data dirs share one root — the prod/gouda
+# layout. Proves the default resolution, the apply-time migration, and the upgrade-time
+# symlink end to end through the real CLI (docker/sudo stubbed).
+L="$SANDBOX/boxroot/pithead-v9.9.9"
+mkdir -p "$L/build/tari" "$L/build/dashboard"
+: >"$L/build/dashboard/Dockerfile"
+cp "$STACK" "$L/pithead"
+make_stubs "$L/bin"
+cp "$ROOT/build/tari/config.toml.template" "$L/build/tari/"
+SHARED="$SANDBOX/boxroot/data"
+seed_L() {
+    cat >"$L/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+}
+cfg_L() { # <dashboard-extra-json>  e.g. ',"data_dir":"/pinned"'
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"T","data_dir":"%s/tari"}, "p2pool":{"pool":"main","data_dir":"%s/p2pool"}, "tor":{"data_dir":"%s/tor"}, "dashboard":{"secure":true,"host":"box.lan"%s} }\n' \
+        "$WALLET" "$SHARED" "$SHARED" "$SHARED" "$SHARED" "$1" >"$L/config.json"
+}
+# Old layout on disk: the dashboard DB inside the version dir's ./data (the pre-#455 default).
+seed_L
+cfg_L ""
+mkdir -p "$L/data/dashboard"
+printf 'proddb' >"$L/data/dashboard/mining_data.db"
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with a shared data root succeeds" "$?" "0"
+assert_eq "DASHBOARD_DATA_DIR joins the shared data root" \
+    "$(run_sourced "$L" env_get_file "$L/.env" DASHBOARD_DATA_DIR)" "$SHARED/dashboard"
+assert_eq "apply moved the dashboard DB to the shared root" \
+    "$(cat "$SHARED/dashboard/mining_data.db" 2>/dev/null)" "proddb"
+if [ -e "$L/data/dashboard" ]; then bad "apply: old in-version-dir data gone" "still exists"; else ok "apply: old in-version-dir data gone"; fi
+# Re-apply: no config change, nothing to migrate — clean no-op.
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "re-apply is a no-op" "$?" "0"
+assert_eq "re-apply leaves the migrated DB alone" "$(cat "$SHARED/dashboard/mining_data.db")" "proddb"
+# Upgrade from the versioned dir: maintains `current ->` beside it and stays idempotent.
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead upgrade 2>&1)"
+assert_rc "upgrade succeeds" "$?" "0"
+assert_eq "upgrade maintains current -> pithead-v9.9.9" "$(readlink "$SANDBOX/boxroot/current")" "pithead-v9.9.9"
+assert_eq "upgrade leaves the migrated DB alone" "$(cat "$SHARED/dashboard/mining_data.db")" "proddb"
+# Scattered custom dirs (no single parent): the classic in-install ./data default stands.
+seed_L
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' \
+    "$WALLET" "$SHARED" >"$L/config.json"
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with scattered data dirs succeeds" "$?" "0"
+assert_eq "no shared root -> dashboard default stays ./data/dashboard" \
+    "$(run_sourced "$L" env_get_file "$L/.env" DASHBOARD_DATA_DIR)" "$L/data/dashboard"
 
 # ---------------------------------------------------------------------------
 echo ""

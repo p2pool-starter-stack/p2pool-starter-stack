@@ -347,9 +347,12 @@ button then appears next to the Simple/Advanced toggle.
 
 The flow mirrors the CLI's `apply`:
 
-1. The form is prefilled from the live `config.json`, grouped by section. Secrets (the dashboard
-   password, the Telegram bot token, node RPC credentials, the stratum password) show as
-   "set — leave blank to keep"; their values are never sent to the browser.
+1. The form is prefilled from a pre-masked copy of `config.json` the host renders into the
+   control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)), grouped by
+   section. Secrets (the dashboard password, the Telegram bot token, node RPC credentials, the
+   stratum password) show as "set — leave blank to keep"; their values never enter the dashboard
+   container, let alone the browser — leaving one untouched sends a sentinel back, and the host
+   swaps in the live value when it stages the change.
 2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own

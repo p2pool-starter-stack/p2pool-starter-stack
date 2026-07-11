@@ -168,8 +168,10 @@ CONTROL_RESULTS_DIR = os.environ.get("CONTROL_RESULTS_DIR", "/control/results")
 # written and rotated host-side, and every field read from them is sanitized before serving.
 CONTROL_AUDIT_LOG = os.environ.get("CONTROL_AUDIT_LOG", "/control/audit/control.log")
 ACCESS_LOG_PATH = os.environ.get("ACCESS_LOG_PATH", "/access-log/access.log")
-# The live config.json, bind-mounted read-only for form prefill; secrets are masked before serving.
-HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/host-config/config.json")
+# The PRE-MASKED config copy, bind-mounted read-only for form prefill (#440): the host renders it
+# with every set secret leaf already replaced by the sentinel, so the container never holds a raw
+# secret. The raw config.json is not mounted into the container at all.
+HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/control/masked/config.json")
 # config.reference.json (every key with its default), bind-mounted read-only. read_config merges it
 # UNDER the operator's sparse config.json so the editor form covers the full schema, not just the
 # keys the operator happens to have set (#33 "edit every setting"). A missing reference degrades to
@@ -394,6 +396,21 @@ TELEGRAM_EVENTS = {
 # on. Uses the dashboard container's timezone (dashboard.timezone), so "08:00" means 8am wherever
 # the box is. Rendered from config.json telegram.daily_summary_time.
 TELEGRAM_DAILY_SUMMARY_TIME = os.environ.get("TELEGRAM_DAILY_SUMMARY_TIME", "08:00").strip()
+
+# --- Operator alerts: webhook + ntfy sinks (#380) ---
+# Push-only siblings of the Telegram alerter: every alert AlertService emits also POSTs to each
+# configured webhook URL (as JSON) and to an ntfy topic URL (as the message body). All off by
+# default — no URLs means nothing new runs. The URLs and the ntfy token are secrets (webhook
+# query strings often carry tokens): rendered into the owner-only .env and never logged.
+# Rendered from config.json's notifications block by pithead.
+NOTIFY_WEBHOOK_URLS = os.environ.get("NOTIFY_WEBHOOK_URLS", "").split()
+NTFY_URL = os.environ.get("NTFY_URL", "").strip()
+NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "").strip()
+# Route the webhook/ntfy POSTs over Tor (default), so the endpoint sees a Tor exit, not the host
+# IP — the same egress rule as Telegram (#340). notifications.tor:false opts out for LAN /
+# self-hosted endpoints (Tor exits can't reach RFC1918 addresses); flipping it makes clearnet
+# endpoints see the host IP.
+NOTIFY_TOR = os.environ.get("NOTIFY_TOR", "true").strip().lower() == "true"
 
 # Hashrate-degradation detector (Issue #99). Flags a sustained drop in total hashrate below
 # HASHRATE_DROP_THRESHOLD_PCT of its trailing baseline for HASHRATE_DROP_MINUTES minutes — surfaced

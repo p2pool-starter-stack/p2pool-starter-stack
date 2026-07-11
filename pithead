@@ -379,6 +379,9 @@ stack_upgrade() {
     # it's already installed from `up` and this is a cheap idempotent re-apply. Runs after the .env
     # render above so the toggle/subnet are current.
     apply_tor_egress_firewall # Tor-only egress (#270), consistent with up/apply
+    # One-time move of the dashboard data out of the install dir (#455) — after the .env commit
+    # (a failed move is retried on re-run) and before the recreate mounts the new location.
+    migrate_dashboard_data
     # Source checkout: rebuild the images from build/. Release install: pull the new published images
     # instead — force a re-pull so a moved tag is refreshed (#44).
     if is_source_checkout; then
@@ -400,6 +403,7 @@ stack_upgrade() {
     if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
         provision_dashboard_onion && render_env
     fi
+    update_current_symlink # #455: only a SUCCESSFUL upgrade moves the `current ->` pointer
     log "Stack upgraded."
 }
 
@@ -2349,7 +2353,22 @@ parse_and_validate_config() {
     TARI_DIR=$(resolve_default "$(jq -r '.tari.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/tari")
     P2POOL_DIR=$(resolve_default "$(jq -r '.p2pool.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/p2pool")
     TOR_DATA_DIR=$(resolve_default "$(jq -r '.tor.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/tor")
-    DASHBOARD_DIR=$(resolve_default "$(jq -r '.dashboard.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/dashboard")
+    # Shared data root (#455): when monero/tari/p2pool/tor all resolve under ONE parent, that
+    # parent is the box's data root and the dashboard's DEFAULT joins it — before this, the
+    # dashboard DB was the only data living inside the (per-version) install dir, moving with the
+    # code on every versioned deploy. An all-default install (or scattered custom dirs) keeps the
+    # classic ./data default, so nothing changes unless the chain data was deliberately co-located.
+    local _data_root _dash_cfg
+    _data_root=$(dirname "$MONERO_DIR")
+    { [ "$(dirname "$TARI_DIR")" == "$_data_root" ] &&
+        [ "$(dirname "$P2POOL_DIR")" == "$_data_root" ] &&
+        [ "$(dirname "$TOR_DATA_DIR")" == "$_data_root" ]; } || _data_root="$PWD/data"
+    _dash_cfg=$(jq -r '.dashboard.data_dir // empty' "$CONFIG_FILE")
+    DASHBOARD_DIR=$(resolve_default "$_dash_cfg" "$_data_root/dashboard")
+    # Global, read by migrate_dashboard_data: the #455 migration only ever moves a DEFAULT
+    # location — an operator-pinned dashboard.data_dir is theirs, never touched.
+    DASHBOARD_DIR_IS_DEFAULT=1
+    [ "$DASHBOARD_DIR" == "$_dash_cfg" ] && DASHBOARD_DIR_IS_DEFAULT=0
     # Internal shared state dir (#234): the dashboard (rw) drops a per-chain "clearnet sync complete"
     # marker here and the monerod/tari entrypoints (ro) read it to decide Tor-vs-clearnet. Not a
     # user-facing data dir, so it's fixed under ./data rather than config-driven.
@@ -2510,14 +2529,61 @@ prepare_directories() {
     prepare_control_dirs
 }
 
+# Secret leaves in config.json, as jq path arrays. The single host-side source for BOTH control-
+# channel maskings (#440): the pre-masked prefill copy (render_masked_config) and the sentinel
+# swap at staging (control_preview). Mirrors the dashboard's control_service.SECRET_PATHS — keep
+# the two lists in step.
+readonly CONTROL_SECRET_PATHS='[
+    ["dashboard","auth","password"],
+    ["telegram","bot_token"],
+    ["workers","api_token"],
+    ["monero","node_username"],
+    ["monero","node_password"],
+    ["p2pool","stratum_password"],
+    ["healthchecks","ping_url"]]'
+
+# Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
+# by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
+# The dashboard serves the Configuration form from THIS file (mounted read-only) — the raw
+# config.json is never mounted into the container, so a full container compromise reads masked
+# config, results, and the audit log, nothing more. An EMPTY secret stays empty, so the UI can
+# tell "set — leave blank to keep" from "not set". World-readable on purpose (it holds no secret
+# values; the container reads it as $APP_UID); best-effort, so a render hiccup degrades to a
+# stale prefill, never a failed apply.
+render_masked_config() { # <control-dir>
+    local mdir="$1/masked" tmp
+    mkdir -p "$mdir" 2>/dev/null || true
+    tmp="$mdir/.config.json.tmp"
+    # Per-worker tokens (#172) live in the variable-length .dashboard.workers[] array, out of
+    # reach of the fixed-path walk above — mask each SET .token entry by entry.
+    if jq --argjson paths "$CONTROL_SECRET_PATHS" '
+        reduce $paths[] as $p (.;
+            if ((try getpath($p) catch null) // "") == "" then .
+            else setpath($p; {"__secret__": true}) end)
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token // "") == "" then . else .token = {"__secret__": true} end)
+          else . end' "$CONFIG_FILE" >"$tmp" 2>/dev/null; then
+        chmod 644 "$tmp" 2>/dev/null || true
+        mv "$tmp" "$mdir/config.json" 2>/dev/null ||
+            warn "Could not write $mdir/config.json — the dashboard editor prefill may be stale."
+    else
+        rm -f "$tmp"
+        warn "Could not render the masked config copy — the dashboard editor prefill may be stale."
+    fi
+}
+
 # Control-channel spool layout (#33). requests/ is the ONLY leg the dashboard container may write
-# (chowned to its uid); staged/, results/ and audit/ stay host-owned — the container mounts
-# results/ and audit/ read-only and never sees staged/ at all. That rw/ro split IS the trust
-# boundary: the container can only ask; it cannot forge a result, rewrite the audit log, or alter
-# a staged intent between preview and commit.
+# (chowned to its uid); staged/ stays host-only — the container mounts results/, audit/ and the
+# pre-masked masked/ copy (#440) read-only and never sees staged/ at all. That rw/ro split is the
+# trust boundary: the container can only ask; it cannot forge a result, rewrite the audit log,
+# alter a staged intent between preview and commit, or read a secret out of the live config.
 prepare_control_dirs() {
     mkdir -p "$CONTROL_DIR/requests" "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
     ensure_owner "$CONTROL_DIR/requests" "$APP_UID" "$APP_GID"
+    # Re-render the masked prefill copy on every setup/apply/upgrade (#440) — any path that can
+    # change config.json runs through here, so the copy can never serve a stale schema for long.
+    render_masked_config "$CONTROL_DIR"
     # Caddy access-log dir (#349): root-owned so the capability-stripped caddy container (uid 0,
     # no CAP_DAC_OVERRIDE) can write it; the dashboard (uid 1000) reads it via a ro mount — the
     # Caddyfile's `mode 0644` keeps the files readable.
@@ -2582,6 +2648,63 @@ ensure_directories() {
     ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
     prepare_control_dirs # #33: spool dirs exist + requests/ writable by the dashboard uid
     [ "${#created[@]}" -gt 0 ] && sudo chmod -R 755 "$P2POOL_DIR/stats"
+    return 0
+}
+
+# One-time dashboard-data migration (#455): the dashboard DB used to default INSIDE the install
+# dir (./data/dashboard) — the one data dir that moved with the code on every versioned deploy.
+# When the resolved default now lives under the shared data root, move the old in-install data
+# there once. Move-then-verify and idempotent: a no-op when the old default holds nothing (fresh
+# install, or already migrated), a warning-only when the operator pinned dashboard.data_dir, and
+# a hard stop when BOTH locations hold data — never guess which DB is live. Runs after the config
+# is committed (apply) / right before the containers are recreated (upgrade), so a failed move is
+# retried on the next run and the recreated dashboard always mounts the migrated directory.
+migrate_dashboard_data() {
+    local old="$PWD/data/dashboard" new="${DASHBOARD_DIR:-}"
+    [ -n "$new" ] && [ "$old" != "$new" ] || return 0   # classic layout — nothing to move
+    [ -n "$(ls -A "$old" 2>/dev/null)" ] || return 0    # old default empty/absent — nothing to move
+    if [ "${DASHBOARD_DIR_IS_DEFAULT:-1}" -eq 0 ]; then # operator-pinned path: their data, their call
+        warn "Dashboard data found at the old default $old, but dashboard.data_dir is set explicitly ($new) — leaving both alone. Move or remove $old yourself."
+        return 0
+    fi
+    if [ -n "$(ls -A "$new" 2>/dev/null)" ]; then
+        error "Dashboard data exists at BOTH the old default ($old) and the new one ($new) — refusing to guess which is live. Keep one, delete the other, then re-run."
+    fi
+    log "Moving the dashboard data to the shared data root: $old → $new (#455)..."
+    # The dashboard writes its SQLite DB continuously — stop it for the move; the compose up that
+    # follows every apply/upgrade brings it back on the new mount. Best-effort: already stopped is fine.
+    docker compose stop dashboard >/dev/null 2>&1 || true
+    local had_db=0
+    [ -f "$old/mining_data.db" ] && had_db=1
+    rmdir "$new" 2>/dev/null || true # drop a pre-created EMPTY target so mv renames instead of nesting
+    mkdir -p "$(dirname "$new")"
+    mv "$old" "$new" || error "Could not move $old to $new — the data is still at $old, nothing was lost. Move it yourself (or set dashboard.data_dir), then re-run."
+    if [ "$had_db" -eq 1 ] && [ ! -f "$new/mining_data.db" ]; then
+        error "The dashboard DB is missing after the move — check $new and $old before starting the stack."
+    fi
+    log "Dashboard data migrated to $new."
+}
+
+# One authoritative pointer to the live install (#455): when this install lives in a versioned
+# deploy dir (pithead-vX.Y.Z), keep a `current` symlink beside it pointing here — updated with
+# `ln -sfn` on every successful setup/upgrade, so the live version dir is discoverable without
+# docker inspect (the dashboard one-click upgrade, #59, runs `upgrade` and gets this for free).
+# Relative target, so the whole tree can move. Any other layout (source checkout, plain
+# `pithead/` extract) is left alone, and nothing here ever fails the surrounding command.
+update_current_symlink() {
+    local name parent
+    name=$(basename "$PWD")
+    [[ "$name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+    parent=$(dirname "$PWD")
+    if [ -e "$parent/current" ] && [ ! -L "$parent/current" ]; then
+        warn "$parent/current exists but is not a symlink — leaving it alone. Point it at $name yourself."
+        return 0
+    fi
+    if ln -sfn "$name" "$parent/current" 2>/dev/null; then
+        log "Updated $parent/current -> $name."
+    else
+        warn "Could not update $parent/current -> $name (permissions?) — the stack is fine; fix the symlink by hand."
+    fi
     return 0
 }
 
@@ -3048,6 +3171,18 @@ render_env() {
     # Local time (HH:MM) for the daily digest; default 08:00.
     tg_summary_time=$(jq -r '.telegram.daily_summary_time // "08:00"' "$CONFIG_FILE")
 
+    # Webhook + ntfy alert sinks (#380). Push-only siblings of the Telegram alerter: every alert
+    # also POSTs to each notifications.webhooks URL (as JSON) and to the notifications.ntfy.url
+    # topic (as the message body). All off by default — no URLs, nothing runs. The URLs and the
+    # ntfy token are secrets (webhook query strings often carry tokens): they live only in the
+    # owner-only .env and are never echoed or logged. notifications.tor (default true) keeps the
+    # POSTs on Tor so endpoints see a Tor exit, not this host's IP; false is the LAN carve-out.
+    local notify_webhooks ntfy_url ntfy_token notify_tor
+    notify_webhooks=$(jq -r '(.notifications.webhooks // []) | join(" ")' "$CONFIG_FILE")
+    ntfy_url=$(jq -r '.notifications.ntfy.url // empty' "$CONFIG_FILE")
+    ntfy_token=$(jq -r '.notifications.ntfy.token // empty' "$CONFIG_FILE")
+    notify_tor=$(jq -r 'if .notifications.tor != null then .notifications.tor | tostring else "true" end' "$CONFIG_FILE")
+
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
     # healthy. Uncapped, that growth can OOM the whole host on small machines. So the cap is a SAFETY
@@ -3164,6 +3299,10 @@ TELEGRAM_EVENT_CONTAINER_UNHEALTHY=$tg_ev_container_unhealthy
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
+NOTIFY_WEBHOOK_URLS=$notify_webhooks
+NTFY_URL=$ntfy_url
+NTFY_TOKEN=$ntfy_token
+NOTIFY_TOR=$notify_tor
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -3613,6 +3752,7 @@ setup() {
     optimize_kernel
     generate_caddyfile
     provision_control_runner # #33: install/remove the dashboard-control systemd trigger
+    update_current_symlink   # #455: versioned deploy dir -> maintain the `current ->` pointer
 
     log "Deployment preparation complete!"
     if [ "$REBOOT_REQUIRED" = true ]; then
@@ -3688,6 +3828,10 @@ describe_change() {
         ;;
     PROXY_DONATE_LEVEL)
         msg="xmrig-proxy dev-fee donation level: ${old:-0}% → ${new}% (#173) — the xmrig-proxy container is recreated (brief restart)."
+        ;;
+    DASHBOARD_DATA_DIR)
+        flag=DEST
+        msg="$key: $old → $new — data at the old DEFAULT location (./data/dashboard) is moved there automatically (#455); any other old path is left in place."
         ;;
     *_DATA_DIR)
         flag=DEST
@@ -3821,6 +3965,39 @@ describe_change() {
         ;;
     TELEGRAM_DAILY_SUMMARY_TIME)
         msg="Telegram daily summary time: $old → $new (local time; #121)."
+        ;;
+    NOTIFY_WEBHOOK_URLS)
+        # Webhook URLs often carry tokens in the query string — report the change WITHOUT
+        # printing the values (same rule as HEALTHCHECKS_PING_URL).
+        if [ -z "$new" ]; then
+            msg="Webhook alert sink(s) DISABLED (#380) — URL list cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="Webhook alert sink(s) ENABLED (#380) — every alert now also POSTs as JSON to the configured URL(s), over Tor by default; the dashboard container is recreated."
+        else
+            msg="Webhook alert URL(s) updated (#380) — the dashboard container is recreated."
+        fi
+        ;;
+    NTFY_URL)
+        # The topic URL is a capability secret (whoever knows it can read/post the topic) —
+        # never print it.
+        if [ -z "$new" ]; then
+            msg="ntfy alert sink DISABLED (#380) — topic URL cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="ntfy alert sink ENABLED (#380) — every alert now also POSTs to the configured ntfy topic, over Tor by default; the dashboard container is recreated."
+        else
+            msg="ntfy topic URL updated (#380) — the dashboard container is recreated."
+        fi
+        ;;
+    NTFY_TOKEN)
+        # Secret — never echo the token value into the change preview / logs.
+        msg="ntfy access token updated (#380) — the dashboard container is recreated."
+        ;;
+    NOTIFY_TOR)
+        if [ "$new" == "true" ]; then
+            msg="Webhook/ntfy alerts back on Tor (#380) — endpoints see a Tor exit, not this host's IP; the dashboard container is recreated."
+        else
+            msg="⚠ Webhook/ntfy alerts OFF Tor (#380) — POSTs go out directly, so clearnet endpoints see this host's IP (the LAN/self-hosted carve-out; Tor exits can't reach private addresses); the dashboard container is recreated."
+        fi
         ;;
     MONERO_CLEARNET_SYNC)
         flag=DEST
@@ -4028,6 +4205,10 @@ apply() {
     # build error, a port already bound, a failed health/dependency gate, daemon hiccup) leaves the
     # marker for the next apply to retry instead of no-opping on the already-committed config (#125).
     : >"$apply_marker"
+    # One-time move of the dashboard data out of the install dir (#455) — after the confirmed
+    # commit above (never before the operator said yes) and under the marker, so a failed move is
+    # retried; the recreate below then mounts the migrated directory.
+    migrate_dashboard_data
     # Compose recreates only the services whose resolved config changed; --remove-orphans
     # drops monerod when a local→remote switch deactivates the local_node profile.
     if ! compose_up_checked -d --remove-orphans; then
@@ -4116,7 +4297,9 @@ run_chain() {
 # (its single writable spool mount). This host-side runner claims each request, validates it, and
 # dispatches EXACTLY three actions — `apply --dry-run --porcelain` (preview), `apply -y` (commit),
 # and `upgrade` to the latest published release (#59, target re-derived host-side).
-# Outcomes land in results/ and an audit line in audit/, both mounted read-only in the container.
+# Outcomes land in results/ and an audit line in audit/, both mounted read-only in the container —
+# as is masked/, the pre-masked config copy the editor form prefills from (#440); the raw
+# config.json is never mounted, so the container holds no secret it wasn't given.
 # No string from the container is ever executed or interpolated into a command; the candidate
 # config crosses the boundary only as a FILE handed to `apply` via PITHEAD_CONFIG_FILE.
 
@@ -4250,13 +4433,34 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "rejected"
         return 0
     fi
-    # The staged copy carries the operator's MERGED secrets (the dashboard re-inserted real values
-    # for unchanged sentinels before submitting). It lives in host-only staged/ — never mounted —
-    # but pin it owner-only anyway so a co-tenant on the host can't read secrets from it (#33
-    # hardening; the config.json bind-mount, not this file, is the real secret trust boundary —
-    # see SECURITY.md). Created under umask 077 so it is never even briefly world-readable
-    # (create-then-chmod race); the chmod stays as belt-and-suspenders.
-    (umask 077 && jq '.config' "$file" >"$staged")
+    # The "blank secret keeps the live value" merge happens HERE, host-side (#440): the request
+    # arrives with {"__secret__":true} sentinels for untouched secrets (the container never held
+    # the real values — it prefills from the pre-masked copy), and each sentinel is swapped for
+    # the live config.json value at staging. A sentinel for a secret that is not actually set
+    # collapses to "" rather than leaking a dict into config.json. The staged copy therefore
+    # carries merged secrets: it lives in host-only staged/ — never mounted — and is pinned
+    # owner-only so a co-tenant on the host can't read secrets from it (#33 hardening). Created
+    # under umask 077 so it is never even briefly world-readable (create-then-chmod race); the
+    # chmod stays as belt-and-suspenders.
+    # Per-worker token sentinels (#172) get the same swap, but out of the fixed-path walk: they
+    # live in the .dashboard.workers[] array, so restore each from the live token matched by worker
+    # name (first-declared wins on duplicate names, matching the container's probe). A sentinel for
+    # a rig with no live token collapses to "" too.
+    (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" '
+        (reduce (($live[0].dashboard.workers // []) | reverse | .[]) as $w ({};
+            if ($w | type) == "object" and ($w.name | type) == "string"
+            then .[$w.name] = ($w.token // "") else . end)) as $livetok
+        | reduce $paths[] as $p (.config;
+            (try getpath($p) catch null) as $v
+            | if ($v | type) == "object" and $v.__secret__ == true
+              then setpath($p; (($live[0] | try getpath($p) catch null) // ""))
+              else . end)
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token | type) == "object" and .token.__secret__ == true
+              then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
+              else . end)
+          else . end' "$file" >"$staged")
     chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '
@@ -4300,8 +4504,9 @@ control_commit() { # <id> <actor> <control-dir>
         return 0
     fi
     keys="$gate_out"
-    # Keep a pre-change backup; on failure it is named in the result and left in place. cp (not mv)
-    # keeps config.json's inode stable — the container bind-mounts the file read-only for prefill.
+    # Keep a pre-change backup; on failure it is named in the result and left in place. The
+    # `apply -y` below re-renders the pre-masked prefill copy (#440), so the dashboard's editor
+    # form reflects the committed config on the next load.
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-control"
     cp "$staged" "$CONFIG_FILE"
     "$0" apply -y >"$logf" 2>&1 || rc=$?
@@ -4535,6 +4740,9 @@ control_run_pending() {
     cdir=$(env_get CONTROL_DIR)
     [ -n "$cdir" ] || cdir="$PWD/data/control"
     mkdir -p "$cdir/staged" "$cdir/results" "$cdir/audit"
+    # Freshen the pre-masked prefill copy (#440) before draining: hand-edits to config.json since
+    # the last apply show up in the editor form. A commit re-renders it again via its `apply -y`.
+    render_masked_config "$cdir"
     # Time-bounded DoS sweep (#33 hardening): drop staged/ copies and stray requests/ files older
     # than an hour that no commit ever claimed, so a burst that is never committed cannot pile up
     # (staged intents already expire per-commit at 10 min; this bounds accumulation regardless).

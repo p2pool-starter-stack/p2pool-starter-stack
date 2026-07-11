@@ -1,13 +1,14 @@
 """Dashboard side of the host-mutation control channel (#33).
 
-The container can only ASK. This module reads the bind-mounted live config (masking every secret
-leaf), writes typed JSON intents into the requests/ spool — the container's single writable leg —
-and reads results back from the read-only results/ mount. The host-side runner
-(``pithead control-run-pending``) re-validates and executes; nothing here runs a command.
+The container can only ASK. This module reads the host-rendered PRE-MASKED config copy (#440) to
+prefill the editor form, writes typed JSON intents into the requests/ spool — the container's
+single writable leg — and reads results back from the read-only results/ mount. The host-side
+runner (``pithead control-run-pending``) re-validates and executes; nothing here runs a command.
 
-Secrets round-trip masked: ``read_config`` replaces each non-empty secret value with the
-``{"__secret__": true}`` sentinel, and ``merge_secrets`` swaps a sentinel coming back in a
-proposed config for the current live value ("unchanged"). The raw secret is never served.
+Secrets never enter the container: the host masks every set secret to the ``{"__secret__": true}``
+sentinel before the copy is mounted (the raw config.json is not mounted at all), a proposal
+carries the sentinel back for an untouched secret, and the host swaps it for the live value when
+it stages the intent. ``read_config`` re-applies the same masking as defense-in-depth.
 """
 
 import asyncio
@@ -21,7 +22,8 @@ from mining_dashboard.config import config
 
 logger = logging.getLogger("ControlService")
 
-# Config paths whose leaves are secrets. Mirrors what pithead's describe_change refuses to echo.
+# Config paths whose leaves are secrets. Mirrors pithead's CONTROL_SECRET_PATHS (the host-side
+# masking source, #440) — keep the two lists in step.
 SECRET_PATHS = [
     ("dashboard", "auth", "password"),
     ("telegram", "bot_token"),
@@ -38,7 +40,8 @@ SECRET_SENTINEL = {"__secret__": True}
 _RESULT_POLL_S = 0.5
 
 
-def _load_raw():
+def _load_host_config():
+    """The host-rendered, pre-masked config copy (#440) — no raw secret ever crosses the mount."""
     with open(config.HOST_CONFIG_PATH) as f:
         return json.load(f)
 
@@ -62,10 +65,6 @@ def _set(cfg, path, value):
     node[path[-1]] = value
 
 
-def is_secret_sentinel(value):
-    return isinstance(value, dict) and value.get("__secret__") is True
-
-
 def _deep_merge(base, override):
     """Recursively lay ``override`` over ``base`` (dicts merge; any other value replaces)."""
     merged = dict(base)
@@ -80,11 +79,12 @@ def _deep_merge(base, override):
 def read_config():
     """The full config schema for the editor's form, every set secret masked to the sentinel.
 
-    ``config.reference.json`` (every key with its default) is merged UNDER the operator's sparse
-    ``config.json`` so the form covers the whole schema — a missing/unreadable reference degrades to
-    the host config alone (graft #437). An *empty* secret stays empty, so the UI can tell
-    "set — leave blank to keep" from "not set"; masking runs AFTER the merge."""
-    cfg = _load_raw()
+    ``config.reference.json`` (every key with its default) is merged UNDER the host's sparse,
+    pre-masked copy so the form covers the whole schema — a missing/unreadable reference degrades
+    to the host copy alone (graft #437). An *empty* secret stays empty, so the UI can tell
+    "set — leave blank to keep" from "not set". The copy arrives already masked (#440); the
+    masking pass here is defense-in-depth and runs AFTER the merge."""
+    cfg = _load_host_config()
     try:
         with open(config.HOST_REFERENCE_PATH) as f:
             reference = json.load(f)
@@ -96,45 +96,7 @@ def read_config():
         found, value = _get(cfg, path)
         if found and value:
             _set(cfg, path, dict(SECRET_SENTINEL))
-    # Per-worker tokens (#172) live inside the dashboard.workers ARRAY, out of reach of the
-    # fixed-path walk above — mask them entry by entry.
-    for entry in _worker_entries(cfg):
-        if entry.get("token"):
-            entry["token"] = dict(SECRET_SENTINEL)
     return cfg
-
-
-def merge_secrets(proposed):
-    """Re-insert live secret values wherever the proposed config carries the sentinel
-    (= "unchanged"). Mutates and returns ``proposed``. A sentinel for a secret that is not
-    actually set collapses to empty rather than leaking a dict into config.json."""
-    raw = _load_raw()
-    for path in SECRET_PATHS:
-        found, value = _get(proposed, path)
-        if found and is_secret_sentinel(value):
-            raw_found, raw_value = _get(raw, path)
-            _set(proposed, path, raw_value if raw_found else "")
-    # Per-worker token sentinels (#172): restore the live token matched by worker name; a
-    # sentinel for a rig with no live token collapses to empty, same as the fixed paths above.
-    live = {
-        e["name"]: e.get("token", "")
-        for e in reversed(_worker_entries(raw))  # reversed => first-declared wins
-        if isinstance(e.get("name"), str)
-    }
-    for entry in _worker_entries(proposed):
-        if is_secret_sentinel(entry.get("token")):
-            entry["token"] = live.get(entry.get("name"), "")
-    return proposed
-
-
-def _worker_entries(cfg):
-    """The dict entries of cfg's dashboard.workers list, [] for any other shape."""
-    if not isinstance(cfg, dict) or not isinstance(cfg.get("dashboard"), dict):
-        return []
-    workers = cfg["dashboard"].get("workers")
-    if not isinstance(workers, list):
-        return []
-    return [e for e in workers if isinstance(e, dict)]
 
 
 def submit(action, cfg=None, actor="", intent_id=None, version=None):
