@@ -9,7 +9,13 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/releasing.md`](docs/releasing.md).
 
-## [Unreleased]
+## [1.4.0] - 2026-07-12
+
+Hands-off operation you can trust: edit the stack's config and run one-click upgrades from the
+dashboard over a locked-down host-control channel; cosign-signed releases verified before anything
+is pulled; encrypted backups; one-command secret rotation; read-only container filesystems; an
+audit trail and auth-attempt log on the Tor-facing dashboard; a self-heal for the stuck-Tor-guard
+outage; and the XvB donation controller actually donating what it was told to.
 
 ### Added
 
