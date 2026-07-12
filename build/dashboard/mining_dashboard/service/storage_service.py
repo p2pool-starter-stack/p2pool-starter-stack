@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import random
 import sqlite3
 import threading
@@ -24,6 +25,15 @@ _WINDOW_EXTRA_COLUMNS = [
     for col in pair
     if col not in _BASE_HISTORY_COLS
 ]
+
+# Substrings SQLite uses when the DB file itself is unusable — a corrupted page, a truncated/rewritten
+# file, or a non-DB where the DB should be (#489). Matched case-insensitively against the error text
+# so an operations-eating corruption auto-heals (quarantine + fresh DB) instead of erroring on every
+# write cycle forever. A transient error (locked, disk full, permissions) is NOT here: those are the
+# db_unhealthy path — retryable, not a reason to throw away history.
+_CORRUPTION_MARKERS = ("malformed", "not a database", "image is malformed", "file is encrypted")
+# How many quarantined copies of a corrupt DB to keep for post-mortem before pruning the oldest.
+_CORRUPT_KEEP = 3
 
 
 class StateManager:
@@ -81,35 +91,144 @@ class StateManager:
         # surface "history isn't being saved" instead of silently losing everything on the next restart.
         self.db_healthy = True
 
+        # DB self-heal (#489): a corrupt DB used to error on every write forever, silently losing all
+        # telemetry (and the DB now holds XvB-credited + payout state). On integrity loss we quarantine
+        # the bad file and start fresh. ``db_reset_count`` is a monotonic one-shot the alerter edges on
+        # so the operator is told history was reset (a plain db_healthy flip can be missed — a startup
+        # reset has no prior state, a runtime reset flips back to healthy within one cycle).
+        self.db_reset_count = 0
+        self.last_db_reset = (
+            None  # {"ts", "reason", "quarantine"} of the most recent reset, for the alert
+        )
+
         self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
         self._init_db()
         self.load()
 
+    def _apply_schema(self):
+        """Set pragmas + create/migrate the schema on the open connection. Caller holds ``_db_lock``.
+
+        Split out of ``_init_db`` so the recovery path (#489) can rebuild the schema on a freshly
+        reconnected DB without re-entering the (non-reentrant) lock via ``_init_db``."""
+        # Enable WAL mode for better concurrency
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        with self._conn:
+            self._create_tables()
+            self._migrate_db()
+            # Indexes come AFTER migration: idx_ts is on history(timestamp), a column
+            # _migrate_db adds when upgrading a pre-timestamp DB. Creating it in
+            # _create_tables would throw "no such column: timestamp" on that old schema
+            # and abort the whole migration, leaving the DB half-upgraded.
+            self._create_indexes()
+
     def _init_db(self):
-        """Initializes the SQLite database schema and handles migrations."""
+        """Initializes the SQLite database schema and handles migrations.
+
+        Runs an integrity check first (#489): a DB corrupted while the dashboard was down would
+        otherwise fail on the first write and error every cycle thereafter. A malformed DB — caught by
+        the check or by a corruption error while applying the schema — is quarantined and rebuilt fresh
+        rather than left broken."""
         try:
             with self._db_lock:
-                # Enable WAL mode for better concurrency
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                self._conn.execute("PRAGMA synchronous=NORMAL")
-
-                with self._conn:
-                    self._create_tables()
-                    self._migrate_db()
-                    # Indexes come AFTER migration: idx_ts is on history(timestamp), a column
-                    # _migrate_db adds when upgrading a pre-timestamp DB. Creating it in
-                    # _create_tables would throw "no such column: timestamp" on that old schema
-                    # and abort the whole migration, leaving the DB half-upgraded.
-                    self._create_indexes()
+                self._check_integrity()
+                self._apply_schema()
         except sqlite3.Error as e:
-            self._db_error("DB Init Error", e)
+            if self._is_corruption_error(e):
+                self._recover_corrupt_db(f"startup: {e}")
+            else:
+                self._db_error("DB Init Error", e)
+
+    @staticmethod
+    def _is_corruption_error(e: Exception) -> bool:
+        """True when the error means the DB file itself is unusable (vs. a retryable write failure)."""
+        text = str(e).lower()
+        return any(marker in text for marker in _CORRUPTION_MARKERS)
+
+    def _check_integrity(self):
+        """Raise ``sqlite3.DatabaseError`` if ``PRAGMA integrity_check`` doesn't return ``ok``.
+
+        A DB can be malformed yet still open and answer simple queries, so this surfaces corruption
+        proactively at startup. ``:memory:`` and a brand-new empty file both report ``ok``. Caller
+        holds ``_db_lock``."""
+        row = self._conn.execute("PRAGMA integrity_check").fetchone()
+        result = (row[0] if row else "") or ""
+        if result != "ok":
+            # Phrase it with a corruption marker so _is_corruption_error routes it to recovery.
+            raise sqlite3.DatabaseError(
+                f"integrity_check reported the database is malformed: {result}"
+            )
+
+    def _recover_corrupt_db(self, reason: str):
+        """Quarantine a corrupt DB file and rebuild an empty schema so persistence resumes (#489).
+
+        The bad file is renamed to ``<db>.corrupt-<UTC>`` (kept for post-mortem, oldest pruned) rather
+        than deleted, and a fresh DB takes its place. Bumps ``db_reset_count`` so the alerter tells the
+        operator history was reset. A ``:memory:`` DB has no file to quarantine — it just rebuilds. On
+        any failure here the DB stays flagged unhealthy (the #131 badge) rather than crashing."""
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        quarantine = None
+        try:
+            with self._db_lock:
+                try:
+                    if self._conn:
+                        self._conn.close()
+                except sqlite3.Error:
+                    pass
+                self._conn = None
+                if self.db_path != ":memory:" and os.path.exists(self.db_path):
+                    quarantine = f"{self.db_path}.corrupt-{stamp}"
+                    os.replace(self.db_path, quarantine)
+                    # WAL/SHM siblings of a corrupt DB are meaningless without it — drop them so the
+                    # fresh DB doesn't inherit a stale write-ahead log.
+                    for sfx in ("-wal", "-shm"):
+                        try:
+                            os.remove(self.db_path + sfx)
+                        except OSError:
+                            pass
+                    self._prune_quarantined()
+                self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+                self._conn.row_factory = sqlite3.Row
+                self._apply_schema()
+            self.db_healthy = True
+            self.db_reset_count += 1
+            self.last_db_reset = {"ts": time.time(), "reason": reason, "quarantine": quarantine}
+            self.logger.error(
+                "DB corruption recovered (%s): quarantined to %s, started a fresh database — "
+                "hashrate history and stats before now were lost.",
+                reason,
+                quarantine or "(in-memory, nothing to quarantine)",
+            )
+        except (sqlite3.Error, OSError) as e:
+            # Recovery itself failed (disk full, permissions) — leave persistence flagged unhealthy.
+            self._db_error("DB Recovery Error", e)
+
+    def _prune_quarantined(self):
+        """Keep only the newest ``_CORRUPT_KEEP`` ``<db>.corrupt-*`` files; delete older ones."""
+        directory = os.path.dirname(self.db_path) or "."
+        base = os.path.basename(self.db_path) + ".corrupt-"
+        try:
+            stale = sorted(f for f in os.listdir(directory) if f.startswith(base))
+        except OSError:
+            return
+        for name in stale[: max(0, len(stale) - _CORRUPT_KEEP)]:
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass
 
     def _db_error(self, where: str, e: Exception):
-        """Record a DB failure and flag persistence as unhealthy so /api/state can surface it (#131)."""
+        """Record a DB failure and flag persistence as unhealthy so /api/state can surface it (#131).
+
+        A corruption error (malformed file) triggers auto-recovery (#489) — quarantine + fresh DB —
+        so a corrupt DB self-heals instead of erroring on every write cycle indefinitely. ``where ==
+        "DB Recovery Error"`` is excluded so a failed recovery can't recurse."""
         self.db_healthy = False
         self.logger.error(f"{where}: {e}")
+        if where != "DB Recovery Error" and self._is_corruption_error(e):
+            self._recover_corrupt_db(f"{where}: {e}")
 
     def is_db_healthy(self) -> bool:
         """True unless a DB init or write has failed — drives the dashboard persistence badge (#131)."""

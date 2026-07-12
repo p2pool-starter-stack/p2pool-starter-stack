@@ -465,6 +465,7 @@ TELEGRAM_EVENTS = {
     "sync_finished": _telegram_event_enabled("sync_finished"),
     "disk_space": _telegram_event_enabled("disk_space"),
     "db_unhealthy": _telegram_event_enabled("db_unhealthy"),
+    "db_reset": _telegram_event_enabled("db_reset"),
     "xvb_no_share": _telegram_event_enabled("xvb_no_share"),
     "clearnet_exposed": _telegram_event_enabled("clearnet_exposed"),
     "xvb_registration": _telegram_event_enabled("xvb_registration"),

@@ -972,6 +972,10 @@ class DataService:
                         workers_expected=self.miner_released and not self.workers_rejected,
                         disk_percent=(disk_usage or {}).get("percent", 0) or 0,
                         db_healthy=db_healthy,
+                        # DB self-heal one-shot (#489): a monotonic counter + the last reset's detail,
+                        # so the alerter fires exactly once when a corrupt DB was quarantined + reset.
+                        db_reset_seq=self.state_manager.db_reset_count,
+                        db_reset_detail=self.state_manager.last_db_reset,
                         xvb_enabled=ENABLE_XVB,
                         shares_in_window=shares_in_window,
                         clearnet_active=bool(self.clearnet_sync_state.get("active")),

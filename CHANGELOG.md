@@ -276,6 +276,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The dashboard auto-heals a corrupt SQLite database instead of erroring forever (#489).** A
+  clashed WAL checkpoint (seen when a container was recreated twice in quick succession) could leave
+  `mining_data.db` malformed; the dashboard then logged a write error every cycle **indefinitely** and
+  silently lost all history — and that DB now holds XvB-credited and payout state, so corruption can
+  skew the donation loop. On startup (`PRAGMA integrity_check`) and on any write that reports the file
+  malformed, the dashboard now quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for
+  post-mortem, oldest pruned), rebuilds a fresh schema, and resumes persisting. A one-shot **`db_reset`
+  alert** fires through Telegram and the other sinks so you know history before that point was cleared
+  — a plain "DB write failing" badge could be missed, since a startup reset has no prior state and a
+  runtime reset flips back to healthy within one cycle. A *transient* failure (disk full, locked,
+  permissions) is unchanged: it still just flags the persistence badge and retries, never discarding
+  history.
 - **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
   environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
   file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`

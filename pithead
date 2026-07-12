@@ -3303,7 +3303,7 @@ render_env() {
     # One toggle per event, defaulting to true when the key is absent.
     tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
     local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
-    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
+    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy tg_ev_db_reset
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
     local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed tg_ev_high_reject_rate
@@ -3318,6 +3318,7 @@ render_env() {
     tg_ev_sync_finished=$(tg_event sync_finished)
     tg_ev_disk_space=$(tg_event disk_space)
     tg_ev_db_unhealthy=$(tg_event db_unhealthy)
+    tg_ev_db_reset=$(tg_event db_reset)
     tg_ev_xvb_no_share=$(tg_event xvb_no_share)
     tg_ev_clearnet_exposed=$(tg_event clearnet_exposed)
     tg_ev_xvb_registration=$(tg_event xvb_registration)
@@ -3485,6 +3486,7 @@ TELEGRAM_EVENT_WORKER_LEFT=$tg_ev_worker_left
 TELEGRAM_EVENT_SYNC_FINISHED=$tg_ev_sync_finished
 TELEGRAM_EVENT_DISK_SPACE=$tg_ev_disk_space
 TELEGRAM_EVENT_DB_UNHEALTHY=$tg_ev_db_unhealthy
+TELEGRAM_EVENT_DB_RESET=$tg_ev_db_reset
 TELEGRAM_EVENT_XVB_NO_SHARE=$tg_ev_xvb_no_share
 TELEGRAM_EVENT_CLEARNET_EXPOSED=$tg_ev_clearnet_exposed
 TELEGRAM_EVENT_XVB_REGISTRATION=$tg_ev_xvb_registration
@@ -4614,7 +4616,7 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
     TELEGRAM_EVENT_WORKER_JOINED TELEGRAM_EVENT_WORKER_LEFT
     TELEGRAM_EVENT_SYNC_FINISHED TELEGRAM_EVENT_DISK_SPACE
-    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_XVB_NO_SHARE
+    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_DB_RESET TELEGRAM_EVENT_XVB_NO_SHARE
     TELEGRAM_EVENT_XVB_REGISTRATION TELEGRAM_EVENT_NEW_RELEASE
     TELEGRAM_EVENT_STACK_ONLINE TELEGRAM_EVENT_DAILY_SUMMARY
     TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
