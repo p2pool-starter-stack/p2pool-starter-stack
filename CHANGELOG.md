@@ -34,7 +34,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   hidden. Net profit is P2Pool XMR only: Tari is lumpy solo merge-mining (priced separately) and XvB
   is raffle status, not income, so both are excluded, as the earnings card already frames them. See
   [Dashboard › Energy & profit](docs/dashboard.md#energy--profit).
->>>>>>> origin/develop-v1.5
 - **Read RigForge's enriched worker feed on the dashboard (#235).** A RigForge rig serves an
   enriched read API on port `8081` — the same `/1/summary` the dashboard already polls, plus a
   `rigforge` block with the rig's version, tuning state, power draw and efficiency, CPU/firmware
