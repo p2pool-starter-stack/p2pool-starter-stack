@@ -5280,6 +5280,26 @@ EOF
 
 # --- Main Execution ---
 
+# #493: a subcommand's -h/--help must print usage and exit 0 BEFORE any side effect, and a
+# subcommand that takes no options must reject an unrecognized flag instead of silently ignoring it
+# and running anyway. `pithead upgrade --help` used to run a full upgrade (image pull + container
+# recreation) — on the v1.4.0 deploy that recreation collided with the real upgrade and corrupted
+# the dashboard DB (#489). A --help must never mutate the host.
+_help_requested() { # "$@" — return 0 if any argument is -h/--help
+    local a
+    for a in "$@"; do
+        case "$a" in
+        -h | --help) return 0 ;;
+        esac
+    done
+    return 1
+}
+_reject_options() { # <verb> "$@" — this verb takes no options; error on any leftover argument
+    local verb="$1"
+    shift
+    [ "$#" -eq 0 ] || error "Unknown option for $verb: '$1'. This command takes no options. Run '$0 $verb -h' or '$0 help'."
+}
+
 main() {
     # Chained subcommands (#94): when every argument is a bare subcommand name, run them
     # left-to-right as a chain. Any other token (a flag, a service name, an archive path) keeps
@@ -5300,6 +5320,17 @@ main() {
 
     local cmd="${1:-}"
     if [ -n "$cmd" ]; then shift; fi
+
+    # #493: -h/--help on any subcommand prints help and exits 0 before ANY side effect. `logs` is the
+    # one deliberate passthrough (its args go to `docker compose logs`), so it opts out and forwards
+    # -h/--help downstream. The bare `pithead -h/--help/help` is its own command in the case below.
+    case "$cmd" in
+    "" | help | -h | --help | logs) ;;
+    *) if _help_requested "$@"; then
+        show_help
+        exit 0
+    fi ;;
+    esac
 
     # Make the stack version + build provenance available to any `docker compose [up] build` this
     # invocation runs, so the dashboard image bakes in its version badge (Issue #58).
@@ -5322,10 +5353,12 @@ main() {
         ;;
     apply) apply "$@" ;;
     up)
+        _reject_options up "$@"
         require_deployed
         stack_up
         ;;
     down)
+        _reject_options down "$@"
         require_env
         stack_down
         ;;
@@ -5334,6 +5367,7 @@ main() {
         stack_restart "$@"
         ;;
     upgrade)
+        _reject_options upgrade "$@"
         require_deployed
         stack_upgrade
         ;;
@@ -5343,10 +5377,14 @@ main() {
         docker compose logs -f "$@"
         ;;
     status)
+        _reject_options status "$@"
         require_env
         stack_status || exit 1
         ;;
-    doctor) doctor || exit 1 ;;
+    doctor)
+        _reject_options doctor "$@"
+        doctor || exit 1
+        ;;
     reset-dashboard)
         require_deployed
         reset_dashboard "$@"
@@ -5354,10 +5392,14 @@ main() {
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
     control-run-pending)
+        _reject_options control-run-pending "$@"
         require_deployed
         control_run_pending
         ;;
-    onion-client-key) onion_client_key ;;
+    onion-client-key)
+        _reject_options onion-client-key "$@"
+        onion_client_key
+        ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
     rotate-secrets) rotate_secrets "$@" ;;
     version | -V | --version) show_version ;;

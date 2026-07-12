@@ -2112,6 +2112,37 @@ out="$(run_sourced "$SANDBOX" validate_chain down upgrade 2>&1)"
 assert_rc "rejects 'down upgrade' (down not last)" "$?" "1"
 assert_contains "down-not-last message" "$out" "last"
 
+echo "== unit: subcommand flag guard (#493) =="
+# `-h/--help` on a subcommand must print help and exit 0 BEFORE any side effect, and a no-option verb
+# must reject an unrecognized flag instead of silently ignoring it and running the command anyway
+# (`pithead upgrade --help` used to run a full upgrade — the trigger for the #489 DB corruption). Run
+# from a NON-deployed sandbox: if the guard failed to short-circuit, `upgrade`/`status` would fall
+# through to require_deployed/stack_upgrade — so exit 0 + help text here proves the guard fired first.
+CLIG="$SANDBOX/cli-guard"
+mkdir -p "$CLIG"
+cp "$STACK" "$CLIG/pithead"
+out="$(cd "$CLIG" && ./pithead upgrade --help 2>&1)"
+assert_rc "upgrade --help exits 0 (no side effect)" "$?" "0"
+assert_contains "upgrade --help prints usage" "$out" "Commands"
+(cd "$CLIG" && ./pithead upgrade -h >/dev/null 2>&1)
+assert_rc "upgrade -h exits 0" "$?" "0"
+out="$(cd "$CLIG" && ./pithead upgrade --bogus 2>&1)"
+assert_rc "upgrade --bogus errors" "$?" "1"
+assert_contains "unknown-flag message names the flag" "$out" "--bogus"
+out="$(cd "$CLIG" && ./pithead status --json 2>&1)"
+assert_rc "status --json (unknown flag) errors" "$?" "1"
+assert_contains "status unknown-flag names the verb" "$out" "status"
+# A mutating verb that parses its own args still gets the help short-circuit before it runs.
+(cd "$CLIG" && ./pithead apply --help >/dev/null 2>&1)
+assert_rc "apply --help exits 0 (no apply)" "$?" "0"
+# `logs` is the deliberate passthrough — --help forwards to docker, not the pithead guard (no exit 0
+# from our guard). It can't run a real docker here, so just assert the guard didn't hijack it: the
+# bare `pithead --help` / `help` still print pithead help and exit 0.
+(cd "$CLIG" && ./pithead --help >/dev/null 2>&1)
+assert_rc "bare --help still exits 0" "$?" "0"
+(cd "$CLIG" && ./pithead help >/dev/null 2>&1)
+assert_rc "help command still exits 0" "$?" "0"
+
 echo "== unit: chain execution — order, fail-fast, exit code (#94) =="
 # run_chain re-invokes pithead per step via PITHEAD_SELF; a stub records the order and can be told
 # to fail a given step, so order/fail-fast/propagation are proven without a stack.
