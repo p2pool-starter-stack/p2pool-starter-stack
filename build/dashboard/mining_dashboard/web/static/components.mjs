@@ -592,6 +592,22 @@ function PoolBadge({ pool }) {
   return html`<span class="badge badge-bad">Unknown</span>`;
 }
 
+// RigForge enriched feed (#235): a monospace version badge plus health / power / tune / watchdog
+// chips, all built server-side (views._rigforge_display) so the client stays a dumb renderer. A
+// plain-xmrig worker has no `rigforge` block and renders nothing extra — no chips, no error, no
+// empty placeholder, exactly as today. Each chip is a {text, variant, title}; only present-data
+// chips are emitted, so a rig with no RAPL shows no power chip.
+function RigForgeChips({ rf }) {
+  if (!rf) return null;
+  return html`${
+    rf.version
+      ? html` <span class="badge badge-outline version-badge" title="RigForge version">rf ${rf.version}</span>`
+      : null
+  }${(rf.chips || []).map(
+    (c) => html` <span class=${"badge badge-" + c.variant} title=${c.title || ""}>${c.text}</span>`,
+  )}`;
+}
+
 // Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
 // has reported any shares so it isn't an all-zero line on a fresh start.
 const ProxyTotals = ({ summary }) => {
@@ -642,7 +658,7 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort }) {
                               w.api_ok === false
                                 ? html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`
                                 : null
-                            }</td>
+                            }<${RigForgeChips} rf=${w.rigforge} /></td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
                             <td>${w.h60_str}</td>

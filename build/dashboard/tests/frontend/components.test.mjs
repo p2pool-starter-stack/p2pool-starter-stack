@@ -400,6 +400,33 @@ test('WorkersTable surfaces the per-rig api-unreadable and reject badges, and th
     assert.match(html, /badge-bad">Unknown/);
 });
 
+test('WorkersTable renders the RigForge version badge + chips when present, nothing when absent (#235)', () => {
+    // A plain-xmrig worker has no `rigforge` (the server sends null) -> no chips, no error.
+    const plain = clone();
+    plain.workers.forEach((w) => (w.rigforge = null));
+    const plainHtml = renderApp({ state: plain });
+    assert.doesNotMatch(plainHtml, /rf 1\.7\.0/);
+    assert.doesNotMatch(plainHtml, /throttling/);
+
+    // A RigForge worker carries the server-built {version, chips} view.
+    const rf = clone();
+    rf.workers[0].rigforge = {
+        version: '1.7.0',
+        miner_down: false,
+        chips: [
+            { text: 'throttling', variant: 'bad', title: 'hot' },
+            { text: 'gov: performance', variant: 'ok', title: '' },
+            { text: '142 W · 86.9 H/s·W', variant: 'outline', title: 'power' },
+        ],
+    };
+    rf.workers[1].rigforge = null; // the other rig is plain xmrig
+    const html = renderApp({ state: rf });
+    assert.match(html, /rf 1\.7\.0/); // version badge
+    assert.match(html, /badge-bad" title="hot">throttling/); // a bad chip
+    assert.match(html, /gov: performance/);
+    assert.match(html, /142 W · 86.9 H\/s·W/);
+});
+
 test('Tari status gates the ✔ on a live gRPC channel, never on active-but-dead (#278/#313)', () => {
     // The ✔ must mean the merge-mine channel is actually up. A dead channel that still reads "active"
     // must show status-warn and NO check — otherwise a TRANSIENT_FAILURE reads as healthy (#278/#313).

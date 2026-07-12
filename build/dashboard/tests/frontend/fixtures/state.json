@@ -67,17 +67,24 @@
       }
     ]
   },
+  "control_enabled": false,
   "db_healthy": true,
   "earnings": {
     "available": false,
     "block_reward": "0.0000 XMR",
     "coeff_day": 0.0,
+    "confirmed": {
+      "enabled": false
+    },
     "disclaimer": "Estimated XMR from P2Pool mining only \u2014 excludes XvB donations (donated hashrate earns no P2Pool payout). Tari is merge-mined SOLO by the same hashrate: you get the whole block reward at once when your hashrate finds a Tari block \u2014 roughly every 'time to Tari block' shown \u2014 so the per-day XTM figure is a long-run average, not steady income. Expected values only; mining is variance-heavy, so real payouts swing well above and below these figures. Estimates, not guarantees.",
     "p2pool_hr": 8050.0,
     "p2pool_hr_str": "8.05 kH/s",
     "pool_difficulty": 0,
     "tari_available": false,
     "tari_coeff_day": 0.0,
+    "tari_confirmed": {
+      "enabled": false
+    },
     "tari_difficulty": 0.0,
     "tari_reward": 0
   },
@@ -266,6 +273,7 @@
     "wallet": "Unknown",
     "wallet_short": "Unknown"
   },
+  "stratum_port": 3333,
   "sync": {
     "monero": {
       "current": 3000000,
@@ -552,6 +560,7 @@
       "reject_flag": null,
       "rejected": 1,
       "rejected_str": "1",
+      "rigforge": null,
       "status": "online",
       "uptime": 0,
       "uptime_str": "0m 0s"
@@ -572,6 +581,7 @@
       "reject_flag": null,
       "rejected": 40,
       "rejected_str": "40",
+      "rigforge": null,
       "status": "offline",
       "uptime": 0,
       "uptime_str": "0m 0s"

@@ -13,6 +13,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Read RigForge's enriched worker feed on the dashboard (#235).** A RigForge rig serves an
+  enriched read API on port `8081` — the same `/1/summary` the dashboard already polls, plus a
+  `rigforge` block with the rig's version, tuning state, power draw and efficiency, CPU/firmware
+  health, and watchdog temperatures. Point that rig's `dashboard.workers[]` descriptor `port` at the
+  feed and the Workers Alive table gains a RigForge version badge and health/power/tune/watchdog
+  chips next to the rig — throttling and a non-performance governor read red or amber, the rest are
+  muted read-outs. Because the feed is a strict superset, uptime and per-miner hashrate still come
+  from the same response, and a plain-xmrig rig (no `rigforge` block) reads exactly as before: no
+  chips, no error. A rig whose RigForge is up but whose miner has stopped stays in the table with a
+  **miner down** chip instead of dropping to offline. Every enriched field is nullable, so a rig with
+  no RAPL shows no power chip and a disabled watchdog shows no temperature. The [#122 SSRF
+  guard](docs/workers.md) is unchanged — the dashboard still polls only the operator-set descriptor
+  host/port, never a miner-advertised value. See [Connecting
+  Miners](docs/workers.md#rigforge-enriched-feed).
 - **Confirm Tari payouts on-chain, too (#462).** The Tari sibling of #381, for the other half of
   the merge-mine. Tari merge-mining here is solo — the whole block reward lands at once when your
   hashrate finds a Tari block — so a payout is a rare, large event worth ground-truth confirmation.

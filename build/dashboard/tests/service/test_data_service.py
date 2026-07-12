@@ -403,6 +403,21 @@ class TestMergeDirectStats:
         assert (w["h10"], w["h60"], w["h15"]) == (1, 2, 3)
         assert w["uptime"] == 7
 
+    def test_rigforge_block_carried_onto_worker(self):
+        # A RigForge enriched feed (#235) rides in on the same result; the parsed block reaches the
+        # worker model. A plain-xmrig result leaves no `rigforge` key.
+        extra = {
+            "api_ok": True,
+            "hashrate": {"total": [1, 2, 3]},
+            "rigforge": {"version": "1.7.0", "power": {"watts": 100.0, "hs_per_watt": 50.0}},
+        }
+        [w] = _merge_direct_stats([self._worker()], [extra], "3333")
+        assert w["rigforge"]["version"] == "1.7.0"
+        assert w["rigforge"]["power"] == {"watts": 100.0, "hs_per_watt": 50.0}
+
+        [plain] = _merge_direct_stats([self._worker()], [{"api_ok": True}], "3333")
+        assert "rigforge" not in plain
+
 
 class TestAggregateHashrate:
     """Total live hashrate, priority 15m > 60s > 10s, online-only (Issue #39)."""

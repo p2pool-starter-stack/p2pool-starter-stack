@@ -202,6 +202,16 @@ card so columns stay readable. Until the first worker ever connects, the card sh
 ("point each rig at `<host-ip>:3333`") in place of the empty table; see
 [Connecting Miners](workers.md).
 
+A [RigForge](https://github.com/p2pool-starter-stack/rigforge) rig that serves its enriched read API
+adds a version badge and a row of chips next to its name — CPU governor and throttling state,
+firmware board, HugePages, power draw and H/s-per-watt, the active tuning target and next autotune,
+and watchdog temperature. Alarming states (throttling, thermal hold, a non-performance governor) read
+red or amber; the rest are muted read-outs. Each chip shows only when the rig reports that field, so
+a partial reading never leaves a blank, and a plain-xmrig rig shows no chips at all. If RigForge is up
+but its miner isn't, the rig stays in the table with a **miner down** chip rather than dropping to
+offline. Point the rig's descriptor at the enriched feed to turn this on — see
+[Connecting Miners › RigForge enriched feed](workers.md#rigforge-enriched-feed).
+
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
 rejected count — a rig submitting stale or bad shares (bad overclock, flaky network, clock drift)

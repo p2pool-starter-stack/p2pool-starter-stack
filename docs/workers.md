@@ -228,6 +228,27 @@ imposter that claims a listed rig's name from pulling that rig's token to its ow
 The standard fleet — everyone on `8080`, token = rig name or open — needs no `dashboard.workers`
 at all.
 
+#### RigForge enriched feed
+
+A [RigForge](https://github.com/p2pool-starter-stack/rigforge) rig also serves an enriched read API
+on port `8081`: the same `/1/summary` the dashboard already polls, plus a `rigforge` block carrying
+the rig's RigForge version, tuning state, power draw and efficiency, CPU/firmware health, and
+watchdog temperatures. Point that rig's descriptor `port` at it to pick the block up:
+
+```jsonc
+"dashboard": {
+    "workers": [
+        { "name": "rig-01", "port": 8081 }
+    ]
+}
+```
+
+Nothing else changes — the enriched feed is a superset, so uptime and per-miner hashrate come from
+the same response. The dashboard then shows a RigForge version badge and health/power/tune/watchdog
+chips for that rig (see [Dashboard › Workers Alive](dashboard.md#workers-alive)). A plain-xmrig rig
+on `8080` sends no `rigforge` block and reads exactly as before — no chips, no error. Auth is
+unchanged: send the rig's `token` only if it sets an `ACCESS_TOKEN` (the read API is open otherwise).
+
 ---
 
 ## New to mining? Start with RigForge
