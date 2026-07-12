@@ -3303,7 +3303,7 @@ render_env() {
     # One toggle per event, defaulting to true when the key is absent.
     tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
     local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
-    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
+    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy tg_ev_db_reset
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
     local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed tg_ev_high_reject_rate
@@ -3318,6 +3318,7 @@ render_env() {
     tg_ev_sync_finished=$(tg_event sync_finished)
     tg_ev_disk_space=$(tg_event disk_space)
     tg_ev_db_unhealthy=$(tg_event db_unhealthy)
+    tg_ev_db_reset=$(tg_event db_reset)
     tg_ev_xvb_no_share=$(tg_event xvb_no_share)
     tg_ev_clearnet_exposed=$(tg_event clearnet_exposed)
     tg_ev_xvb_registration=$(tg_event xvb_registration)
@@ -3485,6 +3486,7 @@ TELEGRAM_EVENT_WORKER_LEFT=$tg_ev_worker_left
 TELEGRAM_EVENT_SYNC_FINISHED=$tg_ev_sync_finished
 TELEGRAM_EVENT_DISK_SPACE=$tg_ev_disk_space
 TELEGRAM_EVENT_DB_UNHEALTHY=$tg_ev_db_unhealthy
+TELEGRAM_EVENT_DB_RESET=$tg_ev_db_reset
 TELEGRAM_EVENT_XVB_NO_SHARE=$tg_ev_xvb_no_share
 TELEGRAM_EVENT_CLEARNET_EXPOSED=$tg_ev_clearnet_exposed
 TELEGRAM_EVENT_XVB_REGISTRATION=$tg_ev_xvb_registration
@@ -4614,7 +4616,7 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
     TELEGRAM_EVENT_WORKER_JOINED TELEGRAM_EVENT_WORKER_LEFT
     TELEGRAM_EVENT_SYNC_FINISHED TELEGRAM_EVENT_DISK_SPACE
-    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_XVB_NO_SHARE
+    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_DB_RESET TELEGRAM_EVENT_XVB_NO_SHARE
     TELEGRAM_EVENT_XVB_REGISTRATION TELEGRAM_EVENT_NEW_RELEASE
     TELEGRAM_EVENT_STACK_ONLINE TELEGRAM_EVENT_DAILY_SUMMARY
     TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
@@ -5280,6 +5282,26 @@ EOF
 
 # --- Main Execution ---
 
+# #493: a subcommand's -h/--help must print usage and exit 0 BEFORE any side effect, and a
+# subcommand that takes no options must reject an unrecognized flag instead of silently ignoring it
+# and running anyway. `pithead upgrade --help` used to run a full upgrade (image pull + container
+# recreation) — on the v1.4.0 deploy that recreation collided with the real upgrade and corrupted
+# the dashboard DB (#489). A --help must never mutate the host.
+_help_requested() { # "$@" — return 0 if any argument is -h/--help
+    local a
+    for a in "$@"; do
+        case "$a" in
+        -h | --help) return 0 ;;
+        esac
+    done
+    return 1
+}
+_reject_options() { # <verb> "$@" — this verb takes no options; error on any leftover argument
+    local verb="$1"
+    shift
+    [ "$#" -eq 0 ] || error "Unknown option for $verb: '$1'. This command takes no options. Run '$0 $verb -h' or '$0 help'."
+}
+
 main() {
     # Chained subcommands (#94): when every argument is a bare subcommand name, run them
     # left-to-right as a chain. Any other token (a flag, a service name, an archive path) keeps
@@ -5300,6 +5322,17 @@ main() {
 
     local cmd="${1:-}"
     if [ -n "$cmd" ]; then shift; fi
+
+    # #493: -h/--help on any subcommand prints help and exits 0 before ANY side effect. `logs` is the
+    # one deliberate passthrough (its args go to `docker compose logs`), so it opts out and forwards
+    # -h/--help downstream. The bare `pithead -h/--help/help` is its own command in the case below.
+    case "$cmd" in
+    "" | help | -h | --help | logs) ;;
+    *) if _help_requested "$@"; then
+        show_help
+        exit 0
+    fi ;;
+    esac
 
     # Make the stack version + build provenance available to any `docker compose [up] build` this
     # invocation runs, so the dashboard image bakes in its version badge (Issue #58).
@@ -5322,10 +5355,12 @@ main() {
         ;;
     apply) apply "$@" ;;
     up)
+        _reject_options up "$@"
         require_deployed
         stack_up
         ;;
     down)
+        _reject_options down "$@"
         require_env
         stack_down
         ;;
@@ -5334,6 +5369,7 @@ main() {
         stack_restart "$@"
         ;;
     upgrade)
+        _reject_options upgrade "$@"
         require_deployed
         stack_upgrade
         ;;
@@ -5343,10 +5379,14 @@ main() {
         docker compose logs -f "$@"
         ;;
     status)
+        _reject_options status "$@"
         require_env
         stack_status || exit 1
         ;;
-    doctor) doctor || exit 1 ;;
+    doctor)
+        _reject_options doctor "$@"
+        doctor || exit 1
+        ;;
     reset-dashboard)
         require_deployed
         reset_dashboard "$@"
@@ -5354,10 +5394,14 @@ main() {
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
     control-run-pending)
+        _reject_options control-run-pending "$@"
         require_deployed
         control_run_pending
         ;;
-    onion-client-key) onion_client_key ;;
+    onion-client-key)
+        _reject_options onion-client-key "$@"
+        onion_client_key
+        ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
     rotate-secrets) rotate_secrets "$@" ;;
     version | -V | --version) show_version ;;

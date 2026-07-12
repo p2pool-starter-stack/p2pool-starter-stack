@@ -58,6 +58,8 @@ def _ev(
     workers_expected=False,
     disk_percent=0,
     db_healthy=True,
+    db_reset_seq=0,
+    db_reset_detail=None,
     xvb_enabled=False,
     shares_in_window=0,
     clearnet_active=False,
@@ -82,6 +84,8 @@ def _ev(
         workers_expected=workers_expected,
         disk_percent=disk_percent,
         db_healthy=db_healthy,
+        db_reset_seq=db_reset_seq,
+        db_reset_detail=db_reset_detail,
         xvb_enabled=xvb_enabled,
         shares_in_window=shares_in_window,
         clearnet_active=clearnet_active,
@@ -304,6 +308,24 @@ class TestDbEdges:
         assert _ev(svc, db_healthy=False) == []  # no repeat
         _, text = _ev(svc, db_healthy=True)[0]
         assert "recovered" in text
+
+
+class TestDbReset:
+    """One-shot DB-reset alert (#489): fires once when the corrupt-DB auto-heal bumps the counter."""
+
+    def test_fires_once_on_increment(self):
+        svc = _svc()
+        assert _ev(svc, db_reset_seq=0) == []  # seed silently
+        alerts = _ev(svc, db_reset_seq=1, db_reset_detail={"quarantine": "/data/x.corrupt-Z"})
+        assert _keys(alerts) == [AlertService.EVT_DB_RESET]
+        _, text = alerts[0]
+        assert "reset" in text and "/data/x.corrupt-Z" in text
+        assert _ev(svc, db_reset_seq=1) == []  # same seq -> no repeat
+
+    def test_seed_nonzero_does_not_replay(self):
+        # A restart after a prior reset (counter already >0) must not re-alert.
+        svc = _svc()
+        assert _ev(svc, db_reset_seq=5) == []
 
 
 class TestXvbShareEdges:

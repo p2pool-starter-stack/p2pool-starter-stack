@@ -108,6 +108,7 @@ class AlertService:
     EVT_SYNC_FINISHED = "sync_finished"
     EVT_DISK_SPACE = "disk_space"
     EVT_DB_UNHEALTHY = "db_unhealthy"
+    EVT_DB_RESET = "db_reset"
     EVT_XVB_NO_SHARE = "xvb_no_share"
     EVT_CLEARNET_EXPOSED = "clearnet_exposed"
     EVT_XVB_REGISTRATION = "xvb_registration"
@@ -185,6 +186,7 @@ class AlertService:
         self._prev_released = None
         self._prev_disk_level = None
         self._prev_db_healthy = None
+        self._prev_db_reset_seq = None
         self._prev_xvb_has_share = None
         self._prev_clearnet_active = None
         self._prev_xvb_reg = None
@@ -235,6 +237,8 @@ class AlertService:
         workers_expected,
         disk_percent=0,
         db_healthy=True,
+        db_reset_seq=0,
+        db_reset_detail=None,
         xvb_enabled=False,
         shares_in_window=0,
         clearnet_active=False,
@@ -310,9 +314,10 @@ class AlertService:
                     self._record_incident(self.EVT_CONTAINER_UNHEALTHY)
                 alerts.append((evt, self._fmt(template.format(name=name))))
 
-        # --- Host health: data disk filling up, dashboard DB write failing ---
+        # --- Host health: data disk filling up, dashboard DB write failing / reset ---
         alerts += self._disk_edges(disk_percent)
         alerts += self._db_edges(db_healthy)
+        alerts += self._db_reset_edges(db_reset_seq, db_reset_detail)
 
         # --- Payout-wallet tamper tripwire (#375) — kv-backed, so it survives container recreate ---
         alerts += self._wallet_edges(observed_wallet)
@@ -434,6 +439,33 @@ class AlertService:
             (
                 self.EVT_DB_UNHEALTHY,
                 self._fmt("\U0001f7e2 \U0001f5c4️ Dashboard DB writes recovered."),
+            )
+        ]
+
+    def _db_reset_edges(self, db_reset_seq, detail):
+        """One-shot alert when a corrupt DB was auto-healed by resetting it (#489).
+
+        ``db_reset_seq`` is StateManager's monotonic reset counter. We edge on an increase rather than
+        the db_healthy flip because a reset can be invisible to ``_db_edges``: a startup reset happens
+        before the first cycle (no prior state), and a runtime reset flips back to healthy within one
+        cycle. The message is loud — the operator must know history before now was quarantined and
+        cleared, even though the stack recovered on its own."""
+        prev = self._prev_db_reset_seq
+        self._prev_db_reset_seq = db_reset_seq
+        # Seed silently on the first observation (or after a restart): only a genuine increase alerts.
+        if prev is None or db_reset_seq <= prev:
+            return []
+        self._record_incident(self.EVT_DB_RESET)
+        where = ""
+        if isinstance(detail, dict) and detail.get("quarantine"):
+            where = f" The corrupt file was kept at {detail['quarantine']} for inspection."
+        return [
+            (
+                self.EVT_DB_RESET,
+                self._fmt(
+                    "\U0001f504 \U0001f5c4️ Dashboard DB was corrupt and has been reset — hashrate "
+                    "history and stats before now were cleared so persistence could resume." + where
+                ),
             )
         ]
 
