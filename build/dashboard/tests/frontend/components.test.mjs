@@ -27,7 +27,7 @@ const noop = () => {};
 const HANDLERS = {
     onRange: noop, onSort: noop, onView: noop, onTheme: noop,
     onZoom: noop, onResetZoom: noop, onToggleSeries: noop, onAvgWindow: noop,
-    onDismissHint: noop,
+    onDismissHint: noop, onInspect: noop, onCloseInspect: noop,
 };
 
 function renderApp({ state = BASE, connected = true, ui = UI } = {}) {
@@ -532,4 +532,36 @@ test('syncing App renders the sync gauges instead of the dashboard', () => {
     assert.match(html, /Monero Sync/);
     assert.match(html, /Tari Sync/);
     assert.doesNotMatch(html, /Workers Alive/);
+});
+
+
+// --- Worker Inspect (#185) ---------------------------------------------------------------
+
+test('worker names are inspect buttons only when the control channel is on (#185)', () => {
+    // Control off (base fixture): the name is plain text, no inspect affordance.
+    const off = renderApp();
+    assert.doesNotMatch(off, /worker-name-link/);
+    // Control on: each worker name becomes an inspect button.
+    const s = clone();
+    s.control_enabled = true;
+    const on = renderApp({ state: s });
+    assert.match(on, /worker-name-link/);
+    assert.match(on, />rig-alpha</);
+});
+
+test('WorkerInspect overlay renders for the selected worker (#185)', () => {
+    const s = clone();
+    s.control_enabled = true;
+    // ui.inspectWorker drives the overlay; the render harness runs no effects, so it's the
+    // pre-fetch loading state (the fetch itself is covered by the server tests).
+    const html = renderApp({ state: s, ui: { ...UI, inspectWorker: 'rig-alpha' } });
+    assert.match(html, /worker-inspect-overlay/);
+    assert.match(html, /Worker · rig-alpha/);
+    assert.match(html, /Loading/);
+});
+
+test('no WorkerInspect overlay when none is selected (#185)', () => {
+    const s = clone();
+    s.control_enabled = true;
+    assert.doesNotMatch(renderApp({ state: s }), /worker-inspect-overlay/);
 });

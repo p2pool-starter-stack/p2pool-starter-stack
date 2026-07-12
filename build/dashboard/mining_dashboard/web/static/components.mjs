@@ -29,6 +29,7 @@ import {
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
 import { StackTopology } from "./topology.mjs";
+import { WorkerInspect } from "./workerview.mjs";
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => "c-" + v;
@@ -687,7 +688,7 @@ const ProxyTotals = ({ summary }) => {
     </div>`;
 };
 
-function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort }) {
+function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onInspect }) {
   // First-run empty state (#385): until the proxy has ever reported a worker, the table would be
   // eight headers over nothing — show the one action the operator must take instead. `workers`
   // includes offline rigs, so a fleet that is temporarily all-offline keeps its (red) table.
@@ -718,7 +719,12 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort }) {
                     ${rows.map(
                       (w) => html`
                         <tr class=${w.status === "online" ? "status-ok" : "status-bad"}>
-                            <td>${w.name} <${PoolBadge} pool=${w.pool} />${
+                            <td>${
+                              onInspect
+                                ? html`<button type="button" class="worker-name-link" onClick=${() => onInspect(w.name)}
+                                                title="Inspect / edit this worker's config">${w.name}</button>`
+                                : w.name
+                            } <${PoolBadge} pool=${w.pool} />${
                               w.api_ok === false
                                 ? html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`
                                 : null
@@ -820,6 +826,7 @@ function DashboardView({
   onToggleSeries,
   onAvgWindow,
   onDismissHint,
+  onInspect,
 }) {
   const advanced = ui.view === "advanced";
   const configView = ui.view === "config";
@@ -848,7 +855,8 @@ function DashboardView({
                           onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
         <div class="grid">
-            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} stratumPort=${state.stratum_port} />
+            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} stratumPort=${state.stratum_port}
+                             onInspect=${state.control_enabled ? onInspect : null} />
         </div>
         <div class="grid">
             <${Overview} state=${state} />
@@ -880,9 +888,18 @@ export function App({
   onToggleSeries,
   onAvgWindow,
   onDismissHint,
+  onInspect,
+  onCloseInspect,
 }) {
   // The theme toggle is fixed-position and always available, even before the first data load.
   const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
+  // Worker Inspect overlay (#185): opened from a worker name in the table; the panel does its own
+  // fetch/apply/poll. `key` remounts it when a different worker is picked. Only reachable when the
+  // control channel is on (the trigger is gated on state.control_enabled).
+  const inspect =
+    state && ui.inspectWorker
+      ? html`<${WorkerInspect} name=${ui.inspectWorker} onClose=${onCloseInspect} key=${ui.inspectWorker} />`
+      : null;
   if (!state) {
     return html`<${Fragment}>
             <div class="loading">${connected ? "Connecting to the dashboard…" : "Cannot reach the dashboard."}</div>
@@ -900,9 +917,10 @@ export function App({
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
                                   onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow}
-                                  onDismissHint=${onDismissHint} />
+                                  onDismissHint=${onDismissHint} onInspect=${onInspect} />
               <//>`
         }
+        ${inspect}
         ${switcher}
     <//>`;
 }

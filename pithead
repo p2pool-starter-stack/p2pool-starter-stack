@@ -2213,6 +2213,8 @@ validate_worker_endpoints() {
                 then "dashboard.workers[\(.name)].host must be a hostname or IPv4 address (letters, digits, and . _ - only; no port or path)."
               elif has("port") and ((.port | type) != "number" or .port != (.port | floor) or .port < 1 or .port > 65535)
                 then "dashboard.workers[\(.name)].port must be an integer between 1 and 65535."
+              elif has("control_port") and ((.control_port | type) != "number" or .control_port != (.control_port | floor) or .control_port < 1 or .control_port > 65535)
+                then "dashboard.workers[\(.name)].control_port must be an integer between 1 and 65535 (the rig writable control API port, #185)."
               elif has("token") and ((.token | type) != "string" or (.token | test("^[!-~]{1,128}$") | not))
                 then "dashboard.workers[\(.name)].token must be 1-128 printable non-space characters."
               elif has("watts") and ((.watts | type) != "number" or .watts <= 0 or .watts >= 1000000)
@@ -4982,6 +4984,153 @@ control_lifecycle() { # <verb: restart|apply> <id> <actor> <control-dir>
     rm -f "$logf"
 }
 
+# Worker config apply (#185): POST an operator's writable-key change to a RigForge rig's control API
+# and record the outcome for the dashboard's config history. The intent carries ONLY the worker NAME
+# and the CHANGES — never a host, port, or token: the runner resolves the rig's real address + bearer
+# from the HOST's own config.json (dashboard.workers[]), so a tampered intent can at most target
+# another ALREADY-configured rig, never an arbitrary host (#122 SSRF), and the rig's access token —
+# masked out of the container (#440) — never leaves the host. Changes are re-validated against the
+# same writable allowlist the rig enforces (defence in depth). Every result/audit line the container
+# reads back carries the change_id + status only, never the token.
+control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    local results="$cdir/results" auditf="$cdir/audit/control.log"
+    control_audit "$auditf" "$id" "$actor" "worker-apply" "started"
+    _wa_reject() { # <reason> — refused before dialing the rig; nothing changed
+        control_write_result "$results" "$id" "$(jq -n --arg e "$1" '{status:"rejected",error:$e,ts:(now|floor)}')"
+        control_audit "$auditf" "$id" "$actor" "worker-apply" "rejected"
+    }
+    _wa_fail() { # <reason> — the dial started and did not complete
+        control_write_result "$results" "$id" "$(jq -n --arg e "$1" '{status:"failed",error:$e,ts:(now|floor)}')"
+        control_audit "$auditf" "$id" "$actor" "worker-apply" "failed"
+    }
+    local worker changes
+    worker=$(jq -r '.worker // ""' "$file")
+    # The worker name is a config.json lookup key AND (in name-auth) a bearer; pin its charset.
+    if ! printf '%s' "$worker" | grep -qE '^[!-~]{1,128}$'; then
+        _wa_reject "malformed or missing 'worker' name in the request."
+        return 0
+    fi
+    # Changes must be a non-empty object whose keys are ALL writable via the rig's control path (the
+    # rig re-validates; this is the host-side gate — mirrors rigforge WRITABLE, #185/#236).
+    changes=$(jq -c '.changes // {}' "$file")
+    local badkeys
+    badkeys=$(printf '%s' "$changes" | jq -r '
+        (["pools","DONATION","autotune","watchdog","watchdog_interval_min","max_temp_c"]) as $ok
+        | if (type) != "object" or (length) == 0 then "__empty__"
+          else [keys[] | select(. as $k | $ok | index($k) | not)] | join(",") end' 2>/dev/null)
+    if [ "$badkeys" = "__empty__" ]; then
+        _wa_reject "'changes' must be a non-empty object of writable config keys."
+        return 0
+    fi
+    if [ -n "$badkeys" ]; then
+        _wa_reject "keys not writable via the control path: $badkeys"
+        return 0
+    fi
+    # Resolve the rig's ADDRESS + BEARER from the HOST's config.json — never the intent. A rig with no
+    # host or no token cannot be a target (fail closed): the rig's control path is bearer-mandatory and
+    # we only ever dial an operator-set host.
+    local host cport token
+    host=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    cport=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
+    token=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    if [ -z "$host" ]; then
+        _wa_reject "worker '$worker' has no configured host in dashboard.workers[] — set host + control_port + token to edit it."
+        return 0
+    fi
+    # host charset guard (#122): no port/path/userinfo can be smuggled into the URL below.
+    if ! printf '%s' "$host" | grep -qE '^[A-Za-z0-9._-]{1,253}$'; then
+        _wa_reject "worker '$worker' has an invalid host."
+        return 0
+    fi
+    if ! printf '%s' "$cport" | grep -qE '^[0-9]{1,5}$' || [ "$cport" -lt 1 ] || [ "$cport" -gt 65535 ]; then
+        _wa_reject "worker '$worker' has an invalid control_port."
+        return 0
+    fi
+    if [ -z "$token" ]; then
+        _wa_reject "worker '$worker' has no token in dashboard.workers[] — the rig's control API is bearer-mandatory."
+        return 0
+    fi
+    # Per-drain dial budget (hardening): worker-apply is the only control action that blocks the
+    # single-threaded root runner on a network round-trip (a dial + a status poll, tens of seconds).
+    # Cap how many actually dial per drain so a compromised container can't queue a flood of valid
+    # worker-applies and starve legitimate commit/restart/upgrade intents. The counter lives in the
+    # runner's shell (control_run_pending seeds it), so it persists across the drain loop. Over-budget
+    # intents are rejected with a retry hint — the operator just re-applies; a real fleet edit is a
+    # handful of rigs, never dozens at once.
+    if [ "${CONTROL_WA_BUDGET:-0}" -le 0 ]; then
+        _wa_reject "too many worker config changes in one cycle — retry in a moment."
+        return 0
+    fi
+    CONTROL_WA_BUDGET=$((CONTROL_WA_BUDGET - 1))
+    control_write_result "$results" "$id" "$(jq -n --arg w "$worker" '{status:"running",worker:$w,ts:(now|floor)}')"
+    # POST the change to the rig's control API. Direct LAN dial (like the read path) — NOT Tor: the rig
+    # is an operator-set host on the mining LAN, not clearnet. The token rides one header, never the
+    # URL, the result, or the audit log.
+    local url="http://$host:$cport/apply" bodyf="$cdir/staged/.$id.body" code
+    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 \
+        -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+        --data "$changes" "$url" 2>/dev/null); then
+        rm -f "$bodyf"
+        _wa_fail "could not reach worker '$worker' control API at $host:$cport — nothing was applied."
+        return 0
+    fi
+    if [ "$code" != "202" ]; then
+        local rig_err
+        # The rig's error string is attacker-influenceable (a compromised rig or a LAN MITM); cap it
+        # before it lands in a result the container reads and the dashboard renders.
+        rig_err=$(jq -r '.error // ""' "$bodyf" 2>/dev/null | head -c 500)
+        rm -f "$bodyf"
+        _wa_reject "worker '$worker' refused the change (HTTP $code): ${rig_err:-no detail}."
+        return 0
+    fi
+    local change_id
+    change_id=$(jq -r '.change_id // ""' "$bodyf" 2>/dev/null | head -c 64)
+    rm -f "$bodyf"
+    # Poll the rig's /status for THIS change_id's terminal outcome. The rig stages → validates →
+    # applies → liveness-checks → rolls back if the miner doesn't return live, seconds later. The 20s
+    # deadline (plus the 15s dial above) stays under the dashboard's CONTROL_WAIT_S POST wait, so the
+    # dashboard always catches a terminal-ish result and records it in the config history.
+    local sbody scode status reason ckeys deadline=$((SECONDS + 20))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 2
+        sbody="$cdir/staged/.$id.status"
+        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 \
+            -H "Authorization: Bearer $token" "http://$host:$cport/status" 2>/dev/null); then
+            rm -f "$sbody"
+            continue
+        fi
+        [ "$scode" = "200" ] || {
+            rm -f "$sbody"
+            continue
+        }
+        # Only trust a status whose change_id matches ours (a concurrent change could be newer).
+        if [ "$(jq -r '.change_id // ""' "$sbody" 2>/dev/null)" != "$change_id" ]; then
+            rm -f "$sbody"
+            continue
+        fi
+        status=$(jq -r '.status // ""' "$sbody")
+        case "$status" in
+        applied | rejected | rolled_back)
+            # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
+            reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
+            ckeys=$(jq -c '.changed_keys // []' "$sbody")
+            rm -f "$sbody"
+            control_write_result "$results" "$id" "$(jq -n --arg s "$status" --arg c "$change_id" --arg w "$worker" --argjson k "$ckeys" --arg r "$reason" \
+                '{status:$s,change_id:$c,worker:$w,changed_keys:$k,reason:(if $r=="" then null else $r end),ts:(now|floor)}')"
+            control_audit "$auditf" "$id" "$actor" "worker-apply" "$status"
+            return 0
+            ;;
+        esac
+        rm -f "$sbody"
+    done
+    # Accepted but no terminal status in time — the change is staged on the rig and will apply; the
+    # container can keep polling the rig via the next read. Record accepted-but-pending, not a failure.
+    control_write_result "$results" "$id" "$(jq -n --arg c "$change_id" --arg w "$worker" \
+        '{status:"accepted",change_id:$c,worker:$w,note:"queued on the rig; outcome not yet observed",ts:(now|floor)}')"
+    control_audit "$auditf" "$id" "$actor" "worker-apply" "accepted"
+}
+
 control_process_request() { # <claimed-file> <control-dir>
     local file="$1" cdir="$2" id action actor size
     # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
@@ -5010,7 +5159,7 @@ control_process_request() { # <claimed-file> <control-dir>
         warn "Control request has a malformed id — discarded (no result can be addressed)."
         return 0
     fi
-    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version")] | length' "$file")" != "0" ]; then
+    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version" and . != "worker" and . != "changes")] | length' "$file")" != "0" ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unexpected keys in request",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "" "invalid" "rejected"
         return 0
@@ -5024,6 +5173,7 @@ control_process_request() { # <claimed-file> <control-dir>
     preview) control_preview "$file" "$id" "$actor" "$cdir" ;;
     commit) control_commit "$id" "$actor" "$cdir" ;;
     upgrade) control_upgrade "$file" "$id" "$actor" "$cdir" ;;
+    worker-apply) control_worker_apply "$file" "$id" "$actor" "$cdir" ;;
     restart | apply) control_lifecycle "$action" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
@@ -5054,6 +5204,10 @@ control_run_pending() {
     # the spool can't hold the root runner for an unbounded stretch — the leftovers wait for the
     # next path-unit fire.
     local max=50
+    # Per-drain worker-apply DIAL budget (#185 hardening): worker-apply is the only action that blocks
+    # the runner on a network round-trip, so cap how many dial per drain (the rest reject with a retry
+    # hint). control_worker_apply reads + decrements this in the same shell.
+    CONTROL_WA_BUDGET=5
     names=$(cd "$cdir/requests" 2>/dev/null && ls -1tr -- *.json 2>/dev/null) || true
     if [ -z "$names" ]; then
         log "No pending control requests."

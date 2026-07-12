@@ -231,6 +231,40 @@ over recent shares rather than the cumulative-since-proxy-start percentage in Pr
 series drives the `high_reject_rate` [Telegram alert](telegram.md) when the trailing-hour rate
 crosses 5%.
 
+### Worker Inspect
+
+With the control channel on (`dashboard.control.enabled`), a worker's name in the Workers Alive table
+is a link. Click it to open **Worker Inspect** — a panel with that rig's live telemetry, an editor for
+the writable slice of its config, and the change history.
+
+The editor covers the keys RigForge lets the control path change: `pools`, `DONATION`, `autotune`,
+`watchdog`, `watchdog_interval_min`, and `max_temp_c`. Nothing else (identity, filesystem paths, API
+ports, the control token) is editable from here. Enter the changes as a JSON object of those keys and
+**Apply to rig**; RigForge validates the change, applies it, and — if the miner doesn't come back to a
+live hashrate — rolls it back on its own. The panel shows the outcome (applied / rejected / rolled
+back) and appends it to the history.
+
+To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
+in its [`dashboard.workers[]`](configuration.md#configuration-reference) descriptor. Without a host, or
+without a token, the rig isn't a write target and the panel says so.
+
+How it stays safe:
+
+- **The dashboard never holds the rig's token.** It spools the worker name and the change into the
+  same host-side control channel [the config editor uses](#configuration-view); the host resolves the
+  rig's address and token from `config.json` and dials the rig. A compromised dashboard container can
+  neither read the token nor point the write at a host it wasn't configured for (the same
+  [SSRF rule](workers.md#per-worker-overrides) as the read path).
+- **Fail-closed.** The write path exists only when the control channel is on, which requires a
+  dashboard password; every request carries the CSRF header; and only the writable allowlist is
+  accepted, at every layer.
+
+RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
+recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
+config *values*, the editor prefills from the last config the dashboard applied — not a live read of
+the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
+dashboard apply.
+
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the

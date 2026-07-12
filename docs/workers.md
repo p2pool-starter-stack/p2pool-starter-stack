@@ -197,7 +197,7 @@ URL, status, and likely fix, so a misconfigured API reads differently from an of
 — its API is on a different port, on another interface than the address it mines from (NAT,
 multi-homed), or carries its own token — override just that rig with
 [`dashboard.workers`](configuration.md#configuration-reference), a list of
-`{name, host?, port?, token?, watts?}` objects. Every field but `name` is optional:
+`{name, host?, port?, token?, watts?, control_port?}` objects. Every field but `name` is optional:
 
 ```jsonc
 // config.json — the rest of the fleet keeps the workers.* defaults
@@ -218,6 +218,18 @@ turns on token-auth for that one rig regardless of the fleet-wide `api_auth` mod
 reports no measured watts — macOS (the RAPL probe is Linux-only), a non-RigForge miner, or an older
 kit — so the fleet power total still counts it (marked *estimated*). A RigForge rig on Linux reports
 its own watts and needs no estimate.
+
+`control_port` (default `8082`) is the rig's writable control API port, used by
+[Worker Inspect](dashboard.md#worker-inspect) to push config changes from the dashboard. Set it
+alongside `host` and `token` to make a rig editable; leave the whole feature off by not enabling the
+dashboard control channel. The token is the rig's `ACCESS_TOKEN` and never leaves the stack host — the
+dashboard container doesn't hold it.
+
+! The control token is **write-capable** and travels in **cleartext HTTP** over the LAN (like the
+stratum password): a change can alter a rig's pools or its thermal `watchdog`/`max_temp_c`, so anyone
+who can sniff or MITM the mining LAN and capture the token can push config to your rigs. Keep the
+mining LAN isolated from untrusted devices, and treat the token as a secret (it lives only in the
+owner-only `config.json`/`.env`, never in the dashboard container).
 
 Entries are matched by `name` — the rig's stratum worker name (the part before any `+` suffix).
 On a name miss the dashboard falls back to matching by the rig's connecting IP against an
