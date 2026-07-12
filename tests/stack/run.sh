@@ -2317,6 +2317,28 @@ dw_case '[{"name":"rig1","host":"attacker:8080"}]' "worker host smuggling a port
 dw_case '[{"name":"rig1","port":65536}]' "out-of-range worker port" "dashboard.workers[rig1].port"
 dw_case '[{"name":"rig1","port":"8080"}]' "string worker port" "dashboard.workers[rig1].port"
 dw_case '[{"name":"rig1","token":"has space"}]' "unsafe worker token" "dashboard.workers[rig1].token"
+dw_case '[{"name":"rig1","watts":0}]' "non-positive worker watts (#260)" "dashboard.workers[rig1].watts"
+dw_case '[{"name":"rig1","watts":"142"}]' "string worker watts (#260)" "dashboard.workers[rig1].watts"
+
+# dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
+en_case() { # <energy-json> <label> <expected-msg-fragment>
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "$2 rejected" "$rc" "1"
+    assert_contains "$2 message" "$out" "$3"
+}
+en_case '"nope"' "non-object dashboard.energy" "dashboard.energy must be an object"
+en_case '{"cost_per_kwh":-1}' "negative cost_per_kwh" "dashboard.energy.cost_per_kwh"
+en_case '{"xmr_price":"lots"}' "non-number xmr_price" "dashboard.energy.xmr_price"
+en_case '{"currency":"US Dollars"}' "unsafe currency label" "dashboard.energy.currency"
+
+# A valid energy block (prices + per-worker watts) applies; like workers[], nothing reaches .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"currency":"EUR"},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "valid dashboard.energy applies" "$?" "0"
 
 # Duplicate names are legal (first-declared wins) but warned about, and a valid list applies.
 seed_env

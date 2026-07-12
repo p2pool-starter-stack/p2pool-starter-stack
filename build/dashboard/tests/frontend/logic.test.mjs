@@ -17,6 +17,7 @@ import {
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
     parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare,
+    computeEnergy, formatFiat, formatUnit,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -458,4 +459,66 @@ test('boxAnchor: lands on the border facing the target, not the centre', () => {
     assert.deepEqual(boxAnchor(node, 120, 0), { x: 120, y: 100 });
     // Degenerate (target == centre) → the centre itself, no NaN.
     assert.deepEqual(boxAnchor(node, 120, 110), { x: 120, y: 110 });
+});
+
+
+// --- Energy & profit calculator (#260) --------------------------------------------------
+
+test('computeEnergy: kWh from measured watts, naive extrapolation', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0, xmr_price: 0 },
+        { day: 0 },
+    );
+    assert.equal(en.kwhDay, 24);                      // 1000 W = 1 kW * 24h
+    assert.equal(en.kwhMonth, 24 * DAYS_PER_MONTH);
+    assert.equal(en.kwhYear, 24 * DAYS_PER_YEAR);
+    assert.equal(en.costDay, null);                   // no price -> no cost
+    assert.equal(en.netDay, null);
+});
+
+test('computeEnergy: cost appears once cost_per_kwh is set', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 0 },
+        { day: 0.01 },
+    );
+    assert.equal(en.costDay, 24 * 0.2);               // 24 kWh * 0.2
+    assert.equal(en.netDay, null);                    // no xmr_price -> no net
+});
+
+test('computeEnergy: net = gross(XMR*price) - cost when both prices set', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150 },
+        { day: 0.1 },                                  // 0.1 XMR/day
+    );
+    // gross = 0.1 * 150 = 15; cost = 24 * 0.2 = 4.8; net = 10.2
+    assert.ok(Math.abs(en.netDay - 10.2) < 1e-9);
+    assert.ok(Math.abs(en.netYear - 10.2 * DAYS_PER_YEAR) < 1e-6);
+});
+
+test('computeEnergy: negative net survives (power costs more than it earns)', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 1, xmr_price: 1 },
+        { day: 0.001 },
+    );
+    assert.ok(en.netDay < 0);
+});
+
+test('computeEnergy: unavailable / zero watts returns all nulls', () => {
+    for (const bad of [null, { available: false }, { available: true, total_watts: 0 }]) {
+        const en = computeEnergy(bad, { day: 1 });
+        assert.equal(en.kwhDay, null);
+        assert.equal(en.netDay, null);
+    }
+});
+
+test('formatFiat: currency label, two decimals, keeps the sign', () => {
+    assert.equal(formatFiat(12.5, 'USD'), 'USD 12.50');
+    assert.equal(formatFiat(-3, 'EUR'), '-EUR 3.00');
+    assert.equal(formatFiat(null, 'USD'), '—');
+});
+
+test('formatUnit: value + unit, "—" for null', () => {
+    assert.equal(formatUnit(142.0, 'W'), '142.0 W');
+    assert.equal(formatUnit(20, 'H/s·W', 2), '20.00 H/s·W');
+    assert.equal(formatUnit(null, 'kWh'), '—');
 });

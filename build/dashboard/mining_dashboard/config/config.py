@@ -204,8 +204,16 @@ HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config
 #           literals are not supported)
 #   port  — integer 1-65535 (bool is an int subclass — rejected explicitly)
 #   token — 1-128 printable non-space ASCII chars (header-safe)
+#   watts — a positive number: the operator's manual power-draw estimate for a rig whose enriched
+#           feed reports no RAPL watts (macOS, non-RigForge, or an old kit), so the energy/profit
+#           calculator (#260) can still total the fleet draw. Marked "estimated" in the UI.
 _WORKER_NAME_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
 _WORKER_HOST_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+
+
+def _valid_watts(v):
+    """A positive, finite power estimate (bool rejected — it's an int subclass), else None."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 1e6 else None
 
 
 def load_worker_endpoints(path=None):
@@ -238,12 +246,58 @@ def load_worker_endpoints(path=None):
             if not isinstance(item["token"], str) or not _WORKER_NAME_RE.match(item["token"]):
                 continue
             entry["token"] = item["token"]
+        if "watts" in item:
+            watts = _valid_watts(item["watts"])
+            if watts is None:
+                continue  # fail-closed like every other field: a bad watts drops the whole entry
+            entry["watts"] = watts
         seen.add(name)
         out.append(entry)
     return out
 
 
 DASHBOARD_WORKERS = load_worker_endpoints()
+
+
+def load_energy_config(path=None):
+    """The validated ``dashboard.energy`` block for the energy/profit calculator (#260).
+
+    Read straight off the read-only config.json bind mount (same as the worker descriptors above),
+    not the .env render — it's a small, self-contained block with no secrets. Every field is
+    optional and validated; a missing/invalid value falls back to its default so a typo degrades the
+    feature (profit math hidden) instead of crashing the dashboard. pithead validates the same shape
+    loudly at apply.
+
+    ``cost_per_kwh`` — electricity price per kWh (0/unset ⇒ cost + profit hidden, energy view only).
+    ``xmr_price``    — operator-supplied fiat price of 1 XMR (0/unset ⇒ net profit hidden). No price
+                       feed ships: fetching one is a clearnet egress this privacy-first stack avoids,
+                       so the operator supplies it, in the same ``currency`` as ``cost_per_kwh``.
+    ``currency``     — display label for both figures (e.g. USD, EUR). Label only — no conversion.
+    """
+    try:
+        with open(path or HOST_CONFIG_PATH) as f:
+            raw = json.load(f).get("dashboard", {}).get("energy", {})
+    except (OSError, ValueError, AttributeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _nonneg(v):
+        return (
+            float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else 0.0
+        )
+
+    currency = raw.get("currency")
+    if not isinstance(currency, str) or not _WORKER_NAME_RE.match(currency):
+        currency = "USD"
+    return {
+        "cost_per_kwh": _nonneg(raw.get("cost_per_kwh")),
+        "xmr_price": _nonneg(raw.get("xmr_price")),
+        "currency": currency,
+    }
+
+
+DASHBOARD_ENERGY = load_energy_config()
 # How long a preview/commit POST waits for the host-side runner's result before returning 202 and
 # leaving the client to poll /api/control/result. The systemd path unit fires within seconds.
 CONTROL_WAIT_S = float(os.environ.get("CONTROL_WAIT_S", 30))

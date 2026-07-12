@@ -254,11 +254,12 @@ A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2P
 the XTM the same hashrate merge-mines alongside it, from your P2Pool hashrate and the live network
 figures.
 
-The card is split into three tabs — **Monero**, **Tari**, and **XvB** — driven by one **what-if
-hashrate** input that sits above the tabs, so switching tabs keeps the value you entered. Monero
-holds the XMR/day·month·year figures, time-to-share, and block reward; Tari holds the solo
+The card is split into tabs — **Monero**, **Tari**, **XvB**, and **Energy** — driven by one
+**what-if hashrate** input that sits above the tabs, so switching tabs keeps the value you entered.
+Monero holds the XMR/day·month·year figures, time-to-share, and block reward; Tari holds the solo
 time-to-block, per-block reward, and per-day average; XvB holds the tier/cost block and the
-per-tier payout comparison. The XvB tab appears only when XvB is enabled.
+per-tier payout comparison. The XvB tab appears only when XvB is enabled, and the Energy tab only
+when the fleet reports power (see [Energy & profit](#energy--profit)).
 
 It is scoped to P2Pool — **not** an XvB calculator:
 
@@ -292,6 +293,39 @@ It is scoped to P2Pool — **not** an XvB calculator:
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
 > network figures aren't available yet, the card shows `—` rather than a bogus number.
+
+### Energy & profit
+
+The **Energy** tab turns "what does my hashrate earn" into "what does it earn *after power*." It
+sums each worker's power draw and shows fleet efficiency, and — once you set a price — the net
+profit after electricity.
+
+Power draw comes from RigForge's enriched feed (the `watts` and `hs_per_watt` in the `rigforge`
+block, sampled via RAPL every 15s — see [Connecting Miners](workers.md#rigforge-enriched-feed)). A
+worker whose feed reports no watts (macOS, a non-RigForge rig, an older kit) can carry a manual
+estimate: add `"watts": <number>` to its `dashboard.workers[]` descriptor and it counts toward the
+total, marked *estimated*. A worker with neither a measured nor a configured draw is left out and
+the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
+
+The tab always shows fleet watts, H/s-per-watt, and energy use (kWh per day/month/year, a naive
+extrapolation of the current draw). Two prices add the rest, and each is optional:
+
+| Config | Adds |
+|---|---|
+| `dashboard.energy.cost_per_kwh` | **Power cost** per day/month/year (`kWh × price`). |
+| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year (`P2Pool XMR earnings × your XMR price − power cost`). |
+
+Both are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no conversion
+happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it but leave
+`xmr_price` unset and you get the energy cost but no net. Net profit scales with the same what-if
+hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red when
+power costs more than it earns.
+
+Net profit counts **P2Pool XMR only**. Tari is lumpy solo merge-mining priced separately, and XvB
+is raffle status rather than income, so both are excluded — the same honesty the earnings tabs
+already apply. **No price feed ships:** fetching an exchange rate is a clearnet request this
+privacy-first stack avoids, so you supply the XMR price yourself (see
+[Privacy › Runtime egress](privacy.md#runtime-egress)).
 
 ### Payout confirmation
 

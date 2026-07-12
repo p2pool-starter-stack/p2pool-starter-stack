@@ -197,7 +197,7 @@ URL, status, and likely fix, so a misconfigured API reads differently from an of
 — its API is on a different port, on another interface than the address it mines from (NAT,
 multi-homed), or carries its own token — override just that rig with
 [`dashboard.workers`](configuration.md#configuration-reference), a list of
-`{name, host?, port?, token?}` objects. Every field but `name` is optional:
+`{name, host?, port?, token?, watts?}` objects. Every field but `name` is optional:
 
 ```jsonc
 // config.json — the rest of the fleet keeps the workers.* defaults
@@ -212,6 +212,12 @@ multi-homed), or carries its own token — override just that rig with
 The merge rule is: **per-worker field > fleet default > built-in default.** A rig with no entry (or
 an entry that only sets `port`) inherits everything else from `workers.*`. A per-worker `token`
 turns on token-auth for that one rig regardless of the fleet-wide `api_auth` mode.
+
+`watts` is a manual power-draw estimate (in watts) for the dashboard's
+[energy & profit calculator](dashboard.md#energy--profit). Set it only for a rig whose enriched feed
+reports no measured watts — macOS (the RAPL probe is Linux-only), a non-RigForge miner, or an older
+kit — so the fleet power total still counts it (marked *estimated*). A RigForge rig on Linux reports
+its own watts and needs no estimate.
 
 Entries are matched by `name` — the rig's stratum worker name (the part before any `+` suffix).
 On a name miss the dashboard falls back to matching by the rig's connecting IP against an
