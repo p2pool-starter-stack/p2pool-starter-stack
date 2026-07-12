@@ -13,6 +13,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Contract test for the RigForge worker API ↔ dashboard seam (#209).** A tier-2 contract test
+  points the real `XMRigWorkerClient` at a controllable fake RigForge worker API over a real socket
+  and asserts the whole `none`/`name`/`token` auth matrix (the #315 model), a wrong-token 401, and
+  that the enriched `/1/summary` (rigforge#99 shape) parses through the real consumer — so a drift in
+  either the auth handshake or the enriched-feed shape goes red in CI instead of only on a live rig.
+  `docs/testing-strategy.md` gains a per-flow tier map for the two-repo contract; the real-mining and
+  real-proxy accept/reject legs stay tier-4 (documented, run on a bench rig).
 - **Energy & profit calculator on the dashboard (#260).** The Advanced-view earnings card gains an
   **Energy** tab that totals fleet power draw and efficiency, and — once you set a price — the net
   profit after power. It sums each worker's watts from RigForge's enriched feed (#235); a worker
