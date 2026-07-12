@@ -122,6 +122,31 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Real merge-mining share lands; real hashrate on dashboard | live mining | 4 ▶ |
 | Caddy TLS scheme; Tor onion provisioning; HugePages/AVX2; real disk pressure; prune DB size | real host | 4 ▶ |
 
+### I. RigForge worker ↔ Pithead contract (#209)
+
+The two repos share three seams: mining on the proxy's `:3333`, the enriched worker API on the
+rig's `:8081`, and the stratum-auth handshake. Each behaviour sits at the lowest tier that proves
+it — the worker-API **auth model is the #315 none/name/token matrix**, not the old single
+`Bearer <rig name>`.
+
+| Situation | Trigger | Tier |
+|---|---|---|
+| Worker-API auth header per mode (none/name/token), per-worker token override, SSRF guard rejects a miner-IP/name host | `XMRigWorkerClient` logic | 1 ✅ (`test_xmrig_client`) |
+| Real client authenticates + parses the enriched `/1/summary` over a real socket — none/name/token matrix, wrong-token 401, miner-down body (rigforge#99 shape) | real client vs fake worker API | 2 ✅ (`fakes/fake_worker_api.py` + `test_contract.py`) |
+| Dashboard parses proxy `/workers` rows → worker list + hashrate aggregation; offline drop-off window | metrics / `worker_presence` | 1 ✅ |
+| `p2pool.stratum_password` renders `--access-password` (set) / omits it (default-off) | `pithead` render | 1 ✅ (`tests/stack`) · 4 ▶ (default-off live check) |
+| Proxy restart / node-down → reject → readmit (real containers) | control plane | 3 ▶ (mini-stack) |
+| Real worker mines through the real proxy: appears via its stratum name, hashrate aggregates, backup-pool failover | live rig + proxy | 4 ▶ (`run.sh --workers`) |
+| Stratum auth accept/reject: matching `pass` mines, wrong/missing `pass` rejected, rotation | live proxy `--access-password` | 4 (deferred — a headless xmrig login probe, real proxy binary) |
+| Dev-fee independence (#173): proxy `--donate-level` and rig `DONATION` both honored | live proxy + rig | 4 (deferred) |
+
+The deferred tier-4 legs need a real RigForge rig against a real proxy — provisioned via
+`rigforge.sh setup` on a bench box and driven by the live matrix (`run.sh --workers`), gated on the
+`/var/lock/rig-e2e.lock` bench reservation (see [docs/release-server.md](release-server.md)). They
+are **not** re-provable at a lower tier: the auth-header logic (tier 1) and the wire handshake
+(tier 2) already are, so the only thing left for the real rig is real mining and the real proxy's
+accept/reject — which only a real xmrig-proxy binary can prove.
+
 ## Running each tier
 
 ```bash
