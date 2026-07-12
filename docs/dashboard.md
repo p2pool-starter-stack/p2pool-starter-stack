@@ -136,6 +136,13 @@ A red `⚠ DB write failing` badge appears if the dashboard can't write to its S
 or read-only disk, permissions problem). The dashboard keeps serving live data, but hashrate history,
 shares, and stats won't survive a restart until it's fixed.
 
+If the database file is found **corrupt** (malformed, e.g. after a container was recreated twice in
+quick succession while a write was mid-flight), the dashboard heals itself rather than erroring
+forever: it quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for post-mortem), starts
+a fresh database, and keeps running. A `db_reset` alert (Telegram and the other sinks) tells you
+history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
+only the historical charts reset.
+
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.

@@ -32,6 +32,7 @@ transition, not a stream:
 | ✅ **Sync finished** | The initial blockchain sync completed and mining has started — handy on first run, when the sync can take hours. |
 | 🟠 **Disk filling up** | The data disk crossed the warn/critical threshold — a full disk can corrupt the Monero database, so free space before it runs out. |
 | 🔴 **DB write failing** | The dashboard can no longer write to its database; hashrate history, shares, and stats will be lost on restart until it's fixed (usually disk space or permissions). |
+| 🔄 **DB reset** | The database was found corrupt and auto-healed — the bad file was quarantined and a fresh one started, so history before now was cleared (the stack kept running). |
 | 🔴 **Container trouble** | A stack container is restart-looping (an OOM kill — the per-container memory ceiling doing its job — or a bad config) or running but failing its healthcheck for over 2 minutes. One alert per incident, not one per restart, and a recovery note when it stabilises. Intentional stops (the sync hold, node-down failover) never fire it. |
 | ⚠ **No PPLNS share (XvB)** | You're donating to XvB but hold no share in the PPLNS window, so raffle wins are **skipped** — donations are wasted until you land one. Only fires when XvB is enabled. |
 | ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
@@ -161,6 +162,7 @@ block and set it to `false` — any event you don't list stays on:
 | `sync_finished` | `true` | Initial sync done, mining started |
 | `disk_space` | `true` | Data disk filling up / critical / recovered |
 | `db_unhealthy` | `true` | Dashboard database writes failing / recovered |
+| `db_reset` | `true` | Corrupt dashboard database auto-healed (quarantined + reset); history cleared |
 | `xvb_no_share` | `true` | XvB on but no PPLNS share (wins skipped) / restored |
 | `clearnet_exposed` | `true` | A node is syncing over clearnet (IP exposed) / back on Tor |
 | `xvb_registration` | `true` | XvB auto-registration rejected / failing / recovered |
