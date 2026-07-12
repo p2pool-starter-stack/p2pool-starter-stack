@@ -852,6 +852,17 @@ class TestControlGate:
         # An hour later there is room again.
         assert gate.open("restart", "7", now=3601) is not None
 
+    def test_rate_limit_is_per_operator(self):
+        # #470: one operator exhausting the budget must NOT lock the others out — the budget is
+        # keyed by user id, not a single global list.
+        gate = tc.ControlGate(timeout_s=60, max_prompts_per_hour=2)
+        assert all(gate.open("restart", "7", now=i) for i in range(2))
+        assert gate.open("restart", "7", now=2) is None  # operator 7 is now capped
+        # A different operator still has their full budget.
+        assert gate.open("apply", "42", now=2) is not None
+        assert gate.open("apply", "42", now=3) is not None
+        assert gate.open("apply", "42", now=4) is None  # 42 caps independently
+
 
 # --- #338 control commands: bot wiring -----------------------------------------------------
 
