@@ -276,6 +276,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The tier-4 hardening phase always reaps its root control units (#477).** The phase installs the
+  `pithead-control.{path,service}` systemd units to exercise the #33 spool, and relied on the restore
+  `apply` to remove them — but that removal runs early in `apply`, so a restore that died partway (a
+  render failure, or the settle timeout firing mid-apply) could leave the **root** `pithead-control.path`
+  unit watching the control spool after the run, exactly the host residue tier-4 exists to prevent. The
+  phase now tears the units down unconditionally at the end, independent of the restore's exit code, and
+  warns loudly if any survive (a no-op on hosts without systemd). Test-harness only; no runtime change.
 - **Telegram control prompts are rate-limited per operator, not globally (#470).** The `ControlGate`
   budget (max approval prompts per rolling hour) was one shared list, so a single allow-listed id —
   or one compromised-but-allow-listed session — could exhaust it and lock the *other* operators out
