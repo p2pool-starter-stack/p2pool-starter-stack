@@ -276,6 +276,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The tier-4 hardening phase always reaps its root control units (#477).** The phase installs the
+  `pithead-control.{path,service}` systemd units to exercise the #33 spool, and relied on the restore
+  `apply` to remove them — but that removal runs early in `apply`, so a restore that died partway (a
+  render failure, or the settle timeout firing mid-apply) could leave the **root** `pithead-control.path`
+  unit watching the control spool after the run, exactly the host residue tier-4 exists to prevent. The
+  phase now tears the units down unconditionally at the end, independent of the restore's exit code, and
+  warns loudly if any survive (a no-op on hosts without systemd). Test-harness only; no runtime change.
 - **`pithead <verb> --help` no longer runs the command (#493).** `-h`/`--help` on any subcommand now
   prints usage and exits 0 **before any side effect** — previously `pithead upgrade --help` ignored
   the flag and ran a full upgrade (image pull + container recreation). On the v1.4.0 deploy that
