@@ -283,6 +283,18 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   unit watching the control spool after the run, exactly the host residue tier-4 exists to prevent. The
   phase now tears the units down unconditionally at the end, independent of the restore's exit code, and
   warns loudly if any survive (a no-op on hosts without systemd). Test-harness only; no runtime change.
+- **The dashboard auto-heals a corrupt SQLite database instead of erroring forever (#489).** A
+  clashed WAL checkpoint (seen when a container was recreated twice in quick succession) could leave
+  `mining_data.db` malformed; the dashboard then logged a write error every cycle **indefinitely** and
+  silently lost all history — and that DB now holds XvB-credited and payout state, so corruption can
+  skew the donation loop. On startup (`PRAGMA integrity_check`) and on any write that reports the file
+  malformed, the dashboard now quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for
+  post-mortem, oldest pruned), rebuilds a fresh schema, and resumes persisting. A one-shot **`db_reset`
+  alert** fires through Telegram and the other sinks so you know history before that point was cleared
+  — a plain "DB write failing" badge could be missed, since a startup reset has no prior state and a
+  runtime reset flips back to healthy within one cycle. A *transient* failure (disk full, locked,
+  permissions) is unchanged: it still just flags the persistence badge and retries, never discarding
+  history.
 - **`pithead <verb> --help` no longer runs the command (#493).** `-h`/`--help` on any subcommand now
   prints usage and exits 0 **before any side effect** — previously `pithead upgrade --help` ignored
   the flag and ran a full upgrade (image pull + container recreation). On the v1.4.0 deploy that

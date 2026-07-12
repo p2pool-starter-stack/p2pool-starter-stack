@@ -116,6 +116,7 @@
             "sync_finished": true,
             "disk_space": true,
             "db_unhealthy": true,
+            "db_reset": true,
             "xvb_no_share": true,
             "clearnet_exposed": true,
             "xvb_registration": true,
