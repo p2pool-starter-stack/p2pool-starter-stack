@@ -276,6 +276,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Telegram control prompts are rate-limited per operator, not globally (#470).** The `ControlGate`
+  budget (max approval prompts per rolling hour) was one shared list, so a single allow-listed id —
+  or one compromised-but-allow-listed session — could exhaust it and lock the *other* operators out
+  of `/restart` / `/apply` for up to an hour. The budget is now keyed by operator id, so each caps
+  independently. A confidentiality/integrity fix this is not (the host-side fixed-verb runner is the
+  real boundary, #33/#338) — only availability among already-trusted operators; the `ControlGate`
+  docstring was corrected to say so.
 - **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
   environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
   file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
