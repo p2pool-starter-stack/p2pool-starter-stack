@@ -11,6 +11,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-11
+
 ### Added
 
 - **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
