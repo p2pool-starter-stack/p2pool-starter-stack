@@ -288,6 +288,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   runtime reset flips back to healthy within one cycle. A *transient* failure (disk full, locked,
   permissions) is unchanged: it still just flags the persistence badge and retries, never discarding
   history.
+- **`pithead <verb> --help` no longer runs the command (#493).** `-h`/`--help` on any subcommand now
+  prints usage and exits 0 **before any side effect** — previously `pithead upgrade --help` ignored
+  the flag and ran a full upgrade (image pull + container recreation). On the v1.4.0 deploy that
+  stray recreation collided with the real upgrade and corrupted the dashboard's SQLite DB (see the
+  auto-heal fix). Unrecognized flags on a no-option verb (`upgrade`, `up`, `down`, `status`,
+  `doctor`, `control-run-pending`, `onion-client-key`) now error and name the bad flag instead of
+  being silently ignored while the command runs anyway. `--dry-run` and other real options are
+  unaffected; `logs` still forwards its args to `docker compose logs`.
 - **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
   environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
   file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
