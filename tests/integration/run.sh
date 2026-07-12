@@ -1350,6 +1350,13 @@ run_hardening() {
     # 240s: this apply follows the control enable/disable + a tor restart, so the stack has more to
     # re-settle than a plain apply (180s timed out here on a real run).
     wait_status_ok 240 || true
+
+    # Reap the systemd control unit UNCONDITIONALLY (#33/#424). apply only removes it on a control
+    # on->off transition, so if the restore apply above failed or timed out the root pithead-control.path
+    # is left installed+enabled and a plain re-apply won't strip it. Tear it down directly — idempotent,
+    # runs regardless of the restore apply's exit — so no root unit outlives this phase.
+    it_step "reaping any leftover pithead-control systemd unit…"
+    rx 'sudo systemctl disable --now pithead-control.path 2>/dev/null; sudo rm -f /etc/systemd/system/pithead-control.path /etc/systemd/system/pithead-control.service; sudo systemctl daemon-reload' >/dev/null 2>&1 || true
 }
 
 run_auth_fail_closed() {
