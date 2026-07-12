@@ -37,6 +37,7 @@ from mining_dashboard.helper.utils import (
     is_ip_address,
     xvb_stats_are_stale,
 )
+from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
 from mining_dashboard.service.earnings import (
     ATOMIC_PER_XMR,
     MICRO_PER_XTM,
@@ -1412,6 +1413,39 @@ def _egress_badge(summary):
         "variant": "ok" if ok else "bad",
         "text": "🛡️ Tor-only egress" if ok else f"⚠️ {summary['leaks']} clearnet egress",
         "title": summary["label"],
+    }
+
+
+def build_worker_detail(name, data, state_mgr):
+    """Per-worker Inspect payload (#185): the rig's current enriched telemetry, the writable config
+    the dashboard last applied (the editor prefill — the rig's feed does not expose the writable
+    config values, so Pithead's own last-applied record is the honest source), and the change history
+    (each row's ``changes`` is a diff by construction, since we only ever record deltas we authored).
+
+    ``editable`` is whether the worker has an operator-set ``host`` in ``dashboard.workers[]`` — the
+    precondition for the host-side write path. The rig's token is masked out of this container (#440),
+    so the container cannot verify it; the host runner re-checks it and fails closed if it is missing.
+    """
+    workers = data.get("workers", []) if data else []
+    worker = next((w for w in workers if w.get("name") == name), None)
+    descriptor = next((e for e in config.DASHBOARD_WORKERS if e["name"] == name), None)
+    history = state_mgr.get_worker_config_history(name)
+    for row in history:
+        ts = row.get("ts")
+        row["applied_at"] = format_time_abs(ts) if ts else ""
+    return {
+        "name": name,
+        "found": worker is not None,
+        # A worker is editable only if the operator pinned its host in config.json — never a
+        # miner-advertised address (#122). control_enabled gates whether the write path exists at all.
+        "editable": bool(descriptor and descriptor.get("host")),
+        "control_enabled": config.DASHBOARD_CONTROL_ENABLED,
+        "status": worker.get("status") if worker else None,
+        "hashrate": format_hashrate(worker.get("h60", 0)) if worker else None,
+        "rigforge": _rigforge_display(worker.get("rigforge")) if worker else None,
+        "writable_keys": sorted(WORKER_WRITABLE_KEYS),
+        "last_applied": state_mgr.get_last_applied_worker_config(name),
+        "history": history,
     }
 
 

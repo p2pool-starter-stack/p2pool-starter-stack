@@ -4772,6 +4772,62 @@ assert_eq "unknown verb never runs a host command" "$(cat "$SELF_LOG")" ""
 unset PITHEAD_SELF SELF_LOG
 
 # ---------------------------------------------------------------------------
+echo "== control channel: worker config apply fails closed (#185) =="
+# control_worker_apply resolves the rig's host/token from the HOST's config.json (never the intent)
+# and refuses — before dialing any rig — a bad worker name, a non-writable key, an empty change, or a
+# worker missing a host or token. These are the fail-closed guards a compromised container hits.
+WA="$SANDBOX/ctrl185"
+mkdir -p "$WA/staged" "$WA/results" "$WA/audit"
+# config.json: rig1 fully addressable (host+token), rig2 has a host but no token (bearer-mandatory).
+cat >"$WA/config.json" <<'EOF'
+{ "dashboard": { "workers": [
+    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" },
+    { "name": "rig2", "host": "10.0.0.8" }
+] } }
+EOF
+wa_case() { # <uuid> <intent-json> <label> <expected-error-substring>
+    printf '%s\n' "$2" >"$WA/req.json"
+    PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
+    local out
+    out=$(jq -r '.status + "|" + (.error // "")' "$WA/results/$1.json" 2>/dev/null)
+    case "$out" in
+    rejected\|*"$4"*) ok "$3" ;;
+    *) bad "$3" "got: $out" ;;
+    esac
+}
+u1="aaaaaaaa-1111-4111-8111-111111111111"
+u2="bbbbbbbb-2222-4222-8222-222222222222"
+u3="cccccccc-3333-4333-8333-333333333333"
+u4="dddddddd-4444-4444-8444-444444444444"
+u5="eeeeeeee-5555-4555-8555-555555555555"
+wa_case "$u1" "{\"id\":\"$u1\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"\",\"changes\":{\"DONATION\":2}}" "empty worker name rejected" "worker"
+wa_case "$u2" "{\"id\":\"$u2\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"rig1\",\"changes\":{\"ACCESS_TOKEN\":\"x\"}}" "non-writable key rejected" "not writable"
+wa_case "$u3" "{\"id\":\"$u3\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"rig1\",\"changes\":{}}" "empty changes rejected" "non-empty"
+wa_case "$u4" "{\"id\":\"$u4\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"ghost\",\"changes\":{\"DONATION\":2}}" "unknown/hostless worker rejected" "no configured host"
+wa_case "$u5" "{\"id\":\"$u5\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"rig2\",\"changes\":{\"DONATION\":2}}" "worker without a token rejected (bearer-mandatory)" "no token"
+# The intent's own host/port/token are IGNORED — resolution is from config.json only (#122). A tampered
+# intent naming rig2 (no token) with an injected token still fails closed.
+u6="ffffffff-6666-4666-8666-666666666666"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig2","changes":{"DONATION":2}}\n' "$u6" >"$WA/req.json"
+PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
+assert_eq "worker-apply reject is audited by name only" \
+    "$(jq -r '.status' "$WA/results/$u6.json")" "rejected"
+assert_contains "worker-apply audit records the action, no token" \
+    "$(cat "$WA/audit/control.log")" '"action":"worker-apply","status":"rejected"'
+if grep -q 'tok-rig1' "$WA/audit/control.log" "$WA"/results/*.json 2>/dev/null; then
+    bad "worker-apply never leaks a token to results/audit" "token found"
+else
+    ok "worker-apply never leaks a token to results/audit"
+fi
+# Per-drain dial budget (#185 hardening): with the budget exhausted, a fully-valid apply (rig1 has a
+# host + token) is refused BEFORE any rig dial, so a flood can't starve the root runner.
+u7="99999999-7777-4777-8777-777777777777"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"DONATION":2}}\n' "$u7" >"$WA/req.json"
+CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
+assert_contains "worker-apply over the dial budget is rejected (no dial)" \
+    "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
+
+# ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
 if [ "$FAIL" -gt 0 ]; then

@@ -122,6 +122,46 @@ def submit(action, cfg=None, actor="", intent_id=None, version=None):
     return rid
 
 
+def submit_worker_apply(worker, changes, actor="", intent_id=None):
+    """Spool a worker-config change intent (#185). Carries ONLY the worker NAME and the writable-key
+    ``changes`` — never a host, port, or token: the host-side runner resolves the rig's real address
+    and bearer from its own config.json (dashboard.workers[]), so a tampered intent can at most target
+    another already-configured rig, never an arbitrary host, and the rig token — masked out of this
+    container (#440) — never crosses the mount. Returns the request id (always a UUID)."""
+    rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())
+    request = {
+        "id": rid,
+        "action": "worker-apply",
+        "actor": actor,
+        "worker": worker,
+        "changes": changes,
+    }
+    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
+    with open(tmp, "w") as f:
+        json.dump(request, f)
+    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
+    return rid
+
+
+# The config keys the Worker Inspect editor may change — the exact writable allowlist the rig's
+# control API enforces (rigforge WRITABLE, #236). Validated here (fail-closed, defence in depth), on
+# the host runner, and finally by the rig itself. NOT writable: identity, filesystem paths, the API
+# ports, and the control token — remote mutation of those would be escalation.
+WORKER_WRITABLE_KEYS = frozenset(
+    {"pools", "DONATION", "autotune", "watchdog", "watchdog_interval_min", "max_temp_c"}
+)
+
+
+def validate_worker_changes(changes):
+    """Return an error string if ``changes`` isn't a non-empty object of writable keys, else ''."""
+    if not isinstance(changes, dict) or not changes:
+        return "changes must be a non-empty object of writable config keys"
+    bad = sorted(k for k in changes if k not in WORKER_WRITABLE_KEYS)
+    if bad:
+        return "keys not writable via the control path: " + ", ".join(bad)
+    return ""
+
+
 def result(rid):
     """The runner's result for ``rid``, or None while pending. The id is validated as a UUID
     before it touches a path (it arrives from a query param)."""

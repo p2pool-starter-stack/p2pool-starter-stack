@@ -188,3 +188,33 @@ class TestReferenceMerge:
         # Still serves the host config (masked) rather than raising.
         assert cfg["p2pool"]["pool"] == "mini"
         assert cfg["monero"]["node_password"] == {"__secret__": True}
+
+
+class TestWorkerApply:
+    """Worker config-apply spooling + validation (#185). The intent carries only the worker name +
+    writable-key changes — never a host, port, or token (those stay host-side, #440)."""
+
+    def test_validate_worker_changes(self):
+        assert control_service.validate_worker_changes({"DONATION": 2}) == ""
+        assert control_service.validate_worker_changes({"pools": [], "max_temp_c": 80}) == ""
+        # Empty / wrong type.
+        assert "non-empty" in control_service.validate_worker_changes({})
+        assert "non-empty" in control_service.validate_worker_changes([])
+        assert "non-empty" in control_service.validate_worker_changes("nope")
+        # A key outside the writable allowlist (escalation attempt).
+        err = control_service.validate_worker_changes({"ACCESS_TOKEN": "x", "DONATION": 1})
+        assert "ACCESS_TOKEN" in err and "not writable" in err
+
+    def test_submit_worker_apply_spools_tokenless_intent(self, spool):
+        rid = control_service.submit_worker_apply("rig1", {"DONATION": 4}, actor="admin")
+        uuid.UUID(rid)
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req == {
+            "id": rid,
+            "action": "worker-apply",
+            "actor": "admin",
+            "worker": "rig1",
+            "changes": {"DONATION": 4},
+        }
+        # No secret / addressing leaks into the container-writable spool.
+        assert "host" not in req and "port" not in req and "token" not in req

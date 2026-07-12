@@ -585,3 +585,135 @@ class TestResponsiveLayout:
         css = await (await client.get("/static/dashboard.css")).text()
         assert "brand-host-at" in mjs and "state.host_addr" in mjs
         assert ".brand-host-at" in css and "opacity" in css
+
+
+@pytest.fixture
+async def worker_client(aiohttp_client, control_spool, monkeypatch):
+    """Control channel on, one editable worker descriptor, and a worker in the live snapshot.
+
+    Exposes the StateManager so tests can read back the config history the route records."""
+    from mining_dashboard.config import config as cfg_mod
+    from mining_dashboard.web import views
+
+    monkeypatch.setattr(
+        cfg_mod, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "10.0.0.9", "control_port": 8082}]
+    )
+    data = {
+        "workers": [
+            {
+                "name": "rig1",
+                "ip": "10.0.0.9",
+                "status": "online",
+                "active_pool": "3333",
+                "h60": 5100,
+            }
+        ]
+    }
+    sm = StateManager(db_path=":memory:")
+    cli = await aiohttp_client(create_app(sm, data))
+    cli.sm = sm  # for history assertions
+    assert views.config is cfg_mod  # both modules share the one config object
+    yield cli
+    sm.close()
+
+
+class TestWorkerInspect:
+    async def test_worker_detail_reports_editable_and_telemetry(self, worker_client):
+        resp = await worker_client.get("/api/worker?name=rig1")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["found"] is True
+        assert body["editable"] is True  # has an operator-set host
+        assert body["status"] == "online"
+        assert "DONATION" in body["writable_keys"]
+        assert body["history"] == []
+
+    async def test_worker_detail_requires_name(self, worker_client):
+        assert (await worker_client.get("/api/worker")).status == 400
+
+    async def test_worker_apply_requires_control_header(self, worker_client):
+        resp = await worker_client.post(
+            "/api/control/worker-apply", json={"worker": "rig1", "changes": {"DONATION": 2}}
+        )
+        assert resp.status == 403  # CSRF guard
+
+    async def test_worker_apply_rejects_non_writable_keys(self, worker_client):
+        resp = await worker_client.post(
+            "/api/control/worker-apply",
+            json={"worker": "rig1", "changes": {"ACCESS_TOKEN": "x"}},
+            headers=CONTROL_HEADERS,
+        )
+        assert resp.status == 400  # not in the writable allowlist
+
+    async def test_worker_apply_spools_tokenless_intent_and_records_history(
+        self, worker_client, control_spool, monkeypatch
+    ):
+        # Pin the id and pre-write the host runner's terminal result so wait_result returns at once.
+        rid = str(uuid.uuid4())
+        monkeypatch.setattr(control_service.uuid, "uuid4", lambda: uuid.UUID(rid))
+        result = {
+            "status": "applied",
+            "change_id": "deadbeefcafef00d",
+            "worker": "rig1",
+            "changed_keys": ["DONATION"],
+            "reason": None,
+        }
+        (control_spool / "results" / f"{rid}.json").write_text(json.dumps(result))
+
+        resp = await worker_client.post(
+            "/api/control/worker-apply",
+            json={"worker": "rig1", "changes": {"DONATION": 3}},
+            headers=CONTROL_HEADERS,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["status"] == "applied" and body["change_id"] == "deadbeefcafef00d"
+
+        # The spooled intent carries ONLY the worker name + changes — never a host, port, or token.
+        req = json.loads((control_spool / "requests" / f"{rid}.json").read_text())
+        assert req["action"] == "worker-apply"
+        assert req["worker"] == "rig1" and req["changes"] == {"DONATION": 3}
+        assert "host" not in req and "port" not in req and "token" not in req
+
+        # The outcome is recorded in the per-worker config history.
+        history = worker_client.sm.get_worker_config_history("rig1")
+        assert len(history) == 1
+        assert history[0]["status"] == "applied"
+        assert history[0]["changes"] == {"DONATION": 3}
+        assert worker_client.sm.get_last_applied_worker_config("rig1") == {"DONATION": 3}
+
+    async def test_worker_routes_absent_when_control_disabled(self, client):
+        assert (await client.get("/api/worker?name=rig1")).status == 404
+        assert (
+            await client.post("/api/control/worker-apply", json={}, headers=CONTROL_HEADERS)
+        ).status == 404
+
+
+class TestWorkerApplyEdgeCases:
+    async def test_apply_bad_body_and_missing_worker(self, worker_client):
+        # Non-JSON body → 400.
+        resp = await worker_client.post(
+            "/api/control/worker-apply", data="not json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+        # Missing / empty worker name → 400.
+        resp = await worker_client.post(
+            "/api/control/worker-apply", json={"changes": {"DONATION": 1}}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_apply_pending_when_runner_silent(
+        self, worker_client, control_spool, monkeypatch
+    ):
+        # No result file is written, so wait_result times out → 202 pending, nothing recorded.
+        rid = str(uuid.uuid4())
+        monkeypatch.setattr(control_service.uuid, "uuid4", lambda: uuid.UUID(rid))
+        monkeypatch.setattr(control_service.config, "CONTROL_WAIT_S", 0.05)
+        resp = await worker_client.post(
+            "/api/control/worker-apply",
+            json={"worker": "rig1", "changes": {"DONATION": 1}},
+            headers={**CONTROL_HEADERS},
+        )
+        assert resp.status == 202
+        assert (await resp.json())["status"] == "pending"
+        assert worker_client.sm.get_worker_config_history("rig1") == []  # no terminal outcome yet

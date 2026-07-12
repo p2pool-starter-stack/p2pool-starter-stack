@@ -13,6 +13,24 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Worker Inspect: view and edit a rig's config from the dashboard (#185).** Click a worker's name in
+  the Workers Alive table (with the control channel on) to open a panel showing the rig's live
+  telemetry, an editor for the writable slice of its config (`pools`, `DONATION`, `autotune`,
+  `watchdog`, `watchdog_interval_min`, `max_temp_c`), and the change history. Applying a change goes
+  through RigForge's writable control API (rigforge#236) — the rig validates it, applies it, and rolls
+  back automatically if the miner doesn't return to a live hashrate; the panel shows the outcome
+  (applied / rejected / rolled back) and records every change to a per-worker history you can browse.
+  **Security:** the write path is fail-closed — it only exists when `dashboard.control.enabled` is on
+  (which requires a dashboard password), every request carries the CSRF header, and the change surface
+  is the writable allowlist only. The dashboard container **never holds the rig's token**: it spools
+  the worker name plus the change, and the host-side control runner resolves the rig's address and
+  bearer from `config.json` and dials the rig — so a compromised container can neither read the token
+  nor point the write at an arbitrary host (the [#122 SSRF](docs/workers.md) rule). Each rig needs
+  `host`, `token`, and (if not the default `8082`) `control_port` in its `dashboard.workers[]`
+  descriptor to be editable. RigForge keeps no config history on the rig, so Pithead owns it; the
+  rig's enriched feed doesn't expose the writable values, so the editor prefills from the last config
+  the dashboard applied. See [Dashboard › Worker Inspect](docs/dashboard.md#worker-inspect).
+
 - **Contract test for the RigForge worker API ↔ dashboard seam (#209).** A tier-2 contract test
   points the real `XMRigWorkerClient` at a controllable fake RigForge worker API over a real socket
   and asserts the whole `none`/`name`/`token` auth matrix (the #315 model), a wrong-token 401, and

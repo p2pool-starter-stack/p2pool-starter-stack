@@ -43,6 +43,7 @@ from mining_dashboard.web.views import (
     build_sync,
     build_system,
     build_tari,
+    build_worker_detail,
     build_workers,
     build_xvb_calc,
     canonical_window,
@@ -1991,3 +1992,65 @@ class TestBuildEnergy:
         assert got["cost_per_kwh"] == 0.2
         assert got["xmr_price"] == 150.0
         assert got["currency"] == "EUR"
+
+
+class TestBuildWorkerDetail:
+    """Per-worker Inspect payload (#185): current telemetry + last-applied prefill + history."""
+
+    def _detail(self, monkeypatch, name, workers=None, descriptors=None):
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        try:
+            return build_worker_detail(name, {"workers": workers or []}, sm), sm
+        finally:
+            pass
+
+    def test_editable_when_operator_set_host(self, monkeypatch):
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 5100, "rigforge": None}],
+            descriptors=[{"name": "rig1", "host": "10.0.0.9", "control_port": 8082}],
+        )
+        sm.close()
+        assert d["found"] is True and d["editable"] is True
+        assert "DONATION" in d["writable_keys"]
+
+    def test_not_editable_without_host(self, monkeypatch):
+        # A worker with no operator-set host can't be a write target (SSRF safety, #122).
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 0}],
+            descriptors=[{"name": "rig1", "port": 8081}],
+        )
+        sm.close()
+        assert d["editable"] is False
+
+    def test_not_found_worker_absent_from_snapshot(self, monkeypatch):
+        d, sm = self._detail(monkeypatch, "ghost", workers=[])
+        sm.close()
+        assert d["found"] is False and d["editable"] is False
+        assert d["history"] == []
+
+    def test_history_and_last_applied_from_db(self, monkeypatch):
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 0}],
+            descriptors=[{"name": "rig1", "host": "10.0.0.9"}],
+        )
+        sm.add_worker_config_version("rig1", "cid1", "applied", {"DONATION": 2}, None, ts=1000.0)
+        sm.add_worker_config_version(
+            "rig1", "cid2", "rejected", {"max_temp_c": 999}, "bad", ts=2000.0
+        )
+        d = build_worker_detail("rig1", {"workers": [{"name": "rig1", "status": "online"}]}, sm)
+        sm.close()
+        assert [h["status"] for h in d["history"]] == ["rejected", "applied"]  # newest first
+        assert d["history"][0]["applied_at"]  # formatted timestamp present
+        assert d["last_applied"] == {"DONATION": 2}  # only the applied change prefills

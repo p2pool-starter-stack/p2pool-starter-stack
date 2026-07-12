@@ -158,6 +158,27 @@ class TestWorkerEndpoints:
         assert load_worker_endpoints(str(tmp_path / "absent.json")) == []
         assert self._load(tmp_path, {"dashboard": {}}) == []
 
+    def test_valid_control_port_loads_and_bad_drops_entry(self, tmp_path):
+        # control_port (#185) is validated like port: an out-of-range or non-int value drops the
+        # whole entry (fail-closed), so a typo can't leave a half-configured writable target.
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "workers": [
+                        {"name": "rig1", "host": "10.0.0.5", "control_port": 8082},
+                        {"name": "bad", "control_port": 70000},
+                        {"name": "boolcp", "control_port": True},
+                        {"name": "ok", "port": 8081},
+                    ]
+                }
+            },
+        )
+        assert got == [
+            {"name": "rig1", "host": "10.0.0.5", "control_port": 8082},
+            {"name": "ok", "port": 8081},
+        ]
+
     def test_valid_watts_loads_and_bad_watts_drops_entry(self, tmp_path):
         # A positive watts estimate (#260) rides on the descriptor; a bad one fails closed like
         # every other field so a typo can't silently distort the fleet power total.

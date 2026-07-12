@@ -242,6 +242,14 @@ def load_worker_endpoints(path=None):
             if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
                 continue
             entry["port"] = port
+        if "control_port" in item:
+            # The rig's writable control API port (#185). Operator-overridable, NOT derived from
+            # `port`+1 — RigForge lets the operator pick it (default 8082). Only the HOST-side runner
+            # ever dials it (with the real token); the dashboard container only shows/edits config.
+            cport = item["control_port"]
+            if isinstance(cport, bool) or not isinstance(cport, int) or not 1 <= cport <= 65535:
+                continue
+            entry["control_port"] = cport
         if "token" in item:
             if not isinstance(item["token"], str) or not _WORKER_NAME_RE.match(item["token"]):
                 continue

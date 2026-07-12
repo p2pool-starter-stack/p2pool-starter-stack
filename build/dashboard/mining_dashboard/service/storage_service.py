@@ -148,6 +148,19 @@ class StateManager:
             "(chain TEXT, txid TEXT, height INTEGER, ts REAL, amount_atomic INTEGER, "
             "PRIMARY KEY (chain, txid))"
         )
+        # Per-worker config-change history for the Worker Inspect page (#185). RigForge keeps no
+        # config history on the rig, so Pithead owns it: one row per change the dashboard applied,
+        # with the writable-key `changes` we sent (each row IS a diff from the prior state, by
+        # construction — we only ever record deltas we authored) and the rig's terminal outcome.
+        # Additive, forward-only (mirrors events / payouts) — no _migrate_db change needed. `changes`
+        # holds only the writable allowlist keys; NO secret ever lands here (the rig token stays
+        # host-side, #440). change_id is the rig's 16-hex id, or NULL for a request that never reached
+        # a rig (rejected host-side).
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS worker_config "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, change_id TEXT, ts REAL, "
+            "status TEXT, changes TEXT, reason TEXT)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -155,6 +168,9 @@ class StateManager:
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON history(timestamp)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_ts ON shares(ts)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_stats_ts ON share_stats(ts)")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_worker_config ON worker_config(worker, ts)"
+        )
 
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
@@ -565,6 +581,72 @@ class StateManager:
         except sqlite3.Error as e:
             self.logger.error(f"Payout Height Read Error: {e}")
             return 0
+
+    def add_worker_config_version(
+        self,
+        worker: str,
+        change_id: str | None,
+        status: str,
+        changes: dict[str, Any],
+        reason: str | None,
+        ts: float | None = None,
+    ) -> None:
+        """Record one applied/attempted worker config change (#185). ``changes`` is the writable-key
+        delta the dashboard sent (stored as JSON — no secret ever lands here). Forward-only."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                self._conn.execute(
+                    "INSERT INTO worker_config (worker, change_id, ts, status, changes, reason) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        worker,
+                        change_id,
+                        ts if ts is not None else time.time(),
+                        status,
+                        json.dumps(changes),
+                        reason,
+                    ),
+                )
+                self._conn.commit()
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            self._db_error("Worker Config Write Error", e)
+
+    def get_worker_config_history(self, worker: str, limit: int = 50) -> list[dict[str, Any]]:
+        """The change history for ``worker``, newest first, with ``changes`` parsed back to a dict."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT change_id, ts, status, changes, reason FROM worker_config "
+                    "WHERE worker = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                    (worker, limit),
+                )
+                out = []
+                for row in cursor.fetchall():
+                    d = dict(row)
+                    try:
+                        d["changes"] = json.loads(d["changes"]) if d["changes"] else {}
+                    except (TypeError, ValueError):
+                        d["changes"] = {}
+                    out.append(d)
+                return out
+        except sqlite3.Error as e:
+            self.logger.error(f"Worker Config Read Error: {e}")
+            return []
+
+    def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
+        """The merged writable config the dashboard last successfully applied to ``worker`` — the
+        best prefill for the editor, since the rig's enriched feed does not expose the writable config
+        values (#185). Later applied changes lay over earlier ones (last write wins per key)."""
+        merged: dict[str, Any] = {}
+        for row in reversed(self.get_worker_config_history(worker, limit=200)):
+            if row.get("status") == "applied" and isinstance(row.get("changes"), dict):
+                merged.update(row["changes"])
+        return merged
 
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

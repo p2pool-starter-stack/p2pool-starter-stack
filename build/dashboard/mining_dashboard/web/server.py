@@ -10,7 +10,13 @@ from mining_dashboard.service import audit_service, control_service
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
-from mining_dashboard.web.views import build_state, canonical_window, get_shell_html, parse_window
+from mining_dashboard.web.views import (
+    build_state,
+    build_worker_detail,
+    canonical_window,
+    get_shell_html,
+    parse_window,
+)
 
 logger = logging.getLogger("WebServer")
 
@@ -176,6 +182,76 @@ async def handle_control_upgrade(request):
     return web.json_response({"id": rid, "status": "pending"}, status=202)
 
 
+def _record_worker_result(state_mgr, worker, changes, res):
+    """Log a worker-apply outcome to the per-worker config history (#185). Only terminal-ish
+    statuses are kept; ``changes`` carries no secret (the rig token stays host-side)."""
+    status = res.get("status", "unknown")
+    if status in ("applied", "rejected", "rolled_back", "accepted", "failed"):
+        state_mgr.add_worker_config_version(
+            worker,
+            res.get("change_id"),
+            status,
+            changes,
+            res.get("reason") or res.get("error"),
+        )
+
+
+async def handle_worker_detail(request):
+    """Per-worker inspect data (#185): the rig's current enriched telemetry, the writable config the
+    dashboard last applied (the prefill — the rig's feed does not expose the writable config values),
+    and the change history with per-change diffs."""
+    name = request.query.get("name", "")
+    if not name:
+        raise web.HTTPBadRequest(text="'name' is required.")
+    app = request.app
+    data = app["latest_data"] or {}
+    state_mgr = app["state_manager"]
+    try:
+        return web.json_response(build_worker_detail(name, data, state_mgr))
+    except Exception:
+        logger.exception("Error building worker detail")
+        return web.json_response({"error": "Failed to build worker detail."}, status=500)
+
+
+async def handle_worker_apply(request):
+    """Push a writable-key config change to a worker's rig via the HOST-side control runner (#185).
+
+    This container never holds the rig's token: it spools ``{worker, changes}`` and the host resolves
+    the rig's address + bearer from config.json (dashboard.workers[]), POSTs, and polls the rig's
+    ``/status``. Fail-closed — the route only exists when the control channel is on, which itself
+    requires a dashboard password. The change surface is the writable allowlist only. Records the
+    terminal outcome in the per-worker config history."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    worker = body.get("worker")
+    changes = body.get("changes")
+    if not isinstance(worker, str) or not worker:
+        raise web.HTTPBadRequest(text="'worker' must be a non-empty string.")
+    err = control_service.validate_worker_changes(changes)
+    if err:
+        raise web.HTTPBadRequest(text=err)
+    actor = request.headers.get("X-Auth-User", "")
+    state_mgr = request.app["state_manager"]
+    try:
+        rid = control_service.submit_worker_apply(worker, changes, actor)
+        # Wait for a TERMINAL outcome (skip the runner's interim "running"), using the shared
+        # CONTROL_WAIT_S window. The host runner bounds its own rig dial + status poll well under that
+        # window, so it always writes a terminal-ish result the wait catches — and we record it below.
+        res = await control_service.wait_result(rid, done=lambda r: r.get("status") != "running")
+    except Exception:
+        logger.exception("Error submitting worker-apply")
+        return web.json_response(
+            {"error": "Failed to submit the worker config change."}, status=500
+        )
+    if res is None:
+        return web.json_response({"id": rid, "status": "pending"}, status=202)
+    _record_worker_result(state_mgr, worker, changes, res)
+    return web.json_response({"id": rid, **res})
+
+
 async def handle_control_result(request):
     """Client-side polling endpoint for a 202'd preview/commit."""
     try:
@@ -271,6 +347,10 @@ def create_app(state_manager, latest_data_ref):
                 web.post("/api/control/upgrade", handle_control_upgrade),
                 web.get("/api/control/result", handle_control_result),
                 web.get("/api/audit", handle_audit_log),
+                # Worker Inspect (#185): read a worker's detail + config history, and push a
+                # writable-key change to its rig. Gated with the rest of the control channel.
+                web.get("/api/worker", handle_worker_detail),
+                web.post("/api/control/worker-apply", handle_worker_apply),
             ]
         )
 
