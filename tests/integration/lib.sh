@@ -269,6 +269,10 @@ rig_lock() { # rig_lock <project> <suite> [shared]
     local mode=-x
     [ "${3:-}" = shared ] && mode=-s
     exec 9>"${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}"
+    # World-writable so a later non-root run can always open FD 9 even if a prior sudo/root run
+    # created the lock file root-owned (otherwise exec 9> fails and the flock is silently not held).
+    # Byte-for-byte with RigForge's canonical rig_lock (rigforge#183/#249) — keep the two identical.
+    chmod 666 "${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}" 2>/dev/null || true
     if ! flock -n $mode 9; then
         if [ "${RIG_LOCK_WAIT:-0}" = 1 ]; then
             echo "rig busy ($(cat "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || echo unknown)) — waiting..." >&2
@@ -278,8 +282,19 @@ rig_lock() { # rig_lock <project> <suite> [shared]
             exit 75
         fi
     fi
-    printf '%s %s pid=%s started=%s\n' "$1" "$2" "$$" "$(date -Is)" >"${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}"
-    trap 'rm -f "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}"' EXIT
+    # The flock is now HELD on FD 9 and stays held for the whole run (the kernel drops it on
+    # process death). Everything below is DISPLAY-ONLY and strictly best-effort: it must never be
+    # able to drop or prevent the lock. The holder marker lives under /run (root-owned), so a
+    # non-root runner's write gets EACCES — try a plain write, fall back to passwordless sudo, then
+    # swallow any remaining failure with `|| true` so a marker we can't write NEVER aborts the lock
+    # (the bug: a failed holder-write must not leave the box unreserved). Portable UTC stamp — the
+    # GNU-only `date -Is` errors on macOS (the self-test host: "invalid argument 's' for -I").
+    local holder="${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" line
+    line="$(printf '%s %s pid=%s started=%s' "$1" "$2" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    { printf '%s\n' "$line" >"$holder" || printf '%s\n' "$line" | sudo -n tee "$holder" >/dev/null; } 2>/dev/null || true
+    # The trap fires at process exit, when the `holder` local is out of scope — re-derive the path
+    # from the durable env/default so the marker is actually removed (best-effort, may need sudo).
+    trap 'rm -f "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || sudo -n rm -f "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || true' EXIT
 }
 
 # Take the rig lock ON a remote box and hold it for the lifetime of THIS process. The remote
