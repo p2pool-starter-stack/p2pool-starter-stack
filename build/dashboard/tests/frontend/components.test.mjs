@@ -212,6 +212,43 @@ test('EarningsCard drops the XvB tab entirely when XvB is disabled (#118)', () =
     assert.doesNotMatch(html, /XvB Tier \(raffle\)/);
 });
 
+test('EarningsCard shows an Energy tab only when the fleet reports power (#260)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    // Fixture has an available energy block → the Energy tab and panel exist.
+    let html = renderApp({ state: s });
+    assert.match(html, /id="etab-energy"[^>]*>Energy</);
+    assert.match(html, /id="epanel-energy"[^>]*hidden>/); // present but inactive (Monero default)
+    assert.match(html, /Fleet Power/);
+    assert.match(html, /285\.0 W/); // measured fleet draw from the fixture
+    // No electricity price set → the prompt to set cost_per_kwh, and no net-profit figures.
+    assert.match(html, /cost_per_kwh/);
+    assert.doesNotMatch(html, /Net \/ day/);
+    // With no power at all, the Energy tab disappears entirely.
+    s.energy = { available: false };
+    html = renderApp({ state: s });
+    assert.doesNotMatch(html, /id="etab-energy"/);
+    assert.doesNotMatch(html, /id="epanel-energy"/);
+});
+
+test('EarningsCard Energy tab shows cost then net as prices are set (#260)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8; // small XMR/H/s/day so gross stays sane
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.currency = 'EUR';
+    // Only the electricity price set → power cost shows, net profit still gated on xmr_price.
+    let html = renderApp({ state: s });
+    assert.match(html, /Power cost \/ day/);
+    assert.match(html, /set xmr_price/);
+    assert.doesNotMatch(html, /Net \/ day/);
+    // Both prices set → net profit appears.
+    s.energy.xmr_price = 150;
+    html = renderApp({ state: s });
+    assert.match(html, /Net \/ day/);
+    assert.match(html, /Net \/ year/);
+});
+
 test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
     const base = clone();
     base.earnings.available = true;

@@ -33,6 +33,7 @@ from mining_dashboard.web.views import (
     build_cadence,
     build_chart,
     build_earnings,
+    build_energy,
     build_hashrate,
     build_pool_network,
     build_proxy_summary,
@@ -1916,3 +1917,77 @@ class TestChartEvents:
             e["label"] for e in build_chart(self._hist(now), [], "1h", events=events)["events"]
         ]
         assert labels == ["recent"]  # the 2h-old marker is outside the 1h window
+
+
+class TestBuildEnergy:
+    """Fleet energy totals for the Energy tab (#260). Sums measured watts (RigForge feed) with the
+    operator's per-worker `watts` fallback, excludes workers with neither (marking the total
+    incomplete), and publishes the operator-set prices for the client to turn into cost/net."""
+
+    def _worker(self, name, watts=None, hs=1000, active_pool="3333"):
+        rf = {"power": {"watts": watts, "hs_per_watt": None}} if watts is not None else None
+        return {
+            "name": name,
+            "ip": "1.1.1.1",
+            "status": "online",
+            "active_pool": active_pool,
+            "h60": hs,
+            "rigforge": rf,
+        }
+
+    def _energy(self, monkeypatch, workers, energy=None, descriptors=None):
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config,
+            "DASHBOARD_ENERGY",
+            energy or {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"},
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
+        return build_energy(workers)
+
+    def test_no_power_anywhere_is_unavailable(self, monkeypatch):
+        got = self._energy(monkeypatch, [self._worker("r1"), self._worker("r2")])
+        assert got["available"] is False
+        assert got["total_watts"] is None
+        assert got["incomplete"] is True
+
+    def test_measured_watts_sum_and_efficiency(self, monkeypatch):
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100, hs=2000), self._worker("r2", watts=50, hs=1000)],
+        )
+        assert got["available"] is True
+        assert got["total_watts"] == 150.0
+        assert got["incomplete"] is False
+        assert got["hs_per_watt"] == 20.0  # 3000 H/s / 150 W
+
+    def test_config_watts_fallback_marked_estimated(self, monkeypatch):
+        # r2 reports no measured watts but has a configured estimate — counted, flagged estimated.
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100), self._worker("r2")],
+            descriptors=[{"name": "r2", "watts": 60}],
+        )
+        assert got["total_watts"] == 160.0
+        assert got["incomplete"] is False
+        by_name = {w["name"]: w for w in got["per_worker"]}
+        assert by_name["r1"]["estimated"] is False
+        assert by_name["r2"]["estimated"] is True
+
+    def test_worker_with_no_power_and_no_estimate_excluded_but_counted_incomplete(
+        self, monkeypatch
+    ):
+        got = self._energy(monkeypatch, [self._worker("r1", watts=100), self._worker("dark")])
+        assert got["total_watts"] == 100.0  # dark excluded
+        assert got["incomplete"] is True
+
+    def test_prices_pass_through(self, monkeypatch):
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100)],
+            energy={"cost_per_kwh": 0.2, "xmr_price": 150.0, "currency": "EUR"},
+        )
+        assert got["cost_per_kwh"] == 0.2
+        assert got["xmr_price"] == 150.0
+        assert got["currency"] == "EUR"

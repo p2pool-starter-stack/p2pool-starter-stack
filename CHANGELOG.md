@@ -13,6 +13,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Energy & profit calculator on the dashboard (#260).** The Advanced-view earnings card gains an
+  **Energy** tab that totals fleet power draw and efficiency, and — once you set a price — the net
+  profit after power. It sums each worker's watts from RigForge's enriched feed (#235); a worker
+  whose feed reports no RAPL watts (macOS, a non-RigForge rig, an older kit) can carry a manual
+  estimate via a `watts` field on its `dashboard.workers[]` descriptor, marked *estimated*, and a
+  worker with neither is excluded so the total reads as a lower bound rather than a fabricated zero.
+  The tab shows fleet watts, H/s-per-watt, and kWh per day/month/year always; set
+  `dashboard.energy.cost_per_kwh` to add the energy **cost**, and `dashboard.energy.xmr_price` to add
+  **net profit** (`net = P2Pool XMR earnings × your XMR price − power cost`), each in your
+  `dashboard.energy.currency` label. No price feed ships — fetching one is a clearnet egress this
+  stack avoids — so both prices are operator-supplied; leave either unset and that layer stays
+  hidden. Net profit is P2Pool XMR only: Tari is lumpy solo merge-mining (priced separately) and XvB
+  is raffle status, not income, so both are excluded, as the earnings card already frames them. See
+  [Dashboard › Energy & profit](docs/dashboard.md#energy--profit).
 - **Read RigForge's enriched worker feed on the dashboard (#235).** A RigForge rig serves an
   enriched read API on port `8081` — the same `/1/summary` the dashboard already polls, plus a
   `rigforge` block with the rig's version, tuning state, power draw and efficiency, CPU/firmware

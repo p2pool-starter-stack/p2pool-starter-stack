@@ -7,10 +7,13 @@ import { ChartCard } from "./chart.mjs";
 import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
   computeEarnings,
+  computeEnergy,
   computeXvbTier,
   egressRoute,
   fmtHashrate,
+  formatFiat,
   formatTimeToShare,
+  formatUnit,
   formatXmr,
   formatXtm,
   heroKpis,
@@ -485,13 +488,16 @@ class EarningsCard extends Component {
     const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
     const est = computeEarnings(hr, e);
     const xvb = this.props.xvb;
-    // Tabs split the (now three-domain) card body. XvB only appears when it's enabled — there's no
-    // tier to show otherwise. The one what-if input above the strip drives every tab's estimate.
+    const energy = this.props.energy;
+    // Tabs split the (now multi-domain) card body. XvB only appears when it's enabled and Energy only
+    // when the fleet reports any power — there's nothing to show otherwise. The one what-if input
+    // above the strip drives every tab's estimate.
     const tabs = [
       { id: "monero", label: "Monero" },
       { id: "tari", label: "Tari" },
     ];
     if (xvb && xvb.enabled) tabs.push({ id: "xvb", label: "XvB" });
+    if (energy && energy.available) tabs.push({ id: "energy", label: "Energy" });
     const active = tabs.some((t) => t.id === tab) ? tab : "monero";
     return html`
         <div class="card card-advanced" id="card-earnings">
@@ -543,9 +549,67 @@ class EarningsCard extends Component {
             </div>`
                 : null
             }
+            ${
+              energy && energy.available
+                ? html`
+            <div role="tabpanel" id="epanel-energy" aria-labelledby="etab-energy" hidden=${active !== "energy"}>
+                <${EnergyPanel} energy=${energy} est=${est} />
+            </div>`
+                : null
+            }
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }
+}
+
+// Energy & profit tab body (#260). Fleet power draw + efficiency (always, when any power is known),
+// then energy cost once an electricity price is set, then net profit once an XMR price is also set —
+// each layer appears only when its inputs exist, so the operator never sees a fabricated figure.
+// `est` is the earnings for the shared what-if hashrate; the client does the kWh/cost/net math.
+function EnergyPanel({ energy, est }) {
+  const en = computeEnergy(energy, est);
+  const cur = energy.currency;
+  const haveCost = energy.cost_per_kwh > 0;
+  const haveNet = haveCost && energy.xmr_price > 0;
+  return html`
+    <div class="stat-grid">
+        <${StatCard} label="Fleet Power" value=${formatUnit(energy.total_watts, "W")}
+                     cls=${energy.incomplete ? "status-warn" : ""}
+                     title=${
+                       energy.incomplete
+                         ? "Summed draw of the workers that report power (RAPL) or have a configured estimate — a lower bound: some workers report neither and are excluded."
+                         : "Summed measured/estimated draw across the fleet."
+} />
+        <${StatCard} label="Efficiency" value=${formatUnit(energy.hs_per_watt, "H/s·W", 2)}
+                     title="Fleet hashrate ÷ fleet watts." />
+        <${StatCard} label="Energy / day" value=${formatUnit(en.kwhDay, "kWh")} />
+        <${StatCard} label="Energy / month" value=${formatUnit(en.kwhMonth, "kWh")} />
+        <${StatCard} label="Energy / year" value=${formatUnit(en.kwhYear, "kWh")} />
+    </div>
+    ${
+      haveCost
+        ? html`
+    <h4 class="text-small mt-2">Cost${haveNet ? " & Net Profit" : ""} (${cur})</h4>
+    <div class="stat-grid">
+        <${StatCard} label="Power cost / day" value=${formatFiat(en.costDay, cur)} />
+        <${StatCard} label="Power cost / month" value=${formatFiat(en.costMonth, cur)} />
+        <${StatCard} label="Power cost / year" value=${formatFiat(en.costYear, cur)} />
+        ${
+          haveNet
+            ? html`
+        <${StatCard} label="Net / day" value=${formatFiat(en.netDay, cur)}
+                     cls=${en.netDay !== null && en.netDay < 0 ? "c-bad" : "text-accent"}
+                     title="P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari and XvB." />
+        <${StatCard} label="Net / month" value=${formatFiat(en.netMonth, cur)}
+                     cls=${en.netMonth !== null && en.netMonth < 0 ? "c-bad" : "text-accent"} />
+        <${StatCard} label="Net / year" value=${formatFiat(en.netYear, cur)}
+                     cls=${en.netYear !== null && en.netYear < 0 ? "c-bad" : "text-accent"} />`
+            : html`<${StatCard} label="Net Profit" value="set xmr_price"
+                     title="Set dashboard.energy.xmr_price (in your currency) to see net profit after power. No price feed ships — this stack avoids the clearnet egress." />`
+        }
+    </div>`
+        : html`<p class="text-muted text-xs mt-2">Set <code>dashboard.energy.cost_per_kwh</code> to see energy cost and net profit after power.</p>`
+    }`;
 }
 
 // Pool cadence & luck (#84). Read-only Advanced card over server-formatted figures: time since the
@@ -790,7 +854,7 @@ function DashboardView({
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
-            <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} />
+            <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />
             <${CadenceCard} cadence=${state.cadence} />
             <${TariCard} tari=${state.tari} />
             <${GlobalStats} state=${state} />

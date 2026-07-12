@@ -828,6 +828,92 @@ def build_workers(workers):
     return rows
 
 
+# --------------------------------------------------------------------------------------
+# Energy & profit calculator (Issue #260): fleet power draw + efficiency, and — once the operator
+# sets an electricity price (and an XMR price) — the net profit after power. The server totals the
+# measured draw and publishes the prices; the client does the per-day/month/year arithmetic and the
+# net = gross − cost, scaling gross with the same what-if hashrate the earnings card already uses
+# (one source of truth, #61). Deliberately NO price feed: fetching one is a clearnet egress this
+# privacy-first stack avoids (#160), so both prices are operator-supplied.
+# --------------------------------------------------------------------------------------
+
+_ENERGY_DISCLAIMER = (
+    "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting "
+    "neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the "
+    "current draw at a constant rate — a naive projection, not a metered bill. Net profit is "
+    "P2Pool XMR earnings valued at your XMR price, minus power cost: it excludes Tari (lumpy solo "
+    "merge-mining, priced separately) and XvB (raffle status, not income). Estimates, not "
+    "guarantees."
+)
+
+
+def _worker_watts_config(name):
+    """The operator's manual watts estimate for a worker name (#172 descriptor ``watts``), or None."""
+    for entry in config.DASHBOARD_WORKERS:
+        if entry["name"] == name:
+            return entry.get("watts")
+    return None
+
+
+def build_energy(workers):
+    """Fleet energy inputs for the earnings card's Energy tab (Issue #260).
+
+    Sums each worker's power draw — measured watts from the RigForge enriched feed (#235) first, else
+    the operator's per-worker ``watts`` estimate (marked ``estimated``). A worker with neither is
+    excluded and flips ``incomplete`` so the UI shows the total as a lower bound rather than counting
+    it as zero. Fleet efficiency (H/s per watt) is the summed hashrate of the powered workers over
+    their summed watts, so a worker with unknown draw skews neither number.
+
+    Publishes the summed watts + prices; the client scales to kWh / cost / net per day·month·year
+    (``computeEnergy`` in ``logic.mjs``). ``available`` is False only when no worker reports or is
+    configured with any power — the card then shows nothing rather than a zero-watt fleet."""
+    cfg = config.DASHBOARD_ENERGY
+    per_worker = []
+    total_watts = 0.0
+    powered_hs = 0.0
+    incomplete = False
+    for worker in workers:
+        name = worker.get("name", "")
+        rf = worker.get("rigforge") or {}
+        power = rf.get("power") or {}
+        watts = _num(power.get("watts"))
+        estimated = False
+        if watts is None or watts <= 0:
+            cfg_watts = _worker_watts_config(name)
+            watts = cfg_watts if (cfg_watts and cfg_watts > 0) else None
+            estimated = watts is not None
+        hs = _num(worker.get("h60")) or 0.0
+        if watts is None:
+            incomplete = True
+            per_worker.append(
+                {"name": name, "watts": None, "estimated": False, "hs": hs, "hs_per_watt": None}
+            )
+            continue
+        total_watts += watts
+        powered_hs += hs
+        per_worker.append(
+            {
+                "name": name,
+                "watts": round(watts, 1),
+                "estimated": estimated,
+                "hs": hs,
+                "hs_per_watt": round(hs / watts, 2) if watts > 0 else None,
+            }
+        )
+    have_power = total_watts > 0
+    return {
+        "available": have_power,
+        "total_watts": round(total_watts, 1) if have_power else None,
+        "hs_per_watt": round(powered_hs / total_watts, 2) if have_power else None,
+        "incomplete": incomplete,
+        "cost_per_kwh": cfg["cost_per_kwh"],
+        "xmr_price": cfg["xmr_price"],
+        "currency": cfg["currency"],
+        "per_worker": per_worker,
+        "disclaimer": _ENERGY_DISCLAIMER,
+    }
+
+
 def build_proxy_summary(data):
     """Pool-wide share-health totals from the xmrig-proxy ``/summary`` (Issue #82): cumulative
     accepted/rejected/invalid/expired shares submitted to the upstream pool, the aggregate reject
@@ -1401,6 +1487,8 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
+        # Fleet power draw / efficiency and (once a price is set) net profit after power (#260).
+        "energy": build_energy(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),
         # Persisted per-poll share-health deltas + trailing 24h reject rate (#116). Kept out of
         # proxy_summary so its (cumulative) shape stays unchanged for existing clients.

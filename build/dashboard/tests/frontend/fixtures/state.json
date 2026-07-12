@@ -587,6 +587,32 @@
       "uptime_str": "0m 0s"
     }
   ],
+  "energy": {
+    "available": true,
+    "total_watts": 285.0,
+    "hs_per_watt": 35.8,
+    "incomplete": false,
+    "cost_per_kwh": 0.0,
+    "xmr_price": 0.0,
+    "currency": "USD",
+    "per_worker": [
+      {
+        "name": "rig-1",
+        "watts": 142.0,
+        "estimated": false,
+        "hs": 5100,
+        "hs_per_watt": 35.9
+      },
+      {
+        "name": "rig-2",
+        "watts": 143.0,
+        "estimated": false,
+        "hs": 5100,
+        "hs_per_watt": 35.7
+      }
+    ],
+    "disclaimer": "Power draw is measured or estimated; net profit is P2Pool XMR only."
+  },
   "xvb_calc": {
     "current_tier": "None",
     "enabled": true,
