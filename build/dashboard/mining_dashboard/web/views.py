@@ -601,6 +601,119 @@ def _reject_flag(accepted, rejected):
     return {"text": "⚠", "title": f"High reject rate: {rate * 100:.1f}% ({rejected} rejected)"}
 
 
+def _num(v):
+    """A number for display, or None for anything non-numeric (incl. bools, which JSON booleans
+    would otherwise pass as 0/1). Every enriched RigForge field is nullable on the wire (#235)."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _fmt_num(v):
+    """Trim a display number: drop a pointless ``.0`` so ``142.0 W`` reads ``142 W``."""
+    return str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)
+
+
+def _rigforge_display(rf):
+    """A ``{version, miner_down, chips}`` view of a worker's parsed ``rigforge`` block, or ``None``
+    for a plain-xmrig worker (#235). Each chip is ``{text, variant, title}`` (the same shape the
+    Badges component renders) and is emitted ONLY when its data is present — a rig with no RAPL
+    shows no power chip, a disabled watchdog shows no watchdog chip. Building the chip set (and its
+    thresholds) here keeps the client a dumb renderer, matching the ``_reject_flag`` precedent."""
+    if not rf:
+        return None
+    chips = []
+    if rf.get("miner_down"):
+        chips.append(
+            {
+                "text": "miner down",
+                "variant": "bad",
+                "title": "RigForge is up but its XMRig API is unreachable — the rig is present but "
+                "not mining. Live hashrate and uptime come from the proxy.",
+            }
+        )
+
+    health = rf.get("health") or {}
+    if health.get("throttling") is True:
+        chips.append(
+            {"text": "throttling", "variant": "bad", "title": "CPU is thermal/power throttling."}
+        )
+    gov = health.get("governor")
+    if gov:
+        ok = gov == "performance"
+        chips.append(
+            {
+                "text": f"gov: {gov}",
+                "variant": "ok" if ok else "warn",
+                "title": "CPU frequency governor"
+                + ("" if ok else " — 'performance' is recommended for mining."),
+            }
+        )
+    hp = _num(health.get("hugepages_total"))
+    if hp is not None:
+        chips.append(
+            {
+                "text": f"HP {_fmt_num(hp)}",
+                "variant": "outline",
+                "title": f"HugePages allocated: {_fmt_num(hp)}.",
+            }
+        )
+    board = health.get("board")
+    if board:
+        chips.append({"text": board, "variant": "outline", "title": "Mainboard (firmware)."})
+
+    power = rf.get("power") or {}
+    watts = _num(power.get("watts"))
+    hspw = _num(power.get("hs_per_watt"))
+    if watts is not None or hspw is not None:
+        parts = []
+        if watts is not None:
+            parts.append(f"{_fmt_num(round(watts, 1))} W")
+        if hspw is not None:
+            parts.append(f"{_fmt_num(round(hspw, 1))} H/s·W")
+        chips.append(
+            {"text": " · ".join(parts), "variant": "outline", "title": "Power draw / efficiency."}
+        )
+
+    tune = rf.get("tune") or {}
+    if tune.get("target"):
+        chips.append(
+            {
+                "text": f"tune: {tune['target']}",
+                "variant": "outline",
+                "title": "Active tuning target.",
+            }
+        )
+    if tune.get("autotune_enabled") and tune.get("autotune_next"):
+        chips.append(
+            {
+                "text": f"autotune → {tune['autotune_next']}",
+                "variant": "outline",
+                "title": "Next scheduled autotune run.",
+            }
+        )
+
+    wd = rf.get("watchdog") or {}
+    if wd.get("enabled"):
+        temp = _num(wd.get("temp_c"))
+        maxt = _num(wd.get("max_temp_c"))
+        if wd.get("thermal_hold") is True:
+            chips.append(
+                {
+                    "text": "thermal hold",
+                    "variant": "bad",
+                    "title": "Watchdog is holding the rig back — temperature above its ceiling.",
+                }
+            )
+        elif temp is not None:
+            label = f"{_fmt_num(round(temp, 1))}°C"
+            if maxt is not None:
+                label += f" / {_fmt_num(maxt)}°C"
+            chips.append(
+                {"text": label, "variant": "outline", "title": "Watchdog temperature / ceiling."}
+            )
+
+    return {"version": rf.get("version"), "miner_down": bool(rf.get("miner_down")), "chips": chips}
+
+
 def build_system(data):
     """System resource metrics (CPU, RAM, Disk, HugePages) as formatted values + level tokens.
 
@@ -704,6 +817,9 @@ def build_workers(workers):
                     # hashrate unavailable; the client badges it), True = ok, None = not probed
                     # (internal/invalid IP per the SSRF guard) — don't flag the unknown case.
                     "api_ok": worker.get("api_ok"),
+                    # RigForge enriched feed (#235): version badge + health/power/tune/watchdog
+                    # chips, or None for a plain-xmrig worker (renders nothing extra).
+                    "rigforge": _rigforge_display(worker.get("rigforge")),
                 }
             )
         except Exception as e:

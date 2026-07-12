@@ -26,6 +26,7 @@ from mining_dashboard.web.views import (
     _chart_tension,
     _mode_palette,
     _reject_flag,
+    _rigforge_display,
     _target_points,
     _window_reject_pct,
     build_badges,
@@ -952,6 +953,132 @@ class TestRejectFlag:
     def test_flags_all_rejects_at_floor(self):
         # A worker submitting only rejects trips the floor immediately (rate 100%).
         assert _reject_flag(0, 3) is not None
+
+
+class TestRigForgeDisplay:
+    """The RigForge enriched-feed chip builder (#235). Parsed block in → {version, chips} out; each
+    chip emitted only when its data is present, so nothing renders for a plain-xmrig worker."""
+
+    def _chip_texts(self, disp):
+        return [c["text"] for c in disp["chips"]]
+
+    def test_none_for_plain_xmrig(self):
+        assert _rigforge_display(None) is None
+
+    def test_build_workers_passes_none_for_plain_xmrig(self):
+        # A worker with no parsed rigforge block carries `rigforge: None` — the client renders
+        # nothing extra, exactly as before the enriched feed existed.
+        row = build_workers(
+            [{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}]
+        )[0]
+        assert row["rigforge"] is None
+
+    def test_full_block_emits_version_and_chips(self):
+        parsed = {
+            "version": "1.7.0",
+            "miner_down": False,
+            "power": {"watts": 142.0, "hs_per_watt": 86.9},
+            "tune": {"target": "perf", "autotune_enabled": True, "autotune_next": "Sun 03:00"},
+            "health": {
+                "governor": "performance",
+                "throttling": False,
+                "board": "ProArt X670E",
+                "hugepages_total": 1280,
+            },
+            "watchdog": {"enabled": True, "thermal_hold": False, "temp_c": 62, "max_temp_c": 85},
+        }
+        disp = _rigforge_display(parsed)
+        assert disp["version"] == "1.7.0"
+        texts = self._chip_texts(disp)
+        assert "gov: performance" in texts
+        assert "HP 1280" in texts
+        assert "ProArt X670E" in texts
+        assert "142 W · 86.9 H/s·W" in texts
+        assert "tune: perf" in texts
+        assert "autotune → Sun 03:00" in texts
+        assert "62°C / 85°C" in texts
+        # Nothing alarming here: no bad-variant chips.
+        assert all(c["variant"] != "bad" for c in disp["chips"])
+
+    def test_throttling_and_bad_governor_flag(self):
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": "powersave",
+                    "throttling": True,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False},
+            }
+        )
+        chips = {c["text"]: c["variant"] for c in disp["chips"]}
+        assert chips["throttling"] == "bad"
+        assert chips["gov: powersave"] == "warn"
+
+    def test_nullable_fields_emit_no_chip(self):
+        # No RAPL, no governor, disabled watchdog, no tune → only the fields that exist render.
+        disp = _rigforge_display(
+            {
+                "version": None,
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False, "thermal_hold": None, "temp_c": None},
+            }
+        )
+        assert disp["version"] is None
+        assert disp["chips"] == []
+
+    def test_miner_down_chip(self):
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": True,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False},
+            }
+        )
+        assert disp["miner_down"] is True
+        assert disp["chips"][0]["text"] == "miner down"
+        assert disp["chips"][0]["variant"] == "bad"
+
+    def test_thermal_hold_wins_over_temp_chip(self):
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": True, "thermal_hold": True, "temp_c": 90, "max_temp_c": 85},
+            }
+        )
+        texts = self._chip_texts(disp)
+        assert "thermal hold" in texts
+        assert not any("°C" in t for t in texts)  # the hold chip replaces the temp chip
 
 
 # --- Tari -----------------------------------------------------------------------------

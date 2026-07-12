@@ -9,7 +9,7 @@ from mining_dashboard.client.docker.docker_control import DockerControl
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient
+from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge
 from mining_dashboard.client.xvb_client import (
     REG_INVALID,
     REG_NOT_ELIGIBLE,
@@ -230,6 +230,14 @@ def _merge_direct_stats(workers, results, active_pool_port):
         api_ok = extra_stats.get("api_ok") if extra_stats else None
         if api_ok is not None:
             w["api_ok"] = api_ok
+
+        # RigForge enriched feed (#235): a superset /1/summary carries an extra `rigforge` block.
+        # Present only for RigForge rigs whose descriptor port points at the enriched feed; a
+        # plain-xmrig rig parses to None and gets no chips. A miner-down enriched body has no XMRig
+        # keys, so this rides in even when api_ok can't confirm live hashrate.
+        rf = parse_rigforge(extra_stats) if extra_stats else None
+        if rf is not None:
+            w["rigforge"] = rf
 
         if api_ok:  # only a successful probe carries uptime + per-miner hashrate
             w["uptime"] = extra_stats.get("uptime", w["uptime"])

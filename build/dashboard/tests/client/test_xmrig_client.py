@@ -1,7 +1,44 @@
 import pytest
 
 from mining_dashboard.client import xmrig_client as xc
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient
+from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge
+
+# A full enriched `rigforge` block from the RigForge superset /1/summary (rigforge#99), matching the
+# verified producer contract: version/tune/power/health/watchdog with real field names and units.
+RIGFORGE_BLOCK = {
+    "version": "1.7.0",
+    "xmrig_version": "6.21.0",
+    "xmrig_commit": "a" * 40,
+    "tune": {
+        "applied": {"threads": 8},
+        "target": "perf",
+        "last_best_hs": 12345,
+        "candidates_tried": 4,
+        "autotune": {"enabled": True, "target": "perf", "schedule": "weekly", "next": "Sun 03:00"},
+    },
+    "power": {"watts": 142.0, "hs_per_watt": 86.9},
+    "health": {
+        "service_active": True,
+        "hugepages_total": 1280,
+        "hugepages_1g": 0,
+        "governor": "performance",
+        "msr": "applied",
+        "ram": {"modules": 2, "channels": 2, "mts": 6000, "rated_mts": 6000},
+        "xmp": True,
+        "smt": "on",
+        "firmware": {"vendor": "ASUS", "board": "ProArt X670E"},
+        "clock_pct_of_boost": 96,
+        "throttling": False,
+    },
+    "watchdog": {
+        "mode": "enabled",
+        "thermal_hold": False,
+        "max_temp_c": 85,
+        "resumes_below_c": 75,
+        "temp_c": 62,
+        "strikes": 0,
+    },
+}
 
 
 class FakeResponse:
@@ -343,3 +380,72 @@ async def test_spoofed_name_cannot_redirect_the_token_to_the_miner_ip_when_host_
     session = FakeSession(response=FakeResponse(200, {"ok": True}))
     await XMRigWorkerClient(session).get_stats("8.8.8.8", "rig1")
     assert session.calls[0][0] == "http://192.168.7.9:8080/1/summary"
+
+
+# --- RigForge enriched feed parse (#235) ---------------------------------------------------------
+# The enriched feed is a SUPERSET of /1/summary: the whole XMRig object plus one `rigforge` key.
+# parse_rigforge lifts the display-relevant fields, nullable-safe; a plain-xmrig body → None.
+
+
+def test_parse_rigforge_absent_is_none():
+    # A plain-xmrig worker (no `rigforge` key) parses to None — the UI renders it as today.
+    assert parse_rigforge({"hashrate": {"total": [100]}, "api_ok": True}) is None
+    assert parse_rigforge({}) is None
+    assert parse_rigforge(["not", "a", "dict"]) is None
+
+
+def test_parse_rigforge_full_block():
+    rf = parse_rigforge({"hashrate": {"total": [100]}, "rigforge": RIGFORGE_BLOCK, "api_ok": True})
+    assert rf["version"] == "1.7.0"
+    assert rf["miner_down"] is False
+    assert rf["power"] == {"watts": 142.0, "hs_per_watt": 86.9}
+    assert rf["tune"] == {"target": "perf", "autotune_enabled": True, "autotune_next": "Sun 03:00"}
+    assert rf["health"] == {
+        "governor": "performance",
+        "throttling": False,
+        "board": "ProArt X670E",
+        "hugepages_total": 1280,
+    }
+    assert rf["watchdog"] == {
+        "enabled": True,
+        "thermal_hold": False,
+        "temp_c": 62,
+        "max_temp_c": 85,
+    }
+
+
+def test_parse_rigforge_miner_down_has_no_xmrig_keys():
+    # Miner-down body: XMRig keys drop, only the rigforge block with xmrig_api unreachable remains.
+    rf = parse_rigforge({"rigforge": {"version": "1.7.0", "xmrig_api": "unreachable"}})
+    assert rf["miner_down"] is True
+    assert rf["version"] == "1.7.0"
+    # Absent sub-objects default cleanly — no chip data, no crash.
+    assert rf["power"] == {"watts": None, "hs_per_watt": None}
+    assert rf["watchdog"]["enabled"] is False
+
+
+def test_parse_rigforge_all_null_fields():
+    # Every enriched field is nullable on the wire (no RAPL, non-root, watchdog disabled).
+    block = {
+        "version": "1.7.0",
+        "tune": {"target": None, "autotune": {"enabled": False, "next": None}},
+        "power": {"watts": None, "hs_per_watt": None},
+        "health": {"governor": None, "throttling": None, "firmware": {}, "hugepages_total": None},
+        "watchdog": {"mode": "disabled"},
+    }
+    rf = parse_rigforge({"rigforge": block})
+    assert rf["power"] == {"watts": None, "hs_per_watt": None}
+    assert rf["health"] == {
+        "governor": None,
+        "throttling": None,
+        "board": None,
+        "hugepages_total": None,
+    }
+    assert rf["tune"] == {"target": None, "autotune_enabled": False, "autotune_next": None}
+    # A disabled watchdog masks its temp fields.
+    assert rf["watchdog"] == {
+        "enabled": False,
+        "thermal_hold": None,
+        "temp_c": None,
+        "max_temp_c": None,
+    }

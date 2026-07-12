@@ -30,6 +30,55 @@ except ValueError:
     _INTERNAL_NET = ipaddress.ip_network("172.28.0.0/16")
 
 
+def parse_rigforge(payload):
+    """Normalize the optional ``rigforge`` block off a worker ``/1/summary`` (#235).
+
+    A RigForge rig serves an ENRICHED feed on its ``api_port`` (default 8081): the whole XMRig
+    ``/1/summary`` object unchanged, plus one added ``rigforge`` key (rigforge#99). Point the rig's
+    descriptor ``port`` at that feed and the block rides in on the existing poll — no new read path.
+    A plain-xmrig rig has no ``rigforge`` key, so this returns ``None`` and the UI renders it exactly
+    as before (backward compatible).
+
+    Every enriched field is nullable on the wire — no RAPL / non-root → ``power.watts`` null, no
+    governor read → ``governor`` null — so each access is defaulted. A present-but-miner-down rig
+    (``xmrig_api == "unreachable"``, XMRig keys absent) is flagged via ``miner_down`` so the UI can
+    show it as up-but-miner-down rather than offline. Returns a compact dict for the UI, or ``None``.
+    """
+    rf = payload.get("rigforge") if isinstance(payload, dict) else None
+    if not isinstance(rf, dict):
+        return None
+    tune = rf.get("tune") or {}
+    autotune = tune.get("autotune") or {}
+    power = rf.get("power") or {}
+    health = rf.get("health") or {}
+    firmware = health.get("firmware") or {}
+    watchdog = rf.get("watchdog") or {}
+    wd_on = watchdog.get("mode") == "enabled"
+    return {
+        "version": rf.get("version"),
+        "miner_down": rf.get("xmrig_api") == "unreachable",
+        "power": {"watts": power.get("watts"), "hs_per_watt": power.get("hs_per_watt")},
+        "tune": {
+            "target": tune.get("target"),
+            "autotune_enabled": bool(autotune.get("enabled")),
+            "autotune_next": autotune.get("next"),
+        },
+        "health": {
+            "governor": health.get("governor"),
+            "throttling": health.get("throttling"),
+            "board": firmware.get("board"),
+            "hugepages_total": health.get("hugepages_total"),
+        },
+        # thermal_hold/temps are only meaningful while the watchdog is enabled.
+        "watchdog": {
+            "enabled": wd_on,
+            "thermal_hold": watchdog.get("thermal_hold") if wd_on else None,
+            "temp_c": watchdog.get("temp_c") if wd_on else None,
+            "max_temp_c": watchdog.get("max_temp_c") if wd_on else None,
+        },
+    }
+
+
 def _safe_probe_host(ip):
     """Return a safe host string to probe, or None.
 
