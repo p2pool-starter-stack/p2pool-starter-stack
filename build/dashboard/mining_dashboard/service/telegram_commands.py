@@ -513,8 +513,15 @@ class ControlGate:
     Fail-closed transaction-signing: a control action runs ONLY when a confirm callback for its exact
     one-time token arrives, from the same operator that issued it, within ``timeout_s``. No confirm,
     a stale/unknown token, a foreign user, or a lapsed deadline all DENY — nothing is ever queued for
-    later. ``open`` also rate-limits how many prompts can be issued per rolling hour, so a compromised
-    dashboard can't spam approval prompts to fatigue the operator into tapping approve.
+    later. ``open`` also rate-limits how many prompts each operator can be issued per rolling hour, so
+    a runaway or confused command source can't fatigue an operator into tapping approve.
+
+    The rate limit is **per operator** (#470): one shared budget let a single allow-listed id (or one
+    compromised-but-allow-listed session) exhaust it and lock the *other* operators out for up to an
+    hour. This gate is a UX / anti-fatigue guard among already-trusted operators — it is NOT the
+    security boundary. A compromised dashboard bypasses every Python-side check here and can drop an
+    intent straight into the #33 host-control spool; the load-bearing control is host-side, where the
+    root runner accepts only the fixed verbs ``restart``/``apply`` and re-validates before acting.
 
     Pure and clock-injected (``now`` is a monotonic timestamp the caller passes), so the whole
     state machine is unit-testable without sleeping.
@@ -525,18 +532,24 @@ class ControlGate:
         self._max = max_prompts_per_hour
         # token -> (verb, owner_id, deadline)
         self._pending = {}
-        # monotonic timestamps of recently-issued prompts, for the rolling-hour rate limit
-        self._prompts = []
+        # owner_id -> monotonic timestamps of that operator's recently-issued prompts, for a
+        # per-operator rolling-hour rate limit (#470). Bounded by the control allow-list, since the
+        # caller only reaches open() for an allow-listed id.
+        self._prompts = {}
 
     def open(self, verb, user_id, now):
-        """Register a pending confirmation and return its token, or ``None`` when rate-limited."""
+        """Register a pending confirmation and return its token, or ``None`` when this operator is
+        rate-limited. The budget is per operator, so one id exhausting it never blocks another."""
         self._sweep(now)
-        self._prompts = [t for t in self._prompts if t > now - 3600]
-        if len(self._prompts) >= self._max:
+        owner = str(user_id)
+        recent = [t for t in self._prompts.get(owner, []) if t > now - 3600]
+        if len(recent) >= self._max:
+            self._prompts[owner] = recent  # keep the pruned window; still denied
             return None
         token = uuid.uuid4().hex
-        self._pending[token] = (verb, str(user_id), now + self._timeout)
-        self._prompts.append(now)
+        self._pending[token] = (verb, owner, now + self._timeout)
+        recent.append(now)
+        self._prompts[owner] = recent
         return token
 
     def confirm(self, token, user_id, now):
