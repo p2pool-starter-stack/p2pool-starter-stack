@@ -2215,6 +2215,8 @@ validate_worker_endpoints() {
                 then "dashboard.workers[\(.name)].port must be an integer between 1 and 65535."
               elif has("token") and ((.token | type) != "string" or (.token | test("^[!-~]{1,128}$") | not))
                 then "dashboard.workers[\(.name)].token must be 1-128 printable non-space characters."
+              elif has("watts") and ((.watts | type) != "number" or .watts <= 0 or .watts >= 1000000)
+                then "dashboard.workers[\(.name)].watts must be a positive number of watts (a manual power-draw estimate for the energy calculator, #260)."
               else empty end
           ] | first // empty end' "$CONFIG_FILE" 2>/dev/null)
     [ -z "$dw_err" ] || error "$dw_err"
@@ -2222,6 +2224,26 @@ validate_worker_endpoints() {
     local dw_dups
     dw_dups=$(jq -r '[(.dashboard.workers // [])[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
     [ -z "$dw_dups" ] || warn "dashboard.workers has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
+}
+
+# Validate the dashboard.energy block for the energy/profit calculator (#260). Like the worker
+# descriptors, this renders nothing to .env — the dashboard reads it off the read-only config.json
+# bind mount — so validation exists only to fail an apply loudly on a typo. Prices are operator-set
+# (no price feed ships: fetching one is a clearnet egress this stack avoids), so both must be
+# non-negative numbers and the currency a short label.
+validate_energy_config() {
+    local en_err
+    en_err=$(jq -r '
+        (.dashboard.energy // {}) as $e
+        | if ($e | type) != "object" then "dashboard.energy must be an object {cost_per_kwh, currency?, xmr_price?}."
+          elif ($e | has("cost_per_kwh")) and (($e.cost_per_kwh | type) != "number" or $e.cost_per_kwh < 0)
+            then "dashboard.energy.cost_per_kwh must be a non-negative number (your electricity price per kWh; 0 or unset hides the profit math)."
+          elif ($e | has("xmr_price")) and (($e.xmr_price | type) != "number" or $e.xmr_price < 0)
+            then "dashboard.energy.xmr_price must be a non-negative number (the fiat price of 1 XMR in your currency; 0 or unset hides net profit)."
+          elif ($e | has("currency")) and (($e.currency | type) != "string" or ($e.currency | test("^[!-~]{1,128}$") | not))
+            then "dashboard.energy.currency must be a short currency label (e.g. USD, EUR)."
+          else empty end' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$en_err" ] || error "$en_err"
 }
 
 parse_and_validate_config() {
@@ -2381,6 +2403,7 @@ parse_and_validate_config() {
     fi
 
     validate_worker_endpoints
+    validate_energy_config
 
     # Optional miner authentication on the stratum port (#152). xmrig-proxy's --access-password
     # rejects rigs whose stratum 'pass' doesn't match, so only devices that know the secret can

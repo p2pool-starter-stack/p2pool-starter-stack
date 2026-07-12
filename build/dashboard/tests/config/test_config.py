@@ -157,4 +157,79 @@ class TestWorkerEndpoints:
 
         assert load_worker_endpoints(str(tmp_path / "absent.json")) == []
         assert self._load(tmp_path, {"dashboard": {}}) == []
-        assert self._load(tmp_path, {"dashboard": {"workers": "nope"}}) == []
+
+    def test_valid_watts_loads_and_bad_watts_drops_entry(self, tmp_path):
+        # A positive watts estimate (#260) rides on the descriptor; a bad one fails closed like
+        # every other field so a typo can't silently distort the fleet power total.
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "workers": [
+                        {"name": "rig1", "watts": 142.5},
+                        {"name": "zero", "watts": 0},  # not positive
+                        {"name": "neg", "watts": -5},  # negative
+                        {"name": "boolw", "watts": True},  # bool is not watts
+                        {"name": "strw", "watts": "142"},  # string is not watts
+                        {"name": "ok", "port": 8081},
+                    ]
+                }
+            },
+        )
+        assert got == [{"name": "rig1", "watts": 142.5}, {"name": "ok", "port": 8081}]
+
+
+class TestEnergyConfig:
+    """dashboard.energy loader (#260): operator-set electricity + XMR prices, read off the config.json
+    mount. Every field optional; an invalid value degrades to its default (feature off) rather than
+    crashing — no price feed ships, so both prices are supplied by the operator."""
+
+    def _load(self, tmp_path, payload):
+        from mining_dashboard.config.config import load_energy_config
+
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps(payload))
+        return load_energy_config(str(p))
+
+    def test_defaults_when_absent(self, tmp_path):
+        assert self._load(tmp_path, {"dashboard": {}}) == {
+            "cost_per_kwh": 0.0,
+            "xmr_price": 0.0,
+            "currency": "USD",
+        }
+
+    def test_valid_values_load(self, tmp_path):
+        got = self._load(
+            tmp_path,
+            {"dashboard": {"energy": {"cost_per_kwh": 0.18, "xmr_price": 150, "currency": "EUR"}}},
+        )
+        assert got == {"cost_per_kwh": 0.18, "xmr_price": 150.0, "currency": "EUR"}
+
+    def test_invalid_values_degrade_to_defaults(self, tmp_path):
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "energy": {
+                        "cost_per_kwh": -1,
+                        "xmr_price": "expensive",
+                        "currency": "has space",
+                    }
+                }
+            },
+        )
+        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"}
+
+    def test_non_object_energy_degrades_to_defaults(self, tmp_path):
+        # A hand-edited `energy` that isn't an object mustn't crash — fall back to defaults.
+        got = self._load(tmp_path, {"dashboard": {"energy": "nope"}})
+        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"}
+
+    def test_missing_file_reads_defaults(self, tmp_path):
+        from mining_dashboard.config.config import load_energy_config
+
+        assert load_energy_config(str(tmp_path / "absent.json")) == {
+            "cost_per_kwh": 0.0,
+            "xmr_price": 0.0,
+            "currency": "USD",
+        }
