@@ -269,6 +269,10 @@ rig_lock() { # rig_lock <project> <suite> [shared]
     local mode=-x
     [ "${3:-}" = shared ] && mode=-s
     exec 9>"${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}"
+    # World-writable so a later non-root run can always open FD 9 even if a prior sudo/root run
+    # created the lock file root-owned (otherwise exec 9> fails and the flock is silently not held).
+    # Byte-for-byte with RigForge's canonical rig_lock (rigforge#183/#249) — keep the two identical.
+    chmod 666 "${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}" 2>/dev/null || true
     if ! flock -n $mode 9; then
         if [ "${RIG_LOCK_WAIT:-0}" = 1 ]; then
             echo "rig busy ($(cat "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || echo unknown)) — waiting..." >&2
