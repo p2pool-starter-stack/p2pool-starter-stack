@@ -2572,6 +2572,7 @@ echo "== unit+black-box: secret files are owner-only from creation (#368) =="
 # reverse order is wrong — on Linux `stat -f` is a VALID flag (filesystem status) that succeeds
 # with the wrong output, so the fallback never runs and CI (Linux) reads garbage.
 file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+file_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1" 2>/dev/null; }
 PB="$SANDBOX/perm368"
 mkdir -p "$PB/bin"
 printf '{ "monero": {} }\n' >"$PB/config.json"
@@ -3551,6 +3552,18 @@ assert_eq "committed config landed in config.json" "$(jq -r '.p2pool.pool' "$C/c
 assert_contains "commit ran the real apply (containers recreated)" "$(cat "$CTRL_LOG")" "compose up"
 assert_contains "commit audited with the actor" "$(cat "$AUDIT")" "\"actor\":\"admin\",\"action\":\"commit\",\"status\":\"applied\""
 [ ! -f "$STAGED/$UUID1.json" ] && ok "staged intent consumed on commit" || bad "staged intent consumed on commit" "still staged"
+
+# Operator keeps ownership of the stack files the root runner's apply wrote (#33 v1.4): control_run_pending
+# is root, so its apply would render .env root:root 0600 — unreadable to the non-root operator. The
+# re-own derives the owner from config.json (operator-owned, container can't write it) so a commit
+# matches a normal apply. Assert every operator-facing file is owned by config.json's owner, so a
+# non-root operator can still read .env / re-render on the next apply.
+cfg_uid="$(file_uid "$C/config.json")"
+for reowned in ".env" "Caddyfile" "config.json.bak-control"; do
+    [ -e "$C/$reowned" ] &&
+        assert_eq "$reowned owned by the config.json owner after a control commit" "$(file_uid "$C/$reowned")" "$cfg_uid" ||
+        bad "$reowned present after a control commit" "missing"
+done
 
 echo "== black-box: audit log records names, never values (#349) =="
 # WHAT changed rides in the audit entry as env-key NAMES (main -> mini touches the p2pool keys);
