@@ -1330,7 +1330,7 @@ run_hardening() {
         local uuid_bad bad_cfg wallet_before
         uuid_bad="$(_uuid4)"
         wallet_before="$(env_on_box MONERO_WALLET_ADDRESS)"
-        bad_cfg="$(printf '%s' "$ctrl_config" | jq -c '.monero.wallet_address="4TIER4TESTWALLETdoNotApplyThisIsAnIntegrationTestRejectionProbe0000000000000000000000000000000000"')"
+        bad_cfg="$(printf '%s' "$ctrl_config" | jq -c '.monero.wallet_address="4TESTWALLETdoNotUseHandsffGateRejectSensitiveKeyDefautDenyProbeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"')"
         _spool_write "$cdir/requests/$uuid_bad.json" \
             "$(jq -nc --argjson c "$bad_cfg" --arg id "$uuid_bad" '{id:$id,action:"preview",actor:"itest",config:$c}')"
         st="$(_wait_control_status "$cdir" "$uuid_bad" "" 60 || echo timeout)"
