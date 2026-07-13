@@ -11,6 +11,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-13
+
 ### Added
 
 - **Worker Inspect: view and edit a rig's config from the dashboard (#185).** Click a worker's name in
