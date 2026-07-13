@@ -163,6 +163,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The shared bench-lock opens read-only, matching RigForge byte-for-byte (#499, ports rigforge#252).**
+  The tier-4 harness's `rig_lock` helper (`tests/integration/lib.sh`) opened its flock file write-open
+  (`exec 9>`); on a shared box where the lock was first created by a non-root reserve,
+  `fs.protected_regular=2` blocks even root's write-open of the foreign-owned file with EACCES, so the
+  flock was silently *not* held and the box read as unreserved. It now opens read-only (`exec 9<`,
+  RigForge #242) — never guarded, and `flock -x/-s` works fine on a read fd — with a symlink guard and
+  the holder breadcrumb beside the lock. The helper is byte-identical to RigForge's canonical copy
+  again (the same lock path + open semantics on every box *is* the reservation protocol). Test-harness
+  only; no runtime change.
 - **The tier-4 hardening phase always reaps its root control units (#477).** The phase installs the
   `pithead-control.{path,service}` systemd units to exercise the #33 spool, and relied on the restore
   `apply` to remove them — but that removal runs early in `apply`, so a restore that died partway (a
