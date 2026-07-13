@@ -264,37 +264,51 @@ monero_caught_up() {
 # RIG_LOCK_FILE/RIG_LOCK_HOLDER are env-overridable so the tier-1 self-test can sandbox the
 # paths (rigforge#183 note 6). run.sh sets no other EXIT trap; if one is ever added there,
 # fold this rm -f into its body instead of trapping twice — a later `trap … EXIT` replaces,
-# it doesn't stack (rigforge#183 note 3).
+# it doesn't stack (rigforge#183 note 3). The lock is opened READ-only (9<, rigforge#242/#252) so a
+# root run can reserve a box whose lock file a prior non-root reserve created — fs.protected_regular
+# blocks even root's write-open (9>) of a foreign-owned lock, silently dropping the flock (#249).
 rig_lock() { # rig_lock <project> <suite> [shared]
     local mode=-x
     [ "${3:-}" = shared ] && mode=-s
-    exec 9>"${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}"
-    # World-writable so a later non-root run can always open FD 9 even if a prior sudo/root run
-    # created the lock file root-owned (otherwise exec 9> fails and the flock is silently not held).
-    # Byte-for-byte with RigForge's canonical rig_lock (rigforge#183/#249) — keep the two identical.
-    chmod 666 "${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}" 2>/dev/null || true
+    local lf="${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}"
+    # Holder breadcrumb defaults BESIDE the lock, not under root-owned /run (a non-root box can't
+    # write /run/rig-e2e.holder — the lock still holds, but the write errors with stderr noise). (#244)
+    local hf="${RIG_LOCK_HOLDER:-$lf.holder}"
+    # /run/lock is world-writable + sticky; refuse a symlinked lock/holder path so a planted symlink
+    # can't redirect our root-side create/chmod/holder-write onto another file (defence for a
+    # multi-tenant box; single-tenant rigs aren't exposed, but the guard is free).
+    { [ -L "$lf" ] || [ -L "$hf" ]; } && {
+        echo "rig_lock: lock/holder path is a symlink — refusing" >&2
+        exit 1
+    }
+    # Open the lock READ-only (9<). A lock file first created by a NON-root flock (a manual reserve
+    # after a reboot clears the /run/lock tmpfs) is owned by that user, and fs.protected_regular then
+    # blocks even root's O_CREAT-*write* of it (a 9> open) with EACCES. A read-open is never guarded,
+    # and flock -x/-s works fine on a read fd, so this sidesteps it without rm-ing a possibly-held
+    # lock. Create it first if absent; keep it 0666 so a shared reader can still join. (#242)
+    [ -e "$lf" ] || : >"$lf" 2>/dev/null || true
+    chmod 666 "$lf" 2>/dev/null || true # best-effort world-writable; a read-open (9<) only needs o+r
+    exec 9<"$lf"
     if ! flock -n $mode 9; then
         if [ "${RIG_LOCK_WAIT:-0}" = 1 ]; then
-            echo "rig busy ($(cat "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || echo unknown)) — waiting..." >&2
+            echo "rig busy ($(cat "$hf" 2>/dev/null || echo unknown)) — waiting..." >&2
             flock $mode 9
         else
-            echo "miner-0 busy: $(cat "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || echo unknown). Retry with RIG_LOCK_WAIT=1 to queue." >&2
-            exit 75
+            echo "miner-0 busy: $(cat "$hf" 2>/dev/null || echo unknown). Retry with RIG_LOCK_WAIT=1 to queue." >&2
+            exit 75 # EX_TEMPFAIL — callers can tell "busy, retry later" from a real failure
         fi
     fi
-    # The flock is now HELD on FD 9 and stays held for the whole run (the kernel drops it on
-    # process death). Everything below is DISPLAY-ONLY and strictly best-effort: it must never be
-    # able to drop or prevent the lock. The holder marker lives under /run (root-owned), so a
-    # non-root runner's write gets EACCES — try a plain write, fall back to passwordless sudo, then
-    # swallow any remaining failure with `|| true` so a marker we can't write NEVER aborts the lock
-    # (the bug: a failed holder-write must not leave the box unreserved). Portable UTC stamp — the
-    # GNU-only `date -Is` errors on macOS (the self-test host: "invalid argument 's' for -I").
-    local holder="${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" line
-    line="$(printf '%s %s pid=%s started=%s' "$1" "$2" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
-    { printf '%s\n' "$line" >"$holder" || printf '%s\n' "$line" | sudo -n tee "$holder" >/dev/null; } 2>/dev/null || true
-    # The trap fires at process exit, when the `holder` local is out of scope — re-derive the path
-    # from the durable env/default so the marker is actually removed (best-effort, may need sudo).
-    trap 'rm -f "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || sudo -n rm -f "${RIG_LOCK_HOLDER:-/run/rig-e2e.holder}" 2>/dev/null || true' EXIT
+    # DISPLAY-ONLY and strictly best-effort. The flock is already HELD on FD 9 above; a holder
+    # marker we can't write (a root-owned RIG_LOCK_HOLDER + a non-root runner) must NEVER abort
+    # under set -e and drop the lock — that would leave the box UNRESERVED, the exact bug (#249).
+    # Plain write, then passwordless sudo, then swallow. Portable UTC stamp — the GNU-only
+    # `date -Iseconds` errors on BSD/macOS. (#244)
+    local _line
+    _line="$(printf '%s %s pid=%s started=%s' "$1" "$2" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    { printf '%s\n' "$_line" >"$hf" || printf '%s\n' "$_line" | sudo -n tee "$hf" >/dev/null; } 2>/dev/null || true
+    # The trap fires at EXIT when the $hf local is out of scope, so re-derive the path from the
+    # durable env/default; best-effort removal, may need sudo for a root-written marker. (#244/#249)
+    trap 'rm -f "${RIG_LOCK_HOLDER:-${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}.holder}" 2>/dev/null || sudo -n rm -f "${RIG_LOCK_HOLDER:-${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}.holder}" 2>/dev/null || true' EXIT
 }
 
 # Take the rig lock ON a remote box and hold it for the lifetime of THIS process. The remote
