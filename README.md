@@ -36,8 +36,11 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   guide](docs/privacy.md) maps every connection.
 - 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
   address in the miner config; the stack routes the hashrate.
-- 📊 **Live dashboard.** Hashrate, the P2Pool/XvB split, the PPLNS window, and per-worker updates,
-  served over HTTPS on your LAN.
+- 📊 **Live dashboard, now with config editing.** Hashrate, the P2Pool/XvB split, the PPLNS window,
+  and per-worker updates over HTTPS on your LAN. Opt in with `dashboard.control.enabled` to edit
+  `config.json`, one-click upgrade to a new release, and watch the access + config-change audit logs
+  from the browser — every change gated host-side behind a login. See
+  [The Dashboard](docs/dashboard.md).
 - 📟 **Telegram operator bot.** Opt-in alerts for a downed node, a worker that dropped off, sync
   finishing, low disk, a clearnet leak, or a sustained hashrate drop — plus a daily digest and
   read-only commands (`/status`, `/hashrate`, `/workers`, `/earnings`). Routed over Tor. The same
@@ -99,7 +102,7 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 | **[Getting Started](docs/getting-started.md)** | Prerequisites, install, first-run setup, and what to expect while the node syncs. |
 | **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network), and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
-| **[The Dashboard](docs/dashboard.md)** | Sync Mode and a tour of the live operational view. |
+| **[The Dashboard](docs/dashboard.md)** | Sync Mode, a tour of the live operational view, and the opt-in control channel: editing config, one-click upgrades, and the audit logs from the browser. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
 | **[Architecture](docs/architecture.md)** | The nine services, the privacy model, and the algorithmic XvB switching engine. |
 | **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection: what's Tor-routed, what's clearnet today, and how to harden it. |
@@ -192,8 +195,10 @@ Everything runs through `pithead` (`./pithead help` lists it all):
 | `./pithead logs [service]` | Follow logs (all, or one service). |
 | `./pithead status` | Container status + health-check of every expected service (warns on anything down). |
 | `./pithead doctor` | Read-only health report (deps, Docker, AVX2, HugePages, RAM/disk, onion state). |
-| `./pithead backup` | Save config, secrets, the Tor onion keys, and the dashboard's database to `backups/` (`--with-chains` adds blockchain data; `-y` / `--yes` skips the prompts). |
-| `./pithead restore <archive>` | Restore those files from a backup archive (asks before overwriting; `-y` / `--yes` skips the prompt). |
+| `./pithead version` | Print the installed stack version on one line (offline; also `-V` / `--version`). |
+| `./pithead backup` | Save config, secrets, the Tor onion keys, and the dashboard's database to a passphrase-encrypted archive under `backups/` (`--with-chains` adds blockchain data; `--no-encrypt` writes plaintext; `-y` / `--yes` skips the prompts). |
+| `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; `-y` / `--yes` skips the prompt). |
+| `./pithead rotate-secrets` | Regenerate the stack's internal credentials after a suspected leak — see [Rotating the internal secrets](docs/operations.md#rotating-the-internal-secrets). |
 
 Commands chain in one call (`./pithead apply upgrade` runs both, stopping on the first failure;
 nonsense like `up down` is rejected before anything runs), and `source pithead-completion.bash`

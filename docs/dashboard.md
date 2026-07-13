@@ -46,9 +46,12 @@ finishes syncing in the background.
 > **Want to skip most of the wait?** Point the stack at an existing synced blockchain, or connect
 > to a remote node. See [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
 
-You can also follow sync progress from the command line:
+You can also follow sync progress from the command line. `./pithead status` prints each chain's
+percent and blocks remaining while it's still syncing (no ETA — block rate isn't sampled), or watch
+the node logs directly:
 
 ```bash
+./pithead status
 ./pithead logs monerod
 ./pithead logs tari
 ```

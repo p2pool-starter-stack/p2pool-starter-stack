@@ -38,6 +38,7 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   either the auth handshake or the enriched-feed shape goes red in CI instead of only on a live rig.
   `docs/testing-strategy.md` gains a per-flow tier map for the two-repo contract; the real-mining and
   real-proxy accept/reject legs stay tier-4 (documented, run on a bench rig).
+
 - **Energy & profit calculator on the dashboard (#260).** The Advanced-view earnings card gains an
   **Energy** tab that totals fleet power draw and efficiency, and — once you set a price — the net
   profit after power. It sums each worker's watts from RigForge's enriched feed (#235); a worker
@@ -52,6 +53,7 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   hidden. Net profit is P2Pool XMR only: Tari is lumpy solo merge-mining (priced separately) and XvB
   is raffle status, not income, so both are excluded, as the earnings card already frames them. See
   [Dashboard › Energy & profit](docs/dashboard.md#energy--profit).
+
 - **Read RigForge's enriched worker feed on the dashboard (#235).** A RigForge rig serves an
   enriched read API on port `8081` — the same `/1/summary` the dashboard already polls, plus a
   `rigforge` block with the rig's version, tuning state, power draw and efficiency, CPU/firmware
@@ -66,6 +68,7 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   guard](docs/workers.md) is unchanged — the dashboard still polls only the operator-set descriptor
   host/port, never a miner-advertised value. See [Connecting
   Miners](docs/workers.md#rigforge-enriched-feed).
+
 - **Confirm Tari payouts on-chain, too (#462).** The Tari sibling of #381, for the other half of
   the merge-mine. Tari merge-mining here is solo — the whole block reward lands at once when your
   hashrate finds a Tari block — so a payout is a rare, large event worth ground-truth confirmation.
@@ -128,6 +131,7 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   never sends a configured token to a miner-controlled host (SSRF guard, #122). The standard path
   (3333 / 8080 / token = rig name) needs no config. Pairs with rigforge#21 (`pool.port`) and
   rigforge#23 (`api.port`). See [Connecting Miners](docs/workers.md).
+
 - **Alert sinks beyond Telegram: generic JSON webhook + ntfy (#380).** Every alert the stack
   produces — node down/recovered, worker offline/joined/left, sync, disk, DB, XvB, clearnet
   exposure, blocks and payouts, the daily digest — can now also be pushed to a **generic JSON
@@ -141,6 +145,107 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   sees a Tor exit, not your host IP. `notifications.tor: false` is the LAN/self-hosted carve-out
   (Tor exits can't reach private addresses) — with it, clearnet endpoints see your host IP. See
   [Telegram › Webhook and ntfy sinks](docs/telegram.md#webhook-and-ntfy-sinks).
+
+### Changed
+
+- **The deploy-box layout is a product feature (#455).** `./pithead setup` and `./pithead upgrade`
+  now maintain a `current -> pithead-vX.Y.Z` symlink beside the install when the install directory
+  is version-named — one authoritative pointer to the live install, updated (`ln -sfn`) only on a
+  successful upgrade; the dashboard's one-click upgrade (#59) runs the same `upgrade` and moves it
+  too. The dashboard database also stops living inside the install directory: when the four other
+  `*.data_dir` share one parent, `dashboard.data_dir`'s default joins them there, and a one-time
+  migration in `upgrade`/`apply` moves data from the old `./data/dashboard` default (stop the
+  dashboard, move, verify the DB arrived; an explicit `dashboard.data_dir` is warned about and
+  left alone, and data at both locations stops the run instead of guessing). The canonical layout
+  — `current`, one rollback version dir, the shared data root — is documented in
+  [Operations › The deploy-box layout](docs/operations.md#the-deploy-box-layout), replacing the
+  hand-written per-box READMEs.
+
+### Fixed
+
+- **The tier-4 hardening phase always reaps its root control units (#477).** The phase installs the
+  `pithead-control.{path,service}` systemd units to exercise the #33 spool, and relied on the restore
+  `apply` to remove them — but that removal runs early in `apply`, so a restore that died partway (a
+  render failure, or the settle timeout firing mid-apply) could leave the **root** `pithead-control.path`
+  unit watching the control spool after the run, exactly the host residue tier-4 exists to prevent. The
+  phase now tears the units down unconditionally at the end, independent of the restore's exit code, and
+  warns loudly if any survive (a no-op on hosts without systemd). Test-harness only; no runtime change.
+
+- **Telegram control prompts are rate-limited per operator, not globally (#470).** The `ControlGate`
+  budget (max approval prompts per rolling hour) was one shared list, so a single allow-listed id —
+  or one compromised-but-allow-listed session — could exhaust it and lock the *other* operators out
+  of `/restart` / `/apply` for up to an hour. The budget is now keyed by operator id, so each caps
+  independently. A confidentiality/integrity fix this is not (the host-side fixed-verb runner is the
+  real boundary, #33/#338) — only availability among already-trusted operators; the `ControlGate`
+  docstring was corrected to say so.
+
+- **The dashboard auto-heals a corrupt SQLite database instead of erroring forever (#489).** A
+  clashed WAL checkpoint (seen when a container was recreated twice in quick succession) could leave
+  `mining_data.db` malformed; the dashboard then logged a write error every cycle **indefinitely** and
+  silently lost all history — and that DB now holds XvB-credited and payout state, so corruption can
+  skew the donation loop. On startup (`PRAGMA integrity_check`) and on any write that reports the file
+  malformed, the dashboard now quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for
+  post-mortem, oldest pruned), rebuilds a fresh schema, and resumes persisting. A one-shot **`db_reset`
+  alert** fires through Telegram and the other sinks so you know history before that point was cleared
+  — a plain "DB write failing" badge could be missed, since a startup reset has no prior state and a
+  runtime reset flips back to healthy within one cycle. A *transient* failure (disk full, locked,
+  permissions) is unchanged: it still just flags the persistence badge and retries, never discarding
+  history.
+
+- **`pithead <verb> --help` no longer runs the command (#493).** `-h`/`--help` on any subcommand now
+  prints usage and exits 0 **before any side effect** — previously `pithead upgrade --help` ignored
+  the flag and ran a full upgrade (image pull + container recreation). On the v1.4.0 deploy that
+  stray recreation collided with the real upgrade and corrupted the dashboard's SQLite DB (see the
+  auto-heal fix). Unrecognized flags on a no-option verb (`upgrade`, `up`, `down`, `status`,
+  `doctor`, `control-run-pending`, `onion-client-key`) now error and name the bad flag instead of
+  being silently ignored while the command runs anyway. `--dry-run` and other real options are
+  unaffected; `logs` still forwards its args to `docker compose logs`.
+
+- **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
+  environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
+  file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
+  refused with "would be overwritten." Provisioning now forces a pristine tree (`checkout -f` +
+  `reset --hard` + `clean -fdx`, keeping the harness's `results/` and the gitignored
+  `config.json`/`.env`/`data/`/`backups/`). And the restore path ran `pithead apply/up` from
+  `CANONICAL_DIR`, but on a release box the live stack runs from a per-version bundle dir — so the
+  source checkout took over the `pithead` project with locally-built `:dev` images and Tari
+  crash-looped. Restore now targets the directory the live stack actually ran from, read at preflight
+  off the running container's `com.docker.compose.project.working_dir` label, and falls back to
+  `CANONICAL_DIR` only when the stack is down.
+
+### Security
+
+- **The dashboard container never sees a plaintext secret (#440).** The one accepted residual
+  from the #33 control-channel reviews is closed: the dashboard no longer bind-mounts the raw
+  `config.json` to prefill its Configuration form. The host now renders a pre-masked copy —
+  every set secret (node RPC credentials, stratum and dashboard passwords, the Telegram bot
+  token, the Healthchecks ping URL) already replaced by a sentinel — into a read-only leg of the
+  control spool (`data/control/masked/`), and the form serves from that. The
+  "leave blank to keep the current value" merge moved host-side too: an untouched secret rides
+  back as the sentinel and the runner swaps in the live value at staging, so the request spool
+  is also secret-free. A fully compromised dashboard container can now read masked config,
+  results, and the audit log, and ask to change an allowlisted key — nothing else. The copy is
+  re-rendered on every `setup`/`apply`/`upgrade` and runner pass, so it never serves stale state
+  for long. See [SECURITY.md](SECURITY.md#secret-trust-boundary-for-dashboard-config-editing).
+
+- **Image verification is bound to the pulled bytes (#451).** `verify_release_images` now cosign-
+  verifies the immutable `@sha256` digest the bundled compose pins each first-party image to (#461),
+  not the mutable tag. Verify and pull resolve the same content-addressed bytes, so a tampered
+  registry can no longer serve the signed manifest to cosign and a different one to docker in a
+  separate dial. With a key present, an image whose compose line is not digest-pinned aborts too —
+  there is nothing to bind the check to.
+
+- **First install verifies signatures, not just upgrades (#452).** A fresh release install's first
+  `pithead up` pulled the five first-party images with no signature check; the gate now runs on that
+  path as well, under the same rules as `upgrade` — source checkouts skip, a missing `cosign.pub`
+  warns and proceeds (signing is opt-in), a present key that fails aborts before anything starts.
+  (`apply` and `rotate-secrets` recreate from the already-verified local images, so the two
+  registry-pull paths — first `up` and `upgrade` — are now both gated.)
+
+## [1.4.0] - 2026-07-11
+
+### Added
+
 - **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
   circuits time out, so every Tor-clearnet feature — Healthchecks pings, the Telegram bot, XvB
   stats — breaks at once while mining (established onion circuits) keeps working. v1.3.1 added
@@ -256,18 +361,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Changed
 
-- **The deploy-box layout is a product feature (#455).** `./pithead setup` and `./pithead upgrade`
-  now maintain a `current -> pithead-vX.Y.Z` symlink beside the install when the install directory
-  is version-named — one authoritative pointer to the live install, updated (`ln -sfn`) only on a
-  successful upgrade; the dashboard's one-click upgrade (#59) runs the same `upgrade` and moves it
-  too. The dashboard database also stops living inside the install directory: when the four other
-  `*.data_dir` share one parent, `dashboard.data_dir`'s default joins them there, and a one-time
-  migration in `upgrade`/`apply` moves data from the old `./data/dashboard` default (stop the
-  dashboard, move, verify the DB arrived; an explicit `dashboard.data_dir` is warned about and
-  left alone, and data at both locations stops the run instead of guessing). The canonical layout
-  — `current`, one rollback version dir, the shared data root — is documented in
-  [Operations › The deploy-box layout](docs/operations.md#the-deploy-box-layout), replacing the
-  hand-written per-box READMEs.
 - **`build/tor/Dockerfile`** now pins Alpine to a named minor version (`alpine:3.24`) alongside its
   digest, instead of the floating `latest` tag, so Dependabot has a real version line to track
   (#373).
@@ -276,51 +369,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
-- **The tier-4 hardening phase always reaps its root control units (#477).** The phase installs the
-  `pithead-control.{path,service}` systemd units to exercise the #33 spool, and relied on the restore
-  `apply` to remove them — but that removal runs early in `apply`, so a restore that died partway (a
-  render failure, or the settle timeout firing mid-apply) could leave the **root** `pithead-control.path`
-  unit watching the control spool after the run, exactly the host residue tier-4 exists to prevent. The
-  phase now tears the units down unconditionally at the end, independent of the restore's exit code, and
-  warns loudly if any survive (a no-op on hosts without systemd). Test-harness only; no runtime change.
-- **Telegram control prompts are rate-limited per operator, not globally (#470).** The `ControlGate`
-  budget (max approval prompts per rolling hour) was one shared list, so a single allow-listed id —
-  or one compromised-but-allow-listed session — could exhaust it and lock the *other* operators out
-  of `/restart` / `/apply` for up to an hour. The budget is now keyed by operator id, so each caps
-  independently. A confidentiality/integrity fix this is not (the host-side fixed-verb runner is the
-  real boundary, #33/#338) — only availability among already-trusted operators; the `ControlGate`
-  docstring was corrected to say so.
-- **The dashboard auto-heals a corrupt SQLite database instead of erroring forever (#489).** A
-  clashed WAL checkpoint (seen when a container was recreated twice in quick succession) could leave
-  `mining_data.db` malformed; the dashboard then logged a write error every cycle **indefinitely** and
-  silently lost all history — and that DB now holds XvB-credited and payout state, so corruption can
-  skew the donation loop. On startup (`PRAGMA integrity_check`) and on any write that reports the file
-  malformed, the dashboard now quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for
-  post-mortem, oldest pruned), rebuilds a fresh schema, and resumes persisting. A one-shot **`db_reset`
-  alert** fires through Telegram and the other sinks so you know history before that point was cleared
-  — a plain "DB write failing" badge could be missed, since a startup reset has no prior state and a
-  runtime reset flips back to healthy within one cycle. A *transient* failure (disk full, locked,
-  permissions) is unchanged: it still just flags the persistence badge and retries, never discarding
-  history.
-- **`pithead <verb> --help` no longer runs the command (#493).** `-h`/`--help` on any subcommand now
-  prints usage and exits 0 **before any side effect** — previously `pithead upgrade --help` ignored
-  the flag and ran a full upgrade (image pull + container recreation). On the v1.4.0 deploy that
-  stray recreation collided with the real upgrade and corrupted the dashboard's SQLite DB (see the
-  auto-heal fix). Unrecognized flags on a no-option verb (`upgrade`, `up`, `down`, `status`,
-  `doctor`, `control-run-pending`, `onion-client-key`) now error and name the bad flag instead of
-  being silently ignored while the command runs anyway. `--dry-run` and other real options are
-  unaffected; `logs` still forwards its args to `docker compose logs`.
-- **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
-  environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
-  file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
-  refused with "would be overwritten." Provisioning now forces a pristine tree (`checkout -f` +
-  `reset --hard` + `clean -fdx`, keeping the harness's `results/` and the gitignored
-  `config.json`/`.env`/`data/`/`backups/`). And the restore path ran `pithead apply/up` from
-  `CANONICAL_DIR`, but on a release box the live stack runs from a per-version bundle dir — so the
-  source checkout took over the `pithead` project with locally-built `:dev` images and Tari
-  crash-looped. Restore now targets the directory the live stack actually ran from, read at preflight
-  off the running container's `com.docker.compose.project.working_dir` label, and falls back to
-  `CANONICAL_DIR` only when the stack is down.
 - **The XvB donation controller no longer overshoots the target tier in steady state (#423).**
   During a split cycle the p2pool remainder dwell ended on its first 30-second check, because the
   dwell's early-exit asked "would we donate at all?" — a question the held split answers yes to by
@@ -353,18 +401,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Security
 
-- **The dashboard container never sees a plaintext secret (#440).** The one accepted residual
-  from the #33 control-channel reviews is closed: the dashboard no longer bind-mounts the raw
-  `config.json` to prefill its Configuration form. The host now renders a pre-masked copy —
-  every set secret (node RPC credentials, stratum and dashboard passwords, the Telegram bot
-  token, the Healthchecks ping URL) already replaced by a sentinel — into a read-only leg of the
-  control spool (`data/control/masked/`), and the form serves from that. The
-  "leave blank to keep the current value" merge moved host-side too: an untouched secret rides
-  back as the sentinel and the runner swaps in the live value at staging, so the request spool
-  is also secret-free. A fully compromised dashboard container can now read masked config,
-  results, and the audit log, and ask to change an allowlisted key — nothing else. The copy is
-  re-rendered on every `setup`/`apply`/`upgrade` and runner pass, so it never serves stale state
-  for long. See [SECURITY.md](SECURITY.md#secret-trust-boundary-for-dashboard-config-editing).
 - **Signed releases, verified before upgrade (#376).** The release pipeline now cosign-signs the
   five promoted image digests and the install bundle with a key that lives only on the release
   box; the public key is committed as `cosign.pub` and ships in every bundle. On a release
@@ -376,18 +412,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `cosign.pub` (bundles up to v1.3.x) keep today's TLS-to-GitHub + tag-pinning behaviour with a
   loud warning, and `doctor` reports the verification state. See
   [Releasing › Signed releases](docs/releasing.md#signed-releases).
-- **Image verification is bound to the pulled bytes (#451).** `verify_release_images` now cosign-
-  verifies the immutable `@sha256` digest the bundled compose pins each first-party image to (#461),
-  not the mutable tag. Verify and pull resolve the same content-addressed bytes, so a tampered
-  registry can no longer serve the signed manifest to cosign and a different one to docker in a
-  separate dial. With a key present, an image whose compose line is not digest-pinned aborts too —
-  there is nothing to bind the check to.
-- **First install verifies signatures, not just upgrades (#452).** A fresh release install's first
-  `pithead up` pulled the five first-party images with no signature check; the gate now runs on that
-  path as well, under the same rules as `upgrade` — source checkouts skip, a missing `cosign.pub`
-  warns and proceeds (signing is opt-in), a present key that fails aborts before anything starts.
-  (`apply` and `rotate-secrets` recreate from the already-verified local images, so the two
-  registry-pull paths — first `up` and `upgrade` — are now both gated.)
 - **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
   and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
   did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a

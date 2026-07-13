@@ -1151,6 +1151,19 @@ _spool_write() { # _spool_write <abs-path-on-box> <content>
     fi
 }
 
+# A fresh lowercase uuid4 for each control round-trip. The real dashboard mints one per
+# preview→commit cycle (control_service.submit: str(uuid4())) and NEVER reuses it; a hardcoded id
+# reused across runs collides with the results/ that pithead never sweeps, so the preview's
+# "wait for any status" reads a STALE "applied" from a prior run and the commit races the real
+# staging. A per-run id has no prior result on disk, so the wait proves THIS request settled.
+_uuid4() {
+    if [ -r /proc/sys/kernel/random/uuid ]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        uuidgen | tr 'A-F' 'a-f'
+    fi
+}
+
 # Wait up to <timeout>s for the systemd path unit to write results/<id>.json with a status OTHER
 # than <exclude> (so a leftover preview result doesn't satisfy a wait for the commit result).
 # Returns 0 and echoes the status when it settles; 1 on timeout. Proof the unit actually fired.
@@ -1306,17 +1319,28 @@ run_hardening() {
         # Use an allowlisted key that renders UNCONDITIONALLY: DASHBOARD_CHECK_UPDATES is always
         # emitted (a telegram event toggle only renders when telegram is configured, so it reads
         # empty on a telegram-off baseline — a test-only pitfall, not a control-channel bug).
-        local uuid_ok="a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1" ok_cfg st
+        # A FRESH id per round-trip, exactly as the real dashboard mints one (control_service.submit:
+        # str(uuid4())) and NEVER reuses it. A hardcoded id reused across runs collides with the
+        # results/ that pithead never sweeps, so the preview's "wait for any status" reads a STALE
+        # "applied" left by a prior run's commit and the test races on to the commit before the runner
+        # has staged THIS config. A per-run id has no result on disk, so the wait proves the new request.
+        local uuid_ok ok_cfg st
+        uuid_ok="$(_uuid4)"
         ok_cfg="$(printf '%s' "$ctrl_config" | jq -c '.dashboard.check_for_updates=false')"
         _spool_write "$cdir/requests/$uuid_ok.json" \
-            "$(jq -nc --argjson c "$ok_cfg" '{id:"'"$uuid_ok"'",action:"preview",actor:"itest",config:$c}')"
-        if st="$(_wait_control_status "$cdir" "$uuid_ok" "" 60)"; then
-            it_pass "systemd path unit fired on a spooled request (#33) [preview=$st]"
+            "$(jq -nc --argjson c "$ok_cfg" --arg id "$uuid_ok" '{id:$id,action:"preview",actor:"itest",config:$c}')"
+        # Wait for THIS preview to reach "previewed" before committing — mirrors production, where the
+        # preview HTTP handler awaits its result and only then does the browser POST the commit. It also
+        # confirms the runner CLAIMED the request (drained requests/), so the commit write below is a
+        # clean empty→match edge for the path unit instead of racing an unclaimed preview file.
+        st="$(_wait_control_status "$cdir" "$uuid_ok" "" 60 || echo timeout)"
+        if [ "$st" = "previewed" ]; then
+            it_pass "systemd path unit fired + staged a spooled preview (#33) [preview=$st]"
         else
-            it_fail "systemd path unit fired on a spooled request (#33)" "no result after 60s"
+            it_fail "systemd path unit fired + staged a spooled preview (#33)" "preview status=$st (expected previewed)"
         fi
         _spool_write "$cdir/requests/$uuid_ok.json" \
-            "{\"id\":\"$uuid_ok\",\"action\":\"commit\",\"actor\":\"itest\"}"
+            "$(jq -nc --arg id "$uuid_ok" '{id:$id,action:"commit",actor:"itest"}')"
         st="$(_wait_control_status "$cdir" "$uuid_ok" "previewed" 90 || echo timeout)"
         assert_eq "spool commit applied by the path unit (#33)" "$st" "applied"
         assert_eq "the allowlisted change landed host-side (#33)" "$(env_on_box DASHBOARD_CHECK_UPDATES)" "false"
@@ -1325,14 +1349,16 @@ run_hardening() {
 
         # 3b. A SENSITIVE change (wallet swap) MUST be refused host-side, .env untouched — the
         #     default-deny gate, exercised through the real spool rather than a unit test.
-        local uuid_bad="b2b2b2b2-2222-4222-8222-b2b2b2b2b2b2" bad_cfg wallet_before
+        local uuid_bad bad_cfg wallet_before
+        uuid_bad="$(_uuid4)"
         wallet_before="$(env_on_box MONERO_WALLET_ADDRESS)"
-        bad_cfg="$(printf '%s' "$ctrl_config" | jq -c '.monero.wallet_address="4TIER4TESTWALLETdoNotApplyThisIsAnIntegrationTestRejectionProbe0000000000000000000000000000000000"')"
+        bad_cfg="$(printf '%s' "$ctrl_config" | jq -c '.monero.wallet_address="4TESTWALLETdoNotUseHandsffGateRejectSensitiveKeyDefautDenyProbeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"')"
         _spool_write "$cdir/requests/$uuid_bad.json" \
-            "$(jq -nc --argjson c "$bad_cfg" '{id:"'"$uuid_bad"'",action:"preview",actor:"itest",config:$c}')"
-        _wait_control_status "$cdir" "$uuid_bad" "" 60 >/dev/null || true
+            "$(jq -nc --argjson c "$bad_cfg" --arg id "$uuid_bad" '{id:$id,action:"preview",actor:"itest",config:$c}')"
+        st="$(_wait_control_status "$cdir" "$uuid_bad" "" 60 || echo timeout)"
+        assert_eq "sensitive (wallet) spool preview staged host-side (#33)" "$st" "previewed"
         _spool_write "$cdir/requests/$uuid_bad.json" \
-            "{\"id\":\"$uuid_bad\",\"action\":\"commit\",\"actor\":\"itest\"}"
+            "$(jq -nc --arg id "$uuid_bad" '{id:$id,action:"commit",actor:"itest"}')"
         st="$(_wait_control_status "$cdir" "$uuid_bad" "previewed" 90 || echo timeout)"
         assert_eq "sensitive (wallet) spool commit refused host-side (#33)" "$st" "rejected"
         assert_eq "refused wallet change did NOT touch .env (#33)" "$(env_on_box MONERO_WALLET_ADDRESS)" "$wallet_before"
@@ -1348,6 +1374,8 @@ run_hardening() {
     wait_status_ok 240 || true
     # #477: reap the control units unconditionally — the restore apply above is supposed to remove them,
     # but if it died before provision_control_runner ran, the ROOT path unit would linger past the phase.
+    # (develop's #424 added a fire-and-forget inline version here; this supersedes it — it verifies the
+    # units are actually gone and warns loudly if not, rather than swallowing the outcome with `|| true`.)
     if _remove_control_units; then
         it_pass "control systemd units removed after the hardening phase (#477)"
     else
