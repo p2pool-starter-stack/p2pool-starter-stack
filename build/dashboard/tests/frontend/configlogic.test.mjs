@@ -23,7 +23,10 @@ const CFG = {
     remote: { host: "node.example", rpc_port: 18081 },
   },
   p2pool: { pool: "mini", stratum_password: "" },
-  dashboard: { auth: { username: "admin", password: { __secret__: true } } },
+  dashboard: {
+    auth: { username: "admin", password: { __secret__: true } },
+    workers: [{ name: "rig1", host: "10.0.0.5", token: { __secret__: true } }],
+  },
 };
 
 test("isSecretSentinel: only the exact sentinel shape", () => {
@@ -85,6 +88,17 @@ test("applyEdits: edits land at their path with type coercion; the rest is untou
   assert.equal(proposed.monero.remote.rpc_port, 18089); // string → number
   assert.equal(proposed.monero.wallet_address, "4AAAA");
   assert.equal(CFG.p2pool.pool, "mini"); // the source config is never mutated
+});
+
+test("array values are not form fields and survive an edit round-trip verbatim (#172)", () => {
+  // dashboard.workers is a list of per-rig descriptors — there is no form rendering for it, so
+  // buildSections must skip it (a text field would mangle it into a string) and applyEdits must
+  // carry it through untouched.
+  const sections = buildSections(CFG);
+  const keys = sections.flatMap((s) => s.fields.map((f) => f.key));
+  assert.ok(!keys.some((k) => k.startsWith("dashboard.workers")));
+  const proposed = applyEdits(CFG, sections, { "p2pool.pool": "main" });
+  assert.deepEqual(proposed.dashboard.workers, CFG.dashboard.workers);
 });
 
 test("applyEdits: a blank secret keeps the sentinel; a typed one replaces it", () => {

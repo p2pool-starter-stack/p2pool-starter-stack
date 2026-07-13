@@ -139,6 +139,13 @@ A red `⚠ DB write failing` badge appears if the dashboard can't write to its S
 or read-only disk, permissions problem). The dashboard keeps serving live data, but hashrate history,
 shares, and stats won't survive a restart until it's fixed.
 
+If the database file is found **corrupt** (malformed, e.g. after a container was recreated twice in
+quick succession while a write was mid-flight), the dashboard heals itself rather than erroring
+forever: it quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for post-mortem), starts
+a fresh database, and keeps running. A `db_reset` alert (Telegram and the other sinks) tells you
+history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
+only the historical charts reset.
+
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
@@ -205,6 +212,16 @@ card so columns stay readable. Until the first worker ever connects, the card sh
 ("point each rig at `<host-ip>:3333`") in place of the empty table; see
 [Connecting Miners](workers.md).
 
+A [RigForge](https://github.com/p2pool-starter-stack/rigforge) rig that serves its enriched read API
+adds a version badge and a row of chips next to its name — CPU governor and throttling state,
+firmware board, HugePages, power draw and H/s-per-watt, the active tuning target and next autotune,
+and watchdog temperature. Alarming states (throttling, thermal hold, a non-performance governor) read
+red or amber; the rest are muted read-outs. Each chip shows only when the rig reports that field, so
+a partial reading never leaves a blank, and a plain-xmrig rig shows no chips at all. If RigForge is up
+but its miner isn't, the rig stays in the table with a **miner down** chip rather than dropping to
+offline. Point the rig's descriptor at the enriched feed to turn this on — see
+[Connecting Miners › RigForge enriched feed](workers.md#rigforge-enriched-feed).
+
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
 rejected count — a rig submitting stale or bad shares (bad overclock, flaky network, clock drift)
@@ -223,6 +240,40 @@ serves the series as `share_stats` and a trailing-24-hour reject rate as `reject
 over recent shares rather than the cumulative-since-proxy-start percentage in Proxy totals. The same
 series drives the `high_reject_rate` [Telegram alert](telegram.md) when the trailing-hour rate
 crosses 5%.
+
+### Worker Inspect
+
+With the control channel on (`dashboard.control.enabled`), a worker's name in the Workers Alive table
+is a link. Click it to open **Worker Inspect** — a panel with that rig's live telemetry, an editor for
+the writable slice of its config, and the change history.
+
+The editor covers the keys RigForge lets the control path change: `pools`, `DONATION`, `autotune`,
+`watchdog`, `watchdog_interval_min`, and `max_temp_c`. Nothing else (identity, filesystem paths, API
+ports, the control token) is editable from here. Enter the changes as a JSON object of those keys and
+**Apply to rig**; RigForge validates the change, applies it, and — if the miner doesn't come back to a
+live hashrate — rolls it back on its own. The panel shows the outcome (applied / rejected / rolled
+back) and appends it to the history.
+
+To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
+in its [`dashboard.workers[]`](configuration.md#configuration-reference) descriptor. Without a host, or
+without a token, the rig isn't a write target and the panel says so.
+
+How it stays safe:
+
+- **The dashboard never holds the rig's token.** It spools the worker name and the change into the
+  same host-side control channel [the config editor uses](#configuration-view); the host resolves the
+  rig's address and token from `config.json` and dials the rig. A compromised dashboard container can
+  neither read the token nor point the write at a host it wasn't configured for (the same
+  [SSRF rule](workers.md#per-worker-overrides) as the read path).
+- **Fail-closed.** The write path exists only when the control channel is on, which requires a
+  dashboard password; every request carries the CSRF header; and only the writable allowlist is
+  accepted, at every layer.
+
+RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
+recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
+config *values*, the editor prefills from the last config the dashboard applied — not a live read of
+the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
+dashboard apply.
 
 ### Simple vs. Advanced view
 
@@ -247,11 +298,12 @@ A P2Pool mining calculator (Advanced view). It estimates the XMR earned from P2P
 the XTM the same hashrate merge-mines alongside it, from your P2Pool hashrate and the live network
 figures.
 
-The card is split into three tabs — **Monero**, **Tari**, and **XvB** — driven by one **what-if
-hashrate** input that sits above the tabs, so switching tabs keeps the value you entered. Monero
-holds the XMR/day·month·year figures, time-to-share, and block reward; Tari holds the solo
+The card is split into tabs — **Monero**, **Tari**, **XvB**, and **Energy** — driven by one
+**what-if hashrate** input that sits above the tabs, so switching tabs keeps the value you entered.
+Monero holds the XMR/day·month·year figures, time-to-share, and block reward; Tari holds the solo
 time-to-block, per-block reward, and per-day average; XvB holds the tier/cost block and the
-per-tier payout comparison. The XvB tab appears only when XvB is enabled.
+per-tier payout comparison. The XvB tab appears only when XvB is enabled, and the Energy tab only
+when the fleet reports power (see [Energy & profit](#energy--profit)).
 
 It is scoped to P2Pool — **not** an XvB calculator:
 
@@ -285,6 +337,80 @@ It is scoped to P2Pool — **not** an XvB calculator:
 > **These are estimates, not guarantees.** Mining is variance-heavy, so real payouts swing well
 > above and below these figures. The calculator says so in a disclaimer on the card. If the
 > network figures aren't available yet, the card shows `—` rather than a bogus number.
+
+### Energy & profit
+
+The **Energy** tab turns "what does my hashrate earn" into "what does it earn *after power*." It
+sums each worker's power draw and shows fleet efficiency, and — once you set a price — the net
+profit after electricity.
+
+Power draw comes from RigForge's enriched feed (the `watts` and `hs_per_watt` in the `rigforge`
+block, sampled via RAPL every 15s — see [Connecting Miners](workers.md#rigforge-enriched-feed)). A
+worker whose feed reports no watts (macOS, a non-RigForge rig, an older kit) can carry a manual
+estimate: add `"watts": <number>` to its `dashboard.workers[]` descriptor and it counts toward the
+total, marked *estimated*. A worker with neither a measured nor a configured draw is left out and
+the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
+
+The tab always shows fleet watts, H/s-per-watt, and energy use (kWh per day/month/year, a naive
+extrapolation of the current draw). Two prices add the rest, and each is optional:
+
+| Config | Adds |
+|---|---|
+| `dashboard.energy.cost_per_kwh` | **Power cost** per day/month/year (`kWh × price`). |
+| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year (`P2Pool XMR earnings × your XMR price − power cost`). |
+
+Both are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no conversion
+happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it but leave
+`xmr_price` unset and you get the energy cost but no net. Net profit scales with the same what-if
+hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red when
+power costs more than it earns.
+
+Net profit counts **P2Pool XMR only**. Tari is lumpy solo merge-mining priced separately, and XvB
+is raffle status rather than income, so both are excluded — the same honesty the earnings tabs
+already apply. **No price feed ships:** fetching an exchange rate is a clearnet request this
+privacy-first stack avoids, so you supply the XMR price yourself (see
+[Privacy › Runtime egress](privacy.md#runtime-egress)).
+
+### Payout confirmation
+
+Everything above is a **model**. The earnings card also shows what actually landed in your wallet,
+when you give the stack a way to check the chain. Set `monero.view_key` (the private **view** key
+for your payout address) and the stack runs a **view-only** `monero-wallet-rpc` against your local
+node, scanning for confirmed incoming payouts. P2Pool pays each miner's share directly in a Monero
+block's coinbase, so the wallet is the only ground truth that a payout arrived. The card then shows
+**Confirmed** totals — 24 hours, 7 days, and all-time XMR — beside the estimate, and a
+`payout_confirmed` alert fires once per payout (Telegram and the other sinks).
+
+The dashboard polls the wallet on a slow cadence (about every 5 minutes) and records each confirmed
+payout to a small local table, so a restart never re-alerts. Coinbase outputs become spendable only
+after 60 blocks; a payout is recorded and announced when it's **confirmed in a block**, not when it
+matures — once, never twice. A pruned node confirms payouts fine (coinbase outputs are never pruned). If the
+wallet is still doing its first scan or is briefly unreachable, the confirmed figure stays put
+rather than erroring.
+
+> **The view key is a secret. Treat it like a password.** A view key **cannot spend** — it can only
+> scan — but it reveals every incoming payout amount and its timing to anyone who can read it. The
+> stack keeps it in the owner-only `.env`, never logs or echoes it, keeps it off the dashboard
+> Configuration editor, and never puts it on a container command line. It stays on the box: the
+> view-only `monero-wallet-rpc` is published only to the host loopback (`127.0.0.1:18082`), runs
+> non-root with a read-only root filesystem, and authenticates the dashboard with a generated
+> password. **Phase 1 is local node only** — scanning through a third-party daemon would change the
+> trust story, so a view key set with `monero.mode: remote` is refused. To rotate it, get a fresh
+> view key from your wallet and replace `monero.view_key`. Leave `monero.view_key` empty (the
+> default) and none of this runs — the card shows only the estimate.
+
+The **Tari** side of the merge-mine works the same way (#462). Tari merge-mining here is solo — the
+whole block reward lands at once when your hashrate finds a Tari block, so a payout is a rare, large
+event worth confirming. Set `tari.view_key` and `tari.spend_public_key` (both exported from your
+Tari wallet) and the stack runs a **view-only** `minotari_console_wallet` against your local Tari
+node. The Tari tab of the earnings card then shows **Confirmed** XTM totals (24 hours, 7 days,
+all-time) beside the time-to-block estimate, and the same `payout_confirmed` alert fires once per
+Tari payout, carrying the chain. The Tari view key is a secret and is handled exactly like the
+Monero one — owner-only `.env`, never logged or on a container command line, off the Configuration
+editor — with one extra safeguard: because Tari has no key-import file, the three wallet secrets are
+delivered to the container through a tmpfs secret mount, so they never appear in `docker inspect`.
+Local Tari node only. Its restore point is a **birthday** (`tari.payout_scan_birthday`, days since
+the Unix epoch), not a block height. Leave `tari.view_key` empty and none of the Tari half runs.
 
 ### XvB Tier (raffle)
 
@@ -350,9 +476,12 @@ button then appears next to the Simple/Advanced toggle.
 
 The flow mirrors the CLI's `apply`:
 
-1. The form is prefilled from the live `config.json`, grouped by section. Secrets (the dashboard
-   password, the Telegram bot token, node RPC credentials, the stratum password) show as
-   "set — leave blank to keep"; their values are never sent to the browser.
+1. The form is prefilled from a pre-masked copy of `config.json` the host renders into the
+   control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)), grouped by
+   section. Secrets (the dashboard password, the Telegram bot token, node RPC credentials, the
+   stratum password) show as "set — leave blank to keep"; their values never enter the dashboard
+   container, let alone the browser — leaving one untouched sends a sentinel back, and the host
+   swaps in the live value when it stages the change.
 2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own

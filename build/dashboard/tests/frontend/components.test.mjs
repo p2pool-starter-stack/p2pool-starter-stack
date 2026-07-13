@@ -27,7 +27,7 @@ const noop = () => {};
 const HANDLERS = {
     onRange: noop, onSort: noop, onView: noop, onTheme: noop,
     onZoom: noop, onResetZoom: noop, onToggleSeries: noop, onAvgWindow: noop,
-    onDismissHint: noop,
+    onDismissHint: noop, onInspect: noop, onCloseInspect: noop,
 };
 
 function renderApp({ state = BASE, connected = true, ui = UI } = {}) {
@@ -212,6 +212,43 @@ test('EarningsCard drops the XvB tab entirely when XvB is disabled (#118)', () =
     assert.doesNotMatch(html, /XvB Tier \(raffle\)/);
 });
 
+test('EarningsCard shows an Energy tab only when the fleet reports power (#260)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    // Fixture has an available energy block → the Energy tab and panel exist.
+    let html = renderApp({ state: s });
+    assert.match(html, /id="etab-energy"[^>]*>Energy</);
+    assert.match(html, /id="epanel-energy"[^>]*hidden>/); // present but inactive (Monero default)
+    assert.match(html, /Fleet Power/);
+    assert.match(html, /285\.0 W/); // measured fleet draw from the fixture
+    // No electricity price set → the prompt to set cost_per_kwh, and no net-profit figures.
+    assert.match(html, /cost_per_kwh/);
+    assert.doesNotMatch(html, /Net \/ day/);
+    // With no power at all, the Energy tab disappears entirely.
+    s.energy = { available: false };
+    html = renderApp({ state: s });
+    assert.doesNotMatch(html, /id="etab-energy"/);
+    assert.doesNotMatch(html, /id="epanel-energy"/);
+});
+
+test('EarningsCard Energy tab shows cost then net as prices are set (#260)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8; // small XMR/H/s/day so gross stays sane
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.currency = 'EUR';
+    // Only the electricity price set → power cost shows, net profit still gated on xmr_price.
+    let html = renderApp({ state: s });
+    assert.match(html, /Power cost \/ day/);
+    assert.match(html, /set xmr_price/);
+    assert.doesNotMatch(html, /Net \/ day/);
+    // Both prices set → net profit appears.
+    s.energy.xmr_price = 150;
+    html = renderApp({ state: s });
+    assert.match(html, /Net \/ day/);
+    assert.match(html, /Net \/ year/);
+});
+
 test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
     const base = clone();
     base.earnings.available = true;
@@ -352,6 +389,13 @@ test('WorkersTable connect hint uses the real host IP when known (#385)', () => 
     const html = renderApp({ state: s });
     assert.match(html, /192\.168\.1\.10:3333/);
     assert.doesNotMatch(html, /Unknown Host:3333/);
+    // A custom p2pool.stratum_port (#172) flows into the hint — the UI never lies about where
+    // rigs must point.
+    const custom = clone();
+    custom.workers = [];
+    custom.host_ip = '192.168.1.10';
+    custom.stratum_port = 4444;
+    assert.match(renderApp({ state: custom }), /192\.168\.1\.10:4444/);
     // A populated fleet — even all-offline — keeps the table, never the hint.
     const offline = clone();
     offline.workers = offline.workers.map((w) => ({ ...w, status: 'offline' }));
@@ -391,6 +435,33 @@ test('WorkersTable surfaces the per-rig api-unreadable and reject badges, and th
     assert.match(html, /90% rejected/); // per-row reject badge (how you spot a problem rig)
     assert.match(html, /badge-purple">XvB/);
     assert.match(html, /badge-bad">Unknown/);
+});
+
+test('WorkersTable renders the RigForge version badge + chips when present, nothing when absent (#235)', () => {
+    // A plain-xmrig worker has no `rigforge` (the server sends null) -> no chips, no error.
+    const plain = clone();
+    plain.workers.forEach((w) => (w.rigforge = null));
+    const plainHtml = renderApp({ state: plain });
+    assert.doesNotMatch(plainHtml, /rf 1\.7\.0/);
+    assert.doesNotMatch(plainHtml, /throttling/);
+
+    // A RigForge worker carries the server-built {version, chips} view.
+    const rf = clone();
+    rf.workers[0].rigforge = {
+        version: '1.7.0',
+        miner_down: false,
+        chips: [
+            { text: 'throttling', variant: 'bad', title: 'hot' },
+            { text: 'gov: performance', variant: 'ok', title: '' },
+            { text: '142 W · 86.9 H/s·W', variant: 'outline', title: 'power' },
+        ],
+    };
+    rf.workers[1].rigforge = null; // the other rig is plain xmrig
+    const html = renderApp({ state: rf });
+    assert.match(html, /rf 1\.7\.0/); // version badge
+    assert.match(html, /badge-bad" title="hot">throttling/); // a bad chip
+    assert.match(html, /gov: performance/);
+    assert.match(html, /142 W · 86.9 H\/s·W/);
 });
 
 test('Tari status gates the ✔ on a live gRPC channel, never on active-but-dead (#278/#313)', () => {
@@ -461,4 +532,36 @@ test('syncing App renders the sync gauges instead of the dashboard', () => {
     assert.match(html, /Monero Sync/);
     assert.match(html, /Tari Sync/);
     assert.doesNotMatch(html, /Workers Alive/);
+});
+
+
+// --- Worker Inspect (#185) ---------------------------------------------------------------
+
+test('worker names are inspect buttons only when the control channel is on (#185)', () => {
+    // Control off (base fixture): the name is plain text, no inspect affordance.
+    const off = renderApp();
+    assert.doesNotMatch(off, /worker-name-link/);
+    // Control on: each worker name becomes an inspect button.
+    const s = clone();
+    s.control_enabled = true;
+    const on = renderApp({ state: s });
+    assert.match(on, /worker-name-link/);
+    assert.match(on, />rig-alpha</);
+});
+
+test('WorkerInspect overlay renders for the selected worker (#185)', () => {
+    const s = clone();
+    s.control_enabled = true;
+    // ui.inspectWorker drives the overlay; the render harness runs no effects, so it's the
+    // pre-fetch loading state (the fetch itself is covered by the server tests).
+    const html = renderApp({ state: s, ui: { ...UI, inspectWorker: 'rig-alpha' } });
+    assert.match(html, /worker-inspect-overlay/);
+    assert.match(html, /Worker · rig-alpha/);
+    assert.match(html, /Loading/);
+});
+
+test('no WorkerInspect overlay when none is selected (#185)', () => {
+    const s = clone();
+    s.control_enabled = true;
+    assert.doesNotMatch(renderApp({ state: s }), /worker-inspect-overlay/);
 });

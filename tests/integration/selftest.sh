@@ -353,6 +353,40 @@ else
     unset RIG_LOCK_FILE RIG_LOCK_HOLDER
 fi
 
+echo "== provision: force-clean checkout tolerates untracked leftovers, keeps results/backups/data (#454) =="
+# Mirrors e2e.sh provision(): the disposable e2e checkout must survive a stray untracked file at a
+# path the target branch tracks (the reported abort), while never wiping the harness's results/ or
+# the shared chains' data/ + rollback backups/. The FLAGS are what's under test.
+_gt="$(mktemp -d)"
+(
+    cd "$_gt" || exit 1
+    git init -q
+    git config user.email t@t
+    git config user.name t
+    git commit -q --allow-empty -m base
+    mkdir -p tests/integration/benchmarks
+    echo tracked >tests/integration/benchmarks/bench.sh
+    git add -A && git commit -q -m feature
+    _feat="$(git rev-parse HEAD)"
+    git checkout -q -B other HEAD~1 # a tree WITHOUT bench.sh
+    # A leftover untracked file at the colliding path + cruft + the dirs the harness must keep.
+    mkdir -p tests/integration/benchmarks results backups data
+    echo leftover >tests/integration/benchmarks/bench.sh
+    printf x >results/keep
+    printf x >backups/keep
+    printf x >data/keep
+    printf x >stray-cruft
+    git checkout -q -f -B feature "$_feat"
+    git reset -q --hard "$_feat"
+    git clean -qfdx -e /results -e /backups -e /data
+) >/dev/null 2>&1
+assert_eq "-f overwrites the untracked leftover instead of aborting" "$(cat "$_gt/tests/integration/benchmarks/bench.sh" 2>/dev/null)" "tracked"
+for _d in results backups data; do
+    if [ -f "$_gt/$_d/keep" ]; then it_pass "clean keeps $_d/"; else it_fail "clean keeps $_d/" "$_d/keep was removed"; fi
+done
+if [ ! -e "$_gt/stray-cruft" ]; then it_pass "clean removes untracked cruft"; else it_fail "clean removes untracked cruft" "stray-cruft survived"; fi
+rm -rf "$_gt"
+
 # --- Tally ------------------------------------------------------------------
 echo ""
 echo "selftest: $IT_PASS passed, $IT_FAIL failed"

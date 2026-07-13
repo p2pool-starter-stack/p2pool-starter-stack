@@ -6,10 +6,12 @@ status commands** on demand, so you can check on the stack from your phone. Both
 default**; this guide takes you from nothing to a working alert in about five minutes, then adds
 commands if you want them.
 
-> **What this is — and isn't.** Alerts are a one-way push (a pager). Commands are **read-only** —
-> `/status`, `/hashrate`, and friends report what the dashboard already knows; **nothing controls
-> the stack over Telegram** (start/stop/`apply` stay on the CLI). So the worst a leaked chat can do
-> is *read* your status, never change anything.
+> **What this is — and isn't.** Alerts are a one-way push (a pager). The status commands
+> (`/status`, `/hashrate`, and friends) are **read-only** — they report what the dashboard already
+> knows and never change anything, so the worst a leaked chat can do is *read* your status. Two
+> **control** commands (`/restart`, `/apply`) can act on the host, but they are a **separate,
+> off-by-default opt-in** locked behind an operator allow-list and a per-action confirmation — see
+> [Control commands](#control-commands).
 
 ---
 
@@ -30,6 +32,7 @@ transition, not a stream:
 | ✅ **Sync finished** | The initial blockchain sync completed and mining has started — handy on first run, when the sync can take hours. |
 | 🟠 **Disk filling up** | The data disk crossed the warn/critical threshold — a full disk can corrupt the Monero database, so free space before it runs out. |
 | 🔴 **DB write failing** | The dashboard can no longer write to its database; hashrate history, shares, and stats will be lost on restart until it's fixed (usually disk space or permissions). |
+| 🔄 **DB reset** | The database was found corrupt and auto-healed — the bad file was quarantined and a fresh one started, so history before now was cleared (the stack kept running). |
 | 🔴 **Container trouble** | A stack container is restart-looping (an OOM kill — the per-container memory ceiling doing its job — or a bad config) or running but failing its healthcheck for over 2 minutes. One alert per incident, not one per restart, and a recovery note when it stabilises. Intentional stops (the sync hold, node-down failover) never fire it. |
 | ⚠ **No PPLNS share (XvB)** | You're donating to XvB but hold no share in the PPLNS window, so raffle wins are **skipped** — donations are wasted until you land one. Only fires when XvB is enabled. |
 | ⚠ **Clearnet sync active** | A node is doing its initial sync over **clearnet**, so this host's IP is exposed to that chain's P2P network until it finishes (it reverts to Tor automatically). |
@@ -159,6 +162,7 @@ block and set it to `false` — any event you don't list stays on:
 | `sync_finished` | `true` | Initial sync done, mining started |
 | `disk_space` | `true` | Data disk filling up / critical / recovered |
 | `db_unhealthy` | `true` | Dashboard database writes failing / recovered |
+| `db_reset` | `true` | Corrupt dashboard database auto-healed (quarantined + reset); history cleared |
 | `xvb_no_share` | `true` | XvB on but no PPLNS share (wins skipped) / restored |
 | `clearnet_exposed` | `true` | A node is syncing over clearnet (IP exposed) / back on Tor |
 | `xvb_registration` | `true` | XvB auto-registration rejected / failing / recovered |
@@ -233,6 +237,71 @@ the same outbound path as the alerts — nothing about your host is exposed to r
 
 ---
 
+## Control commands
+
+Two commands can **act on the host** rather than just report:
+
+| Command | What it does |
+|---|---|
+| `/restart` | Recreate the running stack (`./pithead restart`). |
+| `/apply` | Re-render and re-apply the **current** `config.json` on the host (`./pithead apply`). It applies what is already on disk — it does not carry a config change from Telegram. |
+
+This is a **remotely-reachable control surface**, so it is off by default and gated at every step.
+The bot token being known is **not** authorization. Turn it on only if you accept that a Telegram
+message can trigger these actions, and set the allow-list to the operators who may.
+
+```json
+"telegram": {
+    "enabled": true,
+    "bot_token": "…",
+    "chat_id": "…",
+    "commands": { "enabled": true },
+    "control": {
+        "enabled": true,
+        "allowed_ids": [123456789],
+        "confirm_timeout": 60
+    }
+},
+"dashboard": {
+    "auth": { "username": "admin", "password": "…" },
+    "control": { "enabled": true }
+}
+```
+
+How the gating works:
+
+- **Operator allow-list.** A control command is accepted **only** from the numeric Telegram **user
+  ids** in `allowed_ids` — being in the right `chat_id` is not enough. Every other sender is refused
+  and dropped silently (no reply, so the bot can't be used to probe who is authorised). Find your
+  user id the same way you found your chat id ([step 3](#3-find-your-chat-id)); with an **empty**
+  allow-list the whole feature stays off.
+- **Per-action confirmation, deny-on-timeout.** Issuing `/restart` or `/apply` doesn't do anything
+  yet — the bot replies with the concrete action and a single **Confirm** button. Nothing happens
+  until you tap it, and if you don't within `confirm_timeout` seconds (default 60) the request is
+  **denied**, never queued. Only the operator who issued the command can confirm it, and each button
+  is one-shot.
+- **A fixed, small action set.** The two verbs are the whole surface — a Telegram message **selects**
+  one of them, it never becomes a host command. There is no arbitrary execution.
+- **It rides the config-editor's channel, not a new one.** Both verbs act by dropping a typed intent
+  into the same host-control spool the dashboard config editor uses (`dashboard.control.enabled`,
+  see [Editing config from the dashboard](configuration.md)); the root runner on the host validates
+  and runs the fixed verb. The dashboard container never runs a host command itself. That is why
+  `dashboard.control.enabled` (and its login) is a prerequisite — `apply` refuses to enable the
+  Telegram control commands without it.
+- **Everything is audited.** Each confirmed command lands in the host-side control audit log
+  (`data/control/audit/control.log`) with the actor tagged `tg-<your-user-id>` and the outcome —
+  the same tamper-evident log the config editor writes to.
+
+A **config-changing** apply is deliberately **not** a Telegram command: editing config still goes
+through the dashboard's editor, where the host's default-deny allowlist refuses security-sensitive
+keys. `/apply` here only re-applies the config already on the host.
+
+> **Tuning the confirmation window.** `confirm_timeout` is in seconds. Shorten it if you want a
+> tighter window; a value that is too short just means you have to be quicker to tap Confirm before
+> the request is denied.
+
+---
+
 ## One chat, two bots
 
 Pithead's companion **Healthchecks.io** monitor (a "dead-man's switch" that detects the whole host
@@ -274,6 +343,52 @@ Once your Pithead bot is posting to the group, add Healthchecks.io's bot to it a
 Full walkthrough on their site: **<https://healthchecks.io/integrations/add_telegram/>**. For the
 rest of the Healthchecks.io setup (creating the check, the ping URL, `config.json`), see
 [Monitoring & Alerting](monitoring.md).
+
+---
+
+## Webhook and ntfy sinks
+
+Telegram is not the only way out. Every alert above can also be pushed to a **generic JSON
+webhook** (Gotify, Home Assistant, n8n, anything that accepts a POST) and/or an **[ntfy](https://ntfy.sh)
+topic** — with or without Telegram. Both are **off by default** and configured in their own
+top-level `config.json` block:
+
+```json
+"notifications": {
+    "webhooks": ["https://example.com/pithead-hook"],
+    "ntfy": {
+        "url": "https://ntfy.sh/your-topic",
+        "token": ""
+    },
+    "tor": true
+}
+```
+
+- **`webhooks`** — a list of URLs. Each alert is POSTed to every URL as JSON:
+
+  ```json
+  {"event": "node_down", "text": "🔴 ⛓️ Monero node is DOWN — workers failing over to backup pools.", "ts": 1781136000}
+  ```
+
+  `event` is the same key used in `telegram.events` (the table above), `text` is the exact
+  message Telegram would get, `ts` is a Unix timestamp.
+- **`ntfy.url`** — one topic URL (`https://server/topic`; self-hosted servers work). Each alert's
+  text is POSTed as the message body. Set `ntfy.token` for an access-protected topic — it's sent
+  as an `Authorization: Bearer` header.
+- **`tor`** — keep the POSTs on Tor (the default; see below).
+
+Then `./pithead apply`. Sinks carry **every** event — the `telegram.events` toggles gate Telegram
+only. Like the Telegram alerter, sends **fail silently** (an unreachable endpoint never breaks the
+stack), and the URLs and token are **secrets**: webhook URLs often embed a key in the query
+string, so they live only in the owner-only `.env` and are never printed by `apply` or written to
+a log line.
+
+**Tor and the LAN carve-out.** With `tor: true` (the default) every POST rides the bundled Tor
+SOCKS proxy, so the endpoint sees a **Tor exit, not your host IP** — same rule as Telegram. That
+also means the endpoint must be **Tor-reachable**: Tor exits cannot reach private (RFC1918)
+addresses, so a webhook or ntfy server on your LAN needs `tor: false`. Flipping it routes the
+POSTs directly — a **clearnet** endpoint then sees your host IP on every alert, so keep `tor:
+true` unless every configured endpoint is on your own network.
 
 ---
 

@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import random
 import sqlite3
 import threading
@@ -24,6 +25,15 @@ _WINDOW_EXTRA_COLUMNS = [
     for col in pair
     if col not in _BASE_HISTORY_COLS
 ]
+
+# Substrings SQLite uses when the DB file itself is unusable — a corrupted page, a truncated/rewritten
+# file, or a non-DB where the DB should be (#489). Matched case-insensitively against the error text
+# so an operations-eating corruption auto-heals (quarantine + fresh DB) instead of erroring on every
+# write cycle forever. A transient error (locked, disk full, permissions) is NOT here: those are the
+# db_unhealthy path — retryable, not a reason to throw away history.
+_CORRUPTION_MARKERS = ("malformed", "not a database", "image is malformed", "file is encrypted")
+# How many quarantined copies of a corrupt DB to keep for post-mortem before pruning the oldest.
+_CORRUPT_KEEP = 3
 
 
 class StateManager:
@@ -81,35 +91,144 @@ class StateManager:
         # surface "history isn't being saved" instead of silently losing everything on the next restart.
         self.db_healthy = True
 
+        # DB self-heal (#489): a corrupt DB used to error on every write forever, silently losing all
+        # telemetry (and the DB now holds XvB-credited + payout state). On integrity loss we quarantine
+        # the bad file and start fresh. ``db_reset_count`` is a monotonic one-shot the alerter edges on
+        # so the operator is told history was reset (a plain db_healthy flip can be missed — a startup
+        # reset has no prior state, a runtime reset flips back to healthy within one cycle).
+        self.db_reset_count = 0
+        self.last_db_reset = (
+            None  # {"ts", "reason", "quarantine"} of the most recent reset, for the alert
+        )
+
         self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
         self._init_db()
         self.load()
 
+    def _apply_schema(self):
+        """Set pragmas + create/migrate the schema on the open connection. Caller holds ``_db_lock``.
+
+        Split out of ``_init_db`` so the recovery path (#489) can rebuild the schema on a freshly
+        reconnected DB without re-entering the (non-reentrant) lock via ``_init_db``."""
+        # Enable WAL mode for better concurrency
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        with self._conn:
+            self._create_tables()
+            self._migrate_db()
+            # Indexes come AFTER migration: idx_ts is on history(timestamp), a column
+            # _migrate_db adds when upgrading a pre-timestamp DB. Creating it in
+            # _create_tables would throw "no such column: timestamp" on that old schema
+            # and abort the whole migration, leaving the DB half-upgraded.
+            self._create_indexes()
+
     def _init_db(self):
-        """Initializes the SQLite database schema and handles migrations."""
+        """Initializes the SQLite database schema and handles migrations.
+
+        Runs an integrity check first (#489): a DB corrupted while the dashboard was down would
+        otherwise fail on the first write and error every cycle thereafter. A malformed DB — caught by
+        the check or by a corruption error while applying the schema — is quarantined and rebuilt fresh
+        rather than left broken."""
         try:
             with self._db_lock:
-                # Enable WAL mode for better concurrency
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                self._conn.execute("PRAGMA synchronous=NORMAL")
-
-                with self._conn:
-                    self._create_tables()
-                    self._migrate_db()
-                    # Indexes come AFTER migration: idx_ts is on history(timestamp), a column
-                    # _migrate_db adds when upgrading a pre-timestamp DB. Creating it in
-                    # _create_tables would throw "no such column: timestamp" on that old schema
-                    # and abort the whole migration, leaving the DB half-upgraded.
-                    self._create_indexes()
+                self._check_integrity()
+                self._apply_schema()
         except sqlite3.Error as e:
-            self._db_error("DB Init Error", e)
+            if self._is_corruption_error(e):
+                self._recover_corrupt_db(f"startup: {e}")
+            else:
+                self._db_error("DB Init Error", e)
+
+    @staticmethod
+    def _is_corruption_error(e: Exception) -> bool:
+        """True when the error means the DB file itself is unusable (vs. a retryable write failure)."""
+        text = str(e).lower()
+        return any(marker in text for marker in _CORRUPTION_MARKERS)
+
+    def _check_integrity(self):
+        """Raise ``sqlite3.DatabaseError`` if ``PRAGMA integrity_check`` doesn't return ``ok``.
+
+        A DB can be malformed yet still open and answer simple queries, so this surfaces corruption
+        proactively at startup. ``:memory:`` and a brand-new empty file both report ``ok``. Caller
+        holds ``_db_lock``."""
+        row = self._conn.execute("PRAGMA integrity_check").fetchone()
+        result = (row[0] if row else "") or ""
+        if result != "ok":
+            # Phrase it with a corruption marker so _is_corruption_error routes it to recovery.
+            raise sqlite3.DatabaseError(
+                f"integrity_check reported the database is malformed: {result}"
+            )
+
+    def _recover_corrupt_db(self, reason: str):
+        """Quarantine a corrupt DB file and rebuild an empty schema so persistence resumes (#489).
+
+        The bad file is renamed to ``<db>.corrupt-<UTC>`` (kept for post-mortem, oldest pruned) rather
+        than deleted, and a fresh DB takes its place. Bumps ``db_reset_count`` so the alerter tells the
+        operator history was reset. A ``:memory:`` DB has no file to quarantine — it just rebuilds. On
+        any failure here the DB stays flagged unhealthy (the #131 badge) rather than crashing."""
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        quarantine = None
+        try:
+            with self._db_lock:
+                try:
+                    if self._conn:
+                        self._conn.close()
+                except sqlite3.Error:
+                    pass
+                self._conn = None
+                if self.db_path != ":memory:" and os.path.exists(self.db_path):
+                    quarantine = f"{self.db_path}.corrupt-{stamp}"
+                    os.replace(self.db_path, quarantine)
+                    # WAL/SHM siblings of a corrupt DB are meaningless without it — drop them so the
+                    # fresh DB doesn't inherit a stale write-ahead log.
+                    for sfx in ("-wal", "-shm"):
+                        try:
+                            os.remove(self.db_path + sfx)
+                        except OSError:
+                            pass
+                    self._prune_quarantined()
+                self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+                self._conn.row_factory = sqlite3.Row
+                self._apply_schema()
+            self.db_healthy = True
+            self.db_reset_count += 1
+            self.last_db_reset = {"ts": time.time(), "reason": reason, "quarantine": quarantine}
+            self.logger.error(
+                "DB corruption recovered (%s): quarantined to %s, started a fresh database — "
+                "hashrate history and stats before now were lost.",
+                reason,
+                quarantine or "(in-memory, nothing to quarantine)",
+            )
+        except (sqlite3.Error, OSError) as e:
+            # Recovery itself failed (disk full, permissions) — leave persistence flagged unhealthy.
+            self._db_error("DB Recovery Error", e)
+
+    def _prune_quarantined(self):
+        """Keep only the newest ``_CORRUPT_KEEP`` ``<db>.corrupt-*`` files; delete older ones."""
+        directory = os.path.dirname(self.db_path) or "."
+        base = os.path.basename(self.db_path) + ".corrupt-"
+        try:
+            stale = sorted(f for f in os.listdir(directory) if f.startswith(base))
+        except OSError:
+            return
+        for name in stale[: max(0, len(stale) - _CORRUPT_KEEP)]:
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass
 
     def _db_error(self, where: str, e: Exception):
-        """Record a DB failure and flag persistence as unhealthy so /api/state can surface it (#131)."""
+        """Record a DB failure and flag persistence as unhealthy so /api/state can surface it (#131).
+
+        A corruption error (malformed file) triggers auto-recovery (#489) — quarantine + fresh DB —
+        so a corrupt DB self-heals instead of erroring on every write cycle indefinitely. ``where ==
+        "DB Recovery Error"`` is excluded so a failed recovery can't recurse."""
         self.db_healthy = False
         self.logger.error(f"{where}: {e}")
+        if where != "DB Recovery Error" and self._is_corruption_error(e):
+            self._recover_corrupt_db(f"{where}: {e}")
 
     def is_db_healthy(self) -> bool:
         """True unless a DB init or write has failed — drives the dashboard persistence badge (#131)."""
@@ -138,6 +257,29 @@ class StateManager:
             "CREATE TABLE IF NOT EXISTS share_stats "
             "(ts REAL, accepted INTEGER, rejected INTEGER, invalid INTEGER, expired INTEGER)"
         )
+        # Confirmed on-chain payouts from the view-only wallet (#381). Keyed (chain, txid) — NOT
+        # txid alone — so the Tari sibling (#462) reuses this exact table with chain="tari"; the
+        # payout_confirmed alert carries the chain too. Additive, forward-only: mirrors events /
+        # share_stats, so no _migrate_db change is needed. amount_atomic keeps the wallet's native
+        # atomic units; the view layer converts to XMR at the edge.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS payouts "
+            "(chain TEXT, txid TEXT, height INTEGER, ts REAL, amount_atomic INTEGER, "
+            "PRIMARY KEY (chain, txid))"
+        )
+        # Per-worker config-change history for the Worker Inspect page (#185). RigForge keeps no
+        # config history on the rig, so Pithead owns it: one row per change the dashboard applied,
+        # with the writable-key `changes` we sent (each row IS a diff from the prior state, by
+        # construction — we only ever record deltas we authored) and the rig's terminal outcome.
+        # Additive, forward-only (mirrors events / payouts) — no _migrate_db change needed. `changes`
+        # holds only the writable allowlist keys; NO secret ever lands here (the rig token stays
+        # host-side, #440). change_id is the rig's 16-hex id, or NULL for a request that never reached
+        # a rig (rejected host-side).
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS worker_config "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, change_id TEXT, ts REAL, "
+            "status TEXT, changes TEXT, reason TEXT)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -145,6 +287,9 @@ class StateManager:
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON history(timestamp)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_ts ON shares(ts)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_share_stats_ts ON share_stats(ts)")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_worker_config ON worker_config(worker, ts)"
+        )
 
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
@@ -478,6 +623,149 @@ class StateManager:
         """Returns a copy of the per-poll share-health deltas (#116)."""
         with self._lock:
             return list(self.state.get("share_stats", []))
+
+    def add_payouts(self, chain: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Persist confirmed on-chain payouts (#381), idempotent on ``(chain, txid)``, and return
+        only the rows that were NEWLY inserted this call.
+
+        The returned "new" list is what drives the ``payout_confirmed`` alert: an already-stored
+        payout is silently ignored (INSERT OR IGNORE), so a dashboard restart re-fetching the tip
+        never re-alerts. Not held in memory (payouts are read straight from the DB by the view /
+        alert paths) — unlike the retention-pruned series, payout history is small and permanent."""
+        if not rows:
+            return []
+        new_rows = []
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                with self._conn:
+                    for r in rows:
+                        cur = self._conn.execute(
+                            "INSERT OR IGNORE INTO payouts "
+                            "(chain, txid, height, ts, amount_atomic) VALUES (?, ?, ?, ?, ?)",
+                            (
+                                chain,
+                                r["txid"],
+                                int(r.get("height", 0) or 0),
+                                float(r.get("ts", 0) or 0),
+                                int(r.get("amount_atomic", 0) or 0),
+                            ),
+                        )
+                        # rowcount == 1 means the row was actually inserted (not an ignored dup),
+                        # so it's a genuinely new payout worth alerting on exactly once.
+                        if cur.rowcount == 1:
+                            new_rows.append(r)
+        except (sqlite3.Error, KeyError, ValueError, TypeError) as e:
+            self._db_error("Payout Insert Error", e)
+            return []
+        return new_rows
+
+    def get_payouts(self, chain: str | None = None) -> list[dict[str, Any]]:
+        """Return stored confirmed payouts, newest first. Filters to ``chain`` when given (the
+        dashboard's Monero card reads chain="monero"); omit it for the cross-chain total."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                if chain is None:
+                    cursor.execute(
+                        "SELECT chain, txid, height, ts, amount_atomic FROM payouts "
+                        "ORDER BY ts DESC"
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT chain, txid, height, ts, amount_atomic FROM payouts "
+                        "WHERE chain = ? ORDER BY ts DESC",
+                        (chain,),
+                    )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Payout Read Error: {e}")
+            return []
+
+    def get_payout_max_height(self, chain: str) -> int:
+        """Highest stored block height for ``chain`` (0 if none) — the wallet-poll seed. Fetching
+        transfers from this height forward re-scans only the tip; idempotent add_payouts drops the
+        overlap, so a restart replays nothing (#381)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return 0
+                cursor = self._conn.cursor()
+                cursor.execute("SELECT MAX(height) FROM payouts WHERE chain = ?", (chain,))
+                row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        except sqlite3.Error as e:
+            self.logger.error(f"Payout Height Read Error: {e}")
+            return 0
+
+    def add_worker_config_version(
+        self,
+        worker: str,
+        change_id: str | None,
+        status: str,
+        changes: dict[str, Any],
+        reason: str | None,
+        ts: float | None = None,
+    ) -> None:
+        """Record one applied/attempted worker config change (#185). ``changes`` is the writable-key
+        delta the dashboard sent (stored as JSON — no secret ever lands here). Forward-only."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                self._conn.execute(
+                    "INSERT INTO worker_config (worker, change_id, ts, status, changes, reason) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        worker,
+                        change_id,
+                        ts if ts is not None else time.time(),
+                        status,
+                        json.dumps(changes),
+                        reason,
+                    ),
+                )
+                self._conn.commit()
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            self._db_error("Worker Config Write Error", e)
+
+    def get_worker_config_history(self, worker: str, limit: int = 50) -> list[dict[str, Any]]:
+        """The change history for ``worker``, newest first, with ``changes`` parsed back to a dict."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT change_id, ts, status, changes, reason FROM worker_config "
+                    "WHERE worker = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                    (worker, limit),
+                )
+                out = []
+                for row in cursor.fetchall():
+                    d = dict(row)
+                    try:
+                        d["changes"] = json.loads(d["changes"]) if d["changes"] else {}
+                    except (TypeError, ValueError):
+                        d["changes"] = {}
+                    out.append(d)
+                return out
+        except sqlite3.Error as e:
+            self.logger.error(f"Worker Config Read Error: {e}")
+            return []
+
+    def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
+        """The merged writable config the dashboard last successfully applied to ``worker`` — the
+        best prefill for the editor, since the rig's enriched feed does not expose the writable config
+        values (#185). Later applied changes lay over earlier ones (last write wins per key)."""
+        merged: dict[str, Any] = {}
+        for row in reversed(self.get_worker_config_history(worker, limit=200)):
+            if row.get("status") == "applied" and isinstance(row.get("changes"), dict):
+                merged.update(row["changes"])
+        return merged
 
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

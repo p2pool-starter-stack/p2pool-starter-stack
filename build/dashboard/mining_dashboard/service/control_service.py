@@ -1,13 +1,14 @@
 """Dashboard side of the host-mutation control channel (#33).
 
-The container can only ASK. This module reads the bind-mounted live config (masking every secret
-leaf), writes typed JSON intents into the requests/ spool — the container's single writable leg —
-and reads results back from the read-only results/ mount. The host-side runner
-(``pithead control-run-pending``) re-validates and executes; nothing here runs a command.
+The container can only ASK. This module reads the host-rendered PRE-MASKED config copy (#440) to
+prefill the editor form, writes typed JSON intents into the requests/ spool — the container's
+single writable leg — and reads results back from the read-only results/ mount. The host-side
+runner (``pithead control-run-pending``) re-validates and executes; nothing here runs a command.
 
-Secrets round-trip masked: ``read_config`` replaces each non-empty secret value with the
-``{"__secret__": true}`` sentinel, and ``merge_secrets`` swaps a sentinel coming back in a
-proposed config for the current live value ("unchanged"). The raw secret is never served.
+Secrets never enter the container: the host masks every set secret to the ``{"__secret__": true}``
+sentinel before the copy is mounted (the raw config.json is not mounted at all), a proposal
+carries the sentinel back for an untouched secret, and the host swaps it for the live value when
+it stages the intent. ``read_config`` re-applies the same masking as defense-in-depth.
 """
 
 import asyncio
@@ -21,13 +22,18 @@ from mining_dashboard.config import config
 
 logger = logging.getLogger("ControlService")
 
-# Config paths whose leaves are secrets. Mirrors what pithead's describe_change refuses to echo.
+# Config paths whose leaves are secrets. Mirrors pithead's CONTROL_SECRET_PATHS (the host-side
+# masking source, #440) — keep the two lists in step.
 SECRET_PATHS = [
     ("dashboard", "auth", "password"),
     ("telegram", "bot_token"),
     ("workers", "api_token"),
     ("monero", "node_username"),
     ("monero", "node_password"),
+    # The private view key (#381): reveals all incoming payout amounts/timing to anyone who reads it.
+    ("monero", "view_key"),
+    # The Tari private view key (#462): same exposure for the Tari side (spend_public_key is public).
+    ("tari", "view_key"),
     ("p2pool", "stratum_password"),
     # A capability secret: pithead's describe_change already refuses to echo it, but read_config
     # was serving it in cleartext to the browser. Mask it too (#33 hardening).
@@ -38,7 +44,8 @@ SECRET_SENTINEL = {"__secret__": True}
 _RESULT_POLL_S = 0.5
 
 
-def _load_raw():
+def _load_host_config():
+    """The host-rendered, pre-masked config copy (#440) — no raw secret ever crosses the mount."""
     with open(config.HOST_CONFIG_PATH) as f:
         return json.load(f)
 
@@ -62,10 +69,6 @@ def _set(cfg, path, value):
     node[path[-1]] = value
 
 
-def is_secret_sentinel(value):
-    return isinstance(value, dict) and value.get("__secret__") is True
-
-
 def _deep_merge(base, override):
     """Recursively lay ``override`` over ``base`` (dicts merge; any other value replaces)."""
     merged = dict(base)
@@ -80,11 +83,12 @@ def _deep_merge(base, override):
 def read_config():
     """The full config schema for the editor's form, every set secret masked to the sentinel.
 
-    ``config.reference.json`` (every key with its default) is merged UNDER the operator's sparse
-    ``config.json`` so the form covers the whole schema — a missing/unreadable reference degrades to
-    the host config alone (graft #437). An *empty* secret stays empty, so the UI can tell
-    "set — leave blank to keep" from "not set"; masking runs AFTER the merge."""
-    cfg = _load_raw()
+    ``config.reference.json`` (every key with its default) is merged UNDER the host's sparse,
+    pre-masked copy so the form covers the whole schema — a missing/unreadable reference degrades
+    to the host copy alone (graft #437). An *empty* secret stays empty, so the UI can tell
+    "set — leave blank to keep" from "not set". The copy arrives already masked (#440); the
+    masking pass here is defense-in-depth and runs AFTER the merge."""
+    cfg = _load_host_config()
     try:
         with open(config.HOST_REFERENCE_PATH) as f:
             reference = json.load(f)
@@ -97,19 +101,6 @@ def read_config():
         if found and value:
             _set(cfg, path, dict(SECRET_SENTINEL))
     return cfg
-
-
-def merge_secrets(proposed):
-    """Re-insert live secret values wherever the proposed config carries the sentinel
-    (= "unchanged"). Mutates and returns ``proposed``. A sentinel for a secret that is not
-    actually set collapses to empty rather than leaking a dict into config.json."""
-    raw = _load_raw()
-    for path in SECRET_PATHS:
-        found, value = _get(proposed, path)
-        if found and is_secret_sentinel(value):
-            raw_found, raw_value = _get(raw, path)
-            _set(proposed, path, raw_value if raw_found else "")
-    return proposed
 
 
 def submit(action, cfg=None, actor="", intent_id=None, version=None):
@@ -129,6 +120,46 @@ def submit(action, cfg=None, actor="", intent_id=None, version=None):
         json.dump(request, f)
     os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
     return rid
+
+
+def submit_worker_apply(worker, changes, actor="", intent_id=None):
+    """Spool a worker-config change intent (#185). Carries ONLY the worker NAME and the writable-key
+    ``changes`` — never a host, port, or token: the host-side runner resolves the rig's real address
+    and bearer from its own config.json (dashboard.workers[]), so a tampered intent can at most target
+    another already-configured rig, never an arbitrary host, and the rig token — masked out of this
+    container (#440) — never crosses the mount. Returns the request id (always a UUID)."""
+    rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())
+    request = {
+        "id": rid,
+        "action": "worker-apply",
+        "actor": actor,
+        "worker": worker,
+        "changes": changes,
+    }
+    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
+    with open(tmp, "w") as f:
+        json.dump(request, f)
+    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
+    return rid
+
+
+# The config keys the Worker Inspect editor may change — the exact writable allowlist the rig's
+# control API enforces (rigforge WRITABLE, #236). Validated here (fail-closed, defence in depth), on
+# the host runner, and finally by the rig itself. NOT writable: identity, filesystem paths, the API
+# ports, and the control token — remote mutation of those would be escalation.
+WORKER_WRITABLE_KEYS = frozenset(
+    {"pools", "DONATION", "autotune", "watchdog", "watchdog_interval_min", "max_temp_c"}
+)
+
+
+def validate_worker_changes(changes):
+    """Return an error string if ``changes`` isn't a non-empty object of writable keys, else ''."""
+    if not isinstance(changes, dict) or not changes:
+        return "changes must be a non-empty object of writable config keys"
+    bad = sorted(k for k in changes if k not in WORKER_WRITABLE_KEYS)
+    if bad:
+        return "keys not writable via the control path: " + ", ".join(bad)
+    return ""
 
 
 def result(rid):

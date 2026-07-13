@@ -56,6 +56,9 @@ const ui = {
   // Simple-view pointer to the Advanced-only earnings/XvB calculators (#425). Persisted once
   // dismissed — either explicitly or by visiting Advanced view — so it shows once per browser.
   hintDismissed: localStorage.getItem("dashboardCalcHint") === "dismissed",
+  // Worker Inspect (#185): the name of the worker whose panel is open, or null. Transient UI —
+  // not persisted; the panel fetches its own /api/worker detail on open.
+  inspectWorker: null,
 };
 
 // Reflect the current theme onto <html data-theme>; the CSS palette (and the chart, which reads
@@ -73,9 +76,20 @@ function rerender() {
     html`<${App} state=${state} connected=${connected} ui=${ui}
                      onRange=${setRange} onSort=${onSort} onView=${setView} onTheme=${setTheme}
                      onZoom=${setZoom} onResetZoom=${resetZoom} onToggleSeries=${toggleSeries}
-                     onAvgWindow=${setAvgWindow} onDismissHint=${dismissHint} />`,
+                     onAvgWindow=${setAvgWindow} onDismissHint=${dismissHint}
+                     onInspect=${openInspect} onCloseInspect=${closeInspect} />`,
     root,
   );
+}
+
+// Worker Inspect (#185): open/close the per-worker panel. Not persisted — transient UI state.
+function openInspect(name) {
+  ui.inspectWorker = name;
+  rerender();
+}
+function closeInspect() {
+  ui.inspectWorker = null;
+  rerender();
 }
 
 async function tick() {

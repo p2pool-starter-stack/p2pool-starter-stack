@@ -13,6 +13,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_EVENTS,
 )
 from mining_dashboard.service.container_health import ContainerHealthMonitor
+from mining_dashboard.service.notify_sinks import config_sinks
 from mining_dashboard.service.telegram_notifier import TelegramNotifier
 from mining_dashboard.service.worker_presence import WorkerPresenceMonitor
 
@@ -50,7 +51,8 @@ def _parse_hhmm(value):
 class AlertService:
     """
     Turns the data loop's per-cycle signals into a small set of debounced operator alerts and
-    pushes them over Telegram (Issue #121). Notifications-only — no interactive bot (#45).
+    fans them out to the configured sinks: Telegram (Issue #121) plus any webhook/ntfy sinks
+    (#380). Notifications-only — no interactive bot (#45).
 
     It *consumes* signals the loop already computes rather than re-collecting anything:
 
@@ -106,6 +108,7 @@ class AlertService:
     EVT_SYNC_FINISHED = "sync_finished"
     EVT_DISK_SPACE = "disk_space"
     EVT_DB_UNHEALTHY = "db_unhealthy"
+    EVT_DB_RESET = "db_reset"
     EVT_XVB_NO_SHARE = "xvb_no_share"
     EVT_CLEARNET_EXPOSED = "clearnet_exposed"
     EVT_XVB_REGISTRATION = "xvb_registration"
@@ -120,6 +123,7 @@ class AlertService:
     EVT_HIGH_REJECT_RATE = "high_reject_rate"
     EVT_BLOCK_FOUND = "block_found"
     EVT_PAYOUT_FOUND = "payout_found"
+    EVT_PAYOUT_CONFIRMED = "payout_confirmed"
     EVT_CONTAINER_UNHEALTHY = "container_unhealthy"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
@@ -158,8 +162,13 @@ class AlertService:
         daily_time=TELEGRAM_DAILY_SUMMARY_TIME,
         kv_get=None,
         kv_set=None,
+        sinks=None,
     ):
         self.notifier = notifier if notifier is not None else build_default_notifier()
+        # Every alert fans out to N transports (#380): the Telegram notifier plus any configured
+        # webhook/ntfy sinks — each with `enabled` / `event_enabled(evt)` / `send(text, evt)`.
+        # On a default stack this is just the (disabled) Telegram notifier, so nothing new runs.
+        self.sinks = list(sinks) if sinks is not None else [self.notifier, *config_sinks()]
         self.workers = worker_monitor if worker_monitor is not None else WorkerPresenceMonitor()
         self.containers = (
             container_monitor if container_monitor is not None else ContainerHealthMonitor()
@@ -177,6 +186,7 @@ class AlertService:
         self._prev_released = None
         self._prev_disk_level = None
         self._prev_db_healthy = None
+        self._prev_db_reset_seq = None
         self._prev_xvb_has_share = None
         self._prev_clearnet_active = None
         self._prev_xvb_reg = None
@@ -210,7 +220,11 @@ class AlertService:
 
     @property
     def enabled(self):
-        return self.notifier.enabled
+        return any(s.enabled for s in self.sinks)
+
+    def _event_sinks(self, event):
+        """The sinks this event fans out to (each sink applies its own per-event gating)."""
+        return [s for s in self.sinks if s.event_enabled(event)]
 
     def evaluate(
         self,
@@ -223,6 +237,8 @@ class AlertService:
         workers_expected,
         disk_percent=0,
         db_healthy=True,
+        db_reset_seq=0,
+        db_reset_detail=None,
         xvb_enabled=False,
         shares_in_window=0,
         clearnet_active=False,
@@ -298,9 +314,10 @@ class AlertService:
                     self._record_incident(self.EVT_CONTAINER_UNHEALTHY)
                 alerts.append((evt, self._fmt(template.format(name=name))))
 
-        # --- Host health: data disk filling up, dashboard DB write failing ---
+        # --- Host health: data disk filling up, dashboard DB write failing / reset ---
         alerts += self._disk_edges(disk_percent)
         alerts += self._db_edges(db_healthy)
+        alerts += self._db_reset_edges(db_reset_seq, db_reset_detail)
 
         # --- Payout-wallet tamper tripwire (#375) — kv-backed, so it survives container recreate ---
         alerts += self._wallet_edges(observed_wallet)
@@ -335,7 +352,9 @@ class AlertService:
             "Add RAM for a stable node.",
         )
 
-        return [(evt, text) for evt, text in alerts if self.notifier.event_enabled(evt)]
+        # Keep an alert when ANY sink carries it (#380); incident tallies above are unaffected —
+        # _record_incident runs at the edge, before this delivery filter.
+        return [(evt, text) for evt, text in alerts if self._event_sinks(evt)]
 
     def _node_edges(self, label, down, attr):
         prev = getattr(self, attr)
@@ -420,6 +439,33 @@ class AlertService:
             (
                 self.EVT_DB_UNHEALTHY,
                 self._fmt("\U0001f7e2 \U0001f5c4️ Dashboard DB writes recovered."),
+            )
+        ]
+
+    def _db_reset_edges(self, db_reset_seq, detail):
+        """One-shot alert when a corrupt DB was auto-healed by resetting it (#489).
+
+        ``db_reset_seq`` is StateManager's monotonic reset counter. We edge on an increase rather than
+        the db_healthy flip because a reset can be invisible to ``_db_edges``: a startup reset happens
+        before the first cycle (no prior state), and a runtime reset flips back to healthy within one
+        cycle. The message is loud — the operator must know history before now was quarantined and
+        cleared, even though the stack recovered on its own."""
+        prev = self._prev_db_reset_seq
+        self._prev_db_reset_seq = db_reset_seq
+        # Seed silently on the first observation (or after a restart): only a genuine increase alerts.
+        if prev is None or db_reset_seq <= prev:
+            return []
+        self._record_incident(self.EVT_DB_RESET)
+        where = ""
+        if isinstance(detail, dict) and detail.get("quarantine"):
+            where = f" The corrupt file was kept at {detail['quarantine']} for inspection."
+        return [
+            (
+                self.EVT_DB_RESET,
+                self._fmt(
+                    "\U0001f504 \U0001f5c4️ Dashboard DB was corrupt and has been reset — hashrate "
+                    "history and stats before now were cleared so persistence could resume." + where
+                ),
             )
         ]
 
@@ -704,13 +750,13 @@ class AlertService:
         return f"[{self.host_label}] {text}" if self.host_label else text
 
     async def process(self, **signals):
-        """Evaluate this cycle's signals and dispatch any alerts. Near-no-op when the notifier
-        is disabled — except the payout-wallet baseline (#375), which must persist every cycle
-        regardless: the dashboard's 72h tamper banner reads the kv keys ``_wallet_edges``
-        writes, and Telegram-off is the default stack. Each send runs off-thread so a slow
-        Telegram call can't stall the data loop. Returns the alerts that were dispatched
-        (handy for tests/logging)."""
-        if not self.notifier.enabled:
+        """Evaluate this cycle's signals and dispatch any alerts to every sink that carries
+        them (#380). Near-no-op when every sink is disabled — except the payout-wallet baseline
+        (#375), which must persist every cycle regardless: the dashboard's 72h tamper banner
+        reads the kv keys ``_wallet_edges`` writes, and alerts-off is the default stack. Each
+        send runs off-thread so a slow or blocked endpoint can't stall the data loop. Returns
+        the alerts that were dispatched (handy for tests/logging)."""
+        if not self.enabled:
             try:
                 # Seed/update the kv baseline and change record; the returned alert (the
                 # Telegram message) is the only part that stays notifier-gated.
@@ -723,8 +769,9 @@ class AlertService:
         except Exception as exc:  # never let an alerting bug break the data loop
             logger.debug("Alert evaluation failed (%s)", type(exc).__name__)
             return []
-        for _evt, text in alerts:
-            await asyncio.to_thread(self.notifier.send, text)
+        for evt, text in alerts:
+            for sink in self._event_sinks(evt):
+                await asyncio.to_thread(sink.send, text, evt)
         return alerts
 
     async def degradation_alert(self, kind, drop_frac):
@@ -733,7 +780,8 @@ class AlertService:
         as an incident for the daily log). No-op when the event is toggled off."""
         if kind == "loss":
             self._record_incident(self.EVT_HASHRATE_LOSS)
-        if not self.notifier.event_enabled(self.EVT_HASHRATE_LOSS):
+        sinks = self._event_sinks(self.EVT_HASHRATE_LOSS)
+        if not sinks:
             return None
         if kind == "loss":
             text = self._fmt(
@@ -742,18 +790,43 @@ class AlertService:
             )
         else:
             text = self._fmt("\U0001f7e2 \U0001f4c8 Hashrate recovered.")
-        await asyncio.to_thread(self.notifier.send, text)
+        for sink in sinks:
+            await asyncio.to_thread(sink.send, text, self.EVT_HASHRATE_LOSS)
+        return text
+
+    async def payout_confirmed_alert(self, chain, amount_atomic, txid):
+        """Push a payout-confirmed alert (#381): the view-only wallet saw an incoming payout land
+        on-chain — the ground truth behind the earnings estimate. "Alert once" is enforced upstream
+        (the caller only invokes this for genuinely-new ``(chain, txid)`` rows the idempotent
+        ``payouts`` table just inserted), so a dashboard restart re-scanning the tip replays nothing.
+        Carries the chain so the shared table/event serves Tari's sibling (#462), and the chain
+        also picks the atomic-unit divisor — Monero stores piconero (1e12/XMR), Tari microTari
+        (1e6/XTM) — so the same alert formats both correctly. No-op when the event is toggled off.
+        Returns the text sent (handy for tests), else ``None``."""
+        sinks = self._event_sinks(self.EVT_PAYOUT_CONFIRMED)
+        if not sinks:
+            return None
+        divisor = 1_000_000 if chain == "tari" else 1_000_000_000_000
+        amount = (amount_atomic or 0) / divisor
+        text = self._fmt(
+            f"\U0001f4b0 Payout CONFIRMED on-chain: {amount:.6f} {chain.upper()} "
+            f"landed in your wallet (tx {txid[:8]}…)."
+        )
+        for sink in sinks:
+            await asyncio.to_thread(sink.send, text, self.EVT_PAYOUT_CONFIRMED)
         return text
 
     async def tor_heal_alert(self, text):
         """Push the Tor guard self-heal note (#424). Deliberately not behind a per-event toggle:
-        it fires at most once per outage, only after a heal restored the very path Telegram rides
-        (so a broken egress can never even attempt it), and an operator who opted into the heal
-        wants to know it acted. No-op when the notifier is off."""
-        if not self.notifier.enabled:
+        it fires at most once per outage, only after a heal restored the very path the alert
+        sinks ride (so a broken egress can never even attempt it), and an operator who opted
+        into the heal wants to know it acted. No-op when every sink is off."""
+        if not self.enabled:
             return None
         text = self._fmt(text)
-        await asyncio.to_thread(self.notifier.send, text)
+        for sink in self.sinks:
+            if sink.enabled:
+                await asyncio.to_thread(sink.send, text)
         return text
 
     async def maybe_daily_summary(self, now, summary_provider):
@@ -765,9 +838,8 @@ class AlertService:
         today's time it waits for tomorrow rather than firing a stale digest immediately. Returns the
         text sent (handy for tests), else ``None``.
         """
-        if self._daily_target_min is None or not self.notifier.event_enabled(
-            self.EVT_DAILY_SUMMARY
-        ):
+        sinks = self._event_sinks(self.EVT_DAILY_SUMMARY)
+        if self._daily_target_min is None or not sinks:
             return None
         lt = time.localtime(now)
         today = (lt.tm_year, lt.tm_yday)
@@ -786,5 +858,6 @@ class AlertService:
             logger.debug("Daily summary build failed (%s)", type(exc).__name__)
             return None
         if text:
-            await asyncio.to_thread(self.notifier.send, text)
+            for sink in sinks:
+                await asyncio.to_thread(sink.send, text, self.EVT_DAILY_SUMMARY)
         return text

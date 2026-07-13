@@ -182,6 +182,11 @@ stack_up() {
     # first closes the startup window in which a clearnet app (e.g. Tari) could open a connection that
     # the ESTABLISHED rule would then grandfather past the DROP.
     apply_tor_egress_firewall
+    # #452: a fresh release install's first `up` pulls the 5 first-party images (pull policy
+    # `missing`) — gate that pull on the same cosign check `upgrade` uses, so first install is not
+    # the one unverified pull. Same guard: source checkouts skip, a missing cosign.pub warns and
+    # proceeds (signing is opt-in, #461), a present key that fails aborts before anything starts.
+    verify_release_images
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     if ! compose_up_checked -d; then
         error "Stack failed to start — see the error above."
@@ -313,16 +318,36 @@ apply_tor_egress_firewall() {
     log "Tor-only egress enforced (#270): clearnet dials from $subnet dropped except via Tor ($tor_ip)."
 }
 
-# Cryptographic gate on a release upgrade (#376): every first-party image the pull would fetch
-# must carry a cosign signature that verifies against the cosign.pub shipped next to this script.
-# Key-based signing from the release box — no Rekor transparency log, hence --private-infrastructure
-# (a plain key signature carries no Rekor bundle, and cosign would otherwise demand one). The
-# decision table, fail-closed where a key exists:
-#   source checkout                        -> skip: locally built images are unsigned by design
-#   no cosign.pub (an older install)       -> today's behaviour, plus one loud warning
-#   cosign.pub present, cosign missing     -> ABORT with an install pointer — an absent verifier
-#                                             must not silently disable verification
-#   any signature that fails to verify     -> ABORT naming the image; nothing pulled or restarted
+# The @sha256 digest the bundled compose pins pithead-<suffix> to (#461 writes these into the
+# released compose). Empty if the image line carries no digest (an un-pinned/dev compose). Mirrors
+# the caddy-digest read at bcrypt-hash time (grep straight from docker-compose.yml at cwd).
+compose_pinned_digest() {
+    grep -oE "pithead-$1:[^[:space:]]*@sha256:[0-9a-f]+" docker-compose.yml |
+        grep -oE 'sha256:[0-9a-f]+' | head -1
+}
+
+# Cryptographic gate on a release pull (#376). Runs before both the upgrade pull and the
+# first-install pull (#452), so every first-party image the pull would fetch must carry a cosign
+# signature that verifies against the cosign.pub shipped next to this script. Key-based signing from
+# the release box — no Rekor transparency log, hence --private-infrastructure (a plain key signature
+# carries no Rekor bundle, and cosign would otherwise demand one).
+#
+# #451 — verification and the pull are bound to the SAME bytes: the released bundle pins each
+# first-party image to an immutable @sha256 digest (#461), and compose pulls by that digest. We
+# cosign-verify that SAME digest, not the mutable tag. A tampered registry cannot serve one manifest
+# to cosign and another to docker — both are content-addressed to the identical sha256, and docker
+# rejects a pull whose bytes don't hash to the pinned digest. Verifying the tag left a window open:
+# cosign and the pull resolved the tag in separate registry dials.
+#
+# The decision table, fail-closed where a key exists:
+#   source checkout                          -> skip: locally built images are unsigned by design
+#   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (signing is opt-in per
+#                                               #461; the digest-pinned bundle is the protection)
+#   cosign.pub present, cosign missing       -> ABORT with an install pointer — an absent verifier
+#                                               must not silently disable verification
+#   cosign.pub present, image not pinned     -> ABORT: with no digest there's nothing to bind the
+#                                               verification to the pulled bytes (the #451 window)
+#   any signature that fails to verify       -> ABORT naming the image; nothing pulled or restarted
 verify_release_images() {
     is_source_checkout && return 0
     if [ ! -f cosign.pub ]; then
@@ -330,19 +355,23 @@ verify_release_images() {
         return 0
     fi
     command -v cosign >/dev/null 2>&1 ||
-        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified upgrade (#376). Install cosign (docs/releasing.md § Verifying a release) and re-run '$0 upgrade'."
-    # The 5 first-party images, expanded exactly as docker-compose.yml expands its image: refs.
-    local suffix image out
+        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull (#376). Install cosign (docs/releasing.md § Verifying a release) and re-run '$0'."
+    # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
+    local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
-        image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}:${STACK_VERSION:-dev}"
+        repo="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}"
+        sha="$(compose_pinned_digest "$suffix")"
+        [ -n "$sha" ] ||
+            error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing (#451). A signed release bundle pins every first-party image by @sha256 (#461)."
+        image="${repo}@${sha}"
         if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
             # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
             # prints via `echo -e`, so an attacker-controlled registry response could otherwise
             # inject ANSI escapes into the operator's terminal (#376 review).
-            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to upgrade, nothing was pulled or restarted (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
+            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to pull or restart, nothing was changed (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
         fi
     done
-    log "All 5 release images carry a valid signature (cosign.pub, #376)."
+    log "All 5 release images verify against their pinned digest (cosign.pub, #451/#376)."
 }
 
 stack_upgrade() {
@@ -379,6 +408,9 @@ stack_upgrade() {
     # it's already installed from `up` and this is a cheap idempotent re-apply. Runs after the .env
     # render above so the toggle/subnet are current.
     apply_tor_egress_firewall # Tor-only egress (#270), consistent with up/apply
+    # One-time move of the dashboard data out of the install dir (#455) — after the .env commit
+    # (a failed move is retried on re-run) and before the recreate mounts the new location.
+    migrate_dashboard_data
     # Source checkout: rebuild the images from build/. Release install: pull the new published images
     # instead — force a re-pull so a moved tag is refreshed (#44).
     if is_source_checkout; then
@@ -400,6 +432,7 @@ stack_upgrade() {
     if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
         provision_dashboard_onion && render_env
     fi
+    update_current_symlink # #455: only a SUCCESSFUL upgrade moves the `current ->` pointer
     log "Stack upgraded."
 }
 
@@ -699,15 +732,15 @@ doctor() {
     else
         dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
     fi
-    # Release-signature verification (#376): report the state the next `upgrade` will act on.
+    # Release-signature verification (#376): report the state the next pull (up or upgrade) will act on.
     if is_source_checkout; then
         dr_info "Source checkout — images build locally and are not signature-verified (#376)."
     elif [ ! -f cosign.pub ]; then
-        dr_warn "No cosign.pub next to pithead — upgrades are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
     elif command -v cosign >/dev/null 2>&1; then
-        dr_ok "cosign found — 'upgrade' verifies the release images against cosign.pub (#376)."
+        dr_ok "cosign found — 'up' and 'upgrade' verify the release images against cosign.pub (#376/#452)."
     else
-        dr_warn "cosign.pub is present but cosign is not installed — 'upgrade' refuses to proceed until it is (#376). Install: docs/releasing.md § Verifying a release."
+        dr_warn "cosign.pub is present but cosign is not installed — 'up'/'upgrade' refuse to pull until it is (#376). Install: docs/releasing.md § Verifying a release."
     fi
 
     # --- Docker daemon ---
@@ -1645,10 +1678,11 @@ host_public_ips() {
 # Home/NAT hosts (no public IP on an interface) and hosts that narrowed p2pool.stratum_bind stay
 # quiet in setup. $1 = "setup" (emit via warn, only on exposure) or "doctor" (emit OK/WARN/skip).
 check_stratum_exposure() {
-    local mode="$1" bind pub msg
+    local mode="$1" bind pub msg port
     bind="${STRATUM_BIND:-}"
     if [ -z "$bind" ] && [ -f "${ENV_FILE:-.env}" ]; then bind="$(env_get STRATUM_BIND 2>/dev/null || true)"; fi
     [ -n "$bind" ] || bind="0.0.0.0"
+    port=$(stratum_port_effective)
 
     if ! command -v ip >/dev/null 2>&1; then
         [ "$mode" = doctor ] && dr_info "Skipped public-IP exposure check (no 'ip' command; Linux-only)."
@@ -1657,7 +1691,7 @@ check_stratum_exposure() {
     case "$bind" in
     0.0.0.0 | "") ;; # all interfaces — the exposed case
     *)
-        [ "$mode" = doctor ] && dr_ok "Stratum :3333 bound to $bind (not all interfaces) — not publicly exposed."
+        [ "$mode" = doctor ] && dr_ok "Stratum :$port bound to $bind (not all interfaces) — not publicly exposed."
         return 0
         ;;
     esac
@@ -1665,10 +1699,10 @@ check_stratum_exposure() {
     pub="$(host_public_ips)"
     pub="${pub//$'\n'/, }"
     if [ -n "$pub" ]; then
-        msg="This host appears to have a public IP ($pub). The stratum port 3333 is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
+        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
         if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
     else
-        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :3333 isn't directly internet-exposed."
+        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
     fi
     return 0
 }
@@ -1723,12 +1757,22 @@ check_stratum_listening() {
         dr_info "Stratum listen check skipped — no 'ss' command (Linux-only)."
         return 0
     fi
-    if ss -Hltn 2>/dev/null | grep -q ':3333 '; then
-        dr_ok "Stratum :3333 is listening — workers can connect."
+    local port
+    port=$(stratum_port_effective)
+    if ss -Hltn 2>/dev/null | grep -q ":$port "; then
+        dr_ok "Stratum :$port is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :3333 — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
+        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
     fi
     return 0
+}
+
+# The operator-facing stratum port (#172): the env wins (already-parsed config), then the rendered
+# .env, then the 3333 default — mirrors how check_stratum_exposure resolves STRATUM_BIND.
+stratum_port_effective() {
+    local port="${STRATUM_PORT:-}"
+    if [ -z "$port" ] && [ -f "${ENV_FILE:-.env}" ]; then port="$(env_get STRATUM_PORT 2>/dev/null || true)"; fi
+    printf '%s' "${port:-3333}"
 }
 
 # doctor (#383): a "running" dashboard container doesn't mean the app inside answers. Probe the
@@ -2149,6 +2193,61 @@ ensure_onion_password() {
     log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
 }
 
+# Validate the per-worker endpoint descriptors, dashboard.workers[] (#172): a list of
+# {name, host?, port?, token?} objects the dashboard uses to override the fleet worker-API
+# defaults per rig. Nothing here renders to .env — the dashboard reads the list straight off its
+# read-only config.json bind mount (tokens stay in the one owner-only file that already holds
+# secrets) — so this validation exists to fail an apply LOUDLY on a typo instead of the dashboard
+# silently dropping the entry at runtime. The `host` charset matters for #122: it must never be
+# able to smuggle a port, path, or userinfo into the dashboard's probe URL.
+validate_worker_endpoints() {
+    local dw_err
+    dw_err=$(jq -r '
+        (.dashboard.workers // []) as $w
+        | if ($w | type) != "array" then "dashboard.workers must be an array of {name, host?, port?, token?} objects."
+          else [ $w[] |
+              if type != "object" then "dashboard.workers entries must be objects (got a \(type))."
+              elif (.name | type) != "string" or (.name | test("^[!-~]{1,128}$") | not)
+                then "dashboard.workers: every entry needs a \"name\" of 1-128 printable non-space characters (its stratum worker name)."
+              elif has("host") and ((.host | type) != "string" or (.host | test("^[A-Za-z0-9._-]{1,253}$") | not))
+                then "dashboard.workers[\(.name)].host must be a hostname or IPv4 address (letters, digits, and . _ - only; no port or path)."
+              elif has("port") and ((.port | type) != "number" or .port != (.port | floor) or .port < 1 or .port > 65535)
+                then "dashboard.workers[\(.name)].port must be an integer between 1 and 65535."
+              elif has("control_port") and ((.control_port | type) != "number" or .control_port != (.control_port | floor) or .control_port < 1 or .control_port > 65535)
+                then "dashboard.workers[\(.name)].control_port must be an integer between 1 and 65535 (the rig writable control API port, #185)."
+              elif has("token") and ((.token | type) != "string" or (.token | test("^[!-~]{1,128}$") | not))
+                then "dashboard.workers[\(.name)].token must be 1-128 printable non-space characters."
+              elif has("watts") and ((.watts | type) != "number" or .watts <= 0 or .watts >= 1000000)
+                then "dashboard.workers[\(.name)].watts must be a positive number of watts (a manual power-draw estimate for the energy calculator, #260)."
+              else empty end
+          ] | first // empty end' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$dw_err" ] || error "$dw_err"
+    # Duplicate names are legal but only the FIRST declaration counts — surface that, once.
+    local dw_dups
+    dw_dups=$(jq -r '[(.dashboard.workers // [])[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$dw_dups" ] || warn "dashboard.workers has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
+}
+
+# Validate the dashboard.energy block for the energy/profit calculator (#260). Like the worker
+# descriptors, this renders nothing to .env — the dashboard reads it off the read-only config.json
+# bind mount — so validation exists only to fail an apply loudly on a typo. Prices are operator-set
+# (no price feed ships: fetching one is a clearnet egress this stack avoids), so both must be
+# non-negative numbers and the currency a short label.
+validate_energy_config() {
+    local en_err
+    en_err=$(jq -r '
+        (.dashboard.energy // {}) as $e
+        | if ($e | type) != "object" then "dashboard.energy must be an object {cost_per_kwh, currency?, xmr_price?}."
+          elif ($e | has("cost_per_kwh")) and (($e.cost_per_kwh | type) != "number" or $e.cost_per_kwh < 0)
+            then "dashboard.energy.cost_per_kwh must be a non-negative number (your electricity price per kWh; 0 or unset hides the profit math)."
+          elif ($e | has("xmr_price")) and (($e.xmr_price | type) != "number" or $e.xmr_price < 0)
+            then "dashboard.energy.xmr_price must be a non-negative number (the fiat price of 1 XMR in your currency; 0 or unset hides net profit)."
+          elif ($e | has("currency")) and (($e.currency | type) != "string" or ($e.currency | test("^[!-~]{1,128}$") | not))
+            then "dashboard.energy.currency must be a short currency label (e.g. USD, EUR)."
+          else empty end' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$en_err" ] || error "$en_err"
+}
+
 parse_and_validate_config() {
     log "Parsing configuration..."
     if ! jq -e . "$CONFIG_FILE" >/dev/null 2>&1; then
@@ -2193,6 +2292,67 @@ parse_and_validate_config() {
     *) error "monero.mode must be \"local\" or \"remote\" (got \"$MONERO_MODE\")." ;;
     esac
 
+    # On-chain payout confirmation (#381). The operator supplies the PRIVATE VIEW KEY for
+    # monero.wallet_address; the stack runs a view-only monero-wallet-rpc against the LOCAL node to
+    # confirm payouts actually landed. The view key is a SECRET (it reveals all incoming amounts and
+    # timing to anyone who can read config.json/.env) — handled like node_password: never logged or
+    # echoed. Empty (the default) = feature off, nothing new runs. Phase 1 is LOCAL NODE ONLY:
+    # scanning through a third-party daemon changes the trust story, so a view key set on a remote
+    # node is refused, loudly — the wrong way to fail is silent.
+    MONERO_VIEW_KEY=$(jq -r '.monero.view_key // empty' "$CONFIG_FILE")
+    PAYOUT_SCAN_HEIGHT=$(jq -r '.monero.payout_scan_height // "auto"' "$CONFIG_FILE")
+    PAYOUT_CONFIRM_ENABLED=false
+    if [ -n "$MONERO_VIEW_KEY" ]; then
+        if [ "$MONERO_MODE" != "local" ]; then
+            error "monero.view_key is set but monero.mode is \"$MONERO_MODE\". On-chain payout confirmation (#381) scans against the LOCAL node only — a remote/third-party daemon changes the trust story. Unset monero.view_key, or switch to a local node."
+        fi
+        # A view key is 64 lowercase hex chars. Reject a malformed value before it reaches the wallet.
+        if ! printf '%s' "$MONERO_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
+            error "monero.view_key must be the 64-character hex PRIVATE VIEW KEY for monero.wallet_address (get it from your wallet: 'View Key' / 'wallet_secret_view_key'). Got ${#MONERO_VIEW_KEY} chars."
+        fi
+        case "$PAYOUT_SCAN_HEIGHT" in
+        '' | auto | [0-9]*) ;;
+        *) error "monero.payout_scan_height must be \"auto\" or a block height (integer). Got \"$PAYOUT_SCAN_HEIGHT\"." ;;
+        esac
+        PAYOUT_CONFIRM_ENABLED=true
+    fi
+
+    # Tari on-chain payout confirmation (#462), the sibling of #381 for the merge-mine half. The
+    # operator supplies the PRIVATE VIEW KEY plus the PUBLIC SPEND KEY for the Tari payout address;
+    # the stack runs a view-only minotari_console_wallet against the LOCAL Tari node to confirm a
+    # merge-mine coinbase actually landed. The view key is a SECRET (reveals all incoming amounts and
+    # timing) — handled like node_password: never logged or echoed, delivered to the container via a
+    # tmpfs-mounted compose secret, never the command line or `docker inspect`. Empty (the default) =
+    # feature off. Phase 1 is LOCAL NODE ONLY: a view key with a remote Tari node (#103, v1.6) is
+    # refused, mirroring monero.mode. tari.payout_scan_birthday is Tari's restore point: DAYS SINCE
+    # THE UNIX EPOCH (a u16, not a block height), so a fresh wallet doesn't rescan from genesis.
+    TARI_VIEW_KEY=$(jq -r '.tari.view_key // empty' "$CONFIG_FILE")
+    TARI_SPEND_PUBLIC_KEY=$(jq -r '.tari.spend_public_key // empty' "$CONFIG_FILE")
+    TARI_WALLET_BIRTHDAY=$(jq -r '.tari.payout_scan_birthday // "auto"' "$CONFIG_FILE")
+    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
+    TARI_PAYOUT_CONFIRM_ENABLED=false
+    if [ -n "$TARI_VIEW_KEY" ]; then
+        if [ "$TARI_MODE" != "local" ]; then
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Tari payout confirmation (#462) scans against the LOCAL Tari node only — remote Tari (#103) is v1.6 and changes the trust story. Unset tari.view_key, or use a local Tari node."
+        fi
+        # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
+        if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
+            error "tari.view_key must be the 64-character hex PRIVATE VIEW KEY for the Tari payout address (from your Tari wallet: 'export-view-key-and-spend-key'). Got ${#TARI_VIEW_KEY} chars."
+        fi
+        # A view-only Tari wallet needs the PUBLIC spend key too — require both together.
+        if ! printf '%s' "$TARI_SPEND_PUBLIC_KEY" | grep -qE '^[0-9a-f]{64}$'; then
+            error "tari.spend_public_key must be the 64-character hex PUBLIC SPEND KEY for the Tari payout address (exported alongside the view key). Set it whenever tari.view_key is set."
+        fi
+        # Birthday is "auto" (resolved to today's days-since-epoch at wallet creation) or an explicit
+        # u16 days-since-epoch (0–65535). Reject anything else before it reaches the wallet.
+        case "$TARI_WALLET_BIRTHDAY" in
+        '' | auto) ;;
+        *[!0-9]*) error "tari.payout_scan_birthday must be \"auto\" or DAYS SINCE THE UNIX EPOCH (an integer 0–65535, NOT a block height). Got \"$TARI_WALLET_BIRTHDAY\"." ;;
+        *) [ "$TARI_WALLET_BIRTHDAY" -le 65535 ] || error "tari.payout_scan_birthday must be ≤ 65535 (days since the Unix epoch, a u16). Got \"$TARI_WALLET_BIRTHDAY\"." ;;
+        esac
+        TARI_PAYOUT_CONFIRM_ENABLED=true
+    fi
+
     # Bridge network subnet (#180): configurable so the stack can avoid colliding with a 172.28.0.0/24
     # already in use on the host (Docker else errors "Pool overlaps with other one on this address
     # space" and the install fails). The structured fixed-IP layout is preserved — services keep their
@@ -2234,6 +2394,18 @@ parse_and_validate_config() {
     if ! is_ipv4 "$STRATUM_BIND"; then
         error "p2pool.stratum_bind must be an IPv4 address like \"0.0.0.0\", \"127.0.0.1\", or your LAN IP (got \"$STRATUM_BIND\")."
     fi
+
+    # Operator-facing stratum port (#172), default 3333 — the host port xmrig-proxy binds and
+    # publishes, i.e. what every rig dials. Rendered to STRATUM_PORT in .env; RigForge rigs must
+    # point at the same port (rigforge pool.port). p2pool's container-INTERNAL stratum stays fixed
+    # at :3333 (only xmrig-proxy dials it on the bridge), so P2POOL_URL is untouched by this knob.
+    STRATUM_PORT=$(jq -r '.p2pool.stratum_port // 3333' "$CONFIG_FILE")
+    if ! printf '%s' "$STRATUM_PORT" | grep -qE '^[0-9]{1,5}$' || [ "$STRATUM_PORT" -lt 1 ] || [ "$STRATUM_PORT" -gt 65535 ]; then
+        error "p2pool.stratum_port must be an integer between 1 and 65535 (got \"$STRATUM_PORT\")."
+    fi
+
+    validate_worker_endpoints
+    validate_energy_config
 
     # Optional miner authentication on the stratum port (#152). xmrig-proxy's --access-password
     # rejects rigs whose stratum 'pass' doesn't match, so only devices that know the secret can
@@ -2296,7 +2468,22 @@ parse_and_validate_config() {
     TARI_DIR=$(resolve_default "$(jq -r '.tari.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/tari")
     P2POOL_DIR=$(resolve_default "$(jq -r '.p2pool.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/p2pool")
     TOR_DATA_DIR=$(resolve_default "$(jq -r '.tor.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/tor")
-    DASHBOARD_DIR=$(resolve_default "$(jq -r '.dashboard.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/dashboard")
+    # Shared data root (#455): when monero/tari/p2pool/tor all resolve under ONE parent, that
+    # parent is the box's data root and the dashboard's DEFAULT joins it — before this, the
+    # dashboard DB was the only data living inside the (per-version) install dir, moving with the
+    # code on every versioned deploy. An all-default install (or scattered custom dirs) keeps the
+    # classic ./data default, so nothing changes unless the chain data was deliberately co-located.
+    local _data_root _dash_cfg
+    _data_root=$(dirname "$MONERO_DIR")
+    { [ "$(dirname "$TARI_DIR")" == "$_data_root" ] &&
+        [ "$(dirname "$P2POOL_DIR")" == "$_data_root" ] &&
+        [ "$(dirname "$TOR_DATA_DIR")" == "$_data_root" ]; } || _data_root="$PWD/data"
+    _dash_cfg=$(jq -r '.dashboard.data_dir // empty' "$CONFIG_FILE")
+    DASHBOARD_DIR=$(resolve_default "$_dash_cfg" "$_data_root/dashboard")
+    # Global, read by migrate_dashboard_data: the #455 migration only ever moves a DEFAULT
+    # location — an operator-pinned dashboard.data_dir is theirs, never touched.
+    DASHBOARD_DIR_IS_DEFAULT=1
+    [ "$DASHBOARD_DIR" == "$_dash_cfg" ] && DASHBOARD_DIR_IS_DEFAULT=0
     # Internal shared state dir (#234): the dashboard (rw) drops a per-chain "clearnet sync complete"
     # marker here and the monerod/tari entrypoints (ro) read it to decide Tor-vs-clearnet. Not a
     # user-facing data dir, so it's fixed under ./data rather than config-driven.
@@ -2416,6 +2603,25 @@ parse_and_validate_config() {
     if [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_ENABLED" == "true" ] && [ "$DASHBOARD_ONION_CLIENT_AUTH" != "true" ]; then
         error "dashboard.control.enabled is true on a published onion (dashboard.onion.enabled) but dashboard.onion.client_auth is false. A root-capable config-mutation channel must not sit behind only a brute-forceable password on an anonymously-reachable .onion. Set dashboard.onion.client_auth: true (the default) and re-run."
     fi
+
+    # Telegram two-way control commands (#338). Opt-in, default off. This is a REMOTELY-REACHABLE
+    # host-control surface, so it fails closed on every leg — refuse to enable it unless the whole
+    # chain is present:
+    #   - It rides the #33 spool + root runner, so dashboard.control.enabled must be on (the spool and
+    #     the systemd path unit that drains it only exist then); otherwise a /restart intent would
+    #     pile up unprocessed.
+    #   - The bot must actually be polling for commands (telegram.commands.enabled), which itself
+    #     needs telegram.enabled plus a bot_token and chat_id (guarded by the dashboard too).
+    #   - At least one allow-listed Telegram user id, or nobody could ever confirm an action and the
+    #     feature would be inert — better to say so at apply time than to fail silently at runtime.
+    if [ "$(normalize_bool "$(config_bool '.telegram.control.enabled' false)")" == "true" ]; then
+        [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] ||
+            error "telegram.control.enabled is true but dashboard.control.enabled is false. The Telegram /restart and /apply commands ride the #33 host-control spool, which only exists when the dashboard control channel is on. Enable dashboard.control (and its login) first, or turn telegram.control off."
+        [ "$(normalize_bool "$(config_bool '.telegram.commands.enabled' false)")" == "true" ] ||
+            error "telegram.control.enabled is true but telegram.commands.enabled is false. The control commands are handled by the same bot that answers the read-only commands — enable telegram.commands (and telegram itself) first."
+        [ "$(jq -r '(.telegram.control.allowed_ids // []) | length' "$CONFIG_FILE")" -gt 0 ] ||
+            error "telegram.control.enabled is true but telegram.control.allowed_ids is empty. A remotely-reachable host-control command must be gated to specific operator Telegram user ids — with none listed every command is refused. Add your numeric Telegram user id to telegram.control.allowed_ids."
+    fi
 }
 
 # Load secrets and one-time-provisioned values from an existing .env so that re-rendering
@@ -2423,6 +2629,12 @@ parse_and_validate_config() {
 # Generates a fresh proxy token only when none exists yet.
 load_preserved_state() {
     PROXY_AUTH_TOKEN=$(env_get PROXY_AUTH_TOKEN)
+    # View-only wallet-rpc login (#381): the dashboard→wallet-rpc password. Generated once and
+    # preserved across applies (like PROXY_AUTH_TOKEN) so both containers keep matching creds.
+    WALLET_RPC_PASSWORD=$(env_get WALLET_RPC_PASSWORD)
+    # View-only Tari wallet password (#462): encrypts the wallet DB on its named volume. MUST stay
+    # stable across applies or the existing wallet file can't be reopened — preserve like the above.
+    TARI_WALLET_PASSWORD=$(env_get TARI_WALLET_PASSWORD)
     MONERO_ONION=$(env_get MONERO_ONION_ADDRESS)
     TARI_ONION=$(env_get TARI_ONION_ADDRESS)
     P2POOL_ONION=$(env_get P2POOL_ONION_ADDRESS)
@@ -2432,6 +2644,8 @@ load_preserved_state() {
     PRESERVED_HOST_IP=$(env_get HOST_IP)
 
     [ -n "$PROXY_AUTH_TOKEN" ] || PROXY_AUTH_TOKEN=$(openssl rand -hex 12)
+    [ -n "$WALLET_RPC_PASSWORD" ] || WALLET_RPC_PASSWORD=$(openssl rand -hex 12)
+    [ -n "$TARI_WALLET_PASSWORD" ] || TARI_WALLET_PASSWORD=$(openssl rand -hex 16)
     [ -n "$MONERO_ONION" ] || MONERO_ONION="placeholder"
     [ -n "$TARI_ONION" ] || TARI_ONION="placeholder"
     [ -n "$P2POOL_ONION" ] || P2POOL_ONION="placeholder"
@@ -2457,14 +2671,63 @@ prepare_directories() {
     prepare_control_dirs
 }
 
+# Secret leaves in config.json, as jq path arrays. The single host-side source for BOTH control-
+# channel maskings (#440): the pre-masked prefill copy (render_masked_config) and the sentinel
+# swap at staging (control_preview). Mirrors the dashboard's control_service.SECRET_PATHS — keep
+# the two lists in step.
+readonly CONTROL_SECRET_PATHS='[
+    ["dashboard","auth","password"],
+    ["telegram","bot_token"],
+    ["workers","api_token"],
+    ["monero","node_username"],
+    ["monero","node_password"],
+    ["monero","view_key"],
+    ["tari","view_key"],
+    ["p2pool","stratum_password"],
+    ["healthchecks","ping_url"]]'
+
+# Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
+# by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
+# The dashboard serves the Configuration form from THIS file (mounted read-only) — the raw
+# config.json is never mounted into the container, so a full container compromise reads masked
+# config, results, and the audit log, nothing more. An EMPTY secret stays empty, so the UI can
+# tell "set — leave blank to keep" from "not set". World-readable on purpose (it holds no secret
+# values; the container reads it as $APP_UID); best-effort, so a render hiccup degrades to a
+# stale prefill, never a failed apply.
+render_masked_config() { # <control-dir>
+    local mdir="$1/masked" tmp
+    mkdir -p "$mdir" 2>/dev/null || true
+    tmp="$mdir/.config.json.tmp"
+    # Per-worker tokens (#172) live in the variable-length .dashboard.workers[] array, out of
+    # reach of the fixed-path walk above — mask each SET .token entry by entry.
+    if jq --argjson paths "$CONTROL_SECRET_PATHS" '
+        reduce $paths[] as $p (.;
+            if ((try getpath($p) catch null) // "") == "" then .
+            else setpath($p; {"__secret__": true}) end)
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token // "") == "" then . else .token = {"__secret__": true} end)
+          else . end' "$CONFIG_FILE" >"$tmp" 2>/dev/null; then
+        chmod 644 "$tmp" 2>/dev/null || true
+        mv "$tmp" "$mdir/config.json" 2>/dev/null ||
+            warn "Could not write $mdir/config.json — the dashboard editor prefill may be stale."
+    else
+        rm -f "$tmp"
+        warn "Could not render the masked config copy — the dashboard editor prefill may be stale."
+    fi
+}
+
 # Control-channel spool layout (#33). requests/ is the ONLY leg the dashboard container may write
-# (chowned to its uid); staged/, results/ and audit/ stay host-owned — the container mounts
-# results/ and audit/ read-only and never sees staged/ at all. That rw/ro split IS the trust
-# boundary: the container can only ask; it cannot forge a result, rewrite the audit log, or alter
-# a staged intent between preview and commit.
+# (chowned to its uid); staged/ stays host-only — the container mounts results/, audit/ and the
+# pre-masked masked/ copy (#440) read-only and never sees staged/ at all. That rw/ro split is the
+# trust boundary: the container can only ask; it cannot forge a result, rewrite the audit log,
+# alter a staged intent between preview and commit, or read a secret out of the live config.
 prepare_control_dirs() {
     mkdir -p "$CONTROL_DIR/requests" "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
     ensure_owner "$CONTROL_DIR/requests" "$APP_UID" "$APP_GID"
+    # Re-render the masked prefill copy on every setup/apply/upgrade (#440) — any path that can
+    # change config.json runs through here, so the copy can never serve a stale schema for long.
+    render_masked_config "$CONTROL_DIR"
     # Caddy access-log dir (#349): root-owned so the capability-stripped caddy container (uid 0,
     # no CAP_DAC_OVERRIDE) can write it; the dashboard (uid 1000) reads it via a ro mount — the
     # Caddyfile's `mode 0644` keeps the files readable.
@@ -2529,6 +2792,63 @@ ensure_directories() {
     ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
     prepare_control_dirs # #33: spool dirs exist + requests/ writable by the dashboard uid
     [ "${#created[@]}" -gt 0 ] && sudo chmod -R 755 "$P2POOL_DIR/stats"
+    return 0
+}
+
+# One-time dashboard-data migration (#455): the dashboard DB used to default INSIDE the install
+# dir (./data/dashboard) — the one data dir that moved with the code on every versioned deploy.
+# When the resolved default now lives under the shared data root, move the old in-install data
+# there once. Move-then-verify and idempotent: a no-op when the old default holds nothing (fresh
+# install, or already migrated), a warning-only when the operator pinned dashboard.data_dir, and
+# a hard stop when BOTH locations hold data — never guess which DB is live. Runs after the config
+# is committed (apply) / right before the containers are recreated (upgrade), so a failed move is
+# retried on the next run and the recreated dashboard always mounts the migrated directory.
+migrate_dashboard_data() {
+    local old="$PWD/data/dashboard" new="${DASHBOARD_DIR:-}"
+    [ -n "$new" ] && [ "$old" != "$new" ] || return 0   # classic layout — nothing to move
+    [ -n "$(ls -A "$old" 2>/dev/null)" ] || return 0    # old default empty/absent — nothing to move
+    if [ "${DASHBOARD_DIR_IS_DEFAULT:-1}" -eq 0 ]; then # operator-pinned path: their data, their call
+        warn "Dashboard data found at the old default $old, but dashboard.data_dir is set explicitly ($new) — leaving both alone. Move or remove $old yourself."
+        return 0
+    fi
+    if [ -n "$(ls -A "$new" 2>/dev/null)" ]; then
+        error "Dashboard data exists at BOTH the old default ($old) and the new one ($new) — refusing to guess which is live. Keep one, delete the other, then re-run."
+    fi
+    log "Moving the dashboard data to the shared data root: $old → $new (#455)..."
+    # The dashboard writes its SQLite DB continuously — stop it for the move; the compose up that
+    # follows every apply/upgrade brings it back on the new mount. Best-effort: already stopped is fine.
+    docker compose stop dashboard >/dev/null 2>&1 || true
+    local had_db=0
+    [ -f "$old/mining_data.db" ] && had_db=1
+    rmdir "$new" 2>/dev/null || true # drop a pre-created EMPTY target so mv renames instead of nesting
+    mkdir -p "$(dirname "$new")"
+    mv "$old" "$new" || error "Could not move $old to $new — the data is still at $old, nothing was lost. Move it yourself (or set dashboard.data_dir), then re-run."
+    if [ "$had_db" -eq 1 ] && [ ! -f "$new/mining_data.db" ]; then
+        error "The dashboard DB is missing after the move — check $new and $old before starting the stack."
+    fi
+    log "Dashboard data migrated to $new."
+}
+
+# One authoritative pointer to the live install (#455): when this install lives in a versioned
+# deploy dir (pithead-vX.Y.Z), keep a `current` symlink beside it pointing here — updated with
+# `ln -sfn` on every successful setup/upgrade, so the live version dir is discoverable without
+# docker inspect (the dashboard one-click upgrade, #59, runs `upgrade` and gets this for free).
+# Relative target, so the whole tree can move. Any other layout (source checkout, plain
+# `pithead/` extract) is left alone, and nothing here ever fails the surrounding command.
+update_current_symlink() {
+    local name parent
+    name=$(basename "$PWD")
+    [[ "$name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+    parent=$(dirname "$PWD")
+    if [ -e "$parent/current" ] && [ ! -L "$parent/current" ]; then
+        warn "$parent/current exists but is not a symlink — leaving it alone. Point it at $name yourself."
+        return 0
+    fi
+    if ln -sfn "$name" "$parent/current" 2>/dev/null; then
+        log "Updated $parent/current -> $name."
+    else
+        warn "Could not update $parent/current -> $name (permissions?) — the stack is fine; fix the symlink by hand."
+    fi
     return 0
 }
 
@@ -2844,6 +3164,23 @@ render_env() {
         profiles="" # Empty profile disables local monerod
     fi
 
+    # On-chain payout confirmation (#381): the view-only wallet-rpc service only starts when its
+    # compose profile is active, which is only when a view key is set on a local node. Off = no
+    # container, dashboard unchanged. PAYOUT_CONFIRM_ENABLED is set by parse_and_validate_config
+    # (which also refuses a view key on a remote node and validates the key/height).
+    if [ "${PAYOUT_CONFIRM_ENABLED:-false}" == "true" ]; then
+        profiles="${profiles:+$profiles,}payout_confirm"
+    fi
+
+    # Tari on-chain payout confirmation (#462): the view-only tari-wallet service only starts when
+    # its own compose profile is active, which is only when a tari view key is set on the local Tari
+    # node. Separate from monero's payout_confirm so the two features toggle independently.
+    # TARI_PAYOUT_CONFIRM_ENABLED is set by parse_and_validate_config (which also refuses a view key
+    # on a remote Tari node and validates the key/spend key/birthday).
+    if [ "${TARI_PAYOUT_CONFIRM_ENABLED:-false}" == "true" ]; then
+        profiles="${profiles:+$profiles,}tari_payout_confirm"
+    fi
+
     # Pruning is on unless config explicitly sets monero.prune:false (config_bool honours that
     # explicit false rather than coercing it back to the default — see #294).
     local prune
@@ -2956,10 +3293,17 @@ render_env() {
     tg_token=$(jq -r '.telegram.bot_token // empty' "$CONFIG_FILE")
     tg_chat=$(jq -r '.telegram.chat_id // empty' "$CONFIG_FILE")
     tg_commands=$(jq -r 'if .telegram.commands.enabled != null then .telegram.commands.enabled | tostring else "false" end' "$CONFIG_FILE")
+    # Two-way control commands (#338): /restart, /apply from the bot, through the #33 host channel.
+    # Default off; gated to specific operator Telegram user ids (numbers → comma list) and validated
+    # above (needs dashboard.control + telegram.commands). confirm_timeout is the deny-on-timeout window.
+    local tg_control tg_control_ids tg_control_confirm
+    tg_control=$(jq -r 'if .telegram.control.enabled != null then .telegram.control.enabled | tostring else "false" end' "$CONFIG_FILE")
+    tg_control_ids=$(jq -r '(.telegram.control.allowed_ids // []) | map(tostring) | join(",")' "$CONFIG_FILE")
+    tg_control_confirm=$(jq -r '.telegram.control.confirm_timeout // 60' "$CONFIG_FILE")
     # One toggle per event, defaulting to true when the key is absent.
     tg_event() { jq -r --arg k "$1" 'if .telegram.events[$k] != null then .telegram.events[$k] | tostring else "true" end' "$CONFIG_FILE"; }
     local tg_ev_node_down tg_ev_node_recovered tg_ev_worker_offline tg_ev_worker_recovered
-    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy
+    local tg_ev_worker_joined tg_ev_worker_left tg_ev_sync_finished tg_ev_disk_space tg_ev_db_unhealthy tg_ev_db_reset
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
     local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed tg_ev_high_reject_rate
@@ -2974,6 +3318,7 @@ render_env() {
     tg_ev_sync_finished=$(tg_event sync_finished)
     tg_ev_disk_space=$(tg_event disk_space)
     tg_ev_db_unhealthy=$(tg_event db_unhealthy)
+    tg_ev_db_reset=$(tg_event db_reset)
     tg_ev_xvb_no_share=$(tg_event xvb_no_share)
     tg_ev_clearnet_exposed=$(tg_event clearnet_exposed)
     tg_ev_xvb_registration=$(tg_event xvb_registration)
@@ -2994,6 +3339,18 @@ render_env() {
     hr_drop_minutes=$(jq -r '.dashboard.hashrate_drop_minutes // 10' "$CONFIG_FILE")
     # Local time (HH:MM) for the daily digest; default 08:00.
     tg_summary_time=$(jq -r '.telegram.daily_summary_time // "08:00"' "$CONFIG_FILE")
+
+    # Webhook + ntfy alert sinks (#380). Push-only siblings of the Telegram alerter: every alert
+    # also POSTs to each notifications.webhooks URL (as JSON) and to the notifications.ntfy.url
+    # topic (as the message body). All off by default — no URLs, nothing runs. The URLs and the
+    # ntfy token are secrets (webhook query strings often carry tokens): they live only in the
+    # owner-only .env and are never echoed or logged. notifications.tor (default true) keeps the
+    # POSTs on Tor so endpoints see a Tor exit, not this host's IP; false is the LAN carve-out.
+    local notify_webhooks ntfy_url ntfy_token notify_tor
+    notify_webhooks=$(jq -r '(.notifications.webhooks // []) | join(" ")' "$CONFIG_FILE")
+    ntfy_url=$(jq -r '.notifications.ntfy.url // empty' "$CONFIG_FILE")
+    ntfy_token=$(jq -r '.notifications.ntfy.token // empty' "$CONFIG_FILE")
+    notify_tor=$(jq -r 'if .notifications.tor != null then .notifications.tor | tostring else "true" end' "$CONFIG_FILE")
 
     # Tari memory cap (#55). Tari officially needs only a few GB (min 4 GB host, 8 GB+ recommended),
     # but its memory grows unbounded over time — one 32 GB host was seen at ~11 GB while staying
@@ -3046,6 +3403,26 @@ render_env() {
 
     log "Monero block-prep threads: $prep_threads | pool: $pool_type | mode: $MONERO_MODE"
 
+    # Tari view-only wallet secret delivery (#462). The view key, public spend key, and wallet
+    # password must NOT ride the tari-wallet's compose `environment:` (those show in `docker
+    # inspect`). Instead render them into a dedicated owner-only file that compose mounts as a
+    # `secrets:` entry — Docker serves it on a tmpfs at /run/secrets, owner-readable only, and the
+    # wrapper entrypoint exports them into the wallet child process only. Kept under data/ (gitignored
+    # like .env). Written for the REAL .env target only, so a dry-run render never mutates it; the
+    # values are empty (harmless) when the feature is off, so the compose secret always resolves.
+    local tari_secret_file="$PWD/data/tari-wallet-secret.env"
+    if [ "$target" != "${ENV_FILE}.dryrun" ]; then
+        mkdir -p "$PWD/data"
+        (
+            umask 077
+            cat >"$tari_secret_file" <<EOF
+MINOTARI_WALLET_VIEW_PRIVATE_KEY=$TARI_VIEW_KEY
+MINOTARI_WALLET_SPEND_KEY=$TARI_SPEND_PUBLIC_KEY
+MINOTARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
+EOF
+        )
+    fi
+
     # Subshell umask (#368): .env carries the RPC, stratum, and Telegram secrets — it must be
     # owner-only from its FIRST byte, not after a post-write chmod window.
     (
@@ -3059,7 +3436,20 @@ TOR_DATA_DIR=$TOR_DATA_DIR
 MONERO_NODE_USERNAME=$MONERO_USER
 MONERO_NODE_PASSWORD=$MONERO_PASS
 MONERO_WALLET_ADDRESS=$MONERO_WALLET
+MONERO_VIEW_KEY=$MONERO_VIEW_KEY
+PAYOUT_SCAN_HEIGHT=$PAYOUT_SCAN_HEIGHT
+PAYOUT_CONFIRM_ENABLED=$PAYOUT_CONFIRM_ENABLED
+WALLET_RPC_USERNAME=wallet
+WALLET_RPC_PASSWORD=$WALLET_RPC_PASSWORD
+MONERO_WALLET_RPC_URL=http://127.0.0.1:18082/json_rpc
 TARI_WALLET_ADDRESS=$TARI_WALLET
+TARI_VIEW_KEY=$TARI_VIEW_KEY
+TARI_SPEND_PUBLIC_KEY=$TARI_SPEND_PUBLIC_KEY
+TARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
+TARI_WALLET_BIRTHDAY=$TARI_WALLET_BIRTHDAY
+TARI_PAYOUT_CONFIRM_ENABLED=$TARI_PAYOUT_CONFIRM_ENABLED
+TARI_WALLET_GRPC_ADDRESS=127.0.0.1:18143
+TARI_WALLET_SECRET_FILE=$tari_secret_file
 MONERO_ONION_ADDRESS=$MONERO_ONION
 TARI_ONION_ADDRESS=$TARI_ONION
 P2POOL_ONION_ADDRESS=$P2POOL_ONION
@@ -3069,6 +3459,7 @@ DASHBOARD_ONION_CLIENT_PRIVKEY=$DASHBOARD_ONION_CLIENT_PRIVKEY
 P2POOL_FLAGS=$p2pool_flags
 P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
+STRATUM_PORT=$STRATUM_PORT
 PROXY_STRATUM_PASSWORD=$STRATUM_PASSWORD
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
@@ -3083,6 +3474,9 @@ TELEGRAM_ENABLED=$tg_enabled
 TELEGRAM_BOT_TOKEN=$tg_token
 TELEGRAM_CHAT_ID=$tg_chat
 TELEGRAM_COMMANDS_ENABLED=$tg_commands
+TELEGRAM_CONTROL_ENABLED=$tg_control
+TELEGRAM_CONTROL_ALLOWED_IDS=$tg_control_ids
+TELEGRAM_CONTROL_CONFIRM_S=$tg_control_confirm
 TELEGRAM_EVENT_NODE_DOWN=$tg_ev_node_down
 TELEGRAM_EVENT_NODE_RECOVERED=$tg_ev_node_recovered
 TELEGRAM_EVENT_WORKER_OFFLINE=$tg_ev_worker_offline
@@ -3092,6 +3486,7 @@ TELEGRAM_EVENT_WORKER_LEFT=$tg_ev_worker_left
 TELEGRAM_EVENT_SYNC_FINISHED=$tg_ev_sync_finished
 TELEGRAM_EVENT_DISK_SPACE=$tg_ev_disk_space
 TELEGRAM_EVENT_DB_UNHEALTHY=$tg_ev_db_unhealthy
+TELEGRAM_EVENT_DB_RESET=$tg_ev_db_reset
 TELEGRAM_EVENT_XVB_NO_SHARE=$tg_ev_xvb_no_share
 TELEGRAM_EVENT_CLEARNET_EXPOSED=$tg_ev_clearnet_exposed
 TELEGRAM_EVENT_XVB_REGISTRATION=$tg_ev_xvb_registration
@@ -3110,6 +3505,10 @@ TELEGRAM_EVENT_CONTAINER_UNHEALTHY=$tg_ev_container_unhealthy
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
+NOTIFY_WEBHOOK_URLS=$notify_webhooks
+NTFY_URL=$ntfy_url
+NTFY_TOKEN=$ntfy_token
+NOTIFY_TOR=$notify_tor
 MONERO_MEM_LIMIT=$monero_mem_limit
 P2POOL_URL=${NETWORK_PREFIX}.28:3333
 NETWORK_SUBNET=$NETWORK_SUBNET
@@ -3559,6 +3958,7 @@ setup() {
     optimize_kernel
     generate_caddyfile
     provision_control_runner # #33: install/remove the dashboard-control systemd trigger
+    update_current_symlink   # #455: versioned deploy dir -> maintain the `current ->` pointer
 
     log "Deployment preparation complete!"
     if [ "$REBOOT_REQUIRED" = true ]; then
@@ -3606,9 +4006,18 @@ describe_change() {
     STRATUM_BIND)
         if [ "$new" == "0.0.0.0" ]; then
             flag=DEST
-            msg="Stratum (:3333) will be published on ALL interfaces ($old → $new) — keep it firewalled to your LAN."
+            msg="The stratum port will be published on ALL interfaces ($old → $new) — keep it firewalled to your LAN."
         else
-            msg="Stratum (:3333) bind address: $old → $new (workers must reach this address)."
+            msg="Stratum bind address: $old → $new (workers must reach this address)."
+        fi
+        ;;
+    STRATUM_PORT)
+        if [ -z "$old" ]; then
+            # First render of the key (upgrade from a pre-#172 .env) — the port isn't changing.
+            msg="Stratum port recorded (:$new) — no rig change needed."
+        else
+            flag=DEST
+            msg="Stratum port: $old → $new (#172) — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
         fi
         ;;
     PROXY_STRATUM_PASSWORD)
@@ -3625,6 +4034,10 @@ describe_change() {
         ;;
     PROXY_DONATE_LEVEL)
         msg="xmrig-proxy dev-fee donation level: ${old:-0}% → ${new}% (#173) — the xmrig-proxy container is recreated (brief restart)."
+        ;;
+    DASHBOARD_DATA_DIR)
+        flag=DEST
+        msg="$key: $old → $new — data at the old DEFAULT location (./data/dashboard) is moved there automatically (#455); any other old path is left in place."
         ;;
     *_DATA_DIR)
         flag=DEST
@@ -3753,11 +4166,54 @@ describe_change() {
     TELEGRAM_COMMANDS_ENABLED)
         msg="Telegram command interface → $([ "$new" == "true" ] && echo on || echo off) (#45) — the bot $([ "$new" == "true" ] && echo "now answers" || echo "no longer answers") /status, /hashrate, /workers, /sync from the configured chat; the dashboard container is recreated."
         ;;
+    TELEGRAM_CONTROL_ENABLED)
+        msg="Telegram control commands → $([ "$new" == "true" ] && echo on || echo off) (#338) — the bot $([ "$new" == "true" ] && echo "now accepts" || echo "no longer accepts") /restart and /apply from allow-listed operator ids, each with an in-chat confirmation; the dashboard container is recreated."
+        ;;
+    TELEGRAM_CONTROL_ALLOWED_IDS)
+        # Telegram user ids are not secret, but they are the control-command allow-list — report the change.
+        msg="Telegram control allow-list: [$old] → [$new] (#338) — only these operator user ids may run /restart or /apply."
+        ;;
+    TELEGRAM_CONTROL_CONFIRM_S)
+        msg="Telegram control confirmation timeout: ${old}s → ${new}s (#338) — an unconfirmed control command is denied after this."
+        ;;
     TELEGRAM_EVENT_*)
         msg="Telegram alert toggle ($key): $old → $new (#121)."
         ;;
     TELEGRAM_DAILY_SUMMARY_TIME)
         msg="Telegram daily summary time: $old → $new (local time; #121)."
+        ;;
+    NOTIFY_WEBHOOK_URLS)
+        # Webhook URLs often carry tokens in the query string — report the change WITHOUT
+        # printing the values (same rule as HEALTHCHECKS_PING_URL).
+        if [ -z "$new" ]; then
+            msg="Webhook alert sink(s) DISABLED (#380) — URL list cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="Webhook alert sink(s) ENABLED (#380) — every alert now also POSTs as JSON to the configured URL(s), over Tor by default; the dashboard container is recreated."
+        else
+            msg="Webhook alert URL(s) updated (#380) — the dashboard container is recreated."
+        fi
+        ;;
+    NTFY_URL)
+        # The topic URL is a capability secret (whoever knows it can read/post the topic) —
+        # never print it.
+        if [ -z "$new" ]; then
+            msg="ntfy alert sink DISABLED (#380) — topic URL cleared; the dashboard container is recreated."
+        elif [ -z "$old" ]; then
+            msg="ntfy alert sink ENABLED (#380) — every alert now also POSTs to the configured ntfy topic, over Tor by default; the dashboard container is recreated."
+        else
+            msg="ntfy topic URL updated (#380) — the dashboard container is recreated."
+        fi
+        ;;
+    NTFY_TOKEN)
+        # Secret — never echo the token value into the change preview / logs.
+        msg="ntfy access token updated (#380) — the dashboard container is recreated."
+        ;;
+    NOTIFY_TOR)
+        if [ "$new" == "true" ]; then
+            msg="Webhook/ntfy alerts back on Tor (#380) — endpoints see a Tor exit, not this host's IP; the dashboard container is recreated."
+        else
+            msg="⚠ Webhook/ntfy alerts OFF Tor (#380) — POSTs go out directly, so clearnet endpoints see this host's IP (the LAN/self-hosted carve-out; Tor exits can't reach private addresses); the dashboard container is recreated."
+        fi
         ;;
     MONERO_CLEARNET_SYNC)
         flag=DEST
@@ -3774,6 +4230,60 @@ describe_change() {
         else
             msg="Tari clearnet sync DISABLED (#183) — the Tari base node returns to Tor-only transport. tari is recreated."
         fi
+        ;;
+    MONERO_VIEW_KEY)
+        # Secret (#381): the private view key reveals every incoming payout amount/time — never
+        # echo its value into the change preview / logs.
+        if [ -z "$new" ]; then
+            msg="Payout confirmation view key CLEARED (#381) — the view-only wallet-rpc is removed."
+        elif [ -z "$old" ]; then
+            flag=DEST
+            msg="Payout confirmation view key SET (#381) — a view-only monero-wallet-rpc starts and scans the local node for confirmed payouts (it can see incoming amounts, never spend)."
+        else
+            flag=DEST
+            msg="Payout confirmation view key CHANGED (#381) — the view-only wallet-rpc is recreated and rescans."
+        fi
+        ;;
+    WALLET_RPC_PASSWORD)
+        # Secret (#381): auto-generated wallet-rpc login — never echo the value.
+        msg="Payout wallet-rpc credential updated (#381)."
+        ;;
+    PAYOUT_CONFIRM_ENABLED)
+        msg="On-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off) (#381)."
+        ;;
+    PAYOUT_SCAN_HEIGHT)
+        msg="Payout wallet restore height: $old → $new (#381) — only affects a first-time wallet creation."
+        ;;
+    WALLET_RPC_USERNAME | MONERO_WALLET_RPC_URL)
+        # Fixed internal values that co-change with the view key toggle; keep the preview to one line.
+        msg=""
+        ;;
+    TARI_VIEW_KEY)
+        # Secret (#462): the Tari private view key reveals every incoming payout amount/time — never
+        # echo its value into the change preview / logs.
+        if [ -z "$new" ]; then
+            msg="Tari payout confirmation view key CLEARED (#462) — the view-only tari-wallet is removed."
+        elif [ -z "$old" ]; then
+            flag=DEST
+            msg="Tari payout confirmation view key SET (#462) — a view-only minotari_console_wallet starts and scans the local Tari node for confirmed payouts (it can see incoming amounts, never spend)."
+        else
+            flag=DEST
+            msg="Tari payout confirmation view key CHANGED (#462) — the view-only tari-wallet is recreated and rescans."
+        fi
+        ;;
+    TARI_WALLET_PASSWORD)
+        # Secret (#462): auto-generated wallet-DB password — never echo the value.
+        msg="Tari payout wallet credential updated (#462)."
+        ;;
+    TARI_PAYOUT_CONFIRM_ENABLED)
+        msg="Tari on-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off) (#462)."
+        ;;
+    TARI_WALLET_BIRTHDAY)
+        msg="Tari payout wallet birthday: $old → $new (#462, days since the Unix epoch) — only affects a first-time wallet creation."
+        ;;
+    TARI_SPEND_PUBLIC_KEY | TARI_WALLET_GRPC_ADDRESS | TARI_WALLET_SECRET_FILE)
+        # Public/fixed internal values that co-change with the Tari view key toggle; keep to one line.
+        msg=""
         ;;
     *)
         msg="$key: $old → $new."
@@ -3965,6 +4475,10 @@ apply() {
     # build error, a port already bound, a failed health/dependency gate, daemon hiccup) leaves the
     # marker for the next apply to retry instead of no-opping on the already-committed config (#125).
     : >"$apply_marker"
+    # One-time move of the dashboard data out of the install dir (#455) — after the confirmed
+    # commit above (never before the operator said yes) and under the marker, so a failed move is
+    # retried; the recreate below then mounts the migrated directory.
+    migrate_dashboard_data
     # Compose recreates only the services whose resolved config changed; --remove-orphans
     # drops monerod when a local→remote switch deactivates the local_node profile.
     if ! compose_up_checked -d --remove-orphans; then
@@ -4053,7 +4567,9 @@ run_chain() {
 # (its single writable spool mount). This host-side runner claims each request, validates it, and
 # dispatches EXACTLY three actions — `apply --dry-run --porcelain` (preview), `apply -y` (commit),
 # and `upgrade` to the latest published release (#59, target re-derived host-side).
-# Outcomes land in results/ and an audit line in audit/, both mounted read-only in the container.
+# Outcomes land in results/ and an audit line in audit/, both mounted read-only in the container —
+# as is masked/, the pre-masked config copy the editor form prefills from (#440); the raw
+# config.json is never mounted, so the container holds no secret it wasn't given.
 # No string from the container is ever executed or interpolated into a command; the candidate
 # config crosses the boundary only as a FILE handed to `apply` via PITHEAD_CONFIG_FILE.
 
@@ -4082,7 +4598,12 @@ run_chain() {
 # is derived from a validated enum, boolean, or number — never a free-form string that reaches a
 # command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
 # channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
-# and donor id, tokens and passwords — stays host-CLI-only. The WALLET_CHANGED and
+# and donor id, tokens and passwords, the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
+# WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED / PAYOUT_SCAN_HEIGHT, and their #462 Tari siblings
+# (TARI_VIEW_KEY, TARI_WALLET_PASSWORD, TARI_SPEND_PUBLIC_KEY) plus TARI_PAYOUT_CONFIRM_ENABLED /
+# TARI_WALLET_BIRTHDAY / TARI_WALLET_GRPC_ADDRESS / TARI_WALLET_SECRET_FILE — stays host-CLI-only.
+# Each view key reveals every incoming payout amount/time, so it is never dashboard-committable
+# (default-deny already refuses it; named here deliberately). The WALLET_CHANGED and
 # CLEARNET_EXPOSED alert toggles are excluded on purpose: they are the tamper-evidence alarms on
 # the Telegram channel (the future #338 approval channel), so the dashboard must not silence
 # them. Space-separated exact env-key names.
@@ -4095,7 +4616,7 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
     TELEGRAM_EVENT_WORKER_JOINED TELEGRAM_EVENT_WORKER_LEFT
     TELEGRAM_EVENT_SYNC_FINISHED TELEGRAM_EVENT_DISK_SPACE
-    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_XVB_NO_SHARE
+    TELEGRAM_EVENT_DB_UNHEALTHY TELEGRAM_EVENT_DB_RESET TELEGRAM_EVENT_XVB_NO_SHARE
     TELEGRAM_EVENT_XVB_REGISTRATION TELEGRAM_EVENT_NEW_RELEASE
     TELEGRAM_EVENT_STACK_ONLINE TELEGRAM_EVENT_DAILY_SUMMARY
     TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
@@ -4109,6 +4630,14 @@ control_approval_gate() { # <staged-file>
     # preview, so a dry-run failure here means something changed — refuse).
     if ! porcelain=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>/dev/null); then
         printf 'could not re-validate the staged change host-side — refusing to commit'
+        return 1
+    fi
+    # dashboard.workers (#172) never renders to .env — the dashboard reads it straight off its
+    # config.json mount — so the env-diff allowlist below can't see it. It carries per-rig hosts
+    # and API tokens (exactly the "free-form string that reaches a URL or credential" class the
+    # allowlist exists to keep host-CLI-only), so refuse any change to it explicitly.
+    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.workers // []) == ($live[0].dashboard.workers // [])' "$staged" >/dev/null 2>&1; then
+        printf 'this change alters dashboard.workers (per-worker hosts/tokens, #172), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
     # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
@@ -4179,13 +4708,34 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "rejected"
         return 0
     fi
-    # The staged copy carries the operator's MERGED secrets (the dashboard re-inserted real values
-    # for unchanged sentinels before submitting). It lives in host-only staged/ — never mounted —
-    # but pin it owner-only anyway so a co-tenant on the host can't read secrets from it (#33
-    # hardening; the config.json bind-mount, not this file, is the real secret trust boundary —
-    # see SECURITY.md). Created under umask 077 so it is never even briefly world-readable
-    # (create-then-chmod race); the chmod stays as belt-and-suspenders.
-    (umask 077 && jq '.config' "$file" >"$staged")
+    # The "blank secret keeps the live value" merge happens HERE, host-side (#440): the request
+    # arrives with {"__secret__":true} sentinels for untouched secrets (the container never held
+    # the real values — it prefills from the pre-masked copy), and each sentinel is swapped for
+    # the live config.json value at staging. A sentinel for a secret that is not actually set
+    # collapses to "" rather than leaking a dict into config.json. The staged copy therefore
+    # carries merged secrets: it lives in host-only staged/ — never mounted — and is pinned
+    # owner-only so a co-tenant on the host can't read secrets from it (#33 hardening). Created
+    # under umask 077 so it is never even briefly world-readable (create-then-chmod race); the
+    # chmod stays as belt-and-suspenders.
+    # Per-worker token sentinels (#172) get the same swap, but out of the fixed-path walk: they
+    # live in the .dashboard.workers[] array, so restore each from the live token matched by worker
+    # name (first-declared wins on duplicate names, matching the container's probe). A sentinel for
+    # a rig with no live token collapses to "" too.
+    (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" '
+        (reduce (($live[0].dashboard.workers // []) | reverse | .[]) as $w ({};
+            if ($w | type) == "object" and ($w.name | type) == "string"
+            then .[$w.name] = ($w.token // "") else . end)) as $livetok
+        | reduce $paths[] as $p (.config;
+            (try getpath($p) catch null) as $v
+            | if ($v | type) == "object" and $v.__secret__ == true
+              then setpath($p; (($live[0] | try getpath($p) catch null) // ""))
+              else . end)
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token | type) == "object" and .token.__secret__ == true
+              then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
+              else . end)
+          else . end' "$file" >"$staged")
     chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '
@@ -4253,8 +4803,9 @@ control_commit() { # <id> <actor> <control-dir>
         return 0
     fi
     keys="$gate_out"
-    # Keep a pre-change backup; on failure it is named in the result and left in place. cp (not mv)
-    # keeps config.json's inode stable — the container bind-mounts the file read-only for prefill.
+    # Keep a pre-change backup; on failure it is named in the result and left in place. The
+    # `apply -y` below re-renders the pre-masked prefill copy (#440), so the dashboard's editor
+    # form reflects the committed config on the next load.
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak-control"
     cp "$staged" "$CONFIG_FILE"
     "$0" apply -y >"$logf" 2>&1 || rc=$?
@@ -4430,6 +4981,183 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
 # Validate + dispatch one CLAIMED request file. Trusts no byte of it: must be JSON, only the keys
 # id/action/config/actor/version, the id must be a UUID (it becomes the result/staged FILENAME —
 # anything else is rejected before it can touch a path), and the action one of the three known verbs.
+# Lifecycle verbs for the Telegram control commands (#338): the only two host actions the bot can
+# trigger, both FIXED — `restart` runs `$0 restart` (recreate the running stack) and `apply` runs
+# `$0 apply -y` (re-render + re-apply the CURRENT on-disk config.json). The container's `action`
+# string only SELECTS between these two hardcoded commands; nothing from the request is ever
+# interpolated into a command, and `apply` here carries no config change (the default-deny config
+# allowlist is only relevant to a config-editing commit, not a re-apply of the source of truth).
+# Access control + the deny-on-timeout confirmation are enforced dashboard-side before the intent is
+# ever spooled; this side records the actor and outcome in the same tamper-evidence audit log.
+control_lifecycle() { # <verb: restart|apply> <id> <actor> <control-dir>
+    local verb="$1" id="$2" actor="$3" cdir="$4" rc=0
+    local logf="$cdir/staged/.$id.log"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "$verb" "started"
+    # ${PITHEAD_SELF:-$0} is this script (run_chain uses the same handle); the verb is a FIXED
+    # literal picked by the case, never a string from the request.
+    local self="${PITHEAD_SELF:-$0}"
+    case "$verb" in
+    restart) "$self" restart >"$logf" 2>&1 || rc=$? ;;
+    apply) "$self" apply -y >"$logf" 2>&1 || rc=$? ;;
+    *) return 0 ;; # unreachable: the dispatch already gated the verb
+    esac
+    if [ "$rc" -eq 0 ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg a "$verb" '{status:"applied",action:$a,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "$verb" "applied"
+    else
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg a "$verb" --arg e "$(tail -c 2000 "$logf")" '{status:"failed",action:$a,error:$e,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "$verb" "failed"
+    fi
+    rm -f "$logf"
+}
+
+# Worker config apply (#185): POST an operator's writable-key change to a RigForge rig's control API
+# and record the outcome for the dashboard's config history. The intent carries ONLY the worker NAME
+# and the CHANGES — never a host, port, or token: the runner resolves the rig's real address + bearer
+# from the HOST's own config.json (dashboard.workers[]), so a tampered intent can at most target
+# another ALREADY-configured rig, never an arbitrary host (#122 SSRF), and the rig's access token —
+# masked out of the container (#440) — never leaves the host. Changes are re-validated against the
+# same writable allowlist the rig enforces (defence in depth). Every result/audit line the container
+# reads back carries the change_id + status only, never the token.
+control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    local results="$cdir/results" auditf="$cdir/audit/control.log"
+    control_audit "$auditf" "$id" "$actor" "worker-apply" "started"
+    _wa_reject() { # <reason> — refused before dialing the rig; nothing changed
+        control_write_result "$results" "$id" "$(jq -n --arg e "$1" '{status:"rejected",error:$e,ts:(now|floor)}')"
+        control_audit "$auditf" "$id" "$actor" "worker-apply" "rejected"
+    }
+    _wa_fail() { # <reason> — the dial started and did not complete
+        control_write_result "$results" "$id" "$(jq -n --arg e "$1" '{status:"failed",error:$e,ts:(now|floor)}')"
+        control_audit "$auditf" "$id" "$actor" "worker-apply" "failed"
+    }
+    local worker changes
+    worker=$(jq -r '.worker // ""' "$file")
+    # The worker name is a config.json lookup key AND (in name-auth) a bearer; pin its charset.
+    if ! printf '%s' "$worker" | grep -qE '^[!-~]{1,128}$'; then
+        _wa_reject "malformed or missing 'worker' name in the request."
+        return 0
+    fi
+    # Changes must be a non-empty object whose keys are ALL writable via the rig's control path (the
+    # rig re-validates; this is the host-side gate — mirrors rigforge WRITABLE, #185/#236).
+    changes=$(jq -c '.changes // {}' "$file")
+    local badkeys
+    badkeys=$(printf '%s' "$changes" | jq -r '
+        (["pools","DONATION","autotune","watchdog","watchdog_interval_min","max_temp_c"]) as $ok
+        | if (type) != "object" or (length) == 0 then "__empty__"
+          else [keys[] | select(. as $k | $ok | index($k) | not)] | join(",") end' 2>/dev/null)
+    if [ "$badkeys" = "__empty__" ]; then
+        _wa_reject "'changes' must be a non-empty object of writable config keys."
+        return 0
+    fi
+    if [ -n "$badkeys" ]; then
+        _wa_reject "keys not writable via the control path: $badkeys"
+        return 0
+    fi
+    # Resolve the rig's ADDRESS + BEARER from the HOST's config.json — never the intent. A rig with no
+    # host or no token cannot be a target (fail closed): the rig's control path is bearer-mandatory and
+    # we only ever dial an operator-set host.
+    local host cport token
+    host=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    cport=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
+    token=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    if [ -z "$host" ]; then
+        _wa_reject "worker '$worker' has no configured host in dashboard.workers[] — set host + control_port + token to edit it."
+        return 0
+    fi
+    # host charset guard (#122): no port/path/userinfo can be smuggled into the URL below.
+    if ! printf '%s' "$host" | grep -qE '^[A-Za-z0-9._-]{1,253}$'; then
+        _wa_reject "worker '$worker' has an invalid host."
+        return 0
+    fi
+    if ! printf '%s' "$cport" | grep -qE '^[0-9]{1,5}$' || [ "$cport" -lt 1 ] || [ "$cport" -gt 65535 ]; then
+        _wa_reject "worker '$worker' has an invalid control_port."
+        return 0
+    fi
+    if [ -z "$token" ]; then
+        _wa_reject "worker '$worker' has no token in dashboard.workers[] — the rig's control API is bearer-mandatory."
+        return 0
+    fi
+    # Per-drain dial budget (hardening): worker-apply is the only control action that blocks the
+    # single-threaded root runner on a network round-trip (a dial + a status poll, tens of seconds).
+    # Cap how many actually dial per drain so a compromised container can't queue a flood of valid
+    # worker-applies and starve legitimate commit/restart/upgrade intents. The counter lives in the
+    # runner's shell (control_run_pending seeds it), so it persists across the drain loop. Over-budget
+    # intents are rejected with a retry hint — the operator just re-applies; a real fleet edit is a
+    # handful of rigs, never dozens at once.
+    if [ "${CONTROL_WA_BUDGET:-0}" -le 0 ]; then
+        _wa_reject "too many worker config changes in one cycle — retry in a moment."
+        return 0
+    fi
+    CONTROL_WA_BUDGET=$((CONTROL_WA_BUDGET - 1))
+    control_write_result "$results" "$id" "$(jq -n --arg w "$worker" '{status:"running",worker:$w,ts:(now|floor)}')"
+    # POST the change to the rig's control API. Direct LAN dial (like the read path) — NOT Tor: the rig
+    # is an operator-set host on the mining LAN, not clearnet. The token rides one header, never the
+    # URL, the result, or the audit log.
+    local url="http://$host:$cport/apply" bodyf="$cdir/staged/.$id.body" code
+    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 \
+        -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+        --data "$changes" "$url" 2>/dev/null); then
+        rm -f "$bodyf"
+        _wa_fail "could not reach worker '$worker' control API at $host:$cport — nothing was applied."
+        return 0
+    fi
+    if [ "$code" != "202" ]; then
+        local rig_err
+        # The rig's error string is attacker-influenceable (a compromised rig or a LAN MITM); cap it
+        # before it lands in a result the container reads and the dashboard renders.
+        rig_err=$(jq -r '.error // ""' "$bodyf" 2>/dev/null | head -c 500)
+        rm -f "$bodyf"
+        _wa_reject "worker '$worker' refused the change (HTTP $code): ${rig_err:-no detail}."
+        return 0
+    fi
+    local change_id
+    change_id=$(jq -r '.change_id // ""' "$bodyf" 2>/dev/null | head -c 64)
+    rm -f "$bodyf"
+    # Poll the rig's /status for THIS change_id's terminal outcome. The rig stages → validates →
+    # applies → liveness-checks → rolls back if the miner doesn't return live, seconds later. The 20s
+    # deadline (plus the 15s dial above) stays under the dashboard's CONTROL_WAIT_S POST wait, so the
+    # dashboard always catches a terminal-ish result and records it in the config history.
+    local sbody scode status reason ckeys deadline=$((SECONDS + 20))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 2
+        sbody="$cdir/staged/.$id.status"
+        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 \
+            -H "Authorization: Bearer $token" "http://$host:$cport/status" 2>/dev/null); then
+            rm -f "$sbody"
+            continue
+        fi
+        [ "$scode" = "200" ] || {
+            rm -f "$sbody"
+            continue
+        }
+        # Only trust a status whose change_id matches ours (a concurrent change could be newer).
+        if [ "$(jq -r '.change_id // ""' "$sbody" 2>/dev/null)" != "$change_id" ]; then
+            rm -f "$sbody"
+            continue
+        fi
+        status=$(jq -r '.status // ""' "$sbody")
+        case "$status" in
+        applied | rejected | rolled_back)
+            # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
+            reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
+            ckeys=$(jq -c '.changed_keys // []' "$sbody")
+            rm -f "$sbody"
+            control_write_result "$results" "$id" "$(jq -n --arg s "$status" --arg c "$change_id" --arg w "$worker" --argjson k "$ckeys" --arg r "$reason" \
+                '{status:$s,change_id:$c,worker:$w,changed_keys:$k,reason:(if $r=="" then null else $r end),ts:(now|floor)}')"
+            control_audit "$auditf" "$id" "$actor" "worker-apply" "$status"
+            return 0
+            ;;
+        esac
+        rm -f "$sbody"
+    done
+    # Accepted but no terminal status in time — the change is staged on the rig and will apply; the
+    # container can keep polling the rig via the next read. Record accepted-but-pending, not a failure.
+    control_write_result "$results" "$id" "$(jq -n --arg c "$change_id" --arg w "$worker" \
+        '{status:"accepted",change_id:$c,worker:$w,note:"queued on the rig; outcome not yet observed",ts:(now|floor)}')"
+    control_audit "$auditf" "$id" "$actor" "worker-apply" "accepted"
+}
+
 control_process_request() { # <claimed-file> <control-dir>
     local file="$1" cdir="$2" id action actor size
     # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
@@ -4458,7 +5186,7 @@ control_process_request() { # <claimed-file> <control-dir>
         warn "Control request has a malformed id — discarded (no result can be addressed)."
         return 0
     fi
-    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version")] | length' "$file")" != "0" ]; then
+    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version" and . != "worker" and . != "changes")] | length' "$file")" != "0" ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unexpected keys in request",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "" "invalid" "rejected"
         return 0
@@ -4472,6 +5200,8 @@ control_process_request() { # <claimed-file> <control-dir>
     preview) control_preview "$file" "$id" "$actor" "$cdir" ;;
     commit) control_commit "$id" "$actor" "$cdir" ;;
     upgrade) control_upgrade "$file" "$id" "$actor" "$cdir" ;;
+    worker-apply) control_worker_apply "$file" "$id" "$actor" "$cdir" ;;
+    restart | apply) control_lifecycle "$action" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "${action:-none}" "rejected"
@@ -4489,6 +5219,9 @@ control_run_pending() {
     cdir=$(env_get CONTROL_DIR)
     [ -n "$cdir" ] || cdir="$PWD/data/control"
     mkdir -p "$cdir/staged" "$cdir/results" "$cdir/audit"
+    # Freshen the pre-masked prefill copy (#440) before draining: hand-edits to config.json since
+    # the last apply show up in the editor form. A commit re-renders it again via its `apply -y`.
+    render_masked_config "$cdir"
     # Time-bounded DoS sweep (#33 hardening): drop staged/ copies and stray requests/ files older
     # than an hour that no commit ever claimed, so a burst that is never committed cannot pile up
     # (staged intents already expire per-commit at 10 min; this bounds accumulation regardless).
@@ -4498,6 +5231,10 @@ control_run_pending() {
     # the spool can't hold the root runner for an unbounded stretch — the leftovers wait for the
     # next path-unit fire.
     local max=50
+    # Per-drain worker-apply DIAL budget (#185 hardening): worker-apply is the only action that blocks
+    # the runner on a network round-trip, so cap how many dial per drain (the rest reject with a retry
+    # hint). control_worker_apply reads + decrements this in the same shell.
+    CONTROL_WA_BUDGET=5
     names=$(cd "$cdir/requests" 2>/dev/null && ls -1tr -- *.json 2>/dev/null) || true
     if [ -z "$names" ]; then
         log "No pending control requests."
@@ -4570,6 +5307,26 @@ EOF
 
 # --- Main Execution ---
 
+# #493: a subcommand's -h/--help must print usage and exit 0 BEFORE any side effect, and a
+# subcommand that takes no options must reject an unrecognized flag instead of silently ignoring it
+# and running anyway. `pithead upgrade --help` used to run a full upgrade (image pull + container
+# recreation) — on the v1.4.0 deploy that recreation collided with the real upgrade and corrupted
+# the dashboard DB (#489). A --help must never mutate the host.
+_help_requested() { # "$@" — return 0 if any argument is -h/--help
+    local a
+    for a in "$@"; do
+        case "$a" in
+        -h | --help) return 0 ;;
+        esac
+    done
+    return 1
+}
+_reject_options() { # <verb> "$@" — this verb takes no options; error on any leftover argument
+    local verb="$1"
+    shift
+    [ "$#" -eq 0 ] || error "Unknown option for $verb: '$1'. This command takes no options. Run '$0 $verb -h' or '$0 help'."
+}
+
 main() {
     # Chained subcommands (#94): when every argument is a bare subcommand name, run them
     # left-to-right as a chain. Any other token (a flag, a service name, an archive path) keeps
@@ -4590,6 +5347,17 @@ main() {
 
     local cmd="${1:-}"
     if [ -n "$cmd" ]; then shift; fi
+
+    # #493: -h/--help on any subcommand prints help and exits 0 before ANY side effect. `logs` is the
+    # one deliberate passthrough (its args go to `docker compose logs`), so it opts out and forwards
+    # -h/--help downstream. The bare `pithead -h/--help/help` is its own command in the case below.
+    case "$cmd" in
+    "" | help | -h | --help | logs) ;;
+    *) if _help_requested "$@"; then
+        show_help
+        exit 0
+    fi ;;
+    esac
 
     # Make the stack version + build provenance available to any `docker compose [up] build` this
     # invocation runs, so the dashboard image bakes in its version badge (Issue #58).
@@ -4612,10 +5380,12 @@ main() {
         ;;
     apply) apply "$@" ;;
     up)
+        _reject_options up "$@"
         require_deployed
         stack_up
         ;;
     down)
+        _reject_options down "$@"
         require_env
         stack_down
         ;;
@@ -4624,6 +5394,7 @@ main() {
         stack_restart "$@"
         ;;
     upgrade)
+        _reject_options upgrade "$@"
         require_deployed
         stack_upgrade
         ;;
@@ -4633,10 +5404,14 @@ main() {
         docker compose logs -f "$@"
         ;;
     status)
+        _reject_options status "$@"
         require_env
         stack_status || exit 1
         ;;
-    doctor) doctor || exit 1 ;;
+    doctor)
+        _reject_options doctor "$@"
+        doctor || exit 1
+        ;;
     reset-dashboard)
         require_deployed
         reset_dashboard "$@"
@@ -4644,10 +5419,14 @@ main() {
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
     control-run-pending)
+        _reject_options control-run-pending "$@"
         require_deployed
         control_run_pending
         ;;
-    onion-client-key) onion_client_key ;;
+    onion-client-key)
+        _reject_options onion-client-key "$@"
+        onion_client_key
+        ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
     rotate-secrets) rotate_secrets "$@" ;;
     version | -V | --version) show_version ;;

@@ -288,6 +288,65 @@ export function formatXtm(xtm) {
   return formatCoin(xtm, "XTM");
 }
 
+// Energy & profit (#260). Turns the server's measured fleet watts + operator prices into
+// kWh / cost / net over day·month·year for a what-if hashrate. Power draw is measured (does NOT
+// scale with the what-if hashrate — it's the real fleet), so only the earnings side scales:
+//   net = gross(what-if XMR/day × xmr_price) − cost(kWh × cost_per_kwh).
+// `est` is the already-computed earnings for this what-if hashrate (computeEarnings). Any figure
+// whose inputs are missing comes back null so the card shows "—" rather than a bogus number:
+// cost needs cost_per_kwh > 0; net additionally needs xmr_price > 0 and a valid XMR estimate.
+export function computeEnergy(energy, est) {
+  const blank = {
+    kwhDay: null,
+    kwhMonth: null,
+    kwhYear: null,
+    costDay: null,
+    costMonth: null,
+    costYear: null,
+    netDay: null,
+    netMonth: null,
+    netYear: null,
+  };
+  if (!energy || !energy.available || !(energy.total_watts > 0)) return blank;
+  const kwhDay = (energy.total_watts / 1000) * 24;
+  const price = energy.cost_per_kwh;
+  const haveCost = Number.isFinite(price) && price > 0;
+  const costDay = haveCost ? kwhDay * price : null;
+  const xmrPrice = energy.xmr_price;
+  // Gross fiat/day from P2Pool XMR only (Tari lumpy/priced-separately, XvB is raffle status).
+  const grossDay =
+    Number.isFinite(xmrPrice) && xmrPrice > 0 && est && Number.isFinite(est.day)
+      ? est.day * xmrPrice
+      : null;
+  const netDay = grossDay !== null && costDay !== null ? grossDay - costDay : null;
+  const span = (v, mult) => (v === null ? null : v * mult);
+  return {
+    kwhDay,
+    kwhMonth: kwhDay * DAYS_PER_MONTH,
+    kwhYear: kwhDay * DAYS_PER_YEAR,
+    costDay,
+    costMonth: span(costDay, DAYS_PER_MONTH),
+    costYear: span(costDay, DAYS_PER_YEAR),
+    netDay,
+    netMonth: span(netDay, DAYS_PER_MONTH),
+    netYear: span(netDay, DAYS_PER_YEAR),
+  };
+}
+
+// Format a fiat figure (energy cost / net profit, #260) in the operator's currency label. Net can be
+// negative (power costs more than it earns) — keep the sign. "—" for the null/uncomputable case.
+export function formatFiat(value, currency) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  const sign = value < 0 ? "-" : "";
+  return sign + (currency || "USD") + " " + Math.abs(value).toFixed(2);
+}
+
+// Format a power draw / energy figure with its unit (W, kWh); "—" for the null/invalid case.
+export function formatUnit(value, unit, dp = 1) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return value.toFixed(dp) + " " + unit;
+}
+
 // Format the expected time-to-share (seconds) for display; "—" when not computable. Reuses the
 // two-coarsest-units duration formatter (e.g. "3d 4h", "1h 20m").
 export function formatTimeToShare(sec) {

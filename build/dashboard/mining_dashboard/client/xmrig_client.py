@@ -4,11 +4,17 @@ import time
 
 from mining_dashboard.config.config import (
     API_TIMEOUT,
+    DASHBOARD_WORKERS,
     MINING_NET_CIDR,
     XMRIG_API_AUTH,
     XMRIG_API_PORT,
     XMRIG_API_TOKEN,
 )
+
+# Per-worker endpoint descriptors (#172): the validated dashboard.workers[] list from config.json.
+# Module-level (not from-import at call sites) so tests can swap it per case. Fleets are small, so
+# the per-poll lookups below are linear scans — no index to keep in sync.
+WORKER_ENDPOINTS = DASHBOARD_WORKERS
 
 # Longest worker-name we'll ever echo back as a Bearer token (#122). xmrig names/tokens are short;
 # this just bounds a pathological miner-supplied value before it goes into a header.
@@ -22,6 +28,55 @@ try:
     _INTERNAL_NET = ipaddress.ip_network(MINING_NET_CIDR, strict=False)
 except ValueError:
     _INTERNAL_NET = ipaddress.ip_network("172.28.0.0/16")
+
+
+def parse_rigforge(payload):
+    """Normalize the optional ``rigforge`` block off a worker ``/1/summary`` (#235).
+
+    A RigForge rig serves an ENRICHED feed on its ``api_port`` (default 8081): the whole XMRig
+    ``/1/summary`` object unchanged, plus one added ``rigforge`` key (rigforge#99). Point the rig's
+    descriptor ``port`` at that feed and the block rides in on the existing poll — no new read path.
+    A plain-xmrig rig has no ``rigforge`` key, so this returns ``None`` and the UI renders it exactly
+    as before (backward compatible).
+
+    Every enriched field is nullable on the wire — no RAPL / non-root → ``power.watts`` null, no
+    governor read → ``governor`` null — so each access is defaulted. A present-but-miner-down rig
+    (``xmrig_api == "unreachable"``, XMRig keys absent) is flagged via ``miner_down`` so the UI can
+    show it as up-but-miner-down rather than offline. Returns a compact dict for the UI, or ``None``.
+    """
+    rf = payload.get("rigforge") if isinstance(payload, dict) else None
+    if not isinstance(rf, dict):
+        return None
+    tune = rf.get("tune") or {}
+    autotune = tune.get("autotune") or {}
+    power = rf.get("power") or {}
+    health = rf.get("health") or {}
+    firmware = health.get("firmware") or {}
+    watchdog = rf.get("watchdog") or {}
+    wd_on = watchdog.get("mode") == "enabled"
+    return {
+        "version": rf.get("version"),
+        "miner_down": rf.get("xmrig_api") == "unreachable",
+        "power": {"watts": power.get("watts"), "hs_per_watt": power.get("hs_per_watt")},
+        "tune": {
+            "target": tune.get("target"),
+            "autotune_enabled": bool(autotune.get("enabled")),
+            "autotune_next": autotune.get("next"),
+        },
+        "health": {
+            "governor": health.get("governor"),
+            "throttling": health.get("throttling"),
+            "board": firmware.get("board"),
+            "hugepages_total": health.get("hugepages_total"),
+        },
+        # thermal_hold/temps are only meaningful while the watchdog is enabled.
+        "watchdog": {
+            "enabled": wd_on,
+            "thermal_hold": watchdog.get("thermal_hold") if wd_on else None,
+            "temp_c": watchdog.get("temp_c") if wd_on else None,
+            "max_temp_c": watchdog.get("max_temp_c") if wd_on else None,
+        },
+    }
 
 
 def _safe_probe_host(ip):
@@ -60,6 +115,24 @@ def _safe_probe_host(ip):
     return host
 
 
+def _worker_override(name_token, safe_ip):
+    """The dashboard.workers[] entry for this worker, or None (#172).
+
+    Matched by the rig's stratum name first; on a name miss, by the validated connecting IP
+    against an operator-set ``host`` (covers a renamed rig that still connects from its declared
+    address). config.py already enforces unique names (first-declared wins), so the first list
+    hit is the match.
+    """
+    for entry in WORKER_ENDPOINTS:
+        if entry["name"] == name_token:
+            return entry
+    if safe_ip:
+        for entry in WORKER_ENDPOINTS:
+            if entry.get("host") == safe_ip:
+                return entry
+    return None
+
+
 class XMRigWorkerClient:
     def __init__(self, session):
         """
@@ -73,8 +146,14 @@ class XMRigWorkerClient:
         # state survives across iterations.
         self._warned = {}
 
-    def _auth_header(self, name_token):
-        """Build the single Authorization header for the configured auth mode (or no header)."""
+    def _auth_header(self, name_token, override_token=""):
+        """Build the single Authorization header for the configured auth mode (or no header).
+
+        A per-worker token (#172) implies token-auth for that worker only, whatever the
+        fleet-wide mode says.
+        """
+        if override_token:
+            return {"Authorization": f"Bearer {override_token}"}
         mode = XMRIG_API_AUTH
         if mode == "name":
             return {"Authorization": f"Bearer {name_token}"} if name_token else {}
@@ -126,21 +205,36 @@ class XMRigWorkerClient:
         hint, rather than silently trying alternatives or swallowing the error. On success the parsed
         summary is returned with ``api_ok`` set to ``True``.
 
-        Only the worker's validated IP is ever used as the request host (SSRF guard, #122): a
-        miner-controlled worker *name* is never a host — in ``name`` auth it is only offered back to
-        that same IP as the Bearer token.
+        Per-worker overrides (#172, ``dashboard.workers[]``) merge on top: per-worker field >
+        fleet default > inherit. An operator-set ``host`` replaces the connecting IP as the probe
+        target; a per-worker ``token`` becomes the Bearer for that worker only.
+
+        Only two things are ever used as the request host (SSRF guard, #122): the worker's
+        validated IP, or a host the OPERATOR wrote into config.json. A miner-controlled worker
+        *name* is never a host — in ``name`` auth it is only offered back as the Bearer token —
+        and a per-worker token is never sent anywhere a miner-advertised value could point it.
         """
-        host = _safe_probe_host(ip)
-        if host is None:
-            # No safe target: ip is missing/internal/not a bare address. This isn't a misconfigured
-            # miner — it's a worker we deliberately won't probe — so stay quiet and leave api_ok
-            # unset (unknown) rather than flagging a failure. Never fall back to the
-            # miner-controlled name as a host: that is the SSRF this guard exists to prevent (#122).
+        name_token = name.split("+")[0].strip()[:_MAX_NAME_TOKEN] if name else ""
+        safe_ip = _safe_probe_host(ip)
+        override = _worker_override(name_token, safe_ip)
+        if override and "host" in override:
+            # Operator-set in config.json — never miner-advertised (#122). Pinning the host also
+            # means an imposter claiming this rig's name can't pull the rig's token to its own
+            # address; docs recommend host+token together for exactly that reason.
+            host = override["host"]
+        elif safe_ip:
+            host = safe_ip
+        else:
+            # No safe target: ip is missing/internal/not a bare address, and no operator-set host.
+            # This isn't a misconfigured miner — it's a worker we deliberately won't probe — so
+            # stay quiet and leave api_ok unset (unknown) rather than flagging a failure. Never
+            # fall back to the miner-controlled name as a host: that is the SSRF this guard exists
+            # to prevent (#122).
             return {}
 
-        name_token = name.split("+")[0].strip()[:_MAX_NAME_TOKEN] if name else ""
-        url = f"http://{host}:{XMRIG_API_PORT}/1/summary"
-        headers = self._auth_header(name_token)
+        port = override.get("port", XMRIG_API_PORT) if override else XMRIG_API_PORT
+        url = f"http://{host}:{port}/1/summary"
+        headers = self._auth_header(name_token, override.get("token", "") if override else "")
 
         try:
             async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:

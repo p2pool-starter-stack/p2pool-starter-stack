@@ -1202,6 +1202,28 @@ _onion_reachable_external() {
     rx "$snippet" | grep -q "PROBE-OK"
 }
 
+# Reap the root pithead-control systemd units on the box, unconditionally and idempotently (#477).
+# The hardening phase installs pithead-control.{path,service} to exercise the #33 spool; the restore
+# apply is supposed to remove them, but that removal runs EARLY in apply (provision_control_runner) —
+# before container recreation + the tor restart — so a restore apply that dies partway (render/preflight
+# failure, or wait_status_ok timing out mid-apply) leaves the ROOT path unit watching the control spool
+# past the phase and beyond. A later apply is convergent and would clean it, but only if it runs. This
+# teardown mirrors provision_control_runner's removal branch (pithead:5242) and runs regardless of the
+# restore apply's exit code. No-ops where there's no systemd (macOS/dev). Returns non-zero ONLY if a
+# unit survives (e.g. sudo unavailable) so the caller can warn loudly instead of silently passing.
+_remove_control_units() {
+    rx '
+        command -v systemctl >/dev/null 2>&1 || exit 0
+        ud=/etc/systemd/system
+        if [ -e "$ud/pithead-control.path" ] || [ -e "$ud/pithead-control.service" ]; then
+            sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
+            sudo rm -f "$ud/pithead-control.path" "$ud/pithead-control.service"
+            sudo systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        [ ! -e "$ud/pithead-control.path" ] && [ ! -e "$ud/pithead-control.service" ]
+    '
+}
+
 # Tier-4 hardening phase (#377/#33/#424): the v1.4 host-mutation + hardening surfaces that ONLY a
 # real box proves — a read-only rootfs actually rejecting a write, the systemd path unit actually
 # firing on a spooled request, and a tor restart restoring real clearnet egress. Local mode only
@@ -1350,13 +1372,15 @@ run_hardening() {
     # 240s: this apply follows the control enable/disable + a tor restart, so the stack has more to
     # re-settle than a plain apply (180s timed out here on a real run).
     wait_status_ok 240 || true
-
-    # Reap the systemd control unit UNCONDITIONALLY (#33/#424). apply only removes it on a control
-    # on->off transition, so if the restore apply above failed or timed out the root pithead-control.path
-    # is left installed+enabled and a plain re-apply won't strip it. Tear it down directly — idempotent,
-    # runs regardless of the restore apply's exit — so no root unit outlives this phase.
-    it_step "reaping any leftover pithead-control systemd unit…"
-    rx 'sudo systemctl disable --now pithead-control.path 2>/dev/null; sudo rm -f /etc/systemd/system/pithead-control.path /etc/systemd/system/pithead-control.service; sudo systemctl daemon-reload' >/dev/null 2>&1 || true
+    # #477: reap the control units unconditionally — the restore apply above is supposed to remove them,
+    # but if it died before provision_control_runner ran, the ROOT path unit would linger past the phase.
+    # (develop's #424 added a fire-and-forget inline version here; this supersedes it — it verifies the
+    # units are actually gone and warns loudly if not, rather than swallowing the outcome with `|| true`.)
+    if _remove_control_units; then
+        it_pass "control systemd units removed after the hardening phase (#477)"
+    else
+        it_warn "pithead-control units survived teardown — remove them by hand on the box (sudo unavailable?)"
+    fi
 }
 
 run_auth_fail_closed() {

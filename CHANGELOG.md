@@ -11,6 +11,237 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Worker Inspect: view and edit a rig's config from the dashboard (#185).** Click a worker's name in
+  the Workers Alive table (with the control channel on) to open a panel showing the rig's live
+  telemetry, an editor for the writable slice of its config (`pools`, `DONATION`, `autotune`,
+  `watchdog`, `watchdog_interval_min`, `max_temp_c`), and the change history. Applying a change goes
+  through RigForge's writable control API (rigforge#236) — the rig validates it, applies it, and rolls
+  back automatically if the miner doesn't return to a live hashrate; the panel shows the outcome
+  (applied / rejected / rolled back) and records every change to a per-worker history you can browse.
+  **Security:** the write path is fail-closed — it only exists when `dashboard.control.enabled` is on
+  (which requires a dashboard password), every request carries the CSRF header, and the change surface
+  is the writable allowlist only. The dashboard container **never holds the rig's token**: it spools
+  the worker name plus the change, and the host-side control runner resolves the rig's address and
+  bearer from `config.json` and dials the rig — so a compromised container can neither read the token
+  nor point the write at an arbitrary host (the [#122 SSRF](docs/workers.md) rule). Each rig needs
+  `host`, `token`, and (if not the default `8082`) `control_port` in its `dashboard.workers[]`
+  descriptor to be editable. RigForge keeps no config history on the rig, so Pithead owns it; the
+  rig's enriched feed doesn't expose the writable values, so the editor prefills from the last config
+  the dashboard applied. See [Dashboard › Worker Inspect](docs/dashboard.md#worker-inspect).
+
+- **Contract test for the RigForge worker API ↔ dashboard seam (#209).** A tier-2 contract test
+  points the real `XMRigWorkerClient` at a controllable fake RigForge worker API over a real socket
+  and asserts the whole `none`/`name`/`token` auth matrix (the #315 model), a wrong-token 401, and
+  that the enriched `/1/summary` (rigforge#99 shape) parses through the real consumer — so a drift in
+  either the auth handshake or the enriched-feed shape goes red in CI instead of only on a live rig.
+  `docs/testing-strategy.md` gains a per-flow tier map for the two-repo contract; the real-mining and
+  real-proxy accept/reject legs stay tier-4 (documented, run on a bench rig).
+
+- **Energy & profit calculator on the dashboard (#260).** The Advanced-view earnings card gains an
+  **Energy** tab that totals fleet power draw and efficiency, and — once you set a price — the net
+  profit after power. It sums each worker's watts from RigForge's enriched feed (#235); a worker
+  whose feed reports no RAPL watts (macOS, a non-RigForge rig, an older kit) can carry a manual
+  estimate via a `watts` field on its `dashboard.workers[]` descriptor, marked *estimated*, and a
+  worker with neither is excluded so the total reads as a lower bound rather than a fabricated zero.
+  The tab shows fleet watts, H/s-per-watt, and kWh per day/month/year always; set
+  `dashboard.energy.cost_per_kwh` to add the energy **cost**, and `dashboard.energy.xmr_price` to add
+  **net profit** (`net = P2Pool XMR earnings × your XMR price − power cost`), each in your
+  `dashboard.energy.currency` label. No price feed ships — fetching one is a clearnet egress this
+  stack avoids — so both prices are operator-supplied; leave either unset and that layer stays
+  hidden. Net profit is P2Pool XMR only: Tari is lumpy solo merge-mining (priced separately) and XvB
+  is raffle status, not income, so both are excluded, as the earnings card already frames them. See
+  [Dashboard › Energy & profit](docs/dashboard.md#energy--profit).
+
+- **Read RigForge's enriched worker feed on the dashboard (#235).** A RigForge rig serves an
+  enriched read API on port `8081` — the same `/1/summary` the dashboard already polls, plus a
+  `rigforge` block with the rig's version, tuning state, power draw and efficiency, CPU/firmware
+  health, and watchdog temperatures. Point that rig's `dashboard.workers[]` descriptor `port` at the
+  feed and the Workers Alive table gains a RigForge version badge and health/power/tune/watchdog
+  chips next to the rig — throttling and a non-performance governor read red or amber, the rest are
+  muted read-outs. Because the feed is a strict superset, uptime and per-miner hashrate still come
+  from the same response, and a plain-xmrig rig (no `rigforge` block) reads exactly as before: no
+  chips, no error. A rig whose RigForge is up but whose miner has stopped stays in the table with a
+  **miner down** chip instead of dropping to offline. Every enriched field is nullable, so a rig with
+  no RAPL shows no power chip and a disabled watchdog shows no temperature. The [#122 SSRF
+  guard](docs/workers.md) is unchanged — the dashboard still polls only the operator-set descriptor
+  host/port, never a miner-advertised value. See [Connecting
+  Miners](docs/workers.md#rigforge-enriched-feed).
+
+- **Confirm Tari payouts on-chain, too (#462).** The Tari sibling of #381, for the other half of
+  the merge-mine. Tari merge-mining here is solo — the whole block reward lands at once when your
+  hashrate finds a Tari block — so a payout is a rare, large event worth ground-truth confirmation.
+  Set `tari.view_key` and `tari.spend_public_key` (exported from your Tari wallet) and the stack runs
+  a view-only `minotari_console_wallet` against your **local** Tari node; the Tari tab of the
+  earnings card gains a **Confirmed** total (24h / 7d / all-time XTM) beside the time-to-block
+  estimate, and the shared `payout_confirmed` alert fires once per Tari payout (it carries the
+  chain). Confirmed payouts persist to the same local table as the Monero side, so a restart never
+  re-alerts; the restore point is a **birthday** (`tari.payout_scan_birthday`, days since the Unix
+  epoch), not a block height, so a fresh wallet doesn't rescan from genesis. **Security:** the Tari
+  view key is handled exactly like `monero.view_key` (scan-only, never spend; owner-only `.env`;
+  never logged, echoed, on a container command line, or in the dashboard editor), with one extra
+  safeguard — because Tari has no key-import file, the wallet secrets reach the container through a
+  tmpfs secret mount, so they never appear in `docker inspect`. Off by default (empty view key =
+  nothing new runs); **local Tari node only.** See
+  [Dashboard › Payout confirmation](docs/dashboard.md#payout-confirmation).
+
+- **Confirm payouts on-chain with a view-only wallet (#381).** Every earnings figure the dashboard
+  shows is an *estimate*; nothing checked that a P2Pool payout actually landed in your wallet.
+  Now, when you set `monero.view_key` (the private **view** key for your payout address), the stack
+  runs a view-only `monero-wallet-rpc` against your **local** node and confirms payouts from the
+  chain — the coinbase outputs P2Pool pays you are the only ground truth. The earnings card gains a
+  **Confirmed** total (24h / 7d / all-time XMR) beside the estimate, and a new `payout_confirmed`
+  alert fires once per payout across every sink (Telegram, webhook, ntfy). It polls on a slow
+  cadence and records each payout locally, so a restart never re-alerts; coinbase outputs are
+  recorded when confirmed in a block, not when they mature 60 blocks later; a pruned node works
+  fine. **Security:** a view key can scan but never spend, yet it reveals every incoming amount and
+  its timing — so it's handled exactly like `node_password` (owner-only `.env`, never logged or
+  echoed, off the dashboard config editor, never on a container command line). The wallet-rpc runs
+  non-root with a read-only root filesystem, is published only to the host loopback
+  (`127.0.0.1:18082`), and is password-authenticated. Off by default (empty view key = nothing new
+  runs); **local node only** — a view key set with `monero.mode: remote` is refused. See
+  [Dashboard › Payout confirmation](docs/dashboard.md#payout-confirmation).
+
+- **Telegram control commands: `/restart` and `/apply` (#338).** The Telegram bot, until now
+  strictly read-only, can accept two commands that act on the host: `/restart` recreates the stack
+  and `/apply` re-applies the current on-disk config. Off by default (`telegram.control.enabled`)
+  and gated as a remotely-reachable control surface: honoured only from the numeric Telegram **user
+  ids** in `telegram.control.allowed_ids` (being in the chat, or knowing the bot token, is not
+  enough), and each command needs an explicit in-chat **confirmation** (an inline button) from the
+  same operator within `confirm_timeout` seconds — an unconfirmed command is **denied**, never
+  queued. The two verbs are the whole action set (no arbitrary execution), and they ride the same
+  host-control spool the config editor uses (#33) rather than a new privileged path: the root runner
+  validates and runs the fixed verb and audits the actor (`tg-<user-id>`) and outcome. Requires
+  `dashboard.control` (the spool + runner) and the read-only command bot; a config-*changing* apply
+  stays in the dashboard editor behind its default-deny allowlist. See
+  [Telegram › Control commands](docs/telegram.md#control-commands).
+
+- **Configurable stratum port & per-worker endpoints (#172).** `p2pool.stratum_port` (default
+  `3333`) sets the port the stratum endpoint your rigs connect to is published on — thread through
+  the `xmrig-proxy` bind, the compose publish, the `:PORT` healthcheck, and the "point your rigs
+  at host:PORT" hint. The default preserves today's behaviour; changing it repoints every rig
+  (RigForge: `pool.port`) and `apply` flags it destructive. P2Pool's container-internal stratum
+  stays fixed at `3333`. New `dashboard.workers[]` — a list of `{name, host?, port?, token?}` —
+  overrides the worker-API probe per rig when one differs from the fleet defaults: per-worker
+  field > fleet default (`workers.api_port`/`api_auth`/`api_token`) > inherit. Entries match by
+  stratum name, then by connecting IP against an operator-set `host` (first-declared wins on
+  duplicate names); a per-worker `token` forces token-auth for that rig only. The `host` must be
+  operator-set in `config.json` and is never taken from a miner-advertised value — the dashboard
+  never sends a configured token to a miner-controlled host (SSRF guard, #122). The standard path
+  (3333 / 8080 / token = rig name) needs no config. Pairs with rigforge#21 (`pool.port`) and
+  rigforge#23 (`api.port`). See [Connecting Miners](docs/workers.md).
+
+- **Alert sinks beyond Telegram: generic JSON webhook + ntfy (#380).** Every alert the stack
+  produces — node down/recovered, worker offline/joined/left, sync, disk, DB, XvB, clearnet
+  exposure, blocks and payouts, the daily digest — can now also be pushed to a **generic JSON
+  webhook** (one POST per alert with `event`/`text`/`ts` keys, for Gotify, Home Assistant, or any
+  endpoint that accepts a POST) and/or an **[ntfy](https://ntfy.sh) topic** (the alert text as the
+  message body, optional `Authorization: Bearer` token). Configured in a new top-level
+  `notifications` block (`webhooks` list, `ntfy.url`/`ntfy.token`); all unset — the default —
+  runs nothing new, and Telegram plus its per-event toggles are unchanged (the new sinks carry
+  every event). Both sinks copy the Telegram alerter's discipline: fail-silent, secrets (webhook
+  URLs, the ntfy token) never logged or echoed, and **Tor-routed by default** so the endpoint
+  sees a Tor exit, not your host IP. `notifications.tor: false` is the LAN/self-hosted carve-out
+  (Tor exits can't reach private addresses) — with it, clearnet endpoints see your host IP. See
+  [Telegram › Webhook and ntfy sinks](docs/telegram.md#webhook-and-ntfy-sinks).
+
+### Changed
+
+- **The deploy-box layout is a product feature (#455).** `./pithead setup` and `./pithead upgrade`
+  now maintain a `current -> pithead-vX.Y.Z` symlink beside the install when the install directory
+  is version-named — one authoritative pointer to the live install, updated (`ln -sfn`) only on a
+  successful upgrade; the dashboard's one-click upgrade (#59) runs the same `upgrade` and moves it
+  too. The dashboard database also stops living inside the install directory: when the four other
+  `*.data_dir` share one parent, `dashboard.data_dir`'s default joins them there, and a one-time
+  migration in `upgrade`/`apply` moves data from the old `./data/dashboard` default (stop the
+  dashboard, move, verify the DB arrived; an explicit `dashboard.data_dir` is warned about and
+  left alone, and data at both locations stops the run instead of guessing). The canonical layout
+  — `current`, one rollback version dir, the shared data root — is documented in
+  [Operations › The deploy-box layout](docs/operations.md#the-deploy-box-layout), replacing the
+  hand-written per-box READMEs.
+
+### Fixed
+
+- **The tier-4 hardening phase always reaps its root control units (#477).** The phase installs the
+  `pithead-control.{path,service}` systemd units to exercise the #33 spool, and relied on the restore
+  `apply` to remove them — but that removal runs early in `apply`, so a restore that died partway (a
+  render failure, or the settle timeout firing mid-apply) could leave the **root** `pithead-control.path`
+  unit watching the control spool after the run, exactly the host residue tier-4 exists to prevent. The
+  phase now tears the units down unconditionally at the end, independent of the restore's exit code, and
+  warns loudly if any survive (a no-op on hosts without systemd). Test-harness only; no runtime change.
+
+- **Telegram control prompts are rate-limited per operator, not globally (#470).** The `ControlGate`
+  budget (max approval prompts per rolling hour) was one shared list, so a single allow-listed id —
+  or one compromised-but-allow-listed session — could exhaust it and lock the *other* operators out
+  of `/restart` / `/apply` for up to an hour. The budget is now keyed by operator id, so each caps
+  independently. A confidentiality/integrity fix this is not (the host-side fixed-verb runner is the
+  real boundary, #33/#338) — only availability among already-trusted operators; the `ControlGate`
+  docstring was corrected to say so.
+
+- **The dashboard auto-heals a corrupt SQLite database instead of erroring forever (#489).** A
+  clashed WAL checkpoint (seen when a container was recreated twice in quick succession) could leave
+  `mining_data.db` malformed; the dashboard then logged a write error every cycle **indefinitely** and
+  silently lost all history — and that DB now holds XvB-credited and payout state, so corruption can
+  skew the donation loop. On startup (`PRAGMA integrity_check`) and on any write that reports the file
+  malformed, the dashboard now quarantines the bad file to `mining_data.db.corrupt-<UTC>` (kept for
+  post-mortem, oldest pruned), rebuilds a fresh schema, and resumes persisting. A one-shot **`db_reset`
+  alert** fires through Telegram and the other sinks so you know history before that point was cleared
+  — a plain "DB write failing" badge could be missed, since a startup reset has no prior state and a
+  runtime reset flips back to healthy within one cycle. A *transient* failure (disk full, locked,
+  permissions) is unchanged: it still just flags the persistence badge and retries, never discarding
+  history.
+
+- **`pithead <verb> --help` no longer runs the command (#493).** `-h`/`--help` on any subcommand now
+  prints usage and exits 0 **before any side effect** — previously `pithead upgrade --help` ignored
+  the flag and ran a full upgrade (image pull + container recreation). On the v1.4.0 deploy that
+  stray recreation collided with the real upgrade and corrupted the dashboard's SQLite DB (see the
+  auto-heal fix). Unrecognized flags on a no-option verb (`upgrade`, `up`, `down`, `status`,
+  `doctor`, `control-run-pending`, `onion-client-key`) now error and name the bad flag instead of
+  being silently ignored while the command runs anyway. `--dry-run` and other real options are
+  unaffected; `logs` still forwards its args to `docker compose logs`.
+
+- **The tier-4 e2e harness survives a dirty bench and restores the right stack (#454).** Two
+  environmental failures from the v1.4 release gate: provisioning aborted when a leftover untracked
+  file (a stray bench script) sat in the disposable `/srv/code/pithead-e2e` checkout — `git checkout`
+  refused with "would be overwritten." Provisioning now forces a pristine tree (`checkout -f` +
+  `reset --hard` + `clean -fdx`, keeping the harness's `results/` and the gitignored
+  `config.json`/`.env`/`data/`/`backups/`). And the restore path ran `pithead apply/up` from
+  `CANONICAL_DIR`, but on a release box the live stack runs from a per-version bundle dir — so the
+  source checkout took over the `pithead` project with locally-built `:dev` images and Tari
+  crash-looped. Restore now targets the directory the live stack actually ran from, read at preflight
+  off the running container's `com.docker.compose.project.working_dir` label, and falls back to
+  `CANONICAL_DIR` only when the stack is down.
+
+### Security
+
+- **The dashboard container never sees a plaintext secret (#440).** The one accepted residual
+  from the #33 control-channel reviews is closed: the dashboard no longer bind-mounts the raw
+  `config.json` to prefill its Configuration form. The host now renders a pre-masked copy —
+  every set secret (node RPC credentials, stratum and dashboard passwords, the Telegram bot
+  token, the Healthchecks ping URL) already replaced by a sentinel — into a read-only leg of the
+  control spool (`data/control/masked/`), and the form serves from that. The
+  "leave blank to keep the current value" merge moved host-side too: an untouched secret rides
+  back as the sentinel and the runner swaps in the live value at staging, so the request spool
+  is also secret-free. A fully compromised dashboard container can now read masked config,
+  results, and the audit log, and ask to change an allowlisted key — nothing else. The copy is
+  re-rendered on every `setup`/`apply`/`upgrade` and runner pass, so it never serves stale state
+  for long. See [SECURITY.md](SECURITY.md#secret-trust-boundary-for-dashboard-config-editing).
+
+- **Image verification is bound to the pulled bytes (#451).** `verify_release_images` now cosign-
+  verifies the immutable `@sha256` digest the bundled compose pins each first-party image to (#461),
+  not the mutable tag. Verify and pull resolve the same content-addressed bytes, so a tampered
+  registry can no longer serve the signed manifest to cosign and a different one to docker in a
+  separate dial. With a key present, an image whose compose line is not digest-pinned aborts too —
+  there is nothing to bind the check to.
+
+- **First install verifies signatures, not just upgrades (#452).** A fresh release install's first
+  `pithead up` pulled the five first-party images with no signature check; the gate now runs on that
+  path as well, under the same rules as `upgrade` — source checkouts skip, a missing `cosign.pub`
+  warns and proceeds (signing is opt-in), a present key that fails aborts before anything starts.
+  (`apply` and `rotate-secrets` recreate from the already-verified local images, so the two
+  registry-pull paths — first `up` and `upgrade` — are now both gated.)
+
 ## [1.4.0] - 2026-07-11
 
 ### Added

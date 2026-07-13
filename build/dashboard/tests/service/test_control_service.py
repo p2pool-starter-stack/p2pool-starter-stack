@@ -1,5 +1,7 @@
-"""Unit tests for the dashboard side of the control channel (#33): secret masking round-trip,
-atomic request submission, result reads, and the UUID gate on ids that become host filenames."""
+"""Unit tests for the dashboard side of the control channel (#33): defense-in-depth secret
+masking, atomic request submission, result reads, and the UUID gate on ids that become host
+filenames. The host serves a PRE-MASKED config copy (#440); read_config's own masking pass is
+the second layer, so these tests feed it raw values on purpose."""
 
 import json
 import os
@@ -70,27 +72,17 @@ class TestSecretMasking:
         assert cfg["monero"]["prune"] is True
         assert cfg["p2pool"]["pool"] == "mini"
 
-    def test_merge_secrets_round_trip(self, spool):
-        # Sentinel in → live value out; an actually-edited secret passes through.
-        proposed = control_service.read_config()
-        proposed["p2pool"]["pool"] = "main"
-        proposed["telegram"]["bot_token"] = "456:new"  # explicit new value
-        merged = control_service.merge_secrets(proposed)
-        assert merged["dashboard"]["auth"]["password"] == "correct horse"
-        assert merged["monero"]["node_password"] == "hunter2"
-        assert merged["telegram"]["bot_token"] == "456:new"
-        assert merged["p2pool"]["pool"] == "main"
-
-    def test_merge_sentinel_for_unset_secret_collapses_to_empty(self, spool):
-        # A forged sentinel where no secret exists must not leak a dict into config.json.
-        proposed = {"workers": {"api_token": {"__secret__": True}}}
-        assert control_service.merge_secrets(proposed)["workers"]["api_token"] == ""
-
-    def test_merge_missing_sections_tolerated(self, spool):
-        # A proposed config that omits whole sections merges without KeyErrors.
-        assert control_service.merge_secrets({"p2pool": {"pool": "nano"}}) == {
-            "p2pool": {"pool": "nano"}
-        }
+    def test_pre_masked_host_copy_served_as_is(self, spool):
+        # The production shape (#440): the host copy already carries sentinels; read_config
+        # serves them unchanged (its own masking pass is an idempotent second layer).
+        pre_masked = json.loads(json.dumps(CONFIG))
+        pre_masked["monero"]["node_password"] = {"__secret__": True}
+        pre_masked["dashboard"]["auth"]["password"] = {"__secret__": True}
+        (spool / "config.json").write_text(json.dumps(pre_masked))
+        cfg = control_service.read_config()
+        assert cfg["monero"]["node_password"] == {"__secret__": True}
+        assert cfg["dashboard"]["auth"]["password"] == {"__secret__": True}
+        assert cfg["p2pool"]["pool"] == "mini"
 
 
 class TestSubmit:
@@ -196,3 +188,33 @@ class TestReferenceMerge:
         # Still serves the host config (masked) rather than raising.
         assert cfg["p2pool"]["pool"] == "mini"
         assert cfg["monero"]["node_password"] == {"__secret__": True}
+
+
+class TestWorkerApply:
+    """Worker config-apply spooling + validation (#185). The intent carries only the worker name +
+    writable-key changes — never a host, port, or token (those stay host-side, #440)."""
+
+    def test_validate_worker_changes(self):
+        assert control_service.validate_worker_changes({"DONATION": 2}) == ""
+        assert control_service.validate_worker_changes({"pools": [], "max_temp_c": 80}) == ""
+        # Empty / wrong type.
+        assert "non-empty" in control_service.validate_worker_changes({})
+        assert "non-empty" in control_service.validate_worker_changes([])
+        assert "non-empty" in control_service.validate_worker_changes("nope")
+        # A key outside the writable allowlist (escalation attempt).
+        err = control_service.validate_worker_changes({"ACCESS_TOKEN": "x", "DONATION": 1})
+        assert "ACCESS_TOKEN" in err and "not writable" in err
+
+    def test_submit_worker_apply_spools_tokenless_intent(self, spool):
+        rid = control_service.submit_worker_apply("rig1", {"DONATION": 4}, actor="admin")
+        uuid.UUID(rid)
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req == {
+            "id": rid,
+            "action": "worker-apply",
+            "actor": "admin",
+            "worker": "rig1",
+            "changes": {"DONATION": 4},
+        }
+        # No secret / addressing leaks into the container-writable spool.
+        assert "host" not in req and "port" not in req and "token" not in req

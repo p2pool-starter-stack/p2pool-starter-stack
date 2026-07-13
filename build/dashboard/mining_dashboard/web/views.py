@@ -37,7 +37,10 @@ from mining_dashboard.helper.utils import (
     is_ip_address,
     xvb_stats_are_stale,
 )
+from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
 from mining_dashboard.service.earnings import (
+    ATOMIC_PER_XMR,
+    MICRO_PER_XTM,
     tari_seconds_to_block_per_hs,
     xmr_per_hs_day,
     xtm_per_hs_day,
@@ -599,6 +602,119 @@ def _reject_flag(accepted, rejected):
     return {"text": "⚠", "title": f"High reject rate: {rate * 100:.1f}% ({rejected} rejected)"}
 
 
+def _num(v):
+    """A number for display, or None for anything non-numeric (incl. bools, which JSON booleans
+    would otherwise pass as 0/1). Every enriched RigForge field is nullable on the wire (#235)."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _fmt_num(v):
+    """Trim a display number: drop a pointless ``.0`` so ``142.0 W`` reads ``142 W``."""
+    return str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)
+
+
+def _rigforge_display(rf):
+    """A ``{version, miner_down, chips}`` view of a worker's parsed ``rigforge`` block, or ``None``
+    for a plain-xmrig worker (#235). Each chip is ``{text, variant, title}`` (the same shape the
+    Badges component renders) and is emitted ONLY when its data is present — a rig with no RAPL
+    shows no power chip, a disabled watchdog shows no watchdog chip. Building the chip set (and its
+    thresholds) here keeps the client a dumb renderer, matching the ``_reject_flag`` precedent."""
+    if not rf:
+        return None
+    chips = []
+    if rf.get("miner_down"):
+        chips.append(
+            {
+                "text": "miner down",
+                "variant": "bad",
+                "title": "RigForge is up but its XMRig API is unreachable — the rig is present but "
+                "not mining. Live hashrate and uptime come from the proxy.",
+            }
+        )
+
+    health = rf.get("health") or {}
+    if health.get("throttling") is True:
+        chips.append(
+            {"text": "throttling", "variant": "bad", "title": "CPU is thermal/power throttling."}
+        )
+    gov = health.get("governor")
+    if gov:
+        ok = gov == "performance"
+        chips.append(
+            {
+                "text": f"gov: {gov}",
+                "variant": "ok" if ok else "warn",
+                "title": "CPU frequency governor"
+                + ("" if ok else " — 'performance' is recommended for mining."),
+            }
+        )
+    hp = _num(health.get("hugepages_total"))
+    if hp is not None:
+        chips.append(
+            {
+                "text": f"HP {_fmt_num(hp)}",
+                "variant": "outline",
+                "title": f"HugePages allocated: {_fmt_num(hp)}.",
+            }
+        )
+    board = health.get("board")
+    if board:
+        chips.append({"text": board, "variant": "outline", "title": "Mainboard (firmware)."})
+
+    power = rf.get("power") or {}
+    watts = _num(power.get("watts"))
+    hspw = _num(power.get("hs_per_watt"))
+    if watts is not None or hspw is not None:
+        parts = []
+        if watts is not None:
+            parts.append(f"{_fmt_num(round(watts, 1))} W")
+        if hspw is not None:
+            parts.append(f"{_fmt_num(round(hspw, 1))} H/s·W")
+        chips.append(
+            {"text": " · ".join(parts), "variant": "outline", "title": "Power draw / efficiency."}
+        )
+
+    tune = rf.get("tune") or {}
+    if tune.get("target"):
+        chips.append(
+            {
+                "text": f"tune: {tune['target']}",
+                "variant": "outline",
+                "title": "Active tuning target.",
+            }
+        )
+    if tune.get("autotune_enabled") and tune.get("autotune_next"):
+        chips.append(
+            {
+                "text": f"autotune → {tune['autotune_next']}",
+                "variant": "outline",
+                "title": "Next scheduled autotune run.",
+            }
+        )
+
+    wd = rf.get("watchdog") or {}
+    if wd.get("enabled"):
+        temp = _num(wd.get("temp_c"))
+        maxt = _num(wd.get("max_temp_c"))
+        if wd.get("thermal_hold") is True:
+            chips.append(
+                {
+                    "text": "thermal hold",
+                    "variant": "bad",
+                    "title": "Watchdog is holding the rig back — temperature above its ceiling.",
+                }
+            )
+        elif temp is not None:
+            label = f"{_fmt_num(round(temp, 1))}°C"
+            if maxt is not None:
+                label += f" / {_fmt_num(maxt)}°C"
+            chips.append(
+                {"text": label, "variant": "outline", "title": "Watchdog temperature / ceiling."}
+            )
+
+    return {"version": rf.get("version"), "miner_down": bool(rf.get("miner_down")), "chips": chips}
+
+
 def build_system(data):
     """System resource metrics (CPU, RAM, Disk, HugePages) as formatted values + level tokens.
 
@@ -702,12 +818,101 @@ def build_workers(workers):
                     # hashrate unavailable; the client badges it), True = ok, None = not probed
                     # (internal/invalid IP per the SSRF guard) — don't flag the unknown case.
                     "api_ok": worker.get("api_ok"),
+                    # RigForge enriched feed (#235): version badge + health/power/tune/watchdog
+                    # chips, or None for a plain-xmrig worker (renders nothing extra).
+                    "rigforge": _rigforge_display(worker.get("rigforge")),
                 }
             )
         except Exception as e:
             logger.error(f"Error processing worker {worker.get('name', 'unknown')}: {e}")
             continue
     return rows
+
+
+# --------------------------------------------------------------------------------------
+# Energy & profit calculator (Issue #260): fleet power draw + efficiency, and — once the operator
+# sets an electricity price (and an XMR price) — the net profit after power. The server totals the
+# measured draw and publishes the prices; the client does the per-day/month/year arithmetic and the
+# net = gross − cost, scaling gross with the same what-if hashrate the earnings card already uses
+# (one source of truth, #61). Deliberately NO price feed: fetching one is a clearnet egress this
+# privacy-first stack avoids (#160), so both prices are operator-supplied.
+# --------------------------------------------------------------------------------------
+
+_ENERGY_DISCLAIMER = (
+    "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting "
+    "neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the "
+    "current draw at a constant rate — a naive projection, not a metered bill. Net profit is "
+    "P2Pool XMR earnings valued at your XMR price, minus power cost: it excludes Tari (lumpy solo "
+    "merge-mining, priced separately) and XvB (raffle status, not income). Estimates, not "
+    "guarantees."
+)
+
+
+def _worker_watts_config(name):
+    """The operator's manual watts estimate for a worker name (#172 descriptor ``watts``), or None."""
+    for entry in config.DASHBOARD_WORKERS:
+        if entry["name"] == name:
+            return entry.get("watts")
+    return None
+
+
+def build_energy(workers):
+    """Fleet energy inputs for the earnings card's Energy tab (Issue #260).
+
+    Sums each worker's power draw — measured watts from the RigForge enriched feed (#235) first, else
+    the operator's per-worker ``watts`` estimate (marked ``estimated``). A worker with neither is
+    excluded and flips ``incomplete`` so the UI shows the total as a lower bound rather than counting
+    it as zero. Fleet efficiency (H/s per watt) is the summed hashrate of the powered workers over
+    their summed watts, so a worker with unknown draw skews neither number.
+
+    Publishes the summed watts + prices; the client scales to kWh / cost / net per day·month·year
+    (``computeEnergy`` in ``logic.mjs``). ``available`` is False only when no worker reports or is
+    configured with any power — the card then shows nothing rather than a zero-watt fleet."""
+    cfg = config.DASHBOARD_ENERGY
+    per_worker = []
+    total_watts = 0.0
+    powered_hs = 0.0
+    incomplete = False
+    for worker in workers:
+        name = worker.get("name", "")
+        rf = worker.get("rigforge") or {}
+        power = rf.get("power") or {}
+        watts = _num(power.get("watts"))
+        estimated = False
+        if watts is None or watts <= 0:
+            cfg_watts = _worker_watts_config(name)
+            watts = cfg_watts if (cfg_watts and cfg_watts > 0) else None
+            estimated = watts is not None
+        hs = _num(worker.get("h60")) or 0.0
+        if watts is None:
+            incomplete = True
+            per_worker.append(
+                {"name": name, "watts": None, "estimated": False, "hs": hs, "hs_per_watt": None}
+            )
+            continue
+        total_watts += watts
+        powered_hs += hs
+        per_worker.append(
+            {
+                "name": name,
+                "watts": round(watts, 1),
+                "estimated": estimated,
+                "hs": hs,
+                "hs_per_watt": round(hs / watts, 2) if watts > 0 else None,
+            }
+        )
+    have_power = total_watts > 0
+    return {
+        "available": have_power,
+        "total_watts": round(total_watts, 1) if have_power else None,
+        "hs_per_watt": round(powered_hs / total_watts, 2) if have_power else None,
+        "incomplete": incomplete,
+        "cost_per_kwh": cfg["cost_per_kwh"],
+        "xmr_price": cfg["xmr_price"],
+        "currency": cfg["currency"],
+        "per_worker": per_worker,
+        "disclaimer": _ENERGY_DISCLAIMER,
+    }
 
 
 def build_proxy_summary(data):
@@ -1006,8 +1211,47 @@ _EARNINGS_DISCLAIMER = (
 )
 
 
-def build_earnings(data, metrics):
+def _confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="xmr"):
+    """Roll confirmed on-chain payouts into 24h / 7d / all-time totals + a count (#381/#462).
+
+    ``payouts`` is the stored-payout list (``storage.get_payouts(chain)``): each carries ``ts``
+    (unix seconds) and ``amount_atomic``. Sums are converted atomic→whole-unit at this edge only,
+    via ``divisor`` (piconero 1e12 for Monero, microTari 1e6 for Tari) with the amount keys prefixed
+    by ``unit`` (``xmr_*`` / ``xtm_*``). ``enabled`` is False when the feature is off
+    (``payouts is None``) — the UI then shows only the estimate; an empty list means "on, nothing
+    confirmed yet" (shows 0.000000)."""
+    if payouts is None:
+        return {"enabled": False}
+    now = now if now is not None else time.time()
+    day, week = now - 86_400, now - 7 * 86_400
+    atomic_24h = atomic_7d = atomic_all = 0
+    for p in payouts:
+        amt = p.get("amount_atomic", 0) or 0
+        ts = p.get("ts", 0) or 0
+        atomic_all += amt
+        if ts >= week:
+            atomic_7d += amt
+        if ts >= day:
+            atomic_24h += amt
+    last_ts = max((p.get("ts", 0) or 0 for p in payouts), default=0)
+    return {
+        "enabled": True,
+        "count": len(payouts),
+        f"{unit}_24h": atomic_24h / divisor,
+        f"{unit}_7d": atomic_7d / divisor,
+        f"{unit}_all": atomic_all / divisor,
+        "last_ts": last_ts,
+    }
+
+
+def build_earnings(data, metrics, payouts=None, tari_payouts=None):
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
+
+    ``payouts`` (#381), when the view-only wallet feature is on, is the stored confirmed-payout
+    list; it's rolled into a ``confirmed`` block (24h / 7d / all-time XMR) shown beside this
+    estimate — the estimate is a model, the confirmed figure is ground truth from the wallet.
+    ``tari_payouts`` (#462) is the same for the Tari side, rolled into ``tari_confirmed`` (XTM)
+    beside the Tari time-to-block estimate.
 
     This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
     actually mining on your P2Pool node — *not* the rig's total output. The what-if default is
@@ -1055,6 +1299,14 @@ def build_earnings(data, metrics):
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,
+        # Confirmed on-chain payouts (#381), beside the estimate above. {"enabled": False} when the
+        # view-only wallet feature is off — the UI then shows only the estimate.
+        "confirmed": _confirmed_payouts_summary(payouts),
+        # Confirmed Tari payouts (#462), beside the Tari time-to-block estimate. XTM (microTari),
+        # {"enabled": False} when the Tari view-only wallet feature is off.
+        "tari_confirmed": _confirmed_payouts_summary(
+            tari_payouts, divisor=MICRO_PER_XTM, unit="xtm"
+        ),
     }
 
 
@@ -1164,6 +1416,39 @@ def _egress_badge(summary):
     }
 
 
+def build_worker_detail(name, data, state_mgr):
+    """Per-worker Inspect payload (#185): the rig's current enriched telemetry, the writable config
+    the dashboard last applied (the editor prefill — the rig's feed does not expose the writable
+    config values, so Pithead's own last-applied record is the honest source), and the change history
+    (each row's ``changes`` is a diff by construction, since we only ever record deltas we authored).
+
+    ``editable`` is whether the worker has an operator-set ``host`` in ``dashboard.workers[]`` — the
+    precondition for the host-side write path. The rig's token is masked out of this container (#440),
+    so the container cannot verify it; the host runner re-checks it and fails closed if it is missing.
+    """
+    workers = data.get("workers", []) if data else []
+    worker = next((w for w in workers if w.get("name") == name), None)
+    descriptor = next((e for e in config.DASHBOARD_WORKERS if e["name"] == name), None)
+    history = state_mgr.get_worker_config_history(name)
+    for row in history:
+        ts = row.get("ts")
+        row["applied_at"] = format_time_abs(ts) if ts else ""
+    return {
+        "name": name,
+        "found": worker is not None,
+        # A worker is editable only if the operator pinned its host in config.json — never a
+        # miner-advertised address (#122). control_enabled gates whether the write path exists at all.
+        "editable": bool(descriptor and descriptor.get("host")),
+        "control_enabled": config.DASHBOARD_CONTROL_ENABLED,
+        "status": worker.get("status") if worker else None,
+        "hashrate": format_hashrate(worker.get("h60", 0)) if worker else None,
+        "rigforge": _rigforge_display(worker.get("rigforge")) if worker else None,
+        "writable_keys": sorted(WORKER_WRITABLE_KEYS),
+        "last_applied": state_mgr.get_last_applied_worker_config(name),
+        "history": history,
+    }
+
+
 def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
@@ -1197,6 +1482,8 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
+        # The operator-facing stratum port (#172) — feeds the "point your rigs at host:PORT" hint.
+        "stratum_port": config.STRATUM_PORT,
         "version": resolve_version(),
         "update": data.get("update"),  # {available, latest, url} | None — new-release badge (#224)
         # Whether the control channel is on (#33) — gates the header Upgrade button (#59). The
@@ -1221,10 +1508,21 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "cadence": build_cadence(metrics),
         "raffle_eligible": build_raffle_eligibility(metrics),
         "proxy_workers": metrics.workers_online,
-        "earnings": build_earnings(data, metrics),
+        # Confirmed payouts (#381): pass the stored list when the feature is on, else None (feature
+        # off → earnings shows only the estimate). config read at call time so tests can flip it.
+        "earnings": build_earnings(
+            data,
+            metrics,
+            payouts=state_mgr.get_payouts("monero") if config.PAYOUT_CONFIRM_ENABLED else None,
+            tari_payouts=(
+                state_mgr.get_payouts("tari") if config.TARI_PAYOUT_CONFIRM_ENABLED else None
+            ),
+        ),
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
+        # Fleet power draw / efficiency and (once a price is set) net profit after power (#260).
+        "energy": build_energy(data.get("workers", [])),
         "proxy_summary": build_proxy_summary(data),
         # Persisted per-poll share-health deltas + trailing 24h reject rate (#116). Kept out of
         # proxy_summary so its (cumulative) shape stays unchanged for existing clients.

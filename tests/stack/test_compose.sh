@@ -231,17 +231,19 @@ else
 fi
 
 # Control-channel spool mounts (#33): the rw/ro split IS the trust boundary. requests/ is the
-# dashboard's ONLY writable leg; results/, audit/ and the config prefill are read-only; staged/
-# is never mounted at all — so the container can ask, but cannot forge a result, rewrite the
-# audit log, or alter a staged intent.
+# dashboard's ONLY writable leg; results/, audit/ and the pre-masked config prefill (#440) are
+# read-only; staged/ is never mounted at all — so the container can ask, but cannot forge a
+# result, rewrite the audit log, alter a staged intent, or read a raw secret.
 jq_assert "dashboard control requests/ mounted read-write (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/requests") and ((.read_only // false) == false))'
 jq_assert "dashboard control results/ mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/results") and (.read_only == true))'
 jq_assert "dashboard control audit/ mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/control/audit") and (.read_only == true))'
-jq_assert "dashboard config.json prefill mounted read-only (#33)" \
-    '.services.dashboard.volumes | any((.target == "/host-config/config.json") and (.read_only == true))'
+jq_assert "dashboard pre-masked config prefill mounted read-only (#440)" \
+    '.services.dashboard.volumes | any((.target == "/control/masked") and (.read_only == true))'
+jq_assert "raw config.json never enters the dashboard container (#440)" \
+    '.services.dashboard.volumes | any(.source | tostring | endswith("/config.json")) | not'
 jq_assert "dashboard config.reference.json prefill mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/host-config/config.reference.json") and (.read_only == true))'
 jq_assert "control staged/ dir never enters the container (#33)" \
@@ -272,6 +274,38 @@ sub_check "custom subnet rebases the bridge network (#180)" "subnet: 10.84.0.0/2
 sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 5
 sub_check "custom subnet rebases the dashboard SSRF CIDR (#180)" "MINING_NET_CIDR: 10.84.0.0/24" 1
 sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "TOR_SOCKS_PROXY: socks5h://10.84.0.25:9050" 1
+
+# Configurable stratum port (#172). Default env (no STRATUM_PORT — a pre-#172 .env) must keep
+# publishing/binding :3333; a custom port must move the publish, the container port, the -b bind
+# AND the dashboard hint — while the internal proxy→p2pool leg stays :3333 (P2POOL_URL, and
+# p2pool's own --stratum 0.0.0.0:3333).
+jq_assert "default stratum publish stays :3333 (#172)" \
+    '.services["xmrig-proxy"].ports | any((.published == "3333") and (.target == 3333))'
+jq_assert "default -b bind stays 0.0.0.0:3333 (#172)" \
+    '.services["xmrig-proxy"].command | any(. == "0.0.0.0:3333")'
+PORT_ENV="$(mktemp)"
+{
+    cat "$ENV_FILE"
+    printf 'STRATUM_PORT=4444\n'
+} >"$PORT_ENV"
+PORT_JSON="$(docker compose --env-file "$PORT_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+rm -f "$PORT_ENV"
+port_assert() { # <label> <filter>
+    if printf '%s' "$PORT_JSON" | jq -e "$2" >/dev/null 2>&1; then echo "  ✓ $1"; else
+        echo "  ✗ $1: failed [$2]"
+        fails=$((fails + 1))
+    fi
+}
+port_assert "custom stratum port moves the publish and container port (#172)" \
+    '.services["xmrig-proxy"].ports | any((.published == "4444") and (.target == 4444))'
+port_assert "custom stratum port moves the -b bind (#172)" \
+    '.services["xmrig-proxy"].command | any(. == "0.0.0.0:4444")'
+port_assert "custom stratum port reaches the dashboard hint env (#172)" \
+    '.services.dashboard.environment["STRATUM_PORT"] == "4444"'
+port_assert "internal p2pool stratum stays :3333 under a custom port (#172)" \
+    '.services["p2pool"].command | any(. == "0.0.0.0:3333")'
+port_assert "proxy upstream (P2POOL_URL) stays the internal :3333 (#172)" \
+    '.services["xmrig-proxy"].command | any(. == "172.28.0.28:3333")'
 
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"

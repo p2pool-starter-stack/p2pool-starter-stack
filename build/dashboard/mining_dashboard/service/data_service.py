@@ -6,8 +6,10 @@ import time
 from aiohttp import ClientSession
 
 from mining_dashboard.client.docker.docker_control import DockerControl
+from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
 from mining_dashboard.client.tari.tari_client import TariClient
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient
+from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient
+from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge
 from mining_dashboard.client.xvb_client import (
     REG_INVALID,
     REG_NOT_ELIGIBLE,
@@ -40,9 +42,11 @@ from mining_dashboard.config.config import (
     LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     MONERO_WALLET_ADDRESS,
+    PAYOUT_CONFIRM_ENABLED,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
     TARI_CLEARNET_SYNC,
+    TARI_PAYOUT_CONFIRM_ENABLED,
     TARI_REQUIRED,
     TOR_SOCKS_PROXY,
     UPDATE_CHECK_INTERVAL,
@@ -226,6 +230,14 @@ def _merge_direct_stats(workers, results, active_pool_port):
         api_ok = extra_stats.get("api_ok") if extra_stats else None
         if api_ok is not None:
             w["api_ok"] = api_ok
+
+        # RigForge enriched feed (#235): a superset /1/summary carries an extra `rigforge` block.
+        # Present only for RigForge rigs whose descriptor port points at the enriched feed; a
+        # plain-xmrig rig parses to None and gets no chips. A miner-down enriched body has no XMRig
+        # keys, so this rides in even when api_ok can't confirm live hashrate.
+        rf = parse_rigforge(extra_stats) if extra_stats else None
+        if rf is not None:
+            w["rigforge"] = rf
 
         if api_ok:  # only a successful probe carries uptime + per-miner hashrate
             w["uptime"] = extra_stats.get("uptime", w["uptime"])
@@ -451,6 +463,14 @@ class DataService:
         self.alert_service = AlertService(
             kv_get=self.state_manager.get_kv, kv_set=self.state_manager.set_kv
         )
+        # On-chain payout confirmation (#381): a view-only wallet-rpc client, polled on the slow
+        # cadence below. Only constructed when the feature is on (view key set on a local node);
+        # off, this stays None and no payout polling ever runs.
+        self.wallet_client = MoneroWalletClient() if PAYOUT_CONFIRM_ENABLED else None
+        # Tari on-chain payout confirmation (#462): a view-only console-wallet gRPC client, polled on
+        # the same slow cadence. Only constructed when the Tari feature is on (tari view key set on a
+        # local Tari node); off, this stays None and no Tari payout polling ever runs.
+        self.tari_wallet_client = TariWalletClient() if TARI_PAYOUT_CONFIRM_ENABLED else None
         # Tor guard self-heal (#424), opt-in via tor.auto_heal — a no-op (no probes, no
         # restarts) unless enabled. Reuses the #31 docker-control proxy (start/stop only)
         # to restart tor when clearnet egress is stuck on a failing guard; the recovery
@@ -678,6 +698,54 @@ class DataService:
                     self.state_manager.update_xvb_stats, registration_state="failing"
                 )
 
+    async def _sync_payouts(self):
+        """Confirm on-chain payouts from the view-only wallet-rpc (#381), throttled by the caller.
+
+        Seeds the query from the highest stored Monero payout height, so a restart re-scans only
+        the tip; ``add_payouts`` is idempotent on ``(chain, txid)``, so the overlap is dropped and
+        nothing replays. Every genuinely-new confirmed payout fires exactly one ``payout_confirmed``
+        alert. A wallet still doing its first-run scan (or briefly unreachable) returns ``[]`` — a
+        quiet no-op, no error. chain="monero" here; the Tari sibling (#462) reuses the same table."""
+        chain = "monero"
+        min_height = await asyncio.to_thread(self.state_manager.get_payout_max_height, chain)
+        payouts = await asyncio.to_thread(self.wallet_client.get_confirmed_payouts, min_height)
+        if not payouts:
+            return
+        new_rows = await asyncio.to_thread(self.state_manager.add_payouts, chain, payouts)
+        for r in new_rows:
+            logger.info(
+                "Payout confirmed on-chain: %.6f XMR (tx %s…) at height %d (#381)",
+                r["amount_atomic"] / 1e12,
+                r["txid"][:8],
+                r["height"],
+            )
+            await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
+
+    async def _sync_tari_payouts(self):
+        """Confirm Tari on-chain payouts from the view-only console wallet (#462), throttled by the
+        caller — the Tari sibling of ``_sync_payouts``.
+
+        Identical shape: seed from the highest stored Tari payout height, stream new confirmed
+        payouts, persist to the shared ``payouts`` table with chain="tari" (idempotent on
+        ``(chain, txid)`` so a restart replays nothing), and fire one ``payout_confirmed`` alert per
+        genuinely-new payout. ``amount_atomic`` is microTari here; the shared alert divides by the
+        Tari divisor. The Tari client is async (grpc.aio), so it's awaited directly rather than via
+        ``asyncio.to_thread``. An empty/unreachable scan is a quiet no-op."""
+        chain = "tari"
+        min_height = await asyncio.to_thread(self.state_manager.get_payout_max_height, chain)
+        payouts = await self.tari_wallet_client.get_confirmed_payouts(min_height)
+        if not payouts:
+            return
+        new_rows = await asyncio.to_thread(self.state_manager.add_payouts, chain, payouts)
+        for r in new_rows:
+            logger.info(
+                "Tari payout confirmed on-chain: %.6f XTM (tx %s…) at height %d (#462)",
+                r["amount_atomic"] / 1e6,
+                r["txid"][:8],
+                r["height"],
+            )
+            await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
+
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
         if ok:
@@ -904,6 +972,10 @@ class DataService:
                         workers_expected=self.miner_released and not self.workers_rejected,
                         disk_percent=(disk_usage or {}).get("percent", 0) or 0,
                         db_healthy=db_healthy,
+                        # DB self-heal one-shot (#489): a monotonic counter + the last reset's detail,
+                        # so the alerter fires exactly once when a corrupt DB was quarantined + reset.
+                        db_reset_seq=self.state_manager.db_reset_count,
+                        db_reset_detail=self.state_manager.last_db_reset,
                         xvb_enabled=ENABLE_XVB,
                         shares_in_window=shares_in_window,
                         clearnet_active=bool(self.clearnet_sync_state.get("active")),
@@ -1056,6 +1128,17 @@ class DataService:
                         # the stats sync (Tor, every 10th poll, XvB-enabled only). Gated on a PPLNS
                         # share existing — before then the endpoint is a no-op, so we just retry.
                         await self._maybe_register_xvb(shares_list, p2pool_stats)
+
+                    # 7c. On-chain payout confirmation (#381), every 10th poll (~5 min). Independent
+                    # of XvB — gated on the view-only wallet-rpc being configured (local node + view
+                    # key). Polls get_transfers, persists new confirmed payouts, fires one alert each.
+                    if self.wallet_client is not None and iteration_count % 10 == 0:
+                        await self._sync_payouts()
+
+                    # 7d. Tari on-chain payout confirmation (#462), same cadence — gated on the
+                    # view-only Tari console wallet being configured (local node + tari view key).
+                    if self.tari_wallet_client is not None and iteration_count % 10 == 0:
+                        await self._sync_tari_payouts()
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to
