@@ -44,6 +44,7 @@ transition, not a stream:
 | 🚨 **Payout wallet changed** | The wallet p2pool mines to differs from the last one seen — every future reward goes to the new address. Fires on **every** change, including one you made yourself with `./pithead apply`, so treat it as a confirmation; if you didn't change it, your rewards are being redirected. Addresses appear truncated to 8 characters (full addresses never leave the host), and the dashboard shows a matching top-bar warning for 72 hours — the dashboard warning works even with Telegram off. |
 | 🎉 **Block found** | The P2Pool sidechain found a Monero block. Pool-wide: every miner with a PPLNS share gets paid from it. |
 | 💰 **Payout incoming** | That block pays **you** — this node held a share in the PPLNS window when it was found. The amount lands in your wallet once the block matures (about two hours). |
+| ✅ **Payout confirmed** | A P2Pool payout (Monero or Tari) matured and was seen **on-chain** by the view-only wallet — ground truth that a reward actually arrived, beside the estimate. Fires once per confirmed payout. Only when a view key is set (see [Payout confirmation](dashboard.md#payout-confirmation)). |
 | 🆕 **New release** | A newer Pithead release is available (the same signal as the dashboard header badge). |
 | 🚀 **Pithead online** | Sent once when the dashboard starts — a heartbeat that the stack is up (and confirms the bot works after setup). |
 | 📅 **Daily summary** | A once-a-day retrospective of the last 24h across your whole fleet — date/time, an **incident roll-up** (what went wrong during the day, or an all-clear), **24h hashrate** with the **P2Pool / XvB split**, **shares found in the day**, an **estimated daily earnings** figure, and a **per-machine 24h breakdown** — pushed at a set local time (**08:00** by default; `telegram.daily_summary_time`). |
@@ -177,6 +178,7 @@ block and set it to `false` — any event you don't list stays on:
 | `high_reject_rate` | `true` | Pool-wide reject rate over the trailing hour crossed 5% (the same threshold as the dashboard's ⚠ flag) / dropped back |
 | `block_found` | `true` | The P2Pool sidechain found a Monero block (pool-wide — every miner with a PPLNS share gets paid) |
 | `payout_found` | `true` | That block pays you — this node held a share in the PPLNS window when it was found |
+| `payout_confirmed` | `true` | A payout (Monero or Tari) confirmed on-chain by the view-only wallet |
 | `container_unhealthy` | `true` | A stack container is crash-looping or stuck failing its healthcheck / recovered |
 
 Run `./pithead apply` after editing.
@@ -280,6 +282,10 @@ How the gating works:
   until you tap it, and if you don't within `confirm_timeout` seconds (default 60) the request is
   **denied**, never queued. Only the operator who issued the command can confirm it, and each button
   is one-shot.
+- **Per-operator rate limit.** Each allow-listed operator can be issued at most a handful of confirm
+  prompts per rolling hour; past that, `/restart` / `/apply` from that operator are dropped without a
+  prompt (an anti-fatigue guard so a stuck or compromised session can't spam approvals). The budget is
+  keyed per operator, so one hitting the cap never locks the others out. Not configurable.
 - **A fixed, small action set.** The two verbs are the whole surface — a Telegram message **selects**
   one of them, it never becomes a host command. There is no arbitrary execution.
 - **It rides the config-editor's channel, not a new one.** Both verbs act by dropping a typed intent
