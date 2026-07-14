@@ -79,7 +79,9 @@ const PreviewModal = ({ preview, confirmText, onConfirmText, onConfirm, onCancel
               ? html`<p class="text-muted">No configuration changes detected.</p>`
               : html`<ul class="config-preview-list">
                   ${changes.map(
-                    (c) => html`<li class=${c.flag === "DEST" ? "config-preview-dest" : c.flag === "HOST" ? "config-preview-host" : ""}>
+                    (
+                      c,
+                    ) => html`<li class=${c.flag === "DEST" ? "config-preview-dest" : c.flag === "HOST" ? "config-preview-host" : ""}>
                         ${c.flag === "DEST" ? "⚠ " : c.flag === "HOST" ? "ℹ " : ""}${c.msg}</li>`,
                   )}
               </ul>`

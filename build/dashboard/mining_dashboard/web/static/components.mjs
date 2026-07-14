@@ -843,9 +843,11 @@ function DashboardView({
             </div>
         </div>
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
-        ${configView
-          ? html`<div class="card-stack"><${ConfigView} /><${SecurityPanel} /></div>`
-          : null}
+        ${
+          configView
+            ? html`<div class="card-stack"><${ConfigView} /><${SecurityPanel} /></div>`
+            : null
+        }
         ${
           configView
             ? null
