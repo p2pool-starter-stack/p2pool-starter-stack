@@ -190,8 +190,8 @@ export class ConfigView extends Component {
     if (phase === "disabled") {
       return html`<div class="card">
           <h3>Configuration</h3>
-          <p>Configuration editing is off (the default). To enable it, set
-          <code>dashboard.control.enabled: true</code> in <code>config.json</code> on the host and
+          <p>Configuration editing is off (the default). To enable it, set <code>dashboard.control.enabled: true</code>
+          in <code>config.json</code> on the host and
           run <code>./pithead apply</code>. It requires a dashboard login.</p>
       </div>`;
     }
