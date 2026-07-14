@@ -11,6 +11,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-14
+
+### Fixed
+
+- **Enriched per-rig stats work again when `dashboard.workers[]` is populated (regression from 1.5.1).**
+  1.5.1's #508 fix kept a worker descriptor whose token is the masked `{"__secret__": true}` sentinel;
+  the read-probe auth then stringified that dict into the `Authorization: Bearer` header, so every
+  enriched-feed probe returned HTTP 401 and per-rig stats disappeared. The probe now uses a per-worker
+  token only when it's a real string, falling through to the fleet auth mode (e.g. `name`) for the
+  masked sentinel — the host-side runner still uses the real token for the control path.
+
 ## [1.5.1] - 2026-07-14
 
 ### Fixed
