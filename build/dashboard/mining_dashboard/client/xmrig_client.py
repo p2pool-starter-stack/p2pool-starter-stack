@@ -152,7 +152,11 @@ class XMRigWorkerClient:
         A per-worker token (#172) implies token-auth for that worker only, whatever the
         fleet-wide mode says.
         """
-        if override_token:
+        # Only a real STRING token overrides the fleet auth. The container reads the MASKED config
+        # (#440), where a per-worker token is the {"__secret__": true} sentinel — it means "a token
+        # exists but the container doesn't hold it", so fall through to the fleet auth mode (e.g. name)
+        # for the read probe. The host-side runner still uses the real token for control (#508/#440).
+        if isinstance(override_token, str) and override_token:
             return {"Authorization": f"Bearer {override_token}"}
         mode = XMRIG_API_AUTH
         if mode == "name":

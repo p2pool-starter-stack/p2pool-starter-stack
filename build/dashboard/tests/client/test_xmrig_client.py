@@ -315,6 +315,20 @@ async def test_override_token_beats_fleet_name_auth(monkeypatch):
     assert session.calls[0][1]["Authorization"] == "Bearer per-rig-secret"
 
 
+async def test_masked_sentinel_token_falls_through_to_fleet_name_auth(monkeypatch):
+    # The container reads the MASKED config (#440): a per-worker token is the {"__secret__": true}
+    # sentinel, which must NOT be sent as a bearer (stringifying the dict 401s). It means "a token
+    # exists but the container doesn't hold it", so the read probe falls through to the fleet auth
+    # mode; the host-side runner uses the real token for control (#508).
+    monkeypatch.setattr(xc, "XMRIG_API_AUTH", "name")
+    _with_overrides(
+        monkeypatch, [{"name": "rig1", "host": "10.0.0.1", "token": {"__secret__": True}}]
+    )
+    session = FakeSession(response=FakeResponse(200, {"ok": True}))
+    await XMRigWorkerClient(session).get_stats("10.0.0.1", "rig1")
+    assert session.calls[0][1]["Authorization"] == "Bearer rig1"
+
+
 async def test_match_is_by_stratum_name_before_plus_suffix(monkeypatch):
     _with_overrides(monkeypatch, [{"name": "rig1", "port": 18088}])
     session = FakeSession(response=FakeResponse(200, {"ok": True}))
