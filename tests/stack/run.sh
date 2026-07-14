@@ -3806,6 +3806,19 @@ assert_eq "pool switch alone is not destructive" "$(jq -r '.destructive' "$RESUL
 assert_eq "staged candidate is mode 600" "$(file_mode "$STAGED/$UUID1.json")" "600"
 assert_contains "preview audited" "$(cat "$AUDIT" 2>/dev/null)" "\"action\":\"preview\",\"status\":\"previewed\""
 
+# #519: an energy-only edit is config.json-only (dashboard.energy never renders to .env), so it
+# produces no committable change — the preview surfaces a non-committable HOST note (so the UI shows
+# an explanation, not a bare "no changes"). Built from the live config so ONLY energy differs.
+UUID_EN="55555555-5555-4555-8555-555555555555"
+jq --arg id "$UUID_EN" '{id:$id, action:"preview", actor:"admin",
+    config:(. + {dashboard:(.dashboard + {energy:{cost_per_kwh:0.11,xmr_price:322,currency:"USD"}})})}' \
+    "$C/config.json" >"$REQS/$UUID_EN.json"
+out="$(run_pending)"
+assert_eq "energy-only preview is previewed" "$(jq -r '.status' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "previewed"
+assert_eq "energy edit surfaces exactly one HOST note" "$(jq -r '[.changes[]|select(.flag=="HOST")]|length' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "1"
+assert_eq "energy-only edit has no committable (.env) change" "$(jq -r '[.changes[]|select(.flag!="HOST")]|length' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "0"
+assert_contains "HOST note names dashboard.energy" "$(jq -r '.changes[]|select(.flag=="HOST")|.msg' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "dashboard.energy changed"
+
 # Malformed id: it would become a filename, so the request is discarded with no result at all.
 printf '{"id":"../../etc/passwd","action":"preview","actor":"x","config":{}}\n' >"$REQS/evil.json"
 out="$(run_pending)"
