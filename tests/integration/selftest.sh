@@ -316,8 +316,76 @@ else
 
     # (e) Every holder exited normally, so the display-only sidecar is gone (EXIT-trap rm).
     if [ ! -f "$RIG_LOCK_HOLDER" ]; then it_pass "holder sidecar removed on normal exit"; else it_fail "holder sidecar removed on normal exit" "sidecar still present"; fi
+
+    # (f) The KERNEL flock is genuinely held for the lifetime of a --local run, and released after —
+    # probed DIRECTLY with flock (not via rig_lock) so we assert the real lock state a colliding
+    # RigForge/pithead run on the box would see. Crucially the holder-marker path is deliberately
+    # UNWRITABLE here (root-owned /run is unwritable for a non-root runner): this proves the marker
+    # write is best-effort and can NEVER stop the flock from being held — the Bug-1 regression where a
+    # failed holder-write left the box unreserved. If acquisition were coupled to the marker, the
+    # holder below would never signal ready and we reap it, so the test FAILS FAST (never hangs).
+    mkfifo "$RL/hold-f"
+    mkdir -p "$RL/noholder" && chmod 000 "$RL/noholder" # unwritable marker dir, mimics /run for non-root
+    (RIG_LOCK_HOLDER="$RL/noholder/x" rig_lock pithead "run.sh matrix" && : >"$RL/ready-f" && read -r _ <"$RL/hold-f") &
+    _rl_f=$!
+    if wait_for 30 0.2 "run holds the flock despite an unwritable marker path" test -f "$RL/ready-f"; then
+        if flock -n -x "$RIG_LOCK_FILE" true 2>/dev/null; then
+            it_fail "flock GENUINELY held mid --local run" "a second exclusive flock succeeded — the box is unreserved (Bug 1)"
+        else
+            it_pass "flock GENUINELY held mid --local run (unwritable marker notwithstanding)"
+        fi
+        printf 'go\n' >"$RL/hold-f" # release the holder (safe: it is alive, reading the fifo)
+        wait "$_rl_f"
+        if flock -n -x "$RIG_LOCK_FILE" true 2>/dev/null; then
+            it_pass "flock released after the --local run exits (kernel drops the FD-held lock)"
+        else
+            it_fail "flock released after the --local run exits" "lock still held after the holder process exited"
+        fi
+    else
+        # Never acquired: the marker write blocked acquisition (the Bug-1 coupling). Fail fast — reap
+        # the holder rather than blocking forever on a fifo write nothing will read.
+        it_fail "flock GENUINELY held mid --local run" "holder never acquired — a failed marker write blocked lock acquisition (Bug 1)"
+        kill "$_rl_f" 2>/dev/null
+        wait "$_rl_f" 2>/dev/null
+    fi
+    chmod 755 "$RL/noholder" # restore so the TMP-dir EXIT cleanup can remove it
+
     unset RIG_LOCK_FILE RIG_LOCK_HOLDER
 fi
+
+echo "== provision: force-clean checkout tolerates untracked leftovers, keeps results/backups/data (#454) =="
+# Mirrors e2e.sh provision(): the disposable e2e checkout must survive a stray untracked file at a
+# path the target branch tracks (the reported abort), while never wiping the harness's results/ or
+# the shared chains' data/ + rollback backups/. The FLAGS are what's under test.
+_gt="$(mktemp -d)"
+(
+    cd "$_gt" || exit 1
+    git init -q
+    git config user.email t@t
+    git config user.name t
+    git commit -q --allow-empty -m base
+    mkdir -p tests/integration/benchmarks
+    echo tracked >tests/integration/benchmarks/bench.sh
+    git add -A && git commit -q -m feature
+    _feat="$(git rev-parse HEAD)"
+    git checkout -q -B other HEAD~1 # a tree WITHOUT bench.sh
+    # A leftover untracked file at the colliding path + cruft + the dirs the harness must keep.
+    mkdir -p tests/integration/benchmarks results backups data
+    echo leftover >tests/integration/benchmarks/bench.sh
+    printf x >results/keep
+    printf x >backups/keep
+    printf x >data/keep
+    printf x >stray-cruft
+    git checkout -q -f -B feature "$_feat"
+    git reset -q --hard "$_feat"
+    git clean -qfdx -e /results -e /backups -e /data
+) >/dev/null 2>&1
+assert_eq "-f overwrites the untracked leftover instead of aborting" "$(cat "$_gt/tests/integration/benchmarks/bench.sh" 2>/dev/null)" "tracked"
+for _d in results backups data; do
+    if [ -f "$_gt/$_d/keep" ]; then it_pass "clean keeps $_d/"; else it_fail "clean keeps $_d/" "$_d/keep was removed"; fi
+done
+if [ ! -e "$_gt/stray-cruft" ]; then it_pass "clean removes untracked cruft"; else it_fail "clean removes untracked cruft" "stray-cruft survived"; fi
+rm -rf "$_gt"
 
 # --- Tally ------------------------------------------------------------------
 echo ""

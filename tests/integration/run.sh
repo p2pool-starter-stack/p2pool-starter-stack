@@ -39,6 +39,7 @@ RUN_LIFECYCLE=0
 RUN_FAULTS=0
 RUN_AUTH_FAIL_CLOSED=0
 RUN_HARDENING=0
+RUN_RIGFORGE=0
 SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
@@ -108,6 +109,9 @@ MATRIX:
                          on a spooled request (allowlisted change applies, sensitive change
                          refused), and the stack recovers from a tor restart. DESTRUCTIVE-then-
                          restored (enables then disables the control channel).
+  --rigforge             also run the RigForge integration phase (#185/#235/#260): assert the
+                         dashboard consumed a REAL rigforge rig's enriched feed and Worker Inspect
+                         reads it. Non-destructive; self-skips if no rigforge rig is connected.
   --keep                 do NOT restore the original config.json at the end (leaves the box
                          on the last scenario — useful for debugging)
 
@@ -193,6 +197,10 @@ parse_args() {
             ;;
         --hardening)
             RUN_HARDENING=1
+            shift
+            ;;
+        --rigforge)
+            RUN_RIGFORGE=1
             shift
             ;;
         --safety-backup)
@@ -1202,6 +1210,28 @@ _onion_reachable_external() {
     rx "$snippet" | grep -q "PROBE-OK"
 }
 
+# Reap the root pithead-control systemd units on the box, unconditionally and idempotently (#477).
+# The hardening phase installs pithead-control.{path,service} to exercise the #33 spool; the restore
+# apply is supposed to remove them, but that removal runs EARLY in apply (provision_control_runner) —
+# before container recreation + the tor restart — so a restore apply that dies partway (render/preflight
+# failure, or wait_status_ok timing out mid-apply) leaves the ROOT path unit watching the control spool
+# past the phase and beyond. A later apply is convergent and would clean it, but only if it runs. This
+# teardown mirrors provision_control_runner's removal branch (pithead:5242) and runs regardless of the
+# restore apply's exit code. No-ops where there's no systemd (macOS/dev). Returns non-zero ONLY if a
+# unit survives (e.g. sudo unavailable) so the caller can warn loudly instead of silently passing.
+_remove_control_units() {
+    rx '
+        command -v systemctl >/dev/null 2>&1 || exit 0
+        ud=/etc/systemd/system
+        if [ -e "$ud/pithead-control.path" ] || [ -e "$ud/pithead-control.service" ]; then
+            sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
+            sudo rm -f "$ud/pithead-control.path" "$ud/pithead-control.service"
+            sudo systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        [ ! -e "$ud/pithead-control.path" ] && [ ! -e "$ud/pithead-control.service" ]
+    '
+}
+
 # Tier-4 hardening phase (#377/#33/#424): the v1.4 host-mutation + hardening surfaces that ONLY a
 # real box proves — a read-only rootfs actually rejecting a write, the systemd path unit actually
 # firing on a spooled request, and a tor restart restoring real clearnet egress. Local mode only
@@ -1350,6 +1380,15 @@ run_hardening() {
     # 240s: this apply follows the control enable/disable + a tor restart, so the stack has more to
     # re-settle than a plain apply (180s timed out here on a real run).
     wait_status_ok 240 || true
+    # #477: reap the control units unconditionally — the restore apply above is supposed to remove them,
+    # but if it died before provision_control_runner ran, the ROOT path unit would linger past the phase.
+    # (develop's #424 added a fire-and-forget inline version here; this supersedes it — it verifies the
+    # units are actually gone and warns loudly if not, rather than swallowing the outcome with `|| true`.)
+    if _remove_control_units; then
+        it_pass "control systemd units removed after the hardening phase (#477)"
+    else
+        it_warn "pithead-control units survived teardown — remove them by hand on the box (sudo unavailable?)"
+    fi
 }
 
 run_auth_fail_closed() {
@@ -1470,6 +1509,75 @@ summary() {
     return 0
 }
 
+# --- RigForge integration phase (--rigforge) --------------------------------
+# The v1.5 dashboard <-> RigForge integration, validated against a REAL rig (the borrowed loaner) —
+# the one thing the tier-2 contract test (fakes/test_contract.py, #209) can't prove: that a real
+# RigForge v1.8.0 producer serves the enriched feed in the shape the dashboard consumes, and that the
+# LIVE dashboard reads it. Self-gates: if no worker exposes a rigforge enriched block (no real rig, or
+# its sister API is off), it warns and skips — it never fails the gate on a bench without a rigforge
+# rig. Non-destructive: it reads /api/state + /api/worker and checks the write path's fail-closed
+# guards; it does NOT push a config change to the borrowed rig (that stage->apply->RESTART->rollback
+# flow restarts a shared loaner and needs the rig's own control API opted in, so it's a manual runbook
+# step). Runs under the shared-bench flock like the rest of main() (rig_lock is already held).
+run_rigforge_integration() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
+    IT_CURRENT_SCENARIO="rigforge-integration"
+    echo ""
+    it_log "── RigForge integration phase (#185/#235/#260) ─────"
+    local st rig
+    st="$(api_state)"
+    if [ -z "$st" ]; then
+        it_warn "rigforge-integration: /api/state unreachable — skipping"
+        return 0
+    fi
+    # A worker whose enriched rigforge block is present (version populated) = a real RigForge rig
+    # whose sister API the dashboard reached and parse_rigforge parsed (#235).
+    rig="$(printf '%s' "$st" | jq -r 'first(.workers[]? | select(.rigforge != null and .rigforge.version != null) | .name) // empty' 2>/dev/null)"
+    if [ -z "$rig" ]; then
+        it_warn "no worker exposes a RigForge enriched feed (a real rigforge rig with api:enabled on :8081?) — enriched-feed consumption not asserted here; the parse contract is covered by the tier-2 test"
+        return 0
+    fi
+    it_pass "dashboard consumed a real RigForge rig's enriched feed: $rig (#235)"
+
+    # 1. Enriched feed (#235/#260): the rig's row carries a version + at least one health/power/tune
+    #    chip, so parse_rigforge ran on the REAL feed, not a fixture.
+    local ver nchips
+    ver="$(printf '%s' "$st" | jq -r --arg n "$rig" 'first(.workers[] | select(.name==$n) | .rigforge.version) // empty' 2>/dev/null)"
+    assert_ne "rigforge version present in the live feed" "$ver" ""
+    nchips="$(printf '%s' "$st" | jq -r --arg n "$rig" '[.workers[] | select(.name==$n) | .rigforge.chips[]?.text] | length' 2>/dev/null)"
+    assert_num_ge "rigforge health/power/tune chips surfaced (>=1)" "${nchips:-0}" 1
+
+    # 2. Worker Inspect (#185) rides on the control channel (fail-closed): the /api/worker route only
+    #    exists when dashboard.control is on. Off here → the enriched-feed leg above still proves
+    #    #235/#260; the control path itself is covered by the hardening phase + the tier-2 test.
+    if [ "$(printf '%s' "$st" | jq -r '.control_enabled // false' 2>/dev/null)" != "true" ]; then
+        it_warn "dashboard.control off — Worker Inspect (#185) read/write not exposed here (covered by the hardening phase + tier-2 contract); enriched-feed consumption validated"
+        return 0
+    fi
+
+    # 2a. Worker Inspect READ: GET /api/worker?name=<rig> returns the rig's detail carrying the
+    #     enriched telemetry (plus the config prefill + history).
+    local detail
+    detail="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null || true)"
+    if [ -n "$detail" ] && printf '%s' "$detail" | jq -e '.name' >/dev/null 2>&1; then
+        it_pass "Worker Inspect read returns the rig's detail (#185)"
+        assert_ne "worker detail carries the enriched telemetry" \
+            "$(printf '%s' "$detail" | jq -r '(.rigforge.version // .telemetry.rigforge.version // .telemetry.version) // empty' 2>/dev/null)" ""
+    else
+        it_fail "Worker Inspect read returns the rig's detail (#185)" "GET /api/worker returned no valid JSON: ${detail:0:120}"
+    fi
+
+    # 2b. Worker Inspect WRITE-path fail-closed guards (#185) — proven WITHOUT mutating the borrowed
+    #     rig: a POST missing the X-Pithead-Control CSRF header is refused (403), and a non-writable key
+    #     is rejected (400). The full dashboard->rig apply+rollback is the manual runbook step.
+    local code_noheader code_badkey
+    code_noheader="$(rx "curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'Content-Type: application/json' --data '{\"worker\":\"$rig\",\"changes\":{\"DONATION\":1}}' http://127.0.0.1:8000/api/control/worker-apply" 2>/dev/null || echo 000)"
+    assert_eq "Worker Inspect write refuses a request without the control header (403, #185)" "$code_noheader" "403"
+    code_badkey="$(rx "curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'Content-Type: application/json' -H 'X-Pithead-Control: 1' --data '{\"worker\":\"$rig\",\"changes\":{\"ACCESS_TOKEN\":\"x\"}}' http://127.0.0.1:8000/api/control/worker-apply" 2>/dev/null || echo 000)"
+    assert_eq "Worker Inspect write rejects a non-writable key (400, #185)" "$code_badkey" "400"
+    it_step "full dashboard->rig config push + rollback (#185) is a manual runbook step — it restarts the borrowed loaner and needs the rig's control API opted in"
+}
+
 # --- Main -------------------------------------------------------------------
 IT_SKIPPED=0
 
@@ -1530,6 +1638,9 @@ main() {
         done < <(scenario_matrix)
     fi
 
+    # RigForge integration (#185/#235/#260) first — it's read-only and wants the freshly-mined
+    # state with the borrowed rig connected, before the destructive phases churn the stack.
+    [ "$RUN_RIGFORGE" = "1" ] && run_rigforge_integration
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
     [ "$RUN_FAULTS" = "1" ] && run_fault_injection
     [ "$RUN_AUTH_FAIL_CLOSED" = "1" ] && run_auth_fail_closed

@@ -42,17 +42,22 @@ The stack's defaults:
 - Signed releases, verified before upgrade
   ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): every published image
   digest and the install bundle carry a cosign key signature made on the release box; only the
-  public key (`cosign.pub`) is committed, and it ships in every bundle. `pithead upgrade` and the
-  dashboard's one-click upgrade verify against it before anything is pulled or extracted, and fail
-  closed while a key is present — a bad signature, a stripped `.sig`, or a missing cosign binary
-  aborts the upgrade. The bundle check anchors trust in the key *already on disk*, so a malicious
-  bundle cannot vouch for itself with a swapped key, and because a signature binds bytes rather
-  than a version, the dashboard upgrade also refuses a bundle whose own `VERSION` does not match
-  the requested tag — closing a rollback to an older, validly-signed release. Limits: installs
-  without `cosign.pub` (releases before signing landed) upgrade unverified with a warning; a
-  compromise of the release box itself — which holds the private key — is outside what a signature
-  can prove; and the CLI image-verify checks the tag, then pulls it in a separate step (a
-  verify-then-pull window tracked as a follow-up). See
+  public key (`cosign.pub`) is committed, and it ships in every bundle. `pithead up`, `pithead
+  upgrade`, and the dashboard's one-click upgrade verify against it before anything is pulled or
+  extracted, and fail closed while a key is present — a bad signature, a stripped `.sig`, or a
+  missing cosign binary aborts. A fresh install's first pull is verified too, not just later
+  upgrades ([#452](https://github.com/p2pool-starter-stack/pithead/issues/452)). The image verify
+  binds to the same bytes the pull fetches
+  ([#451](https://github.com/p2pool-starter-stack/pithead/issues/451)): the bundle pins every
+  first-party image to an immutable `@sha256` digest, and cosign verifies that digest rather than
+  the mutable tag, so a tampered registry cannot show one manifest to cosign and serve another to
+  docker. The bundle check anchors trust in the key *already on disk*, so a malicious bundle cannot
+  vouch for itself with a swapped key, and because a signature binds bytes rather than a version,
+  the dashboard upgrade also refuses a bundle whose own `VERSION` does not match the requested tag —
+  closing a rollback to an older, validly-signed release. Limits: installs without `cosign.pub`
+  (releases before signing landed) pull unverified with a warning — the digest-pinned bundle is
+  then the protection; and a compromise of the release box itself — which holds the private key — is
+  outside what a signature can prove. See
   [Releasing › Signed releases](docs/releasing.md#signed-releases).
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
@@ -62,8 +67,9 @@ The stack's defaults:
   default off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
   directory whose other legs (staged configs, results, the audit log) are host-owned and mounted
   read-only. A root systemd unit re-validates every intent with pithead's own config validation
-  and dispatches exactly three fixed actions (`apply --dry-run`, `apply -y`, and a release
-  upgrade); no string from the container is ever executed. The upgrade intent carries only the
+  and dispatches a fixed, small set of actions (`apply --dry-run` for a preview, `apply -y` for a
+  config commit, a release upgrade, and — for the Telegram control commands (#338) — a stack
+  `restart` and a config re-`apply`); no string from the container is ever executed. The upgrade intent carries only the
   version the operator confirmed: the runner re-derives the target itself from the GitHub release
   API (over the stack's Tor SOCKS), refuses any mismatch or non-release tag, and limits attempts
   to one per 10 minutes — the container cannot choose an image, tag, or registry. Enabling the
@@ -86,15 +92,44 @@ The stack's defaults:
   rolling; a trim-before-append cap in the audit writer). Neither ever records a secret: Caddy
   redacts credential headers by default, and the audit writer logs key names only.
 
+### Telegram control commands (#338)
+
+The Telegram bot can accept two **control** commands, `/restart` and `/apply`, gated behind
+`telegram.control` (default off). This is a remotely-reachable control surface — a Telegram message
+is untrusted pre-auth input — so it fails closed at every step and adds **no new privileged path**:
+it is a thin client of the host-control channel above.
+
+- **Allow-list, not the chat.** A control command is honoured only from the numeric Telegram **user
+  ids** in `telegram.control.allowed_ids`; being in the configured chat is not enough, and the bot
+  token being known is not authorization. Any other sender is refused, logged, and dropped silently
+  (no reply — no oracle for who is authorised), and never earns a write into the host spool. An
+  empty allow-list disables the feature.
+- **Per-action confirmation, deny-on-timeout.** Each command requires an explicit in-chat
+  confirmation (an inline button carrying a one-time token) from the same operator that issued it,
+  within a timeout — transaction-signing semantics, so even a fully compromised dashboard session
+  cannot restart or re-apply without a human approving the exact action. An unconfirmed command is
+  **denied**, never queued; prompts are rate-limited so a compromised host can't fatigue the
+  operator into tapping approve.
+- **Bounded verbs, shared channel.** A message only selects one of two fixed verbs — there is no
+  arbitrary execution. Confirmed, the verb rides the same request spool the config editor uses; the
+  root runner validates and runs it and records the actor (`tg-<user-id>`) and outcome in the
+  host-side audit log. `telegram.control` therefore requires `dashboard.control` (the spool + runner)
+  and the read-only command bot; `apply` refuses to enable it otherwise. A **config-changing** apply
+  is deliberately not a Telegram command — config edits still go through the editor's default-deny
+  allowlist; `/apply` only re-applies the config already on the host.
+
 ### Secret trust boundary for dashboard config editing
 
-When `dashboard.control` is on, the dashboard reads `config.json` through a **read-only bind
-mount** to prefill the editor form. The API masks every secret leaf before serving it to the
-browser — but that masking protects the *browser*, not the container. The bind mount itself is the
-real secret boundary: a backend compromise of the dashboard container can read the plaintext
-`config.json` (including the dashboard login and stratum passwords) directly off the mount,
-regardless of the API masking. Treat the dashboard container as semi-trusted, keep the onion behind
-Tor client authorization, and do not co-host untrusted workloads in that container. Host-side
-staged copies that carry merged secrets are written mode 600.
+The dashboard container never mounts the raw `config.json` (#440). When `dashboard.control` is
+on, the host renders a **pre-masked copy** of the config into the control spool — every set
+secret leaf (node credentials, the stratum and dashboard passwords, the Telegram token, the
+Healthchecks ping URL) already replaced by a sentinel — and the editor form prefills from that
+copy, mounted read-only. An untouched secret rides back to the host as the same sentinel, and the
+host swaps it for the live value when it stages the intent, so the container never holds a secret
+the operator didn't just type into the form. A full backend compromise of the dashboard container
+can therefore read masked config, results, and the audit log, and *ask* to change an allowlisted
+key — nothing else. Host-side staged copies, which do carry the merged secrets, live outside
+every mount and are written mode 600. Still treat the container as semi-trusted and keep the
+onion behind Tor client authorization: the request spool remains a mutation-request surface.
 
 Report any gap in these.

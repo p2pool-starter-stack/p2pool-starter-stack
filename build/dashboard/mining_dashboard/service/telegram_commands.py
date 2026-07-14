@@ -1,14 +1,19 @@
 import asyncio
 import logging
 import time
+import uuid
 
 import requests
 
 from mining_dashboard.config.config import (
+    DASHBOARD_CONTROL_ENABLED,
     HOST_IP,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
     TELEGRAM_COMMANDS_ENABLED,
+    TELEGRAM_CONTROL_ALLOWED_IDS,
+    TELEGRAM_CONTROL_CONFIRM_S,
+    TELEGRAM_CONTROL_ENABLED,
     TELEGRAM_ENABLED,
     TOR_SOCKS_PROXY,
 )
@@ -18,6 +23,7 @@ from mining_dashboard.helper.utils import (
     format_hashrate,
     format_xmr,
 )
+from mining_dashboard.service import control_service
 from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
 from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
@@ -65,6 +71,19 @@ HELP_TEXT = (
     "/help — this message"
 )
 
+# The write commands, each mapping 1:1 to a bounded host action the #33 runner knows (see pithead
+# control_lifecycle). The Telegram input only ever SELECTS one of these — it never becomes a host
+# command — so the action set is fixed and there is no arbitrary execution.
+CONTROL_COMMANDS = ("restart", "apply")
+
+CONTROL_HELP_TEXT = (
+    "\n\nControl commands (allow-listed operators only, each needs confirmation):\n"
+    "/restart — recreate the running stack\n"
+    "/apply — re-apply the current config on the host"
+)
+
+_ALL_COMMANDS = frozenset(COMMANDS) | frozenset(CONTROL_COMMANDS)
+
 
 def _prefix(host_label):
     """Hostname tag so replies from several stacks sharing one chat stay distinguishable.
@@ -91,7 +110,7 @@ def parse_command(text):
     cmd = word[1:].split("@", 1)[0].lower()
     if not cmd:
         return None
-    return cmd if cmd in COMMANDS else "unknown"
+    return cmd if cmd in _ALL_COMMANDS else "unknown"
 
 
 def _node_state(sync):
@@ -488,6 +507,69 @@ def format_daily_summary(metrics, data, host_label="", now=None, incidents=None)
     return "\n".join(lines)
 
 
+class ControlGate:
+    """Per-action confirmation with deny-on-timeout for the Telegram control commands (#338).
+
+    Fail-closed transaction-signing: a control action runs ONLY when a confirm callback for its exact
+    one-time token arrives, from the same operator that issued it, within ``timeout_s``. No confirm,
+    a stale/unknown token, a foreign user, or a lapsed deadline all DENY — nothing is ever queued for
+    later. ``open`` also rate-limits how many prompts each operator can be issued per rolling hour, so
+    a runaway or confused command source can't fatigue an operator into tapping approve.
+
+    The rate limit is **per operator** (#470): one shared budget let a single allow-listed id (or one
+    compromised-but-allow-listed session) exhaust it and lock the *other* operators out for up to an
+    hour. This gate is a UX / anti-fatigue guard among already-trusted operators — it is NOT the
+    security boundary. A compromised dashboard bypasses every Python-side check here and can drop an
+    intent straight into the #33 host-control spool; the load-bearing control is host-side, where the
+    root runner accepts only the fixed verbs ``restart``/``apply`` and re-validates before acting.
+
+    Pure and clock-injected (``now`` is a monotonic timestamp the caller passes), so the whole
+    state machine is unit-testable without sleeping.
+    """
+
+    def __init__(self, timeout_s, max_prompts_per_hour=10):
+        self._timeout = timeout_s
+        self._max = max_prompts_per_hour
+        # token -> (verb, owner_id, deadline)
+        self._pending = {}
+        # owner_id -> monotonic timestamps of that operator's recently-issued prompts, for a
+        # per-operator rolling-hour rate limit (#470). Bounded by the control allow-list, since the
+        # caller only reaches open() for an allow-listed id.
+        self._prompts = {}
+
+    def open(self, verb, user_id, now):
+        """Register a pending confirmation and return its token, or ``None`` when this operator is
+        rate-limited. The budget is per operator, so one id exhausting it never blocks another."""
+        self._sweep(now)
+        owner = str(user_id)
+        recent = [t for t in self._prompts.get(owner, []) if t > now - 3600]
+        if len(recent) >= self._max:
+            self._prompts[owner] = recent  # keep the pruned window; still denied
+            return None
+        token = uuid.uuid4().hex
+        self._pending[token] = (verb, owner, now + self._timeout)
+        recent.append(now)
+        self._prompts[owner] = recent
+        return token
+
+    def confirm(self, token, user_id, now):
+        """Return the verb if ``token`` is pending, unexpired, and confirmed by the same operator;
+        otherwise ``None`` (denied). One-shot: the token is consumed whether it succeeds or fails, so
+        a confirm can never be replayed."""
+        self._sweep(now)
+        rec = self._pending.pop(token, None)
+        if rec is None:
+            return None
+        verb, owner, deadline = rec
+        if str(user_id) != owner or now >= deadline:
+            return None
+        return verb
+
+    def _sweep(self, now):
+        """Drop lapsed pendings — deny-on-timeout is structural: an expired token is simply gone."""
+        self._pending = {t: r for t, r in self._pending.items() if r[2] > now}
+
+
 class TelegramCommandBot:
     """
     On-demand Telegram command interface (Issue #45) — the interactive half of the operator bot.
@@ -507,8 +589,13 @@ class TelegramCommandBot:
       offer. Nothing is exposed.
     - **Single-chat access control.** Only the configured ``chat_id`` is answered; every other update
       is dropped silently, so an unknown chat gets no reply and can't use the bot as a probe oracle.
-    - **Read-only.** No command mutates the stack (lifecycle stays on the CLI), so a compromised chat
-      can at worst read status.
+    - **Read-only by default; control commands are a separate opt-in (#338).** The status commands
+      never mutate the stack. ``/restart`` and ``/apply`` are enabled only when ``telegram.control``
+      is on with a non-empty operator allow-list, are honoured only from those allow-listed USER ids
+      (the ``chat_id`` alone is not enough), and each needs an explicit in-chat confirmation that
+      denies on timeout. They act by dropping a typed intent into the #33 host-control spool — the
+      same root-runner path the config editor uses — never a second privileged path, and never
+      arbitrary command execution: the message only selects one of two fixed verbs.
     - **Fail silent, never leaks the token.** Network errors (offline / Tor-only host) are swallowed
       at debug and the poll backs off; the ``bot_token`` only ever appears in the request URL and is
       never written to a log line.
@@ -527,6 +614,9 @@ class TelegramCommandBot:
         api_base=TELEGRAM_API_BASE,
         long_poll=LONG_POLL_SECONDS,
         tor_proxy=TOR_SOCKS_PROXY,
+        control_enabled=None,
+        allowed_ids=TELEGRAM_CONTROL_ALLOWED_IDS,
+        confirm_timeout=TELEGRAM_CONTROL_CONFIRM_S,
     ):
         self.data_service = data_service
         self._token = (bot_token or "").strip()
@@ -543,6 +633,17 @@ class TelegramCommandBot:
             enabled = bool(TELEGRAM_ENABLED and TELEGRAM_COMMANDS_ENABLED)
         self.enabled = bool(enabled and self._token and self.chat_id)
         self._offset = None
+        # Two-way control commands (#338), a stricter opt-in on top of the read-only bot. Enabled only
+        # when telegram.control is on, the #33 spool actually exists (dashboard.control on) AND at
+        # least one operator id is allow-listed — an empty allow-list means nobody could ever confirm,
+        # so the feature stays fully off (fail-closed). The allow-list is the trust boundary: these
+        # numeric Telegram USER ids, not merely "same chat", are the only actors a command is honoured
+        # from.
+        self.allowed_ids = frozenset(str(i) for i in (allowed_ids or ()))
+        if control_enabled is None:
+            control_enabled = bool(TELEGRAM_CONTROL_ENABLED and DASHBOARD_CONTROL_ENABLED)
+        self.control_enabled = bool(self.enabled and control_enabled and self.allowed_ids)
+        self._gate = ControlGate(confirm_timeout)
 
     def reply_for(self, text):
         """Map an incoming message to a reply string, or ``None`` to stay silent.
@@ -553,10 +654,14 @@ class TelegramCommandBot:
         cmd = parse_command(text)
         if cmd is None:
             return None
+        # Control verbs are side-effecting and need the operator's user id + the confirm flow, so they
+        # are routed in _handle_update, never here. reply_for stays pure/read-only.
+        if cmd in CONTROL_COMMANDS:
+            return None
         if cmd == "help":
-            return f"{_prefix(self.host_label)}{HELP_TEXT}"
+            return f"{_prefix(self.host_label)}{self._help_text()}"
         if cmd == "unknown":
-            return f"{_prefix(self.host_label)}Unknown command.\n{HELP_TEXT}"
+            return f"{_prefix(self.host_label)}Unknown command.\n{self._help_text()}"
 
         data = self.data_service.latest_data or {}
         # /system reads the raw snapshot only — no need to build the full metrics.
@@ -635,7 +740,10 @@ class TelegramCommandBot:
 
     def _get_updates(self, poll_timeout):
         """Blocking ``getUpdates`` over Tor. Called via ``to_thread`` from the loop."""
-        params = {"timeout": poll_timeout, "allowed_updates": '["message"]'}
+        # Ask Telegram for callback_query updates too when control commands are on — that is how a
+        # tapped inline confirm button arrives (#338); the read-only bot stays messages-only.
+        allowed = '["message","callback_query"]' if self.control_enabled else '["message"]'
+        params = {"timeout": poll_timeout, "allowed_updates": allowed}
         if self._offset is not None:
             params["offset"] = self._offset
         url = f"{self._api_base}/bot{self._token}/getUpdates"
@@ -650,16 +758,162 @@ class TelegramCommandBot:
             return []
         return payload.get("result", [])
 
+    def _help_text(self):
+        """The /help body — read-only commands always, plus the control commands when this bot is
+        configured to accept them."""
+        return HELP_TEXT + (CONTROL_HELP_TEXT if self.control_enabled else "")
+
     async def _handle_update(self, update):
+        # A tapped inline confirm button arrives as a callback_query, not a message (#338).
+        callback = update.get("callback_query")
+        if callback is not None:
+            await self._handle_callback(callback)
+            return
         message = update.get("message") or {}
         chat = message.get("chat") or {}
         # Access control: only the configured chat may drive the bot. Anything else is dropped
         # silently — no reply, so an unknown chat can't even confirm the bot exists.
         if str(chat.get("id")) != self.chat_id:
             return
-        reply = await asyncio.to_thread(self._safe_reply_for, message.get("text", ""))
+        text = message.get("text", "")
+        if parse_command(text) in CONTROL_COMMANDS:
+            await self._handle_control(message, parse_command(text))
+            return
+        reply = await asyncio.to_thread(self._safe_reply_for, text)
         if reply:
             await asyncio.to_thread(self._send, reply)
+
+    async def _handle_control(self, message, verb):
+        """A /restart or /apply from within the configured chat. Gate it on the operator allow-list,
+        then arm an in-chat confirmation (deny-on-timeout). Nothing reaches the host spool here — that
+        only happens once the operator confirms in :meth:`_handle_callback`."""
+        if not self.control_enabled:
+            # The write channel is off (or nobody is allow-listed): behave like an unknown command,
+            # so a read-only-only bot doesn't imply a control surface it doesn't expose.
+            await asyncio.to_thread(
+                self._send, f"{_prefix(self.host_label)}Unknown command.\n{self._help_text()}"
+            )
+            return
+        uid = str((message.get("from") or {}).get("id", ""))
+        if uid not in self.allowed_ids:
+            # Not an allow-listed operator: refuse. Log it (audit trail) but stay SILENT to the user —
+            # no reply, so the bot can't be used as an oracle to probe who is authorised, and a
+            # non-allow-listed message never earns a write into the host spool (no DoS amplification).
+            logger.warning(
+                "Telegram control /%s refused — user id %s is not on the allow-list.",
+                verb,
+                uid or "?",
+            )
+            return
+        token = self._gate.open(verb, uid, time.monotonic())
+        if token is None:
+            await asyncio.to_thread(
+                self._send,
+                f"{_prefix(self.host_label)}Too many confirmation prompts recently — wait a bit and try again.",
+            )
+            return
+        logger.info(
+            "Telegram control /%s requested by %s — awaiting in-chat confirmation.", verb, uid
+        )
+        await asyncio.to_thread(self._send_confirm, verb, token)
+
+    async def _handle_callback(self, callback):
+        """Handle a tapped confirm button. Answers the callback (clears the client spinner), then
+        dispatches only if the token is valid, unexpired, and tapped by the same operator that issued
+        it — otherwise denies. Fail-closed throughout."""
+        cb_id = callback.get("id")
+        chat = (callback.get("message") or {}).get("chat") or {}
+        data = callback.get("data") or ""
+        if cb_id:
+            await asyncio.to_thread(self._answer_callback, cb_id)
+        # Same outer chat boundary as messages, then the control gate does the per-operator check.
+        if str(chat.get("id")) != self.chat_id or not self.control_enabled:
+            return
+        if not data.startswith("confirm:"):
+            return
+        uid = str((callback.get("from") or {}).get("id", ""))
+        verb = self._gate.confirm(data[len("confirm:") :], uid, time.monotonic())
+        if verb is None:
+            logger.warning(
+                "Telegram control confirm denied (stale/foreign token) for user id %s.", uid or "?"
+            )
+            await asyncio.to_thread(
+                self._send,
+                f"{_prefix(self.host_label)}⛔ Not confirmed in time (or not authorised) — denied.",
+            )
+            return
+        await self._dispatch_control(verb, uid)
+
+    async def _dispatch_control(self, verb, uid):
+        """Drop the confirmed intent into the #33 host-control spool. This is the ONLY privileged
+        leg, and it is the shared one: the root ``control-run-pending`` runner validates and runs the
+        fixed verb, and records the actor + outcome in the host-side audit log. The bot never runs a
+        host command itself."""
+        actor = (
+            f"tg-{uid}"  # 'tg-' + numeric id: passes the host actor charset, tags the audit line
+        )
+        try:
+            rid = await asyncio.to_thread(control_service.submit, verb, None, actor)
+        except Exception as exc:
+            logger.warning(
+                "Telegram control /%s could not be queued (%s).", verb, type(exc).__name__
+            )
+            await asyncio.to_thread(
+                self._send,
+                f"{_prefix(self.host_label)}⚠️ Could not queue {verb} — see the dashboard log.",
+            )
+            return
+        logger.info(
+            "Telegram control /%s confirmed by %s — queued to the host control spool (id %s).",
+            verb,
+            uid,
+            rid,
+        )
+        await asyncio.to_thread(
+            self._send,
+            f"{_prefix(self.host_label)}✅ {verb.capitalize()} confirmed — the host is applying it. "
+            "Use /status to watch it come back.",
+        )
+
+    def _send_confirm(self, verb, token):
+        """Send the confirm prompt with a single inline button. The prompt names the CONCRETE action
+        so a compromised session can't get a generic 'approve?' tapped for something else (#338)."""
+        action_text = (
+            "recreate the running stack" if verb == "restart" else "re-apply the host config"
+        )
+        text = (
+            f"{_prefix(self.host_label)}Confirm /{verb}? This will {action_text}.\n"
+            f"Denied automatically if not confirmed soon."
+        )
+        markup = {
+            "inline_keyboard": [
+                [{"text": f"✅ Confirm {verb}", "callback_data": f"confirm:{token}"}]
+            ]
+        }
+        url = f"{self._api_base}/bot{self._token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+            "reply_markup": markup,
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=10, proxies=self._proxies)
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.debug("Telegram confirm prompt failed (%s)", type(exc).__name__)
+
+    def _answer_callback(self, callback_id):
+        """Acknowledge a callback query so the operator's client stops showing a spinner. Best-effort:
+        a failure here never blocks the dispatch decision."""
+        url = f"{self._api_base}/bot{self._token}/answerCallbackQuery"
+        try:
+            resp = requests.post(
+                url, json={"callback_query_id": callback_id}, timeout=10, proxies=self._proxies
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.debug("Telegram answerCallbackQuery failed (%s)", type(exc).__name__)
 
     def _safe_reply_for(self, text):
         """Never let a formatting/read bug kill the poll loop — a broken command just goes quiet."""

@@ -225,6 +225,12 @@ assert_contains "stratum listen: IPv6 listener -> OK" "$out" "workers can connec
 # Running + nothing on :3333 -> FAIL.
 out="$(RUNNING_CONTAINERS="xmrig-proxy" SS_OUT='LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
 assert_contains "stratum listen: nothing on :3333 -> FAIL" "$out" "NOTHING is listening"
+# A custom p2pool.stratum_port (#172) moves the check: a :3333 listener no longer satisfies it,
+# the configured port does.
+out="$(RUNNING_CONTAINERS="xmrig-proxy" STRATUM_PORT=4444 SS_OUT='LISTEN 0 4096 0.0.0.0:3333 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: custom port not listening -> FAIL" "$out" "NOTHING is listening on :4444"
+out="$(RUNNING_CONTAINERS="xmrig-proxy" STRATUM_PORT=4444 SS_OUT='LISTEN 0 4096 0.0.0.0:4444 0.0.0.0:*' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
+assert_contains "stratum listen: custom port listening -> OK" "$out" "Stratum :4444 is listening"
 
 # Dashboard probe: container running + app answers -> OK; running + no answer -> WARN (not FAIL).
 out="$(RUNNING_CONTAINERS="dashboard" CURL_RC=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_dashboard_answers 2>&1)"
@@ -368,6 +374,11 @@ assert_contains "prune is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO
 assert_contains "rpc lan is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum open is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum lan is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 0.0.0.0 127.0.0.1)" "INFO"
+# Stratum port (#172): changing it disconnects every rig until repointed — DEST; the key's first
+# appearance (an upgrade from a pre-#172 .env) is a no-op INFO row, never a scary repoint warning.
+assert_contains "stratum port change is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "DEST"
+assert_contains "stratum port change says repoint" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "repoint"
+assert_contains "stratum port first render is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT '' 3333)" "INFO"
 # Stratum access-password (#152): enabling/changing is DEST (rigs need the new pass), disabling is
 # INFO — and the secret value must NEVER appear in the change preview.
 assert_contains "stratum pw enable is DEST" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "DEST"
@@ -403,6 +414,28 @@ assert_contains "telegram enable is INFO" "$(run_sourced "$SANDBOX" describe_cha
 assert_contains "telegram event is INFO" "$(run_sourced "$SANDBOX" describe_change TELEGRAM_EVENT_NODE_DOWN true false)" "INFO"
 tg_tok_msg="$(run_sourced "$SANDBOX" describe_change TELEGRAM_BOT_TOKEN oldsecret newsecret)"
 assert_contains "telegram token change noted" "$tg_tok_msg" "Telegram bot token updated"
+# Webhook/ntfy sink changes (#380): URLs and the ntfy token are secrets — the preview names the
+# change without printing any value.
+hook_msg="$(run_sourced "$SANDBOX" describe_change NOTIFY_WEBHOOK_URLS "" "https://hook.example/x?key=HOOKSEC")"
+assert_contains "webhook enable noted" "$hook_msg" "Webhook alert sink(s) ENABLED"
+case "$hook_msg" in
+*HOOKSEC*) bad "webhook url not leaked in preview" "leaked: $hook_msg" ;;
+*) ok "webhook url not leaked in preview" ;;
+esac
+ntfy_msg="$(run_sourced "$SANDBOX" describe_change NTFY_URL "https://ntfy.sh/OLDTOPIC" "https://ntfy.sh/NEWTOPIC")"
+assert_contains "ntfy url change noted" "$ntfy_msg" "ntfy topic URL updated"
+case "$ntfy_msg" in
+*OLDTOPIC* | *NEWTOPIC*) bad "ntfy topic url not leaked in preview" "leaked: $ntfy_msg" ;;
+*) ok "ntfy topic url not leaked in preview" ;;
+esac
+ntfy_tok_msg="$(run_sourced "$SANDBOX" describe_change NTFY_TOKEN oldntfysec newntfysec)"
+assert_contains "ntfy token change noted" "$ntfy_tok_msg" "ntfy access token updated"
+case "$ntfy_tok_msg" in
+*oldntfysec* | *newntfysec*) bad "ntfy token value not leaked in preview" "leaked: $ntfy_tok_msg" ;;
+*) ok "ntfy token value not leaked in preview" ;;
+esac
+assert_contains "notify tor opt-out warns about IP exposure" \
+    "$(run_sourced "$SANDBOX" describe_change NOTIFY_TOR true false)" "see this host's IP"
 case "$tg_tok_msg" in
 *oldsecret* | *newsecret*) bad "telegram token value not leaked in preview" "leaked: $tg_tok_msg" ;;
 *) ok "telegram token value not leaked in preview" ;;
@@ -660,6 +693,28 @@ upg_sig_order=$(
 assert_eq "upgrade verifies release-image signatures before 'compose up' (#376)" \
     "$(printf '%s\n' "$upg_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
 
+# #452: the FIRST-install `up` must also verify before it pulls — the same wiring guarantee as
+# upgrade. A fresh release install's first `up` is where the 5 images are first fetched; if verify
+# goes missing or lands after "compose", this fails.
+up_sig_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    warn_missing_data_dirs() { :; }
+    migrate_compose_project() { :; }
+    apply_tor_egress_firewall() { :; }
+    print_clearnet_banner() { :; }
+    announce_dashboard_url() { :; }
+    print_first_run_epilogue() { :; }
+    log() { :; }
+    verify_release_images() { echo verify; }
+    compose_up_checked() { echo compose; }
+    stack_up
+)
+assert_eq "first-install up verifies release-image signatures before 'compose up' (#452)" \
+    "$(printf '%s\n' "$up_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
+
 echo "== black-box: verify_release_images fail-closed gate (#376) =="
 # The verification decision itself, against a fake cosign on a PINNED PATH ($VRI/bin:/usr/bin:/bin
 # — coreutils stay, any real cosign install on the host disappears, so the host can never decide
@@ -673,35 +728,66 @@ exit "${COSIGN_RC:-0}"
 EOF
 chmod +x "$VRI/bin/cosign"
 
+# A deterministic 64-hex digest per image, and a digest-pinned compose (#461) so verify has the same
+# @sha256 bytes to check that a release install's compose would pull (#451). TOR_DG is what the tor
+# assertions expect the tor image to be verified/failed against.
+hex64() { printf "$1%.0s" $(seq 1 64); }
+TOR_DG="sha256:$(hex64 1)"
+write_pinned_compose() { # $1=dir  — one image: line per first-party suffix, each pinned by @sha256
+    local d="$1" n=1 suffix
+    : >"$d/docker-compose.yml"
+    for suffix in tor monero p2pool xmrig-proxy dashboard; do
+        printf '    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-%s:${STACK_VERSION:-dev}@sha256:%s\n' \
+            "$suffix" "$(hex64 "$n")" >>"$d/docker-compose.yml"
+        n=$((n + 1))
+    done
+}
+write_pinned_compose "$VRI"
+
 # No cosign.pub (an install older than the first signed release): documented fallback — proceed,
 # but say loudly that nothing was verified.
 out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "no pubkey -> upgrade proceeds (documented fallback)" "$?" "0"
+assert_rc "no pubkey -> pull proceeds (documented fallback)" "$?" "0"
 assert_contains "no pubkey -> loud NOT-verified warning" "$out" "NOT be signature-verified"
 
 # cosign.pub present but no cosign binary anywhere on PATH: FAIL CLOSED with an install pointer —
 # a missing verifier must not silently disable verification.
 printf 'fake release public key' >"$VRI/cosign.pub"
 out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "pubkey without cosign -> upgrade aborts" "$?" "1"
+assert_rc "pubkey without cosign -> pull aborts" "$?" "1"
 assert_contains "cosign-missing abort points at the install doc" "$out" "not installed"
 
 # Valid signatures (fake cosign exits 0): all 5 images verified with the committed key, no Rekor
-# (--private-infrastructure), against the digest-bearing tag compose will pull.
+# (--private-infrastructure), against the EXACT @sha256 digest compose pins and pulls (#451 — bound
+# to the same bytes, not the mutable tag).
 : >"$VRI/cosign.log"
 out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" \
     PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "valid signatures -> upgrade proceeds" "$?" "0"
+assert_rc "valid signatures -> pull proceeds" "$?" "0"
 assert_eq "all 5 first-party images verified" "$(grep -c '^\[cosign\] verify ' "$VRI/cosign.log")" "5"
-assert_contains "verify uses the committed key + --private-infrastructure" \
-    "$(cat "$VRI/cosign.log")" "verify --key cosign.pub --private-infrastructure ghcr.io/test/pithead-tor:v9.9.9"
+assert_contains "verify binds to the pinned digest, not the tag (#451)" \
+    "$(cat "$VRI/cosign.log")" "verify --key cosign.pub --private-infrastructure ghcr.io/test/pithead-tor@$TOR_DG"
+assert_not_contains "verify never resolves the mutable tag (#451)" "$(cat "$VRI/cosign.log")" "pithead-tor:v9.9.9"
 
 # A signature that does not verify (fake cosign exits 1): FAIL CLOSED. This is the red test for the
 # whole feature — bypass or soften the verification and it goes green-to-broken.
 out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 \
     PITHEAD_REGISTRY="ghcr.io/test" STACK_VERSION="v9.9.9" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "bad signature -> upgrade aborts (fail closed)" "$?" "1"
-assert_contains "bad-signature abort names the image" "$out" "Signature verification FAILED for ghcr.io/test/pithead-tor:v9.9.9"
+assert_rc "bad signature -> pull aborts (fail closed)" "$?" "1"
+assert_contains "bad-signature abort names the pinned image" "$out" "Signature verification FAILED for ghcr.io/test/pithead-tor@$TOR_DG"
+
+# cosign.pub present but the compose is NOT digest-pinned (a pre-#461 or tampered bundle): FAIL
+# CLOSED (#451). Without a digest there's nothing to bind verification to the pulled bytes, so the
+# verify-then-pull window can't be closed — refuse rather than fall back to verifying the tag.
+UNPINNED="$SANDBOX/verify451-unpinned"
+mkdir -p "$UNPINNED"
+printf 'fake release public key' >"$UNPINNED/cosign.pub"
+printf '    image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-tor:${STACK_VERSION:-dev}\n' >"$UNPINNED/docker-compose.yml"
+: >"$VRI/cosign.log"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" run_sourced "$UNPINNED" verify_release_images 2>&1)"
+assert_rc "un-pinned compose + key -> pull aborts (#451)" "$?" "1"
+assert_contains "un-pinned abort explains the missing digest bind" "$out" "not digest-pinned"
+assert_eq "un-pinned -> cosign never asked to verify a tag" "$(cat "$VRI/cosign.log")" ""
 
 # Source checkout: locally built images are unsigned by design — skipped, silently and completely.
 mkdir -p "$VRI/build/dashboard"
@@ -2026,6 +2112,37 @@ out="$(run_sourced "$SANDBOX" validate_chain down upgrade 2>&1)"
 assert_rc "rejects 'down upgrade' (down not last)" "$?" "1"
 assert_contains "down-not-last message" "$out" "last"
 
+echo "== unit: subcommand flag guard (#493) =="
+# `-h/--help` on a subcommand must print help and exit 0 BEFORE any side effect, and a no-option verb
+# must reject an unrecognized flag instead of silently ignoring it and running the command anyway
+# (`pithead upgrade --help` used to run a full upgrade — the trigger for the #489 DB corruption). Run
+# from a NON-deployed sandbox: if the guard failed to short-circuit, `upgrade`/`status` would fall
+# through to require_deployed/stack_upgrade — so exit 0 + help text here proves the guard fired first.
+CLIG="$SANDBOX/cli-guard"
+mkdir -p "$CLIG"
+cp "$STACK" "$CLIG/pithead"
+out="$(cd "$CLIG" && ./pithead upgrade --help 2>&1)"
+assert_rc "upgrade --help exits 0 (no side effect)" "$?" "0"
+assert_contains "upgrade --help prints usage" "$out" "Commands"
+(cd "$CLIG" && ./pithead upgrade -h >/dev/null 2>&1)
+assert_rc "upgrade -h exits 0" "$?" "0"
+out="$(cd "$CLIG" && ./pithead upgrade --bogus 2>&1)"
+assert_rc "upgrade --bogus errors" "$?" "1"
+assert_contains "unknown-flag message names the flag" "$out" "--bogus"
+out="$(cd "$CLIG" && ./pithead status --json 2>&1)"
+assert_rc "status --json (unknown flag) errors" "$?" "1"
+assert_contains "status unknown-flag names the verb" "$out" "status"
+# A mutating verb that parses its own args still gets the help short-circuit before it runs.
+(cd "$CLIG" && ./pithead apply --help >/dev/null 2>&1)
+assert_rc "apply --help exits 0 (no apply)" "$?" "0"
+# `logs` is the deliberate passthrough — --help forwards to docker, not the pithead guard (no exit 0
+# from our guard). It can't run a real docker here, so just assert the guard didn't hijack it: the
+# bare `pithead --help` / `help` still print pithead help and exit 0.
+(cd "$CLIG" && ./pithead --help >/dev/null 2>&1)
+assert_rc "bare --help still exits 0" "$?" "0"
+(cd "$CLIG" && ./pithead help >/dev/null 2>&1)
+assert_rc "help command still exits 0" "$?" "0"
+
 echo "== unit: chain execution — order, fail-fast, exit code (#94) =="
 # run_chain re-invokes pithead per step via PITHEAD_SELF; a stub records the order and can be told
 # to fail a given step, so order/fail-fast/propagation are proven without a stack.
@@ -2125,7 +2242,7 @@ echo "== completion: suggestions (#94) =="
 out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
 assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
 out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
-assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod tari p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod wallet-rpc tari tari-wallet p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
 
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
@@ -2202,6 +2319,68 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "unsafe stratum_password rejected" "$rc" "1"
 assert_contains "stratum_password message" "$out" "p2pool.stratum_password"
+
+# p2pool.stratum_port (#172) must be an integer 1-65535; junk and out-of-range values fail apply
+# before they can render an unparseable compose port mapping.
+for bad_port in '"abc"' 0 65536; do
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_port":%s}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$bad_port" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "invalid stratum_port $bad_port rejected" "$rc" "1"
+    assert_contains "stratum_port message ($bad_port)" "$out" "p2pool.stratum_port"
+done
+
+# dashboard.workers (#172): malformed per-worker descriptors fail apply loudly — a typo must not
+# be silently dropped at dashboard runtime. host charset is the #122 guard (no port/path/userinfo).
+dw_case() { # <workers-json> <label> <expected-msg-fragment>
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "$2 rejected" "$rc" "1"
+    assert_contains "$2 message" "$out" "$3"
+}
+dw_case '{"name":"rig1"}' "non-array dashboard.workers" "must be an array"
+dw_case '[{"host":"10.0.0.5"}]' "worker entry without a name" "name"
+dw_case '[{"name":"rig1","host":"10.0.0.5/path"}]' "worker host with URL structure" "dashboard.workers[rig1].host"
+dw_case '[{"name":"rig1","host":"attacker:8080"}]' "worker host smuggling a port" "dashboard.workers[rig1].host"
+dw_case '[{"name":"rig1","port":65536}]' "out-of-range worker port" "dashboard.workers[rig1].port"
+dw_case '[{"name":"rig1","port":"8080"}]' "string worker port" "dashboard.workers[rig1].port"
+dw_case '[{"name":"rig1","token":"has space"}]' "unsafe worker token" "dashboard.workers[rig1].token"
+dw_case '[{"name":"rig1","watts":0}]' "non-positive worker watts (#260)" "dashboard.workers[rig1].watts"
+dw_case '[{"name":"rig1","watts":"142"}]' "string worker watts (#260)" "dashboard.workers[rig1].watts"
+
+# dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
+en_case() { # <energy-json> <label> <expected-msg-fragment>
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "$2 rejected" "$rc" "1"
+    assert_contains "$2 message" "$out" "$3"
+}
+en_case '"nope"' "non-object dashboard.energy" "dashboard.energy must be an object"
+en_case '{"cost_per_kwh":-1}' "negative cost_per_kwh" "dashboard.energy.cost_per_kwh"
+en_case '{"xmr_price":"lots"}' "non-number xmr_price" "dashboard.energy.xmr_price"
+en_case '{"currency":"US Dollars"}' "unsafe currency label" "dashboard.energy.currency"
+
+# A valid energy block (prices + per-worker watts) applies; like workers[], nothing reaches .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"currency":"EUR"},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "valid dashboard.energy applies" "$?" "0"
+
+# Duplicate names are legal (first-declared wins) but warned about, and a valid list applies.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "valid dashboard.workers applies" "$rc" "0"
+assert_contains "duplicate worker names are warned" "$out" "first-declared"
+# Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
+# per-worker token must not leak into a second secrets file.
+if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
 
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
@@ -2354,6 +2533,112 @@ case "$(cat "$V/Caddyfile")" in
 *) ok "auth disable drops basic_auth" ;;
 esac
 
+echo "== black-box: payout confirmation view key (#381) =="
+# The private view key gates the view-only wallet-rpc service. Empty (default) -> feature off, no
+# profile, no container. Set on a LOCAL node -> the payout_confirm profile is added, the key +
+# generated wallet-rpc creds render into .env, and PAYOUT_CONFIRM_ENABLED flips true. The key is a
+# secret: it must never be echoed to stdout by apply (BOTSECRET pattern), only land in the 600 .env.
+VIEWKEY="$(printf 'a%.0s' $(seq 64))" # 64 hex chars — a well-formed private view key
+# (1) OFF by default: no view key -> feature disabled, wallet-rpc profile absent.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "payout confirm off by default" "$(run_sourced "$V" env_get_file "$V/.env" PAYOUT_CONFIRM_ENABLED)" "false"
+case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
+*payout_confirm*) bad "no wallet-rpc profile when view key unset" "payout_confirm leaked into COMPOSE_PROFILES" ;;
+*) ok "no wallet-rpc profile when view key unset" ;;
+esac
+# (2) ON (local node): view key set -> profile added, key + creds rendered, flag true.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with a view key succeeds" "$?" "0"
+assert_eq "payout confirm enabled renders true" "$(run_sourced "$V" env_get_file "$V/.env" PAYOUT_CONFIRM_ENABLED)" "true"
+assert_eq "view key rendered into .env" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_VIEW_KEY)" "$VIEWKEY"
+assert_contains "wallet-rpc profile added" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "payout_confirm"
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)" ] && ok "wallet-rpc password generated" || bad "wallet-rpc password generated" "empty"
+# The view key must NEVER be echoed to stdout by apply — only land in the owner-only .env (#90).
+case "$out" in
+*"$VIEWKEY"*) bad "view key never printed by apply" "the view key leaked into apply stdout" ;;
+*) ok "view key never printed by apply" ;;
+esac
+# The wallet-rpc password stays off the .env command line too — it's in .env but never on stdout.
+case "$out" in
+*"$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)"*) bad "wallet-rpc password not printed" "leaked into apply stdout" ;;
+*) ok "wallet-rpc password not printed" ;;
+esac
+# The wallet-rpc password is preserved across a re-apply (like PROXY_AUTH_TOKEN), so both containers
+# keep matching creds and the wallet-rpc isn't needlessly recreated.
+pw1="$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "wallet-rpc password preserved across apply" "$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)" "$pw1"
+# (3) REMOTE node + view key -> refused loudly (Phase 1 is local-only; scanning a third-party node
+# changes the trust story).
+seed_env
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "view key on a remote node rejected" "$?" "1"
+assert_contains "remote view-key message names the mode" "$out" "monero.view_key"
+# (4) A malformed view key (not 64 hex) is rejected before it reaches the wallet.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"not-a-view-key"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "malformed view key rejected" "$?" "1"
+assert_contains "malformed view-key message" "$out" "64-character hex"
+
+echo "== black-box: Tari payout confirmation view key (#462) =="
+# The Tari sibling of #381: tari.view_key + tari.spend_public_key gate the view-only tari-wallet.
+# Empty (default) -> feature off, no profile. Set on a LOCAL Tari node -> the tari_payout_confirm
+# profile is added, the keys render into .env, the secret file is written 600, and the view key is
+# never echoed to stdout. Obvious dummy keys (all-a / all-b) so gitleaks can't mistake them.
+TVIEW="$(printf 'a%.0s' $(seq 64))"  # 64 hex — a well-formed Tari private view key
+TSPEND="$(printf 'b%.0s' $(seq 64))" # 64 hex — a well-formed Tari public spend key
+# (1) OFF by default: no tari view key -> feature disabled, tari_payout_confirm profile absent.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tari payout confirm off by default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_PAYOUT_CONFIRM_ENABLED)" "false"
+case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
+*tari_payout_confirm*) bad "no tari-wallet profile when view key unset" "tari_payout_confirm leaked into COMPOSE_PROFILES" ;;
+*) ok "no tari-wallet profile when view key unset" ;;
+esac
+# (2) ON (local node): tari view key + spend key set -> profile added, keys rendered, flag true.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with a tari view key succeeds" "$?" "0"
+assert_eq "tari payout confirm enabled renders true" "$(run_sourced "$V" env_get_file "$V/.env" TARI_PAYOUT_CONFIRM_ENABLED)" "true"
+assert_eq "tari view key rendered into .env" "$(run_sourced "$V" env_get_file "$V/.env" TARI_VIEW_KEY)" "$TVIEW"
+assert_contains "tari-wallet profile added" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "tari_payout_confirm"
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)" ] && ok "tari wallet password generated" || bad "tari wallet password generated" "empty"
+# The secret file is written owner-only (600) and contains the view key; it is NOT world-readable.
+secret_file="$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_SECRET_FILE)"
+[ -f "$secret_file" ] && ok "tari wallet secret file written" || bad "tari wallet secret file written" "missing $secret_file"
+perms="$(stat -c '%a' "$secret_file" 2>/dev/null || stat -f '%Lp' "$secret_file" 2>/dev/null)"
+assert_eq "tari wallet secret file is owner-only (600)" "$perms" "600"
+assert_contains "secret file carries the view key for the container" "$(cat "$secret_file")" "$TVIEW"
+# The view key must NEVER be echoed to stdout by apply — only land in the owner-only .env / secret file.
+case "$out" in
+*"$TVIEW"*) bad "tari view key never printed by apply" "the tari view key leaked into apply stdout" ;;
+*) ok "tari view key never printed by apply" ;;
+esac
+# The tari wallet password is preserved across a re-apply so the existing wallet DB can be reopened.
+tpw1="$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "tari wallet password preserved across apply" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)" "$tpw1"
+# (3) A view key WITHOUT the spend key -> refused (a view-only wallet needs both).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari view key without spend key rejected" "$?" "1"
+assert_contains "missing-spend-key message" "$out" "tari.spend_public_key"
+# (4) A malformed tari view key (not 64 hex) is rejected before it reaches the wallet.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"nope","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "malformed tari view key rejected" "$?" "1"
+assert_contains "malformed tari view-key message" "$out" "64-character hex"
+
 echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
 # restarts its privacy boundary unbidden); explicit true -> on.
@@ -2377,6 +2662,10 @@ assert_contains "pool flag propagated" "$(run_sourced "$V" env_get_file "$V/.env
 # pool flag AND the Tor SOCKS flags (no p2pool.clearnet set in this config).
 assert_contains "outbound P2P via Tor by default (#165)" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)" "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
 assert_eq "stratum_bind default" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_BIND)" "0.0.0.0"
+# stratum_port (#172) defaults to 3333, so an unconfigured stack keeps today's behaviour, and the
+# internal proxy→p2pool leg (P2POOL_URL) stays :3333 whatever the operator-facing port says.
+assert_eq "stratum_port default" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_PORT)" "3333"
+assert_eq "P2POOL_URL keeps the internal :3333" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_URL)" "172.28.0.28:3333"
 assert_eq "token preserved" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
@@ -2415,6 +2704,14 @@ case "$mem" in
     ;;
 *) bad "tari mem auto has m suffix" "got [$mem]" ;;
 esac
+
+# A custom p2pool.stratum_port (#172) propagates to STRATUM_PORT; the internal proxy→p2pool leg
+# (P2POOL_URL) is deliberately untouched — only the operator-facing published port moves.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_port":4444}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "stratum_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_PORT)" "4444"
+assert_eq "custom stratum_port leaves P2POOL_URL internal" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_URL)" "172.28.0.28:3333"
 
 # Non-blocking Tari (dashboard.tari_required:false) propagates as TARI_REQUIRED=false.
 seed_env
@@ -2467,6 +2764,25 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","daily_summary_time":"21:30"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "daily summary time propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "21:30"
+
+# Webhook + ntfy alert sinks (#380): no notifications block => everything off, Tor default on.
+assert_eq "webhook urls default empty" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" ""
+assert_eq "ntfy url default empty" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" ""
+assert_eq "ntfy token default empty" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_TOKEN)" ""
+assert_eq "notify tor defaults on" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_TOR)" "true"
+# Configured block propagates: the webhook list joins to one space-separated value, ntfy url/token
+# land verbatim, tor:false carries through — and apply never prints the URL/token secrets.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "notifications":{"webhooks":["https://hook.example/a","https://hook2.example/b?key=HOOKSECRET"],"ntfy":{"url":"https://ntfy.sh/PITTOPIC","token":"NTFYSECRET"},"tor":false} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "webhook urls join space-separated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" "https://hook.example/a https://hook2.example/b?key=HOOKSECRET"
+assert_eq "ntfy url propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" "https://ntfy.sh/PITTOPIC"
+assert_eq "ntfy token propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_TOKEN)" "NTFYSECRET"
+assert_eq "notify tor opt-out propagated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_TOR)" "false"
+case "$out" in
+*HOOKSECRET* | *NTFYSECRET* | *PITTOPIC*) bad "webhook/ntfy secrets not printed by apply" "leaked in: $out" ;;
+*) ok "webhook/ntfy secrets not printed by apply" ;;
+esac
 
 # Hashrate-loss detector knobs (#99): default 50% over 10 min; explicit dashboard overrides propagate.
 assert_eq "hashrate drop threshold default 50" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "50"
@@ -3585,6 +3901,73 @@ run_pending >/dev/null
 assert_contains "expired staged intent is rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "expired"
 [ ! -f "$STAGED/$UUID2.json" ] && ok "expired staged intent cleared" || bad "expired staged intent cleared" "still staged"
 
+echo "== black-box: pre-masked prefill copy + host-side secret merge (#440) =="
+# The dashboard container never mounts the raw config.json: apply/run-pending render a PRE-MASKED
+# copy into the spool's masked/ leg, and the "blank secret keeps the live value" sentinel swap
+# happens host-side at staging. Current state: pool mini committed above, node_password "p",
+# dashboard password "a control passphrase".
+MASKED="$C/data/control/masked/config.json"
+[ -f "$MASKED" ] && ok "masked prefill copy rendered by apply" || bad "masked prefill copy rendered by apply" "$MASKED missing"
+assert_eq "masked copy is world-readable for the container (644)" "$(file_mode "$MASKED")" "644"
+assert_eq "set secret masked to the sentinel" "$(jq -c '.monero.node_password' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "dashboard password masked to the sentinel" "$(jq -c '.dashboard.auth.password' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "non-secret keys survive the masking" "$(jq -r '.p2pool.pool' "$MASKED" 2>/dev/null)" "mini"
+case "$(cat "$MASKED")" in
+*"a control passphrase"* | *'"p"'*) bad "masked copy holds no secret values" "a secret leaked into $MASKED" ;;
+*) ok "masked copy holds no secret values" ;;
+esac
+
+# Staleness: a hand-edit to config.json (new BOTSECRET token) is re-masked by the next runner
+# pass — run-pending freshens the copy even with an empty request spool.
+jq '.telegram = {"bot_token":"BOTSECRET","chat_id":"-100123"}' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+run_pending >/dev/null
+assert_eq "run-pending re-renders the masked copy" "$(jq -c '.telegram.bot_token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+case "$(cat "$MASKED")" in
+*BOTSECRET*) bad "hand-edited secret never reaches the masked copy" "BOTSECRET leaked into $MASKED" ;;
+*) ok "hand-edited secret never reaches the masked copy" ;;
+esac
+
+# Sync .env with the hand-edited config so the sentinel commit below only changes allowlisted
+# P2POOL keys (TELEGRAM_BOT_TOKEN is deliberately NOT dashboard-committable).
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+
+# Host-side sentinel swap: a proposal carrying {"__secret__":true} for untouched secrets (what the
+# dashboard now submits) stages with the LIVE values merged back in, and a sentinel for an UNSET
+# secret collapses to "" instead of leaking a dict into config.json.
+UUID5="55555555-5555-4555-8555-555555555555"
+jq -n --arg w "$WALLET" --arg id "$UUID5" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:{"__secret__":true}},
+    tari:{wallet_address:"T"}, p2pool:{pool:"main"}, workers:{api_token:{"__secret__":true}},
+    telegram:{bot_token:{"__secret__":true},chat_id:"-100123"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:{"__secret__":true}},control:{enabled:true}}}}' >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "sentinel-carrying preview validates" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "previewed"
+assert_eq "sentinel swapped for the live node password at staging" "$(jq -r '.monero.node_password' "$STAGED/$UUID5.json" 2>/dev/null)" "p"
+assert_eq "sentinel swapped for the live dashboard password" "$(jq -r '.dashboard.auth.password' "$STAGED/$UUID5.json" 2>/dev/null)" "a control passphrase"
+assert_eq "sentinel swapped for the live telegram token" "$(jq -r '.telegram.bot_token' "$STAGED/$UUID5.json" 2>/dev/null)" "BOTSECRET"
+assert_eq "sentinel for an unset secret collapses to empty" "$(jq -r '.workers.api_token' "$STAGED/$UUID5.json" 2>/dev/null)" ""
+# The container-visible legs of this round trip stay secret-free (the request carried sentinels,
+# the merged copy lives only in host-only staged/).
+case "$(cat "$RESULTS/$UUID5.json")$(cat "$AUDIT")" in
+*BOTSECRET* | *"a control passphrase"*) bad "results/audit stay secret-free on a sentinel preview" "a live secret leaked" ;;
+*) ok "results/audit stay secret-free on a sentinel preview" ;;
+esac
+
+# Commit the sentinel intent: the committed config.json carries the LIVE secrets ("blank keeps"),
+# and the masked prefill copy is re-rendered to match the new state.
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live node password" "$(jq -r '.monero.node_password' "$C/config.json")" "p"
+assert_eq "committed config keeps the live telegram token" "$(jq -r '.telegram.bot_token' "$C/config.json")" "BOTSECRET"
+assert_eq "committed config never carries a sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
+assert_eq "masked copy re-rendered after the commit" "$(jq -r '.p2pool.pool' "$MASKED" 2>/dev/null)" "main"
+case "$(cat "$MASKED")" in
+*BOTSECRET* | *"a control passphrase"*) bad "re-rendered masked copy still holds no secrets" "a secret leaked into $MASKED" ;;
+*) ok "re-rendered masked copy still holds no secrets" ;;
+esac
+
 echo "== black-box: .env line-injection guard (#33 hardening, per field) =="
 # A newline in any config string that renders into .env unquoted would inject a SECOND KEY=value
 # line — e.g. PITHEAD_REGISTRY=evil.tld — which the root apply then trusts for every image: pull
@@ -3769,6 +4152,14 @@ jq '.telegram.events={node_down:false}' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "allowlisted alert toggle still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "alert toggle landed in config.json" "$(jq -r '.telegram.events.node_down' "$C/config.json")" "false"
+# dashboard.workers (#172) never renders to .env, so the env-diff allowlist can't see it — yet it
+# carries per-rig hosts and API tokens (a committed attacker host would point token-bearing probes
+# at it). The gate must refuse it via its explicit config-level check.
+jq '.dashboard.workers=[{name:"rig1",host:"attacker.example",token:"stolen"}]' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
+assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
 
 # Forged-flag bypass: the container tampers its visible copy of the preview result to
 # destructive:false AND sends a commit request carrying its own destructive:false field. The
@@ -3793,6 +4184,60 @@ jq '.p2pool.pool="mini"' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "non-security change on a security-laden config still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "pool tier change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+
+echo "== black-box: per-worker token mask + host-side restore (#172) =="
+# dashboard.workers[].token is a per-rig credential living in a VARIABLE-LENGTH array — out of the
+# fixed CONTROL_SECRET_PATHS walk. The masked prefill copy must sentinel each set token (extends
+# the #440 property per-rig), and the staging swap must restore each sentinel from the LIVE token
+# matched by worker NAME. Per-worker descriptors are never dashboard-EDITABLE (the commit gate
+# refuses any dashboard.workers change, asserted above) — so this restore is exactly what lets an
+# operator's OTHER edits round-trip: the workers come back as sentinels and must resolve to the
+# live values unchanged, or every dashboard commit on a stack with configured workers would fail.
+jq '.dashboard.workers=[
+    {name:"rig1",host:"10.0.0.5",token:"tok_rig1secret"},
+    {name:"rig2"},
+    {name:"rig3",token:"tok_rig3secret"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+# 1) masked prefill copy: each SET per-worker token is a sentinel, the raw token never appears,
+#    and a token-less worker stays token-less.
+assert_eq "per-worker token masked to the sentinel" "$(jq -c '.dashboard.workers[0].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "second per-worker token masked to the sentinel" "$(jq -c '.dashboard.workers[2].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "token-less worker stays token-less in the masked copy" "$(jq -r '.dashboard.workers[1] | has("token")' "$MASKED" 2>/dev/null)" "false"
+case "$(cat "$MASKED")" in
+*tok_rig1secret* | *tok_rig3secret*) bad "masked copy holds no per-worker token" "a per-worker token leaked into $MASKED" ;;
+*) ok "masked copy holds no per-worker token" ;;
+esac
+# 2) staging swap: a proposal that prefills the workers from the masked copy (sentinel tokens) and
+#    changes only an allowlisted key stages with each token restored from live BY NAME.
+UUID6="66666666-6666-4666-8666-666666666666"
+jq --arg id "$UUID6" '{id:$id, action:"preview", actor:"admin", config: (.p2pool.pool="main")}' "$MASKED" >"$REQS/$UUID6.json"
+run_pending >/dev/null
+assert_eq "worker-sentinel preview validates" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "previewed"
+assert_eq "per-worker sentinel restored to the live token by name" "$(jq -r '.dashboard.workers[0].token' "$STAGED/$UUID6.json" 2>/dev/null)" "tok_rig1secret"
+assert_eq "second per-worker sentinel restored by name" "$(jq -r '.dashboard.workers[2].token' "$STAGED/$UUID6.json" 2>/dev/null)" "tok_rig3secret"
+assert_eq "token-less worker stays token-less at staging" "$(jq -r '.dashboard.workers[1] | has("token")' "$STAGED/$UUID6.json" 2>/dev/null)" "false"
+case "$(cat "$RESULTS/$UUID6.json")$(cat "$AUDIT")" in
+*tok_rig1secret* | *tok_rig3secret*) bad "results/audit stay free of the restored per-worker token" "a per-worker token leaked" ;;
+*) ok "results/audit stay free of the restored per-worker token" ;;
+esac
+# 3) commit: workers restored to live == live, so the gate passes on the pool-only change, and the
+#    committed config KEEPS the live per-worker tokens (restored by name, not lost, never a dict).
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID6" >"$REQS/$UUID6.json"
+run_pending >/dev/null
+assert_eq "worker-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live per-worker token" "$(jq -r '.dashboard.workers[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
+# 4) duplicate names resolve first-declared-wins (staging only — a duplicate can't round-trip a
+#    commit, since the second entry's token would flip and trip the gate).
+jq '.dashboard.workers=[{name:"rig1",host:"10.0.0.5",token:"tok_first"},{name:"rig1",token:"tok_second"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+UUID7="77777777-7777-4777-8777-777777777777"
+jq --arg id "$UUID7" '{id:$id, action:"preview", actor:"admin", config: .}' "$MASKED" >"$REQS/$UUID7.json"
+run_pending >/dev/null
+assert_eq "duplicate-name sentinel restores the first-declared token" "$(jq -r '.dashboard.workers[0].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
+assert_eq "duplicate-name second entry also resolves to first-declared" "$(jq -r '.dashboard.workers[1].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
 
 echo "== black-box: audit log growth is bounded (#349) =="
 # Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
@@ -4134,6 +4579,297 @@ sed -i.bak 's/"control":{"enabled":true}/"control":{"enabled":false}/' "$C/confi
 out="$(run_pending)"
 assert_rc "runner refuses when the channel is disabled" "$?" "1"
 assert_contains "runner disabled message" "$out" "not enabled"
+
+# ---------------------------------------------------------------------------
+echo "== unit: update_current_symlink (#455) =="
+# A non-versioned install dir (source checkout, plain `pithead/` extract) gets NO symlink —
+# `current` only makes sense beside pithead-vX.Y.Z version dirs.
+mkdir -p "$SANDBOX/plainroot/pithead"
+run_sourced "$SANDBOX/plainroot/pithead" update_current_symlink >/dev/null 2>&1
+if [ -e "$SANDBOX/plainroot/current" ]; then
+    bad "no current symlink for a non-versioned dir" "created $SANDBOX/plainroot/current"
+else
+    ok "no current symlink for a non-versioned dir"
+fi
+
+# A versioned dir gets `../current -> <dirname>` (relative target, so the tree can move).
+mkdir -p "$SANDBOX/deployroot/pithead-v9.9.9" "$SANDBOX/deployroot/pithead-v9.9.10"
+run_sourced "$SANDBOX/deployroot/pithead-v9.9.9" update_current_symlink >/dev/null 2>&1
+assert_eq "current -> pithead-v9.9.9 after first run" "$(readlink "$SANDBOX/deployroot/current")" "pithead-v9.9.9"
+# Re-pointing: a later version dir takes over the same symlink (ln -sfn, no stale nesting).
+run_sourced "$SANDBOX/deployroot/pithead-v9.9.10" update_current_symlink >/dev/null 2>&1
+assert_eq "current re-pointed to pithead-v9.9.10" "$(readlink "$SANDBOX/deployroot/current")" "pithead-v9.9.10"
+# Idempotent re-run keeps it.
+run_sourced "$SANDBOX/deployroot/pithead-v9.9.10" update_current_symlink >/dev/null 2>&1
+assert_eq "current unchanged on re-run" "$(readlink "$SANDBOX/deployroot/current")" "pithead-v9.9.10"
+
+# `current` existing as a REAL directory is never clobbered (ln -sfn would nest a link inside it).
+mkdir -p "$SANDBOX/dirroot/pithead-v1.2.3" "$SANDBOX/dirroot/current"
+out="$(run_sourced "$SANDBOX/dirroot/pithead-v1.2.3" update_current_symlink 2>&1)"
+rc=$?
+assert_rc "real-dir current: still rc 0 (never fails the upgrade)" "$rc" "0"
+assert_contains "real-dir current: warns" "$out" "not a symlink"
+if [ -d "$SANDBOX/dirroot/current" ] && [ ! -L "$SANDBOX/dirroot/current" ]; then
+    ok "real-dir current left untouched"
+else
+    bad "real-dir current left untouched" "was replaced"
+fi
+
+echo "== unit: migrate_dashboard_data (#455) =="
+# Direct unit calls with the parse-time globals set by hand; docker stubbed (no daemon in tests).
+mig455() { # <workdir> <DASHBOARD_DIR> <is_default>
+    (
+        cd "$1" || exit 1
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        docker() { :; }
+        # shellcheck disable=SC2034  # read by the sourced migrate_dashboard_data
+        DASHBOARD_DIR="$2"
+        # shellcheck disable=SC2034
+        DASHBOARD_DIR_IS_DEFAULT="$3"
+        migrate_dashboard_data
+    )
+}
+M="$SANDBOX/mig"
+mkdir -p "$M/data/dashboard" "$M/shared"
+printf 'olddb' >"$M/data/dashboard/mining_data.db"
+# move-if-default: the old in-install-dir data moves to the shared-root default, DB intact.
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "move-if-default succeeds" "$?" "0"
+assert_eq "DB moved intact" "$(cat "$M/shared/dashboard/mining_data.db" 2>/dev/null)" "olddb"
+if [ -e "$M/data/dashboard" ]; then bad "old default gone after move" "still exists"; else ok "old default gone after move"; fi
+# idempotent: nothing at the old default any more -> silent no-op.
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "re-run is a no-op" "$?" "0"
+assert_eq "DB survives the re-run" "$(cat "$M/shared/dashboard/mining_data.db" 2>/dev/null)" "olddb"
+# warn-if-custom: an operator-pinned dashboard.data_dir is never migrated — warn and leave both.
+mkdir -p "$M/data/dashboard"
+printf 'olddb2' >"$M/data/dashboard/mining_data.db"
+out="$(mig455 "$M" "$M/pinned" 0 2>&1)"
+assert_rc "custom path: rc 0" "$?" "0"
+assert_contains "custom path: warns about the leftover" "$out" "$M/data/dashboard"
+assert_eq "custom path: old data untouched" "$(cat "$M/data/dashboard/mining_data.db")" "olddb2"
+if [ -e "$M/pinned/mining_data.db" ]; then bad "custom path: nothing moved" "moved anyway"; else ok "custom path: nothing moved"; fi
+# conflict: data at BOTH locations -> hard stop, nothing touched (never guess which DB is live).
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "both-populated: refuses" "$?" "1"
+assert_eq "both-populated: old DB untouched" "$(cat "$M/data/dashboard/mining_data.db")" "olddb2"
+assert_eq "both-populated: new DB untouched" "$(cat "$M/shared/dashboard/mining_data.db")" "olddb"
+# empty pre-created target (an earlier ensure_directories mkdir) is not a conflict — the move runs.
+rm -f "$M/shared/dashboard/mining_data.db"
+out="$(mig455 "$M" "$M/shared/dashboard" 1 2>&1)"
+assert_rc "empty pre-created target: move succeeds" "$?" "0"
+assert_eq "empty pre-created target: DB moved" "$(cat "$M/shared/dashboard/mining_data.db" 2>/dev/null)" "olddb2"
+
+# Wiring: stack_upgrade migrates BEFORE the containers are recreated and points `current` at the
+# install only AFTER a successful 'compose up' — a failed upgrade must not move the pointer.
+upg455_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 0; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    migrate_dashboard_data() { echo migrate; }
+    update_current_symlink() { echo symlink; }
+    compose_up_checked() { echo compose; }
+    stack_upgrade
+)
+assert_eq "upgrade: migrate -> compose -> symlink (#455)" \
+    "$(printf '%s\n' "$upg455_order" | grep -xE 'migrate|compose|symlink' | tr '\n' ',')" "migrate,compose,symlink,"
+upg455_fail=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    inject_service_configs() { :; }
+    generate_caddyfile() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    is_source_checkout() { return 0; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    migrate_dashboard_data() { :; }
+    update_current_symlink() { echo symlink; }
+    compose_up_checked() { return 1; }
+    stack_upgrade
+)
+assert_not_contains "failed upgrade does NOT move the current pointer (#455)" "$upg455_fail" "symlink"
+
+echo "== black-box: deploy-box layout (#455) =="
+# A sandboxed source-checkout install whose chain data dirs share one root — the prod/gouda
+# layout. Proves the default resolution, the apply-time migration, and the upgrade-time
+# symlink end to end through the real CLI (docker/sudo stubbed).
+L="$SANDBOX/boxroot/pithead-v9.9.9"
+mkdir -p "$L/build/tari" "$L/build/dashboard"
+: >"$L/build/dashboard/Dockerfile"
+cp "$STACK" "$L/pithead"
+make_stubs "$L/bin"
+cp "$ROOT/build/tari/config.toml.template" "$L/build/tari/"
+SHARED="$SANDBOX/boxroot/data"
+seed_L() {
+    cat >"$L/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+}
+cfg_L() { # <dashboard-extra-json>  e.g. ',"data_dir":"/pinned"'
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"T","data_dir":"%s/tari"}, "p2pool":{"pool":"main","data_dir":"%s/p2pool"}, "tor":{"data_dir":"%s/tor"}, "dashboard":{"secure":true,"host":"box.lan"%s} }\n' \
+        "$WALLET" "$SHARED" "$SHARED" "$SHARED" "$SHARED" "$1" >"$L/config.json"
+}
+# Old layout on disk: the dashboard DB inside the version dir's ./data (the pre-#455 default).
+seed_L
+cfg_L ""
+mkdir -p "$L/data/dashboard"
+printf 'proddb' >"$L/data/dashboard/mining_data.db"
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with a shared data root succeeds" "$?" "0"
+assert_eq "DASHBOARD_DATA_DIR joins the shared data root" \
+    "$(run_sourced "$L" env_get_file "$L/.env" DASHBOARD_DATA_DIR)" "$SHARED/dashboard"
+assert_eq "apply moved the dashboard DB to the shared root" \
+    "$(cat "$SHARED/dashboard/mining_data.db" 2>/dev/null)" "proddb"
+if [ -e "$L/data/dashboard" ]; then bad "apply: old in-version-dir data gone" "still exists"; else ok "apply: old in-version-dir data gone"; fi
+# Re-apply: no config change, nothing to migrate — clean no-op.
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "re-apply is a no-op" "$?" "0"
+assert_eq "re-apply leaves the migrated DB alone" "$(cat "$SHARED/dashboard/mining_data.db")" "proddb"
+# Upgrade from the versioned dir: maintains `current ->` beside it and stays idempotent.
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead upgrade 2>&1)"
+assert_rc "upgrade succeeds" "$?" "0"
+assert_eq "upgrade maintains current -> pithead-v9.9.9" "$(readlink "$SANDBOX/boxroot/current")" "pithead-v9.9.9"
+assert_eq "upgrade leaves the migrated DB alone" "$(cat "$SHARED/dashboard/mining_data.db")" "proddb"
+# Scattered custom dirs (no single parent): the classic in-install ./data default stands.
+seed_L
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' \
+    "$WALLET" "$SHARED" >"$L/config.json"
+out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with scattered data dirs succeeds" "$?" "0"
+assert_eq "no shared root -> dashboard default stays ./data/dashboard" \
+    "$(run_sourced "$L" env_get_file "$L/.env" DASHBOARD_DATA_DIR)" "$L/data/dashboard"
+
+echo "== control channel: Telegram lifecycle verbs (#338) =="
+# The #33 runner dispatches the two bounded Telegram control verbs to FIXED pithead commands and
+# audits them; an unknown verb is rejected and no host command runs. PITHEAD_SELF points the runner
+# at a stub that only records the literal verb it was handed, so nothing real is applied/restarted.
+CC="$SANDBOX/ctrl338"
+mkdir -p "$CC/staged" "$CC/results" "$CC/audit"
+cat >"$CC/self" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >>"$SELF_LOG"
+exit 0
+EOF
+chmod +x "$CC/self"
+export SELF_LOG="$CC/self.log"
+export PITHEAD_SELF="$CC/self"
+uid_r="11111111-1111-4111-8111-111111111111"
+uid_a="22222222-2222-4222-8222-222222222222"
+uid_x="33333333-3333-4333-8333-333333333333"
+
+: >"$SELF_LOG"
+printf '{"id":"%s","action":"restart","actor":"tg-7"}\n' "$uid_r" >"$CC/req_r.json"
+run_sourced "$SANDBOX" control_process_request "$CC/req_r.json" "$CC" >/dev/null 2>&1
+assert_eq "restart intent runs the fixed 'restart' verb" "$(cat "$SELF_LOG")" "restart"
+assert_eq "restart result is applied" "$(jq -r .status "$CC/results/$uid_r.json")" "applied"
+assert_contains "restart is audited with the actor + action" \
+    "$(cat "$CC/audit/control.log")" '"actor":"tg-7","action":"restart","status":"applied"'
+
+: >"$SELF_LOG"
+printf '{"id":"%s","action":"apply","actor":"tg-7"}\n' "$uid_a" >"$CC/req_a.json"
+run_sourced "$SANDBOX" control_process_request "$CC/req_a.json" "$CC" >/dev/null 2>&1
+assert_eq "apply intent runs the fixed 'apply -y' verb (config re-apply, no edit)" "$(cat "$SELF_LOG")" "apply -y"
+assert_eq "apply result is applied" "$(jq -r .status "$CC/results/$uid_a.json")" "applied"
+
+: >"$SELF_LOG"
+printf '{"id":"%s","action":"frobnicate","actor":"tg-7"}\n' "$uid_x" >"$CC/req_x.json"
+run_sourced "$SANDBOX" control_process_request "$CC/req_x.json" "$CC" >/dev/null 2>&1
+assert_eq "unknown verb rejected (bounded action set)" "$(jq -r .error "$CC/results/$uid_x.json")" "unknown action"
+assert_eq "unknown verb never runs a host command" "$(cat "$SELF_LOG")" ""
+unset PITHEAD_SELF SELF_LOG
+
+# ---------------------------------------------------------------------------
+echo "== control channel: worker config apply fails closed (#185) =="
+# control_worker_apply resolves the rig's host/token from the HOST's config.json (never the intent)
+# and refuses — before dialing any rig — a bad worker name, a non-writable key, an empty change, or a
+# worker missing a host or token. These are the fail-closed guards a compromised container hits.
+WA="$SANDBOX/ctrl185"
+mkdir -p "$WA/staged" "$WA/results" "$WA/audit"
+# config.json: rig1 fully addressable (host+token), rig2 has a host but no token (bearer-mandatory).
+cat >"$WA/config.json" <<'EOF'
+{ "dashboard": { "workers": [
+    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" },
+    { "name": "rig2", "host": "10.0.0.8" }
+] } }
+EOF
+wa_case() { # <uuid> <intent-json> <label> <expected-error-substring>
+    printf '%s\n' "$2" >"$WA/req.json"
+    PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
+    local out
+    out=$(jq -r '.status + "|" + (.error // "")' "$WA/results/$1.json" 2>/dev/null)
+    case "$out" in
+    rejected\|*"$4"*) ok "$3" ;;
+    *) bad "$3" "got: $out" ;;
+    esac
+}
+u1="aaaaaaaa-1111-4111-8111-111111111111"
+u2="bbbbbbbb-2222-4222-8222-222222222222"
+u3="cccccccc-3333-4333-8333-333333333333"
+u4="dddddddd-4444-4444-8444-444444444444"
+u5="eeeeeeee-5555-4555-8555-555555555555"
+wa_case "$u1" "{\"id\":\"$u1\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"\",\"changes\":{\"DONATION\":2}}" "empty worker name rejected" "worker"
+wa_case "$u2" "{\"id\":\"$u2\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"rig1\",\"changes\":{\"ACCESS_TOKEN\":\"x\"}}" "non-writable key rejected" "not writable"
+wa_case "$u3" "{\"id\":\"$u3\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"rig1\",\"changes\":{}}" "empty changes rejected" "non-empty"
+wa_case "$u4" "{\"id\":\"$u4\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"ghost\",\"changes\":{\"DONATION\":2}}" "unknown/hostless worker rejected" "no configured host"
+wa_case "$u5" "{\"id\":\"$u5\",\"action\":\"worker-apply\",\"actor\":\"admin\",\"worker\":\"rig2\",\"changes\":{\"DONATION\":2}}" "worker without a token rejected (bearer-mandatory)" "no token"
+# The intent's own host/port/token are IGNORED — resolution is from config.json only (#122). A tampered
+# intent naming rig2 (no token) with an injected token still fails closed.
+u6="ffffffff-6666-4666-8666-666666666666"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig2","changes":{"DONATION":2}}\n' "$u6" >"$WA/req.json"
+PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
+assert_eq "worker-apply reject is audited by name only" \
+    "$(jq -r '.status' "$WA/results/$u6.json")" "rejected"
+assert_contains "worker-apply audit records the action, no token" \
+    "$(cat "$WA/audit/control.log")" '"action":"worker-apply","status":"rejected"'
+if grep -q 'tok-rig1' "$WA/audit/control.log" "$WA"/results/*.json 2>/dev/null; then
+    bad "worker-apply never leaks a token to results/audit" "token found"
+else
+    ok "worker-apply never leaks a token to results/audit"
+fi
+# Per-drain dial budget (#185 hardening): with the budget exhausted, a fully-valid apply (rig1 has a
+# host + token) is refused BEFORE any rig dial, so a flood can't starve the root runner.
+u7="99999999-7777-4777-8777-777777777777"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"DONATION":2}}\n' "$u7" >"$WA/req.json"
+CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
+assert_contains "worker-apply over the dial budget is rejected (no dial)" \
+    "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
 
 # ---------------------------------------------------------------------------
 echo ""

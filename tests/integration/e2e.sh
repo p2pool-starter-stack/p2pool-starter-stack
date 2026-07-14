@@ -160,6 +160,9 @@ on_miner() { ssh "${SSH_OPTS[@]}" "$MINER_HOST" "$1"; }
 SAFETY_ARCHIVE=""
 MINER_CFG_BACKUP=""
 RESTORED=0
+# Where the LIVE stack actually runs from — resolved in preflight (#454). Defaults to CANONICAL_DIR
+# so the EXIT trap always has a target even if it fires before preflight refines it.
+RESTORE_DIR="$CANONICAL_DIR"
 
 # --- Restore (runs on EXIT, even on failure / Ctrl-C) -----------------------
 restore_all() {
@@ -184,13 +187,16 @@ restore_all() {
         fi
     fi
 
-    # 2. Stack: stop the branch (e2e checkout) and bring the canonical baseline back up healthy.
-    step "bringing the canonical baseline stack ($CANONICAL_DIR) back up"
+    # 2. Stack: stop the branch (e2e checkout) and bring the LIVE baseline back up healthy. Restore
+    #    from RESTORE_DIR — the dir the live stack actually ran from (#454), which on a release box is a
+    #    per-version bundle dir, not CANONICAL_DIR. Restoring from the wrong dir hands the "pithead"
+    #    project locally-built :dev images.
+    step "bringing the baseline stack ($RESTORE_DIR) back up"
     on_bench "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
-    if on_bench "cd '$CANONICAL_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
-        wait_bench_healthy 300 && ok "canonical baseline stack healthy again" || warn "canonical stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
+    if on_bench "cd '$RESTORE_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
+        wait_bench_healthy 300 && ok "baseline stack healthy again" || warn "baseline stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
     else
-        warn "canonical 'pithead apply/up' returned non-zero — check $BENCH_HOST by hand."
+        warn "baseline 'pithead apply/up' returned non-zero in $RESTORE_DIR — check $BENCH_HOST by hand."
         warn "  Safety backup to roll back to: $SAFETY_ARCHIVE"
     fi
 
@@ -207,7 +213,7 @@ trap restore_all EXIT INT TERM
 wait_bench_healthy() { # <timeout_s>
     local deadline=$(($(date +%s) + ${1:-300}))
     while :; do
-        on_bench "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" && return 0
+        on_bench "cd '$RESTORE_DIR' && ./pithead status >/dev/null 2>&1" && return 0
         [ "$(date +%s)" -ge "$deadline" ] && return 1
         sleep 10
     done
@@ -269,6 +275,22 @@ preflight() {
     on_bench "cd '$CANONICAL_DIR' && ./pithead status >/dev/null 2>&1" &&
         ok "canonical stack is currently healthy" ||
         warn "canonical stack is NOT healthy right now — continuing, but check the box."
+    # Resolve where the LIVE stack actually runs from (#454). The "pithead" Compose project name is
+    # fixed, so exactly one project runs on the box; read its working_dir off a running container's
+    # label. On a release box that's a per-version bundle dir (e.g. /srv/code/pithead-v1.3.1), NOT
+    # CANONICAL_DIR — the restore must target it or it hands the project locally-built :dev images.
+    # Captured NOW, before deploy_branch rewrites the label to E2E_DIR.
+    local live_cid live_dir=""
+    live_cid="$(on_bench "docker ps -q --filter label=com.docker.compose.project=pithead 2>/dev/null | head -n1" || true)"
+    [ -n "$live_cid" ] && live_dir="$(on_bench "docker inspect --format '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' '$live_cid' 2>/dev/null" || true)"
+    if [ -n "$live_dir" ] && [ "$live_dir" != "$E2E_DIR" ] && on_bench "test -x '$live_dir/pithead'"; then
+        RESTORE_DIR="$live_dir"
+        [ "$RESTORE_DIR" = "$CANONICAL_DIR" ] &&
+            ok "live stack runs from $RESTORE_DIR" ||
+            warn "live stack runs from $RESTORE_DIR (not CANONICAL_DIR=$CANONICAL_DIR) — restore will target it (#454)."
+    else
+        warn "couldn't resolve the live stack's working dir — restore will use CANONICAL_DIR=$CANONICAL_DIR."
+    fi
     if [ "$BORROW_MINER" = "1" ]; then
         on_miner 'echo ok >/dev/null' || die "Cannot SSH to miner '$MINER_HOST' (use --no-miner to skip)."
         on_miner "test -f '$MINER_XMRIG_CONFIG'" || die "No xmrig config at $MINER_XMRIG_CONFIG on $MINER_HOST."
@@ -296,8 +318,15 @@ provision() {
         fi
         git -C '$E2E_DIR' remote set-url origin '$GIT_REMOTE_URL'
         git -C '$E2E_DIR' fetch --quiet origin '$BRANCH'
-        git -C '$E2E_DIR' checkout -q -B '$BRANCH' FETCH_HEAD
+        # The e2e checkout is DEDICATED and disposable, so force a pristine tree instead of assuming
+        # one (#454): drop stray untracked files (e.g. a leftover bench script) that would otherwise
+        # abort 'checkout' with \"would be overwritten\". -x clears ignored build cruft too; the
+        # -e excludes keep data/backups and the harness's own results/, so the shared chains and
+        # rollback anchors are never touched. config.json/.env ARE wiped (gitignored, no -e) but the
+        # next step re-seeds them from CANONICAL_DIR — don't drop that seed thinking clean spares them.
+        git -C '$E2E_DIR' checkout -q -f -B '$BRANCH' FETCH_HEAD
         git -C '$E2E_DIR' reset -q --hard FETCH_HEAD
+        git -C '$E2E_DIR' clean -qfdx -e /results -e /backups -e /data
     " || die "Failed to provision/checkout '$BRANCH' in $E2E_DIR."
     local head
     head="$(on_bench "git -C '$E2E_DIR' rev-parse --short HEAD")"
@@ -312,7 +341,9 @@ provision() {
 # --- Phase 2: safety backup of the live stack -------------------------------
 backup_stack() {
     log "Taking a safety backup of the live stack (the rollback anchor)"
-    on_bench "cd '$CANONICAL_DIR' && ./pithead backup -y >/dev/null 2>&1" || die "pithead backup failed."
+    # ponytail: --no-encrypt because v1.4 refuses to write a plaintext archive unattended without
+    # PITHEAD_BACKUP_PASSPHRASE; this rollback anchor never leaves the bench, so plaintext is fine here.
+    on_bench "cd '$CANONICAL_DIR' && ./pithead backup -y --no-encrypt >/dev/null 2>&1" || die "pithead backup failed."
     SAFETY_ARCHIVE="$(on_bench "ls -t '$CANONICAL_DIR'/backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1")"
     [ -n "$SAFETY_ARCHIVE" ] || die "Backup ran but produced no archive."
     ok "safety backup: $SAFETY_ARCHIVE"
@@ -328,10 +359,15 @@ borrow_miner() {
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
     on_miner "cp -a '$MINER_XMRIG_CONFIG' '$MINER_CFG_BACKUP'" || die "Failed to back up the miner config."
     step "miner config backed up → $MINER_CFG_BACKUP"
-    # Reorder pools so the test-bench pool is primary (index 0); keep the rest as failover. Non-destructive
-    # and fully reversible from the backup above. Assumes a test-bench pool already exists in the config.
+    # Point the rig at the bench: inject a bench pool if the config has none (clone pool[0] so
+    # user/pass/keepalive carry over, override url→bench and force plain stratum), then reorder so the
+    # bench pool is primary and the rest stay as failover. Non-destructive, fully reversible from the
+    # backup above. ponytail: hardcodes :3333 (the seeded canonical stratum_port default, which the bench runs).
     on_miner "
-        jq '.pools |= ([.[] | select(.url | ascii_downcase | contains(\"$BENCH_HOST\"))] + [.[] | select(.url | ascii_downcase | contains(\"$BENCH_HOST\") | not)])' \
+        jq --arg b '$BENCH_HOST' '
+            (if any(.pools[]?; .url | ascii_downcase | contains(\$b)) then .
+             else .pools = ([ (.pools[0]) + {url: (\$b + \":3333\"), tls: false, daemon: false} ] + .pools) end)
+            | .pools |= ([.[] | select(.url | ascii_downcase | contains(\$b))] + [.[] | select(.url | ascii_downcase | contains(\$b) | not)])' \
             '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' \
         && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'
     " || die "Failed to repoint the miner config."
@@ -363,9 +399,12 @@ run_harness() {
     local phases
     case "$MODE" in
     check) phases="--check" ;;
-    targeted) phases="--readiness --auth-fail-closed --lifecycle" ;; # --readiness/--check run first below
+    targeted) phases="--auth-fail-closed --lifecycle" ;; # readiness/check run inline first (below); NOT here — run.sh returns after --readiness
     matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed --hardening" ;;
     esac
+    # RigForge integration (#185/#235/#260) is only meaningful with a REAL rig mining through the stack.
+    # The phase self-skips if no rigforge rig is connected, so this gate is just to avoid the noise.
+    [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge"
     log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 

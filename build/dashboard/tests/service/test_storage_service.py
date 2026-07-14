@@ -145,6 +145,101 @@ class TestSharesAndHistory:
             sm2.close()
 
 
+class TestDbRecovery:
+    """Corrupt-DB auto-heal (#489): a malformed DB is quarantined and rebuilt fresh instead of
+    erroring on every write forever. Recovery is loud (db_reset_count) but non-fatal."""
+
+    def _corrupt(self, path):
+        # Not a SQLite file — connect() opens it lazily, but integrity_check / the first pragma
+        # raises "file is not a database". This is what a truncated/overwritten DB looks like.
+        with open(path, "wb") as f:
+            f.write(b"this is not a sqlite database, it is garbage" * 8)
+
+    def test_corrupt_db_at_startup_is_quarantined_and_rebuilt(self, tmp_path):
+        db = str(tmp_path / "mining.db")
+        self._corrupt(db)
+        sm = StateManager(db_path=db)
+        try:
+            assert sm.db_reset_count == 1
+            assert sm.last_db_reset is not None
+            quarantine = sm.last_db_reset["quarantine"]
+            assert quarantine and quarantine.endswith(tuple("0123456789Z"))
+            import os
+
+            assert os.path.exists(quarantine)  # bad file kept for post-mortem
+            assert sm.is_db_healthy() is True  # fresh DB is writable
+            # The fresh schema works: a write round-trips.
+            sm.update_history(1000, p2pool_hr=5, xvb_hr=0)
+            assert sm.get_history()[-1]["v_p2pool"] == 5
+        finally:
+            sm.close()
+
+    def test_runtime_corruption_error_triggers_recovery(self):
+        # A malformed error surfacing on a write at runtime routes through _db_error into recovery,
+        # so the dashboard self-heals mid-run instead of erroring every cycle. :memory: has no file
+        # to quarantine — it just rebuilds and keeps going.
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm._db_error(
+                "History Update Error",
+                sqlite3.DatabaseError("database disk image is malformed"),
+            )
+            assert sm.db_reset_count == 1
+            assert sm.last_db_reset["quarantine"] is None
+            assert sm.is_db_healthy() is True
+            sm.update_history(500, p2pool_hr=3, xvb_hr=0)  # fresh in-memory DB is writable
+            assert sm.get_history()[-1]["v_p2pool"] == 3
+        finally:
+            sm.close()
+
+    def test_good_db_is_untouched(self, tmp_path):
+        db = str(tmp_path / "ok.db")
+        sm = StateManager(db_path=db)
+        sm.close()
+        sm2 = StateManager(db_path=db)  # reopen a healthy DB
+        try:
+            assert sm2.db_reset_count == 0
+            assert sm2.last_db_reset is None
+        finally:
+            sm2.close()
+
+    def test_corruption_error_classified_transient_is_not(self, state_manager):
+        assert state_manager._is_corruption_error(
+            sqlite3.DatabaseError("database disk image is malformed")
+        )
+        assert state_manager._is_corruption_error(sqlite3.DatabaseError("file is not a database"))
+        # A retryable failure (locked, disk full) must NOT trigger a reset — that would throw away
+        # history over a transient hiccup.
+        assert not state_manager._is_corruption_error(
+            sqlite3.OperationalError("database is locked")
+        )
+
+    def test_transient_write_error_flags_unhealthy_without_reset(self, state_manager):
+        state_manager._db_error("History Update Error", sqlite3.OperationalError("disk I/O error"))
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.db_reset_count == 0  # no reset for a transient error
+
+    def test_prune_keeps_only_recent_quarantines(self, tmp_path):
+        import os
+
+        db = str(tmp_path / "m.db")
+        sm = StateManager(db_path=db)
+        try:
+            for stamp in (
+                "20260101T000000Z",
+                "20260102T000000Z",
+                "20260103T000000Z",
+                "20260104T000000Z",
+            ):
+                open(f"{db}.corrupt-{stamp}", "w").close()
+            sm._prune_quarantined()
+            kept = sorted(f for f in os.listdir(tmp_path) if ".corrupt-" in f)
+            assert len(kept) == 3  # oldest pruned, newest 3 kept
+            assert "m.db.corrupt-20260101T000000Z" not in kept
+        finally:
+            sm.close()
+
+
 class TestKvStore:
     def test_get_missing_key_is_none(self, state_manager):
         assert state_manager.get_kv("payout_wallet") is None
@@ -588,3 +683,71 @@ class TestShareStatsSeries:
             assert sm.get_share_stats() == []
         finally:
             sm.close()
+
+
+class TestPayouts:
+    """Confirmed on-chain payouts (#381), keyed (chain, txid) so the Tari sibling (#462) reuses it."""
+
+    def _rows(self):
+        return [
+            {"txid": "aa", "height": 100, "ts": 1000.0, "amount_atomic": 250_000_000_000},
+            {"txid": "bb", "height": 101, "ts": 2000.0, "amount_atomic": 500_000_000_000},
+        ]
+
+    def test_add_returns_only_new_rows(self, state_manager):
+        new = state_manager.add_payouts("monero", self._rows())
+        assert {r["txid"] for r in new} == {"aa", "bb"}
+
+    def test_add_is_idempotent_on_chain_txid(self, state_manager):
+        state_manager.add_payouts("monero", self._rows())
+        # Re-adding the same rows (a restart re-scanning the tip) inserts nothing new → no re-alert.
+        again = state_manager.add_payouts("monero", self._rows())
+        assert again == []
+        assert len(state_manager.get_payouts("monero")) == 2
+
+    def test_same_txid_different_chain_is_a_distinct_payout(self, state_manager):
+        # The PK is (chain, txid): the same txid string on another chain must NOT collide (#462).
+        state_manager.add_payouts("monero", [self._rows()[0]])
+        new = state_manager.add_payouts("tari", [self._rows()[0]])
+        assert len(new) == 1
+        assert len(state_manager.get_payouts()) == 2  # both chains, cross-chain query
+        assert len(state_manager.get_payouts("monero")) == 1
+
+    def test_get_payouts_newest_first(self, state_manager):
+        state_manager.add_payouts("monero", self._rows())
+        got = state_manager.get_payouts("monero")
+        assert [p["txid"] for p in got] == ["bb", "aa"]  # ts DESC
+        assert got[0]["amount_atomic"] == 500_000_000_000
+
+    def test_max_height_seeds_the_wallet_poll(self, state_manager):
+        assert state_manager.get_payout_max_height("monero") == 0
+        state_manager.add_payouts("monero", self._rows())
+        assert state_manager.get_payout_max_height("monero") == 101
+        # Another chain's rows don't move Monero's seed.
+        state_manager.add_payouts(
+            "tari", [{"txid": "zz", "height": 9, "ts": 5.0, "amount_atomic": 1}]
+        )
+        assert state_manager.get_payout_max_height("monero") == 101
+
+    def test_empty_input_is_a_noop(self, state_manager):
+        assert state_manager.add_payouts("monero", []) == []
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE payouts")
+        assert state_manager.add_payouts("monero", self._rows()) == []
+        assert state_manager.is_db_healthy() is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        # A DB whose payouts table is gone (alien/older schema) reads as empty / height 0, not crash.
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE payouts")
+        assert state_manager.get_payouts("monero") == []
+        assert state_manager.get_payout_max_height("monero") == 0
+
+    def test_reads_and_writes_after_close_are_safe(self, state_manager):
+        # After close() the connection is None — every payout accessor must no-op, never raise.
+        state_manager.close()
+        assert state_manager.add_payouts("monero", [{"txid": "x", "amount_atomic": 1}]) == []
+        assert state_manager.get_payouts("monero") == []
+        assert state_manager.get_payout_max_height("monero") == 0

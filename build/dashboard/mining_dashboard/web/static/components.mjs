@@ -7,10 +7,13 @@ import { ChartCard } from "./chart.mjs";
 import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
   computeEarnings,
+  computeEnergy,
   computeXvbTier,
   egressRoute,
   fmtHashrate,
+  formatFiat,
   formatTimeToShare,
+  formatUnit,
   formatXmr,
   formatXtm,
   heroKpis,
@@ -26,6 +29,7 @@ import {
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
 import { StackTopology } from "./topology.mjs";
+import { WorkerInspect } from "./workerview.mjs";
 
 // Palette token -> text-colour class (defined in dashboard.css).
 const cVar = (v) => "c-" + v;
@@ -485,13 +489,16 @@ class EarningsCard extends Component {
     const hr = useDefault ? e.p2pool_hr : parseHashrate(input);
     const est = computeEarnings(hr, e);
     const xvb = this.props.xvb;
-    // Tabs split the (now three-domain) card body. XvB only appears when it's enabled — there's no
-    // tier to show otherwise. The one what-if input above the strip drives every tab's estimate.
+    const energy = this.props.energy;
+    // Tabs split the (now multi-domain) card body. XvB only appears when it's enabled and Energy only
+    // when the fleet reports any power — there's nothing to show otherwise. The one what-if input
+    // above the strip drives every tab's estimate.
     const tabs = [
       { id: "monero", label: "Monero" },
       { id: "tari", label: "Tari" },
     ];
     if (xvb && xvb.enabled) tabs.push({ id: "xvb", label: "XvB" });
+    if (energy && energy.available) tabs.push({ id: "energy", label: "Energy" });
     const active = tabs.some((t) => t.id === tab) ? tab : "monero";
     return html`
         <div class="card card-advanced" id="card-earnings">
@@ -543,9 +550,67 @@ class EarningsCard extends Component {
             </div>`
                 : null
             }
+            ${
+              energy && energy.available
+                ? html`
+            <div role="tabpanel" id="epanel-energy" aria-labelledby="etab-energy" hidden=${active !== "energy"}>
+                <${EnergyPanel} energy=${energy} est=${est} />
+            </div>`
+                : null
+            }
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }
+}
+
+// Energy & profit tab body (#260). Fleet power draw + efficiency (always, when any power is known),
+// then energy cost once an electricity price is set, then net profit once an XMR price is also set —
+// each layer appears only when its inputs exist, so the operator never sees a fabricated figure.
+// `est` is the earnings for the shared what-if hashrate; the client does the kWh/cost/net math.
+function EnergyPanel({ energy, est }) {
+  const en = computeEnergy(energy, est);
+  const cur = energy.currency;
+  const haveCost = energy.cost_per_kwh > 0;
+  const haveNet = haveCost && energy.xmr_price > 0;
+  return html`
+    <div class="stat-grid">
+        <${StatCard} label="Fleet Power" value=${formatUnit(energy.total_watts, "W")}
+                     cls=${energy.incomplete ? "status-warn" : ""}
+                     title=${
+                       energy.incomplete
+                         ? "Summed draw of the workers that report power (RAPL) or have a configured estimate — a lower bound: some workers report neither and are excluded."
+                         : "Summed measured/estimated draw across the fleet."
+} />
+        <${StatCard} label="Efficiency" value=${formatUnit(energy.hs_per_watt, "H/s·W", 2)}
+                     title="Fleet hashrate ÷ fleet watts." />
+        <${StatCard} label="Energy / day" value=${formatUnit(en.kwhDay, "kWh")} />
+        <${StatCard} label="Energy / month" value=${formatUnit(en.kwhMonth, "kWh")} />
+        <${StatCard} label="Energy / year" value=${formatUnit(en.kwhYear, "kWh")} />
+    </div>
+    ${
+      haveCost
+        ? html`
+    <h4 class="text-small mt-2">Cost${haveNet ? " & Net Profit" : ""} (${cur})</h4>
+    <div class="stat-grid">
+        <${StatCard} label="Power cost / day" value=${formatFiat(en.costDay, cur)} />
+        <${StatCard} label="Power cost / month" value=${formatFiat(en.costMonth, cur)} />
+        <${StatCard} label="Power cost / year" value=${formatFiat(en.costYear, cur)} />
+        ${
+          haveNet
+            ? html`
+        <${StatCard} label="Net / day" value=${formatFiat(en.netDay, cur)}
+                     cls=${en.netDay !== null && en.netDay < 0 ? "c-bad" : "text-accent"}
+                     title="P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari and XvB." />
+        <${StatCard} label="Net / month" value=${formatFiat(en.netMonth, cur)}
+                     cls=${en.netMonth !== null && en.netMonth < 0 ? "c-bad" : "text-accent"} />
+        <${StatCard} label="Net / year" value=${formatFiat(en.netYear, cur)}
+                     cls=${en.netYear !== null && en.netYear < 0 ? "c-bad" : "text-accent"} />`
+            : html`<${StatCard} label="Net Profit" value="set xmr_price"
+                     title="Set dashboard.energy.xmr_price (in your currency) to see net profit after power. No price feed ships — this stack avoids the clearnet egress." />`
+        }
+    </div>`
+        : html`<p class="text-muted text-xs mt-2">Set <code>dashboard.energy.cost_per_kwh</code> to see energy cost and net profit after power.</p>`
+    }`;
 }
 
 // Pool cadence & luck (#84). Read-only Advanced card over server-formatted figures: time since the
@@ -592,6 +657,22 @@ function PoolBadge({ pool }) {
   return html`<span class="badge badge-bad">Unknown</span>`;
 }
 
+// RigForge enriched feed (#235): a monospace version badge plus health / power / tune / watchdog
+// chips, all built server-side (views._rigforge_display) so the client stays a dumb renderer. A
+// plain-xmrig worker has no `rigforge` block and renders nothing extra — no chips, no error, no
+// empty placeholder, exactly as today. Each chip is a {text, variant, title}; only present-data
+// chips are emitted, so a rig with no RAPL shows no power chip.
+function RigForgeChips({ rf }) {
+  if (!rf) return null;
+  return html`${
+    rf.version
+      ? html` <span class="badge badge-outline version-badge" title="RigForge version">rf ${rf.version}</span>`
+      : null
+  }${(rf.chips || []).map(
+    (c) => html` <span class=${"badge badge-" + c.variant} title=${c.title || ""}>${c.text}</span>`,
+  )}`;
+}
+
 // Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
 // has reported any shares so it isn't an all-zero line on a fresh start.
 const ProxyTotals = ({ summary }) => {
@@ -607,18 +688,19 @@ const ProxyTotals = ({ summary }) => {
     </div>`;
 };
 
-function WorkersTable({ workers, summary, ui, onSort, hostIp }) {
+function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onInspect }) {
   // First-run empty state (#385): until the proxy has ever reported a worker, the table would be
   // eight headers over nothing — show the one action the operator must take instead. `workers`
   // includes offline rigs, so a fleet that is temporarily all-offline keeps its (red) table.
   if ((workers || []).length === 0) {
     const addr = hostIp && hostIp !== "Unknown Host" ? hostIp : "YOUR_STACK_IP";
+    const port = stratumPort || 3333; // configurable via p2pool.stratum_port (#172)
     return html`
         <div class="card">
             <h3>Workers Alive</h3>
             <div class="workers-empty">
                 <p>No workers connected yet.</p>
-                <p class="text-muted">Point each rig at <code>${addr}:3333</code> and it appears here —${" "}
+                <p class="text-muted">Point each rig at <code>${addr}:${port}</code> and it appears here —${" "}
                     see the <a href="https://github.com/p2pool-starter-stack/pithead/blob/main/docs/workers.md"
                         target="_blank" rel="noopener noreferrer">workers guide</a>.</p>
             </div>
@@ -637,11 +719,16 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp }) {
                     ${rows.map(
                       (w) => html`
                         <tr class=${w.status === "online" ? "status-ok" : "status-bad"}>
-                            <td>${w.name} <${PoolBadge} pool=${w.pool} />${
+                            <td>${
+                              onInspect
+                                ? html`<button type="button" class="worker-name-link" onClick=${() => onInspect(w.name)}
+                                                title="Inspect / edit this worker's config">${w.name}</button>`
+                                : w.name
+                            } <${PoolBadge} pool=${w.pool} />${
                               w.api_ok === false
                                 ? html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`
                                 : null
-                            }</td>
+                            }<${RigForgeChips} rf=${w.rigforge} /></td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
                             <td>${w.h60_str}</td>
@@ -739,6 +826,7 @@ function DashboardView({
   onToggleSeries,
   onAvgWindow,
   onDismissHint,
+  onInspect,
 }) {
   const advanced = ui.view === "advanced";
   const configView = ui.view === "config";
@@ -767,13 +855,14 @@ function DashboardView({
                           onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
         <div class="grid">
-            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} />
+            <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} stratumPort=${state.stratum_port}
+                             onInspect=${state.control_enabled ? onInspect : null} />
         </div>
         <div class="grid">
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
-            <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} />
+            <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />
             <${CadenceCard} cadence=${state.cadence} />
             <${TariCard} tari=${state.tari} />
             <${GlobalStats} state=${state} />
@@ -799,9 +888,18 @@ export function App({
   onToggleSeries,
   onAvgWindow,
   onDismissHint,
+  onInspect,
+  onCloseInspect,
 }) {
   // The theme toggle is fixed-position and always available, even before the first data load.
   const switcher = html`<${ThemeSwitcher} theme=${ui.theme} onTheme=${onTheme} />`;
+  // Worker Inspect overlay (#185): opened from a worker name in the table; the panel does its own
+  // fetch/apply/poll. `key` remounts it when a different worker is picked. Only reachable when the
+  // control channel is on (the trigger is gated on state.control_enabled).
+  const inspect =
+    state && ui.inspectWorker
+      ? html`<${WorkerInspect} name=${ui.inspectWorker} onClose=${onCloseInspect} key=${ui.inspectWorker} />`
+      : null;
   if (!state) {
     return html`<${Fragment}>
             <div class="loading">${connected ? "Connecting to the dashboard…" : "Cannot reach the dashboard."}</div>
@@ -819,9 +917,10 @@ export function App({
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
                                   onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow}
-                                  onDismissHint=${onDismissHint} />
+                                  onDismissHint=${onDismissHint} onInspect=${onInspect} />
               <//>`
         }
+        ${inspect}
         ${switcher}
     <//>`;
 }

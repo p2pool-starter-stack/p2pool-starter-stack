@@ -21,11 +21,19 @@ _REPO = _HERE.parents[2]
 sys.path.insert(0, str(_REPO / "build" / "dashboard"))
 sys.path.insert(0, str(_HERE))
 
+import aiohttp  # noqa: E402
 from fake_monerod import FakeMonerod  # noqa: E402
 from fake_tari import start_server  # noqa: E402
+from fake_tari_wallet import start_server as start_wallet_server  # noqa: E402
+from fake_wallet_rpc import FakeWalletRpc  # noqa: E402
+from fake_worker_api import FakeWorkerApi  # noqa: E402
 
+from mining_dashboard.client import xmrig_client as xc  # noqa: E402
 from mining_dashboard.client.monero.monero_client import MoneroClient  # noqa: E402
+from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient  # noqa: E402
 from mining_dashboard.client.tari.tari_client import TariClient  # noqa: E402
+from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient  # noqa: E402
+from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge  # noqa: E402
 
 
 # --- Monero (HTTP get_info) -------------------------------------------------
@@ -86,6 +94,36 @@ def test_monero_http_control_mutates_state():
     assert info["synchronized"] is False and info["height"] == 10 and info["target_height"] == 100
 
 
+# --- Monero payout wallet (view-only monero-wallet-rpc, #381) ----------------
+def test_wallet_confirmed_payouts_parse_and_convert():
+    rows = [
+        {"txid": "a1", "amount": 250_000_000_000, "height": 100, "timestamp": 1000},
+        {"txid": "b2", "amount": 500_000_000_000, "height": 200, "timestamp": 2000},
+    ]
+    with FakeWalletRpc(transfers=rows) as w:
+        client = MoneroWalletClient(url=w.url, username="")  # fake serves no digest auth
+        out = client.get_confirmed_payouts(min_height=0)
+    assert [p["txid"] for p in out] == ["a1", "b2"]
+    assert out[0]["amount_atomic"] == 250_000_000_000 and out[0]["amount_xmr"] == 0.25
+
+
+def test_wallet_min_height_filters_server_side():
+    # The client seeds min_height from the last stored payout; the wallet must honor it so a
+    # re-scan of the tip returns only new rows (idempotent storage then drops any overlap).
+    rows = [
+        {"txid": "old", "amount": 1, "height": 100, "timestamp": 1},
+        {"txid": "new", "amount": 2, "height": 300, "timestamp": 2},
+    ]
+    with FakeWalletRpc(transfers=rows) as w:
+        out = MoneroWalletClient(url=w.url, username="").get_confirmed_payouts(min_height=200)
+    assert [p["txid"] for p in out] == ["new"]
+
+
+def test_wallet_no_transfers_yet_reads_empty():
+    with FakeWalletRpc(transfers=[]) as w:
+        assert MoneroWalletClient(url=w.url, username="").get_confirmed_payouts() == []
+
+
 # --- Tari (gRPC BaseNode) ---------------------------------------------------
 # Driven via asyncio.run so they don't depend on pytest-asyncio being active (the dashboard's
 # asyncio_mode=auto only applies when pytest's rootdir is build/dashboard).
@@ -143,3 +181,127 @@ def test_tari_serves_cached_reading_when_briefly_unreachable():
     first, second = asyncio.run(_impl())
     assert first["reachable"] is True and first["is_syncing"] is False
     assert second["reachable"] is False and second["is_syncing"] is False
+
+
+# --- Tari payout wallet (view-only minotari console wallet, #462) ------------
+async def _tari_confirmed_payouts(transactions, min_height=0):
+    state = {"transactions": transactions}
+    server, bound = await start_wallet_server(0, state)
+    client = TariWalletClient(grpc_address=f"127.0.0.1:{bound}")
+    try:
+        return await client.get_confirmed_payouts(min_height=min_height)
+    finally:
+        await client.close()
+        await server.stop(None)
+
+
+def test_tari_wallet_confirmed_payouts_parse_and_convert():
+    txs = [
+        {"tx_id": 11, "amount": 250_000, "mined_in_block_height": 100, "timestamp": 1000},
+        {"tx_id": 22, "amount": 500_000, "mined_in_block_height": 200, "timestamp": 2000},
+    ]
+    out = asyncio.run(_tari_confirmed_payouts(txs))
+    assert [p["txid"] for p in out] == ["11", "22"]
+    assert out[0]["amount_atomic"] == 250_000 and out[0]["amount_xtm"] == 0.25  # µT ÷ 1e6
+
+
+def test_tari_wallet_min_height_filters_the_tip():
+    # The client seeds min_height from the last stored payout; only newer confirmations return
+    # (idempotent storage then drops any overlap), so a restart replays nothing.
+    txs = [
+        {"tx_id": 1, "amount": 1, "mined_in_block_height": 100, "timestamp": 1},
+        {"tx_id": 2, "amount": 2, "mined_in_block_height": 300, "timestamp": 2},
+    ]
+    out = asyncio.run(_tari_confirmed_payouts(txs, min_height=200))
+    assert [p["txid"] for p in out] == ["2"]
+
+
+def test_tari_wallet_no_transactions_reads_empty():
+    assert asyncio.run(_tari_confirmed_payouts([])) == []
+
+
+# --- RigForge worker API ↔ dashboard (the enriched-feed + auth contract, #209) ------------
+#
+# Point the REAL XMRigWorkerClient at the fake RigForge worker API over a real socket, across the
+# none/name/token auth matrix (the #315 model — the issue body's old "Bearer <rig name>" is one mode
+# of three). This proves the wiring the tier-1 xmrig_client unit tests mock away: the bearer is
+# actually transmitted, a real 401 is handled, and the real enriched /1/summary parses through
+# parse_rigforge. A drift in RigForge's auth handshake or enriched-feed shape (rigforge#99) goes red
+# here, not only on a live rig. The real-rig legs (real mining, real proxy /workers aggregation,
+# stratum --access-password) stay tier-4 — see docs/integration-testing.md.
+#
+# The client reaches a loopback fake via an operator-set descriptor `host` (the trusted config.json
+# path), NOT the miner-IP path — a worker IP of 127.0.0.1 is correctly refused by the #122 SSRF guard
+# (proven in the tier-1 suite), so a descriptor is the honest way to target a local test server.
+
+
+def _probe_worker(fake, *, auth="none", token="", fleet_token="", name="rig1"):
+    """Run one real get_stats() against `fake`, configuring the client exactly as config.py would.
+
+    Restores the module globals afterward so the matrix cases don't leak into each other."""
+    saved = (xc.WORKER_ENDPOINTS, xc.XMRIG_API_AUTH, xc.XMRIG_API_TOKEN)
+    entry = {"name": name, "host": fake.host, "port": fake.port}
+    if token:
+        entry["token"] = token  # a per-worker token forces token-auth for that rig
+    xc.WORKER_ENDPOINTS = [entry]
+    xc.XMRIG_API_AUTH = auth
+    xc.XMRIG_API_TOKEN = fleet_token
+
+    async def _impl():
+        async with aiohttp.ClientSession() as session:
+            client = XMRigWorkerClient(session)
+            # ip is unused here (descriptor host wins); pass the stratum name for name-auth.
+            return await client.get_stats("203.0.113.5", name)
+
+    try:
+        return asyncio.run(_impl())
+    finally:
+        xc.WORKER_ENDPOINTS, xc.XMRIG_API_AUTH, xc.XMRIG_API_TOKEN = saved
+
+
+def test_worker_auth_none_open_api_reads_and_parses():
+    with FakeWorkerApi(auth="none") as fake:
+        payload = _probe_worker(fake, auth="none")
+    assert payload["api_ok"] is True
+    rf = parse_rigforge(payload)  # the enriched block parses through the real consumer
+    assert rf is not None and rf["miner_down"] is False
+    assert rf["power"] == {"watts": 142.0, "hs_per_watt": 35.9}
+    assert rf["health"]["governor"] == "performance"
+    assert rf["watchdog"]["max_temp_c"] == 85
+
+
+def test_worker_auth_name_sends_bearer_name():
+    # name mode: the rig's xmrig access-token equals its stratum name (Bearer = name).
+    with FakeWorkerApi(auth="name", name="rig1") as fake:
+        ok = _probe_worker(fake, auth="name", name="rig1")
+        assert ok["api_ok"] is True
+    # A rig whose name doesn't match what the API expects is a 401, surfaced as api_ok False.
+    with FakeWorkerApi(auth="name", name="someone-else") as fake:
+        bad = _probe_worker(fake, auth="name", name="rig1")
+        assert bad == {"api_ok": False}
+
+
+def test_worker_per_worker_token_forces_token_auth():
+    # A per-worker descriptor token (#172) is sent as the bearer whatever the fleet mode is.
+    with FakeWorkerApi(auth="token", token="s3cr3t") as fake:
+        ok = _probe_worker(fake, auth="none", token="s3cr3t")
+        assert ok["api_ok"] is True
+    # Wrong token → real 401 → api_ok False (the documented misconfiguration failure mode).
+    with FakeWorkerApi(auth="token", token="s3cr3t") as fake:
+        bad = _probe_worker(fake, auth="none", token="wrong")
+        assert bad == {"api_ok": False}
+
+
+def test_worker_fleet_token_mode_sends_shared_token():
+    with FakeWorkerApi(auth="token", token="fleetwide") as fake:
+        ok = _probe_worker(fake, auth="token", fleet_token="fleetwide")
+        assert ok["api_ok"] is True
+
+
+def test_worker_miner_down_body_parses_as_up_but_miner_down():
+    # RigForge up, XMRig unreachable: the block alone, flagged — the UI shows up-but-miner-down.
+    with FakeWorkerApi(auth="none", miner_down=True) as fake:
+        payload = _probe_worker(fake, auth="none")
+    assert payload["api_ok"] is True
+    rf = parse_rigforge(payload)
+    assert rf is not None and rf["miner_down"] is True

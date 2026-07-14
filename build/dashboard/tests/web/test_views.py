@@ -26,12 +26,14 @@ from mining_dashboard.web.views import (
     _chart_tension,
     _mode_palette,
     _reject_flag,
+    _rigforge_display,
     _target_points,
     _window_reject_pct,
     build_badges,
     build_cadence,
     build_chart,
     build_earnings,
+    build_energy,
     build_hashrate,
     build_pool_network,
     build_proxy_summary,
@@ -41,6 +43,7 @@ from mining_dashboard.web.views import (
     build_sync,
     build_system,
     build_tari,
+    build_worker_detail,
     build_workers,
     build_xvb_calc,
     canonical_window,
@@ -954,6 +957,132 @@ class TestRejectFlag:
         assert _reject_flag(0, 3) is not None
 
 
+class TestRigForgeDisplay:
+    """The RigForge enriched-feed chip builder (#235). Parsed block in → {version, chips} out; each
+    chip emitted only when its data is present, so nothing renders for a plain-xmrig worker."""
+
+    def _chip_texts(self, disp):
+        return [c["text"] for c in disp["chips"]]
+
+    def test_none_for_plain_xmrig(self):
+        assert _rigforge_display(None) is None
+
+    def test_build_workers_passes_none_for_plain_xmrig(self):
+        # A worker with no parsed rigforge block carries `rigforge: None` — the client renders
+        # nothing extra, exactly as before the enriched feed existed.
+        row = build_workers(
+            [{"name": "r", "ip": "1.1.1.1", "status": "online", "active_pool": "3333"}]
+        )[0]
+        assert row["rigforge"] is None
+
+    def test_full_block_emits_version_and_chips(self):
+        parsed = {
+            "version": "1.7.0",
+            "miner_down": False,
+            "power": {"watts": 142.0, "hs_per_watt": 86.9},
+            "tune": {"target": "perf", "autotune_enabled": True, "autotune_next": "Sun 03:00"},
+            "health": {
+                "governor": "performance",
+                "throttling": False,
+                "board": "ProArt X670E",
+                "hugepages_total": 1280,
+            },
+            "watchdog": {"enabled": True, "thermal_hold": False, "temp_c": 62, "max_temp_c": 85},
+        }
+        disp = _rigforge_display(parsed)
+        assert disp["version"] == "1.7.0"
+        texts = self._chip_texts(disp)
+        assert "gov: performance" in texts
+        assert "HP 1280" in texts
+        assert "ProArt X670E" in texts
+        assert "142 W · 86.9 H/s·W" in texts
+        assert "tune: perf" in texts
+        assert "autotune → Sun 03:00" in texts
+        assert "62°C / 85°C" in texts
+        # Nothing alarming here: no bad-variant chips.
+        assert all(c["variant"] != "bad" for c in disp["chips"])
+
+    def test_throttling_and_bad_governor_flag(self):
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": "powersave",
+                    "throttling": True,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False},
+            }
+        )
+        chips = {c["text"]: c["variant"] for c in disp["chips"]}
+        assert chips["throttling"] == "bad"
+        assert chips["gov: powersave"] == "warn"
+
+    def test_nullable_fields_emit_no_chip(self):
+        # No RAPL, no governor, disabled watchdog, no tune → only the fields that exist render.
+        disp = _rigforge_display(
+            {
+                "version": None,
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False, "thermal_hold": None, "temp_c": None},
+            }
+        )
+        assert disp["version"] is None
+        assert disp["chips"] == []
+
+    def test_miner_down_chip(self):
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": True,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False},
+            }
+        )
+        assert disp["miner_down"] is True
+        assert disp["chips"][0]["text"] == "miner down"
+        assert disp["chips"][0]["variant"] == "bad"
+
+    def test_thermal_hold_wins_over_temp_chip(self):
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": True, "thermal_hold": True, "temp_c": 90, "max_temp_c": 85},
+            }
+        )
+        texts = self._chip_texts(disp)
+        assert "thermal hold" in texts
+        assert not any("°C" in t for t in texts)  # the hold chip replaces the temp chip
+
+
 # --- Tari -----------------------------------------------------------------------------
 
 
@@ -1310,6 +1439,77 @@ class TestEarnings:
         e = build_earnings(self._NET, _metrics(tari_mining=False))
         assert e["available"] is True
         assert e["coeff_day"] > 0
+
+    def test_confirmed_disabled_by_default(self):
+        # No payouts passed (feature off) → the confirmed block reports disabled; UI shows only estimate.
+        e = build_earnings(self._NET, _metrics())
+        assert e["confirmed"] == {"enabled": False}
+
+    def test_confirmed_totals_windowed(self):
+        # #381: 24h / 7d / all-time XMR sums from stored confirmed payouts, atomic→XMR at the edge.
+        now = 1_000_000.0
+        payouts = [
+            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000_000_000},  # in 24h
+            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000_000_000},  # in 7d
+            {
+                "txid": "c",
+                "ts": now - 30 * 86_400,
+                "amount_atomic": 1_000_000_000_000,
+            },  # all-time only
+        ]
+        from mining_dashboard.web.views import _confirmed_payouts_summary
+
+        s = _confirmed_payouts_summary(payouts, now=now)
+        assert s["enabled"] is True and s["count"] == 3
+        assert s["xmr_24h"] == pytest.approx(0.25)
+        assert s["xmr_7d"] == pytest.approx(0.75)
+        assert s["xmr_all"] == pytest.approx(1.75)
+        assert s["last_ts"] == now - 100
+
+    def test_confirmed_enabled_but_empty(self):
+        # Feature on, nothing confirmed yet → enabled with zeroed totals (shows 0.000000, not "—").
+        e = build_earnings(self._NET, _metrics(), payouts=[])
+        assert e["confirmed"] == {
+            "enabled": True,
+            "count": 0,
+            "xmr_24h": 0.0,
+            "xmr_7d": 0.0,
+            "xmr_all": 0.0,
+            "last_ts": 0,
+        }
+
+    def test_tari_confirmed_disabled_by_default(self):
+        # No tari_payouts passed (Tari feature off) → tari_confirmed reports disabled.
+        e = build_earnings(self._NET, _metrics())
+        assert e["tari_confirmed"] == {"enabled": False}
+
+    def test_tari_confirmed_totals_windowed_in_xtm(self):
+        # #462: XTM sums (microTari ÷1e6) with xtm_* keys, distinct from the monero xmr_* block.
+        now = 1_000_000.0
+        tari_payouts = [
+            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000},  # in 24h
+            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000},  # in 7d
+            {"txid": "c", "ts": now - 30 * 86_400, "amount_atomic": 1_000_000},  # all-time only
+        ]
+        from mining_dashboard.web.views import MICRO_PER_XTM, _confirmed_payouts_summary
+
+        s = _confirmed_payouts_summary(tari_payouts, now=now, divisor=MICRO_PER_XTM, unit="xtm")
+        assert s["enabled"] is True and s["count"] == 3
+        assert s["xtm_24h"] == pytest.approx(0.25)
+        assert s["xtm_7d"] == pytest.approx(0.75)
+        assert s["xtm_all"] == pytest.approx(1.75)
+        assert s["last_ts"] == now - 100
+
+    def test_tari_confirmed_enabled_but_empty(self):
+        e = build_earnings(self._NET, _metrics(), tari_payouts=[])
+        assert e["tari_confirmed"] == {
+            "enabled": True,
+            "count": 0,
+            "xtm_24h": 0.0,
+            "xtm_7d": 0.0,
+            "xtm_all": 0.0,
+            "last_ts": 0,
+        }
 
 
 # --- XvB tier / raffle calculator (Issue #118) -----------------------------------------
@@ -1718,3 +1918,139 @@ class TestChartEvents:
             e["label"] for e in build_chart(self._hist(now), [], "1h", events=events)["events"]
         ]
         assert labels == ["recent"]  # the 2h-old marker is outside the 1h window
+
+
+class TestBuildEnergy:
+    """Fleet energy totals for the Energy tab (#260). Sums measured watts (RigForge feed) with the
+    operator's per-worker `watts` fallback, excludes workers with neither (marking the total
+    incomplete), and publishes the operator-set prices for the client to turn into cost/net."""
+
+    def _worker(self, name, watts=None, hs=1000, active_pool="3333"):
+        rf = {"power": {"watts": watts, "hs_per_watt": None}} if watts is not None else None
+        return {
+            "name": name,
+            "ip": "1.1.1.1",
+            "status": "online",
+            "active_pool": active_pool,
+            "h60": hs,
+            "rigforge": rf,
+        }
+
+    def _energy(self, monkeypatch, workers, energy=None, descriptors=None):
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config,
+            "DASHBOARD_ENERGY",
+            energy or {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"},
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
+        return build_energy(workers)
+
+    def test_no_power_anywhere_is_unavailable(self, monkeypatch):
+        got = self._energy(monkeypatch, [self._worker("r1"), self._worker("r2")])
+        assert got["available"] is False
+        assert got["total_watts"] is None
+        assert got["incomplete"] is True
+
+    def test_measured_watts_sum_and_efficiency(self, monkeypatch):
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100, hs=2000), self._worker("r2", watts=50, hs=1000)],
+        )
+        assert got["available"] is True
+        assert got["total_watts"] == 150.0
+        assert got["incomplete"] is False
+        assert got["hs_per_watt"] == 20.0  # 3000 H/s / 150 W
+
+    def test_config_watts_fallback_marked_estimated(self, monkeypatch):
+        # r2 reports no measured watts but has a configured estimate — counted, flagged estimated.
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100), self._worker("r2")],
+            descriptors=[{"name": "r2", "watts": 60}],
+        )
+        assert got["total_watts"] == 160.0
+        assert got["incomplete"] is False
+        by_name = {w["name"]: w for w in got["per_worker"]}
+        assert by_name["r1"]["estimated"] is False
+        assert by_name["r2"]["estimated"] is True
+
+    def test_worker_with_no_power_and_no_estimate_excluded_but_counted_incomplete(
+        self, monkeypatch
+    ):
+        got = self._energy(monkeypatch, [self._worker("r1", watts=100), self._worker("dark")])
+        assert got["total_watts"] == 100.0  # dark excluded
+        assert got["incomplete"] is True
+
+    def test_prices_pass_through(self, monkeypatch):
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100)],
+            energy={"cost_per_kwh": 0.2, "xmr_price": 150.0, "currency": "EUR"},
+        )
+        assert got["cost_per_kwh"] == 0.2
+        assert got["xmr_price"] == 150.0
+        assert got["currency"] == "EUR"
+
+
+class TestBuildWorkerDetail:
+    """Per-worker Inspect payload (#185): current telemetry + last-applied prefill + history."""
+
+    def _detail(self, monkeypatch, name, workers=None, descriptors=None):
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        try:
+            return build_worker_detail(name, {"workers": workers or []}, sm), sm
+        finally:
+            pass
+
+    def test_editable_when_operator_set_host(self, monkeypatch):
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 5100, "rigforge": None}],
+            descriptors=[{"name": "rig1", "host": "10.0.0.9", "control_port": 8082}],
+        )
+        sm.close()
+        assert d["found"] is True and d["editable"] is True
+        assert "DONATION" in d["writable_keys"]
+
+    def test_not_editable_without_host(self, monkeypatch):
+        # A worker with no operator-set host can't be a write target (SSRF safety, #122).
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 0}],
+            descriptors=[{"name": "rig1", "port": 8081}],
+        )
+        sm.close()
+        assert d["editable"] is False
+
+    def test_not_found_worker_absent_from_snapshot(self, monkeypatch):
+        d, sm = self._detail(monkeypatch, "ghost", workers=[])
+        sm.close()
+        assert d["found"] is False and d["editable"] is False
+        assert d["history"] == []
+
+    def test_history_and_last_applied_from_db(self, monkeypatch):
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 0}],
+            descriptors=[{"name": "rig1", "host": "10.0.0.9"}],
+        )
+        sm.add_worker_config_version("rig1", "cid1", "applied", {"DONATION": 2}, None, ts=1000.0)
+        sm.add_worker_config_version(
+            "rig1", "cid2", "rejected", {"max_temp_c": 999}, "bad", ts=2000.0
+        )
+        d = build_worker_detail("rig1", {"workers": [{"name": "rig1", "status": "online"}]}, sm)
+        sm.close()
+        assert [h["status"] for h in d["history"]] == ["rejected", "applied"]  # newest first
+        assert d["history"][0]["applied_at"]  # formatted timestamp present
+        assert d["last_applied"] == {"DONATION": 2}  # only the applied change prefills
