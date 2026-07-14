@@ -233,7 +233,8 @@ def test_writable_key_allowlist_has_no_intra_repo_drift():
     assert set(control_service.WORKER_WRITABLE_KEYS) == canonical
 
     pithead = (Path(__file__).resolve().parents[4] / "pithead").read_text()
-    m = re.search(r"\(\[(.*?)\]\)\s*as\s*\$ok", pithead)
+    # [^\]]* (not .*?) so the match survives the jq array being reflowed across multiple lines.
+    m = re.search(r"\(\[([^\]]*)\]\)\s*as\s*\$ok", pithead)
     assert m, "could not find the writable-key allowlist in pithead's control_worker_apply"
     pithead_keys = set(re.findall(r'"([^"]+)"', m.group(1)))
     assert pithead_keys == canonical, f"pithead allowlist {pithead_keys} drifted from {canonical}"
