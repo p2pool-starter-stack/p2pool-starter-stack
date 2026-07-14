@@ -11,6 +11,23 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-07-14
+
+### Fixed
+
+- **Config editor: a clear note for host-only blocks instead of a silent "no changes" (#519).**
+  Editing `dashboard.energy` — read straight from `config.json` and never rendered to `.env` — made
+  the editor report "No configuration changes detected" and disable Apply, a silent no-op that looked
+  broken. The preview now surfaces a non-committable note that the block is applied on the host.
+  (Committing `dashboard.energy` from the dashboard is tracked separately in #504.)
+- **Configuration tab spacing (#505).** Fixed the run-together "setdashboard.control.enabled" in the
+  disabled-editing hint, and added a gap between the Configuration editor and the Access-log panel.
+
+### Testing
+
+- Guard against drift in the worker writable-key allowlist across its pithead-repo copies (#515).
+- Cover the `telegram.control` fail-closed prerequisites — the remote host-control gate (#521).
+
 ## [1.5.2] - 2026-07-14
 
 ### Fixed
