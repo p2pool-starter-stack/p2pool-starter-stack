@@ -251,9 +251,18 @@ def load_worker_endpoints(path=None):
                 continue
             entry["control_port"] = cport
         if "token" in item:
-            if not isinstance(item["token"], str) or not _WORKER_NAME_RE.match(item["token"]):
+            tok = item["token"]
+            # The container only ever reads the MASKED config (#440), where a real token is replaced
+            # by the sentinel {"__secret__": true}. Keep the entry then (token present, value hidden)
+            # so the worker stays editable — the HOST-side runner supplies the real token when it
+            # dials the rig (#508). A genuinely bad token (bad string, or any other dict) still drops
+            # the whole entry, fail-closed.
+            if isinstance(tok, dict) and tok.get("__secret__") is True:
+                entry["token"] = tok
+            elif isinstance(tok, str) and _WORKER_NAME_RE.match(tok):
+                entry["token"] = tok
+            else:
                 continue
-            entry["token"] = item["token"]
         if "watts" in item:
             watts = _valid_watts(item["watts"])
             if watts is None:
