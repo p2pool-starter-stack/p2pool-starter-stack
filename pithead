@@ -5036,7 +5036,10 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     local worker changes
     worker=$(jq -r '.worker // ""' "$file")
     # The worker name is a config.json lookup key AND (in name-auth) a bearer; pin its charset.
-    if ! printf '%s' "$worker" | grep -qE '^[!-~]{1,128}$'; then
+    # LC_ALL=C so [!-~] is the printable-ASCII BYTE range: under a UTF-8 locale GNU grep reads the
+    # range by collation order and rejects ordinary names like "rig1" (caught by the release gate on a
+    # UTF-8 box; CI runs under C and missed it). jq's test() above is codepoint-based and unaffected.
+    if ! printf '%s' "$worker" | LC_ALL=C grep -qE '^[!-~]{1,128}$'; then
         _wa_reject "malformed or missing 'worker' name in the request."
         return 0
     fi
