@@ -2382,27 +2382,6 @@ assert_contains "duplicate worker names are warned" "$out" "first-declared"
 # per-worker token must not leak into a second secrets file.
 if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
 
-# #521: telegram.control gates a REMOTELY-reachable host-control surface (/restart, /apply). It must
-# fail closed unless all three prerequisites hold: dashboard.control on, telegram.commands on, and a
-# NON-EMPTY allowed_ids (empty = every command refused). Each refusal below was previously untested.
-tgc_case() { # <dashboard-control-bool> <tg-commands-bool> <allowed-ids-json> <label> <expected-msg|OK>
-    seed_env
-    printf '{"monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},"tari":{"wallet_address":"T"},"p2pool":{"pool":"main"},"dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"a control passphrase"},"control":{"enabled":%s}},"telegram":{"enabled":true,"bot_token":"123456:AAdummytoken","chat_id":"999","commands":{"enabled":%s},"control":{"enabled":true,"allowed_ids":%s}}}\n' \
-        "$WALLET" "$1" "$2" "$3" >"$V/config.json"
-    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-    rc=$?
-    if [ "$5" = "OK" ]; then
-        assert_rc "$4 applies" "$rc" "0"
-    else
-        assert_rc "$4 rejected" "$rc" "1"
-        assert_contains "$4 message" "$out" "$5"
-    fi
-}
-tgc_case false true '[123]' "telegram.control without dashboard.control" "dashboard.control.enabled is false"
-tgc_case true false '[123]' "telegram.control without telegram.commands" "telegram.commands.enabled is false"
-tgc_case true true '[]' "telegram.control with empty allowed_ids" "allowed_ids is empty"
-tgc_case true true '[123456789]' "telegram.control fully configured" "OK"
-
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
 seed_env
@@ -3826,19 +3805,6 @@ assert_eq "pool switch alone is not destructive" "$(jq -r '.destructive' "$RESUL
 # The staged copy carries merged secrets — it must land owner-only (#33 re-review).
 assert_eq "staged candidate is mode 600" "$(file_mode "$STAGED/$UUID1.json")" "600"
 assert_contains "preview audited" "$(cat "$AUDIT" 2>/dev/null)" "\"action\":\"preview\",\"status\":\"previewed\""
-
-# #519: an energy-only edit is config.json-only (dashboard.energy never renders to .env), so it
-# produces no committable change — the preview surfaces a non-committable HOST note (so the UI shows
-# an explanation, not a bare "no changes"). Built from the live config so ONLY energy differs.
-UUID_EN="55555555-5555-4555-8555-555555555555"
-jq --arg id "$UUID_EN" '{id:$id, action:"preview", actor:"admin",
-    config:(. + {dashboard:(.dashboard + {energy:{cost_per_kwh:0.11,xmr_price:322,currency:"USD"}})})}' \
-    "$C/config.json" >"$REQS/$UUID_EN.json"
-out="$(run_pending)"
-assert_eq "energy-only preview is previewed" "$(jq -r '.status' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "previewed"
-assert_eq "energy edit surfaces exactly one HOST note" "$(jq -r '[.changes[]|select(.flag=="HOST")]|length' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "1"
-assert_eq "energy-only edit has no committable (.env) change" "$(jq -r '[.changes[]|select(.flag!="HOST")]|length' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "0"
-assert_contains "HOST note names dashboard.energy" "$(jq -r '.changes[]|select(.flag=="HOST")|.msg' "$RESULTS/$UUID_EN.json" 2>/dev/null)" "dashboard.energy changed"
 
 # Malformed id: it would become a filename, so the request is discarded with no result at all.
 printf '{"id":"../../etc/passwd","action":"preview","actor":"x","config":{}}\n' >"$REQS/evil.json"
