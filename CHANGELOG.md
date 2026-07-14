@@ -11,6 +11,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-13
+
 ### Added
 
 - **Worker Inspect: view and edit a rig's config from the dashboard (#185).** Click a worker's name in
@@ -163,6 +165,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The `payout_confirmed` alert is now listed and silenceable (#381/#462 follow-up).** The
+  confirmed-on-chain-payout alert shipped on-by-default but `pithead` never rendered
+  `telegram.events.payout_confirmed`, so it couldn't be turned off and was missing from the event
+  reference. It's now wired end to end (config.json → `.env` → dashboard) and documented in the
+  Telegram alert tables alongside the others; set `telegram.events.payout_confirmed: false` to silence
+  it.
 - **The shared bench-lock opens read-only, matching RigForge byte-for-byte (#499, ports rigforge#252).**
   The tier-4 harness's `rig_lock` helper (`tests/integration/lib.sh`) opened its flock file write-open
   (`exec 9>`); on a shared box where the lock was first created by a non-root reserve,

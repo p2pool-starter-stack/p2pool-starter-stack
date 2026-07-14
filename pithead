@@ -3307,7 +3307,7 @@ render_env() {
     local tg_ev_xvb_no_share tg_ev_clearnet_exposed tg_ev_xvb_registration tg_ev_new_release tg_ev_stack_online
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
     local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed tg_ev_high_reject_rate
-    local tg_ev_block_found tg_ev_payout_found tg_ev_container_unhealthy
+    local tg_ev_block_found tg_ev_payout_found tg_ev_payout_confirmed tg_ev_container_unhealthy
     local hr_drop_threshold hr_drop_minutes
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
@@ -3333,6 +3333,7 @@ render_env() {
     tg_ev_high_reject_rate=$(tg_event high_reject_rate)
     tg_ev_block_found=$(tg_event block_found)
     tg_ev_payout_found=$(tg_event payout_found)
+    tg_ev_payout_confirmed=$(tg_event payout_confirmed)
     tg_ev_container_unhealthy=$(tg_event container_unhealthy)
     # Degradation detector (#99): drop-below-% and sustained-minutes; defaults 50 / 10.
     hr_drop_threshold=$(jq -r '.dashboard.hashrate_drop_threshold // 50' "$CONFIG_FILE")
@@ -3501,6 +3502,7 @@ TELEGRAM_EVENT_WALLET_CHANGED=$tg_ev_wallet_changed
 TELEGRAM_EVENT_HIGH_REJECT_RATE=$tg_ev_high_reject_rate
 TELEGRAM_EVENT_BLOCK_FOUND=$tg_ev_block_found
 TELEGRAM_EVENT_PAYOUT_FOUND=$tg_ev_payout_found
+TELEGRAM_EVENT_PAYOUT_CONFIRMED=$tg_ev_payout_confirmed
 TELEGRAM_EVENT_CONTAINER_UNHEALTHY=$tg_ev_container_unhealthy
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
@@ -4622,7 +4624,7 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
     TELEGRAM_EVENT_HUGEPAGES TELEGRAM_EVENT_LOW_RAM
     TELEGRAM_EVENT_HIGH_REJECT_RATE TELEGRAM_EVENT_BLOCK_FOUND
-    TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
+    TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_PAYOUT_CONFIRMED TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
 
 control_approval_gate() { # <staged-file>
     local staged="$1" porcelain
@@ -5034,7 +5036,10 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     local worker changes
     worker=$(jq -r '.worker // ""' "$file")
     # The worker name is a config.json lookup key AND (in name-auth) a bearer; pin its charset.
-    if ! printf '%s' "$worker" | grep -qE '^[!-~]{1,128}$'; then
+    # LC_ALL=C so [!-~] is the printable-ASCII BYTE range: under a UTF-8 locale GNU grep reads the
+    # range by collation order and rejects ordinary names like "rig1" (caught by the release gate on a
+    # UTF-8 box; CI runs under C and missed it). jq's test() above is codepoint-based and unaffected.
+    if ! printf '%s' "$worker" | LC_ALL=C grep -qE '^[!-~]{1,128}$'; then
         _wa_reject "malformed or missing 'worker' name in the request."
         return 0
     fi

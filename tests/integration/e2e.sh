@@ -341,7 +341,9 @@ provision() {
 # --- Phase 2: safety backup of the live stack -------------------------------
 backup_stack() {
     log "Taking a safety backup of the live stack (the rollback anchor)"
-    on_bench "cd '$CANONICAL_DIR' && ./pithead backup -y >/dev/null 2>&1" || die "pithead backup failed."
+    # ponytail: --no-encrypt because v1.4 refuses to write a plaintext archive unattended without
+    # PITHEAD_BACKUP_PASSPHRASE; this rollback anchor never leaves the bench, so plaintext is fine here.
+    on_bench "cd '$CANONICAL_DIR' && ./pithead backup -y --no-encrypt >/dev/null 2>&1" || die "pithead backup failed."
     SAFETY_ARCHIVE="$(on_bench "ls -t '$CANONICAL_DIR'/backups/pithead-backup-*.tar.gz 2>/dev/null | head -n1")"
     [ -n "$SAFETY_ARCHIVE" ] || die "Backup ran but produced no archive."
     ok "safety backup: $SAFETY_ARCHIVE"
@@ -357,10 +359,15 @@ borrow_miner() {
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
     on_miner "cp -a '$MINER_XMRIG_CONFIG' '$MINER_CFG_BACKUP'" || die "Failed to back up the miner config."
     step "miner config backed up → $MINER_CFG_BACKUP"
-    # Reorder pools so the test-bench pool is primary (index 0); keep the rest as failover. Non-destructive
-    # and fully reversible from the backup above. Assumes a test-bench pool already exists in the config.
+    # Point the rig at the bench: inject a bench pool if the config has none (clone pool[0] so
+    # user/pass/keepalive carry over, override url→bench and force plain stratum), then reorder so the
+    # bench pool is primary and the rest stay as failover. Non-destructive, fully reversible from the
+    # backup above. ponytail: hardcodes :3333 (the seeded canonical stratum_port default, which the bench runs).
     on_miner "
-        jq '.pools |= ([.[] | select(.url | ascii_downcase | contains(\"$BENCH_HOST\"))] + [.[] | select(.url | ascii_downcase | contains(\"$BENCH_HOST\") | not)])' \
+        jq --arg b '$BENCH_HOST' '
+            (if any(.pools[]?; .url | ascii_downcase | contains(\$b)) then .
+             else .pools = ([ (.pools[0]) + {url: (\$b + \":3333\"), tls: false, daemon: false} ] + .pools) end)
+            | .pools |= ([.[] | select(.url | ascii_downcase | contains(\$b))] + [.[] | select(.url | ascii_downcase | contains(\$b) | not)])' \
             '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' \
         && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'
     " || die "Failed to repoint the miner config."
@@ -392,9 +399,12 @@ run_harness() {
     local phases
     case "$MODE" in
     check) phases="--check" ;;
-    targeted) phases="--readiness --auth-fail-closed --lifecycle" ;; # --readiness/--check run first below
+    targeted) phases="--auth-fail-closed --lifecycle" ;; # readiness/check run inline first (below); NOT here — run.sh returns after --readiness
     matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed --hardening" ;;
     esac
+    # RigForge integration (#185/#235/#260) is only meaningful with a REAL rig mining through the stack.
+    # The phase self-skips if no rigforge rig is connected, so this gate is just to avoid the noise.
+    [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge"
     log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 
