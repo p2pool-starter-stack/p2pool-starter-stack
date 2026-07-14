@@ -26,7 +26,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 ### Testing
 
 - Guard against drift in the worker writable-key allowlist across its pithead-repo copies (#515).
-- Cover the `telegram.control` fail-closed prerequisites — the remote host-control gate (#521).
 
 ## [1.5.2] - 2026-07-14
 
