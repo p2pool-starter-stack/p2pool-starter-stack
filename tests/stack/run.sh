@@ -2382,6 +2382,27 @@ assert_contains "duplicate worker names are warned" "$out" "first-declared"
 # per-worker token must not leak into a second secrets file.
 if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
 
+# #521: telegram.control gates a REMOTELY-reachable host-control surface (/restart, /apply). It must
+# fail closed unless all three prerequisites hold: dashboard.control on, telegram.commands on, and a
+# NON-EMPTY allowed_ids (empty = every command refused). Each refusal below was previously untested.
+tgc_case() { # <dashboard-control-bool> <tg-commands-bool> <allowed-ids-json> <label> <expected-msg|OK>
+    seed_env
+    printf '{"monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},"tari":{"wallet_address":"T"},"p2pool":{"pool":"main"},"dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"a control passphrase"},"control":{"enabled":%s}},"telegram":{"enabled":true,"bot_token":"123456:AAdummytoken","chat_id":"999","commands":{"enabled":%s},"control":{"enabled":true,"allowed_ids":%s}}}\n' \
+        "$WALLET" "$1" "$2" "$3" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    if [ "$5" = "OK" ]; then
+        assert_rc "$4 applies" "$rc" "0"
+    else
+        assert_rc "$4 rejected" "$rc" "1"
+        assert_contains "$4 message" "$out" "$5"
+    fi
+}
+tgc_case false true '[123]' "telegram.control without dashboard.control" "dashboard.control.enabled is false"
+tgc_case true false '[123]' "telegram.control without telegram.commands" "telegram.commands.enabled is false"
+tgc_case true true '[]' "telegram.control with empty allowed_ids" "allowed_ids is empty"
+tgc_case true true '[123456789]' "telegram.control fully configured" "OK"
+
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
 seed_env
