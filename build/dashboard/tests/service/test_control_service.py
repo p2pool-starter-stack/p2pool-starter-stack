@@ -232,7 +232,14 @@ def test_writable_key_allowlist_has_no_intra_repo_drift():
     canonical = {"pools", "DONATION", "autotune", "watchdog", "watchdog_interval_min", "max_temp_c"}
     assert set(control_service.WORKER_WRITABLE_KEYS) == canonical
 
-    pithead = (Path(__file__).resolve().parents[4] / "pithead").read_text()
+    # The pithead CLI lives at the repo root; the dashboard-only Docker test image doesn't ship it.
+    # Verify the cross-file drift where pithead is reachable (full checkout / CI shell tests), and
+    # skip cleanly where it isn't.
+    here = Path(__file__).resolve()
+    pithead_path = next((p / "pithead" for p in here.parents if (p / "pithead").is_file()), None)
+    if pithead_path is None:
+        pytest.skip("pithead CLI not present in this test context (dashboard-only image)")
+    pithead = pithead_path.read_text()
     # [^\]]* (not .*?) so the match survives the jq array being reflowed across multiple lines.
     m = re.search(r"\(\[([^\]]*)\]\)\s*as\s*\$ok", pithead)
     assert m, "could not find the writable-key allowlist in pithead's control_worker_apply"
