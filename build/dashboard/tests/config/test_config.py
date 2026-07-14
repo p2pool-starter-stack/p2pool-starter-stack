@@ -152,6 +152,37 @@ class TestWorkerEndpoints:
         )
         assert got == [{"name": "ok", "port": 8081}]
 
+    def test_masked_sentinel_token_is_kept_but_other_dicts_drop(self, tmp_path):
+        # The container ONLY ever reads the masked config (#440), where a real token is the sentinel
+        # {"__secret__": true}. The entry must SURVIVE (token present, value hidden) so the worker is
+        # editable — the host-side runner uses the real token when it dials the rig (#508). Any other
+        # dict is not the sentinel and drops the whole entry, fail-closed.
+        got = self._load(
+            tmp_path,
+            {
+                "dashboard": {
+                    "workers": [
+                        {
+                            "name": "rig1",
+                            "host": "10.0.0.5",
+                            "control_port": 8082,
+                            "token": {"__secret__": True},
+                        },
+                        {"name": "rig2", "host": "10.0.0.6", "token": {"__secret__": False}},
+                        {"name": "rig3", "host": "10.0.0.7", "token": {"foo": "bar"}},
+                    ]
+                }
+            },
+        )
+        assert got == [
+            {
+                "name": "rig1",
+                "host": "10.0.0.5",
+                "control_port": 8082,
+                "token": {"__secret__": True},
+            },
+        ]
+
     def test_missing_file_and_missing_key_read_empty(self, tmp_path):
         from mining_dashboard.config.config import load_worker_endpoints
 

@@ -11,6 +11,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-14
+
+### Fixed
+
+- **Worker Inspect edit path now activates for configured rigs (#508).** The dashboard reads a masked
+  copy of `config.json` (the container never holds real tokens, #440), where a rig's `token` is the
+  sentinel `{"__secret__": true}`. The worker-endpoint loader required a string token and dropped the
+  entry whole, so every worker showed as non-editable even with `dashboard.workers[]` set correctly.
+  The loader now accepts the masked sentinel as "token present"; the host-side runner still supplies
+  the real token when it dials the rig.
+
 ## [1.5.0] - 2026-07-13
 
 ### Added
