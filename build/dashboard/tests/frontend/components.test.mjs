@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { App } from '../../mining_dashboard/web/static/components.mjs';
+import { StatsTable } from '../../mining_dashboard/web/static/workerview.mjs';
 import { render } from './helpers/render.mjs';
 
 const BASE = JSON.parse(readFileSync(new URL('./fixtures/state.json', import.meta.url)));
@@ -564,4 +565,27 @@ test('no WorkerInspect overlay when none is selected (#185)', () => {
     const s = clone();
     s.control_enabled = true;
     assert.doesNotMatch(renderApp({ state: s }), /worker-inspect-overlay/);
+});
+
+test('StatsTable renders the enriched feed as a label/value table, colouring warn/bad values (#507)', () => {
+    // The detail view swaps the compact list's badge row for a table: label cell + value cell,
+    // driven by the server-built {label, value, variant, title} stats. warn/bad colour the value.
+    const html = render(StatsTable, {
+        stats: [
+            { label: 'Governor', value: 'powersave', variant: 'warn', title: 'CPU governor' },
+            { label: 'HugePages', value: '1280', variant: 'outline', title: '' },
+            { label: 'CPU', value: 'throttling', variant: 'bad', title: 'hot' },
+        ],
+    });
+    assert.match(html, /class="worker-history"/); // reuses the existing detail-table styling
+    assert.doesNotMatch(html, /badge-row/); // NOT the compact list's badge row
+    assert.match(html, /Governor<\/td>/);
+    assert.match(html, /class="status-warn">powersave/); // warn colours its value
+    assert.match(html, /class="status-bad">throttling/); // bad colours its value
+    assert.match(html, /<td class="">1280/); // outline metric stays plain
+});
+
+test('StatsTable renders nothing when a rig reports no metrics (#507)', () => {
+    assert.equal(render(StatsTable, { stats: [] }), '');
+    assert.equal(render(StatsTable, { stats: undefined }), '');
 });
