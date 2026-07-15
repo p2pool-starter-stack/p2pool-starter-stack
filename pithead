@@ -4743,6 +4743,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         result=$(printf '%s\n' "$out" | jq -R -s '
             [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
             | {status: "previewed", changes: ., destructive: (map(.flag == "DEST") | any), ts: (now | floor)}')
+        # #519: dashboard.energy is config.json-only (never rendered to .env), so an energy-only edit
+        # produces no porcelain change and the UI would otherwise show a bare "no changes detected".
+        # Surface it as a non-committable HOST note so the operator knows to apply it on the host
+        # (committing this block from the dashboard is tracked in #504).
+        if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+            result=$(printf '%s' "$result" | jq '.changes += [{flag:"HOST",key:"dashboard.energy",msg:"dashboard.energy changed — this block is edited directly in config.json on the host: set it and run \"./pithead apply\". Committing it from the dashboard is tracked in #504."}]')
+        fi
         control_write_result "$cdir/results" "$id" "$result"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "previewed" "$(porcelain_keys "$out")"
     else

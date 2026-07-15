@@ -106,6 +106,14 @@ body {
   min-width: 0;
 }
 
+/* Vertically-stacked cards that aren't in a .grid need their own gap (#505: the Configuration
+ * editor and the Access-log panel otherwise touch with no space between them). */
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 /* Brand block (Issue #81): the Pithead mark + wordmark in the header, with the host IP demoted
  * to a subtitle beneath the name. The host IP (HOST_IP) is arbitrary user input; a long unbroken
  * value (no hyphens/dots to break at) would otherwise push the header — and the page — wider than
@@ -1093,6 +1101,11 @@ button.upgrade-btn {
 }
 .config-preview-dest {
   color: var(--warn);
+}
+/* #519: a config.json-only block (e.g. dashboard.energy) edited from the dashboard — informational,
+ * not committable here, so it's dimmed to read as a note rather than a pending change. */
+.config-preview-host {
+  color: var(--text-muted);
 }
 .config-confirm-type {
   display: block;
