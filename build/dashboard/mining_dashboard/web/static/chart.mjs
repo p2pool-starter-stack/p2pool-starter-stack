@@ -263,11 +263,13 @@ export class ChartCard extends Component {
               },
             },
           },
-          // Drag = box-zoom, wheel = zoom, Shift-drag = pan (Issue #47). Each settled
+          // Drag = box-zoom, Ctrl-wheel = zoom, Shift-drag = pan (Issue #47, #533). Each settled
           // gesture triggers a server refetch of the visible window (onGesture).
+          // modifierKey gates the wheel: a bare scroll over the canvas passes through to the page
+          // (no scroll-hijack, #533); hold Ctrl/⌘ to zoom.
           zoom: {
             zoom: {
-              wheel: { enabled: true },
+              wheel: { enabled: true, modifierKey: "ctrl" },
               drag: {
                 enabled: true,
                 backgroundColor: c.band,
@@ -375,7 +377,7 @@ export class ChartCard extends Component {
                 ${
                   zoomed
                     ? html`<button class="btn-range btn-reset" onClick=${() => props.onResetZoom()}>↺ Reset zoom</button>`
-                    : html`<span class="text-muted text-xs ml-2">Drag to zoom · Shift-drag to pan · Scroll to zoom</span>`
+                    : html`<span class="text-muted text-xs ml-2">Drag to zoom · Shift-drag to pan · Ctrl-scroll to zoom</span>`
                 }
             </div>
             <div class="chart-controls" role="group" aria-label="Hashrate averaging window">
