@@ -958,11 +958,16 @@ class TestRejectFlag:
 
 
 class TestRigForgeDisplay:
-    """The RigForge enriched-feed chip builder (#235). Parsed block in → {version, chips} out; each
-    chip emitted only when its data is present, so nothing renders for a plain-xmrig worker."""
+    """The RigForge enriched-feed builder (#235). Parsed block in → {version, chips, stats} out;
+    each metric emitted only when its data is present, so nothing renders for a plain-xmrig worker.
+    ``chips`` feeds the compact badge row; ``stats`` is the same metrics split into label/value for
+    the Worker Inspect detail table (#507). Both come from one pass, so they stay row-for-row."""
 
     def _chip_texts(self, disp):
         return [c["text"] for c in disp["chips"]]
+
+    def _stats(self, disp):
+        return {s["label"]: s for s in disp["stats"]}
 
     def test_none_for_plain_xmrig(self):
         assert _rigforge_display(None) is None
@@ -1001,6 +1006,60 @@ class TestRigForgeDisplay:
         assert "62°C / 85°C" in texts
         # Nothing alarming here: no bad-variant chips.
         assert all(c["variant"] != "bad" for c in disp["chips"])
+
+        # The detail table (#507) carries the same metrics as label/value pairs, row-for-row with
+        # the chips, so the two renderers can't drift.
+        assert len(disp["stats"]) == len(disp["chips"])
+        stats = self._stats(disp)
+        assert stats["Governor"]["value"] == "performance"
+        assert stats["Governor"]["variant"] == "ok"
+        assert stats["HugePages"]["value"] == "1280"
+        assert stats["Mainboard"]["value"] == "ProArt X670E"
+        assert stats["Power / efficiency"]["value"] == "142 W · 86.9 H/s·W"
+        assert stats["Tuning target"]["value"] == "perf"
+        assert stats["Autotune"]["value"] == "Sun 03:00"
+        assert stats["Temp / max"]["value"] == "62°C / 85°C"
+
+    def test_stats_split_label_from_value_and_colour_warn_states(self):
+        # The label/value split powers the detail table; a bad/warn metric colours its own value.
+        disp = _rigforge_display(
+            {
+                "version": "1.7.0",
+                "miner_down": True,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": "powersave",
+                    "throttling": True,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False},
+            }
+        )
+        stats = self._stats(disp)
+        assert stats["Miner"]["value"] == "down" and stats["Miner"]["variant"] == "bad"
+        assert stats["CPU"]["value"] == "throttling" and stats["CPU"]["variant"] == "bad"
+        assert stats["Governor"]["value"] == "powersave"
+        assert stats["Governor"]["variant"] == "warn"
+
+    def test_stats_empty_when_no_metrics_present(self):
+        disp = _rigforge_display(
+            {
+                "version": None,
+                "miner_down": False,
+                "power": {"watts": None, "hs_per_watt": None},
+                "tune": {"target": None, "autotune_enabled": False, "autotune_next": None},
+                "health": {
+                    "governor": None,
+                    "throttling": None,
+                    "board": None,
+                    "hugepages_total": None,
+                },
+                "watchdog": {"enabled": False, "thermal_hold": None, "temp_c": None},
+            }
+        )
+        assert disp["stats"] == []
 
     def test_throttling_and_bad_governor_flag(self):
         disp = _rigforge_display(
