@@ -2638,6 +2638,51 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "malformed tari view key rejected" "$?" "1"
 assert_contains "malformed tari view-key message" "$out" "64-character hex"
+# (5) A spend key PRESENT but malformed (not 64 hex) is rejected — the require-both check keys off
+# the same 64-hex shape as the view key, so a garbage spend key fails just like a missing one (#523).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"deadbeef"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "malformed tari spend key rejected" "$?" "1"
+assert_contains "malformed spend-key message names spend_public_key" "$out" "tari.spend_public_key"
+
+echo "== black-box: tari.payout_scan_birthday validation (#523) =="
+# The restore-point birthday is validated only on the view-key path (it feeds the tari-wallet). It
+# is "auto" or a u16 days-since-epoch (0–65535) — a block height or an out-of-range value is a
+# common mistake that must fail at apply, not silently mis-restore the wallet. Keys are valid so
+# only the birthday is under test.
+# (1) A non-integer birthday (a block height, say) is refused.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"height-3200000"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "non-integer birthday rejected" "$?" "1"
+assert_contains "non-integer birthday message names the field" "$out" "tari.payout_scan_birthday"
+# (2) An in-range-looking but too-large birthday (> 65535, e.g. a block height) is refused.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"99999"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "out-of-range birthday rejected" "$?" "1"
+assert_contains "out-of-range birthday message names the u16 ceiling" "$out" "65535"
+# (3) A valid u16 birthday applies and reflects verbatim into .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"1000"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "valid birthday accepted" "$?" "0"
+assert_eq "valid birthday reflected into .env" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_BIRTHDAY)" "1000"
+
+echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
+# The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
+# (unset) keeps it localhost-only; true opens it to the LAN. prep_blocks_threads overrides the
+# host-core-derived block-verification thread count verbatim when it is an integer.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "rpc_lan_access default binds monerod RPC to localhost" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "127.0.0.1"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","rpc_lan_access":true,"prep_blocks_threads":6}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "rpc_lan_access true binds monerod RPC to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "0.0.0.0"
+assert_eq "prep_blocks_threads override reflected verbatim" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_PREP_THREADS)" "6"
 
 echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
@@ -4030,6 +4075,44 @@ control_config main
 out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
 assert_rc "control without an onion is allowed" "$?" "0"
 
+echo "== black-box: telegram.control fails closed on each leg (#521) =="
+# telegram.control (the #338 remote /restart /apply surface) is a remotely-reachable host-control
+# channel, so it refuses to enable unless the whole chain is present: dashboard.control on (the #33
+# spool it rides), telegram.commands on (the bot that answers it), and at least one allow-listed
+# operator id (or every command is refused and the feature is inert). Each leg must fail closed.
+tg_control_config() { # <dashboard.control.enabled> <telegram.commands.enabled> <allowed_ids-json>
+    jq -n --arg w "$WALLET" --argjson ctl "$1" --argjson cmds "$2" --argjson ids "$3" \
+        '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
+          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          telegram:{enabled:true,bot_token:"123456:legit-ABC_def",chat_id:"1111",
+                    commands:{enabled:$cmds}, control:{enabled:true,allowed_ids:$ids}},
+          dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},
+                     control:{enabled:$ctl}}}' >"$C/config.json"
+}
+# Leg 1: dashboard.control off — the spool the commands ride does not exist.
+tg_control_config false true '[123456]'
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "telegram.control without dashboard.control is refused" "$?" "1"
+assert_contains "refusal names dashboard.control.enabled" "$out" "dashboard.control.enabled is false"
+# Leg 2: telegram.commands off — no bot is polling for the commands.
+tg_control_config true false '[123456]'
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "telegram.control without telegram.commands is refused" "$?" "1"
+assert_contains "refusal names telegram.commands.enabled" "$out" "telegram.commands.enabled is false"
+# Leg 3: allowed_ids empty — no operator could ever confirm, the feature is inert.
+tg_control_config true true '[]'
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "telegram.control with an empty allowed_ids is refused" "$?" "1"
+assert_contains "refusal names allowed_ids" "$out" "telegram.control.allowed_ids is empty"
+# All three legs present — validates.
+tg_control_config true true '[123456]'
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "fully-configured telegram.control validates" "$?" "0"
+assert_not_contains "fully-configured control raises no telegram.control error" "$out" "telegram.control.enabled is true but"
+# Restore the section baseline (control on, no telegram) for the tests that follow.
+control_config main
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+
 echo "== black-box: approval gate fails closed on a destructive commit (#33 / #338) =="
 UUID3="33333333-3333-4333-8333-333333333333"
 # Clean baseline: pool mini, clearnet off, applied.
@@ -4184,6 +4267,47 @@ jq '.p2pool.pool="mini"' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "non-security change on a security-laden config still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "pool tier change landed in config.json" "$(jq -r '.p2pool.pool' "$C/config.json")" "mini"
+
+echo "== black-box: editable-allowlist commit round-trip, every key (#522) =="
+# Every key on CONTROL_DASHBOARD_EDITABLE_KEYS must actually round-trip a real preview->commit
+# through the approval gate and land in config.json — not just pass a describe_change unit check.
+# Fresh baseline with each tunable at a known value so every row below is a genuine single-key
+# env diff (pool flips P2POOL_FLAGS + P2POOL_PORT, both allowlisted).
+jq -n --arg w "$WALLET" '{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",mem_limit:"4g",prep_blocks_threads:4},
+    tari:{wallet_address:"T",mem_limit:"3g"}, p2pool:{pool:"main"},
+    xvb:{enabled:true,donation_level:"donor"}, telegram:{daily_summary_time:"08:00"},
+    dashboard:{secure:true,host:"box.lan",tari_required:true,check_for_updates:true,timezone:"UTC",
+               hashrate_drop_threshold:50,hashrate_drop_minutes:10,
+               auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+roundtrip_key() { # <label> <jq-set> <jq-read> <expected>
+    jq "$2" "$C/config.json" >"$C/cand.json"
+    gate_try "$C/cand.json"
+    assert_eq "$1 commit applies through the gate" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+    assert_eq "$1 landed in config.json" "$(jq -r "$3" "$C/config.json")" "$4"
+}
+roundtrip_key "XVB_ENABLED" '.xvb.enabled=false' '.xvb.enabled' "false"
+roundtrip_key "XVB_DONATION_LEVEL" '.xvb.donation_level="whale"' '.xvb.donation_level' "whale"
+roundtrip_key "TARI_REQUIRED" '.dashboard.tari_required=false' '.dashboard.tari_required' "false"
+roundtrip_key "DASHBOARD_CHECK_UPDATES" '.dashboard.check_for_updates=false' '.dashboard.check_for_updates' "false"
+roundtrip_key "DASHBOARD_TZ" '.dashboard.timezone="Europe/Paris"' '.dashboard.timezone' "Europe/Paris"
+roundtrip_key "MONERO_MEM_LIMIT" '.monero.mem_limit="5g"' '.monero.mem_limit' "5g"
+roundtrip_key "TARI_MEM_LIMIT" '.tari.mem_limit="2g"' '.tari.mem_limit' "2g"
+roundtrip_key "MONERO_PREP_THREADS" '.monero.prep_blocks_threads=8' '.monero.prep_blocks_threads' "8"
+roundtrip_key "HASHRATE_DROP_THRESHOLD_PCT" '.dashboard.hashrate_drop_threshold=40' '.dashboard.hashrate_drop_threshold' "40"
+roundtrip_key "HASHRATE_DROP_MINUTES" '.dashboard.hashrate_drop_minutes=15' '.dashboard.hashrate_drop_minutes' "15"
+roundtrip_key "TELEGRAM_DAILY_SUMMARY_TIME" '.telegram.daily_summary_time="09:30"' '.telegram.daily_summary_time' "09:30"
+roundtrip_key "P2POOL_FLAGS/P2POOL_PORT" '.p2pool.pool="mini"' '.p2pool.pool' "mini"
+# The 24 allowlisted TELEGRAM_EVENT_* toggles. wallet_changed + clearnet_exposed are deliberately
+# NOT on the allowlist (tamper-evidence alarms; their refusal is asserted above), so they are
+# excluded here. Each flips true->false as a single-key diff.
+for ev in node_down node_recovered worker_offline worker_recovered worker_joined worker_left \
+    sync_finished disk_space db_unhealthy db_reset xvb_no_share xvb_registration new_release \
+    stack_online daily_summary hashrate_low hashrate_loss hugepages low_ram high_reject_rate \
+    block_found payout_found payout_confirmed container_unhealthy; do
+    roundtrip_key "TELEGRAM_EVENT ${ev}" ".telegram.events.${ev}=false" ".telegram.events.${ev}" "false"
+done
 
 echo "== black-box: per-worker token mask + host-side restore (#172) =="
 # dashboard.workers[].token is a per-rig credential living in a VARIABLE-LENGTH array — out of the
