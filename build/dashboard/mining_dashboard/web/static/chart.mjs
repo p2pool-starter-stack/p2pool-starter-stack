@@ -266,7 +266,8 @@ export class ChartCard extends Component {
           // Drag = box-zoom, Ctrl-wheel = zoom, Shift-drag = pan (Issue #47, #533). Each settled
           // gesture triggers a server refetch of the visible window (onGesture).
           // modifierKey gates the wheel: a bare scroll over the canvas passes through to the page
-          // (no scroll-hijack, #533); hold Ctrl/⌘ to zoom.
+          // (no scroll-hijack, #533); hold Ctrl to zoom. (macOS: only ctrlKey counts, not ⌘/metaKey
+          // — but a trackpad pinch synthesizes a ctrl+wheel event, so pinch-to-zoom works for free.)
           zoom: {
             zoom: {
               wheel: { enabled: true, modifierKey: "ctrl" },
