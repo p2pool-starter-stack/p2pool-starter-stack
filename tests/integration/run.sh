@@ -1724,6 +1724,11 @@ run_subnet_scenario() {
     wait_monero_synced 120 || true
     wait_miner_running 180 || true
     wait_hashes_flowing 300 || true
+    # The down/up restarted Tari too, so — like the per-scenario deploy path — let it close its
+    # post-restart offline gap before assert_running_state's sync check, or we catch it mid-"loading".
+    if [ "$(jq_get "$config" '.dashboard.tari_required')" = "true" ]; then
+        wait_tari_synced 300 || true
+    fi
 
     # Subnet-specific live checks + the standard running-state battery on the moved subnet.
     assert_subnet_live "$config"
