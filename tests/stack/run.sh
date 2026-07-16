@@ -4216,6 +4216,20 @@ jq '.dashboard.energy={cost_per_kwh:0.18,__evil:{x:1}}' "$C/config.json" >"$C/ca
 gate_try "$C/cand.json"
 assert_eq "a nested unknown key under a known block is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 
+# NO FALSE-REJECT on legacy configs: config.reference.json must be a COMPLETE superset of every path
+# pithead READS, or the closed-schema guard refuses a legit config on EVERY commit. A config.json
+# predating the xvb rename still carries a legacy xmrig_proxy.* block (read as an alias at pithead
+# ~L3245). Seed it into the live baseline, then prove a normal on-allowlist commit
+# (xvb.donation_level -> XVB_DONATION_LEVEL) still passes the gate and the legacy block round-trips.
+jq '.xmrig_proxy={enabled:true,url:"na.xmrvsbeast.com:4247",donor_id:"auto"}' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+jq '.xvb.donation_level="whale"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "a commit on a config carrying a legacy xmrig_proxy block still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "the allowlisted xvb tier landed in config.json" "$(jq -r '.xvb.donation_level' "$C/config.json")" "whale"
+assert_eq "the legacy xmrig_proxy block round-trips untouched" "$(jq -r '.xmrig_proxy.url' "$C/config.json")" "na.xmrvsbeast.com:4247"
+
 # Forged-flag bypass: the container tampers its visible copy of the preview result to
 # destructive:false AND sends a commit request carrying its own destructive:false field. The
 # extra request key is rejected outright; a clean follow-up commit is still refused because the

@@ -4664,6 +4664,12 @@ control_approval_gate() { # <staged-file>
     # array still surfaces its unknown sub-key. dashboard.workers[] is exempt: its per-rig object
     # elements aren't enumerated in the reference and the array is already fully guarded above. Fail
     # closed — an unreadable reference or a jq error refuses the commit.
+    # INVARIANT: config.reference.json MUST stay a complete superset of every config path this script
+    # reads (grep the config_bool/`jq ... "$CONFIG_FILE"` sites), or a legit config carrying a
+    # read-but-unlisted path is false-rejected on every commit. That includes backward-compat aliases
+    # like xmrig_proxy.* (read at the XvB block). A grep-based test would false-alarm on jq-internal
+    # and filename dotted tokens, so the invariant is guarded by the legacy-xmrig_proxy round-trip
+    # case in tests/stack/run.sh rather than an automated path diff.
     local unknown
     if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
         def norm: [.[] | strings] | join(".");
