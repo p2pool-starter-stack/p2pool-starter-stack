@@ -74,6 +74,13 @@ rc=$?
 assert_rc "compound prereqs resolve" "$rc" "0"
 assert_contains "compound: data_dir" "$RESOLVED" "monero.data_dir=/srv/full"
 assert_contains "compound: remote host" "$RESOLVED" "monero.remote.host=10.0.0.5:18081"
+# A network.subnet move can't be hot-applied (#201) — the hot-apply loop must SKIP it (loud, not
+# silent), leaving the real coverage to run.sh's --subnet phase.
+BASELINE_PRUNE=1
+resolve_overrides "monero.prune=true network.subnet=10.84.0.0/24"
+rc=$?
+assert_rc "subnet move skipped in the hot-apply loop" "$rc" "1"
+assert_contains "subnet skip names the --subnet phase" "$SKIP_REASON" "--subnet phase"
 unset BASELINE_PRUNE PRUNED_DATA_DIR FULL_DATA_DIR REMOTE_MONERO_HOST
 
 echo "== render_scenario_config: applies overrides, stays valid JSON =="
@@ -97,6 +104,12 @@ assert_eq "clearnet absent in baseline (default off)" "$(jq_get "$BASE" '.monero
 assert_contains "matrix has a clearnet scenario" "$(scenario_names)" "local-pruned-main-clearnet-sync"
 assert_contains "clearnet scenario enables monero" "$(scenario_overrides local-pruned-main-clearnet-sync)" "monero.clearnet_initial_sync=true"
 assert_contains "clearnet scenario enables tari" "$(scenario_overrides local-pruned-main-clearnet-sync)" "tari.clearnet_initial_sync=true"
+
+echo "== moved-subnet matrix scenario (#201/#180) =="
+# The matrix documents the subnet axis for coverage; the --subnet phase runs it for real (a subnet
+# move can't be hot-applied), so the scenario is skipped by the hot-apply loop above.
+assert_contains "matrix has a moved-subnet scenario" "$(scenario_names)" "local-pruned-main-subnet"
+assert_contains "subnet scenario sets a non-default /24" "$(scenario_overrides local-pruned-main-subnet)" "network.subnet=10.84.0.0/24"
 
 echo "== expected/absent services: profile gating =="
 LOCAL='{"monero":{"mode":"local"}}'
