@@ -17,6 +17,7 @@
 #   dashboard.secure ......... true (Caddy TLS) | false
 #   dashboard.tari_required .. true (blocking) | false (non-blocking)
 #   monero/tari.clearnet_initial_sync (#183) .. true (clearnet IBD) | false (Tor, the default)
+#   network.subnet (#180/#201) .. default 172.28.0.0/24 | a moved /24 (e.g. 10.84.0.0/24)
 #
 # The clearnet_initial_sync `false` value is the default exercised by every other scenario (they
 # never set the key); only the `true` value needs a dedicated case, so axis_coverage lists just
@@ -29,6 +30,11 @@
 #     SKIPPED so we never silently drop coverage or mutate the canonical chain.
 #   * monero.mode=remote needs a reachable external node (REMOTE_MONERO_HOST); the natural
 #     choice is the box's own synced monerod on its LAN address.
+#   * network.subnet is a set-at-install knob: moving it changes the docker bridge's IPAM subnet,
+#     which Compose cannot recreate while containers are attached — a hot `apply` fails. So the
+#     matrix line documents the axis for coverage, resolve_overrides SKIPS it in the hot-apply
+#     loop (with a loud reason), and run.sh's `--subnet` phase runs it for real via a full
+#     down -> up on the moved subnet (chains are bind-mounted by path, so they are never touched).
 
 # Emit the matrix as `NAME<TAB>overrides…`, one scenario per line. Lines starting with the
 # canonical-first scenario are ordered so the cheapest, most-common config runs first.
@@ -43,6 +49,7 @@ local-pruned-main-xvb-off	monero.mode=local monero.prune=true p2pool.pool=main x
 local-pruned-main-tari-optional	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=false
 local-pruned-main-clearnet-sync	monero.mode=local monero.prune=true monero.clearnet_initial_sync=true tari.clearnet_initial_sync=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
 remote-main-secure-tari	monero.mode=remote p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
+local-pruned-main-subnet	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true network.subnet=10.84.0.0/24
 EOF
 }
 
@@ -67,6 +74,7 @@ dashboard.tari_required=true
 dashboard.tari_required=false
 monero.clearnet_initial_sync=true
 tari.clearnet_initial_sync=true
+network.subnet=10.84.0.0/24
 EOF
 }
 

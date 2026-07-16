@@ -123,12 +123,22 @@ RESOLVED=""
 SKIP_REASON=""
 # shellcheck disable=SC2034  # RESOLVED/SKIP_REASON are output globals consumed by run.sh & selftest.sh
 resolve_overrides() {
-    local overrides="$1" prune mode out="$1"
+    local overrides="$1" prune mode subnet out="$1"
     RESOLVED=""
     SKIP_REASON=""
 
     prune="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.prune=//p')"
     mode="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
+    subnet="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^network\.subnet=//p')"
+
+    # A network.subnet move can't be hot-applied — Compose won't recreate the bridge's IPAM subnet
+    # while containers are attached (#180/#201). It is exercised by run.sh's `--subnet` phase, which
+    # does a full down -> up on the moved subnet. Skip it here so the hot-apply matrix never fails on
+    # a move it structurally can't do (loud SKIP, never a silent drop).
+    if [ -n "$subnet" ]; then
+        SKIP_REASON="network.subnet move needs a full down/up — run the --subnet phase (not a hot apply)"
+        return 1
+    fi
 
     # Prune axis: only flip away from the baseline DB if a matching synced dir is provided —
     # flipping prune on the canonical dir would invalidate it (a DEST change).

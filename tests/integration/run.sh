@@ -40,6 +40,10 @@ RUN_FAULTS=0
 RUN_AUTH_FAIL_CLOSED=0
 RUN_HARDENING=0
 RUN_RIGFORGE=0
+RUN_RIGFORGE_CONTROL=0
+RUN_SUBNET=0
+RIG_HOST=""
+RIG_CONTROL_PORT="8082"
 SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
@@ -112,6 +116,23 @@ MATRIX:
   --rigforge             also run the RigForge integration phase (#185/#235/#260): assert the
                          dashboard consumed a REAL rigforge rig's enriched feed and Worker Inspect
                          reads it. Non-destructive; self-skips if no rigforge rig is connected.
+  --rigforge-control     also run the RigForge control phase (#513/#514/#516/#517), local mode only:
+                         with dashboard.control ON and dashboard.workers[] populated for the borrowed
+                         rig (masked-token descriptor, #440), assert the enriched read path survives
+                         populated descriptors (#514) and the rig is editable (#508/#513), drive a
+                         reversible Worker Inspect edit end-to-end to the rig's control API (#513),
+                         reflect a rig-side edit back into the dashboard (#516), and record an
+                         auto-rollback (#517). DESTRUCTIVE-then-restored. Needs a real rig with its
+                         control API opted in; each leg self-skips loudly without its prerequisites.
+  --rig-host <h>         the borrowed rig's LAN host/IP for control dials — needed to inject a
+                         dashboard.workers[] descriptor when the box's baseline lacks one (#513/#514).
+  --rig-control-port <p> the rig's writable control API port (default: 8082, #185).
+  --subnet               also run the moved-subnet phase (#201/#180), local mode only: bring the
+                         stack DOWN then UP on a non-default network.subnet (10.84.0.0/24) — the one
+                         axis a hot apply can't move — and assert the moved prefix reached .env, the
+                         docker bridge, tor's render-at-start IP, monerod's envsubst'd proxy IP, the
+                         dashboard SSRF CIDR, and the #344 onion vhost, then run the standard
+                         running-state battery. DESTRUCTIVE-then-restored (down/up back to baseline).
   --keep                 do NOT restore the original config.json at the end (leaves the box
                          on the last scenario — useful for debugging)
 
@@ -201,6 +222,22 @@ parse_args() {
             ;;
         --rigforge)
             RUN_RIGFORGE=1
+            shift
+            ;;
+        --rigforge-control)
+            RUN_RIGFORGE_CONTROL=1
+            shift
+            ;;
+        --rig-host)
+            RIG_HOST="$2"
+            shift 2
+            ;;
+        --rig-control-port)
+            RIG_CONTROL_PORT="$2"
+            shift 2
+            ;;
+        --subnet)
+            RUN_SUBNET=1
             shift
             ;;
         --safety-backup)
@@ -1578,6 +1615,405 @@ run_rigforge_integration() {
     it_step "full dashboard->rig config push + rollback (#185) is a manual runbook step — it restarts the borrowed loaner and needs the rig's control API opted in"
 }
 
+# --- Moved-subnet phase (--subnet) ------------------------------------------
+# Assert a config's network.subnet reached the LIVE stack, not just the rendered compose (#180/#201).
+# Config-derived (default 172.28.0.0/24), local mode only. The two named highest-value checks from
+# #201 — tor's render-at-start entrypoint and monerod's envsubst'd Tor proxy IP — plus the docker
+# bridge, the dashboard SSRF CIDR/SOCKS, p2pool's URL, and the #344 onion vhost gateway.
+assert_subnet_live() { # <config-json>
+    local config="$1" subnet prefix
+    subnet="$(jq_get "$config" '.network.subnet')"
+    [ -n "$subnet" ] || subnet="172.28.0.0/24"
+    case "$subnet" in
+    *.0/24) prefix="${subnet%.0/24}" ;;
+    *)
+        it_fail "network.subnet is an X.Y.Z.0/24 block" "got [$subnet]"
+        return 0
+        ;;
+    esac
+
+    # 1. The moved subnet reached .env — both the CIDR and the derived prefix everything keys off.
+    assert_eq "NETWORK_SUBNET matches config (#180)" "$(env_on_box NETWORK_SUBNET)" "$subnet"
+    assert_eq "NETWORK_PREFIX derived from subnet (#180)" "$(env_on_box NETWORK_PREFIX)" "$prefix"
+
+    # 2. The docker bridge is actually on the moved subnet (not just the compose render).
+    assert_eq "docker mining_net bridge on the moved subnet (#180)" \
+        "$(rx "docker network inspect mining_net --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null")" \
+        "$subnet"
+
+    # 3. Tor's render-at-start entrypoint substituted the moved prefix (#180) — the container sits on
+    #    prefix.25 AND its rendered torrc binds there. A hardcoded 172.28.0 in the entrypoint would
+    #    pass tier 1 (which only reads the compose render) and only break here.
+    assert_eq "tor container IP on the moved prefix (.25)" \
+        "$(rx "docker inspect tor --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null")" \
+        "$prefix.25"
+    assert_num_ge "tor torrc rendered on the moved prefix (#180)" \
+        "$(rx "docker exec tor grep -c -F 'ControlPort $prefix.25:9051' /tmp/torrc 2>/dev/null")" 1
+
+    # 4. monerod's envsubst'd Tor P2P proxy points at the moved prefix (.25) — the other named check.
+    assert_num_ge "monerod P2P proxy on the moved prefix (#180)" \
+        "$(rx "docker exec monerod grep -c -F 'proxy=$prefix.25:9050' /home/ubuntu/.bitmonero/bitmonero.conf 2>/dev/null")" 1
+    assert_eq "monerod container IP on the moved prefix (.26)" \
+        "$(rx "docker inspect monerod --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null")" \
+        "$prefix.26"
+
+    # 5. The dashboard's SSRF guard CIDR + Tor SOCKS endpoint rebased (#180) — a stale 172.28.0 in
+    #    either would let the guard misjudge a worker host or leak DNS off the moved bridge.
+    assert_eq "dashboard MINING_NET_CIDR rebased (SSRF guard, #180)" \
+        "$(rx "docker exec dashboard printenv MINING_NET_CIDR 2>/dev/null")" "$subnet"
+    assert_eq "dashboard Tor SOCKS on the moved prefix (#180)" \
+        "$(rx "docker exec dashboard printenv TOR_SOCKS_PROXY 2>/dev/null")" "socks5h://$prefix.25:9050"
+
+    # 6. p2pool's stratum URL rides the moved prefix (.28).
+    assert_contains "P2POOL_URL on the moved prefix (.28)" "$(env_on_box P2POOL_URL)" "$prefix.28:3333"
+
+    # 7. The #344 onion vhost binds the bridge gateway (prefix.1, post-#346 proxy path) — gated on the
+    #    onion being provisioned on this box.
+    if [ "$(env_on_box DASHBOARD_ONION_ENABLED)" = "true" ]; then
+        assert_num_ge "dashboard onion vhost bound to the moved gateway (.1, #344)" \
+            "$(rx "grep -c -F 'http://$prefix.1' Caddyfile 2>/dev/null")" 1
+    else
+        it_step "onion vhost check skipped (dashboard.onion.enabled off on this box)"
+    fi
+}
+
+# Bring the stack up on a NON-default network.subnet and run the standard battery (#201/#180). A
+# subnet move is the one axis a hot `apply` can't do — Compose won't recreate the bridge's IPAM subnet
+# while containers are attached — so this phase does a full down -> up on the moved subnet and, at the
+# end, another down -> up back to the baseline subnet. The synced chains are bind-mounted by PATH (not
+# on the docker network), so they are never touched. DESTRUCTIVE-then-restored; local mode only.
+run_subnet_scenario() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
+    IT_CURRENT_SCENARIO="subnet"
+    echo ""
+    it_log "── moved-subnet phase (#201/#180) ──────────────────"
+
+    if [ "$IT_MODE" != "local" ]; then
+        it_warn "skipping moved-subnet phase (needs local mode: it brings the stack down/up and inspects the live docker network)"
+        return 0
+    fi
+    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+        it_warn "skipping moved-subnet phase (remote mode: monerod's moved-prefix proxy is one of the named checks)"
+        return 0
+    fi
+
+    # The subnet value lives in the matrix (data, not code); isolate JUST the subnet axis onto the
+    # baseline so this phase doesn't drag in the prune/pool axes (the #281 entanglement lesson).
+    local ov subnet
+    ov="$(scenario_overrides local-pruned-main-subnet || true)"
+    subnet="$(printf '%s' "$ov" | tr ' ' '\n' | sed -n 's/^network\.subnet=//p')"
+    [ -n "$subnet" ] || subnet="10.84.0.0/24"
+
+    local config
+    config="$(render_scenario_config "$BASELINE_CONFIG" "network.subnet=$subnet")"
+    if ! printf '%s' "$config" | jq empty 2>/dev/null; then
+        it_fail "rendered moved-subnet config is valid JSON" "jq rejected it"
+        return 0
+    fi
+
+    local fails_before="$IT_FAIL"
+    it_step "moving the stack onto $subnet (down -> up — Compose can't hot-move the bridge subnet)…"
+    push_config "$config"
+    pithead down >/dev/null 2>&1
+    # After down, apply renders the moved-subnet .env and `compose up` recreates the bridge + every
+    # container on the new /24.
+    if ! pithead apply -y >"$OUT_DIR/subnet.apply.log" 2>&1; then
+        it_fail "apply on the moved subnet succeeded" "see $OUT_DIR/subnet.apply.log"
+    fi
+    wait_status_ok 300 || true
+    wait_monero_synced 120 || true
+    wait_miner_running 180 || true
+    wait_hashes_flowing 300 || true
+
+    # Subnet-specific live checks + the standard running-state battery on the moved subnet.
+    assert_subnet_live "$config"
+    assert_running_state "subnet" "$config"
+
+    [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "subnet" "$OUT_DIR"
+
+    # Always move the box back to the baseline subnet — a hot apply can't, so down -> up again. Runs
+    # regardless of the assertions above so a mid-phase failure can't strand the box on the moved /24.
+    it_step "restoring the baseline subnet (down -> up)…"
+    push_config "$BASELINE_CONFIG"
+    pithead down >/dev/null 2>&1
+    pithead apply -y >/dev/null 2>&1 || it_warn "baseline-subnet apply returned non-zero — check the box"
+    wait_status_ok 300 || true
+}
+
+# --- RigForge control phase (--rigforge-control) ----------------------------
+# POST a Worker Inspect config change to the LIVE dashboard's worker-apply route and echo the terminal
+# result JSON. Drives the full loop the tier-2 fake can't: dashboard -> host runner -> rig control API
+# -> back. The route needs the X-Pithead-Control CSRF header; the rig token stays host-side (#440), so
+# nothing secret rides this call. max-time exceeds the runner's own dial + status-poll budget so the
+# handler always returns a terminal-ish result rather than a 202 pending.
+_worker_apply() { # <worker> <changes-json>  -> echoes the dashboard result JSON
+    local body
+    body="$(jq -nc --arg w "$1" --argjson c "$2" '{worker:$w,changes:$c}')"
+    rx "curl -fsS --max-time 60 -X POST -H 'Content-Type: application/json' -H 'X-Pithead-Control: 1' --data $(quote_arg "$body") http://127.0.0.1:8000/api/control/worker-apply" 2>/dev/null
+}
+
+# The v1.5 dashboard <-> RigForge WRITE surfaces that only a real rig with its control API opted in can
+# prove — the exact paths #508 (masked-token descriptor dropped -> not editable) and the v1.5.2
+# regression (masked sentinel stringified into the Bearer header -> :8081 probe 401) shipped through
+# because no live test drove them (#513/#514/#516/#517). With dashboard.control ON and the borrowed
+# rig pinned in dashboard.workers[] (its token seen only as the {"__secret__":true} sentinel inside the
+# container), this:
+#   #514  asserts the enriched READ path survives a populated masked descriptor (api_ok + rigforge feed)
+#   #513  asserts the rig is editable and drives a reversible Worker Inspect edit through to the rig
+#   #516  reflects a rig-side edit back into the dashboard's enriched feed + verifies the masked prefill
+#   #517  records an auto-rollback (rigforge#236) end-to-end from the dashboard
+# DESTRUCTIVE-then-restored (enables control + pins the descriptor, reverted at the end). Local mode
+# only; each leg self-skips LOUDLY without its prerequisites so a bench without the rig never fails.
+run_rigforge_control() {
+    # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
+    IT_CURRENT_SCENARIO="rigforge-control"
+    echo ""
+    it_log "── RigForge control phase (#513/#514/#516/#517) ────"
+
+    if [ "$IT_MODE" != "local" ]; then
+        it_warn "skipping rigforge-control (needs local mode: it edits config.json + dials the rig on the mining LAN)"
+        return 0
+    fi
+    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+        it_warn "skipping rigforge-control (remote mode: no local dashboard container to drive)"
+        return 0
+    fi
+
+    # A real RigForge rig must be connected + parsed into the feed (same gate as run_rigforge_integration).
+    local st rig
+    st="$(api_state)"
+    rig="$(printf '%s' "$st" | jq -r 'first(.workers[]? | select(.rigforge != null and .rigforge.version != null) | .name) // empty' 2>/dev/null)"
+    if [ -z "$rig" ]; then
+        it_warn "no worker exposes a RigForge enriched feed — the write paths need a real rig with its :8081 API on; skipping (#513/#514/#516/#517)"
+        return 0
+    fi
+
+    # The write path resolves the rig's host + token from dashboard.workers[]. Use the baseline's
+    # descriptor if it already pins this rig's host (the gouda/prod case); otherwise inject one from
+    # --rig-host + IT_RIG_TOKEN (local-only, so the token never leaves the bench). No source for
+    # either -> skip: we won't drive an edit we can't address, nor mutate what we can't restore.
+    local have_host inject=0
+    have_host="$(printf '%s' "$BASELINE_CONFIG" | jq -r --arg n "$rig" 'first((.dashboard.workers // [])[] | select(.name==$n) | .host) // empty' 2>/dev/null)"
+    if [ -z "$have_host" ]; then
+        if [ -n "$RIG_HOST" ] && [ -n "${IT_RIG_TOKEN:-}" ]; then
+            inject=1
+        else
+            it_warn "rig '$rig' has no dashboard.workers[] descriptor and no --rig-host + IT_RIG_TOKEN to inject one — skipping the write paths (#513/#514/#516/#517)"
+            return 0
+        fi
+    fi
+
+    # Build the control-on config: enable the channel and ensure a login (control refuses without
+    # one). Only mint a login when the box has none — an existing password hash is preserved across
+    # apply, so we never clobber a real one. The token rides --arg so it never hits a log or argv.
+    local ctrl_config
+    ctrl_config="$(printf '%s' "$BASELINE_CONFIG" | jq '.dashboard.control.enabled = true')"
+    if [ -z "$(env_on_box DASHBOARD_AUTH_HASH_B64)" ]; then
+        ctrl_config="$(printf '%s' "$ctrl_config" | jq '.dashboard.auth = {username:"admin",password:"a tier4 rigforge-control passphrase"}')"
+    fi
+    if [ "$inject" = "1" ]; then
+        if ! printf '%s' "$RIG_CONTROL_PORT" | grep -qE '^[0-9]{1,5}$'; then
+            it_fail "--rig-control-port is a port number" "got [$RIG_CONTROL_PORT]"
+            return 0
+        fi
+        ctrl_config="$(printf '%s' "$ctrl_config" | jq \
+            --arg n "$rig" --arg h "$RIG_HOST" --argjson cp "$RIG_CONTROL_PORT" --arg tok "${IT_RIG_TOKEN:-}" '
+            .dashboard.workers = ((.dashboard.workers // []) | map(select(.name != $n)) + [{name:$n, host:$h, control_port:$cp, token:$tok}])')"
+        it_step "injecting a dashboard.workers[] descriptor for '$rig' at $RIG_HOST:$RIG_CONTROL_PORT (token masked in-container)"
+    fi
+
+    local fails_before="$IT_FAIL"
+    push_config "$ctrl_config"
+    it_step "apply with dashboard.control on + the rig pinned in dashboard.workers[]…"
+    if ! pithead apply -y >"$OUT_DIR/rigforge-control.apply.log" 2>&1; then
+        it_fail "apply (control on + rig descriptor) succeeded" "see $OUT_DIR/rigforge-control.apply.log"
+        push_config "$BASELINE_CONFIG"
+        pithead apply -y >/dev/null 2>&1 || true
+        return 0
+    fi
+    wait_status_ok 240 || true
+    # Let the recreated dashboard re-poll the rig so its enriched feed + descriptor state are fresh.
+    wait_for 120 5 "dashboard to re-read the rig after the control apply" _pred_rig_present "$rig" || true
+
+    # ---- #514: the enriched READ path survives a populated (masked) descriptor ----
+    # With a token in dashboard.workers[], the container reads it ONLY as {"__secret__":true}. The
+    # v1.5.2 regression stringified that sentinel into `Authorization: Bearer {'__secret__': True}`
+    # and every :8081 probe 401'd -> api_ok=false, feed gone. Assert both still resolve.
+    st="$(api_state)"
+    assert_eq "rig api_ok true with a populated masked descriptor (#514, v1.5.2 regression)" \
+        "$(printf '%s' "$st" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .api_ok) // empty' 2>/dev/null)" "true"
+    assert_ne "rigforge feed still resolves with the token masked (#514)" \
+        "$(printf '%s' "$st" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.version) // empty' 2>/dev/null)" ""
+
+    # ---- #513: the rig is editable, and a reversible Worker Inspect edit lands on the rig ----
+    local detail
+    detail="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null || true)"
+    assert_eq "Worker Inspect reports the rig editable with a descriptor (#508/#513)" \
+        "$(printf '%s' "$detail" | jq -r '.editable // false' 2>/dev/null)" "true"
+    assert_eq "Worker Inspect control_enabled (#513)" \
+        "$(printf '%s' "$detail" | jq -r '.control_enabled // false' 2>/dev/null)" "true"
+
+    # A reversible, benign writable change: nudge max_temp_c by +1. It is the one writable key the
+    # enriched feed echoes (watchdog Temp/max), so read the current ceiling from the feed FIRST — if
+    # the rig's watchdog isn't reporting it we can't safely restore it, so skip the write rather than
+    # leave the rig mis-tuned.
+    local orig_maxt new_maxt res status ckeys
+    orig_maxt="$(printf '%s' "$st" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.stats[]? | select(.label=="Temp / max") | .value) // empty' 2>/dev/null | sed -n 's#.*/ *\([0-9][0-9]*\).*#\1#p')"
+    if [ -z "$orig_maxt" ]; then
+        it_warn "rig '$rig' watchdog isn't reporting a max_temp_c in the feed — skipping the reversible write leg (can't read the original to restore it) (#513)"
+    else
+        new_maxt=$((orig_maxt + 1))
+        it_step "Worker Inspect edit: max_temp_c $orig_maxt -> $new_maxt via /api/control/worker-apply…"
+        res="$(_worker_apply "$rig" "{\"max_temp_c\":$new_maxt}")"
+        status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
+        ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
+        assert_eq "Worker Inspect edit applied on the rig (#513)" "$status" "applied"
+        assert_contains "the rig's /status confirms max_temp_c changed (#513)" "$ckeys" "max_temp_c"
+        # The dashboard recorded it in the per-worker config history (#185).
+        assert_eq "worker-apply recorded in the per-worker history (#185)" \
+            "$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -r 'first(.history[]?) | .status // empty' 2>/dev/null)" "applied"
+        it_step "reverting max_temp_c $new_maxt -> $orig_maxt…"
+        res="$(_worker_apply "$rig" "{\"max_temp_c\":$orig_maxt}")"
+        assert_eq "reversible edit reverted on the rig (#513)" \
+            "$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)" "applied"
+    fi
+
+    # ---- #516: a rig-side edit reflects in the dashboard's enriched feed + the masked prefill ----
+    run_rigforge_reverse "$rig" "$orig_maxt"
+
+    # ---- #517: an auto-rollback (rigforge#236) is recorded end-to-end from the dashboard ----
+    run_rigforge_rollback "$rig"
+
+    [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "rigforge-control" "$OUT_DIR"
+
+    # Restore: baseline config drops the injected descriptor + turns control back off (the end-of-run
+    # restore_baseline would too; doing it here keeps the box clean even if a later phase is added).
+    it_step "restoring baseline (control off, descriptor dropped)…"
+    push_config "$BASELINE_CONFIG"
+    pithead apply -y >/dev/null 2>&1 || it_warn "restore apply returned non-zero — check the box"
+    wait_status_ok 240 || true
+}
+
+# Predicate: the rig is present in the live feed with its enriched block parsed.
+_pred_rig_present() { # <rig-name>
+    local s
+    s="$(api_state)"
+    [ -n "$s" ] || return 1
+    [ -n "$(printf '%s' "$s" | jq -r --arg n "$1" 'first(.workers[]? | select(.name==$n and .rigforge.version != null) | .name) // empty' 2>/dev/null)" ]
+}
+
+# #516: a rig-side config edit (made OUTSIDE the dashboard) must reflect in the dashboard's enriched
+# feed, and render_masked_config's claim — that config.json hand-edits show up in the editor prefill —
+# must hold with the per-worker token masked. The feed leg dials the rig's control API DIRECTLY from
+# the bench (bypassing the dashboard's worker-apply), which needs the raw token, so it self-skips
+# without IT_RIG_TOKEN; the prefill leg is bench-only and always runs.
+run_rigforge_reverse() { # <rig-name> <orig-max_temp_c-or-empty>
+    local rig="$1" orig_maxt="$2" cdir masked
+    it_log "   #516: rig-side edit reflects in the dashboard"
+
+    # Prefill leg (always runs): the masked prefill copy (#440) must carry the descriptor host and
+    # mask the token to the sentinel — the exact surface #508 broke. render_masked_config re-runs on
+    # every apply, so a hand-edit to config.json shows up in the editor form.
+    cdir="$(env_on_box CONTROL_DIR)"
+    if [ -n "$cdir" ]; then
+        masked="$(rx "cat $(quote_arg "$cdir/masked/config.json") 2>/dev/null")"
+        assert_ne "masked prefill carries the rig descriptor host (#516/#440)" \
+            "$(printf '%s' "$masked" | jq -r --arg n "$rig" 'first((.dashboard.workers // [])[] | select(.name==$n) | .host) // empty' 2>/dev/null)" ""
+        assert_eq "masked prefill masks the per-worker token to the sentinel (#516/#440)" \
+            "$(printf '%s' "$masked" | jq -r --arg n "$rig" 'first((.dashboard.workers // [])[] | select(.name==$n) | .token."__secret__") // empty' 2>/dev/null)" "true"
+        # A benign hand-edit to config.json must surface in the freshly re-rendered prefill (#516).
+        local probe_watts=123
+        push_config "$(printf '%s' "$(rx 'cat config.json')" | jq --arg n "$rig" --argjson w "$probe_watts" \
+            '(.dashboard.workers[] | select(.name==$n) | .watts) = $w')"
+        pithead apply -y >/dev/null 2>&1 || true
+        assert_eq "config.json hand-edit shows up in the masked prefill (#516 render_masked_config claim)" \
+            "$(rx "cat $(quote_arg "$cdir/masked/config.json") 2>/dev/null" | jq -r --arg n "$rig" 'first((.dashboard.workers // [])[] | select(.name==$n) | .watts) // empty' 2>/dev/null)" "$probe_watts"
+    else
+        it_warn "CONTROL_DIR not set — skipping the masked-prefill leg of #516"
+    fi
+
+    # Feed leg (needs the raw token to dial the rig directly): change max_temp_c ON the rig via its
+    # own control API, then assert the dashboard's enriched feed reflects it — the rig->dashboard
+    # direction, independent of the dashboard write path.
+    if [ -z "${IT_RIG_TOKEN:-}" ] || [ -z "$RIG_HOST" ]; then
+        it_warn "no IT_RIG_TOKEN + --rig-host to dial the rig directly — skipping the enriched-feed reflection leg of #516"
+        return 0
+    fi
+    if [ -z "$orig_maxt" ]; then
+        it_warn "rig watchdog max_temp_c not visible in the feed — skipping the enriched-feed reflection leg of #516"
+        return 0
+    fi
+    local reflect=$((orig_maxt + 2)) change_id
+    it_step "rig-side edit (direct control API): max_temp_c -> $reflect on $RIG_HOST:$RIG_CONTROL_PORT…"
+    change_id="$(_rig_control_apply "{\"max_temp_c\":$reflect}")"
+    if [ -z "$change_id" ]; then
+        it_fail "direct rig control apply accepted (#516)" "the rig's /apply did not return a change_id"
+    else
+        _rig_control_await "$change_id" applied || it_warn "rig didn't report the direct change applied in time (#516)"
+        if wait_for 90 5 "dashboard feed to reflect the rig-side max_temp_c=$reflect (#516)" _pred_feed_maxt "$rig" "$reflect"; then
+            it_pass "rig-side edit reflected in the dashboard's enriched feed (#516)"
+        else
+            it_fail "rig-side edit reflected in the dashboard's enriched feed (#516)" "feed never showed max_temp_c=$reflect"
+        fi
+        # Revert the rig to its original ceiling.
+        change_id="$(_rig_control_apply "{\"max_temp_c\":$orig_maxt}")"
+        [ -n "$change_id" ] && _rig_control_await "$change_id" applied || true
+    fi
+}
+
+# POST a change straight to the rig's control API from the bench (the same dial the host runner makes,
+# minus the dashboard) and echo the rig's change_id. Needs IT_RIG_TOKEN + RIG_HOST. Used only by #516.
+_rig_control_apply() { # <changes-json> -> echoes change_id
+    rx "curl -fsS --max-time 15 -X POST -H $(quote_arg "Authorization: Bearer ${IT_RIG_TOKEN:-}") -H 'Content-Type: application/json' --data $(quote_arg "$1") $(quote_arg "http://$RIG_HOST:$RIG_CONTROL_PORT/apply")" 2>/dev/null | jq -r '.change_id // empty' 2>/dev/null
+}
+
+# Poll the rig's /status for <change_id> reaching <want-status>. Returns 0 on match within the window.
+_rig_control_await() { # <change_id> <want-status>
+    local id="$1" want="$2" deadline=$((SECONDS + 30)) sbody
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        sbody="$(rx "curl -fsS --max-time 10 -H $(quote_arg "Authorization: Bearer ${IT_RIG_TOKEN:-}") $(quote_arg "http://$RIG_HOST:$RIG_CONTROL_PORT/status")" 2>/dev/null)"
+        if [ "$(printf '%s' "$sbody" | jq -r '.change_id // empty' 2>/dev/null)" = "$id" ] &&
+            [ "$(printf '%s' "$sbody" | jq -r '.status // empty' 2>/dev/null)" = "$want" ]; then
+            return 0
+        fi
+        sleep 3
+    done
+    return 1
+}
+
+# Predicate: the dashboard feed's watchdog Temp/max stat shows <want> as the ceiling for <rig>.
+_pred_feed_maxt() { # <rig-name> <want-max_temp_c>
+    local s v
+    s="$(api_state)"
+    [ -n "$s" ] || return 1
+    v="$(printf '%s' "$s" | jq -r --arg n "$1" 'first(.workers[]? | select(.name==$n) | .rigforge.stats[]? | select(.label=="Temp / max") | .value) // empty' 2>/dev/null | sed -n 's#.*/ *\([0-9][0-9]*\).*#\1#p')"
+    [ "$v" = "$2" ]
+}
+
+# #517: an auto-rollback (rigforge#236) recorded end-to-end from the dashboard. A change that tanks the
+# rig's hashrate makes the rig revert and report `rolled_back`; the dashboard's worker-apply result +
+# per-worker history must show it (not `applied`). Inducing a real hashrate drop is rig-specific and
+# risky to guess, so the operator supplies the known-rolls-back change as IT_RIG_ROLLBACK_CHANGES (a
+# JSON `changes` object their rig / fault-injection reverts). Without it, this self-skips loudly.
+run_rigforge_rollback() { # <rig-name>
+    local rig="$1" res status
+    it_log "   #517: control-apply auto-rollback (rigforge#236)"
+    if [ -z "${IT_RIG_ROLLBACK_CHANGES:-}" ]; then
+        it_warn "no IT_RIG_ROLLBACK_CHANGES (a writable-key change the rig's fault-injection rolls back) — skipping the auto-rollback leg (#517)"
+        return 0
+    fi
+    if ! printf '%s' "$IT_RIG_ROLLBACK_CHANGES" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        it_fail "IT_RIG_ROLLBACK_CHANGES is a JSON changes object (#517)" "got [$IT_RIG_ROLLBACK_CHANGES]"
+        return 0
+    fi
+    it_step "applying the rollback-inducing change via /api/control/worker-apply…"
+    res="$(_worker_apply "$rig" "$IT_RIG_ROLLBACK_CHANGES")"
+    status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
+    assert_eq "rig auto-rolled-back the bad change (rigforge#236, #517)" "$status" "rolled_back"
+    assert_eq "the dashboard's per-worker history records the rollback (#517)" \
+        "$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -r 'first(.history[]?) | .status // empty' 2>/dev/null)" "rolled_back"
+}
+
 # --- Main -------------------------------------------------------------------
 IT_SKIPPED=0
 
@@ -1641,10 +2077,16 @@ main() {
     # RigForge integration (#185/#235/#260) first — it's read-only and wants the freshly-mined
     # state with the borrowed rig connected, before the destructive phases churn the stack.
     [ "$RUN_RIGFORGE" = "1" ] && run_rigforge_integration
+    # rigforge-control mutates config + dials the rig; run it with the read-only rigforge phase's rig
+    # still connected, before the node-breaking phases churn the stack.
+    [ "$RUN_RIGFORGE_CONTROL" = "1" ] && run_rigforge_control
     [ "$RUN_LIFECYCLE" = "1" ] && run_lifecycle
     [ "$RUN_FAULTS" = "1" ] && run_fault_injection
     [ "$RUN_AUTH_FAIL_CLOSED" = "1" ] && run_auth_fail_closed
     [ "$RUN_HARDENING" = "1" ] && run_hardening
+    # Subnet last among the destructive phases: it does a full down/up, so it re-establishes the
+    # baseline stack cleanly before the end-of-run restore.
+    [ "$RUN_SUBNET" = "1" ] && run_subnet_scenario
 
     # Failure → roll the box back to the safety backup; success → leave it (restore_baseline
     # just puts config.json back to where we found it). Then drop the generated archive.
