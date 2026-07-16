@@ -24,6 +24,7 @@
     },
 
     "tari": {
+        "mode": "local",
         "wallet_address": "your_tari_wallet_address",
         "view_key": "",
         "spend_public_key": "",
@@ -52,6 +53,13 @@
         "donor_id": "auto",
         "donation_level": "auto",
         "tor": true
+    },
+
+    "xmrig_proxy": {
+        "_docs": "DEPRECATED backward-compat alias for xvb.* (the block was renamed). Kept in the schema so a config.json that predates the rename still validates through the dashboard control channel; xvb.* wins when both are present. Use xvb.* in new configs.",
+        "enabled": true,
+        "url": "na.xmrvsbeast.com:4247",
+        "donor_id": "auto"
     },
 
     "tor": {

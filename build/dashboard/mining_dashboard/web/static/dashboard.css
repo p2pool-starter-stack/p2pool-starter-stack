@@ -1102,11 +1102,6 @@ button.upgrade-btn {
 .config-preview-dest {
   color: var(--warn);
 }
-/* #519: a config.json-only block (e.g. dashboard.energy) edited from the dashboard — informational,
- * not committable here, so it's dimmed to read as a note rather than a pending change. */
-.config-preview-host {
-  color: var(--text-muted);
-}
 .config-confirm-type {
   display: block;
   margin: 12px 0;

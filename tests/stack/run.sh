@@ -2364,6 +2364,9 @@ en_case '"nope"' "non-object dashboard.energy" "dashboard.energy must be an obje
 en_case '{"cost_per_kwh":-1}' "negative cost_per_kwh" "dashboard.energy.cost_per_kwh"
 en_case '{"xmr_price":"lots"}' "non-number xmr_price" "dashboard.energy.xmr_price"
 en_case '{"currency":"US Dollars"}' "unsafe currency label" "dashboard.energy.currency"
+# Closed schema (#33 hardening): the validator rejects any key outside {cost_per_kwh, currency,
+# xmr_price} — defense in depth beneath the control gate's own unknown-path refusal.
+en_case '{"cost_per_kwh":0.1,"__evil":{"x":1}}' "unknown dashboard.energy subkey" "dashboard.energy has an unknown key"
 
 # A valid energy block (prices + per-worker watts) applies; like workers[], nothing reaches .env.
 seed_env
@@ -3746,6 +3749,9 @@ mkdir -p "$C/build/tari" "$C/build/dashboard" \
     "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
 : >"$C/build/dashboard/Dockerfile"
 cp "$STACK" "$C/pithead"
+# The control gate reads config.reference.json (the closed schema) from beside the script; it ships
+# in the bundle + checkout root, so mirror it into the sandbox.
+cp "$ROOT/config.reference.json" "$C/config.reference.json"
 make_stubs "$C/bin"
 cp "$ROOT/build/tari/config.toml.template" "$C/build/tari/"
 # The password hash step reads the pinned Caddy image out of docker-compose.yml (#8).
@@ -4243,6 +4249,69 @@ gate_try "$C/cand.json"
 assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
 assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
+
+# dashboard.energy (#504) is the ONE config.json-only block a commit MAY change: it never renders
+# to .env, so the host previews it as a normal INFO row (not the old non-committable HOST note) and
+# the commit lands it in config.json. Preview first to assert the committable row + non-destructive.
+jq '.dashboard.energy={cost_per_kwh:0.18,currency:"EUR",xmr_price:142.5}' "$C/config.json" >"$C/cand.json"
+jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$C/cand.json" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "energy preview status" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "previewed"
+assert_contains "energy preview carries a committable change row" "$(jq -r '.changes[] | select(.key=="dashboard.energy") | .flag' "$RESULTS/$UUID5.json" 2>/dev/null)" "INFO"
+assert_eq "energy edit alone is not destructive" "$(jq -r '.destructive' "$RESULTS/$UUID5.json" 2>/dev/null)" "false"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+run_pending >/dev/null
+assert_eq "energy edit commits" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "energy cost landed in config.json" "$(jq -r '.dashboard.energy.cost_per_kwh' "$C/config.json")" "0.18"
+assert_eq "energy currency landed in config.json" "$(jq -r '.dashboard.energy.currency' "$C/config.json")" "EUR"
+assert_contains "energy commit audits the synthetic key name (#504)" "$(grep '"action":"commit","status":"applied"' "$AUDIT" | tail -n 1)" "DASHBOARD_ENERGY"
+
+# NEGATIVE — the #504 security teeth: an energy edit BUNDLED with a change that is NOT on the env
+# allowlist (monero.rpc_lan_access -> MONERO_RPC_BIND) must be REFUSED. The energy exemption must
+# not become a carrier for other config: the gate re-derives the env change set host-side and the
+# allowlist catches the monero key even though the energy block is legitimately editable.
+jq '.dashboard.energy={cost_per_kwh:0.25} | .monero.rpc_lan_access=true' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "energy edit bundled with a non-allowlisted key is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "bundled refusal names the security-sensitive gate" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "security-sensitive"
+assert_eq "config.json keeps monero LAN access off after the refusal" "$(jq -r '.monero.rpc_lan_access // false' "$C/config.json")" "false"
+assert_eq "config.json keeps the previously-committed energy cost after the refusal" "$(jq -r '.dashboard.energy.cost_per_kwh' "$C/config.json")" "0.18"
+
+# NEGATIVE — closed-schema smuggling (#33 hardening). An unrecognized config.json key renders to NO
+# env var, so it emits ZERO porcelain rows: invisible to the env-diff allowlist, yet the commit's
+# `cp` would persist it. The schema guard must refuse it. (a) A LEGIT energy edit bundled with a
+# smuggled top-level key is refused whole, and the key never lands. (b) A config identical to live
+# except for one extra key still refuses — an empty change set must not read as "clean".
+jq '.dashboard.energy={cost_per_kwh:0.30} | .attacker_smuggled={payload:"pwned"}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "energy edit smuggling an unknown top-level key is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "smuggle refusal names the schema and the offending key" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "not in the schema (attacker_smuggled"
+assert_eq "config.json never gains the smuggled key" "$(jq -r 'has("attacker_smuggled")' "$C/config.json")" "false"
+assert_eq "config.json keeps the pre-smuggle energy cost" "$(jq -r '.dashboard.energy.cost_per_kwh' "$C/config.json")" "0.18"
+# Only an unknown key added — every rendered value byte-identical to live, so the porcelain is empty.
+jq '.attacker_smuggled={payload:"x"}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "an otherwise-identical config with one extra key is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "empty-porcelain smuggle still names the schema guard" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "not in the schema"
+assert_eq "config.json still free of the smuggled key" "$(jq -r 'has("attacker_smuggled")' "$C/config.json")" "false"
+# A nested unknown key under a KNOWN block (dashboard.energy) is caught by the same guard.
+jq '.dashboard.energy={cost_per_kwh:0.18,__evil:{x:1}}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "a nested unknown key under a known block is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+
+# NO FALSE-REJECT on legacy configs: config.reference.json must be a COMPLETE superset of every path
+# pithead READS, or the closed-schema guard refuses a legit config on EVERY commit. A config.json
+# predating the xvb rename still carries a legacy xmrig_proxy.* block (read as an alias at pithead
+# ~L3245). Seed it into the live baseline, then prove a normal on-allowlist commit
+# (xvb.donation_level -> XVB_DONATION_LEVEL) still passes the gate and the legacy block round-trips.
+jq '.xmrig_proxy={enabled:true,url:"na.xmrvsbeast.com:4247",donor_id:"auto"}' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+jq '.xvb.donation_level="whale"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "a commit on a config carrying a legacy xmrig_proxy block still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
+assert_eq "the allowlisted xvb tier landed in config.json" "$(jq -r '.xvb.donation_level' "$C/config.json")" "whale"
+assert_eq "the legacy xmrig_proxy block round-trips untouched" "$(jq -r '.xmrig_proxy.url' "$C/config.json")" "na.xmrvsbeast.com:4247"
 
 # Forged-flag bypass: the container tampers its visible copy of the preview result to
 # destructive:false AND sends a commit request carrying its own destructive:false field. The
