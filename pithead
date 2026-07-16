@@ -49,6 +49,11 @@ readonly OS_TYPE
 # live config.json. Everything else (the .env, generated files) still belongs to this checkout.
 readonly CONFIG_FILE="${PITHEAD_CONFIG_FILE:-config.json}"
 readonly ENV_FILE=".env"
+# Canonical closed schema: every known config.json leaf path, shipped beside this script (bundle +
+# checkout root). The #33 control gate uses it to refuse a staged config carrying any path the
+# schema doesn't know — the "unrecognized key renders to no env var, so no porcelain row" smuggling
+# gap. Relative like CONFIG_FILE/ENV_FILE (the script cd's to its own dir at startup).
+readonly REFERENCE_CONFIG="config.reference.json"
 # Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
 readonly FIRST_RUN_MARKER=".pithead-first-run-done"
@@ -2238,6 +2243,8 @@ validate_energy_config() {
     en_err=$(jq -r '
         (.dashboard.energy // {}) as $e
         | if ($e | type) != "object" then "dashboard.energy must be an object {cost_per_kwh, currency?, xmr_price?}."
+          elif (($e | keys) - ["cost_per_kwh", "currency", "xmr_price"]) != []
+            then "dashboard.energy has an unknown key (\(($e | keys) - ["cost_per_kwh", "currency", "xmr_price"] | join(", "))). Only cost_per_kwh, currency and xmr_price are allowed."
           elif ($e | has("cost_per_kwh")) and (($e.cost_per_kwh | type) != "number" or $e.cost_per_kwh < 0)
             then "dashboard.energy.cost_per_kwh must be a non-negative number (your electricity price per kWh; 0 or unset hides the profit math)."
           elif ($e | has("xmr_price")) and (($e.xmr_price | type) != "number" or $e.xmr_price < 0)
@@ -4646,6 +4653,28 @@ control_approval_gate() { # <staged-file>
     # any change to it explicitly.
     if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.workers // []) == ($live[0].dashboard.workers // [])' "$staged" >/dev/null 2>&1; then
         printf 'this change alters dashboard.workers (per-worker hosts/tokens, #172), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        return 1
+    fi
+    # Closed-schema guard (#33 hardening). A config.json key the stack doesn't recognize renders to
+    # NO env var, so it emits zero porcelain rows and slips past the allowlist below — yet the
+    # commit's `cp "$staged" "$CONFIG_FILE"` would still persist it. So refuse any staged path that
+    # isn't in the canonical schema (config.reference.json). Numeric path components are dropped so a
+    # populated known scalar array (notifications.webhooks, telegram.control.allowed_ids) collapses
+    # onto its schema-listed key instead of false-rejecting, while a smuggled OBJECT inside such an
+    # array still surfaces its unknown sub-key. dashboard.workers[] is exempt: its per-rig object
+    # elements aren't enumerated in the reference and the array is already fully guarded above. Fail
+    # closed — an unreadable reference or a jq error refuses the commit.
+    local unknown
+    if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
+        def norm: [.[] | strings] | join(".");
+        ([$cfg[0] | paths | select(.[0:2] != ["dashboard", "workers"]) | norm]
+         - [$ref[0] | paths | norm])
+        | unique | join(", ")' 2>/dev/null); then
+        printf 'could not validate the staged config against the schema (%s) — refusing to commit' "$REFERENCE_CONFIG"
+        return 1
+    fi
+    if [ -n "$unknown" ]; then
+        printf 'this change adds config keys not in the schema (%s) — refusing to commit. Edit config.json on the host and run `%s apply`.' "$unknown" "$0"
         return 1
     fi
     # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
