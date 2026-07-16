@@ -97,6 +97,11 @@ every gate is green.
    notes, and attach release assets: a pinned `docker-compose.yml` / config bundle referencing
    `${STACK_VERSION}=vX.Y.Z`, its detached signature (`pithead.tar.gz.sig`), plus the ingredients
    manifest (exact component versions + promoted image digests).
+9. Post-publish smoke ([#459](https://github.com/p2pool-starter-stack/pithead/issues/459)): run
+   `make release-smoke` once against the just-published tag. It downloads the published bundle +
+   images and verifies them for real, and — on the previous-release bench box — drives the real #59
+   upgrade. See [Post-publish smoke test](#post-publish-smoke-test-459). This is the only step gated
+   *behind* the publish, because it checks the published artifact, not a branch.
 
 ### Pre-release gate (#54)
 
@@ -157,6 +162,39 @@ cosign verify-blob --key cosign.pub --signature pithead.tar.gz.sig --insecure-ig
 ```
 
 Releases up to v1.3.x are unsigned; verification gates every release from the first signed one.
+
+## Post-publish smoke test (#459)
+
+Two features can't be tested before merge, because both need a *published* release to exist: the
+[#376](https://github.com/p2pool-starter-stack/pithead/issues/376) cosign verification and the
+[#59](https://github.com/p2pool-starter-stack/pithead/issues/59) one-click upgrade. The tier-4 matrix
+tests a branch, not a published artifact, so the pre-merge tests only ever see a fake cosign. Right
+after `make release` publishes, run [`scripts/release-smoke.sh`](../scripts/release-smoke.sh) once to
+verify the real thing:
+
+```bash
+make release-smoke                                     # verify the just-published version
+make release-smoke ARGS="--upgrade /srv/code/previous" # + drive the real #59 upgrade
+```
+
+It runs two phases:
+
+- **Real cosign verify.** Downloads the published `pithead.tar.gz` (+ `.sig`) and the five
+  `:vX.Y.Z` images and verifies them against the committed `cosign.pub`. A good signature must pass;
+  a byte-changed bundle must be refused (this is what proves the check is real, not the pre-merge
+  fake); the bundle's own `VERSION` must equal the tag (the #376 rollback guard); and an unrelated
+  key must be refused. If the release is **unsigned** — signing is opt-in (#376), so releases up to
+  v1.3.x and any cut with the key off ship without a signature — that is reported plainly and the
+  phase is skipped. It never reports a signed pass for an unsigned release. This phase needs only
+  `gh` auth and network; run it anywhere.
+- **Real #59 upgrade** (`--upgrade DIR`). On a box still running the *previous* release, it enqueues
+  the exact upgrade intent the dashboard writes into the #33 control spool, runs the host control
+  runner, and asserts the install upgrades cleanly to the published tag over the real download →
+  verify → rollback-guard → extract → `pithead upgrade` path. This is destructive to that box's
+  stack: run it on the previous-release bench box (stack up, `dashboard.control` enabled), never on
+  the release host. The one leg it doesn't drive is the browser → dashboard hop (the dashboard
+  container writing the intent), which is unit-covered (#33/#59) and confirmed by clicking the
+  button once by hand.
 
 ## Conventions
 
