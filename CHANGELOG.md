@@ -19,6 +19,33 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   this one `config.json`-only block; any other `config.json` change it does not own is still refused,
   so the exemption cannot carry a wallet, endpoint, or credential edit.
 
+- **Worker Inspect: enriched rig stats as a label/value table (#507).** The single-rig detail view
+  renders RigForge's governor, HugePages, mainboard, power/efficiency, tuning, and temperature as a
+  scannable label→value table instead of a badge row. The compact worker list keeps its badges; both
+  are built from one server-side pass so they cannot drift.
+
+### Changed
+
+- **Expanded test coverage.** CI-tier: the whole editable-allowlist commit round-trip, the
+  `telegram.control` fail-closed paths, and previously-unasserted config validators and effects
+  (#521, #522, #523). Live-bench (tier-4): the dashboard↔RigForge control write-paths against a real
+  rig, and a non-default `network.subnet` deployment (#513, #514, #516, #517, #201). Release: a
+  post-publish smoke test that runs a real cosign verify and a real one-click upgrade against the
+  published bundle (#459).
+
+### Fixed
+
+- **Charts no longer hijack page scroll (#533).** Scrolling the page with the cursor over a chart
+  zoomed the chart instead of scrolling. Wheel-zoom is now gated behind Ctrl (a trackpad pinch still
+  zooms); a bare scroll passes through to the page.
+
+### Security
+
+- **The config-apply gate now enforces a closed schema (#33 hardening).** The dashboard control
+  channel's approval gate rejects any staged `config.json` key outside the schema, in addition to its
+  existing per-key allowlist — defense in depth so a config edit committed through the dashboard can
+  only touch known keys, never introduce new ones. No operator action required.
+
 ## [1.5.3] - 2026-07-14
 
 ### Fixed
