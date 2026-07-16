@@ -11,6 +11,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-16
+
+Supersedes 1.6.0, which was withdrawn before general adoption: the #459 post-publish smoke caught
+the #59 one-click-upgrade bug (the release bundle failed to extract over an existing install), and
+its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the fix below.
+
 ### Added
 
 - **Commit `dashboard.energy` from the config editor (#504).** The energy calculator's settings
@@ -38,6 +44,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 - **Charts no longer hijack page scroll (#533).** Scrolling the page with the cursor over a chart
   zoomed the chart instead of scrolling. Wheel-zoom is now gated behind Ctrl (a trackpad pinch still
   zooms); a bare scroll passes through to the page.
+
+- **One-click upgrade no longer aborts on an existing install (#59).** The dashboard upgrade
+  extracted the release bundle in place with a single unlink-first `tar` pass, which failed on the
+  install's non-empty `build/*` config-template dirs (`Cannot unlink: Directory not empty`) and left
+  the install half-written. It now extracts in two passes — merge the tree, then replace only the
+  running `pithead` script on a fresh inode — so an upgrade over any prior install completes.
 
 ### Security
 
