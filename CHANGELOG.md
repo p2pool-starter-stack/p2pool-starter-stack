@@ -11,6 +11,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Commit `dashboard.energy` from the config editor (#504).** The energy calculator's settings
+  (`cost_per_kwh`, `currency`, `xmr_price`) are now editable from the dashboard and applied through
+  the #33 control channel, replacing the host-only note added in #519. The approval gate allowlists
+  this one `config.json`-only block; any other `config.json` change it does not own is still refused,
+  so the exemption cannot carry a wallet, endpoint, or credential edit.
+
 ## [1.5.3] - 2026-07-14
 
 ### Fixed

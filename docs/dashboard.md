@@ -492,7 +492,8 @@ The flow mirrors the CLI's `apply`:
 
 Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
 allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
-memory limits, time zone, …) and default-denies a change, in any direction, to anything else:
+memory limits, time zone, the energy-calculator prices, …) and default-denies a change, in any
+direction, to anything else:
 wallets, the dashboard login and onion settings, the control channel itself, the Tor egress
 firewall, clearnet toggles, node endpoints, and every credential. It likewise refuses anything
 the preview flags disruptive (⚠). Apply those from the host with `./pithead apply`; out-of-band

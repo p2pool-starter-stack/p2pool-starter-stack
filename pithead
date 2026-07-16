@@ -4634,10 +4634,16 @@ control_approval_gate() { # <staged-file>
         printf 'could not re-validate the staged change host-side — refusing to commit'
         return 1
     fi
-    # dashboard.workers (#172) never renders to .env — the dashboard reads it straight off its
-    # config.json mount — so the env-diff allowlist below can't see it. It carries per-rig hosts
-    # and API tokens (exactly the "free-form string that reaches a URL or credential" class the
-    # allowlist exists to keep host-CLI-only), so refuse any change to it explicitly.
+    # Two config.json blocks never render to .env — the dashboard reads them straight off its
+    # config.json mount (load_worker_endpoints + load_energy_config; these are the ONLY two), so the
+    # env-diff allowlist below can't see either. Each config.json-only block must be handled here by
+    # name or a commit could silently change it: dashboard.workers is REFUSED, dashboard.energy is
+    # ALLOWED (#504). Every OTHER config path renders to .env and is gated by the allowlist, so a
+    # change there is caught below — a NEW config.json-only block, though, MUST add its own line.
+    #
+    # dashboard.workers (#172) carries per-rig hosts and API tokens (exactly the "free-form string
+    # that reaches a URL or credential" class the allowlist exists to keep host-CLI-only), so refuse
+    # any change to it explicitly.
     if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.workers // []) == ($live[0].dashboard.workers // [])' "$staged" >/dev/null 2>&1; then
         printf 'this change alters dashboard.workers (per-worker hosts/tokens, #172), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
@@ -4659,8 +4665,15 @@ control_approval_gate() { # <staged-file>
         return 1
     fi
     # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
-    # (#349) without a third dry-run. Names only, never values.
-    porcelain_keys "$porcelain"
+    # (#349) without a third dry-run. Names only, never values. dashboard.energy (#504) is
+    # config.json-only, so it never appears in the env porcelain — fold a synthetic DASHBOARD_ENERGY
+    # name into the list when that block changed, else an energy-only commit would audit no key.
+    local keys
+    keys=$(porcelain_keys "$porcelain")
+    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+        keys="${keys:+$keys }DASHBOARD_ENERGY"
+    fi
+    printf '%s' "$keys"
     return 0
 }
 
@@ -4743,12 +4756,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         result=$(printf '%s\n' "$out" | jq -R -s '
             [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
             | {status: "previewed", changes: ., destructive: (map(.flag == "DEST") | any), ts: (now | floor)}')
-        # #519: dashboard.energy is config.json-only (never rendered to .env), so an energy-only edit
-        # produces no porcelain change and the UI would otherwise show a bare "no changes detected".
-        # Surface it as a non-committable HOST note so the operator knows to apply it on the host
-        # (committing this block from the dashboard is tracked in #504).
+        # #504: dashboard.energy is config.json-only (never rendered to .env), so an energy-only
+        # edit produces no porcelain row. Surface it as a normal committable INFO change so the UI
+        # arms Apply and the commit lands it in config.json. The approval gate allowlists exactly
+        # this config.json-only block; any OTHER config.json-only delta still refuses (see
+        # control_approval_gate). INFO never flips destructive, so the existing verdict stands.
         if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
-            result=$(printf '%s' "$result" | jq '.changes += [{flag:"HOST",key:"dashboard.energy",msg:"dashboard.energy changed — this block is edited directly in config.json on the host: set it and run \"./pithead apply\". Committing it from the dashboard is tracked in #504."}]')
+            result=$(printf '%s' "$result" | jq '.changes += [{flag:"INFO",key:"dashboard.energy",msg:"Energy calculator settings (dashboard.energy) — electricity price / currency / XMR price updated."}]')
         fi
         control_write_result "$cdir/results" "$id" "$result"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "previewed" "$(porcelain_keys "$out")"

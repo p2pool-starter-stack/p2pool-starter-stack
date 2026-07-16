@@ -65,11 +65,15 @@ const Field = ({ field, edits, onEdit }) => {
   </label>`;
 };
 
-const PreviewModal = ({ preview, confirmText, onConfirmText, onConfirm, onCancel, busy }) => {
+export const PreviewModal = ({
+  preview,
+  confirmText,
+  onConfirmText,
+  onConfirm,
+  onCancel,
+  busy,
+}) => {
   const changes = preview.changes || [];
-  // #519: HOST-flagged entries (e.g. dashboard.energy) are config.json-only — informational, not
-  // committable from the dashboard, so they never arm the Apply button.
-  const committable = changes.filter((c) => c.flag !== "HOST");
   const armed = !preview.destructive || confirmText === "APPLY";
   return html`<div class="config-modal-backdrop">
       <div class="card config-modal">
@@ -79,10 +83,8 @@ const PreviewModal = ({ preview, confirmText, onConfirmText, onConfirm, onCancel
               ? html`<p class="text-muted">No configuration changes detected.</p>`
               : html`<ul class="config-preview-list">
                   ${changes.map(
-                    (
-                      c,
-                    ) => html`<li class=${c.flag === "DEST" ? "config-preview-dest" : c.flag === "HOST" ? "config-preview-host" : ""}>
-                        ${c.flag === "DEST" ? "⚠ " : c.flag === "HOST" ? "ℹ " : ""}${c.msg}</li>`,
+                    (c) => html`<li class=${c.flag === "DEST" ? "config-preview-dest" : ""}>
+                        ${c.flag === "DEST" ? "⚠ " : ""}${c.msg}</li>`,
                   )}
               </ul>`
           }
@@ -96,7 +98,7 @@ const PreviewModal = ({ preview, confirmText, onConfirmText, onConfirm, onCancel
           <div class="config-modal-actions">
               <button class="btn-toggle" onClick=${onCancel} disabled=${busy}>Cancel</button>
               <button class="btn-toggle active" onClick=${onConfirm}
-                      disabled=${busy || committable.length === 0 || !armed}>
+                      disabled=${busy || changes.length === 0 || !armed}>
                   ${busy ? "Applying…" : "Confirm & apply"}
               </button>
           </div>
