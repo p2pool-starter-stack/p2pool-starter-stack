@@ -5013,9 +5013,16 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
-    # -U (unlink first): the archive contains THIS running script — replacing it via unlink keeps
-    # the running copy executing from its old inode, where an in-place truncate would corrupt it.
-    if ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" 2>"$logf"; then
+    # In-place extraction over the running install, in two passes. Pass 1 lays down everything
+    # EXCEPT the running script with plain tar, which MERGES existing directories — a release
+    # install already carries the non-empty build/* config-template mounts — and overwrites files.
+    # A single `-U` (unlink-first) pass over the whole tree instead tries to unlink those non-empty
+    # build/* dirs first and aborts ("Cannot unlink: Directory not empty"), leaving the install
+    # half-written. Pass 2 is the ONE file that needs -U: the pithead script, unlinked-first so it
+    # lands on a NEW inode and the copy executing this very function keeps running from the old one
+    # (an in-place overwrite would corrupt it mid-run).
+    if ! tar -xzf "$bundle" --strip-components=1 -C "$PWD" --exclude='pithead/pithead' 2>"$logf" ||
+        ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" pithead/pithead 2>>"$logf"; then
         rm -f "$bundle"
         _upg_fail "the $tag release bundle failed to extract: $(tail -c 500 "$logf") — the stack keeps running v$PITHEAD_VERSION."
         rm -f "$logf"
