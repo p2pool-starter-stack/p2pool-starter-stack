@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml release
+.PHONY: test test-dashboard test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml release release-smoke
 
 test: lint test-dashboard test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -73,3 +73,11 @@ lint-toml: ## taplo TOML format check (config: .taplo.toml)
 # See docs/releasing.md.
 release: ## Cut a versioned release (build -> stage -> smoke -> promote -> publish). Pass ARGS=...
 	bash scripts/release.sh $(ARGS)
+
+# Post-publish smoke test (#459) — run ONCE, right after `make release` publishes vX.Y.Z. Real
+# cosign verify of the published bundle + images, and (with ARGS="--upgrade DIR") the real #59
+# one-click upgrade against a previous-release install. See docs/releasing.md § Post-publish smoke.
+#   make release-smoke                         # verify the just-published version's signature/bundle
+#   make release-smoke ARGS="--upgrade /srv/code/previous"   # + drive the real #59 upgrade
+release-smoke: ## Post-publish: real cosign verify + real #59 upgrade against the published bundle. Pass ARGS=...
+	bash scripts/release-smoke.sh $(ARGS)
