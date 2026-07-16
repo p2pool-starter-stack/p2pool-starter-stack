@@ -11,6 +11,53 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-16
+
+Supersedes 1.6.0, which was withdrawn before general adoption: the #459 post-publish smoke caught
+the #59 one-click-upgrade bug (the release bundle failed to extract over an existing install), and
+its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the fix below.
+
+### Added
+
+- **Commit `dashboard.energy` from the config editor (#504).** The energy calculator's settings
+  (`cost_per_kwh`, `currency`, `xmr_price`) are now editable from the dashboard and applied through
+  the #33 control channel, replacing the host-only note added in #519. The approval gate allowlists
+  this one `config.json`-only block; any other `config.json` change it does not own is still refused,
+  so the exemption cannot carry a wallet, endpoint, or credential edit.
+
+- **Worker Inspect: enriched rig stats as a label/value table (#507).** The single-rig detail view
+  renders RigForge's governor, HugePages, mainboard, power/efficiency, tuning, and temperature as a
+  scannable label→value table instead of a badge row. The compact worker list keeps its badges; both
+  are built from one server-side pass so they cannot drift.
+
+### Changed
+
+- **Expanded test coverage.** CI-tier: the whole editable-allowlist commit round-trip, the
+  `telegram.control` fail-closed paths, and previously-unasserted config validators and effects
+  (#521, #522, #523). Live-bench (tier-4): the dashboard↔RigForge control write-paths against a real
+  rig, and a non-default `network.subnet` deployment (#513, #514, #516, #517, #201). Release: a
+  post-publish smoke test that runs a real cosign verify and a real one-click upgrade against the
+  published bundle (#459).
+
+### Fixed
+
+- **Charts no longer hijack page scroll (#533).** Scrolling the page with the cursor over a chart
+  zoomed the chart instead of scrolling. Wheel-zoom is now gated behind Ctrl (a trackpad pinch still
+  zooms); a bare scroll passes through to the page.
+
+- **One-click upgrade no longer aborts on an existing install (#59).** The dashboard upgrade
+  extracted the release bundle in place with a single unlink-first `tar` pass, which failed on the
+  install's non-empty `build/*` config-template dirs (`Cannot unlink: Directory not empty`) and left
+  the install half-written. It now extracts in two passes — merge the tree, then replace only the
+  running `pithead` script on a fresh inode — so an upgrade over any prior install completes.
+
+### Security
+
+- **The config-apply gate now enforces a closed schema (#33 hardening).** The dashboard control
+  channel's approval gate rejects any staged `config.json` key outside the schema, in addition to its
+  existing per-key allowlist — defense in depth so a config edit committed through the dashboard can
+  only touch known keys, never introduce new ones. No operator action required.
+
 ## [1.5.3] - 2026-07-14
 
 ### Fixed

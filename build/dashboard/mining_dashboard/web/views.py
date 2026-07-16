@@ -614,52 +614,60 @@ def _fmt_num(v):
 
 
 def _rigforge_display(rf):
-    """A ``{version, miner_down, chips}`` view of a worker's parsed ``rigforge`` block, or ``None``
-    for a plain-xmrig worker (#235). Each chip is ``{text, variant, title}`` (the same shape the
-    Badges component renders) and is emitted ONLY when its data is present — a rig with no RAPL
-    shows no power chip, a disabled watchdog shows no watchdog chip. Building the chip set (and its
-    thresholds) here keeps the client a dumb renderer, matching the ``_reject_flag`` precedent."""
+    """A ``{version, miner_down, chips, stats}`` view of a worker's parsed ``rigforge`` block, or
+    ``None`` for a plain-xmrig worker (#235). Each metric is emitted ONLY when its data is present —
+    a rig with no RAPL shows no power row, a disabled watchdog shows no watchdog row.
+
+    Both outputs come from one pass so they can't drift: ``chips`` is the merged ``{text, variant,
+    title}`` badge shape the compact Workers-Alive list renders, and ``stats`` is the same metrics
+    split into ``{label, value, variant, title}`` for the Worker Inspect detail table (#507).
+    Building the set (and its thresholds) here keeps the client a dumb renderer, matching the
+    ``_reject_flag`` precedent."""
     if not rf:
         return None
-    chips = []
+    rows = []
+
+    def add(label, value, chip, variant, title):
+        rows.append(
+            {"label": label, "value": value, "chip": chip, "variant": variant, "title": title}
+        )
+
     if rf.get("miner_down"):
-        chips.append(
-            {
-                "text": "miner down",
-                "variant": "bad",
-                "title": "RigForge is up but its XMRig API is unreachable — the rig is present but "
-                "not mining. Live hashrate and uptime come from the proxy.",
-            }
+        add(
+            "Miner",
+            "down",
+            "miner down",
+            "bad",
+            "RigForge is up but its XMRig API is unreachable — the rig is present but not mining. "
+            "Live hashrate and uptime come from the proxy.",
         )
 
     health = rf.get("health") or {}
     if health.get("throttling") is True:
-        chips.append(
-            {"text": "throttling", "variant": "bad", "title": "CPU is thermal/power throttling."}
-        )
+        add("CPU", "throttling", "throttling", "bad", "CPU is thermal/power throttling.")
     gov = health.get("governor")
     if gov:
         ok = gov == "performance"
-        chips.append(
-            {
-                "text": f"gov: {gov}",
-                "variant": "ok" if ok else "warn",
-                "title": "CPU frequency governor"
-                + ("" if ok else " — 'performance' is recommended for mining."),
-            }
+        add(
+            "Governor",
+            gov,
+            f"gov: {gov}",
+            "ok" if ok else "warn",
+            "CPU frequency governor"
+            + ("" if ok else " — 'performance' is recommended for mining."),
         )
     hp = _num(health.get("hugepages_total"))
     if hp is not None:
-        chips.append(
-            {
-                "text": f"HP {_fmt_num(hp)}",
-                "variant": "outline",
-                "title": f"HugePages allocated: {_fmt_num(hp)}.",
-            }
+        add(
+            "HugePages",
+            _fmt_num(hp),
+            f"HP {_fmt_num(hp)}",
+            "outline",
+            f"HugePages allocated: {_fmt_num(hp)}.",
         )
     board = health.get("board")
     if board:
-        chips.append({"text": board, "variant": "outline", "title": "Mainboard (firmware)."})
+        add("Mainboard", board, board, "outline", "Mainboard (firmware).")
 
     power = rf.get("power") or {}
     watts = _num(power.get("watts"))
@@ -670,26 +678,25 @@ def _rigforge_display(rf):
             parts.append(f"{_fmt_num(round(watts, 1))} W")
         if hspw is not None:
             parts.append(f"{_fmt_num(round(hspw, 1))} H/s·W")
-        chips.append(
-            {"text": " · ".join(parts), "variant": "outline", "title": "Power draw / efficiency."}
-        )
+        text = " · ".join(parts)
+        add("Power / efficiency", text, text, "outline", "Power draw / efficiency.")
 
     tune = rf.get("tune") or {}
     if tune.get("target"):
-        chips.append(
-            {
-                "text": f"tune: {tune['target']}",
-                "variant": "outline",
-                "title": "Active tuning target.",
-            }
+        add(
+            "Tuning target",
+            tune["target"],
+            f"tune: {tune['target']}",
+            "outline",
+            "Active tuning target.",
         )
     if tune.get("autotune_enabled") and tune.get("autotune_next"):
-        chips.append(
-            {
-                "text": f"autotune → {tune['autotune_next']}",
-                "variant": "outline",
-                "title": "Next scheduled autotune run.",
-            }
+        add(
+            "Autotune",
+            tune["autotune_next"],
+            f"autotune → {tune['autotune_next']}",
+            "outline",
+            "Next scheduled autotune run.",
         )
 
     wd = rf.get("watchdog") or {}
@@ -697,22 +704,30 @@ def _rigforge_display(rf):
         temp = _num(wd.get("temp_c"))
         maxt = _num(wd.get("max_temp_c"))
         if wd.get("thermal_hold") is True:
-            chips.append(
-                {
-                    "text": "thermal hold",
-                    "variant": "bad",
-                    "title": "Watchdog is holding the rig back — temperature above its ceiling.",
-                }
+            add(
+                "Watchdog",
+                "thermal hold",
+                "thermal hold",
+                "bad",
+                "Watchdog is holding the rig back — temperature above its ceiling.",
             )
         elif temp is not None:
-            label = f"{_fmt_num(round(temp, 1))}°C"
+            text = f"{_fmt_num(round(temp, 1))}°C"
             if maxt is not None:
-                label += f" / {_fmt_num(maxt)}°C"
-            chips.append(
-                {"text": label, "variant": "outline", "title": "Watchdog temperature / ceiling."}
-            )
+                text += f" / {_fmt_num(maxt)}°C"
+            add("Temp / max", text, text, "outline", "Watchdog temperature / ceiling.")
 
-    return {"version": rf.get("version"), "miner_down": bool(rf.get("miner_down")), "chips": chips}
+    chips = [{"text": r["chip"], "variant": r["variant"], "title": r["title"]} for r in rows]
+    stats = [
+        {"label": r["label"], "value": r["value"], "variant": r["variant"], "title": r["title"]}
+        for r in rows
+    ]
+    return {
+        "version": rf.get("version"),
+        "miner_down": bool(rf.get("miner_down")),
+        "chips": chips,
+        "stats": stats,
+    }
 
 
 def build_system(data):

@@ -66,7 +66,11 @@ test("poll skips the still-present preview result until the commit outcome lands
 // riding out the window where the upgrade recreates the dashboard container itself. The typed
 // UPGRADE confirm is UX only; the host runner re-derives the real target (tier-2 spool tests).
 
-import { runUpgrade, UpgradeControl } from "../../mining_dashboard/web/static/configview.mjs";
+import {
+  PreviewModal,
+  runUpgrade,
+  UpgradeControl,
+} from "../../mining_dashboard/web/static/configview.mjs";
 import { renderToString } from "./helpers/render.mjs";
 
 const UPDATE = { available: true, latest: "v9.9.9", url: "https://example.invalid/rel" };
@@ -120,4 +124,29 @@ test("the confirm modal arms only on a typed UPGRADE", () => {
   assert.match(renderToString(inst.render()), /disabled/); // unarmed until typed
   inst.state.confirmText = "UPGRADE";
   assert.doesNotMatch(renderToString(inst.render()), /disabled/);
+});
+
+// --- Preview modal (#504) --------------------------------------------------------------
+//
+// dashboard.energy is config.json-only, so the host runner previews an energy edit as a normal
+// INFO change row (not the old, non-committable HOST note). The modal must render it as a pending
+// change and arm Confirm — a non-destructive change needs no typed APPLY.
+test("an INFO change (e.g. dashboard.energy) renders committable and arms Confirm", () => {
+  const preview = {
+    changes: [{ flag: "INFO", key: "dashboard.energy", msg: "Energy calculator settings updated." }],
+    destructive: false,
+  };
+  const out = renderToString(PreviewModal({ preview, confirmText: "", busy: false }));
+  assert.match(out, /Energy calculator settings updated\./); // the change is shown
+  assert.doesNotMatch(out, /No configuration changes detected/);
+  // Confirm is armed: the only disabled control is absent for a non-destructive, non-empty change.
+  assert.doesNotMatch(out, /disabled/);
+});
+
+test("an empty preview leaves Confirm disabled", () => {
+  const out = renderToString(
+    PreviewModal({ preview: { changes: [], destructive: false }, confirmText: "", busy: false }),
+  );
+  assert.match(out, /No configuration changes detected/);
+  assert.match(out, /disabled/); // nothing to commit
 });

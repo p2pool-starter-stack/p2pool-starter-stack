@@ -400,11 +400,15 @@ run_harness() {
     case "$MODE" in
     check) phases="--check" ;;
     targeted) phases="--auth-fail-closed --lifecycle" ;; # readiness/check run inline first (below); NOT here — run.sh returns after --readiness
-    matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed --hardening" ;;
+    matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed --hardening --subnet" ;;
     esac
     # RigForge integration (#185/#235/#260) is only meaningful with a REAL rig mining through the stack.
     # The phase self-skips if no rigforge rig is connected, so this gate is just to avoid the noise.
     [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge"
+    # RigForge control WRITE paths (#513/#514/#516/#517) need the rig pinned in dashboard.workers[] and
+    # its control API opted in. matrix only (it mutates config + dials the rig); each leg self-skips
+    # loudly when its prerequisite is missing, so this stays safe on a bench without the descriptor.
+    [ "$BORROW_MINER" = "1" ] && [ "$MODE" = "matrix" ] && phases="$phases --rigforge-control"
     log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 

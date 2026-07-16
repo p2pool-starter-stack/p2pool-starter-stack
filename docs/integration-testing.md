@@ -134,6 +134,9 @@ Useful flags (full list in `run.sh --help`):
 | `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
 | `--fault-injection` | Also break monerod (stop / SIGSTOP / remove) and assert `status`' down/unhealthy/missing verdicts and the failover→recovery cycle, plus a dashboard DB-write fault (data dir made read-only → `/api/state` reports `db_healthy:false` → write access restored, [#202](https://github.com/p2pool-starter-stack/pithead/issues/202)). Destructive-then-restored; local mode only; slow. |
 | `--auth-fail-closed` | Also empty `PROXY_AUTH_TOKEN` in `.env` and assert `pithead up` refuses to start (the live counterpart to the tier-1 compose-config check, [#153](https://github.com/p2pool-starter-stack/pithead/issues/153)/[#203](https://github.com/p2pool-starter-stack/pithead/issues/203)), then restore the exact token and recover. Destructive-then-restored; ssh or local mode. |
+| `--rigforge-control` | Also drive the RigForge WRITE paths against a real rig with `dashboard.control` on and the rig pinned in `dashboard.workers[]`: the enriched read survives a populated masked-token descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)), the rig is editable and a reversible Worker Inspect edit lands on it ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)), a rig-side edit reflects back in the feed + masked prefill ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)), and an auto-rollback is recorded end-to-end ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517)). Destructive-then-restored; local mode only; each leg self-skips without its prerequisites (see below). |
+| `--rig-host <h>` / `--rig-control-port <p>` | The borrowed rig's LAN host and writable control API port (default `8082`), used to inject a `dashboard.workers[]` descriptor when the box's baseline lacks one ([#185](https://github.com/p2pool-starter-stack/pithead/issues/185)). Pair with `IT_RIG_TOKEN` (env; never a flag). |
+| `--subnet` | Also bring the stack down then up on a non-default `network.subnet` (`10.84.0.0/24`) and assert the moved prefix reached `.env`, the docker bridge, Tor's render-at-start IP, monerod's proxy IP, the dashboard SSRF CIDR, and the [#344](https://github.com/p2pool-starter-stack/pithead/issues/344) onion vhost, then run the standard battery ([#201](https://github.com/p2pool-starter-stack/pithead/issues/201)/[#180](https://github.com/p2pool-starter-stack/pithead/issues/180)). Destructive-then-restored; local mode only. |
 | `--safety-backup` | Take a `pithead backup` before the destructive scenarios and auto-roll-back (down → restore → up) if anything fails; the archive is removed on success. Recommended for the destructive matrix on a precious box; also exercises backup/restore end-to-end. |
 | `--keep` | Don't restore the original config (leave the box on the last scenario). |
 | `--out <dir>` | Where to write the manifest and failure artifacts. |
@@ -184,8 +187,9 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
 already-synced node: `check` + `--lifecycle` (one controlled restart exercises the sync gate /
 node-down failover) + `--auth-fail-closed`. No full config sweep, and never a re-sync. Container
 restarts reload the existing chain and re-confirm the tip in seconds. `check` is pure reads only.
-`matrix` is the opt-in full destructive config sweep (lifecycle + fault-injection + auth-fail-closed,
-`--safety-backup` auto-rollback) for a pre-release tier-4 gate. `--keep` leaves it deployed for
+`matrix` is the opt-in full destructive config sweep (lifecycle + fault-injection + auth-fail-closed +
+hardening + `--subnet`, plus `--rigforge-control` when a rig is borrowed, all under `--safety-backup`
+auto-rollback) for a pre-release tier-4 gate. `--keep` leaves it deployed for
 inspection (skips the restore). Requires SSH access to the test bench and the miner; see the
 [testbench README](../tests/integration/testbench-README.md).
 
@@ -206,6 +210,7 @@ and `--list` prints it).
 | `xvb.enabled` | `true` / `false` | XvB tunnel/donor wiring |
 | `dashboard.secure` | `true` (Caddy TLS) / `false` | Caddy config / scheme |
 | `dashboard.tari_required` | `true` (blocking) / `false` | sync-gate behavior ([#35](https://github.com/p2pool-starter-stack/pithead/issues/35)/[#51](https://github.com/p2pool-starter-stack/pithead/issues/51)) |
+| `network.subnet` | default `172.28.0.0/24` / a moved `/24` | the docker bridge prefix every static IP, Tor's rendered torrc, monerod's proxy IP, and the SSRF CIDR key off ([#180](https://github.com/p2pool-starter-stack/pithead/issues/180)/[#201](https://github.com/p2pool-starter-stack/pithead/issues/201)) — runs via `--subnet` (a move needs a full down/up, not a hot apply) |
 
 ### What each scenario asserts
 
@@ -235,6 +240,43 @@ For one representative config:
 > NOTE: `upgrade` (which rebuilds/pulls images) is intentionally not run unattended. It's slow
 > and changes the bundle under test. Validate it as part of the [release](releasing.md)
 > staging smoke test instead.
+
+### RigForge control (`--rigforge-control`)
+
+The dashboard↔RigForge WRITE surfaces that only a real rig with its `:8082` control API opted in
+can prove — the tier-2 fake covers the `:8081` read only. It enables `dashboard.control`, pins the
+borrowed rig in `dashboard.workers[]` (its token seen inside the container only as the
+`{"__secret__": true}` sentinel, [#440](https://github.com/p2pool-starter-stack/pithead/issues/440)),
+and drives four legs, each self-skipping loudly without its prerequisite:
+
+- Read with a populated masked descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)):
+  `api_ok` and the enriched feed still resolve — the guard for the v1.5.2 regression, where the
+  masked sentinel was stringified into the `Bearer` header and every `:8081` probe returned 401.
+- Editable + reversible edit ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)):
+  Worker Inspect reports the rig `editable`, and a `max_temp_c` nudge applied via
+  `/api/control/worker-apply` lands on the rig's `/status` and is recorded in the per-worker
+  history, then reverted.
+- Rig-side edit reflects ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)):
+  a change made straight on the rig's control API shows up in the dashboard's enriched feed, and a
+  `config.json` hand-edit shows up in the masked prefill (with the token still masked).
+- Auto-rollback ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517), rigforge#236):
+  a change the rig rolls back is recorded as `rolled_back` in the worker-apply result and history.
+
+Prerequisites: a real RigForge rig connected (self-skips otherwise); `--rig-host` + `IT_RIG_TOKEN`
+to inject a descriptor when the baseline lacks one, and to dial the rig directly for the #516 feed
+leg; `IT_RIG_ROLLBACK_CHANGES` (a writable-key `changes` object the rig's fault-injection reverts)
+for the #517 leg.
+
+### Moved subnet (`--subnet`)
+
+A `network.subnet` move can't be hot-applied — Compose won't recreate the bridge's IPAM subnet while
+containers are attached — so this phase does a full down → up on `10.84.0.0/24` (the chains are
+bind-mounted by path, never on the docker network, so they are untouched), asserts the moved prefix
+reached the live `.env`, the docker bridge, Tor's rendered torrc, monerod's envsubst'd proxy IP, the
+dashboard's SSRF CIDR + Tor SOCKS, `P2POOL_URL`, and the [#344](https://github.com/p2pool-starter-stack/pithead/issues/344)
+onion vhost gateway, runs the standard running-state battery, then brings the box back to its
+baseline subnet. The matrix carries a `local-pruned-main-subnet` row for axis bookkeeping; the
+hot-apply loop skips it (a subnet move isn't a hot apply) and this phase runs it for real.
 
 ---
 

@@ -49,6 +49,11 @@ readonly OS_TYPE
 # live config.json. Everything else (the .env, generated files) still belongs to this checkout.
 readonly CONFIG_FILE="${PITHEAD_CONFIG_FILE:-config.json}"
 readonly ENV_FILE=".env"
+# Canonical closed schema: every known config.json leaf path, shipped beside this script (bundle +
+# checkout root). The #33 control gate uses it to refuse a staged config carrying any path the
+# schema doesn't know — the "unrecognized key renders to no env var, so no porcelain row" smuggling
+# gap. Relative like CONFIG_FILE/ENV_FILE (the script cd's to its own dir at startup).
+readonly REFERENCE_CONFIG="config.reference.json"
 # Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
 readonly FIRST_RUN_MARKER=".pithead-first-run-done"
@@ -2238,6 +2243,8 @@ validate_energy_config() {
     en_err=$(jq -r '
         (.dashboard.energy // {}) as $e
         | if ($e | type) != "object" then "dashboard.energy must be an object {cost_per_kwh, currency?, xmr_price?}."
+          elif (($e | keys) - ["cost_per_kwh", "currency", "xmr_price"]) != []
+            then "dashboard.energy has an unknown key (\(($e | keys) - ["cost_per_kwh", "currency", "xmr_price"] | join(", "))). Only cost_per_kwh, currency and xmr_price are allowed."
           elif ($e | has("cost_per_kwh")) and (($e.cost_per_kwh | type) != "number" or $e.cost_per_kwh < 0)
             then "dashboard.energy.cost_per_kwh must be a non-negative number (your electricity price per kWh; 0 or unset hides the profit math)."
           elif ($e | has("xmr_price")) and (($e.xmr_price | type) != "number" or $e.xmr_price < 0)
@@ -4634,12 +4641,46 @@ control_approval_gate() { # <staged-file>
         printf 'could not re-validate the staged change host-side — refusing to commit'
         return 1
     fi
-    # dashboard.workers (#172) never renders to .env — the dashboard reads it straight off its
-    # config.json mount — so the env-diff allowlist below can't see it. It carries per-rig hosts
-    # and API tokens (exactly the "free-form string that reaches a URL or credential" class the
-    # allowlist exists to keep host-CLI-only), so refuse any change to it explicitly.
+    # Two config.json blocks never render to .env — the dashboard reads them straight off its
+    # config.json mount (load_worker_endpoints + load_energy_config; these are the ONLY two), so the
+    # env-diff allowlist below can't see either. Each config.json-only block must be handled here by
+    # name or a commit could silently change it: dashboard.workers is REFUSED, dashboard.energy is
+    # ALLOWED (#504). Every OTHER config path renders to .env and is gated by the allowlist, so a
+    # change there is caught below — a NEW config.json-only block, though, MUST add its own line.
+    #
+    # dashboard.workers (#172) carries per-rig hosts and API tokens (exactly the "free-form string
+    # that reaches a URL or credential" class the allowlist exists to keep host-CLI-only), so refuse
+    # any change to it explicitly.
     if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.workers // []) == ($live[0].dashboard.workers // [])' "$staged" >/dev/null 2>&1; then
         printf 'this change alters dashboard.workers (per-worker hosts/tokens, #172), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        return 1
+    fi
+    # Closed-schema guard (#33 hardening). A config.json key the stack doesn't recognize renders to
+    # NO env var, so it emits zero porcelain rows and slips past the allowlist below — yet the
+    # commit's `cp "$staged" "$CONFIG_FILE"` would still persist it. So refuse any staged path that
+    # isn't in the canonical schema (config.reference.json). Numeric path components are dropped so a
+    # populated known scalar array (notifications.webhooks, telegram.control.allowed_ids) collapses
+    # onto its schema-listed key instead of false-rejecting, while a smuggled OBJECT inside such an
+    # array still surfaces its unknown sub-key. dashboard.workers[] is exempt: its per-rig object
+    # elements aren't enumerated in the reference and the array is already fully guarded above. Fail
+    # closed — an unreadable reference or a jq error refuses the commit.
+    # INVARIANT: config.reference.json MUST stay a complete superset of every config path this script
+    # reads (grep the config_bool/`jq ... "$CONFIG_FILE"` sites), or a legit config carrying a
+    # read-but-unlisted path is false-rejected on every commit. That includes backward-compat aliases
+    # like xmrig_proxy.* (read at the XvB block). A grep-based test would false-alarm on jq-internal
+    # and filename dotted tokens, so the invariant is guarded by the legacy-xmrig_proxy round-trip
+    # case in tests/stack/run.sh rather than an automated path diff.
+    local unknown
+    if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
+        def norm: [.[] | strings] | join(".");
+        ([$cfg[0] | paths | select(.[0:2] != ["dashboard", "workers"]) | norm]
+         - [$ref[0] | paths | norm])
+        | unique | join(", ")' 2>/dev/null); then
+        printf 'could not validate the staged config against the schema (%s) — refusing to commit' "$REFERENCE_CONFIG"
+        return 1
+    fi
+    if [ -n "$unknown" ]; then
+        printf 'this change adds config keys not in the schema (%s) — refusing to commit. Edit config.json on the host and run `%s apply`.' "$unknown" "$0"
         return 1
     fi
     # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
@@ -4659,8 +4700,15 @@ control_approval_gate() { # <staged-file>
         return 1
     fi
     # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
-    # (#349) without a third dry-run. Names only, never values.
-    porcelain_keys "$porcelain"
+    # (#349) without a third dry-run. Names only, never values. dashboard.energy (#504) is
+    # config.json-only, so it never appears in the env porcelain — fold a synthetic DASHBOARD_ENERGY
+    # name into the list when that block changed, else an energy-only commit would audit no key.
+    local keys
+    keys=$(porcelain_keys "$porcelain")
+    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+        keys="${keys:+$keys }DASHBOARD_ENERGY"
+    fi
+    printf '%s' "$keys"
     return 0
 }
 
@@ -4743,12 +4791,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         result=$(printf '%s\n' "$out" | jq -R -s '
             [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
             | {status: "previewed", changes: ., destructive: (map(.flag == "DEST") | any), ts: (now | floor)}')
-        # #519: dashboard.energy is config.json-only (never rendered to .env), so an energy-only edit
-        # produces no porcelain change and the UI would otherwise show a bare "no changes detected".
-        # Surface it as a non-committable HOST note so the operator knows to apply it on the host
-        # (committing this block from the dashboard is tracked in #504).
+        # #504: dashboard.energy is config.json-only (never rendered to .env), so an energy-only
+        # edit produces no porcelain row. Surface it as a normal committable INFO change so the UI
+        # arms Apply and the commit lands it in config.json. The approval gate allowlists exactly
+        # this config.json-only block; any OTHER config.json-only delta still refuses (see
+        # control_approval_gate). INFO never flips destructive, so the existing verdict stands.
         if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
-            result=$(printf '%s' "$result" | jq '.changes += [{flag:"HOST",key:"dashboard.energy",msg:"dashboard.energy changed — this block is edited directly in config.json on the host: set it and run \"./pithead apply\". Committing it from the dashboard is tracked in #504."}]')
+            result=$(printf '%s' "$result" | jq '.changes += [{flag:"INFO",key:"dashboard.energy",msg:"Energy calculator settings (dashboard.energy) — electricity price / currency / XMR price updated."}]')
         fi
         control_write_result "$cdir/results" "$id" "$result"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "preview" "previewed" "$(porcelain_keys "$out")"
@@ -4964,9 +5013,16 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
-    # -U (unlink first): the archive contains THIS running script — replacing it via unlink keeps
-    # the running copy executing from its old inode, where an in-place truncate would corrupt it.
-    if ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" 2>"$logf"; then
+    # In-place extraction over the running install, in two passes. Pass 1 lays down everything
+    # EXCEPT the running script with plain tar, which MERGES existing directories — a release
+    # install already carries the non-empty build/* config-template mounts — and overwrites files.
+    # A single `-U` (unlink-first) pass over the whole tree instead tries to unlink those non-empty
+    # build/* dirs first and aborts ("Cannot unlink: Directory not empty"), leaving the install
+    # half-written. Pass 2 is the ONE file that needs -U: the pithead script, unlinked-first so it
+    # lands on a NEW inode and the copy executing this very function keeps running from the old one
+    # (an in-place overwrite would corrupt it mid-run).
+    if ! tar -xzf "$bundle" --strip-components=1 -C "$PWD" --exclude='pithead/pithead' 2>"$logf" ||
+        ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" pithead/pithead 2>>"$logf"; then
         rm -f "$bundle"
         _upg_fail "the $tag release bundle failed to extract: $(tail -c 500 "$logf") — the stack keeps running v$PITHEAD_VERSION."
         rm -f "$logf"

@@ -171,7 +171,7 @@ export class WorkerInspect extends Component {
                 <${InfoCard} label="Hashrate (1m)" value=${detail.hashrate || "—"} />
                 <${InfoCard} label="RigForge" value=${detail.rigforge ? detail.rigforge.version || "yes" : "—"} />
             </div>
-            ${detail.rigforge ? html`<${Chips} chips=${detail.rigforge.chips} />` : null}
+            ${detail.rigforge ? html`<${StatsTable} stats=${detail.rigforge.stats} />` : null}
 
             <h4 class="mt-2">Edit config</h4>
             ${
@@ -212,10 +212,23 @@ export class WorkerInspect extends Component {
 const InfoCard = ({ label, value }) => html`
     <div class="stat-card"><h5>${label}</h5><p>${value}</p></div>`;
 
-const Chips = ({ chips }) =>
-  chips && chips.length
-    ? html`<div class="badge-row mt-1">${chips.map(
-        (c) =>
-          html`<span class=${"badge badge-" + c.variant} title=${c.title || ""}>${c.text}</span>`,
-      )}</div>`
+// The compact Workers-Alive list renders the enriched feed as a horizontal badge row; here in the
+// single-rig detail view the same server-built metrics read better as a label → value table (#507).
+// `stats` is the {label, value, variant, title} split of the very chips the list uses. A warn/bad
+// variant (bad governor, throttling, thermal hold) colours its value; `outline` metrics stay plain.
+const STAT_VALUE_CLS = { ok: "status-ok", warn: "status-warn", bad: "status-bad" };
+export const StatsTable = ({ stats }) =>
+  stats && stats.length
+    ? html`
+    <div class="table-scroll mt-1">
+        <table class="worker-history">
+            <tbody>${stats.map(
+              (s) => html`
+                <tr>
+                    <td class="text-muted" title=${s.title || ""}>${s.label}</td>
+                    <td class=${STAT_VALUE_CLS[s.variant] || ""}>${s.value}</td>
+                </tr>`,
+            )}</tbody>
+        </table>
+    </div>`
     : null;

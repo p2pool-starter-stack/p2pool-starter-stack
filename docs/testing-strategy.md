@@ -46,6 +46,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `monero.prune` pruned vs full (DB size, #32 display) | config | 1 ✅ (display) · 4 ▶ (real DB) |
 | `monero.rpc_lan_access`, `dashboard.secure`, `xvb.enabled`, `dashboard.tari_required` | config → `.env`/Caddyfile | 4 ▶ |
 | `p2pool.pool` main / mini / nano (sidechain, flags) | config | 4 ▶ |
+| `network.subnet` moved off the default /24 (#180/#201): docker bridge, Tor render-at-start IP, monerod proxy IP, SSRF CIDR, onion vhost gateway | config → live (a subnet move needs a down/up) | 1 ✅ (rendered compose) · 4 ▶ (`run.sh --subnet`) |
 
 ### B. Sync lifecycle (#35)
 
@@ -137,6 +138,10 @@ it — the worker-API **auth model is the #315 none/name/token matrix**, not the
 | `p2pool.stratum_password` renders `--access-password` (set) / omits it (default-off) | `pithead` render | 1 ✅ (`tests/stack`) · 4 ▶ (default-off live check) |
 | Proxy restart / node-down → reject → readmit (real containers) | control plane | 3 ▶ (mini-stack) |
 | Real worker mines through the real proxy: appears via its stratum name, hashrate aggregates, backup-pool failover | live rig + proxy | 4 ▶ (`run.sh --workers`) |
+| Enriched read survives a populated masked-token descriptor — `api_ok` + rigforge feed resolve with `dashboard.workers[].token` seen only as the `{"__secret__":true}` sentinel (the v1.5.2 regression + #508) | live rig + `dashboard.workers[]` populated | 4 ▶ (`run.sh --rigforge-control`, #514) |
+| Worker Inspect edit lands on the rig: `editable` true, a `max_temp_c` nudge via `/api/control/worker-apply` hits the rig's `/status` + records history, reverted | live rig control API on | 4 ▶ (`run.sh --rigforge-control`, #513) |
+| Rig-side edit reflects: a direct rig control-API change shows in the enriched feed; a `config.json` hand-edit shows in the masked prefill | live rig + direct dial | 4 ▶ (`run.sh --rigforge-control`, #516) |
+| Control-apply auto-rollback (rigforge#236): a hashrate-tanking change is recorded `rolled_back` in the worker-apply result + per-worker history | live rig + fault-injection | 4 ▶ (`run.sh --rigforge-control`, #517; operator supplies `IT_RIG_ROLLBACK_CHANGES`) |
 | Stratum auth accept/reject: matching `pass` mines, wrong/missing `pass` rejected, rotation | live proxy `--access-password` | 4 (deferred — a headless xmrig login probe, real proxy binary) |
 | Dev-fee independence (#173): proxy `--donate-level` and rig `DONATION` both honored | live proxy + rig | 4 (deferred) |
 

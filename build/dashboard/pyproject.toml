@@ -7,7 +7,7 @@ name = "mining-dashboard"
 # Keep in lockstep with the top-level VERSION file — the single source of truth for the stack version
 # (#44). A shell test (tests/stack/run.sh) fails if these drift; the dashboard *displays* the version
 # from VERSION (baked in as PITHEAD_VERSION, #58), so this is packaging metadata only.
-version = "1.5.3"
+version = "1.6.1"
 description = "Monitoring dashboard and XvB switching engine for Pithead"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,11 +34,11 @@ test = [
   # diff-cover (#286): patch-coverage gate — new/changed lines must be >=90% covered.
   "diff-cover>=9",
   # hypothesis (#284): property-based tests asserting invariants on the money/numeric logic.
-  "hypothesis>=6.156.1",
+  "hypothesis>=6.156.6",
 ]
 # Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
 # — lint output is version-sensitive, so a floor would let CI and a contributor disagree.
-dev = ["ruff==0.15.20", "pre-commit>=4"]
+dev = ["ruff==0.15.21", "pre-commit>=4"]
 
 [tool.setuptools.packages.find]
 include = ["mining_dashboard*"]
