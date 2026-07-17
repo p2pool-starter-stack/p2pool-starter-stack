@@ -2133,3 +2133,34 @@ class TestBuildWorkerDetail:
         assert [h["status"] for h in d["history"]] == ["rejected", "applied"]  # newest first
         assert d["history"][0]["applied_at"]  # formatted timestamp present
         assert d["last_applied"] == {"DONATION": 2}  # only the applied change prefills
+
+    def test_hashrate_by_config_correlates_samples_to_versions(self, monkeypatch):
+        # #492: worker_history samples aggregated per applied worker_config version.
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 0}],
+            descriptors=[{"name": "rig1", "host": "10.0.0.9"}],
+        )
+        sm.add_worker_config_version("rig1", "cid1", "applied", {"DONATION": 2}, None, ts=100.0)
+        sm.add_worker_history(
+            [{"ts": 150.0, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        d = build_worker_detail("rig1", {"workers": [{"name": "rig1", "status": "online"}]}, sm)
+        sm.close()
+        assert len(d["hashrate_by_config"]) == 1
+        row = d["hashrate_by_config"][0]
+        assert row["change_id"] == "cid1"
+        assert row["applied_at"]  # formatted timestamp present
+        assert row["avg_h15"] == "1.00 kH/s"  # human-formatted, matching detail["hashrate"]
+        assert row["sample_count"] == 1
+
+    def test_hashrate_by_config_empty_with_no_applied_versions(self, monkeypatch):
+        d, sm = self._detail(
+            monkeypatch,
+            "rig1",
+            workers=[{"name": "rig1", "status": "online", "h60": 0}],
+            descriptors=[{"name": "rig1", "host": "10.0.0.9"}],
+        )
+        sm.close()
+        assert d["hashrate_by_config"] == []

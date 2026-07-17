@@ -13,6 +13,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Added
 
+- **Worker Inspect: hashrate correlated to config version (#492).** The per-worker change
+  timeline (#185) now carries the measured hashrate (`worker_history`, #196) each version ran
+  at: a sample is attributed to the most recent *applied* config change at or before its
+  timestamp, then averaged/min/max'd per version, so an operator can compare "config #3 did
+  5.1 kH/s, config #4 did 4.8 kH/s" empirically instead of guessing. Correlation happens in
+  Python (`StateManager.get_worker_hashrate_by_config`) against the existing tables — no new
+  schema, no rig-side change needed. Surfaced as a new table in the Worker Inspect panel,
+  alongside the existing change-history table.
+
 - **Worker Inspect: a table editor and a JSON mode for the writable-config edit path (#518).**
   The raw JSON textarea is now the fallback of two modes: **Table** (the default) renders one row
   per writable key (`pools`, `DONATION`, `autotune`, `watchdog`, `watchdog_interval_min`,

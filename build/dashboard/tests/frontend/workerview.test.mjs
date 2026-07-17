@@ -176,3 +176,60 @@ test("the fill button is a no-op when the file picker is dismissed with no file"
   inst.onFilePick({ target: { files: [] } });
   assert.equal(inst.state.editText, before);
 });
+
+// --- Hashrate by config (#492) ----------------------------------------------------------------
+
+test("renders one row per config version with its aggregated hashrate", () => {
+  const detail = {
+    ...DETAIL,
+    hashrate_by_config: [
+      {
+        change_id: "cid2",
+        applied_at: "2026-07-16 12:00",
+        avg_h15: "4.00 kH/s",
+        min_h15: "4.00 kH/s",
+        max_h15: "4.00 kH/s",
+        sample_count: 0,
+        reason: null,
+      },
+      {
+        change_id: "cid1",
+        applied_at: "2026-07-16 10:00",
+        avg_h15: "1.50 kH/s",
+        min_h15: "1.00 kH/s",
+        max_h15: "2.00 kH/s",
+        sample_count: 2,
+        reason: null,
+      },
+    ],
+  };
+  const out = renderToString(readyInstance(detail).render());
+  assert.match(out, /cid2/);
+  assert.match(out, /cid1/);
+  assert.match(out, /1\.50 kH\/s/);
+});
+
+test("a version with no samples yet shows a dash, not a crash", () => {
+  const detail = {
+    ...DETAIL,
+    hashrate_by_config: [
+      {
+        change_id: "cid1",
+        applied_at: "2026-07-16 10:00",
+        avg_h15: null,
+        min_h15: null,
+        max_h15: null,
+        sample_count: 0,
+        reason: null,
+      },
+    ],
+  };
+  const out = renderToString(readyInstance(detail).render());
+  assert.match(out, /cid1/);
+  assert.match(out, />—</);
+});
+
+test("no applied config versions yet falls back to an explanatory message", () => {
+  const out = renderToString(readyInstance({ ...DETAIL, hashrate_by_config: [] }).render());
+  assert.match(out, /No applied config changes to correlate hashrate against yet/);
+});

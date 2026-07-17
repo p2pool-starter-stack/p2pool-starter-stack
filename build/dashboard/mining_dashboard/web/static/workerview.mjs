@@ -82,6 +82,22 @@ function HistoryRow({ row }) {
     </tr>`;
 }
 
+// One row of the hashrate-by-config table (#492): a config version + the measured hashrate
+// (worker_history) aggregated over that version's active window, so an operator can compare
+// versions empirically ("config #3 did X, config #4 did Y"). avg/min/max are `null` — rendered
+// as "—" — for a version with no samples yet (e.g. the one just applied).
+function HashrateByConfigRow({ row }) {
+  return html`
+    <tr>
+        <td class="text-xs text-muted">${row.applied_at || ""}</td>
+        <td class="font-mono text-xs">${row.change_id || "—"}</td>
+        <td class="text-xs">${row.avg_h15 || "—"}</td>
+        <td class="text-xs text-muted">${row.min_h15 || "—"}</td>
+        <td class="text-xs text-muted">${row.max_h15 || "—"}</td>
+        <td class="text-xs text-muted">${row.sample_count}</td>
+    </tr>`;
+}
+
 // One table-editor row. `value` falls back to the field's prefilled value until the operator
 // edits it (edits is keyed like ConfigView's own `edits` state). A secret row is a masked
 // password input (#508) — never the raw sentinel JSON — so it can only be left alone or replaced.
@@ -283,6 +299,19 @@ export class WorkerInspect extends Component {
                 </table>
             </div>`
                 : html`<p class="text-muted text-small">No changes applied from the dashboard yet.</p>`
+            }
+
+            <h4 class="mt-2">Hashrate by config version</h4>
+            ${
+              (detail.hashrate_by_config || []).length
+                ? html`
+            <div class="table-scroll">
+                <table class="worker-history">
+                    <thead><tr><th>Applied</th><th>Version</th><th>Avg h15</th><th>Min</th><th>Max</th><th>Samples</th></tr></thead>
+                    <tbody>${detail.hashrate_by_config.map((row) => html`<${HashrateByConfigRow} row=${row} />`)}</tbody>
+                </table>
+            </div>`
+                : html`<p class="text-muted text-small">No applied config changes to correlate hashrate against yet.</p>`
             }
         </div>`;
   }

@@ -1,3 +1,4 @@
+import bisect
 import json
 import logging
 import os
@@ -1081,24 +1082,75 @@ class StateManager:
         except sqlite3.Error as e:
             self._table_write_failed("worker_history", "Worker History Insert Error", e)
 
-    def get_worker_history(self, since: float = 0.0) -> list[dict[str, Any]]:
-        """Per-worker hashrate/share samples (every rig) at or after `since` (default: all),
-        oldest first. A per-worker filter isn't needed yet — add a WHERE name = ? when a
-        consumer (e.g. #492) actually reads one rig's series."""
+    def get_worker_history(
+        self, since: float = 0.0, name: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Per-worker hashrate/share samples at or after `since` (default: all), oldest first.
+        `name` restricts to one rig's series (#492); omit it for every rig's samples."""
         try:
             with self._db_lock:
                 if not self._conn:
                     return []
                 cursor = self._conn.cursor()
-                cursor.execute(
-                    "SELECT ts, name, h15, accepted, rejected FROM worker_history "
-                    "WHERE ts >= ? ORDER BY ts ASC",
-                    (since,),
-                )
+                if name is not None:
+                    cursor.execute(
+                        "SELECT ts, name, h15, accepted, rejected FROM worker_history "
+                        "WHERE ts >= ? AND name = ? ORDER BY ts ASC",
+                        (since, name),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT ts, name, h15, accepted, rejected FROM worker_history "
+                        "WHERE ts >= ? ORDER BY ts ASC",
+                        (since,),
+                    )
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
             self.logger.error(f"Worker History Read Error: {e}")
             return []
+
+    def get_worker_hashrate_by_config(
+        self, worker: str, since: float = 0.0
+    ) -> list[dict[str, Any]]:
+        """Correlate `worker`'s measured hashrate (worker_history) to the config version active at
+        each sample's timestamp (#492 — rides #185's worker_config + #196's worker_history). Each
+        *applied* worker_config row is a version boundary; a sample belongs to the most recent
+        applied change at or before its ts, so an operator can compare "config #3 did X, config #4
+        did Y" empirically. Bucketing is in Python (bisect) — the version count is small (`limit`
+        below) and this reads far more clearly than a correlated-subquery/window-function SQL
+        version. Returns one row per version, newest first, matching get_worker_config_history:
+        `{change_id, ts, reason, sample_count, avg_h15, min_h15, max_h15}` (the h15 fields are
+        `None` for a version with zero samples). Samples that predate the first applied change have
+        no known version and are dropped — out of scope: correlate to a KNOWN version, don't guess
+        at pre-history config."""
+        versions = [
+            row
+            for row in reversed(self.get_worker_config_history(worker, limit=200))
+            if row.get("status") == "applied"
+        ]
+        if not versions:
+            return []
+        boundaries = [v["ts"] for v in versions]  # oldest first, aligned with `versions`
+        buckets: list[list[float]] = [[] for _ in versions]
+        for s in self.get_worker_history(since=since, name=worker):
+            idx = bisect.bisect_right(boundaries, s["ts"]) - 1
+            if idx >= 0:
+                buckets[idx].append(s["h15"])
+
+        out = [
+            {
+                "change_id": v["change_id"],
+                "ts": v["ts"],
+                "reason": v.get("reason"),
+                "sample_count": len(vals),
+                "avg_h15": sum(vals) / len(vals) if vals else None,
+                "min_h15": min(vals) if vals else None,
+                "max_h15": max(vals) if vals else None,
+            }
+            for v, vals in zip(versions, buckets, strict=True)
+        ]
+        out.reverse()  # newest first
+        return out
 
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

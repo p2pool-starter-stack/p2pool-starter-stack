@@ -1436,6 +1436,9 @@ def build_worker_detail(name, data, state_mgr):
     the dashboard last applied (the editor prefill — the rig's feed does not expose the writable
     config values, so Pithead's own last-applied record is the honest source), and the change history
     (each row's ``changes`` is a diff by construction, since we only ever record deltas we authored).
+    ``hashrate_by_config`` (#492) is that same version timeline with each version's measured
+    hashrate (worker_history) aggregated over its active window, so an operator can compare config
+    versions empirically.
 
     ``editable`` is whether the worker has an operator-set ``host`` in ``dashboard.workers[]`` — the
     precondition for the host-side write path. The rig's token is masked out of this container (#440),
@@ -1448,6 +1451,12 @@ def build_worker_detail(name, data, state_mgr):
     for row in history:
         ts = row.get("ts")
         row["applied_at"] = format_time_abs(ts) if ts else ""
+    hashrate_by_config = state_mgr.get_worker_hashrate_by_config(name)
+    for row in hashrate_by_config:
+        ts = row.get("ts")
+        row["applied_at"] = format_time_abs(ts) if ts else ""
+        for key in ("avg_h15", "min_h15", "max_h15"):
+            row[key] = format_hashrate(row[key]) if row[key] is not None else None
     return {
         "name": name,
         "found": worker is not None,
@@ -1461,6 +1470,7 @@ def build_worker_detail(name, data, state_mgr):
         "writable_keys": sorted(WORKER_WRITABLE_KEYS),
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
+        "hashrate_by_config": hashrate_by_config,
     }
 
 

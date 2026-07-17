@@ -290,6 +290,15 @@ config *values*, the editor prefills from the last config the dashboard applied 
 the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
 dashboard apply.
 
+Below the change history sits a **Hashrate by config version** table: each *applied* change, with the
+rig's measured hashrate (the same per-rig `worker_history` samples, taken roughly every 5 minutes)
+averaged over the window that version was active — from the moment it was applied to the moment the
+next one was, or now for the current version. A version with no samples yet (just applied) shows a
+dash rather than zero. This is a correlation over existing data, not a new measurement — no rig-side
+change was needed to add it — so use it to compare versions empirically ("config #3 did 5.1 kH/s,
+config #4 did 4.8 kH/s") rather than as a precise A/B test; a version's window can include restarts,
+sync gaps, or other noise the average doesn't separate out.
+
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the

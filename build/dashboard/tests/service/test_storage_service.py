@@ -1037,6 +1037,107 @@ class TestWorkerHistory:
             state_manager._conn.execute("DROP TABLE worker_history")
         assert state_manager.get_worker_history() == []
 
+    def test_get_name_filters_to_one_rig(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0},
+                {"ts": t0, "name": "rig2", "h15": 2.0, "accepted": 0, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_history(name="rig1")
+        assert [r["name"] for r in rows] == ["rig1"]
+
+
+class TestWorkerHashrateByConfig:
+    """Correlates worker_history samples to the worker_config version active at each sample's
+    ts (#492, rides #185's config timeline + #196's hashrate series)."""
+
+    def test_no_applied_versions_returns_empty(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid1", "rejected", {"a": 1}, "bad", ts=100)
+        assert state_manager.get_worker_hashrate_by_config("rig1") == []
+
+    def test_samples_bucketed_by_version_boundary(self, state_manager):
+        # v1 applied at t=100, v2 applied at t=200. Samples before t=100 have no known version and
+        # are dropped; samples in [100, 200) belong to v1, samples >= 200 belong to v2.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_config_version("rig1", "cid2", "applied", {"a": 2}, None, ts=200)
+        state_manager.add_worker_history(
+            [{"ts": 50, "name": "rig1", "h15": 999.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 120, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 180, "name": "rig1", "h15": 2000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 250, "name": "rig1", "h15": 4000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        # Newest first, matching get_worker_config_history.
+        assert [r["change_id"] for r in rows] == ["cid2", "cid1"]
+        v2, v1 = rows
+        assert v1["sample_count"] == 2
+        assert v1["avg_h15"] == 1500.0
+        assert v1["min_h15"] == 1000.0
+        assert v1["max_h15"] == 2000.0
+        assert v2["sample_count"] == 1
+        assert v2["avg_h15"] == 4000.0
+
+    def test_version_with_no_samples_yet_has_none_aggregates(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_history(
+            [{"ts": 150, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_config_version("rig1", "cid2", "applied", {"a": 2}, None, ts=200)
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        newest = rows[0]
+        assert newest["change_id"] == "cid2"
+        assert newest["sample_count"] == 0
+        assert newest["avg_h15"] is None
+        assert newest["min_h15"] is None
+        assert newest["max_h15"] is None
+
+    def test_non_applied_versions_are_not_boundaries(self, state_manager):
+        # A rejected/failed change never became the active config, so it must not split a segment.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_config_version("rig1", "cid2", "rejected", {"a": 2}, "bad", ts=150)
+        state_manager.add_worker_history(
+            [{"ts": 175, "name": "rig1", "h15": 5000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        assert len(rows) == 1
+        assert rows[0]["change_id"] == "cid1"
+        assert rows[0]["sample_count"] == 1
+
+    def test_other_workers_hashrate_is_excluded(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_history(
+            [
+                {"ts": 150, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0},
+                {"ts": 150, "name": "rig2", "h15": 9999.0, "accepted": 0, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        assert rows[0]["sample_count"] == 1
+        assert rows[0]["avg_h15"] == 1000.0
+
+    def test_since_bounds_the_samples_but_not_the_version_timeline(self, state_manager):
+        # A version applied before `since` can still be the active version for samples inside the
+        # window — `since` only filters which SAMPLES are read, not which versions exist.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_history(
+            [{"ts": 120, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 500, "name": "rig1", "h15": 3000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1", since=400)
+        assert rows[0]["change_id"] == "cid1"
+        assert rows[0]["sample_count"] == 1
+        assert rows[0]["avg_h15"] == 3000.0
+
 
 class TestTelemetryTableHealth:
     """Per-table 'last successful write' health signal (#196 Wave-0), mirroring db_healthy so a
