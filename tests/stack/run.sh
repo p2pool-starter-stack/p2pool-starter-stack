@@ -4950,6 +4950,10 @@ cp "$UPGB/pithead/pithead" "$UPGB/noversion/pithead/pithead"
 tar -czf "$UPGB/noversion.tar.gz" -C "$UPGB/noversion" pithead
 UUPG2="77777777-7777-4777-8777-777777777777"
 upgrade_intent "$UUPG" "v9.9.9"
+# The drain orders requests by mtime (ls -1tr); a same-second tie breaks differently between GNU
+# (CI) and BSD (macOS) ls, flipping which intent runs first — and the second one is throttled.
+# One second between the writes makes "UUPG first" deterministic everywhere.
+sleep 1
 printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG2" >"$UPGREQS/$UUPG2.json"
 (cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
     CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/noversion.tar.gz" \
