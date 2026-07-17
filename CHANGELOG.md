@@ -11,6 +11,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`apply --dry-run` no longer writes to `config.json` (#556).** A dry run that saw empty or
+  placeholder local-node RPC credentials still called `persist_node_credentials`, which generated
+  and saved a fresh password — breaking the documented read-only contract and, over the control
+  channel, dirtying the host-side staged copy the commit gate re-validates. `persist_node_credentials`
+  now skips the write while in dry-run mode; the generated credentials are still used in memory so
+  the preview stays accurate, and a real `apply` persists them exactly as before.
+
 ## [1.6.2] - 2026-07-17
 
 The ten v1.6-milestone findings from the 2026-07 full-repo scan (#546–#555): two high-severity

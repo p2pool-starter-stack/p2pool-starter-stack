@@ -4082,6 +4082,46 @@ assert_contains "PITHEAD_CONFIG_FILE override is honoured" "$out" "37890" # nano
 out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
 assert_eq "without the override, config.json shows no changes" "$out" ""
 
+echo "== black-box: apply --dry-run is read-only re: node credential generation (#556) =="
+# Direct CLI leg: a fresh/hand-edited local-node config with placeholder/empty creds must not have
+# config.json rewritten by a --dry-run preview — the read-only contract #556 reported broken
+# (persist_node_credentials was writing the freshly-generated creds back to disk).
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"","node_password":""},
+          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"},
+          "dashboard":{"secure":true,"host":"box.lan",
+                       "auth":{"username":"admin","password":"a control passphrase"},
+                       "control":{"enabled":true}} }\n' "$WALLET" >"$C/config.json"
+cp "$C/config.json" "$C/config.json.556before"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" NO_COLOR=1 ./pithead apply --dry-run 2>&1)"
+assert_rc "dry-run with placeholder node creds still validates" "$?" "0"
+if cmp -s "$C/config.json" "$C/config.json.556before"; then
+    ok "dry-run leaves config.json byte-identical with placeholder node creds (#556)"
+else
+    bad "dry-run leaves config.json byte-identical with placeholder node creds (#556)" "config.json was rewritten"
+fi
+assert_contains "dry-run still previews the credential it would generate (in-memory only)" "$out" "Monero node RPC credential"
+rm -f "$C/config.json.556before"
+
+# Control-channel leg: the same blank-creds config staged through the control path must not have
+# its ON-DISK STAGED COPY rewritten by the dry-run re-validation either (#556) — the same write,
+# one level removed, that used to leave a generated secret sitting in data/control/staged/ and
+# could dirty the diff a later commit gate re-derives from that file.
+UUID0="00000000-0000-4000-8000-000000000000"
+REQS0="$C/data/control/requests"
+STAGED0="$C/data/control/staged"
+RESULTS0="$C/data/control/results"
+jq -n --arg w "$WALLET" --arg id "$UUID0" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"",node_password:""},
+    tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS0/$UUID0.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "blank-creds preview status" "$(jq -r '.status' "$RESULTS0/$UUID0.json" 2>/dev/null)" "previewed"
+assert_eq "staged copy keeps the blank node_username — not persisted (#556)" "$(jq -r '.monero.node_username' "$STAGED0/$UUID0.json" 2>/dev/null)" ""
+assert_eq "staged copy keeps the blank node_password — not persisted (#556)" "$(jq -r '.monero.node_password' "$STAGED0/$UUID0.json" 2>/dev/null)" ""
+# Clean up: the result/staged counters the tests below assume start from a clean spool.
+rm -f "$RESULTS0/$UUID0.json" "$STAGED0/$UUID0.json"
+control_config main # restore config.json to the state control-run-pending below expects
+
 echo "== black-box: control-run-pending (#33) =="
 UUID1="11111111-1111-4111-8111-111111111111"
 UUID2="22222222-2222-4222-8222-222222222222"
