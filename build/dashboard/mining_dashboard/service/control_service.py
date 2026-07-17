@@ -80,6 +80,97 @@ def _deep_merge(base, override):
     return merged
 
 
+# Env-var -> config-path(s) map (#613), mirroring pithead's CONTROL_DASHBOARD_EDITABLE_KEYS
+# (pithead ~L4793) — the commit gate's ACTUAL allowlist, the single source of truth for what the
+# control channel will commit. Surfaced to the browser as ``_editable_keys`` below so the
+# Configuration view can grey out everything else up front instead of letting an operator edit a
+# host-only field and find out at Save (#613).
+#
+# Some env vars are derived from MORE than one config path — P2POOL_FLAGS folds in both
+# ``p2pool.pool`` (--mini/--nano) and ``p2pool.clearnet`` (the Tor-egress socks flags appended in
+# render_env) — so this has to mirror the actual derivation in render_env, not the prose summary
+# in pithead's own allowlist comment (which lists "clearnet toggles" as generally host-only
+# elsewhere; the gate itself works on RENDERED ENV VARS, not config paths, so a config path that
+# feeds an allowlisted var IS committable even if it sounds like it shouldn't be from the comment
+# alone).
+#
+# Drift-guarded (mirrors #515's WORKER_WRITABLE_KEYS check, see
+# test_editable_keys_have_no_intra_repo_drift below): a test regexes
+# CONTROL_DASHBOARD_EDITABLE_KEYS out of the pithead script and asserts its env-var names equal
+# this map's keys, so an allowlist edit without a matching map edit fails CI loudly instead of
+# silently drifting the greyed set out of sync with what the gate actually accepts.
+EDITABLE_ENV_KEY_PATHS = {
+    "P2POOL_FLAGS": ("p2pool.pool", "p2pool.clearnet"),
+    "P2POOL_PORT": ("p2pool.pool",),
+    "XVB_ENABLED": ("xvb.enabled",),
+    "XVB_DONATION_LEVEL": ("xvb.donation_level",),
+    "TARI_REQUIRED": ("dashboard.tari_required",),
+    "DASHBOARD_CHECK_UPDATES": ("dashboard.check_for_updates",),
+    "DASHBOARD_TZ": ("dashboard.timezone",),
+    "MONERO_MEM_LIMIT": ("monero.mem_limit",),
+    "TARI_MEM_LIMIT": ("tari.mem_limit",),
+    "MONERO_PREP_THREADS": ("monero.prep_blocks_threads",),
+    "HASHRATE_DROP_THRESHOLD_PCT": ("dashboard.hashrate_drop_threshold",),
+    "HASHRATE_DROP_MINUTES": ("dashboard.hashrate_drop_minutes",),
+    "TELEGRAM_DAILY_SUMMARY_TIME": ("telegram.daily_summary_time",),
+    # TELEGRAM_EVENT_<NAME> -> telegram.events.<name> is a mechanical rename (pithead's tg_event()
+    # helper and render_env do the same thing per event), so it's generated below rather than
+    # hand-typed 24 times. wallet_changed / clearnet_exposed are the two events NOT in this list —
+    # deliberately excluded: they're the tamper-evidence alarms on the very channel a compromised
+    # container would use to silence them, so the dashboard must never be able to turn them off.
+    # They still render (greyed) in the Notifications > Telegram events nested subgroup (#612).
+    **{
+        f"TELEGRAM_EVENT_{name.upper()}": (f"telegram.events.{name}",)
+        for name in (
+            "node_down",
+            "node_recovered",
+            "worker_offline",
+            "worker_recovered",
+            "worker_joined",
+            "worker_left",
+            "sync_finished",
+            "disk_space",
+            "db_unhealthy",
+            "db_reset",
+            "xvb_no_share",
+            "xvb_registration",
+            "new_release",
+            "stack_online",
+            "daily_summary",
+            "hashrate_low",
+            "hashrate_loss",
+            "hugepages",
+            "low_ram",
+            "high_reject_rate",
+            "block_found",
+            "payout_found",
+            "payout_confirmed",
+            "container_unhealthy",
+        )
+    },
+}
+
+# dashboard.energy.* is config.json-only — it never renders to .env (control_approval_gate reads
+# it straight off config.json, pithead ~L4879), so it can never appear in the map above — but the
+# gate explicitly ALLOWS it (#504). Fold it in as the map's one special-case addition. Worker
+# descriptors (workers.list[] / dashboard.workers[]) are the gate's OTHER config.json-only special
+# case, but they're REFUSED outright (per-rig hosts/tokens), so they never get an editable path —
+# and buildSections never renders them as a form field anyway (arrays, #172).
+_ENERGY_PATHS = (
+    "dashboard.energy.cost_per_kwh",
+    "dashboard.energy.currency",
+    "dashboard.energy.xmr_price",
+)
+
+
+def _editable_paths():
+    """Every config path the control gate will actually commit (#613): the env-var allowlist's
+    paths, union the dashboard.energy special-case (#504)."""
+    paths = {p for target in EDITABLE_ENV_KEY_PATHS.values() for p in target}
+    paths.update(_ENERGY_PATHS)
+    return sorted(paths)
+
+
 def _load_core_keys():
     """The wizard's core-key shortlist (#502/#529), read from the SAME file ``./pithead setup``
     reads — the one shared artifact, not a second hand-maintained list. Degrades to an empty list
@@ -102,9 +193,10 @@ def read_config():
     "set — leave blank to keep" from "not set". The copy arrives already masked (#440); the
     masking pass here is defense-in-depth and runs AFTER the merge.
 
-    The response also carries ``_core_keys`` (#529) — an underscore-prefixed metadata key, the
-    same convention ``config.reference.json``'s own ``_docs`` uses, so ``buildSections`` on the
-    frontend already skips it as a config section for free."""
+    The response also carries ``_core_keys`` (#529) and ``_editable_keys`` (#613) — both
+    underscore-prefixed metadata keys, the same convention ``config.reference.json``'s own
+    ``_docs`` uses, so ``buildSections`` on the frontend already skips them as config sections for
+    free."""
     cfg = _load_host_config()
     try:
         with open(config.HOST_REFERENCE_PATH) as f:
@@ -118,6 +210,7 @@ def read_config():
         if found and value:
             _set(cfg, path, dict(SECRET_SENTINEL))
     cfg["_core_keys"] = _load_core_keys()
+    cfg["_editable_keys"] = _editable_paths()
     return cfg
 
 

@@ -235,6 +235,54 @@ test("mode toggle switches between Form and JSON rendering", () => {
   assert.doesNotMatch(out, /config-section-core/);
 });
 
+// --- Host-only fields render greyed, not edit-then-reject (#613) -----------------------------
+
+test("form mode: a field NOT in the editable set renders disabled with the host-only tooltip", () => {
+  const inst = readyView();
+  inst.state.editableKeys = ["p2pool.pool"]; // dashboard.auth.password deliberately absent
+  const out = renderToString(inst.render());
+  assert.match(out, /disabled/);
+  assert.match(out, /Host-only — edit config\.json and run \.\/pithead apply/);
+});
+
+test("form mode: a field IN the editable set renders enabled, no host-only tooltip on it", () => {
+  const inst = readyView();
+  inst.state.editableKeys = ["p2pool.pool"];
+  const out = renderToString(inst.render());
+  // p2pool.pool is core (lifted to the pinned card) and editable — its own <label> must not carry
+  // the disabled attribute or the host-only title, even though OTHER fields on the page do.
+  const poolField = out.match(/<label[^>]*>\s*<span class="config-field-name">p2pool\.pool<\/span>.*?<\/label>/s);
+  assert.ok(poolField, "expected to find the p2pool.pool field");
+  assert.doesNotMatch(poolField[0], /disabled/);
+});
+
+test("form mode: an empty editable set (host not yet reporting _editable_keys) greys out every field", () => {
+  const inst = readyView();
+  inst.state.editableKeys = [];
+  const out = renderToString(inst.render());
+  // Every field input/select carries disabled — scoped to the field's own opening tag so the
+  // unrelated Save/Discard buttons (also legitimately `disabled` when there's nothing to save)
+  // don't inflate the count.
+  const fieldTags = out.match(/<(?:input|select)[^>]*>/g) || [];
+  assert.ok(fieldTags.length > 0);
+  assert.ok(fieldTags.every((t) => /disabled/.test(t)));
+});
+
+// --- Nested sub-groups within a logical section (#612) ----------------------------------------
+
+test("form mode: telegram.events nests into its own collapsed <details>, inside the Notifications section", () => {
+  const cfg = {
+    ...CFG,
+    telegram: { enabled: true, events: { node_down: true, worker_offline: false } },
+  };
+  const inst = readyView(cfg);
+  const out = renderToString(inst.render());
+  assert.match(out, /Telegram events \(2\)/); // the nested subgroup summary, count included
+  // Nested <details> is ALSO collapsed by default — no `open` anywhere in the whole form.
+  assert.doesNotMatch(out, /<details[^>]*\bopen\b/);
+  assert.match(out, /config-subsection/);
+});
+
 // --- buildProposed(): both modes build the same staged config object -------------------------
 
 test("buildProposed: form mode folds edits back the same way applyEdits does", () => {

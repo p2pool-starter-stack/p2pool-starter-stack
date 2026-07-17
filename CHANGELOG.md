@@ -24,6 +24,25 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   a deferred follow-up, not implemented here (fetching one is a clearnet egress this privacy-first
   stack avoids).
 
+### Changed
+
+- **Configuration view: logical section grouping, nested event groups, host-only grey-out
+  (#611/#612/#613).** The form no longer groups fields one section per top-level `config.json`
+  key — a display-layer map now groups them the way an operator thinks about them (Wallets &
+  payout, Monero node, Mining, Workers, Dashboard & access, Notifications, Energy, Alerts &
+  thresholds, System / advanced), so a grab-bag key like `dashboard` splits across the sections
+  its fields actually belong to; a path no group claims still renders, in a catch-all **Other**
+  group, and a frontend test fails if any `config.reference.json` path would ever land there
+  unclaimed (#611). Within Notifications, the 26 `telegram.events` toggles, the ntfy/webhook
+  sinks, and Healthchecks each nest one level deeper into their own collapsed sub-group instead of
+  dominating the section (#612). And a field the control-channel gate wouldn't actually commit —
+  derived from the SAME allowlist the gate enforces, surfaced to the browser as `_editable_keys` on
+  `GET /api/config` — now renders disabled with a "Host-only" tooltip up front, instead of letting
+  it be edited and rejected only at Save; a drift-guard test keeps the surfaced set in lockstep
+  with the gate's real allowlist (#613). `config.json` itself is unchanged; the staged-preview →
+  closed-schema gate → commit pipeline is unaffected. JSON mode (which edits the whole config as
+  text) is unaffected by any of this.
+
 ## [1.7.0] - 2026-07-17
 
 The **Config UX & telemetry** cycle. Config editing becomes humane — worker
