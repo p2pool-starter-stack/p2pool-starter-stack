@@ -41,8 +41,6 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   over Tor, Telegram alerts). Everything else keeps its `config.reference.json` default silently;
   the wizard prints a pointer to `config.json` and the docs at the end.
 
-### Changed
-
 - **The default P2Pool sidechain is now `mini`, not `main` (#502).** `mini` has a lower share
   difficulty, so a typical home rig — the common case for this stack — finds shares far more often
   (smoother, more frequent PPLNS payouts). The default is now consistent everywhere: the wizard
