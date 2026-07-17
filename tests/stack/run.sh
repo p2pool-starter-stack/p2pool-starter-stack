@@ -1275,6 +1275,16 @@ mkdir -p "$ac_root"
 ac_file="$ac_root/dashboard/authorized_clients/dashboard.auth"
 if [ -f "$ac_file" ]; then ok "authorized_clients/dashboard.auth is written"; else bad "authorized_clients/dashboard.auth is written" "file missing"; fi
 assert_contains "authorized_clients carries a v3 descriptor" "$(cat "$ac_file" 2>/dev/null)" "descriptor:x25519:"
+# Tor refuses a HiddenServiceDir that is group/other-accessible, so the modes provision_onion_client_auth
+# sets (pithead ~L3096-3099) are load-bearing, not a hardening nicety — a wrong mode is a silent onion
+# provisioning failure. GNU stat first (CI/Linux), BSD/macOS `-f %Lp` fallback (the repo's known gotcha:
+# `stat -f` is a VALID-but-wrong flag on Linux, so it must never run first).
+ac_dir_mode="$(stat -c '%a' "$ac_root/dashboard" 2>/dev/null || stat -f '%Lp' "$ac_root/dashboard" 2>/dev/null)"
+ac_subdir_mode="$(stat -c '%a' "$ac_root/dashboard/authorized_clients" 2>/dev/null || stat -f '%Lp' "$ac_root/dashboard/authorized_clients" 2>/dev/null)"
+ac_key_mode="$(stat -c '%a' "$ac_file" 2>/dev/null || stat -f '%Lp' "$ac_file" 2>/dev/null)"
+assert_eq "hidden-service dir is 0700" "$ac_dir_mode" "700"
+assert_eq "authorized_clients dir is 0700" "$ac_subdir_mode" "700"
+assert_eq "authorized_clients key file is 0600" "$ac_key_mode" "600"
 # With client-auth OFF, an existing authorized_clients dir is cleared (onion falls back to password-only).
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 (
@@ -4949,6 +4959,15 @@ else
     bad "audit log trimmed back under the cap" "$audit_size bytes"
 fi
 assert_eq "trim keeps the newest entries (fresh entry is the last line)" "$(tail -n 1 "$AUDIT" | jq -r '.action')" "commit"
+# Pin the line count too, not just the byte size: control_audit trims to `tail -n 2000` BEFORE
+# appending the triggering entry, so the file must land at <= 2001 lines (2000 kept + the new one) —
+# the "newest ~2000 lines" behavior the byte-size check above doesn't directly prove.
+audit_lines="$(wc -l <"$AUDIT" | tr -d ' ')"
+if [ "$audit_lines" -le 2001 ]; then
+    ok "audit log trim caps the line count near the newest 2000 entries ($audit_lines lines)"
+else
+    bad "audit log trim caps the line count near the newest 2000 entries" "$audit_lines lines"
+fi
 
 echo "== black-box: spool intake cap + symlink refusal + stale sweep (#33 hardening) =="
 UUID4="44444444-4444-4444-8444-444444444444"
@@ -5647,6 +5666,56 @@ CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA2/config.json" run_sourced "$SANDBOX
 assert_contains "workers.list worker-apply resolves the rig (budget rejection proves pre-dial success)" \
     "$(jq -r '.error // ""' "$WA2/results/$u8.json")" "too many worker config changes"
 
+echo "== control channel: worker config apply ACCEPT path succeeds + is audited (#185) =="
+# Mirrors the reject-path setup above, but with a stub curl standing in for the rig's control API so a
+# fully-valid worker-apply actually dials, gets accepted (202 + change_id), and polls the rig's
+# /status to a terminal "applied" — proving the success leg of #185, not just the fail-closed guards
+# exercised above it.
+WA3="$SANDBOX/ctrl185-accept"
+mkdir -p "$WA3/staged" "$WA3/results" "$WA3/audit" "$WA3/bin"
+cat >"$WA3/config.json" <<'EOF'
+{ "dashboard": { "workers": [
+    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" }
+] } }
+EOF
+# A minimal curl stand-in: no real network dial. Reads its own args for `-o <file>` and the trailing
+# URL (curl always puts flags/headers/data before the bare URL, so the last plain token IS the URL);
+# serves a canned 202 body for POST .../apply and a terminal "applied" 200 body for GET .../status —
+# mirroring what a real RigForge rig's control API returns (rigforge#236's status shape).
+cat >"$WA3/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+*/apply)
+    printf '{"change_id":"chg-1"}' >"$out"
+    printf '202' ;;
+*/status)
+    printf '{"change_id":"chg-1","status":"applied","changed_keys":["pools"]}' >"$out"
+    printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$WA3/bin/curl"
+u9="12121212-1212-4212-8212-121212121212"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"pools":["pool.example:3333"]}}\n' "$u9" >"$WA3/req.json"
+PATH="$WA3/bin:$PATH" CONTROL_WA_BUDGET=1 PITHEAD_CONFIG_FILE="$WA3/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$WA3/req.json" "$WA3" >/dev/null 2>&1
+assert_eq "worker-apply accept path reaches a terminal 'applied' status" \
+    "$(jq -r '.status' "$WA3/results/$u9.json" 2>/dev/null)" "applied"
+assert_eq "worker-apply accept path records the rig's change_id" \
+    "$(jq -r '.change_id' "$WA3/results/$u9.json" 2>/dev/null)" "chg-1"
+assert_eq "worker-apply accept path records the rig's changed_keys" \
+    "$(jq -rc '.changed_keys' "$WA3/results/$u9.json" 2>/dev/null)" '["pools"]'
+assert_contains "worker-apply accept is audited as applied" \
+    "$(cat "$WA3/audit/control.log")" '"action":"worker-apply","status":"applied"'
+
 # ---------------------------------------------------------------------------
 echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
 # The closed-schema control gate (#537, pithead ~L4706) relies on this invariant: every config.json
@@ -5904,6 +5973,35 @@ assert_contains "pointer mentions dashboard.energy.cost_per_kwh (#504)" "$pointe
 assert_contains "pointer mentions workers.list (per-worker overrides, #506)" "$pointer_out" "workers.list"
 assert_contains "pointer points at docs/configuration.md" "$pointer_out" "docs/configuration.md"
 assert_contains "pointer mentions the dashboard's config editor" "$pointer_out" "dashboard's config editor"
+
+echo "== black-box: 'pithead setup' completes end-to-end from a wizard-produced config (#502) =="
+# Everything above drives the wizard sub-functions directly (sourced). Nothing drives the actual
+# command an operator runs — this is the gap. ensure_config_exists refuses a piped, non-interactive
+# run OUTRIGHT when config.json is missing ([ ! -t 0 ] -> error, pithead ~L2118) — that gate is
+# deliberate (don't silently generate a config from a script with no human reading the prompts), and
+# it's exactly why the wizard functions were split out for testing (the comment above
+# ensure_config_exists says so) rather than something to fake a tty around here. So: produce
+# config.json the same piped-stdin way the wizard tests above do (proving the Q&A -> config path,
+# same as W1), THEN hand it to the real `setup` command, which skips straight past that gate
+# ([-f "$CONFIG_FILE"] short-circuit) and drives its own two remaining prompts (dashboard hostname,
+# "start now?") from stdin like any other `read -r -p`. Same docker/sudo-stubbed sandbox as the apply
+# black-box tests above; --skip-deps/--skip-optimize keep it host-safe (no apt/GRUB/sysctl edits);
+# declining "start now?" stops short of actually bringing containers up.
+SU="$SANDBOX/setup-e2e"
+mkdir -p "$SU/build/tari" "$SU/build/dashboard"
+: >"$SU/build/dashboard/Dockerfile"
+cp "$STACK" "$SU/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$SU/build/tari/"
+make_stubs "$SU/bin"
+printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "TARISETUPWALLET" | run_sourced "$SU" run_wizard >/dev/null 2>&1
+if [ -f "$SU/config.json" ]; then ok "setup e2e: wizard stage produces config.json"; else bad "setup e2e: wizard stage produces config.json" "no file at $SU/config.json"; fi
+su_out="$(cd "$SU" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$SU/bin:$PATH" ./pithead setup --skip-deps --skip-optimize 2>&1)"
+su_rc=$?
+assert_rc "'pithead setup' exits 0 given an existing config.json" "$su_rc" "0"
+assert_contains "'pithead setup' reports completion" "$su_out" "Deployment preparation complete"
+assert_eq "'pithead setup' writes a completed .env" \
+    "$(run_sourced "$SU" env_get_file "$SU/.env" DEPLOYMENT_COMPLETED)" "true"
+unset SU su_out su_rc
 
 unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
 
