@@ -4722,6 +4722,11 @@ touch -t 202001010000 "$REQS/stale-req.json"
 run_pending >/dev/null
 [ ! -f "$STAGED/stale.json" ] && ok "aged staged file swept" || bad "aged staged file swept" "still present"
 [ ! -f "$REQS/stale-req.json" ] && ok "aged request file swept" || bad "aged request file swept" "still present"
+# Orphaned claim sweep (#548): a `.claim.<pid>` left behind by a runner that died mid-dispatch
+# (the errexit gap this issue closes) is swept the same way as stale staged/request files.
+touch -t 202001010000 "$C/data/control/.claim.12345"
+run_pending >/dev/null
+[ ! -f "$C/data/control/.claim.12345" ] && ok "stale orphaned claim swept" || bad "stale orphaned claim swept" "still present"
 # Per-run intake cap: 60 pending intents → one run claims exactly 50 and LEAVES the remainder in
 # requests/ for the next path-unit fire (deterministic overflow — nothing is dropped). Invalid
 # JSON bodies keep each of the 60 on the cheap discard path; they still count against the cap.
@@ -4935,6 +4940,30 @@ assert_eq "version-mismatched (rollback) bundle is refused" "$(jq -r '.status' "
 assert_contains "rollback refusal names the mismatch" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rollback"
 assert_eq "rollback bundle extracts nothing (VERSION untouched)" "$(cat "$UPG/VERSION")" "1.3.1"
 assert_eq "rollback bundle never ran a new pithead" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null || echo none)" "none"
+
+# #548: a bundle that gzips fine but carries no pithead/VERSION at all (corrupt download, or a
+# hostile non-pithead archive) must fail cleanly — not kill the runner via errexit and leave the
+# result stuck at "running" with an orphaned claim and the rest of the queue abandoned.
+reset_upgrade_state
+mkdir -p "$UPGB/noversion/pithead"
+cp "$UPGB/pithead/pithead" "$UPGB/noversion/pithead/pithead"
+tar -czf "$UPGB/noversion.tar.gz" -C "$UPGB/noversion" pithead
+UUPG2="77777777-7777-4777-8777-777777777777"
+upgrade_intent "$UUPG" "v9.9.9"
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG2" >"$UPGREQS/$UUPG2.json"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+    CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/noversion.tar.gz" \
+    ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "bundle missing pithead/VERSION reports failed (not stuck running)" \
+    "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "missing-VERSION failure names the cause" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "missing pithead/VERSION"
+assert_eq "missing-VERSION bundle extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+[ -z "$(find "$UPG/data/control" -maxdepth 1 -name '.claim.*' 2>/dev/null)" ] &&
+    ok "missing-VERSION failure releases its claim" || bad "missing-VERSION failure releases its claim" "claim file left behind"
+[ -f "$UPGRESULTS/$UUPG2.json" ] &&
+    ok "the rest of the queue is not abandoned (second intent still processed)" ||
+    bad "the rest of the queue is not abandoned (second intent still processed)" "no result written for the second intent"
+rm -f "$UPGRESULTS/$UUPG2.json" "$UPGREQS/$UUPG2.json"
 
 # Throttle: a second attempt straight after is refused for 10 minutes (egress-beacon guard).
 # The happy path replaced $U/pithead with the fake bundle's script — restore the real runner

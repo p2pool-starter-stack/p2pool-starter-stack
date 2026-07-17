@@ -5045,8 +5045,17 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # still verify. Refuse unless the bundle's own top-level VERSION matches the host-derived
     # $tag, read WITHOUT extracting (the bundle unpacks to a fixed `pithead/` dir) so a mismatch
     # touches nothing on disk.
+    # #548: the extraction above is a plain assignment, so under errexit a tar failure (a bundle
+    # missing pithead/VERSION — corrupt download or a hostile non-pithead archive) would kill the
+    # runner outright instead of reaching _upg_fail below, leaving this result stuck at "running"
+    # and the claim never released. Guard it like every other dial/extract in this function.
     local bundle_version
-    bundle_version=$(tar -xzOf "$bundle" pithead/VERSION 2>/dev/null | tr -d '[:space:]')
+    if ! bundle_version=$(tar -xzOf "$bundle" pithead/VERSION 2>/dev/null | tr -d '[:space:]') ||
+        [ -z "$bundle_version" ]; then
+        rm -f "$bundle"
+        _upg_fail "the $tag bundle is missing pithead/VERSION (corrupt or not a pithead bundle) — refusing to install it. The stack keeps running v$PITHEAD_VERSION."
+        return 0
+    fi
     if [ "v$bundle_version" != "$tag" ]; then
         rm -f "$bundle"
         _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
@@ -5333,6 +5342,10 @@ control_run_pending() {
     # than an hour that no commit ever claimed, so a burst that is never committed cannot pile up
     # (staged intents already expire per-commit at 10 min; this bounds accumulation regardless).
     find "$cdir/staged" "$cdir/requests" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
+    # Orphaned claims (#548): a claimed request whose handler died before the loop's own `rm -f
+    # "$claim"` below (an errexit gap, e.g.) leaves a `.claim.<pid>` file sitting directly in
+    # $cdir forever. Same age cutoff — a claim in flight never lives past a single drain.
+    find "$cdir" -maxdepth 1 -type f -name '.claim.*' -mmin +60 -delete 2>/dev/null || true
     local names name req claim n=0
     # Per-run cap (#33 hardening): a single trigger drains at most this many intents, so a flood in
     # the spool can't hold the root runner for an unbounded stretch — the leftovers wait for the
