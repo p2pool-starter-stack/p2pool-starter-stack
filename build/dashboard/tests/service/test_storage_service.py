@@ -989,17 +989,6 @@ class TestWorkerHistory:
         values = mock_conn.executemany.call_args.args[1]
         assert len(values) == 3
 
-    def test_get_filters_by_worker_name(self, state_manager):
-        t0 = time.time()
-        state_manager.add_worker_history(
-            [
-                {"ts": t0, "name": "rig1", "h15": 1.0, "accepted": 1, "rejected": 0},
-                {"ts": t0, "name": "rig2", "h15": 2.0, "accepted": 2, "rejected": 0},
-            ]
-        )
-        rows = state_manager.get_worker_history(name="rig1")
-        assert len(rows) == 1 and rows[0]["name"] == "rig1"
-
     def test_get_since_filters_the_window(self, state_manager):
         t0 = time.time()
         state_manager.add_worker_history(

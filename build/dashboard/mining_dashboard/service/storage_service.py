@@ -1054,28 +1054,20 @@ class StateManager:
         except sqlite3.Error as e:
             self._table_write_failed("worker_history", "Worker History Insert Error", e)
 
-    def get_worker_history(
-        self, name: str | None = None, since: float = 0.0
-    ) -> list[dict[str, Any]]:
-        """Per-worker hashrate/share samples at or after `since` (default: all), oldest first.
-        Filters to one rig's `name` when given, else every rig."""
+    def get_worker_history(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """Per-worker hashrate/share samples (every rig) at or after `since` (default: all),
+        oldest first. A per-worker filter isn't needed yet — add a WHERE name = ? when a
+        consumer (e.g. #492) actually reads one rig's series."""
         try:
             with self._db_lock:
                 if not self._conn:
                     return []
                 cursor = self._conn.cursor()
-                if name is None:
-                    cursor.execute(
-                        "SELECT ts, name, h15, accepted, rejected FROM worker_history "
-                        "WHERE ts >= ? ORDER BY ts ASC",
-                        (since,),
-                    )
-                else:
-                    cursor.execute(
-                        "SELECT ts, name, h15, accepted, rejected FROM worker_history "
-                        "WHERE ts >= ? AND name = ? ORDER BY ts ASC",
-                        (since, name),
-                    )
+                cursor.execute(
+                    "SELECT ts, name, h15, accepted, rejected FROM worker_history "
+                    "WHERE ts >= ? ORDER BY ts ASC",
+                    (since,),
+                )
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
             self.logger.error(f"Worker History Read Error: {e}")
