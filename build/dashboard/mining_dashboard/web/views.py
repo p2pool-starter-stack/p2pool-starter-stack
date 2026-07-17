@@ -1505,7 +1505,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # routes 404 when off, so this is display gating only, not a security control. Read at
         # call time (module attribute, not from-import) so tests can flip the flag per-app.
         "control_enabled": config.DASHBOARD_CONTROL_ENABLED,
-        "last_update": format_time_abs(time.time()),
+        # #559: use the snapshot's own timestamp, not now — a restored stale snapshot must
+        # report its true age; falls back to now only when timestamp is missing/0.
+        "last_update": format_time_abs(data.get("timestamp") or time.time()),
         "range": range_arg,
         "window": {"from": window[0], "to": window[1]} if window else None,
         "avg_window": avg_window,
