@@ -187,10 +187,8 @@ verify_release() {
 verify_release_images_direct() {
     stage "verify_release_images() direct exercise (#376/#459) — the real host-path function"
     local bundle_dir="$WORK/pithead"
-    if [ ! -d "$bundle_dir" ]; then
-        tar -xzf "$WORK/pithead.tar.gz" -C "$WORK" ||
-            die "Could not extract the published bundle to exercise verify_release_images()."
-    fi
+    tar -xzf "$WORK/pithead.tar.gz" -C "$WORK" ||
+        die "Could not extract the published bundle to exercise verify_release_images()."
     [ -x "$bundle_dir/pithead" ] || die "Extracted bundle has no executable pithead at $bundle_dir."
 
     if [ "$SIGNED" -eq 1 ]; then
@@ -220,18 +218,13 @@ verify_release_images_direct() {
     rm -rf "$tdir"
     cp -a "$bundle_dir" "$tdir"
     cp "$pub_src" "$tdir/cosign.pub"
-    local orig_sha bad_sha last_char new_char
+    local orig_sha bad_sha
     orig_sha="$(grep -oE 'pithead-tor:[^[:space:]]*@sha256:[0-9a-f]+' "$tdir/docker-compose.yml" | grep -oE 'sha256:[0-9a-f]+' | head -1)"
     [ -n "$orig_sha" ] ||
         die "Could not find a digest-pinned pithead-tor image in the bundle's docker-compose.yml to tamper — the bundle isn't digest-pinned (#461 regression)."
-    # Flip the last hex character so the digest keeps its real shape (64 hex chars) but names a
-    # manifest that exists nowhere in the registry — a mismatched, not malformed, digest.
-    last_char="${orig_sha: -1}"
-    case "$last_char" in
-    0) new_char=1 ;;
-    *) new_char=0 ;;
-    esac
-    bad_sha="${orig_sha%?}${new_char}"
+    # A fixed all-zero 64-hex-char digest: the right SHAPE (a sha256 never legitimately hashes to
+    # it) so verify_release_images sees a well-formed-but-mismatched digest, not a parse error.
+    bad_sha="sha256:$(printf '%064d' 0)"
     sed -E "s#(pithead-tor:[^[:space:]]*@)$orig_sha#\\1$bad_sha#" "$tdir/docker-compose.yml" >"$tdir/docker-compose.yml.tmp" &&
         mv "$tdir/docker-compose.yml.tmp" "$tdir/docker-compose.yml"
     grep -qF "$bad_sha" "$tdir/docker-compose.yml" ||
