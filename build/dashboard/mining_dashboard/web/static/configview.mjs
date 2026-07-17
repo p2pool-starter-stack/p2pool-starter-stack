@@ -4,8 +4,24 @@
 // confirm modal (destructive changes need a typed APPLY) → POST /api/control/commit → result.
 // The view only ever ASKS — every request rides the X-Pithead-Control header (CSRF guard) and
 // the host decides. When the channel is off the routes 404 and this view explains how to enable.
+//
+// Two edit modes (#529, RATIFIED Wave-0 decision — mirrors #518's Worker Inspect shape exactly):
+// **Form** (the default) pins a `core` group — the wizard's own shortlist, `_core_keys` on the
+// fetched config, sourced from config.core-keys.json so the two never drift apart — above the
+// config's natural sections, each a native <details> collapsed by default. **JSON** is the same
+// fetched config as one editable textarea, with a Load-from-file fill button (FileReader, no
+// upload). Both modes build the SAME `proposed` config object and POST it to the SAME
+// /api/control/preview → confirm → /api/control/commit pipeline — the closed-schema gate on the
+// host is the only validation authority; neither mode adds a server-side path the other lacks.
 
-import { applyEdits, buildSections, SECRET_HINT } from "./configlogic.mjs";
+import {
+  applyEdits,
+  buildSections,
+  jsonSyntaxError,
+  parseConfigJson,
+  regroupCore,
+  SECRET_HINT,
+} from "./configlogic.mjs";
 import { Component, html } from "./preact.mjs";
 
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
@@ -38,9 +54,12 @@ async function pollResult(id, skip, max = POLL_MAX) {
   );
 }
 
-const Field = ({ field, edits, onEdit }) => {
+// `full` (#529): the pinned Core card mixes fields from several sections, so its rows need the
+// FULL dotted key ("monero.wallet_address") to stay unambiguous; a natural section already says
+// which section it is via its own heading, so its rows keep the shorter relative label.
+const Field = ({ field, edits, onEdit, full }) => {
   const value = field.key in edits ? edits[field.key] : field.value;
-  const label = field.path.slice(1).join(".") || field.path[0];
+  const label = full ? field.key : field.path.slice(1).join(".") || field.path[0];
   let input;
   if (field.type === "boolean") {
     input = html`<select value=${String(value)} onChange=${(e) => onEdit(field.key, e.target.value)}>
@@ -113,7 +132,11 @@ export class ConfigView extends Component {
       phase: "loading", // loading | disabled | form | previewing | confirm | committing | done | error
       cfg: null,
       sections: [],
+      coreKeys: [],
       edits: {},
+      mode: "form", // form | json (#529)
+      editText: "",
+      jsonError: null,
       preview: null,
       confirmText: "",
       result: null,
@@ -134,10 +157,35 @@ export class ConfigView extends Component {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const cfg = await res.json();
-      this.setState({ phase: "form", cfg, sections: buildSections(cfg), edits: {} });
+      this.setState({
+        phase: "form",
+        cfg,
+        sections: buildSections(cfg),
+        coreKeys: cfg._core_keys || [],
+        edits: {},
+        editText: JSON.stringify(cfg, null, 2),
+        jsonError: null,
+      });
     } catch (e) {
       this.setState({ phase: "error", error: String(e) });
     }
+  }
+
+  // JSON mode (#529, mirrors WorkerInspect.onJsonInput): live parse-error feedback while typing,
+  // not only on Save.
+  onJsonInput(text) {
+    this.setState({ editText: text, jsonError: jsonSyntaxError(text) });
+  }
+
+  // Fill the JSON textarea from a local file (#529, mirrors WorkerInspect.onFilePick, #518) — a
+  // FileReader read, never an upload; the operator still reviews and clicks Save like any other
+  // JSON-mode edit.
+  onFilePick(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => this.onJsonInput(String(reader.result));
+    reader.readAsText(file);
   }
 
   // Poll the result endpoint until a terminal result lands (shared pollResult above; kept as a
@@ -146,10 +194,24 @@ export class ConfigView extends Component {
     return pollResult(id, skip);
   }
 
+  // Build the SAME staged `proposed` config object regardless of mode (#529) — the form folds
+  // edits back via applyEdits; JSON mode's textarea already IS the candidate config, so it only
+  // needs parsing. Either result feeds the identical preview/commit pipeline below.
+  buildProposed() {
+    const { cfg, sections, edits, mode, editText } = this.state;
+    if (mode === "json") return parseConfigJson(editText);
+    return { config: applyEdits(cfg, sections, edits) };
+  }
+
   async save() {
+    const staged = this.buildProposed();
+    if (staged.error) {
+      this.setState({ error: staged.error });
+      return;
+    }
     this.setState({ phase: "previewing", error: null });
     try {
-      const proposed = applyEdits(this.state.cfg, this.state.sections, this.state.edits);
+      const proposed = staged.config;
       const res = await fetch("/api/control/preview", {
         method: "POST",
         headers: CONTROL_HEADERS,
@@ -190,8 +252,61 @@ export class ConfigView extends Component {
     }
   }
 
+  // Form mode (#529): the core group (pinned, never collapsed) above the config's natural
+  // sections, each a native <details> — collapsed by default (no `open` attribute), which gets
+  // keyboard/a11y toggling for free, the same "native platform feature over JS state" call
+  // Worker Inspect's own <dialog> made (#518).
+  renderForm(core, groups, edits) {
+    const onEdit = (k, v) => this.setState({ edits: { ...edits, [k]: v } });
+    const field = (f, full) =>
+      html`<${Field} field=${f} edits=${edits} full=${full} onEdit=${onEdit} />`;
+    return html`<div class="grid">
+        ${
+          core.length
+            ? html`<div class="card config-section config-section-core">
+                <h3>Core</h3>
+                ${core.map((f) => field(f, true))}
+            </div>`
+            : null
+        }
+        ${groups.map(
+          (s) => html`<details class="card config-section">
+              <summary>${s.name}</summary>
+              ${s.fields.map((f) => field(f))}
+          </details>`,
+        )}
+    </div>`;
+  }
+
+  // JSON mode (#529): the whole candidate config as one textarea, mirroring Worker Inspect's JSON
+  // mode (#518) — inline parse-error feedback, and a Load-from-file fill button.
+  renderJson(editText, jsonError, busy) {
+    return html`<div class="card config-section">
+        <textarea class="worker-edit" spellcheck="false" rows="20" disabled=${busy}
+                  value=${editText} onInput=${(e) => this.onJsonInput(e.target.value)}></textarea>
+        ${jsonError ? html`<p class="status-bad text-xs">${jsonError}</p>` : null}
+        <div class="mt-1">
+            <label class="text-muted text-xs">Load from file:
+                <input type="file" accept="application/json,.json" disabled=${busy} onChange=${(e) => this.onFilePick(e)} />
+            </label>
+        </div>
+    </div>`;
+  }
+
   render() {
-    const { phase, sections, edits, preview, confirmText, result, error } = this.state;
+    const {
+      phase,
+      sections,
+      coreKeys,
+      edits,
+      mode,
+      editText,
+      jsonError,
+      preview,
+      confirmText,
+      result,
+      error,
+    } = this.state;
     if (phase === "loading")
       return html`<div class="card"><p class="text-muted">Loading configuration…</p></div>`;
     if (phase === "disabled") {
@@ -225,21 +340,20 @@ export class ConfigView extends Component {
     }
     const busy = phase === "previewing" || phase === "committing";
     const dirty = Object.keys(edits).length > 0;
+    const canSave = mode === "json" ? !jsonError : dirty;
+    const { core, sections: groups } = regroupCore(sections, coreKeys);
     return html`<div class="config-view">
         ${error ? html`<div class="card"><p class="status-bad">${error}</p></div>` : null}
-        <div class="grid">
-            ${sections.map(
-              (s) => html`<div class="card config-section">
-                  <h3>${s.name}</h3>
-                  ${s.fields.map((f) => html`<${Field} field=${f} edits=${edits} onEdit=${(k, v) => this.setState({ edits: { ...edits, [k]: v } })} />`)}
-              </div>`,
-            )}
+        <div class="toggle-group mb-1">
+            <button class=${"btn-toggle" + (mode === "form" ? " active" : "")} onClick=${() => this.setState({ mode: "form" })}>Form</button>
+            <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} onClick=${() => this.setState({ mode: "json" })}>JSON</button>
         </div>
+        ${mode === "form" ? this.renderForm(core, groups, edits) : this.renderJson(editText, jsonError, busy)}
         <div class="config-actions">
-            <button class="btn-toggle active" disabled=${!dirty || busy} onClick=${() => this.save()}>
+            <button class="btn-toggle active" disabled=${!canSave || busy} onClick=${() => this.save()}>
                 ${phase === "previewing" ? "Previewing…" : "Save & preview changes"}
             </button>
-            ${dirty ? html`<button class="btn-toggle" disabled=${busy} onClick=${() => this.setState({ edits: {}, error: null })}>Discard edits</button>` : null}
+            ${mode === "form" && dirty ? html`<button class="btn-toggle" disabled=${busy} onClick=${() => this.setState({ edits: {}, error: null })}>Discard edits</button>` : null}
         </div>
         ${
           phase === "confirm" || phase === "committing"

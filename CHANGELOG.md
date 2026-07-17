@@ -43,6 +43,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   storage, retention, and a getter per series; charts/UI and `/api/state` exposure are deliberate
   follow-ups.
 
+- **The Configuration view regroups around core-vs-sections, plus a JSON edit mode (#529, RATIFIED
+  Wave-0 decision).** **Form** (the default) now pins a **Core** group at the top — the SAME
+  `config.core-keys.json` shortlist the first-run wizard reads, surfaced to the browser as
+  `_core_keys` on `GET /api/config` (one shared artifact, not a hand-maintained duplicate) — above
+  the rest of the schema, regrouped into its natural top-level sections and collapsed by default
+  (native `<details>`), so a typical edit shows a handful of fields instead of all ~94. **JSON**
+  sits beside it: the whole fetched config as one editable text block, with a **Load from file**
+  fill button (`FileReader`, no upload) — mirroring #518's Worker Inspect editor shape exactly,
+  down to reusing its `jsonSyntaxError` helper. Both modes build the identical staged config object
+  and submit it through the unchanged preview → confirm → commit pipeline; the host-side
+  closed-schema gate is still the only validation authority; neither mode opens a path the other
+  lacks. A masked secret (`{__secret__: true}`) still renders as a blank password field in Form
+  mode and round-trips untouched in JSON mode unless you edit it yourself.
+
 ### Changed
 
 - **The first-run wizard now asks a pool tier and a few shape questions, instead of hardcoding

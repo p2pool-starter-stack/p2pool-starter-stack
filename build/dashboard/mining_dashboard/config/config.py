@@ -191,6 +191,11 @@ HOST_CONFIG_PATH = os.environ.get("HOST_CONFIG_PATH", "/control/masked/config.js
 # keys the operator happens to have set (#33 "edit every setting"). A missing reference degrades to
 # the host config alone.
 HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config.reference.json")
+# config.core-keys.json (#502/#529): the wizard's core-key shortlist, bind-mounted read-only. The
+# SAME file the wizard reads, so the Configuration view can pin the SAME shortlist at the top of
+# the form instead of hand-maintaining a duplicate list. A missing/unreadable file degrades to no
+# core group (control_service.read_config falls back to an empty list).
+HOST_CORE_KEYS_PATH = os.environ.get("HOST_CORE_KEYS_PATH", "/host-config/config.core-keys.json")
 
 # --- Per-worker endpoint descriptors (#172, config.json: workers.list[]) ---
 # [{name, host?, port?, token?}] — per-rig overrides for the worker API probe when a rig doesn't

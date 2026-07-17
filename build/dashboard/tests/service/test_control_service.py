@@ -190,6 +190,41 @@ class TestReferenceMerge:
         assert cfg["monero"]["node_password"] == {"__secret__": True}
 
 
+class TestCoreKeys:
+    """read_config's ``_core_keys`` field (#502/#529): the SAME config.core-keys.json file the
+    wizard reads, surfaced to the browser so the Configuration view's core group is never a second
+    hand-maintained list. Underscore-prefixed like config.reference.json's own ``_docs``, so
+    buildSections on the frontend already skips it as a config section for free."""
+
+    def test_core_keys_served_from_the_shared_file(self, spool, monkeypatch):
+        core_keys_path = spool / "config.core-keys.json"
+        core_keys_path.write_text(json.dumps(["monero.wallet_address", "p2pool.pool"]))
+        monkeypatch.setattr(control_service.config, "HOST_CORE_KEYS_PATH", str(core_keys_path))
+        cfg = control_service.read_config()
+        assert cfg["_core_keys"] == ["monero.wallet_address", "p2pool.pool"]
+
+    def test_missing_core_keys_file_degrades_to_empty_list(self, spool, monkeypatch):
+        monkeypatch.setattr(
+            control_service.config, "HOST_CORE_KEYS_PATH", str(spool / "does-not-exist.json")
+        )
+        cfg = control_service.read_config()
+        assert cfg["_core_keys"] == []
+
+    def test_malformed_core_keys_file_degrades_to_empty_list(self, spool, monkeypatch):
+        core_keys_path = spool / "config.core-keys.json"
+        core_keys_path.write_text("{not json")
+        monkeypatch.setattr(control_service.config, "HOST_CORE_KEYS_PATH", str(core_keys_path))
+        cfg = control_service.read_config()
+        assert cfg["_core_keys"] == []
+
+    def test_core_keys_file_not_a_list_degrades_to_empty_list(self, spool, monkeypatch):
+        core_keys_path = spool / "config.core-keys.json"
+        core_keys_path.write_text(json.dumps({"not": "a list"}))
+        monkeypatch.setattr(control_service.config, "HOST_CORE_KEYS_PATH", str(core_keys_path))
+        cfg = control_service.read_config()
+        assert cfg["_core_keys"] == []
+
+
 class TestWorkerApply:
     """Worker config-apply spooling + validation (#185). The intent carries only the worker name +
     writable-key changes — never a host, port, or token (those stay host-side, #440)."""

@@ -1018,10 +1018,20 @@ button.upgrade-btn {
 /* ---- Configuration view (#33) ----------------------------------------------------------
  * The config editor: sectioned form fields, an inline field warning for high-consequence
  * keys, and the preview/confirm modal listing the same change rows `pithead apply` prints
- * (DEST rows styled as warnings). */
+ * (DEST rows styled as warnings). Sections regroup around a pinned core group + collapsible
+ * natural sections (#529) — collapsed <details>, the same pattern as .egress-details above. */
 .config-section h3 {
   margin-top: 0;
   text-transform: capitalize;
+}
+.config-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  text-transform: capitalize;
+  margin-bottom: 8px;
+}
+.config-section-core {
+  border-color: var(--accent);
 }
 .config-field {
   display: grid;

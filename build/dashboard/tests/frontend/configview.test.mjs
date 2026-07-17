@@ -150,3 +150,169 @@ test("an empty preview leaves Confirm disabled", () => {
   assert.match(out, /No configuration changes detected/);
   assert.match(out, /disabled/); // nothing to commit
 });
+
+// --- Core-vs-sections regroup + two edit modes (#529, RATIFIED Wave-0) -----------------------
+//
+// The form/JSON split and the collapse-by-default sections, driven by ConfigView.state directly —
+// the same instance-state pattern workerview.test.mjs uses for WorkerInspect (no DOM, no mount).
+
+import { buildSections } from "../../mining_dashboard/web/static/configlogic.mjs";
+
+function stubSetState(inst) {
+  inst.setState = (patch) => {
+    const next = typeof patch === "function" ? patch(inst.state, inst.props) : patch;
+    Object.assign(inst.state, next);
+  };
+}
+
+const CFG = {
+  monero: { wallet_address: "4AAAA", mode: "local", prune: true },
+  p2pool: { pool: "mini", stratum_password: "" },
+  dashboard: { auth: { username: "admin", password: { __secret__: true } } },
+};
+const CORE_KEYS = ["monero.wallet_address", "p2pool.pool", "dashboard.auth.username"];
+
+function readyView(cfg = CFG, coreKeys = CORE_KEYS) {
+  const inst = new ConfigView({});
+  stubSetState(inst);
+  inst.state = {
+    ...inst.state,
+    phase: "form",
+    cfg,
+    sections: buildSections(cfg),
+    coreKeys,
+    editText: JSON.stringify(cfg, null, 2),
+  };
+  return inst;
+}
+
+test("load() sources the core group from the fetched config's _core_keys (config.core-keys.json, #502/#529)", async () => {
+  const inst = new ConfigView({});
+  stubSetState(inst);
+  const withCore = { ...CFG, _core_keys: CORE_KEYS };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    status: 200,
+    ok: true,
+    json: async () => withCore,
+  });
+  try {
+    await inst.load();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(inst.state.coreKeys, CORE_KEYS);
+  const out = renderToString(inst.render());
+  assert.match(out, /Core/);
+  assert.match(out, /wallet_address/);
+});
+
+test("form mode: the core section renders pinned fields; each natural section is a collapsed <details>", () => {
+  const out = renderToString(readyView().render());
+  assert.match(out, /config-section-core/); // the pinned core card
+  assert.match(out, /<details/); // natural sections are native <details>
+  assert.doesNotMatch(out, /<details[^>]*\bopen\b/); // collapsed by default, not `open`
+});
+
+test("form mode: a core key is lifted out of its own section (no duplicate row)", () => {
+  const inst = readyView();
+  const out = renderToString(inst.render());
+  // dashboard.auth.username is core (rendered with its FULL key, since the pinned card mixes
+  // several sections); dashboard.auth.password stays behind in the dashboard <details> (rendered
+  // with its short relative label, since the section heading already says "dashboard").
+  const matches = out.match(/config-field-name">[^<]*username/g) || [];
+  assert.equal(matches.length, 1); // rendered once (in Core), not twice
+  assert.match(out, /config-field-name">dashboard\.auth\.username/); // full key inside Core
+  assert.match(out, /config-field-name">auth\.password/); // relative label inside its section
+});
+
+test("mode toggle switches between Form and JSON rendering", () => {
+  const inst = readyView();
+  assert.match(renderToString(inst.render()), /config-section-core/);
+  inst.state.mode = "json";
+  const out = renderToString(inst.render());
+  assert.match(out, /worker-edit/); // the JSON textarea reuses Worker Inspect's own class
+  assert.doesNotMatch(out, /config-section-core/);
+});
+
+// --- buildProposed(): both modes build the same staged config object -------------------------
+
+test("buildProposed: form mode folds edits back the same way applyEdits does", () => {
+  const inst = readyView();
+  inst.state.edits = { "p2pool.pool": "main" };
+  const staged = inst.buildProposed();
+  assert.equal(staged.config.p2pool.pool, "main");
+  assert.equal(staged.config.monero.wallet_address, "4AAAA"); // untouched fields survive
+});
+
+test("buildProposed: JSON mode parses the SAME equivalent edit into an identical staged object", () => {
+  const form = readyView();
+  form.state.edits = { "p2pool.pool": "main" };
+  const viaForm = form.buildProposed();
+
+  const json = readyView();
+  json.state.mode = "json";
+  json.state.editText = JSON.stringify(viaForm.config);
+  const viaJson = json.buildProposed();
+
+  assert.deepEqual(viaJson, viaForm); // identical staged config from either mode
+});
+
+test("buildProposed: JSON mode surfaces a parse error instead of a staged config", () => {
+  const inst = readyView();
+  inst.state.mode = "json";
+  inst.state.editText = "{not json";
+  assert.match(inst.buildProposed().error, /Not valid JSON/);
+});
+
+// --- Masked-secret sentinel round-trip, both modes (#508/#440) --------------------------------
+
+test("form mode: leaving a masked secret untouched keeps the sentinel in the staged config", () => {
+  const inst = readyView();
+  const staged = inst.buildProposed(); // no edits at all
+  assert.deepEqual(staged.config.dashboard.auth.password, { __secret__: true });
+});
+
+test("JSON mode: an untouched sentinel round-trips verbatim through the textarea", () => {
+  const inst = readyView();
+  inst.state.mode = "json";
+  assert.match(inst.state.editText, /__secret__/); // still the literal sentinel shape
+  const staged = inst.buildProposed();
+  assert.deepEqual(staged.config.dashboard.auth.password, { __secret__: true });
+});
+
+// --- File-fill button (#529, mirrors #518's ~5 lines) ------------------------------------------
+
+test("the fill button reads a picked file into the JSON textarea via FileReader", () => {
+  const inst = readyView();
+  inst.state.mode = "json";
+  const content = JSON.stringify({ ...CFG, p2pool: { pool: "main", stratum_password: "" } });
+  let capturedOnLoad;
+  class FakeFileReader {
+    set onload(fn) {
+      capturedOnLoad = fn;
+    }
+    readAsText() {
+      this.result = content;
+      capturedOnLoad();
+    }
+  }
+  const realFileReader = globalThis.FileReader;
+  globalThis.FileReader = FakeFileReader;
+  try {
+    inst.onFilePick({ target: { files: [{ name: "config.json" }] } });
+  } finally {
+    globalThis.FileReader = realFileReader;
+  }
+  assert.equal(inst.state.editText, content);
+  assert.equal(inst.state.jsonError, null);
+  assert.equal(inst.buildProposed().config.p2pool.pool, "main");
+});
+
+test("the fill button is a no-op when the file picker is dismissed with no file", () => {
+  const inst = readyView();
+  inst.state.mode = "json";
+  const before = inst.state.editText;
+  inst.onFilePick({ target: { files: [] } });
+  assert.equal(inst.state.editText, before);
+});

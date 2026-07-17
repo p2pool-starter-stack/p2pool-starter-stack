@@ -11,6 +11,9 @@ import {
   applyEdits,
   buildSections,
   isSecretSentinel,
+  jsonSyntaxError,
+  parseConfigJson,
+  regroupCore,
 } from "../../mining_dashboard/web/static/configlogic.mjs";
 
 const CFG = {
@@ -113,4 +116,82 @@ test("applyEdits: garbage in a number field passes through for the host validato
   const sections = buildSections(CFG);
   const proposed = applyEdits(CFG, sections, { "monero.remote.rpc_port": "lots" });
   assert.equal(proposed.monero.remote.rpc_port, "lots");
+});
+
+// --- Core-vs-sections regroup (#529, RATIFIED Wave-0) ---------------------------------------
+
+const CORE_KEYS = ["monero.wallet_address", "p2pool.pool", "dashboard.auth.username"];
+
+test("regroupCore: lifts core-key fields into one pinned group, out of their sections", () => {
+  const { core, sections } = regroupCore(buildSections(CFG), CORE_KEYS);
+  assert.deepEqual(
+    core.map((f) => f.key).sort(),
+    CORE_KEYS.slice().sort(),
+  );
+  // The lifted fields no longer appear in their natural section...
+  const monero = sections.find((s) => s.name === "monero");
+  assert.ok(!monero.fields.some((f) => f.key === "monero.wallet_address"));
+  // ...but every OTHER field in that section is untouched.
+  assert.ok(monero.fields.some((f) => f.key === "monero.prune"));
+  const dashboard = sections.find((s) => s.name === "dashboard");
+  assert.ok(!dashboard.fields.some((f) => f.key === "dashboard.auth.username"));
+  assert.ok(dashboard.fields.some((f) => f.key === "dashboard.auth.password"));
+});
+
+test("regroupCore: a section left with no remaining fields is dropped, not shown empty", () => {
+  // Every leaf of p2pool is core: the section itself should disappear from the regrouped list.
+  const { sections } = regroupCore(buildSections(CFG), ["p2pool.pool", "p2pool.stratum_password"]);
+  assert.ok(!sections.some((s) => s.name === "p2pool"));
+});
+
+test("regroupCore: no core keys (missing/empty config.core-keys.json) leaves every field in its section", () => {
+  const original = buildSections(CFG);
+  const { core, sections } = regroupCore(original, []);
+  assert.deepEqual(core, []);
+  assert.deepEqual(
+    sections.map((s) => s.fields.length),
+    original.map((s) => s.fields.length),
+  );
+});
+
+test("regroupCore: workers.list isn't a field to begin with (array, #172) — it never appears, core or not", () => {
+  const withWorkers = {
+    ...CFG,
+    workers: { list: [{ name: "rig1" }], api_auth: "none" },
+  };
+  const { core, sections } = regroupCore(buildSections(withWorkers), [
+    ...CORE_KEYS,
+    "workers.list",
+  ]);
+  assert.ok(!core.some((f) => f.key === "workers.list"));
+  assert.ok(!sections.some((s) => s.fields.some((f) => f.key === "workers.list")));
+});
+
+// --- JSON mode's whole-config parse (#529) ----------------------------------------------------
+
+test("parseConfigJson: valid JSON builds the same staged config shape applyEdits does", () => {
+  const sections = buildSections(CFG);
+  const viaForm = applyEdits(CFG, sections, { "p2pool.pool": "main" });
+  const viaJson = parseConfigJson(JSON.stringify(viaForm));
+  assert.deepEqual(viaJson, { config: viaForm });
+});
+
+test("parseConfigJson: a masked secret round-trips verbatim through the textarea (#508/#440)", () => {
+  const out = parseConfigJson(JSON.stringify(CFG));
+  assert.deepEqual(out.config.dashboard.auth.password, { __secret__: true });
+});
+
+test("parseConfigJson: malformed JSON surfaces a parse error", () => {
+  assert.match(parseConfigJson("{not json").error, /Not valid JSON/);
+});
+
+test("parseConfigJson: a non-object (array, primitive) is rejected", () => {
+  assert.match(parseConfigJson("[1, 2]").error, /JSON object/);
+  assert.match(parseConfigJson("42").error, /JSON object/);
+});
+
+test("jsonSyntaxError: live check used for inline feedback while typing", () => {
+  assert.equal(jsonSyntaxError(""), null); // still typing — not an error yet
+  assert.equal(jsonSyntaxError('{"a": 1}'), null);
+  assert.match(jsonSyntaxError("{not json"), /Not valid JSON/);
 });

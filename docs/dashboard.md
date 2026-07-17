@@ -489,14 +489,31 @@ Edit `config.json` from the dashboard. Off by default: set `dashboard.control.en
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
 button then appears next to the Simple/Advanced toggle.
 
-The flow mirrors the CLI's `apply`:
+Two edit modes build the same candidate config and submit it through the same pipeline below
+([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
 
-1. The form is prefilled from a pre-masked copy of `config.json` the host renders into the
-   control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)), grouped by
-   section. Secrets (the dashboard password, the Telegram bot token, node RPC credentials, the
-   stratum password) show as "set — leave blank to keep"; their values never enter the dashboard
-   container, let alone the browser — leaving one untouched sends a sentinel back, and the host
-   swaps in the live value when it stages the change.
+- **Form** (the default) pins a **Core** group at the top — the same wallet-address /
+  `monero.mode` / `p2pool.pool` / dashboard-auth-and-host shortlist
+  [`./pithead setup`](getting-started.md#3-run-setup) asks, read from the one file the wizard and
+  this view share, [`config.core-keys.json`](../config.core-keys.json), so the two can't drift
+  apart. Below it, the rest of the schema is grouped by its natural top-level section (`monero`,
+  `tari`, `p2pool`, `telegram`, …), each collapsed by default, so a typical edit shows only the
+  handful of fields you're touching instead of the whole schema. `workers.list[]` (the per-rig
+  descriptors) isn't a form field here — a variable-length list has no single form control for it —
+  edit it via [Worker Inspect](#worker-inspect) or `config.json` directly.
+- **JSON** edits the whole fetched config as one text block, for operators who'd rather paste than
+  click through fields. A **Load from file** control (`FileReader`, no upload) fills it from a
+  saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect) uses. A
+  malformed edit is flagged inline before you click Save.
+
+The flow mirrors the CLI's `apply` either way:
+
+1. The form/textarea is prefilled from a pre-masked copy of `config.json` the host renders into the
+   control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)). Secrets (the
+   dashboard password, the Telegram bot token, node RPC credentials, the stratum password) show as
+   "set — leave blank to keep"; their values never enter the dashboard container, let alone the
+   browser — leaving one untouched sends a sentinel back (JSON mode carries it through verbatim
+   too), and the host swaps in the live value when it stages the change.
 2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own
@@ -508,7 +525,9 @@ The flow mirrors the CLI's `apply`:
 Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
 allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
 memory limits, time zone, the energy-calculator prices, …) and default-denies a change, in any
-direction, to anything else:
+direction, to anything else. The allowlist gates BOTH edit modes identically — JSON mode is a
+different way to assemble the candidate config, not a different validation path, so it can't
+smuggle a change the form couldn't make:
 wallets, the dashboard login and onion settings, the control channel itself, the Tor egress
 firewall, clearnet toggles, node endpoints, and every credential. It likewise refuses anything
 the preview flags disruptive (⚠). Apply those from the host with `./pithead apply`; out-of-band
