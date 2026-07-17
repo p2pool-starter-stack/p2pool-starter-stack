@@ -35,7 +35,7 @@
     },
 
     "p2pool": {
-        "pool": "main",
+        "pool": "mini",
         "stratum_bind": "0.0.0.0",
         "stratum_port": 3333,
         "stratum_password": "",

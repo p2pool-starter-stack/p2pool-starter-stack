@@ -39,10 +39,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   addresses, local/remote Monero node, pool tier, an optional dashboard login) and a few
   Enter-through "how should this run" questions (clearnet initial sync, remote dashboard access
   over Tor, Telegram alerts). Everything else keeps its `config.reference.json` default silently;
-  the wizard prints a pointer to `config.json` and the docs at the end. The pool tier was
-  previously hardcoded to `main` and never asked; the wizard now asks and explains the trade-off
-  (a low-hashrate rig on `main` waits days between shares — `mini` suits a typical home rig),
-  while keeping `main` as the Enter-through default so it matches a config-file install.
+  the wizard prints a pointer to `config.json` and the docs at the end.
+
+### Changed
+
+- **The default P2Pool sidechain is now `mini`, not `main` (#502).** `mini` has a lower share
+  difficulty, so a typical home rig — the common case for this stack — finds shares far more often
+  (smoother, more frequent PPLNS payouts). The default is now consistent everywhere: the wizard
+  Enter-through, `config.reference.json`, and the code fallback (`.p2pool.pool // "mini"`) all
+  agree. Raise it to `main` for a large farm. **Existing installs:** a config that explicitly sets
+  `p2pool.pool` is unaffected; one that OMITS the key (relying on the old `main` default) moves to
+  the `mini` sidechain on its next `apply`/`upgrade` — set `p2pool.pool: "main"` to stay on main.
 
 - **Per-worker descriptors moved to `workers.list[]`, out from under `dashboard.*` (#506).** The
   per-rig `{name, host, port, control_port, token, watts}` entries lived at `dashboard.workers[]`

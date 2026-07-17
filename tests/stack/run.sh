@@ -3166,6 +3166,15 @@ while IFS= read -r ev; do
         "$compose_text" "TELEGRAM_EVENT_$up="
 done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
 
+# #502/#529: p2pool.pool defaults to "mini" (the global default — config.reference.json, the two
+# `.p2pool.pool // "mini"` code fallbacks, and the wizard Enter-through all agree). A config that
+# OMITS p2pool.pool must render the mini sidechain flag, not the old "main". Standalone config so
+# it doesn't disturb the propagate block above.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$V/docker.log" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "omitted p2pool.pool defaults to the mini sidechain flag (#502)" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)" "--mini"
+
 echo "== black-box: payout-wallet change needs a typed confirm (#375) =="
 # Swapping the payout wallet is the highest-value tamper: apply must demand the first 8 chars of
 # the new address typed back (a pasted 'y' can't wave it through), while -y keeps automation alive.
@@ -5822,7 +5831,7 @@ w1_cfg="$(cat "$W1/config.json" 2>/dev/null)"
 assert_eq "defaults path: monero.wallet_address" "$(jq -r '.monero.wallet_address' <<<"$w1_cfg")" "$WALLET"
 assert_eq "defaults path: tari.wallet_address" "$(jq -r '.tari.wallet_address' <<<"$w1_cfg")" "TARIWALLETDEFAULT"
 assert_eq "defaults path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w1_cfg")" "local"
-assert_eq "defaults path: p2pool.pool Enter-through keeps main (matches the reference default)" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "main"
+assert_eq "defaults path: p2pool.pool Enter-through is mini (the global default)" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "mini"
 assert_eq "defaults path: local node RPC creds auto-generated (non-empty)" \
     "$([ -n "$(jq -r '.monero.node_username' <<<"$w1_cfg")" ] && [ -n "$(jq -r '.monero.node_password' <<<"$w1_cfg")" ] && echo yes)" "yes"
 # The revert-proof core: config.json carries ONLY the four top-level blocks the defaults path

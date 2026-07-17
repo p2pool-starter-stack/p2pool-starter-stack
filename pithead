@@ -2189,22 +2189,21 @@ wizard_ask_core() {
 
     # Pool tier (#502's highest-value gap): p2pool's three sidechains are sized by hashrate, so
     # picking the wrong one is silently suboptimal (a small miner on "main" waits days between
-    # shares). The old wizard hardcoded "main" and never asked; now it asks and explains the
-    # trade-off. Enter-through keeps "main" — the reference/code default (`.p2pool.pool // "main"`)
-    # — so the wizard doesn't silently diverge from a config-file install; the operator picks
-    # "mini" for a typical home rig from the guidance shown.
+    # shares). The old wizard hardcoded "main" and never asked; now it asks, and "mini" is the
+    # global default — the reference, the code fallback (`.p2pool.pool // "mini"`), and this
+    # Enter-through all agree — because a typical home rig is the common case for this stack.
     echo ""
     echo "--- Pool Tier ---"
     echo "p2pool has three sidechains sized by hashrate, so miners find shares at a similar cadence:"
     echo "  main — high hashrate (large farms); mini — typical home rig; nano — a single low-power rig"
-    read -r -p "Pool tier [main]: " IN_POOL_TIER || true
+    read -r -p "Pool tier [mini]: " IN_POOL_TIER || true
     case "$(printf '%s' "$IN_POOL_TIER" | tr 'A-Z' 'a-z')" in
-    mini) POOL_TIER="mini" ;;
+    main) POOL_TIER="main" ;;
     nano) POOL_TIER="nano" ;;
-    "" | main) POOL_TIER="main" ;;
+    "" | mini) POOL_TIER="mini" ;;
     *)
-        echo "  Not main/mini/nano — defaulting to main (the reference default)." >&2
-        POOL_TIER="main"
+        echo "  Not main/mini/nano — defaulting to mini (the default for a typical rig)." >&2
+        POOL_TIER="mini"
         ;;
     esac
 
@@ -2537,7 +2536,7 @@ parse_and_validate_config() {
         [ -n "$remote_host" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
     fi
 
-    POOL_TYPE=$(jq -r '.p2pool.pool // "main"' "$CONFIG_FILE")
+    POOL_TYPE=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
     case "$POOL_TYPE" in
     main | mini | nano) ;;
     *) error "p2pool.pool must be \"main\", \"mini\", or \"nano\" (got \"$POOL_TYPE\")." ;;
@@ -3381,7 +3380,7 @@ render_env() {
 
     # P2Pool pool type → flags + p2p port
     local pool_type p2pool_flags p2pool_port
-    pool_type=$(jq -r '.p2pool.pool // "main"' "$CONFIG_FILE")
+    pool_type=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
     p2pool_flags=""
     p2pool_port="37889"
     if [ "$pool_type" == "mini" ]; then
