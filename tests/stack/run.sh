@@ -5421,6 +5421,129 @@ assert_contains "worker-apply over the dial budget is rejected (no dial)" \
     "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
 
 # ---------------------------------------------------------------------------
+echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
+# The closed-schema control gate (#537, pithead ~L4706) relies on this invariant: every config.json
+# path pithead reads must exist in config.reference.json, or a legitimate config carrying that path
+# is false-rejected on every control-channel commit (a control-plane DoS). Until now the only guard
+# was the single legacy-xmrig_proxy round-trip case above. This walks pithead's own read sites,
+# mirroring the #515 cross-file drift guard's shape (build/dashboard/tests/service/test_control_service.py,
+# test_writable_key_allowlist_has_no_intra_repo_drift): a conservative, fixed-shape extractor over
+# the literal read sites that FAILS LOUD on a shape it doesn't recognize (rather than silently
+# skipping it), so a new read shape can't slip through unchecked.
+
+# Deliberate exceptions: paths this extractor finds that are NOT required to have a reference
+# entry. Empty today — every path pithead reads already has one (this test itself verifies that).
+# Keep the mechanism here for the day a genuinely internal/env-only read needs one; each entry
+# needs a why-comment.
+# macOS ships bash 3.2 (no associative arrays / mapfile — matches the rest of this file), so
+# extracted paths accumulate as a newline-separated string, deduped with `sort -u` at the end.
+declare -a DRIFT_EXCEPTIONS=()
+
+DRIFT_FOUND="" # newline-separated normalized dotted paths (no leading dot), deduped at the end
+DRIFT_BAD=0
+
+drift_add_path() { # <.dotted.path> (leading dot optional)
+    local p="${1#.}"
+    [ -n "$p" ] && DRIFT_FOUND="$DRIFT_FOUND
+$p"
+}
+
+# Split a jq `//`-alternative chain into its parts and record each leading-dot part as a read
+# path. A part that isn't a path must be one of the literal default shapes this codebase uses
+# (empty/true/false/[]/{}, a quoted string, or a number) — anything else fails the whole test
+# loudly, naming the culprit, so a new default shape gets a deliberate look instead of a silent
+# pass-through.
+drift_classify_chain() { # <chain> <line-label>
+    local chain="$1" line="$2" part
+    while [ -n "$chain" ]; do
+        if [[ "$chain" == *" // "* ]]; then
+            part="${chain%% // *}"
+            chain="${chain#* // }"
+        else
+            part="$chain"
+            chain=""
+        fi
+        if [[ "$part" == .* ]]; then
+            if [[ "$part" =~ ^\.[A-Za-z_][A-Za-z0-9_.]*$ ]]; then
+                drift_add_path "$part"
+            else
+                bad "config-read extractor (#561)" "unrecognized path shape '$part' in $line — extend the extractor"
+                DRIFT_BAD=1
+            fi
+        elif [ "$part" = "empty" ] || [ "$part" = "true" ] || [ "$part" = "false" ] || [ "$part" = "[]" ] || [ "$part" = "{}" ]; then
+            : # known default literal, not a path
+        elif [[ "$part" =~ ^\"[^\"]*\"$ ]] || [[ "$part" =~ ^-?[0-9]+$ ]]; then
+            : # quoted-string or numeric default
+        else
+            bad "config-read extractor (#561)" "unrecognized default shape '$part' in $line — extend the extractor"
+            DRIFT_BAD=1
+        fi
+    done
+}
+
+# config_bool '<path>' <default> call sites (pithead's null-aware boolean reader) — the path arg
+# is always a plain single-quoted leading-dot literal.
+while IFS= read -r p; do
+    drift_add_path "$p"
+done < <(grep -oE "config_bool '\.[A-Za-z0-9_.]+'" "$STACK" | sed -E "s/^config_bool '(.*)'\$/\1/")
+
+# Single-line jq reads against $CONFIG_FILE. Filtered down to genuine simple `config_get`-style
+# reads: this excludes multi-line validator blocks (an unterminated quote leaves an odd '-count on
+# its opening/closing line), writes (`= $var`), and the closed-schema gate's own whole-block
+# --slurpfile comparisons (those compare already-covered blocks wholesale, not a new leaf path).
+while IFS=: read -r lineno text; do
+    [[ "$text" == *'--slurpfile'* ]] && continue
+    [[ "$text" == *' = $'* ]] && continue
+    [[ "$text" == *'jq'* ]] || continue
+    qcount=$(grep -o "'" <<<"$text" | wc -l)
+    [ "$qcount" -eq 2 ] || continue
+    filter="${text#*\'}"
+    filter="${filter%\'*}"
+    # In scope only if the filter is itself a path read: a bare path, a parenthesized
+    # `(path // default)` prefix, or an `if path <op> ...` boolean read. Anything else (`.`,
+    # `any(..|strings;...)`, an array-literal walk like `[(.path // [])[] | .name] | group_by(.)`)
+    # is a structural check or a nested-element walk, not a new top-level path — out of scope.
+    if [[ "$filter" == .* ]]; then
+        drift_classify_chain "$filter" "pithead:$lineno"
+    elif [[ "$filter" == \(* ]]; then
+        # Only the parenthesized `(path // default)` prefix is attributed; whatever follows the
+        # closing paren (e.g. `[] | select(.name == $n) | .host // ""`) is relative to an
+        # iterated element, not a new root path — deliberately not walked further.
+        inner="${filter#\(}"
+        inner="${inner%%\)*}"
+        drift_classify_chain "$inner" "pithead:$lineno"
+    elif [[ "$filter" == "if "* ]]; then
+        while IFS= read -r tok; do
+            [ -n "$tok" ] && drift_add_path "$tok"
+        done < <(grep -oE '\.[A-Za-z_][A-Za-z0-9_.]*(\[[^]]*\])?[[:space:]]+(!=|==)' <<<"$filter" |
+            sed -E 's/(\[[^]]*\])?[[:space:]]+(!=|==)$//')
+    fi
+done < <(grep -n '"\$CONFIG_FILE"' "$STACK")
+
+REF_PATHS="$(jq -r '[paths | map(select(type=="string")) | join(".")] | unique[]' "$ROOT/config.reference.json")"
+DRIFT_FOUND="$(sort -u <<<"$DRIFT_FOUND")"
+
+checked=0
+missing=0
+for p in $DRIFT_FOUND; do
+    checked=$((checked + 1))
+    grep -qxF "$p" <<<"$REF_PATHS" && continue
+    allowed=0
+    for a in "${DRIFT_EXCEPTIONS[@]:-}"; do
+        [ "$a" = "$p" ] && allowed=1 && break
+    done
+    [ "$allowed" -eq 1 ] && continue
+    bad "config path pithead reads has a config.reference.json entry" "'$p' is missing from config.reference.json"
+    missing=$((missing + 1))
+done
+if [ "$checked" -eq 0 ]; then
+    bad "the extractor found at least one config-read path" "found zero — extend the extractor"
+elif [ "$missing" -eq 0 ] && [ "$DRIFT_BAD" -eq 0 ]; then
+    ok "every extracted config-read path ($checked total) exists in config.reference.json"
+fi
+unset DRIFT_FOUND REF_PATHS DRIFT_BAD
+
+# ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
 if [ "$FAIL" -gt 0 ]; then

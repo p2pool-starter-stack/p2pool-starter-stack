@@ -4714,9 +4714,12 @@ control_approval_gate() { # <staged-file>
     # INVARIANT: config.reference.json MUST stay a complete superset of every config path this script
     # reads (grep the config_bool/`jq ... "$CONFIG_FILE"` sites), or a legit config carrying a
     # read-but-unlisted path is false-rejected on every commit. That includes backward-compat aliases
-    # like xmrig_proxy.* (read at the XvB block). A grep-based test would false-alarm on jq-internal
-    # and filename dotted tokens, so the invariant is guarded by the legacy-xmrig_proxy round-trip
-    # case in tests/stack/run.sh rather than an automated path diff.
+    # like xmrig_proxy.* (read at the XvB block). Guarded two ways in tests/stack/run.sh: the
+    # legacy-xmrig_proxy round-trip case above, and (#561) an automated drift guard that walks this
+    # script's own config_bool/`jq ... "$CONFIG_FILE"` read sites with a conservative fixed-shape
+    # extractor and fails loud ("extend the extractor") on a shape it doesn't recognize, rather than
+    # risking the false-alarms a naive grep-based path diff would hit on jq-internal and filename
+    # dotted tokens.
     local unknown
     if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
         def norm: [.[] | strings] | join(".");

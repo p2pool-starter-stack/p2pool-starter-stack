@@ -20,6 +20,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   now skips the write while in dry-run mode; the generated credentials are still used in memory so
   the preview stays accurate, and a real `apply` persists them exactly as before.
 
+### Testing
+
+- Guard against drift between pithead's config.json reads and config.reference.json: a tier-1 test
+  extracts every path pithead reads (config_bool/`jq ... "$CONFIG_FILE"` sites) and asserts each has
+  a reference entry, failing loud on a read shape it doesn't recognize instead of skipping it (#561).
+
 ## [1.6.2] - 2026-07-17
 
 The ten v1.6-milestone findings from the 2026-07 full-repo scan (#546–#555): two high-severity
