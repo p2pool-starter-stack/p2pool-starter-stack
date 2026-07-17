@@ -371,7 +371,7 @@ profit after electricity.
 Power draw comes from RigForge's enriched feed (the `watts` and `hs_per_watt` in the `rigforge`
 block, sampled via RAPL every 15s — see [Connecting Miners](workers.md#rigforge-enriched-feed)). A
 worker whose feed reports no watts (macOS, a non-RigForge rig, an older kit) can carry a manual
-estimate: add `"watts": <number>` to its `dashboard.workers[]` descriptor and it counts toward the
+estimate: add `"watts": <number>` to its `workers.list[]` descriptor and it counts toward the
 total, marked *estimated*. A worker with neither a measured nor a configured draw is left out and
 the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
 

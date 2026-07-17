@@ -407,7 +407,7 @@ copies and run `./pithead apply` to roll back.
 
 The dashboard's `.onion` address and client-auth key have their own command,
 `./pithead rotate-dashboard-onion` — see
-[Configuration › Dashboard onion](configuration.md#reaching-the-dashboard-from-anywhere-tor-onion).
+[Configuration › Remote access over Tor](configuration.md#remote-access-over-tor-onion-service).
 
 ---
 
