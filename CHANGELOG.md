@@ -86,6 +86,24 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   the manual click-outside JS is gone, replaced by one `close()` call the dialog's own `close`
   event already funnels through.
 
+### Testing
+
+- **The tier-4 RigForge control leg now drives `workers.list[]` by default (#506/#513/#514/#516/#517).**
+  The real-rig descriptor injection, and every read/assert site that resolves it, moved to the
+  primary shape; a box whose baseline still carries the deprecated `dashboard.workers[]` fallback
+  is left as-is rather than force-migrated, so that shape stays exercised on real hardware too, at
+  no extra cost, through the v1.9 removal window.
+
+- **A tier-4 `--check` assertion for the #196 telemetry backbone.** After an upgrade, asserts the
+  five additive SQLite tables (`blocks`, `xvb_history`, `network_history`, `disk_growth`,
+  `worker_history`) exist in the live dashboard's database — proof the migration ran against a
+  real, already-populated DB. Row presence isn't asserted; the capture-hook writes are already
+  covered at tier 1.
+
+- **A tier-1 wizard case for the un-auth'd remote branch + the `nano` pool tier (#502).** Neither
+  case arm was reached by the existing piped-answers tests: declining remote-node auth (leaving
+  the RPC credentials empty rather than auto-generated) and picking the `nano` sidechain.
+
 ## [1.6.3] - 2026-07-17
 
 The v1.7 plan's Wave 0.5 — the remaining seven findings from the 2026-07 scan (#556–#561, #566),
