@@ -1889,6 +1889,36 @@ assert_rc "stage_push, real errexit: retries-exhausted digest read still aborts 
 assert_contains "stage_push, real errexit: crafted die() reaches the operator (#557)" \
     "$stage_push_out" "Could not read the pushed manifest digest"
 
+# #557: main()'s --resume-promote branch has the exact same shape (a second, separately-written
+# instance of the bug — found in review, not part of the original 3 sites). Drive the real `main`
+# (preflight/ghcr_login stubbed no-op) with RESUME_PROMOTE=1 and errexit left ON.
+# shellcheck disable=SC1090,SC2034  # dynamic source; the globals are consumed inside main
+resume_out="$(
+    (
+        cd "$ROOT" || exit 1
+        set --
+        source "$REL" 2>/dev/null
+        preflight() { :; }
+        ghcr_login() { :; }
+        promote() { :; }
+        sign_images() { :; }
+        publish() { :; }
+        DRY_RUN=0
+        RESUME_PROMOTE=1
+        IMAGES=(tor)
+        TAG="v9.9.9"
+        STAGING_TAG="v9.9.9-rc.1"
+        REGISTRY="ghcr.io/test"
+        REGISTRY_READ_RETRIES=1
+        REGISTRY_READ_BACKOFF=0
+        buildx_inspect() { return 1; } # every registry read fails -> retries exhaust
+        main
+    ) 2>&1
+)"
+assert_rc "--resume-promote, real errexit: retries-exhausted digest read still aborts (#557)" "$?" "1"
+assert_contains "--resume-promote, real errexit: crafted die() reaches the operator (#557)" \
+    "$resume_out" "Cannot resolve a staged digest"
+
 echo "== unit: release.sh preflight checks the lint toolchain (#426) =="
 # A reimaged release box loses shellcheck/shfmt/node/uv — the v1.3.0 cut died ~1 min in mid-gate with a
 # bare `shellcheck: not found`. check_release_toolchain must fail fast BEFORE building, naming the tool
