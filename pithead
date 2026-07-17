@@ -69,6 +69,10 @@ readonly APP_GID=1000
 REBOOT_REQUIRED=false
 SKIP_OPTIMIZE=0
 SKIP_DEPS=0
+# Set by apply_dry_run before it calls parse_and_validate_config (#556). A dry run must only
+# read — persist_node_credentials checks this to skip its config.json write-back while still
+# generating in-memory creds so the preview/diff is realistic.
+PITHEAD_DRY_RUN=0
 
 # Detect whether we're being sourced (e.g. by the test suite). When sourced we only define
 # functions/constants and skip all side effects (cd, traps, running main).
@@ -2062,6 +2066,9 @@ cred_needs_generating() {
 # rather than aborting, since the in-memory creds still make this run work.
 persist_node_credentials() {
     local user="$1" pass="$2" tmp="${CONFIG_FILE}.tmp"
+    # A dry run must only read (#556) — the caller already generated the creds in memory for the
+    # render/diff; skip the write-back to config.json (or a staged control-channel copy).
+    [ "$PITHEAD_DRY_RUN" -eq 1 ] && return 0
     # Subshell umask (#368): the temp file carries the credentials, so it too must be owner-only
     # from creation — mv preserves its mode onto config.json.
     if (
@@ -4344,6 +4351,7 @@ describe_change() {
 apply_dry_run() {
     local porcelain="$1"
     local newenv="${ENV_FILE}.dryrun"
+    PITHEAD_DRY_RUN=1 # #556: parse_and_validate_config -> persist_node_credentials checks this
     {
         # NOTE: no ensure_onion_password here — it would write an auto-generated password into
         # the candidate config. A dry run must only read; an invalid candidate fails validation.
