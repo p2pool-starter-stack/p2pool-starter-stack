@@ -113,35 +113,41 @@ EDITABLE_ENV_KEY_PATHS = {
     "HASHRATE_DROP_THRESHOLD_PCT": ("dashboard.hashrate_drop_threshold",),
     "HASHRATE_DROP_MINUTES": ("dashboard.hashrate_drop_minutes",),
     "TELEGRAM_DAILY_SUMMARY_TIME": ("telegram.daily_summary_time",),
-    # The 26 telegram.events.* toggles, minus wallet_changed / clearnet_exposed — pithead's own
-    # comment explains why those two are excluded on purpose: they're the tamper-evidence alarms
-    # on the very channel a compromised container would use to silence them, so the dashboard must
-    # never be able to turn them off. They stay in the Notifications > Telegram events nested
-    # subgroup (#612), just greyed like any other host-only field.
-    "TELEGRAM_EVENT_NODE_DOWN": ("telegram.events.node_down",),
-    "TELEGRAM_EVENT_NODE_RECOVERED": ("telegram.events.node_recovered",),
-    "TELEGRAM_EVENT_WORKER_OFFLINE": ("telegram.events.worker_offline",),
-    "TELEGRAM_EVENT_WORKER_RECOVERED": ("telegram.events.worker_recovered",),
-    "TELEGRAM_EVENT_WORKER_JOINED": ("telegram.events.worker_joined",),
-    "TELEGRAM_EVENT_WORKER_LEFT": ("telegram.events.worker_left",),
-    "TELEGRAM_EVENT_SYNC_FINISHED": ("telegram.events.sync_finished",),
-    "TELEGRAM_EVENT_DISK_SPACE": ("telegram.events.disk_space",),
-    "TELEGRAM_EVENT_DB_UNHEALTHY": ("telegram.events.db_unhealthy",),
-    "TELEGRAM_EVENT_DB_RESET": ("telegram.events.db_reset",),
-    "TELEGRAM_EVENT_XVB_NO_SHARE": ("telegram.events.xvb_no_share",),
-    "TELEGRAM_EVENT_XVB_REGISTRATION": ("telegram.events.xvb_registration",),
-    "TELEGRAM_EVENT_NEW_RELEASE": ("telegram.events.new_release",),
-    "TELEGRAM_EVENT_STACK_ONLINE": ("telegram.events.stack_online",),
-    "TELEGRAM_EVENT_DAILY_SUMMARY": ("telegram.events.daily_summary",),
-    "TELEGRAM_EVENT_HASHRATE_LOW": ("telegram.events.hashrate_low",),
-    "TELEGRAM_EVENT_HASHRATE_LOSS": ("telegram.events.hashrate_loss",),
-    "TELEGRAM_EVENT_HUGEPAGES": ("telegram.events.hugepages",),
-    "TELEGRAM_EVENT_LOW_RAM": ("telegram.events.low_ram",),
-    "TELEGRAM_EVENT_HIGH_REJECT_RATE": ("telegram.events.high_reject_rate",),
-    "TELEGRAM_EVENT_BLOCK_FOUND": ("telegram.events.block_found",),
-    "TELEGRAM_EVENT_PAYOUT_FOUND": ("telegram.events.payout_found",),
-    "TELEGRAM_EVENT_PAYOUT_CONFIRMED": ("telegram.events.payout_confirmed",),
-    "TELEGRAM_EVENT_CONTAINER_UNHEALTHY": ("telegram.events.container_unhealthy",),
+    # TELEGRAM_EVENT_<NAME> -> telegram.events.<name> is a mechanical rename (pithead's tg_event()
+    # helper and render_env do the same thing per event), so it's generated below rather than
+    # hand-typed 24 times. wallet_changed / clearnet_exposed are the two events NOT in this list —
+    # deliberately excluded: they're the tamper-evidence alarms on the very channel a compromised
+    # container would use to silence them, so the dashboard must never be able to turn them off.
+    # They still render (greyed) in the Notifications > Telegram events nested subgroup (#612).
+    **{
+        f"TELEGRAM_EVENT_{name.upper()}": (f"telegram.events.{name}",)
+        for name in (
+            "node_down",
+            "node_recovered",
+            "worker_offline",
+            "worker_recovered",
+            "worker_joined",
+            "worker_left",
+            "sync_finished",
+            "disk_space",
+            "db_unhealthy",
+            "db_reset",
+            "xvb_no_share",
+            "xvb_registration",
+            "new_release",
+            "stack_online",
+            "daily_summary",
+            "hashrate_low",
+            "hashrate_loss",
+            "hugepages",
+            "low_ram",
+            "high_reject_rate",
+            "block_found",
+            "payout_found",
+            "payout_confirmed",
+            "container_unhealthy",
+        )
+    },
 }
 
 # dashboard.energy.* is config.json-only — it never renders to .env (control_approval_gate reads

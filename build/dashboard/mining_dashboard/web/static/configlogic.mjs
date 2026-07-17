@@ -79,15 +79,15 @@ function walk(node, path, out) {
 // Logical section groups (#611): a display-layer map from a section name an operator recognizes
 // to the config-path PREFIXES it pulls fields from — config.json itself is unchanged, this only
 // changes which <details> a field renders under. A field matches a prefix if its dotted key
-// equals the prefix or starts with `prefix + "."`. When more than one prefix matches (e.g. both
-// "monero" and "monero.data_dir"), the LONGEST (most specific) one wins — so a narrow carve-out
-// doesn't need to be listed before a broader claim from the same or a different group; only ties
-// fall back to this array's order. Any leaf no group claims renders in the catch-all "Other"
-// group below (never silently dropped) — buildSections' own test suite asserts every
-// config.reference.json path resolves to a REAL group, so a new key can't slip into "Other"
-// unnoticed either.
+// equals the prefix or starts with `prefix + "."`. Every prefix below names a SPECIFIC leaf or
+// object, never a bare top-level key another group also reaches into (e.g. no group lists a bare
+// "dashboard", even though six different groups claim different dashboard.* leaves) — so prefixes
+// never overlap across groups and first-match is unambiguous; classifyGroup's own test asserts
+// that invariant directly. Any leaf no group claims renders in the catch-all "Other" group below
+// (never silently dropped) — buildSections' own test suite asserts every config.reference.json
+// path resolves to a REAL group, so a new key can't slip into "Other" unnoticed either.
 export const OTHER_GROUP = "Other";
-const LOGICAL_GROUPS = [
+export const LOGICAL_GROUPS = [
   {
     name: "Wallets & payout",
     prefixes: [
@@ -166,16 +166,12 @@ const LOGICAL_GROUPS = [
 ];
 
 export function classifyGroup(key) {
-  let best = null; // { name, len }
   for (const g of LOGICAL_GROUPS) {
     for (const p of g.prefixes) {
-      if (key === p || key.startsWith(`${p}.`)) {
-        const len = p.split(".").length;
-        if (!best || len > best.len) best = { name: g.name, len };
-      }
+      if (key === p || key.startsWith(`${p}.`)) return g.name;
     }
   }
-  return best ? best.name : OTHER_GROUP;
+  return OTHER_GROUP;
 }
 
 // Flatten the masked config into LOGICAL sections (#611): every leaf field, whatever top-level

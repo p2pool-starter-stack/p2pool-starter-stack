@@ -5,9 +5,8 @@
 // Run with Node's built-in test runner (CI runs exactly this):
 //     node --test build/dashboard/tests/frontend/
 import assert from "node:assert/strict";
-import { test } from "node:test";
-
 import { readFileSync } from "node:fs";
+import { test } from "node:test";
 
 import {
   applyEdits,
@@ -15,6 +14,7 @@ import {
   classifyGroup,
   isSecretSentinel,
   jsonSyntaxError,
+  LOGICAL_GROUPS,
   markEditable,
   nestSection,
   OTHER_GROUP,
@@ -75,9 +75,27 @@ test("buildSections: a config path split from its top-level key's other fields l
   );
 });
 
-test("classifyGroup: longest-prefix match — a specific carve-out beats a shorter sibling prefix", () => {
+test("classifyGroup: distinct monero.* leaves resolve to their own group, not a shared bare prefix", () => {
   assert.equal(classifyGroup("monero.data_dir"), "System / advanced");
-  assert.equal(classifyGroup("monero.mode"), "Monero node"); // a different monero.* leaf, own prefix
+  assert.equal(classifyGroup("monero.mode"), "Monero node");
+});
+
+// classifyGroup is first-match (no group's prefix is "more specific" than another's, by design —
+// see the comment above LOGICAL_GROUPS). This test is what actually guarantees that design holds:
+// no two groups may claim overlapping prefixes, so a real config path always resolves the same way
+// regardless of LOGICAL_GROUPS' declaration order.
+test("LOGICAL_GROUPS: no two groups claim overlapping prefixes", () => {
+  const all = LOGICAL_GROUPS.flatMap((g) => g.prefixes.map((p) => ({ group: g.name, prefix: p })));
+  const overlaps = [];
+  for (const a of all) {
+    for (const b of all) {
+      if (a.group === b.group || a.prefix === b.prefix) continue;
+      if (a.prefix === b.prefix || a.prefix.startsWith(`${b.prefix}.`)) {
+        overlaps.push(`"${a.prefix}" (${a.group}) is inside "${b.prefix}" (${b.group})`);
+      }
+    }
+  }
+  assert.deepEqual(overlaps, []);
 });
 
 test("classifyGroup + buildSections: an unclaimed path renders in the catch-all Other group, not dropped", () => {

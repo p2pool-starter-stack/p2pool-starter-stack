@@ -84,20 +84,20 @@ const Field = ({ field, edits, onEdit, full }) => {
   const change = editable ? (e) => onEdit(field.key, e.target.value) : undefined;
   let input;
   if (field.type === "boolean") {
-    input = html`<select value=${String(value)} disabled=${!editable} title=${title} onChange=${change}>
+    input = html`<select value=${String(value)} disabled=${!editable} onChange=${change}>
         <option value="true">true</option>
         <option value="false">false</option>
     </select>`;
   } else if (field.type === "select") {
-    input = html`<select value=${value} disabled=${!editable} title=${title} onChange=${change}>
+    input = html`<select value=${value} disabled=${!editable} onChange=${change}>
         ${field.options.map((o) => html`<option value=${o}>${o}</option>`)}
     </select>`;
   } else if (field.type === "secret") {
     input = html`<input type="password" value=${value} placeholder=${SECRET_HINT}
-        disabled=${!editable} title=${title} onInput=${change} />`;
+        disabled=${!editable} onInput=${change} />`;
   } else {
     input = html`<input type=${field.type === "number" ? "number" : "text"} value=${value}
-        disabled=${!editable} title=${title} onInput=${change} />`;
+        disabled=${!editable} onInput=${change} />`;
   }
   return html`<label class="config-field" title=${title}>
       <span class="config-field-name">${label}</span>
