@@ -11,6 +11,19 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-17
+
+The **Config UX & telemetry** cycle. Config editing becomes humane — worker
+configuration unifies under `workers.list[]`, the Configuration view regroups
+around a core shortlist with a JSON mode, Worker Inspect gets structured
+editors, and the first-run wizard slims to the essentials with `mini` as the
+default sidechain. Telemetry stops being discarded — a five-table time-series
+backbone persists blocks, XvB, network, disk-growth, and per-worker history,
+with per-config-version hashrate correlation in Worker Inspect. Every new
+surface is exercised end-to-end (the `workers.list` real-rig path and the
+telemetry schema are asserted at tier 4) and the docs were passed for
+cross-consistency before the cut.
+
 ### Added
 
 - **Worker Inspect: hashrate correlated to config version (#492).** The per-worker change
