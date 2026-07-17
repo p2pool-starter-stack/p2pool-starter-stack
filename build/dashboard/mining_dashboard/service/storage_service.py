@@ -35,6 +35,16 @@ _CORRUPTION_MARKERS = ("malformed", "not a database", "image is malformed", "fil
 # How many quarantined copies of a corrupt DB to keep for post-mortem before pruning the oldest.
 _CORRUPT_KEEP = 3
 
+# v1.7 telemetry backbone retention (#196 Wave-0 proposal). blocks/disk_growth are permanent (no
+# pruning — small tables, like payouts); the rest extend the existing 30-day HISTORY_RETENTION_SEC
+# convention. Each table gets its OWN retention (independent of `history`'s), by design.
+XVB_HISTORY_RETENTION_SEC = HISTORY_RETENTION_SEC  # 30 days
+WORKER_HISTORY_RETENTION_SEC = HISTORY_RETENTION_SEC  # 30 days
+NETWORK_HISTORY_RETENTION_SEC = 90 * 24 * 3600  # 90 days
+
+# Table names carrying a per-table write-health signal (see __init__ / _table_write_ok below).
+_TELEMETRY_TABLES = ("blocks", "xvb_history", "network_history", "disk_growth", "worker_history")
+
 
 class StateManager:
     """
@@ -100,6 +110,16 @@ class StateManager:
         self.last_db_reset = (
             None  # {"ts", "reason", "quarantine"} of the most recent reset, for the alert
         )
+
+        # Per-table "last successful write" health signal for the v1.7 telemetry backbone (#196
+        # Wave-0), mirroring db_healthy above but per table: DataService's whole poll loop is one
+        # big try/except, so a capture hook that starts silently raising would otherwise stop
+        # writing forever with no visible symptom. `healthy` flips False on a write failure
+        # (routed through _db_error, so it also trips the global #131 badge); `last_write` is the
+        # wall-clock of the last successful write, None until the first one lands.
+        self.table_health = {
+            name: {"healthy": True, "last_write": None} for name in _TELEMETRY_TABLES
+        }
 
         self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -280,6 +300,43 @@ class StateManager:
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, change_id TEXT, ts REAL, "
             "status TEXT, changes TEXT, reason TEXT)"
         )
+        # v1.7 telemetry backbone (#196 Wave-0 proposal): five independent, additive time-series
+        # tables. Each has its own retention (see the RETENTION_SEC constants above) and is
+        # DB-only — nothing reads any of them per-cycle, so there's no in-memory mirror to keep in
+        # sync (keeps RAM flat). No new columns on `history` — that's the whole point of dedicated
+        # tables: independent retention, no row multiplication. Additive, forward-only, same as
+        # payouts/worker_config above: no _migrate_db entry needed.
+        #
+        # blocks: pool block-found events. Permanent (no pruning — a handful of rows/week, like
+        # payouts). `difficulty` is the Monero network difficulty AT DETECTION time (p2pool
+        # exposes no per-block effort figure), so effort-per-block is derivable later.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS blocks (ts REAL, height INTEGER, difficulty REAL)"
+        )
+        # xvb_history: XvB scalars sampled ~5 min wall-clock. 30-day retention.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS xvb_history "
+            "(ts REAL, avg_1h REAL, avg_24h REAL, fail_count INTEGER, "
+            "donation_fraction REAL, mode TEXT)"
+        )
+        # network_history: Monero network difficulty/height/reward + the pool's own hashrate,
+        # sampled hourly wall-clock. 90-day retention.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS network_history "
+            "(ts REAL, difficulty REAL, height INTEGER, reward REAL, pool_hashrate REAL)"
+        )
+        # disk_growth: monerod's on-disk DB size + host disk usage, sampled hourly wall-clock.
+        # Permanent (no pruning — tiny, ~24 rows/day; it's a capacity trend line).
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS disk_growth "
+            "(ts REAL, monero_db_bytes INTEGER, disk_used_gb REAL, disk_total_gb REAL)"
+        )
+        # worker_history: per-rig hashrate window + cumulative accepted/rejected, sampled ~5 min
+        # wall-clock and written in one batched executemany call per cycle. 30-day retention.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS worker_history "
+            "(ts REAL, name TEXT, h15 REAL, accepted INTEGER, rejected INTEGER)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -290,6 +347,13 @@ class StateManager:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_worker_config ON worker_config(worker, ts)"
         )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_blocks_ts ON blocks(ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_xvb_history_ts ON xvb_history(ts)")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_network_history_ts ON network_history(ts)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_disk_growth_ts ON disk_growth(ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_worker_history_ts ON worker_history(ts)")
 
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
@@ -766,6 +830,256 @@ class StateManager:
             if row.get("status") == "applied" and isinstance(row.get("changes"), dict):
                 merged.update(row["changes"])
         return merged
+
+    def _table_write_ok(self, table: str, ts: float):
+        """Stamp a successful write for the v1.7 telemetry backbone's per-table health signal."""
+        self.table_health[table] = {"healthy": True, "last_write": ts}
+
+    def _table_write_failed(self, table: str, where: str, e: Exception):
+        """Flip a table's health signal False and route through the shared #131/#489 error path
+        (flags the global db_healthy badge too, and triggers corruption auto-recovery if that's
+        what this was)."""
+        self.table_health[table]["healthy"] = False
+        self._db_error(where, e)
+
+    def get_table_health(self) -> dict[str, dict[str, Any]]:
+        """Per-table write health for the v1.7 telemetry backbone (#196): ``{table: {"healthy",
+        "last_write"}}``. Lets a caller notice a capture hook that has silently stopped writing —
+        the data-service poll loop is one big try/except, so nothing else would surface that."""
+        return {k: dict(v) for k, v in self.table_health.items()}
+
+    def add_block(self, ts: float, height: int, difficulty: float):
+        """Record one pool block-found event (#196): permanent (no retention prune — a handful of
+        rows/week, like payouts). The caller (DataService) reuses `_shares_to_record` on p2pool's
+        cumulative blocks_found counter so this fires exactly once per genuinely NEW block; a
+        p2pool restart (counter goes backwards) re-baselines instead of replaying history."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT INTO blocks (ts, height, difficulty) VALUES (?, ?, ?)",
+                        (ts, height, difficulty),
+                    )
+            self._table_write_ok("blocks", ts)
+        except sqlite3.Error as e:
+            self._table_write_failed("blocks", "Block Insert Error", e)
+
+    def get_blocks(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """Pool block-found events at or after `since` (default: all), oldest first."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT ts, height, difficulty FROM blocks WHERE ts >= ? ORDER BY ts ASC",
+                    (since,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Block Read Error: {e}")
+            return []
+
+    def add_xvb_history(
+        self,
+        ts: float,
+        avg_1h: float = 0.0,
+        avg_24h: float = 0.0,
+        fail_count: int = 0,
+        donation_fraction: float = 0.0,
+        mode: str = "",
+    ):
+        """Record one XvB-scalars sample (#196), 30-day retention. The caller wall-clock-gates
+        this to ~5 min (DataService._sync_xvb_stats) so the cadence survives an UPDATE_INTERVAL
+        change, and only calls it on a genuine XvB fetch (never on a failed one)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT INTO xvb_history "
+                        "(ts, avg_1h, avg_24h, fail_count, donation_fraction, mode) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (ts, avg_1h, avg_24h, fail_count, donation_fraction, mode),
+                    )
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM xvb_history WHERE ts < ?",
+                            (ts - XVB_HISTORY_RETENTION_SEC,),
+                        )
+            self._table_write_ok("xvb_history", ts)
+        except sqlite3.Error as e:
+            self._table_write_failed("xvb_history", "XvB History Insert Error", e)
+
+    def get_xvb_history(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """XvB-scalar samples at or after `since` (default: all), oldest first."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT ts, avg_1h, avg_24h, fail_count, donation_fraction, mode "
+                    "FROM xvb_history WHERE ts >= ? ORDER BY ts ASC",
+                    (since,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"XvB History Read Error: {e}")
+            return []
+
+    def add_network_history(
+        self,
+        ts: float,
+        difficulty: float = 0.0,
+        height: int = 0,
+        reward: float = 0.0,
+        pool_hashrate: float = 0.0,
+    ):
+        """Record one hourly network-stats sample (#196): Monero difficulty/height/reward plus the
+        pool's own hashrate. 90-day retention. DB-only (nothing reads this per-cycle)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT INTO network_history "
+                        "(ts, difficulty, height, reward, pool_hashrate) VALUES (?, ?, ?, ?, ?)",
+                        (ts, difficulty, height, reward, pool_hashrate),
+                    )
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM network_history WHERE ts < ?",
+                            (ts - NETWORK_HISTORY_RETENTION_SEC,),
+                        )
+            self._table_write_ok("network_history", ts)
+        except sqlite3.Error as e:
+            self._table_write_failed("network_history", "Network History Insert Error", e)
+
+    def get_network_history(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """Hourly network-stats samples at or after `since` (default: all), oldest first."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT ts, difficulty, height, reward, pool_hashrate FROM network_history "
+                    "WHERE ts >= ? ORDER BY ts ASC",
+                    (since,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Network History Read Error: {e}")
+            return []
+
+    def add_disk_growth(
+        self,
+        ts: float,
+        monero_db_bytes: int = 0,
+        disk_used_gb: float = 0.0,
+        disk_total_gb: float = 0.0,
+    ):
+        """Record one hourly disk-growth sample (#196): monerod's DB size plus host disk usage.
+        Permanent (no retention prune — tiny, ~24 rows/day; it's a capacity trend line)."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "INSERT INTO disk_growth "
+                        "(ts, monero_db_bytes, disk_used_gb, disk_total_gb) VALUES (?, ?, ?, ?)",
+                        (ts, monero_db_bytes, disk_used_gb, disk_total_gb),
+                    )
+            self._table_write_ok("disk_growth", ts)
+        except sqlite3.Error as e:
+            self._table_write_failed("disk_growth", "Disk Growth Insert Error", e)
+
+    def get_disk_growth(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """Hourly disk-growth samples at or after `since` (default: all), oldest first."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT ts, monero_db_bytes, disk_used_gb, disk_total_gb FROM disk_growth "
+                    "WHERE ts >= ? ORDER BY ts ASC",
+                    (since,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Disk Growth Read Error: {e}")
+            return []
+
+    def add_worker_history(self, rows: list[dict[str, Any]]):
+        """Record one poll's per-worker hashrate/share-count samples (#196) in a SINGLE
+        executemany call — the caller batches every online worker for one wall-clock tick rather
+        than issuing N inserts per cycle. 30-day retention. Each row needs ts/name/h15/accepted/
+        rejected; a missing key defaults to 0/''. A no-op on an empty batch."""
+        if not rows:
+            return
+        prune_ts = rows[0].get("ts", time.time())
+        try:
+            values = [
+                (
+                    r.get("ts", prune_ts),
+                    r.get("name", ""),
+                    r.get("h15", 0) or 0,
+                    r.get("accepted", 0) or 0,
+                    r.get("rejected", 0) or 0,
+                )
+                for r in rows
+            ]
+            with self._db_lock:
+                if not self._conn:
+                    return
+                with self._conn:
+                    self._conn.executemany(
+                        "INSERT INTO worker_history (ts, name, h15, accepted, rejected) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        values,
+                    )
+                    if random.random() < 0.05:  # noqa: S311 — pruning sampler, not a security context
+                        self._conn.execute(
+                            "DELETE FROM worker_history WHERE ts < ?",
+                            (prune_ts - WORKER_HISTORY_RETENTION_SEC,),
+                        )
+            self._table_write_ok("worker_history", prune_ts)
+        except sqlite3.Error as e:
+            self._table_write_failed("worker_history", "Worker History Insert Error", e)
+
+    def get_worker_history(
+        self, name: str | None = None, since: float = 0.0
+    ) -> list[dict[str, Any]]:
+        """Per-worker hashrate/share samples at or after `since` (default: all), oldest first.
+        Filters to one rig's `name` when given, else every rig."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                if name is None:
+                    cursor.execute(
+                        "SELECT ts, name, h15, accepted, rejected FROM worker_history "
+                        "WHERE ts >= ? ORDER BY ts ASC",
+                        (since,),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT ts, name, h15, accepted, rejected FROM worker_history "
+                        "WHERE ts >= ? AND name = ? ORDER BY ts ASC",
+                        (since, name),
+                    )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Worker History Read Error: {e}")
+            return []
 
     def get_xvb_stats(self) -> dict[str, Any]:
         """Returns the current XvB mining statistics dictionary."""

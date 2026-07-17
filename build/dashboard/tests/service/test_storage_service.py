@@ -1,10 +1,11 @@
 import sqlite3
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
 from mining_dashboard.config.config import HISTORY_RETENTION_SEC, TIER_DEFAULTS
-from mining_dashboard.service.storage_service import StateManager
+from mining_dashboard.service.storage_service import NETWORK_HISTORY_RETENTION_SEC, StateManager
 
 
 class TestDefaults:
@@ -751,3 +752,348 @@ class TestPayouts:
         assert state_manager.add_payouts("monero", [{"txid": "x", "amount_atomic": 1}]) == []
         assert state_manager.get_payouts("monero") == []
         assert state_manager.get_payout_max_height("monero") == 0
+
+
+class TestBlocks:
+    """Pool block-found events (#196 Wave-0): permanent — never pruned, unlike the four
+    retention-bound telemetry tables below."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_block(t0, height=3_100_000, difficulty=123456.0)
+        rows = state_manager.get_blocks()
+        assert rows == [{"ts": t0, "height": 3_100_000, "difficulty": 123456.0}]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_block(t0 - 1000, height=1, difficulty=1.0)
+        state_manager.add_block(t0, height=2, difficulty=2.0)
+        rows = state_manager.get_blocks(since=t0 - 10)
+        assert [r["height"] for r in rows] == [2]
+
+    def test_never_pruned(self, state_manager, monkeypatch):
+        # Force the probabilistic-prune roll to "always fire" — blocks has no prune code path at
+        # all, so an ancient row must survive regardless.
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        state_manager.add_block(old_ts, height=1, difficulty=1.0)
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_block(time.time(), height=2, difficulty=2.0)
+        assert len(state_manager.get_blocks()) == 2
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE blocks")
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["blocks"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE blocks")
+        assert state_manager.get_blocks() == []
+
+
+class TestXvbHistory:
+    """XvB scalars over time (#196 Wave-0): 30-day retention, same recipe as share_stats/events."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_xvb_history(
+            t0, avg_1h=1000.0, avg_24h=900.0, fail_count=1, donation_fraction=0.5, mode="XVB"
+        )
+        rows = state_manager.get_xvb_history()
+        assert rows == [
+            {
+                "ts": t0,
+                "avg_1h": 1000.0,
+                "avg_24h": 900.0,
+                "fail_count": 1,
+                "donation_fraction": 0.5,
+                "mode": "XVB",
+            }
+        ]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_xvb_history(t0 - 1000, avg_1h=1.0)
+        state_manager.add_xvb_history(t0, avg_1h=2.0)
+        rows = state_manager.get_xvb_history(since=t0 - 10)
+        assert [r["avg_1h"] for r in rows] == [2.0]
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO xvb_history (ts, avg_1h, avg_24h, fail_count, donation_fraction, mode) "
+                "VALUES (?,?,?,?,?,?)",
+                (old_ts, 1.0, 1.0, 0, 0.0, "P2POOL"),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_xvb_history(time.time(), avg_1h=5.0)
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM xvb_history WHERE ts < ?",
+                (time.time() - HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE xvb_history")
+        state_manager.add_xvb_history(time.time())
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["xvb_history"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE xvb_history")
+        assert state_manager.get_xvb_history() == []
+
+
+class TestNetworkHistory:
+    """Difficulty/height/reward/pool-hashrate over time (#196 Wave-0): 90-day retention, DB-only."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_network_history(
+            t0, difficulty=1e12, height=3_100_000, reward=0.6, pool_hashrate=5e6
+        )
+        rows = state_manager.get_network_history()
+        assert rows == [
+            {
+                "ts": t0,
+                "difficulty": 1e12,
+                "height": 3_100_000,
+                "reward": 0.6,
+                "pool_hashrate": 5e6,
+            }
+        ]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_network_history(t0 - 1000, height=1)
+        state_manager.add_network_history(t0, height=2)
+        rows = state_manager.get_network_history(since=t0 - 10)
+        assert [r["height"] for r in rows] == [2]
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        old_ts = time.time() - NETWORK_HISTORY_RETENTION_SEC - 24 * 3600  # 91 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO network_history (ts, difficulty, height, reward, pool_hashrate) "
+                "VALUES (?,?,?,?,?)",
+                (old_ts, 1.0, 1, 0.0, 0.0),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_network_history(time.time(), difficulty=2.0)
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM network_history WHERE ts < ?",
+                (time.time() - NETWORK_HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0
+
+    def test_retention_is_90_days_not_30(self):
+        assert NETWORK_HISTORY_RETENTION_SEC == 90 * 24 * 3600
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE network_history")
+        state_manager.add_network_history(time.time())
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["network_history"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE network_history")
+        assert state_manager.get_network_history() == []
+
+
+class TestDiskGrowth:
+    """monerod DB size + host disk usage over time (#196 Wave-0): permanent, DB-only."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_disk_growth(
+            t0, monero_db_bytes=200_000_000_000, disk_used_gb=210.5, disk_total_gb=500.0
+        )
+        rows = state_manager.get_disk_growth()
+        assert rows == [
+            {
+                "ts": t0,
+                "monero_db_bytes": 200_000_000_000,
+                "disk_used_gb": 210.5,
+                "disk_total_gb": 500.0,
+            }
+        ]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_disk_growth(t0 - 1000, monero_db_bytes=1)
+        state_manager.add_disk_growth(t0, monero_db_bytes=2)
+        rows = state_manager.get_disk_growth(since=t0 - 10)
+        assert [r["monero_db_bytes"] for r in rows] == [2]
+
+    def test_never_pruned(self, state_manager, monkeypatch):
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        state_manager.add_disk_growth(old_ts, monero_db_bytes=1)
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_disk_growth(time.time(), monero_db_bytes=2)
+        assert len(state_manager.get_disk_growth()) == 2
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE disk_growth")
+        state_manager.add_disk_growth(time.time())
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["disk_growth"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE disk_growth")
+        assert state_manager.get_disk_growth() == []
+
+
+class TestWorkerHistory:
+    """Per-rig hashrate/share history (#196 Wave-0): 30-day retention, batched executemany write."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1000.0, "accepted": 10, "rejected": 1},
+                {"ts": t0, "name": "rig2", "h15": 2000.0, "accepted": 20, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_history()
+        assert {r["name"] for r in rows} == {"rig1", "rig2"}
+        assert len(rows) == 2
+
+    def test_add_is_a_single_batch_call(self, state_manager, monkeypatch):
+        # Intent: one poll's worker rows land via ONE executemany, not N execute() calls per row.
+        # sqlite3.Connection's methods are read-only slots (can't monkeypatch the real instance),
+        # so swap in a MagicMock connection for this one narrow assertion.
+        mock_conn = MagicMock()
+        monkeypatch.setattr(state_manager, "_conn", mock_conn)
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1.0, "accepted": 1, "rejected": 0},
+                {"ts": t0, "name": "rig2", "h15": 2.0, "accepted": 2, "rejected": 0},
+                {"ts": t0, "name": "rig3", "h15": 3.0, "accepted": 3, "rejected": 0},
+            ]
+        )
+        assert mock_conn.executemany.call_count == 1
+        values = mock_conn.executemany.call_args.args[1]
+        assert len(values) == 3
+
+    def test_get_filters_by_worker_name(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1.0, "accepted": 1, "rejected": 0},
+                {"ts": t0, "name": "rig2", "h15": 2.0, "accepted": 2, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_history(name="rig1")
+        assert len(rows) == 1 and rows[0]["name"] == "rig1"
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [{"ts": t0 - 1000, "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": t0, "name": "rig1", "h15": 2.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_history(since=t0 - 10)
+        assert [r["h15"] for r in rows] == [2.0]
+
+    def test_empty_batch_is_a_noop(self, state_manager):
+        state_manager.add_worker_history([])
+        assert state_manager.get_worker_history() == []
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO worker_history (ts, name, h15, accepted, rejected) VALUES (?,?,?,?,?)",
+                (old_ts, "rig1", 1.0, 0, 0),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_worker_history(
+            [{"ts": time.time(), "name": "rig1", "h15": 2.0, "accepted": 0, "rejected": 0}]
+        )
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM worker_history WHERE ts < ?",
+                (time.time() - HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_history")
+        state_manager.add_worker_history(
+            [{"ts": time.time(), "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+        )
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["worker_history"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_history")
+        assert state_manager.get_worker_history() == []
+
+
+class TestTelemetryTableHealth:
+    """Per-table 'last successful write' health signal (#196 Wave-0), mirroring db_healthy so a
+    hook that silently stops writing (the whole poll loop is one try/except) is visible."""
+
+    def test_starts_healthy_with_no_write_yet(self, state_manager):
+        health = state_manager.get_table_health()
+        assert set(health) == {
+            "blocks",
+            "xvb_history",
+            "network_history",
+            "disk_growth",
+            "worker_history",
+        }
+        for row in health.values():
+            assert row == {"healthy": True, "last_write": None}
+
+    def test_last_write_stamps_on_success(self, state_manager):
+        t0 = time.time()
+        state_manager.add_block(t0, height=1, difficulty=1.0)
+        assert state_manager.get_table_health()["blocks"] == {"healthy": True, "last_write": t0}
+        # untouched tables stay at their default
+        assert state_manager.get_table_health()["xvb_history"]["last_write"] is None
+
+    def test_returns_a_copy(self, state_manager):
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        health = state_manager.get_table_health()
+        health["blocks"]["healthy"] = False
+        assert state_manager.get_table_health()["blocks"]["healthy"] is True
+
+
+class TestTelemetryTablesAfterClose:
+    """After close() the connection is None — every v1.7 telemetry-table accessor must no-op /
+    read empty, never raise (mirrors TestPayouts.test_reads_and_writes_after_close_are_safe)."""
+
+    def test_all_five_tables_are_safe_after_close(self, state_manager):
+        state_manager.close()
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        state_manager.add_xvb_history(time.time())
+        state_manager.add_network_history(time.time())
+        state_manager.add_disk_growth(time.time())
+        state_manager.add_worker_history(
+            [{"ts": time.time(), "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+        )
+        assert state_manager.get_blocks() == []
+        assert state_manager.get_xvb_history() == []
+        assert state_manager.get_network_history() == []
+        assert state_manager.get_disk_growth() == []
+        assert state_manager.get_worker_history() == []

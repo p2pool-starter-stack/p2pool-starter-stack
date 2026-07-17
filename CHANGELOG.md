@@ -32,6 +32,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   future core form section (#529). A tier-1 test pins every path in it to an entry in
   `config.reference.json`.
 
+- **Time-series persistence backbone for five telemetry series (#196).** Five dedicated,
+  independently-retained SQLite tables — `blocks` (pool block-found events, permanent),
+  `xvb_history` (XvB scalars, ~5 min wall-clock, 30-day retention), `network_history` (Monero
+  difficulty/height/reward + pool hashrate, hourly, 90-day retention), `disk_growth` (monerod DB
+  size + host disk usage, hourly, permanent), and `worker_history` (per-rig hashrate + share
+  counts, ~5 min wall-clock batched write, 30-day retention). Additive tables (no new columns on
+  the existing `history` table, no row multiplication), each with a per-table "last successful
+  write" health signal so a silently-failing capture hook is visible. Backbone only — capture,
+  storage, retention, and a getter per series; charts/UI and `/api/state` exposure are deliberate
+  follow-ups.
+
 ### Changed
 
 - **The first-run wizard now asks a pool tier and a few shape questions, instead of hardcoding
