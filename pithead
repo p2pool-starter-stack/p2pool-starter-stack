@@ -369,9 +369,11 @@ verify_release_images() {
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
         repo="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}"
-        sha="$(compose_pinned_digest "$suffix")"
-        [ -n "$sha" ] ||
+        # #557: plain `sha="$(...)"` aborts under errexit on a no-match grep BEFORE this error()
+        # fires — `if !` suspends errexit for the assignment so the crafted diagnostic is reachable.
+        if ! sha="$(compose_pinned_digest "$suffix")" || [ -z "$sha" ]; then
             error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing (#451). A signed release bundle pins every first-party image by @sha256 (#461)."
+        fi
         image="${repo}@${sha}"
         if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
             # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
@@ -1083,8 +1085,15 @@ reset_dashboard() {
     # Idempotent if it's already present from `up`; closes the gap where running reset-dashboard on a
     # `down` stack would otherwise bring p2pool up with no firewall installed at all.
     apply_tor_egress_firewall
-    # Route through compose_up_checked so a subnet collision (#180) gets explained, like every other up-path.
-    compose_up_checked -d dashboard p2pool
+    # Route through compose_up_checked so a subnet collision (#180) gets explained, like every other
+    # up-path. #557: wrapped in `if !` (mirroring the apply call site) — a bare call lets a compose
+    # failure trip errexit inside compose_up_checked's own pipeline, before the #180 explanation
+    # prints and before the mktemp temp file is cleaned up.
+    if ! compose_up_checked -d dashboard p2pool; then
+        warn "Data directories were reset, but dashboard/p2pool did NOT come back up ('docker compose up' failed)."
+        warn "Fix the cause shown above, then re-run '$0 up' to bring them back."
+        exit 1
+    fi
 }
 
 # --- Backup / Restore ---
