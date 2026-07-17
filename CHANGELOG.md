@@ -11,6 +11,15 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- **Per-worker descriptors moved to `workers.list[]`, out from under `dashboard.*` (#506).** The
+  per-rig `{name, host, port, control_port, token, watts}` entries lived at `dashboard.workers[]`
+  (#172), split from the rest of the fleet's worker-API settings under the top-level `workers.*`
+  block. They're now one block: `workers.list[]`. `dashboard.workers[]` is read as a deprecated
+  fallback when `workers.list` is unset — a config carrying both is refused at apply — and is
+  removed in v1.9.
+
 ## [1.6.3] - 2026-07-17
 
 The v1.7 plan's Wave 0.5 — the remaining seven findings from the 2026-07 scan (#556–#561, #566),

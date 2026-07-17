@@ -92,13 +92,15 @@
             "currency": "USD",
             "xmr_price": 0
         },
+        "_workers_docs": "DEPRECATED alias for the top-level workers.list[] (the block was relocated, #506). Kept in the schema so a config.json that predates the move still validates through the dashboard control channel; setting both workers.list[] and dashboard.workers[] is a hard error at apply. Use workers.list[] in new configs. Removed in v1.9.",
         "workers": []
     },
 
     "workers": {
         "api_port": 8080,
         "api_auth": "none",
-        "api_token": ""
+        "api_token": "",
+        "list": []
     },
 
     "network": {

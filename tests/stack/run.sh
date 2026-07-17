@@ -2621,6 +2621,58 @@ dw_case '[{"name":"rig1","token":"has space"}]' "unsafe worker token" "dashboard
 dw_case '[{"name":"rig1","watts":0}]' "non-positive worker watts (#260)" "dashboard.workers[rig1].watts"
 dw_case '[{"name":"rig1","watts":"142"}]' "string worker watts (#260)" "dashboard.workers[rig1].watts"
 
+# Duplicate names are legal (first-declared wins) but warned about, and a valid dashboard.workers[]
+# list applies. Also proves the legacy fallback still validates + warns once (#506).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "valid dashboard.workers applies" "$rc" "0"
+assert_contains "duplicate worker names are warned" "$out" "first-declared"
+assert_contains "legacy dashboard.workers is warned as deprecated (#506)" "$out" "dashboard.workers[] is deprecated"
+# Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
+# per-worker token must not leak into a second secrets file.
+if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
+
+# workers.list[] (#506): the current sub-key validates with the same rules, at the new path — every
+# per-field error message above named its path via dashboard.workers[]; each case repeats here
+# named via workers.list[], proving the dynamic path label in validate_worker_endpoints tracks
+# whichever key is actually in use, not a hardcoded string.
+wl_case() { # <workers-json> <label> <expected-msg-fragment>
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "$2 rejected" "$rc" "1"
+    assert_contains "$2 message" "$out" "$3"
+}
+wl_case '{"name":"rig1"}' "non-array workers.list" "must be an array"
+wl_case '[{"host":"10.0.0.5"}]' "workers.list entry without a name" "name"
+wl_case '[{"name":"rig1","host":"10.0.0.5/path"}]' "workers.list host with URL structure" "workers.list[rig1].host"
+wl_case '[{"name":"rig1","host":"attacker:8080"}]' "workers.list host smuggling a port" "workers.list[rig1].host"
+wl_case '[{"name":"rig1","port":65536}]' "out-of-range workers.list port" "workers.list[rig1].port"
+wl_case '[{"name":"rig1","token":"has space"}]' "unsafe workers.list token" "workers.list[rig1].token"
+wl_case '[{"name":"rig1","watts":0}]' "non-positive workers.list watts (#260)" "workers.list[rig1].watts"
+
+# A valid workers.list[] applies cleanly, warns no deprecation, and — like the legacy shape — never
+# leaks a per-worker token into .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"rig1","host":"worker-lan.local","token":"tok_xyz789"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "valid workers.list applies" "$?" "0"
+assert_not_contains "workers.list applying raises no deprecation warning" "$out" "deprecated"
+if grep -q 'tok_xyz789' "$V/.env"; then bad "workers.list token stays out of .env" "token landed in .env"; else ok "workers.list token stays out of .env"; fi
+
+# Setting BOTH workers.list[] and dashboard.workers[] is a hard error (#506) — a silent pick would
+# leave the other a stale, unnoticed copy of hosts/tokens. REVERT-PROOF: the exact case a partial
+# revert of the dual-read change would silently start allowing again.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig"}]}, "workers":{"list":[{"name":"new-rig"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "both workers.list and dashboard.workers set is rejected" "$rc" "1"
+assert_contains "both-set refusal names both keys" "$out" "sets both workers.list[] and dashboard.workers[]"
+
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
     seed_env
@@ -2643,17 +2695,6 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"currency":"EUR"},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid dashboard.energy applies" "$?" "0"
-
-# Duplicate names are legal (first-declared wins) but warned about, and a valid list applies.
-seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
-out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-rc=$?
-assert_rc "valid dashboard.workers applies" "$rc" "0"
-assert_contains "duplicate worker names are warned" "$out" "first-declared"
-# Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
-# per-worker token must not leak into a second secrets file.
-if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
 
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
@@ -4657,6 +4698,12 @@ gate_try "$C/cand.json"
 assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
 assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
+# Same refusal on the CURRENT workers.list[] shape (#506) — the gate must catch either key.
+jq '.workers.list=[{name:"rig1",host:"attacker.example",token:"stolen"}]' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "workers.list change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "workers.list refusal names the per-worker descriptors" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "workers.list"
+assert_eq "config.json keeps no workers.list descriptors" "$(jq -r '.workers.list // "unset"' "$C/config.json")" "unset"
 
 # dashboard.energy (#504) is the ONE config.json-only block a commit MAY change: it never renders
 # to .env, so the host previews it as a normal INFO row (not the old non-committable HOST note) and
@@ -4839,6 +4886,41 @@ jq --arg id "$UUID7" '{id:$id, action:"preview", actor:"admin", config: .}' "$MA
 run_pending >/dev/null
 assert_eq "duplicate-name sentinel restores the first-declared token" "$(jq -r '.dashboard.workers[0].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
 assert_eq "duplicate-name second entry also resolves to first-declared" "$(jq -r '.dashboard.workers[1].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
+
+echo "== black-box: per-worker token mask + host-side restore, workers.list[] shape (#506) =="
+# Same mask/restore/commit round-trip as above, but on the CURRENT workers.list[] shape — proves
+# render_masked_config and the control_preview sentinel swap key off whichever shape the live
+# config actually uses, not a hardcoded dashboard.workers path. Clear the legacy key first so the
+# live config carries only the new shape (both-set is refused at apply, asserted earlier).
+jq 'del(.dashboard.workers) | .workers.list=[
+    {name:"rig1",host:"10.0.0.5",token:"tok_rig1secret"},
+    {name:"rig2"},
+    {name:"rig3",token:"tok_rig3secret"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+# 1) masked prefill copy: each SET per-worker token is a sentinel, the raw token never appears.
+assert_eq "workers.list token masked to the sentinel" "$(jq -c '.workers.list[0].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "second workers.list token masked to the sentinel" "$(jq -c '.workers.list[2].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "token-less workers.list worker stays token-less in the masked copy" "$(jq -r '.workers.list[1] | has("token")' "$MASKED" 2>/dev/null)" "false"
+case "$(cat "$MASKED")" in
+*tok_rig1secret* | *tok_rig3secret*) bad "masked copy holds no workers.list token" "a per-worker token leaked into $MASKED" ;;
+*) ok "masked copy holds no workers.list token" ;;
+esac
+# 2) staging swap: a proposal that prefills from the masked copy stages with each token restored
+#    from live BY NAME.
+UUID8="88888888-8888-4888-8888-888888888888"
+jq --arg id "$UUID8" '{id:$id, action:"preview", actor:"admin", config: (.p2pool.pool="nano")}' "$MASKED" >"$REQS/$UUID8.json"
+run_pending >/dev/null
+assert_eq "workers.list-sentinel preview validates" "$(jq -r '.status' "$RESULTS/$UUID8.json" 2>/dev/null)" "previewed"
+assert_eq "workers.list sentinel restored to the live token by name" "$(jq -r '.workers.list[0].token' "$STAGED/$UUID8.json" 2>/dev/null)" "tok_rig1secret"
+assert_eq "second workers.list sentinel restored by name" "$(jq -r '.workers.list[2].token' "$STAGED/$UUID8.json" 2>/dev/null)" "tok_rig3secret"
+# 3) commit: workers.list restored to live == live, so the gate passes on the pool-only change, and
+#    the committed config KEEPS the live per-worker tokens.
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID8" >"$REQS/$UUID8.json"
+run_pending >/dev/null
+assert_eq "workers.list-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID8.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live workers.list token" "$(jq -r '.workers.list[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
 
 echo "== black-box: audit log growth is bounded (#349) =="
 # Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
@@ -5537,6 +5619,23 @@ printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","chan
 CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
 assert_contains "worker-apply over the dial budget is rejected (no dial)" \
     "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
+
+# workers.list[] (#506): control_worker_apply resolves the rig's host/token the same way from the
+# CURRENT shape. Reuses the budget=0 technique above — a "too many worker config changes" rejection
+# (instead of "no configured host"/"no token") proves resolution succeeded BEFORE the pre-dial
+# budget gate, without needing to stub the actual network dial.
+WA2="$SANDBOX/ctrl506"
+mkdir -p "$WA2/staged" "$WA2/results" "$WA2/audit"
+cat >"$WA2/config.json" <<'EOF'
+{ "workers": { "list": [
+    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" }
+] } }
+EOF
+u8="88888888-9999-4999-8999-888888888888"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"DONATION":2}}\n' "$u8" >"$WA2/req.json"
+CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA2/config.json" run_sourced "$SANDBOX" control_process_request "$WA2/req.json" "$WA2" >/dev/null 2>&1
+assert_contains "workers.list worker-apply resolves the rig (budget rejection proves pre-dial success)" \
+    "$(jq -r '.error // ""' "$WA2/results/$u8.json")" "too many worker config changes"
 
 # ---------------------------------------------------------------------------
 echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
