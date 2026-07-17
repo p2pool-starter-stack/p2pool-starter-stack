@@ -173,6 +173,78 @@ verify_release() {
     fi
 }
 
+# verify_release() above proves cosign itself works, but it re-implements the cosign calls rather
+# than exercising pithead's OWN verify_release_images() — the function `up`/`upgrade` actually run
+# on every install (#376/#459). This extracts the published bundle (a real, non-source-checkout
+# install dir — verify_release_images's `is_source_checkout` early-return only fires inside a git
+# checkout) and calls that exact function directly, positive AND negative:
+#   - positive (needs a signed release): the real function, against the real pinned digests + the
+#     committed cosign.pub, in the real bundle dir, must pass.
+#   - negative (security-critical, runs regardless of signing): a digest tampered in a COPY of the
+#     bundle's docker-compose.yml can't verify against any real signature — the function must abort
+#     fail-closed before anything would be pulled. This is the assertion that proves the real
+#     host-path function refuses a mismatched digest, not just that a hand-rolled cosign call does.
+verify_release_images_direct() {
+    stage "verify_release_images() direct exercise (#376/#459) — the real host-path function"
+    local bundle_dir="$WORK/pithead"
+    if [ ! -d "$bundle_dir" ]; then
+        tar -xzf "$WORK/pithead.tar.gz" -C "$WORK" ||
+            die "Could not extract the published bundle to exercise verify_release_images()."
+    fi
+    [ -x "$bundle_dir/pithead" ] || die "Extracted bundle has no executable pithead at $bundle_dir."
+
+    if [ "$SIGNED" -eq 1 ]; then
+        local out
+        if out="$(cd "$bundle_dir" && PITHEAD_REGISTRY="$REGISTRY" bash -c 'source ./pithead; verify_release_images' 2>&1)"; then
+            ok "verify_release_images() passes for real, in the actual bundle dir (not a reimplementation)."
+        else
+            die "verify_release_images() FAILED against the real published bundle: $out"
+        fi
+    else
+        warn "Release is unsigned — skipping the positive verify_release_images() exercise (needs a signed release; the negative/tamper case below still runs)."
+    fi
+
+    # Negative: corrupt ONE image's pinned digest in a COPY of the bundle and re-run the real
+    # function. Needs a cosign.pub to reach the real cosign dial (the bundle's own, or the one
+    # committed to this checkout) — without one, verify_release_images's documented fallback is to
+    # WARN and proceed (#376 opt-in), which is a different, already-covered behaviour, not this gate.
+    local pub_src=""
+    [ -f "$bundle_dir/cosign.pub" ] && pub_src="$bundle_dir/cosign.pub"
+    [ -z "$pub_src" ] && [ -f "$REPO_ROOT/cosign.pub" ] && pub_src="$REPO_ROOT/cosign.pub"
+    if [ -z "$pub_src" ] || ! command -v cosign >/dev/null 2>&1; then
+        warn "No cosign.pub available (bundle or committed) or cosign not installed — skipping the tamper-refuses negative case."
+        return 0
+    fi
+
+    local tdir="$WORK/pithead-tampered"
+    rm -rf "$tdir"
+    cp -a "$bundle_dir" "$tdir"
+    cp "$pub_src" "$tdir/cosign.pub"
+    local orig_sha bad_sha last_char new_char
+    orig_sha="$(grep -oE 'pithead-tor:[^[:space:]]*@sha256:[0-9a-f]+' "$tdir/docker-compose.yml" | grep -oE 'sha256:[0-9a-f]+' | head -1)"
+    [ -n "$orig_sha" ] ||
+        die "Could not find a digest-pinned pithead-tor image in the bundle's docker-compose.yml to tamper — the bundle isn't digest-pinned (#461 regression)."
+    # Flip the last hex character so the digest keeps its real shape (64 hex chars) but names a
+    # manifest that exists nowhere in the registry — a mismatched, not malformed, digest.
+    last_char="${orig_sha: -1}"
+    case "$last_char" in
+    0) new_char=1 ;;
+    *) new_char=0 ;;
+    esac
+    bad_sha="${orig_sha%?}${new_char}"
+    sed -E "s#(pithead-tor:[^[:space:]]*@)$orig_sha#\\1$bad_sha#" "$tdir/docker-compose.yml" >"$tdir/docker-compose.yml.tmp" &&
+        mv "$tdir/docker-compose.yml.tmp" "$tdir/docker-compose.yml"
+    grep -qF "$bad_sha" "$tdir/docker-compose.yml" ||
+        die "Failed to tamper the bundle's docker-compose.yml digest — the negative case didn't set up."
+
+    local out2 rc2=0
+    out2="$(cd "$tdir" && PITHEAD_REGISTRY="$REGISTRY" bash -c 'source ./pithead; verify_release_images' 2>&1)" || rc2=$?
+    if [ "$rc2" -eq 0 ]; then
+        die "verify_release_images() PASSED against a TAMPERED digest — fail-closed verification is not real (#376/#459). Output: $out2"
+    fi
+    ok "verify_release_images() REFUSES a tampered/mismatched digest (fail-closed, #376/#459): $(printf '%s' "$out2" | tail -1)"
+}
+
 # --- Phase 2: real #59 upgrade against the published bundle ---------------------------------------
 
 smoke_upgrade() {
@@ -238,6 +310,7 @@ confirm_upgrade() {
 log "Post-publish release smoke test (#459) — $TAG"
 fetch_published_bundle
 verify_release
+verify_release_images_direct
 if [ -n "$UPGRADE_DIR" ]; then
     smoke_upgrade
 else

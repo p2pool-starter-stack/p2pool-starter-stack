@@ -280,17 +280,35 @@ tier 3/4:
   retry next cycle" is unit-only; no tier-3/4 scenario injects a docker start/stop error.
 - **`pithead doctor` on a real box.** ✅ The `--check` phase now runs `doctor` and asserts exit 0
   plus the three #383 runtime OK verdicts (egress firewall installed, stratum listening, dashboard
-  answers). Still open: its NTP/clock-drift check (mining is time-sensitive) is never
-  fault-injected.
-- **Disk-full / ENOSPC verdict.** Only a disk-headroom *warning* is checked; a real
-  container-unhealthy-on-ENOSPC verdict is never forced, though the disk badge + db-write-error
-  paths are unit-tested.
-- **Tor-container-down partial start.** No Caddy/Tor services exist in the mini-stack compose, so
-  "what happens when the Tor container is down" (SOCKS unreachable) is exercised at no tier below
-  the manual real box; every all-Tor egress assertion is read-path only.
+  answers). ✅ Its NTP/clock-drift check is now fault-injected too (`--fault-injection`): a
+  PATH-shadowed `timedatectl` (no real clock skew — mining is time-sensitive) proves doctor
+  classifies a real unsynced report correctly, then the shadow is dropped and recovery is asserted.
+- **Disk-full / ENOSPC verdict.** ✅ Now a tier-4 `--fault-injection` case: a 1MiB tmpfs bind-mounted
+  over the dashboard data dir and filled solid forces a real kernel ENOSPC (distinct from
+  `fault_db_readonly`'s EACCES), and asserts `db_healthy:false`, then unmounts and asserts recovery.
+- **Tor-container-down partial start.** ✅ Now a tier-4 `--fault-injection` case (#563, TOP PRIVACY
+  PRIORITY): `docker compose stop tor` and assert BOTH no clearnet egress leak appears (reuses
+  `bench-verify-egress.sh`'s `/proc/net/tcp` proof, the same one the steady-state battery runs) and
+  that `doctor` flags the outage loudly rather than passing silently, then restart tor and re-assert
+  both the egress proof and `pithead status`. The doctor-loud-failure leg is the harness *proving*
+  the gap: `check_egress_firewall_installed` and `check_tor_clearnet_egress` both currently SKIP
+  (not FAIL) when the tor container isn't running, so this assertion is expected to fail against
+  today's `doctor` until it gains an explicit tor-down verdict — filed as a follow-up, not silently
+  softened here.
 - **Insecure + main matrix row.** `dashboard.secure=false` only ever pairs with `p2pool.pool=nano`,
   so the Caddy-scheme / bind assertions for insecure mode are entangled with the nano path; an
   insecure+main regression has no row.
+- **`verify_release_images()` against a real signed bundle.** ✅ Now exercised directly (not
+  reimplemented) by `scripts/release-smoke.sh`: the real function runs in the extracted, published
+  bundle dir against the real pinned digests + committed `cosign.pub` (positive, needs a signed
+  release) and against a digest tampered in a copy of the bundle (negative, fail-closed, runs
+  regardless of signing) — the security-critical proof that the exact function `up`/`upgrade` run on
+  every install refuses a mismatched digest, not just that a hand-rolled cosign call does (#376/#459).
+- **Per-service runtime uid.** ✅ Now asserted every matrix run and at `--check`: `docker exec <svc>
+  id -u` for all 9 services against their audited expected uid (tor 100; monerod/p2pool/
+  xmrig-proxy/dashboard/tari 1000; caddy/docker-proxy/docker-control root, mitigated by
+  `cap_drop: ALL` + isolation rather than uid) — compose only pinned tari's `user:` at config time
+  (#255/#91); nothing checked what actually runs.
 
 ## Adding a scenario
 
