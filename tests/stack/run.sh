@@ -3513,6 +3513,22 @@ assert_rc "plaintext archive still restores" "$rc" "0"
 assert_eq "plaintext restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
 rm -f "$BK"/backups/pithead-backup-*
 
+# 6b) Truncated plaintext archive (#549): mirrors the encrypted-branch tamper/truncation check
+# (4b above) on the gzip path — a truncated archive must be rejected by a full-stream `tar -tzf`
+# verify BEFORE extraction, with nothing written, instead of half-overwriting config.json/.env.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+plain_trunc_src="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+config_before="$(cat "$BK/config.json")"
+env_before="$(cat "$BK/.env")"
+head -c "$(($(wc -c <"$plain_trunc_src") / 2))" "$plain_trunc_src" >"$BK/backups/truncated-plain.tar.gz"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$BK/backups/truncated-plain.tar.gz" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "truncated plaintext archive exits non-zero" || bad "truncated plaintext archive exits non-zero" "rc=0"
+assert_contains "truncated plaintext archive names integrity failure" "$out" "integrity"
+assert_eq "truncated plaintext archive leaves config.json untouched" "$(cat "$BK/config.json")" "$config_before"
+assert_eq "truncated plaintext archive leaves .env untouched" "$(cat "$BK/.env")" "$env_before"
+rm -f "$BK"/backups/pithead-backup-* "$BK/backups/truncated-plain.tar.gz"
+
 # 7) A failed encrypted backup (openssl dies mid-stream) removes the partial archive.
 cat >"$BK/bin/openssl" <<'EOF'
 #!/usr/bin/env bash
@@ -3541,6 +3557,51 @@ rc=$?
 [ "$rc" -ne 0 ] && ok "encrypted restore w/o passphrase exits non-zero" || bad "encrypted restore w/o passphrase exits non-zero" "rc=0"
 assert_contains "encrypted restore w/o passphrase explains" "$out" "PITHEAD_BACKUP_PASSPHRASE"
 rm -f "$BK"/backups/pithead-backup-*
+
+echo "== black-box: failed plaintext backup restarts a running stack, removes the partial archive (#551) =="
+# Companion to the #549 test above: a failed tar must not strand the stack stopped, nor leave a
+# partial (root-owned) archive that looks like a valid backup. Shadow tar to fail unconditionally
+# and simulate a RUNNING stack (was_running=1), so the failure path must call stack_up for real —
+# proven here by "compose up" showing up in the docker log, not by stubbing stack_up away.
+FB="$SANDBOX/failbackup"
+mkdir -p "$FB/build/tari" "$FB/data/tor" "$FB/data/dashboard" "$FB/bin"
+cp "$STACK" "$FB/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$FB/build/tari/"
+cat >"$FB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >>"${DOCKER_LOG:-/dev/null}"
+case "$*" in
+  "compose ps --status running -q") echo cid123 ;; # non-empty -> stack treated as RUNNING
+esac
+exit 0
+EOF
+cat >"$FB/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+EOF
+cat >"$FB/bin/tar" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$FB/bin/docker" "$FB/bin/sudo" "$FB/bin/tar"
+cat >"$FB/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=FBTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$FB/config.json"
+
+out="$(cd "$FB" && DOCKER_LOG="$FB/docker.log" PATH="$FB/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "failed plaintext backup (running stack) exits non-zero" || bad "failed plaintext backup (running stack) exits non-zero" "rc=0"
+assert_contains "failed plaintext backup names the cause" "$out" "partial archive was removed"
+assert_eq "failed plaintext backup leaves no archive behind" "$(ls "$FB"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+assert_contains "failed plaintext backup restarts the stack" "$(cat "$FB/docker.log" 2>/dev/null)" "compose up"
 
 echo "== black-box: reset-dashboard targets .env dirs, not config.json (#139) =="
 # reset-dashboard must wipe the LIVE deployment's data dirs (from .env), not a path the user may

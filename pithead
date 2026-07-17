@@ -1229,10 +1229,17 @@ stack_backup() {
             openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
                 -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
             rm -f "$archive"
+            [ "$was_running" -eq 1 ] && stack_up
             error "Backup failed — the partial archive was removed."
         fi
     else
-        (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}")
+        # sudo tar itself opens $archive, so a failed run can still leave a root-owned partial
+        # file behind — guard it the same way as the encrypted branch above (#551).
+        if ! (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}"); then
+            sudo rm -f "$archive"
+            [ "$was_running" -eq 1 ] && stack_up
+            error "Backup failed — the partial archive was removed."
+        fi
     fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
     chmod 600 "$archive"
@@ -1318,6 +1325,12 @@ stack_restore() {
         openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
             -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
             tar -tzf - >/dev/null 2>&1 ||
+            error "Archive fails integrity verification (tampered or truncated) — nothing was restored."
+    else
+        # Same full-stream verify as the encrypted branch above, minus the decrypt step: a
+        # truncated/corrupt plaintext archive would otherwise abort tar MID-EXTRACTION, leaving
+        # the live config half-overwritten (#549).
+        tar -tzf "$archive" >/dev/null 2>&1 ||
             error "Archive fails integrity verification (tampered or truncated) — nothing was restored."
     fi
 

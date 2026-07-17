@@ -341,8 +341,10 @@ is typo'd away must fail loudly, not archive your onion keys in plaintext while 
 To write a plaintext archive on purpose, pass `--no-encrypt` (an empty passphrase at the interactive
 prompt does the same, with a warning).
 
-If the stack is running, `backup` stops it for a consistent copy and restarts it when done. Pass
-`-y` / `--yes` to skip both prompts (low-space warning, stop-the-stack question).
+If the stack is running, `backup` stops it for a consistent copy and restarts it when done. A
+failed backup (disk full mid-archive, for example) removes the partial archive and still restarts
+the stack before reporting the error. Pass `-y` / `--yes` to skip both prompts (low-space warning,
+stop-the-stack question).
 
 Include the blockchains (larger, slower) with:
 
@@ -360,7 +362,8 @@ To recover (on a new machine, or after a wipe) copy the archive back and run:
 
 `restore` detects the format from the archive itself — encrypted backups ask for the passphrase
 (or read `PITHEAD_BACKUP_PASSPHRASE`), and plaintext archives from earlier releases restore
-unchanged, no flag needed. A wrong passphrase fails before anything on disk is touched. `restore`
+unchanged, no flag needed. A wrong passphrase, or a corrupt or truncated archive of either format,
+fails before anything on disk is touched. `restore`
 prompts before overwriting anything (pass `-y` / `--yes` to skip). It puts the files back, fixes
 Tor key ownership so the onion address returns unchanged, and restores hashrate history and
 dashboard settings.
