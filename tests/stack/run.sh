@@ -1289,7 +1289,7 @@ assert_contains "rotate preserves DEPLOYMENT_COMPLETED across render_env (#356)"
 echo "== black-box: upgrade captures a just-enabled dashboard onion address (#356) =="
 # Enabling the onion via `upgrade` must read the freshly-generated .onion back into .env; apply's
 # capture only runs when the config changed, so an upgrade-based enable left the address uncaptured.
-upg_capture() { # <onion_enabled> <current_onion> -> prints "captured" if provision_dashboard_onion ran
+upg_capture() { # <onion_enabled> <current_onion> -> "captured" when provision runs, "caddyfile-rendered" per generate_caddyfile call
     cd "$SANDBOX" || exit
     # shellcheck disable=SC1090
     source "$STACK"
@@ -1303,20 +1303,129 @@ upg_capture() { # <onion_enabled> <current_onion> -> prints "captured" if provis
     render_env() { :; }
     mv() { :; }
     inject_service_configs() { :; }
-    generate_caddyfile() { :; }
+    generate_caddyfile() { echo caddyfile-rendered; }
     migrate_compose_project() { :; }
     is_source_checkout() { return 1; }
     log() { :; }
     docker() { :; }
     apply_tor_egress_firewall() { :; }
     compose_up_checked() { :; }
-    provision_dashboard_onion() { echo captured; }
+    provision_dashboard_onion() {
+        DASHBOARD_ONION="upgcap5678.onion"
+        echo captured
+    }
     export DASHBOARD_ONION_ENABLED="$1"
     export DASHBOARD_ONION="$2"
     stack_upgrade
 }
 assert_contains "upgrade captures the onion address when enabled + uncaptured (#356)" "$(upg_capture true '')" "captured"
 assert_not_contains "upgrade skips capture when the onion is disabled (#356)" "$(upg_capture false '')" "captured"
+
+# #546: the upgrade-path capture must ALSO regenerate the Caddyfile — the render preamble ran while
+# the address was still the placeholder, so a capture without a re-render leaves the HTTPS onion
+# vhost missing forever (the next apply no-ops on an unchanged config). Count generate_caddyfile
+# calls: once from the preamble, a second time only when the capture leg runs.
+upg_regen_on=$(upg_capture true '' | grep -c "caddyfile-rendered")
+case "$upg_regen_on" in
+2) ok "upgrade capture regenerates the Caddyfile (#546)" ;;
+*) bad "upgrade capture regenerates the Caddyfile (#546)" "generate_caddyfile ran $upg_regen_on time(s), want 2 (preamble + capture)" ;;
+esac
+upg_regen_off=$(upg_capture false '' | grep -c "caddyfile-rendered")
+case "$upg_regen_off" in
+1) ok "upgrade without onion renders the Caddyfile once (#546)" ;;
+*) bad "upgrade without onion renders the Caddyfile once (#546)" "generate_caddyfile ran $upg_regen_off time(s), want 1" ;;
+esac
+
+echo "== black-box: apply captures + renders the HTTPS onion vhost in the SAME run (#546) =="
+# Before the fix, apply's post-up capture block (provision_dashboard_onion && render_env) never
+# re-ran generate_caddyfile, so the https://<onion> vhost (#360) only appeared on some LATER,
+# unrelated apply — a re-apply that changed nothing hit the "No configuration changes detected"
+# early return before ever reaching generate_caddyfile. Drive the real apply() with the heavy
+# machinery stubbed away but generate_caddyfile left REAL, so the Caddyfile is the actual proof.
+AOC="$SANDBOX/apply-onion-capture"
+mkdir -p "$AOC"
+printf 'DEPLOYMENT_COMPLETED=true\n' >"$AOC/.env"
+caddy_apply_capture=$(
+    cd "$AOC" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    env_changed_keys() { echo DASHBOARD_ONION_ENABLED; }
+    inject_service_configs() { :; }
+    provision_onion_client_auth() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    apply_tor_egress_firewall() { :; }
+    migrate_dashboard_data() { :; }
+    compose_up_checked() { :; }
+    announce_dashboard_url() { :; }
+    log() { :; }
+    warn() { :; }
+    docker() { :; }
+    # The shadowed capture: the address is unknown until the recreated tor container publishes it
+    # post-up, exactly like the real provision_dashboard_onion.
+    provision_dashboard_onion() { DASHBOARD_ONION="captured1234abcd.onion"; }
+    MONERO_ONION=mona.onion HOST_IP=box.lan DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$auth_hb64" NETWORK_PREFIX=172.28.0 DASHBOARD_ONION_ENABLED=true \
+        DASHBOARD_ONION=placeholder apply -y >/dev/null 2>&1
+    cat Caddyfile
+)
+assert_contains "apply: HTTPS onion vhost appears in the SAME apply run (#546)" "$caddy_apply_capture" "https://captured1234abcd.onion {"
+assert_contains "apply: HTTP onion vhost (bridge gateway) still present" "$caddy_apply_capture" "http://172.28.0.1 {"
+
+echo "== black-box: rotate-dashboard-onion regenerates the Caddyfile (#546) =="
+# Before the fix, rotate restarted caddy WITHOUT regenerating the Caddyfile, so caddy kept serving
+# the retired onion's HTTPS vhost and the new address had none. Seed a Caddyfile as if a PRIOR
+# generate_caddyfile ran for the old address, then rotate with a shadowed provision_tor that
+# returns a new one — the fix must leave exactly the new address's vhost behind.
+ROC="$SANDBOX/rotate-onion-capture"
+mkdir -p "$ROC/rot-tor/dashboard"
+cat >"$ROC/Caddyfile" <<'EOF'
+https://box.lan {
+    tls internal
+}
+
+http://172.28.0.1 {
+}
+
+https://oldaddr1234.onion {
+    tls internal
+}
+EOF
+caddy_rotate_capture=$(
+    cd "$ROC" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    warn() { :; }
+    log() { :; }
+    docker() { :; }
+    sudo() { :; }
+    env_get() { :; }
+    render_env() { :; }
+    resolve_dashboard_host() { HOST_IP=box.lan; }
+    # The shadowed provision the issue asks for: a fresh address on rotate.
+    provision_tor() { DASHBOARD_ONION="newaddr5678.onion"; }
+    onion_client_key() { :; }
+    export DASHBOARD_ONION_ENABLED=true
+    export DASHBOARD_ONION_CLIENT_AUTH=false
+    TOR_DATA_DIR="$ROC/rot-tor" DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$auth_hb64" NETWORK_PREFIX=172.28.0 rotate_dashboard_onion -y >/dev/null 2>&1
+    cat Caddyfile
+)
+assert_not_contains "rotate drops the retired onion's HTTPS vhost (#546)" "$caddy_rotate_capture" "oldaddr1234.onion"
+assert_contains "rotate adds the new onion's HTTPS vhost in the same run (#546)" "$caddy_rotate_capture" "https://newaddr5678.onion {"
 
 echo "== unit: dashboard_onion_status surfaces the onion URL for status/doctor (#343) =="
 # The shared resolver behind both `pithead status` and `pithead doctor`: it returns the onion URL +
