@@ -1067,9 +1067,11 @@ reset_dashboard() {
 
     log "Recreating data directories..."
     mkdir -p "$dashboard_dir" "$p2pool_dir"
-    # Owned by the non-root uid the dashboard + p2pool containers run as (#255).
-    sudo chown -R "$APP_UID":"$APP_GID" "$p2pool_dir" "$dashboard_dir"
     mkdir -p "$p2pool_dir/stats"
+    # Owned by the non-root uid the dashboard + p2pool containers run as (#255). mkdir runs first
+    # (above) and chown last (#550) — an unprivileged mkdir into an already chown -R'd tree
+    # EACCESes for any operator uid != APP_UID, and here that abort would land AFTER the data wipe.
+    sudo chown -R "$APP_UID":"$APP_GID" "$p2pool_dir" "$dashboard_dir"
     sudo chmod -R 755 "$p2pool_dir/stats"
 
     log "Bringing services back up..."
@@ -2684,12 +2686,14 @@ load_preserved_state() {
 prepare_directories() {
     log "Initializing data directories..."
     mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR"
+    mkdir -p "$P2POOL_DIR/stats"
 
     # Enforce permissions. Each data dir is owned by the uid its container runs as: Tor keeps its
     # alpine 'tor' user (100:101); the built images + tari run non-root as APP_UID:APP_GID (#255).
+    # mkdir runs first (above) and chown last (#550) — an unprivileged mkdir into an already
+    # chown -R'd tree EACCESes for any operator uid != APP_UID.
     sudo chown -R 100:101 "$TOR_DATA_DIR"
     sudo chown -R "$APP_UID":"$APP_GID" "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$DASHBOARD_DIR"
-    mkdir -p "$P2POOL_DIR/stats"
     sudo chmod -R 755 "$P2POOL_DIR/stats"
     # World-writable so the dashboard container (its own uid) can drop the clearnet auto-transition
     # marker (#234) while monerod/tari mount it read-only. It holds only non-secret state markers.
