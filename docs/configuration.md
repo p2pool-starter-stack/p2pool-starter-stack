@@ -68,9 +68,19 @@ are **core**: wallet addresses, `monero.mode`, `p2pool.pool`, the dashboard logi
 `workers.list` — the ones `./pithead setup` asks about (see
 [Getting Started › Run setup](getting-started.md#3-run-setup)) and, if `dashboard.control.enabled`
 is on, the group the dashboard's [Configuration view](dashboard.md#configuration-view) pins at the
-top of its form, above the rest of the schema grouped by section and collapsed by default. Both
-read the exact same list, [`config.core-keys.json`](../config.core-keys.json) — there's only ever
-one shortlist to keep in sync with this table, not two.
+top of its form. Both read the exact same list, [`config.core-keys.json`](../config.core-keys.json)
+— there's only ever one shortlist to keep in sync with this table, not two.
+
+Below the core group, the Configuration view groups the rest of this table into **logical
+sections** an operator recognizes (Wallets & payout, Monero node, Mining, Workers, Dashboard &
+access, Notifications, Energy, Alerts & thresholds, System / advanced), each collapsed by default
+— not one section per top-level key like this table's own layout, so a key like `dashboard.energy`
+lands in "Energy" and `dashboard.auth` lands in "Dashboard & access" rather than sharing a section
+just because they share a JSON prefix. It also greys out any key the dashboard's control channel
+can't actually commit — most of them, including every credential and every setting listed as
+"Security-relevant" or requiring `./pithead apply` below — instead of letting you edit it and
+finding out only when Save is rejected. Both are display-only: `config.json` itself, and what the
+control channel will commit, are unaffected either way.
 
 | Key | Default | Description |
 |---|---|---|

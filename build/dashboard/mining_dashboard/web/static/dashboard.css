@@ -1033,6 +1033,19 @@ button.upgrade-btn {
 .config-section-core {
   border-color: var(--accent);
 }
+/* Nested sub-group within a section (#612) — telegram.events, the notification sinks,
+ * healthchecks — same collapsed-<details> pattern as .config-section, one level deeper. */
+.config-subsection {
+  margin: 10px 0 10px 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.config-subsection > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
 .config-field {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) 2fr;
@@ -1059,6 +1072,12 @@ button.upgrade-btn {
 .config-field select:focus {
   outline: none;
   border-color: var(--accent);
+}
+/* Host-only field (#613): greyed and read-only up front instead of edit-then-reject. */
+.config-field input:disabled,
+.config-field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .config-field-warning {
   grid-column: 1 / -1;

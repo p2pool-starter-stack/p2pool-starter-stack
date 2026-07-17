@@ -7,11 +7,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { readFileSync } from "node:fs";
+
 import {
   applyEdits,
   buildSections,
+  classifyGroup,
   isSecretSentinel,
   jsonSyntaxError,
+  markEditable,
+  nestSection,
+  OTHER_GROUP,
   parseConfigJson,
   regroupCore,
 } from "../../mining_dashboard/web/static/configlogic.mjs";
@@ -39,16 +45,74 @@ test("isSecretSentinel: only the exact sentinel shape", () => {
   }
 });
 
-test("buildSections: one section per top-level object, _docs skipped, nesting flattened", () => {
+test("buildSections: LOGICAL sections (#611), not one per top-level config key; _docs skipped, nesting flattened", () => {
   const sections = buildSections(CFG);
+  // monero.wallet_address -> Wallets & payout; monero.mode/prune/node_password/remote.* -> Monero
+  // node; p2pool.pool/stratum_password -> Mining; dashboard.auth.* -> Dashboard & access;
+  // dashboard.workers is an array (skipped, #172) so it never pulls "Workers" into the list.
   assert.deepEqual(
     sections.map((s) => s.name),
-    ["monero", "p2pool", "dashboard"],
+    ["Wallets & payout", "Monero node", "Mining", "Dashboard & access"],
   );
-  const monero = sections[0];
-  const keys = monero.fields.map((f) => f.key);
+  const moneroNode = sections.find((s) => s.name === "Monero node");
+  const keys = moneroNode.fields.map((f) => f.key);
   assert.ok(keys.includes("monero.remote.rpc_port")); // nested objects walk down
   assert.ok(!keys.includes("_docs"));
+});
+
+test("buildSections: a config path split from its top-level key's other fields lands in a DIFFERENT logical section (#611)", () => {
+  // dashboard.auth.username (Dashboard & access) and a hypothetical dashboard.energy.* leaf
+  // (Energy) both live under the same top-level `dashboard` key but must not share a section —
+  // that's the whole point of #611 over "one section per top-level key".
+  const cfg = { ...CFG, dashboard: { ...CFG.dashboard, energy: { cost_per_kwh: 0.12 } } };
+  const sections = buildSections(cfg);
+  assert.ok(sections.some((s) => s.name === "Dashboard & access"));
+  assert.ok(sections.some((s) => s.name === "Energy"));
+  const energy = sections.find((s) => s.name === "Energy");
+  assert.deepEqual(
+    energy.fields.map((f) => f.key),
+    ["dashboard.energy.cost_per_kwh"],
+  );
+});
+
+test("classifyGroup: longest-prefix match — a specific carve-out beats a shorter sibling prefix", () => {
+  assert.equal(classifyGroup("monero.data_dir"), "System / advanced");
+  assert.equal(classifyGroup("monero.mode"), "Monero node"); // a different monero.* leaf, own prefix
+});
+
+test("classifyGroup + buildSections: an unclaimed path renders in the catch-all Other group, not dropped", () => {
+  assert.equal(classifyGroup("some_future_key.leaf"), OTHER_GROUP);
+  const sections = buildSections({ ...CFG, some_future_key: { leaf: "x" } });
+  const other = sections.find((s) => s.name === OTHER_GROUP);
+  assert.ok(other, "an unclaimed field must still render, in the Other group");
+  assert.deepEqual(
+    other.fields.map((f) => f.key),
+    ["some_future_key.leaf"],
+  );
+});
+
+test("buildSections: nested underscore-prefixed docs keys (any depth) are skipped, not rendered as fields", () => {
+  const cfg = { ...CFG, xmrig_proxy: { _docs: "legacy alias notes", enabled: true } };
+  const keys = buildSections(cfg)
+    .flatMap((s) => s.fields)
+    .map((f) => f.key);
+  assert.ok(!keys.includes("xmrig_proxy._docs"));
+  assert.ok(keys.includes("xmrig_proxy.enabled"));
+});
+
+// buildSections must claim EVERY leaf path in the real config.reference.json — a new config key
+// added there without a matching LOGICAL_GROUPS entry must fail this test loudly (land in Other)
+// rather than silently vanish from the editor (#611's own stated requirement). Reference values
+// are all scalars/objects/empty-arrays, so feeding the reference straight into buildSections
+// walks the exact same shape the live merged config does.
+test("buildSections: every config.reference.json leaf path resolves to a REAL logical group, not Other", () => {
+  const reference = JSON.parse(
+    readFileSync(new URL("../../../../config.reference.json", import.meta.url)),
+  );
+  const fields = buildSections(reference).flatMap((s) => s.fields);
+  assert.ok(fields.length > 50, "sanity: the reference should produce many fields");
+  const unclaimed = fields.filter((f) => classifyGroup(f.key) === OTHER_GROUP).map((f) => f.key);
+  assert.deepEqual(unclaimed, [], "these config.reference.json paths need a LOGICAL_GROUPS entry");
 });
 
 test("buildSections: field types follow the JSON value", () => {
@@ -122,26 +186,28 @@ test("applyEdits: garbage in a number field passes through for the host validato
 
 const CORE_KEYS = ["monero.wallet_address", "p2pool.pool", "dashboard.auth.username"];
 
-test("regroupCore: lifts core-key fields into one pinned group, out of their sections", () => {
+test("regroupCore: lifts core-key fields into one pinned group, out of their (logical) sections", () => {
   const { core, sections } = regroupCore(buildSections(CFG), CORE_KEYS);
   assert.deepEqual(
     core.map((f) => f.key).sort(),
     CORE_KEYS.slice().sort(),
   );
-  // The lifted fields no longer appear in their natural section...
-  const monero = sections.find((s) => s.name === "monero");
-  assert.ok(!monero.fields.some((f) => f.key === "monero.wallet_address"));
-  // ...but every OTHER field in that section is untouched.
-  assert.ok(monero.fields.some((f) => f.key === "monero.prune"));
-  const dashboard = sections.find((s) => s.name === "dashboard");
-  assert.ok(!dashboard.fields.some((f) => f.key === "dashboard.auth.username"));
-  assert.ok(dashboard.fields.some((f) => f.key === "dashboard.auth.password"));
+  // monero.wallet_address was the ONLY field "Wallets & payout" had for this fixture — lifting it
+  // empties the section, so it disappears entirely (same "no empty section" rule #529 already had).
+  assert.ok(!sections.some((s) => s.name === "Wallets & payout"));
+  // monero.prune stays behind in Monero node, untouched...
+  const moneroNode = sections.find((s) => s.name === "Monero node");
+  assert.ok(moneroNode.fields.some((f) => f.key === "monero.prune"));
+  // ...dashboard.auth.username is lifted out of Dashboard & access, dashboard.auth.password stays.
+  const dashboardAccess = sections.find((s) => s.name === "Dashboard & access");
+  assert.ok(!dashboardAccess.fields.some((f) => f.key === "dashboard.auth.username"));
+  assert.ok(dashboardAccess.fields.some((f) => f.key === "dashboard.auth.password"));
 });
 
 test("regroupCore: a section left with no remaining fields is dropped, not shown empty", () => {
-  // Every leaf of p2pool is core: the section itself should disappear from the regrouped list.
+  // Every leaf CFG.p2pool has (both Mining fields) is core: the section should disappear.
   const { sections } = regroupCore(buildSections(CFG), ["p2pool.pool", "p2pool.stratum_password"]);
-  assert.ok(!sections.some((s) => s.name === "p2pool"));
+  assert.ok(!sections.some((s) => s.name === "Mining"));
 });
 
 test("regroupCore: no core keys (missing/empty config.core-keys.json) leaves every field in its section", () => {
@@ -165,6 +231,69 @@ test("regroupCore: workers.list isn't a field to begin with (array, #172) — it
   ]);
   assert.ok(!core.some((f) => f.key === "workers.list"));
   assert.ok(!sections.some((s) => s.fields.some((f) => f.key === "workers.list")));
+});
+
+// --- Nested sub-groups within a logical section (#612) ----------------------------------------
+
+const NOTIFY_CFG = {
+  telegram: {
+    enabled: true,
+    bot_token: { __secret__: true },
+    daily_summary_time: "08:00",
+    events: { node_down: true, wallet_changed: true },
+  },
+  notifications: { ntfy: { url: "https://ntfy.sh/x" }, tor: true },
+  healthchecks: { ping_url: { __secret__: true } },
+};
+
+test("nestSection: telegram.events / notifications.* / healthchecks.* pull out into subgroups, rest stays flat", () => {
+  const notifications = buildSections(NOTIFY_CFG).find((s) => s.name === "Notifications");
+  const { fields, subgroups } = nestSection(notifications);
+  // The connection keys stay flat in the section...
+  assert.deepEqual(
+    fields.map((f) => f.key).sort(),
+    ["telegram.bot_token", "telegram.daily_summary_time", "telegram.enabled"],
+  );
+  // ...the 26-toggle wall and the sinks each get their own nested group.
+  const byLabel = Object.fromEntries(subgroups.map((g) => [g.label, g.fields.map((f) => f.key)]));
+  assert.deepEqual(byLabel["Telegram events"].sort(), ["telegram.events.node_down", "telegram.events.wallet_changed"]);
+  assert.deepEqual(byLabel["ntfy / webhook"].sort(), ["notifications.ntfy.url", "notifications.tor"]);
+  assert.deepEqual(byLabel.Healthchecks, ["healthchecks.ping_url"]);
+});
+
+test("nestSection: a section with no SUBGROUPS entry (e.g. Monero node) is returned unchanged, empty subgroups", () => {
+  const moneroNode = buildSections(CFG).find((s) => s.name === "Monero node");
+  const out = nestSection(moneroNode);
+  assert.deepEqual(out.fields, moneroNode.fields);
+  assert.deepEqual(out.subgroups, []);
+});
+
+test("nestSection: an empty subgroup (no matching fields) is omitted, not rendered blank", () => {
+  const notifications = buildSections({ telegram: { enabled: true } }).find((s) => s.name === "Notifications");
+  const { subgroups } = nestSection(notifications);
+  assert.deepEqual(subgroups, []); // no events, no notifications.*, no healthchecks in this fixture
+});
+
+// --- Editable-set membership / grey-out (#613) --------------------------------------------------
+
+test("markEditable: only fields whose dotted key is in the editable set are marked editable", () => {
+  const [marked] = markEditable(buildSections(CFG), ["monero.wallet_address"]);
+  const byKey = Object.fromEntries(marked.fields.map((f) => [f.key, f.editable]));
+  assert.equal(byKey["monero.wallet_address"], true);
+});
+
+test("markEditable: a missing/empty editable set fails CLOSED — every field non-editable", () => {
+  for (const bad of [undefined, [], null]) {
+    const sections = markEditable(buildSections(CFG), bad);
+    for (const s of sections) for (const f of s.fields) assert.equal(f.editable, false, f.key);
+  }
+});
+
+test("markEditable: host-only fields (e.g. dashboard.auth.password, a security/secret field) stay non-editable", () => {
+  const editableKeys = ["monero.wallet_address", "p2pool.pool"]; // dashboard.auth.* deliberately absent
+  const [, , , dashboardAccess] = markEditable(buildSections(CFG), editableKeys);
+  const password = dashboardAccess.fields.find((f) => f.key === "dashboard.auth.password");
+  assert.equal(password.editable, false);
 });
 
 // --- JSON mode's whole-config parse (#529) ----------------------------------------------------
