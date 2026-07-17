@@ -44,6 +44,12 @@ services:
       MONERO_NODE_USERNAME: ""
       MONERO_NODE_PASSWORD: ""
       MONERO_NODE_HOST: "fake-monerod"
+      # Must equal MONERO_NODE_HOST so the dashboard takes the "local" RPC-driven path
+      # (mining_dashboard.collector.logs.get_monero_sync_status) instead of the "remote" path,
+      # which never probes reachability and makes monerod-down/#31/#564 a silent no-op — the
+      # fake-monerod container below was wired at the network level but never actually read for
+      # node-health without this.
+      LOCAL_MONERO_HOST: "fake-monerod"
       MONERO_PRUNE: "true"
       TARI_GRPC_ADDRESS: "fake-tari:18142"
       DOCKER_PROXY_URL: "tcp://docker-proxy:2375"
@@ -52,7 +58,9 @@ services:
       # deployment's p2pool/xmrig-proxy on the same host.
       SYNC_GATE_CONTAINERS: "itest-p2pool,itest-xmrig-proxy"
       REJECT_WORKERS_CONTAINER: "itest-xmrig-proxy"
-      TARI_REQUIRED: "true"
+      # Overridable (scenario 11, #562) since it's baked in at container boot — a live toggle
+      # isn't possible, so that scenario recreates the stack with TARI_REQUIRED=false.
+      TARI_REQUIRED: "${TARI_REQUIRED:-true}"
       XVB_ENABLED: "false"
       XVB_POOL_URL: ""
       XVB_DONOR_ID: ""

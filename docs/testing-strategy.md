@@ -64,10 +64,11 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Situation | Trigger | Tier |
 |---|---|---|
 | monerod down → **reject workers** (stop `xmrig-proxy`) | unreachable ≥ `NODE_DOWN_AFTER_SEC` | 1 ✅ · 3 ▶ · 4 ▶ |
-| Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ |
+| monerod busy / mid-reorg (HTTP 200, `status≠OK`) → **reject workers** | RPC answers but distrusted | 1 ✅ · 3 ▶ |
+| Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ · 3 ▶ |
 | Recovery hysteresis — readmit only after stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
 | Transient blip / never-reachable → **no** false reject | debounce / `ever_up` | 1 ✅ |
-| Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) |
+| Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) · 3 ▶ |
 | #35 latch × #31 failover coexist after release | down post-release | 1 ✅ (added) · 3 ▶ |
 | Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |
 
@@ -259,16 +260,22 @@ tier 3/4:
   root-owned file under the dashboard data dir and asserts the pool-flip `apply` (which runs
   `ensure_directories` → `ensure_owner`) chowns it to uid 1000 — the #255 "scan contents, not just
   the dir" regression. Runs at the release gate only (needs root to create a foreign-uid inode).
-- **Real-container monerod failover in PR CI.** The primary-node reject/readmit cycle only runs on
-  the manual tier-4 box (`--fault-injection`); the mini-stack (tier 3) breaks Tari, not monerod.
-- **Non-blocking-Tari "ignore" path with real containers.** Unit-tested only; the mini-stack proves
-  Tari-down-while-required (reject) but never Tari-down-while-optional (keep mining). This is the
-  path that silently kills yield if it regresses to a reject.
-- **monerod busy / mid-reorg failover.** The contract test proves the client reads a busy node as
-  unreachable; no mini-stack or fault-injection scenario asserts the dashboard actually rejects
-  workers on a busy-but-alive node (a real reorg state, distinct from a clean stop).
-- **Double outage, both-must-recover.** Unit-tested (monerod ∧ Tari down → readmit only when both
-  healthy); never driven with real containers, so the recovery ordering is unproven end-to-end.
+- **Real-container monerod failover in PR CI.** ✅ Now tier-3 scenarios 6/7 in the mini-stack: the
+  compose env had a fake `monerod` container wired at the network level (`MONERO_RPC_URL`) but the
+  dashboard's `LOCAL_MONERO_HOST` default didn't match it, so `MONERO_NODE_HOST != LOCAL_MONERO_HOST`
+  put the dashboard on the "remote" code path, which never probes reachability — a monerod outage
+  was a silent no-op end-to-end. Setting `LOCAL_MONERO_HOST` to the fake's hostname fixed the wiring;
+  scenarios 6/7 down/readmit the real `itest-xmrig-proxy` container against it. The tier-4
+  `--fault-injection` box run still covers the real binary/real kernel leg.
+- **Non-blocking-Tari "ignore" path with real containers.** ✅ Mini-stack scenario 11: recreates the
+  stack with `dashboard.tari_required=false` (baked in at container boot, so it needs its own
+  compose cycle) and asserts `itest-xmrig-proxy` stays running through a Tari outage — the path that
+  silently kills yield if it regresses to a reject.
+- **monerod busy / mid-reorg failover.** ✅ Mini-stack scenario 8: the fake's `busy` mode (HTTP 200,
+  `status≠OK`) drives the same reject/readmit cycle as a clean outage.
+- **Double outage, both-must-recover.** ✅ Mini-stack scenario 9: both monerod and Tari down →
+  rejected; recovering only Tari leaves it rejected; recovering monerod too readmits — the recovery
+  ordering proven end-to-end, not just at the unit level.
 - **Partial-start / stop-failure idempotency.** The control loop's "container fails to start/stop →
   retry next cycle" is unit-only; no tier-3/4 scenario injects a docker start/stop error.
 - **`pithead doctor` on a real box.** ✅ The `--check` phase now runs `doctor` and asserts exit 0
