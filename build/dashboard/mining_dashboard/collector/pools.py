@@ -10,21 +10,29 @@ from mining_dashboard.config.config import (
     TARI_STATS_PATH,
 )
 
+# Last-good parse per stats-file path, mirroring how `_merge_proxy_summary` keeps the last-good
+# proxy totals (#141). p2pool rewrites these files in place, so a poll can catch one mid-write;
+# `{}` on that read would replay to every caller as "the counter just dropped to zero" (#547).
+_last_good = {}
+
 
 def _read_json(path):
     """
-    Safely loads a JSON file, returning an empty dictionary on failure.
-    Designed to prevent application crashes during transient file I/O operations.
+    Safely loads a JSON file. On failure, returns the last successfully parsed value for this
+    path (or an empty dictionary if it has never parsed) instead of `{}` — a transient mid-write
+    read must not look like a real reset to callers (#547).
     """
     if os.path.exists(path):
         try:
             with open(path) as f:
-                return json.load(f)
+                data = json.load(f)
+            _last_good[path] = data
+            return data
         except (json.JSONDecodeError, OSError):
             # Fail silently to allow the dashboard to continue running
             # even if a stats file is currently being written to.
             pass
-    return {}
+    return _last_good.get(path, {})
 
 
 def detect_pool_type(peers):
@@ -81,13 +89,17 @@ def get_p2pool_stats():
             "last_block_found": pool_stats.get("lastBlockFound", 0),
             "last_block_ts": pool_stats.get("lastBlockFoundTime", 0),
             "pplns_weight": pool_stats.get("pplnsWeight", 0),
-            "pplns_window": pool_stats.get("pplnsWindowSize", 0),
             "difficulty": pool_stats.get("sidechainDifficulty", 0),
             "total_hashes": pool_stats.get("totalHashes", 0),
             "shares_found": shares_total,
             "last_share_time": last_share_time,
         },
     }
+    # Only materialize pplns_window when the source actually reported it — a read failure
+    # (raw_pool == {}) must leave the key absent so downstream `.get("pplns_window",
+    # DEFAULT_PPLNS_WINDOW)` fallbacks apply, instead of always winning with a 0 (#547).
+    if "pplnsWindowSize" in pool_stats:
+        stats["pool"]["pplns_window"] = pool_stats["pplnsWindowSize"]
     return stats
 
 
