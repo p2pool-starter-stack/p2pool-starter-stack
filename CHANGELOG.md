@@ -40,8 +40,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   Enter-through "how should this run" questions (clearnet initial sync, remote dashboard access
   over Tor, Telegram alerts). Everything else keeps its `config.reference.json` default silently;
   the wizard prints a pointer to `config.json` and the docs at the end. The pool tier was
-  previously hardcoded to `main`, which silently starves a low-hashrate rig of shares — the wizard
-  now defaults to `mini` instead.
+  previously hardcoded to `main` and never asked; the wizard now asks and explains the trade-off
+  (a low-hashrate rig on `main` waits days between shares — `mini` suits a typical home rig),
+  while keeping `main` as the Enter-through default so it matches a config-file install.
 
 - **Per-worker descriptors moved to `workers.list[]`, out from under `dashboard.*` (#506).** The
   per-rig `{name, host, port, control_port, token, watts}` entries lived at `dashboard.workers[]`

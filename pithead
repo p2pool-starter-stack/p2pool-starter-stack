@@ -2188,21 +2188,23 @@ wizard_ask_core() {
     fi
 
     # Pool tier (#502's highest-value gap): p2pool's three sidechains are sized by hashrate, so
-    # picking the wrong one is silently broken, not just suboptimal (a small miner left on the
-    # default "main" waits days between shares). Default to "mini" — the safe choice for a
-    # typical home rig — rather than the old hardcoded "main".
+    # picking the wrong one is silently suboptimal (a small miner on "main" waits days between
+    # shares). The old wizard hardcoded "main" and never asked; now it asks and explains the
+    # trade-off. Enter-through keeps "main" — the reference/code default (`.p2pool.pool // "main"`)
+    # — so the wizard doesn't silently diverge from a config-file install; the operator picks
+    # "mini" for a typical home rig from the guidance shown.
     echo ""
     echo "--- Pool Tier ---"
     echo "p2pool has three sidechains sized by hashrate, so miners find shares at a similar cadence:"
     echo "  main — high hashrate (large farms); mini — typical home rig; nano — a single low-power rig"
-    read -r -p "Pool tier [mini]: " IN_POOL_TIER || true
+    read -r -p "Pool tier [main]: " IN_POOL_TIER || true
     case "$(printf '%s' "$IN_POOL_TIER" | tr 'A-Z' 'a-z')" in
-    main) POOL_TIER="main" ;;
+    mini) POOL_TIER="mini" ;;
     nano) POOL_TIER="nano" ;;
-    "" | mini) POOL_TIER="mini" ;;
+    "" | main) POOL_TIER="main" ;;
     *)
-        echo "  Not main/mini/nano — defaulting to mini (the safe choice for a typical rig)." >&2
-        POOL_TIER="mini"
+        echo "  Not main/mini/nano — defaulting to main (the reference default)." >&2
+        POOL_TIER="main"
         ;;
     esac
 
