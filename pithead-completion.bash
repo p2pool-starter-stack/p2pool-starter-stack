@@ -24,11 +24,30 @@ _pithead_services() {
 }
 
 _pithead() {
-    local cur prev compose
+    local cur prev compose self link i
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD - 1]}"
     if [ "$prev" = "logs" ]; then
-        compose="$(dirname "${COMP_WORDS[0]}")/docker-compose.yml"
+        # Resolve the real script path so this works when pithead is invoked by bare name from
+        # $PATH, not just from the install dir (#566). Bare name (no slash) -> ask the shell where
+        # it lives; fall back to the old behavior if that fails.
+        self="${COMP_WORDS[0]}"
+        case "$self" in
+        */*) ;;
+        *) self="$(command -v -- "$self" 2>/dev/null)" || self="${COMP_WORDS[0]}" ;;
+        esac
+        # Follow symlinks portably instead of GNU-only `readlink -f` — dev checkouts run this on
+        # macOS too (see the pithead script's other GNU/BSD splits). Bounded to dodge a symlink loop.
+        i=0
+        while [ -L "$self" ] && [ "$i" -lt 10 ]; do
+            link="$(readlink -- "$self" 2>/dev/null)" || break
+            case "$link" in
+            /*) self="$link" ;;
+            *) self="$(dirname "$self")/$link" ;;
+            esac
+            i=$((i + 1))
+        done
+        compose="$(dirname "$self")/docker-compose.yml"
         # shellcheck disable=SC2207  # service names never contain whitespace
         COMPREPLY=($(compgen -W "$(_pithead_services "$compose")" -- "$cur"))
         return
