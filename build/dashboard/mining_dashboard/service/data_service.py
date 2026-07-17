@@ -9,7 +9,11 @@ from mining_dashboard.client.docker.docker_control import DockerControl
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge
+from mining_dashboard.client.xmrig_client import (
+    XMRigWorkerClient,
+    parse_rigforge,
+    parse_worker_control_status,
+)
 from mining_dashboard.client.xvb_client import (
     REG_INVALID,
     REG_NOT_ELIGIBLE,
@@ -779,6 +783,26 @@ class DataService:
             )
             await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
 
+    async def _reconcile_worker_config(self, worker_results):
+        """Catch up any still-``accepted`` #185 worker-config history row whose change_id the rig
+        now reports terminal (#579).
+
+        A rollback slower than the host runner's 20s status-poll deadline (#517/#543) is honestly
+        recorded ``accepted`` and never revisited — this rides THIS poll's already-fetched enriched
+        bodies (``worker_results``, positionally aligned with the worker probes in ``run()``), so
+        there's no new dial and no host-runner change. A plain-xmrig rig, a rig still mid-change, or
+        an unreachable/offline rig (``{}``) all parse to ``None`` via ``parse_worker_control_status``
+        and are a quiet no-op — the row simply stays ``accepted`` until a later poll catches it."""
+        for extra_stats in worker_results:
+            ctrl = parse_worker_control_status(extra_stats) if extra_stats else None
+            if ctrl:
+                await asyncio.to_thread(
+                    self.state_manager.reconcile_worker_config_status,
+                    ctrl["change_id"],
+                    ctrl["status"],
+                    ctrl["reason"],
+                )
+
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
         if ok:
@@ -846,6 +870,10 @@ class DataService:
                     # 3. Augment with Direct Worker Stats (Uptime, Hashrate) via Local API
                     tasks = [worker_client.get_stats(w["ip"], w["name"]) for w in proxy_workers]
                     worker_results = await asyncio.gather(*tasks)
+
+                    # 3a. Reconcile any #185 history row a slow rig rollback left stuck 'accepted'
+                    # (#579) — rides this same poll's results, no new dial.
+                    await self._reconcile_worker_config(worker_results)
 
                     current_mode = self.state_manager.get_xvb_stats().get("current_mode", "P2POOL")
                     # Determine active pool port for UI badges based on current Algo mode

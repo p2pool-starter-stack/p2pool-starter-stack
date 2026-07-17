@@ -104,6 +104,19 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   case arm was reached by the existing piped-answers tests: declining remote-node auth (leaving
   the RPC credentials empty rather than auto-generated) and picking the `nano` sidechain.
 
+### Fixed
+
+- **A rig rollback slower than the host runner's 20s status-poll deadline never reached a terminal
+  state in the #185 worker-config history (#579).** The runner honestly records `accepted`
+  ("queued; outcome not yet observed") when its poll lapses before a slow auto-rollback
+  (rigforge#236) finishes — observed taking 2-3 minutes on the bench — and nothing revisited that
+  row afterward, even though the rig itself did reach a terminal outcome. The dashboard's regular
+  per-rig read poll now reconciles it: when a RigForge rig mirrors a terminal outcome
+  (`applied`/`rejected`/`rolled_back`) for a `change_id` into its enriched feed, any history row
+  still `accepted` for that `change_id` is updated to match. Rides the existing poll — no new
+  network dial, no host-runner change, and the 20s synchronous deadline is unchanged. A row already
+  terminal is never overwritten by a stale or duplicate report.
+
 ## [1.6.3] - 2026-07-17
 
 The v1.7 plan's Wave 0.5 — the remaining seven findings from the 2026-07 scan (#556–#561, #566),

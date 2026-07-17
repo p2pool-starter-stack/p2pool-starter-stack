@@ -271,6 +271,17 @@ chips for that rig (see [Dashboard › Workers Alive](dashboard.md#workers-alive
 on `8080` sends no `rigforge` block and reads exactly as before — no chips, no error. Auth is
 unchanged: send the rig's `token` only if it sets an `ACCESS_TOKEN` (the read API is open otherwise).
 
+If the block also carries a `control` object — `{change_id, status, reason}`, mirroring the rig's
+own control-API `/status` response read-only — the dashboard reconciles it against the [Worker
+Inspect](dashboard.md#worker-inspect) change history (#579): a still-`accepted` row whose
+`change_id` matches is updated to the reported terminal `status`
+(`applied`/`rejected`/`rolled_back`). This is how a rollback slower than the host runner's 20s
+status-poll deadline still reaches a terminal state without a second authenticated dial to the
+control port.
+
+[TODO: verify upstream — confirm the `rigforge.control` mirror ships in RigForge; until then this
+parses to nothing and the row stays `accepted`.]
+
 ---
 
 ## New to mining? Start with RigForge

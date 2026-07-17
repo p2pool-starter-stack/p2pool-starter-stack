@@ -821,6 +821,33 @@ class StateManager:
             self.logger.error(f"Worker Config Read Error: {e}")
             return []
 
+    def reconcile_worker_config_status(
+        self, change_id: str, status: str, reason: str | None = None
+    ) -> None:
+        """Catch up a still-``accepted`` #185 history row to its now-known terminal outcome (#579).
+
+        A rig rollback slower than the host runner's status-poll deadline (#517/#543) leaves its
+        row ``accepted`` forever otherwise — nothing re-polls it. This is the reconciler: called
+        from the dashboard's regular per-rig read poll (data_service.py), never a new dial. The
+        ``WHERE status = 'accepted'`` is the whole safety property — a row already terminal
+        (``applied``/``rejected``/``rolled_back``) is never touched, even by a stale or duplicate
+        report for the same ``change_id``.
+        """
+        if status not in ("applied", "rejected", "rolled_back") or not change_id:
+            return
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                self._conn.execute(
+                    "UPDATE worker_config SET status = ?, reason = ? "
+                    "WHERE change_id = ? AND status = 'accepted'",
+                    (status, reason, change_id),
+                )
+                self._conn.commit()
+        except sqlite3.Error as e:
+            self._db_error("Worker Config Reconcile Error", e)
+
     def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
         """The merged writable config the dashboard last successfully applied to ``worker`` — the
         best prefill for the editor, since the rig's enriched feed does not expose the writable config
