@@ -11,6 +11,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-07-17
+
+The ten v1.6-milestone findings from the 2026-07 full-repo scan (#546–#555): two high-severity
+bugs, five hardening fixes on the backup/upgrade/config paths, two documentation corrections, and
+the regression test for the bug that withdrew 1.6.0.
+
 ### Fixed
 
 - **The dashboard's HTTPS onion vhost now appears on the run that captures the address (#546).**
@@ -21,6 +27,60 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   vhost with none for the new address. Enabling via `upgrade` had the same hole as `apply` (#355's
   supported path). All three paths now regenerate the Caddyfile (and restart Caddy) the moment the
   address is captured.
+
+- **A stats-file read race can no longer replay the whole share counter as fresh PPLNS shares
+  (#547).** P2Pool rewrites its stats files in place; a poll that caught one mid-write read as
+  `{}`, which the dashboard took for a counter reset — the next good poll then recorded the entire
+  cumulative `shares_found` (hundreds of shares on a long-lived node) as new, inflating PPLNS
+  weight, luck, and the XvB inputs, and could fire a false payout alert. The same race blanked
+  `pplns_window` to 0, flapping the "no PPLNS share" alert and forcing a real pool switch. The
+  collector now serves the last good parse per stats file (the pattern #141 already used for proxy
+  totals), and `pplns_window` is only reported when the source actually carries it.
+
+- **A bundle without `pithead/VERSION` fails the one-click upgrade cleanly instead of killing the
+  control runner (#548).** The version read ran as a plain assignment under `errexit`, so a corrupt
+  or foreign archive killed the runner mid-request: the result stayed `running` forever, the claim
+  file leaked, and the rest of the queue was abandoned. The read is now guarded into the existing
+  failure path, and the hourly sweep also clears orphaned claim files.
+
+- **`restore` verifies plaintext archives before extracting (#549).** Only encrypted backups got
+  the full-stream integrity check; a truncated plaintext archive aborted `tar` mid-extraction with
+  the live `config.json`/`.env`/onion keys half-overwritten — during disaster recovery. Both
+  formats now refuse a corrupt archive before anything on disk is touched.
+
+- **A failed backup restarts the stack and removes the partial archive (#551).** Both the
+  encrypted and plaintext branches stopped a running stack for the copy but only restarted it
+  after success — a disk-full cron backup left the miner down until a human noticed, and the
+  plaintext branch also left a partial root-owned archive that looked like a valid backup.
+
+- **`setup` and `reset-dashboard` work for operators whose uid isn't 1000 (#550).** Both chowned
+  the data tree to the container uid and then ran an unprivileged `mkdir` inside it — EACCES for
+  any other operator uid, and in `reset-dashboard` the abort landed after the data wipe. Directories
+  are now created before the chown, matching `ensure_directories`.
+
+- **The apply preview no longer misreports payout-confirm toggles as a Monero node switch (#552).**
+  `COMPOSE_PROFILES` also carries the payout-confirmation profiles (#381/#462); the preview keyed
+  on empty-vs-non-empty, so setting a view key warned "Switching to a LOCAL Monero node — monerod
+  will SYNC the blockchain" on the destructive-confirm prompt. The node-switch text (and its
+  destructive flag) now keys on the `local_node` token itself.
+
+### Documentation
+
+- **SECURITY.md states the real release-integrity posture (#553).** It claimed releases are
+  cosign-signed and verified before upgrade; signing is opt-in (#376) and no release has shipped
+  signed — digest-pinned images and the TLS-fetched bundle are the protections today, and `pithead`
+  warns rather than blocks when `cosign.pub` is absent. The policy now says exactly that.
+
+- **Small accuracy fixes (#554).** `docs/monitoring.md` told operators to run `./pithead stop`
+  (the command is `down`); `docs/releasing.md` claimed `VERSION` is `1.0.3`; a compose comment
+  called the dashboard a Flask app (it is aiohttp).
+
+### Testing
+
+- **The tier-1 fake upgrade bundle now reproduces the bug that withdrew 1.6.0 (#555).** The
+  fixture ships `build/*` members mirroring the real bundle and pre-seeds the sandbox install with
+  non-empty `build/*` dirs, so a regression of the #544 two-pass extraction fails `make test`
+  instead of the release smoke.
 
 ## [1.6.1] - 2026-07-16
 
