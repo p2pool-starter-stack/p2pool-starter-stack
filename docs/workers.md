@@ -196,18 +196,22 @@ URL, status, and likely fix, so a misconfigured API reads differently from an of
 `workers.api_auth`/`api_port`/`api_token` set the probe for the *whole* fleet. When one rig differs
 — its API is on a different port, on another interface than the address it mines from (NAT,
 multi-homed), or carries its own token — override just that rig with
-[`dashboard.workers`](configuration.md#configuration-reference), a list of
+[`workers.list`](configuration.md#configuration-reference), a list of
 `{name, host?, port?, token?, watts?, control_port?}` objects. Every field but `name` is optional:
 
 ```jsonc
 // config.json — the rest of the fleet keeps the workers.* defaults
-"dashboard": {
-    "workers": [
+"workers": {
+    "list": [
         { "name": "rig-01", "port": 18080 },
         { "name": "rig-02", "host": "10.0.0.9", "token": "rig-02-secret" }
     ]
 }
 ```
+
+`dashboard.workers` is a deprecated alias for `workers.list` (#506): a config from before the move
+still works — the old location is read as a fallback with a one-time warning — but setting both is
+refused at apply, and the old location is removed in v1.9.
 
 The merge rule is: **per-worker field > fleet default > built-in default.** A rig with no entry (or
 an entry that only sets `port`) inherits everything else from `workers.*`. A per-worker `token`
@@ -243,7 +247,7 @@ will not send a configured token to a host a miner could control (the same [SSRF
 as the worker-name rule). Pinning `host` alongside `token` is the recommended pair — it stops an
 imposter that claims a listed rig's name from pulling that rig's token to its own address.
 
-The standard fleet — everyone on `8080`, token = rig name or open — needs no `dashboard.workers`
+The standard fleet — everyone on `8080`, token = rig name or open — needs no `workers.list`
 at all.
 
 #### RigForge enriched feed
@@ -266,6 +270,17 @@ the same response. The dashboard then shows a RigForge version badge and health/
 chips for that rig (see [Dashboard › Workers Alive](dashboard.md#workers-alive)). A plain-xmrig rig
 on `8080` sends no `rigforge` block and reads exactly as before — no chips, no error. Auth is
 unchanged: send the rig's `token` only if it sets an `ACCESS_TOKEN` (the read API is open otherwise).
+
+If the block also carries a `control` object — `{change_id, status, reason}`, mirroring the rig's
+own control-API `/status` response read-only — the dashboard reconciles it against the [Worker
+Inspect](dashboard.md#worker-inspect) change history (#579): a still-`accepted` row whose
+`change_id` matches is updated to the reported terminal `status`
+(`applied`/`rejected`/`rolled_back`). This is how a rollback slower than the host runner's 20s
+status-poll deadline still reaches a terminal state without a second authenticated dial to the
+control port.
+
+[TODO: verify upstream — confirm the `rigforge.control` mirror ships in RigForge; until then this
+parses to nothing and the row stays `accepted`.]
 
 ---
 

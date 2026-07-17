@@ -79,6 +79,39 @@ def parse_rigforge(payload):
     }
 
 
+# Terminal control-apply outcomes (pithead control_worker_apply / rigforge#236). "accepted" and
+# "running" are non-terminal — never reconciled from a read poll, only ever written by the host
+# runner itself while a change is still in flight.
+_CONTROL_TERMINAL = ("applied", "rejected", "rolled_back")
+
+
+def parse_worker_control_status(payload):
+    """The rig's last control-apply outcome, mirrored read-only into the SAME enriched feed body
+    under ``rigforge.control`` (#579) — no new port, no token, it rides the poll that already
+    fetches the ``rigforge`` block for :func:`parse_rigforge`.
+
+    The host runner's synchronous ``/status`` poll after a worker-apply is capped at 20s
+    (rigforge#236's auto-rollback can take minutes); a change still mid-flight past that deadline
+    is honestly recorded ``accepted`` and nothing re-polls it. Rather than a new authenticated dial
+    to the rig's control port (the dashboard container never holds that token), a RigForge rig
+    mirrors its own last outcome into the already-open, unauthenticated read feed so the next
+    routine poll can catch up.
+
+    Returns ``{"change_id", "status", "reason"}`` only for a TERMINAL outcome
+    (``applied``/``rejected``/``rolled_back``); ``None`` for a still-in-flight change, a malformed
+    block, or a rig that doesn't mirror this yet (older RigForge, plain xmrig) — so a #185 history
+    row is never force-terminaled on bad or absent data.
+    """
+    rf = payload.get("rigforge") if isinstance(payload, dict) else None
+    ctrl = rf.get("control") if isinstance(rf, dict) else None
+    if not isinstance(ctrl, dict):
+        return None
+    change_id, status = ctrl.get("change_id"), ctrl.get("status")
+    if not isinstance(change_id, str) or not change_id or status not in _CONTROL_TERMINAL:
+        return None
+    return {"change_id": change_id, "status": status, "reason": ctrl.get("reason")}
+
+
 def _safe_probe_host(ip):
     """Return a safe host string to probe, or None.
 

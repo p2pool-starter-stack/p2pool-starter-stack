@@ -91,10 +91,18 @@ Setup walks through five stages. It's interactive on the first run and safe to r
    Ubuntu it offers to `apt install` anything missing; on other systems it tells you what to
    install. Skip with `--skip-deps`.
 
-2. **Interactive configuration.** Asks for your Monero and Tari wallet addresses and whether
-   you're running a local Monero node (the default — the stack runs its own) or connecting to a
-   remote one. For a local node it auto-generates the internal RPC credentials. It then writes a
-   minimal `config.json` and locks it down to owner-only (`chmod 600`).
+2. **Interactive configuration.** Asks only what only you can answer, in two short stages, then
+   fills in the rest and writes a minimal `config.json`, locked down to owner-only (`chmod 600`).
+   - **Required:** your Monero and Tari wallet addresses; whether you're running a local Monero
+     node (the default — the stack runs its own) or connecting to a remote one, with a local
+     node's RPC credentials auto-generated; and your P2Pool pool tier (`main`/`mini`/`nano` —
+     pick low if you're not sure, a high-hashrate default silently starves a small rig of
+     shares). An optional dashboard login, Enter to skip.
+   - **A few more, Enter for the default:** a faster clearnet initial sync instead of the private
+     Tor default; reaching the dashboard from outside your LAN over Tor; Telegram alerts.
+   - Everything else — ports, XvB tuning, energy pricing, per-worker overrides, and more — keeps
+     its documented default; the wizard prints a pointer to `config.json` and
+     [Configuration](configuration.md) at the end for anyone who wants it.
 
 3. **Tor provisioning.** Brings up the Tor service and waits for the hidden-service (onion)
    addresses to be generated for Monero, Tari, and P2Pool.

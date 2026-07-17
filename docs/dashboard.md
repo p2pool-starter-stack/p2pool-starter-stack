@@ -244,18 +244,28 @@ crosses 5%.
 ### Worker Inspect
 
 With the control channel on (`dashboard.control.enabled`), a worker's name in the Workers Alive table
-is a link. Click it to open **Worker Inspect** — a panel with that rig's live telemetry, an editor for
-the writable slice of its config, and the change history.
+is a link. Click it to open **Worker Inspect** — a dialog with that rig's live telemetry, an editor
+for the writable slice of its config, and the change history. Close it with the ✕ button, a click
+outside it, or Escape.
 
 The editor covers the keys RigForge lets the control path change: `pools`, `DONATION`, `autotune`,
 `watchdog`, `watchdog_interval_min`, and `max_temp_c`. Nothing else (identity, filesystem paths, API
-ports, the control token) is editable from here. Enter the changes as a JSON object of those keys and
-**Apply to rig**; RigForge validates the change, applies it, and — if the miner doesn't come back to a
-live hashrate — rolls it back on its own. The panel shows the outcome (applied / rejected / rolled
-back) and appends it to the history.
+ports, the control token) is editable from here. Two modes edit the same set of keys and submit the
+same `{worker, changes}` request:
+
+- **Table** (the default) — one row per writable key, prefilled from the last config the dashboard
+  applied. Only the rows you touch go into the change.
+- **JSON** — paste or edit the writable-keys object directly, for copying a whole profile between
+  rigs or moving faster than the table allows. A **Load from file** control inside this mode reads
+  a local JSON file into the textarea (`FileReader`, no upload) so you can push the same profile to
+  several rigs without retyping it. A malformed edit is flagged inline before you click Apply.
+
+Either way, click **Apply to rig**; RigForge validates the change, applies it, and — if the miner
+doesn't come back to a live hashrate — rolls it back on its own. The panel shows the outcome
+(applied / rejected / rolled back) and appends it to the history.
 
 To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
-in its [`dashboard.workers[]`](configuration.md#configuration-reference) descriptor. Without a host, or
+in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
 without a token, the rig isn't a write target and the panel says so.
 
 How it stays safe:
@@ -268,12 +278,26 @@ How it stays safe:
 - **Fail-closed.** The write path exists only when the control channel is on, which requires a
   dashboard password; every request carries the CSRF header; and only the writable allowlist is
   accepted, at every layer.
+- **Masked values stay masked.** If a writable value is ever a masked secret (the same
+  `{__secret__: true}` sentinel the [Configuration view](#configuration-view) uses), the table
+  editor renders it as a blank password field, never as JSON you could copy or mangle; leave it
+  blank to keep it, type a value to replace it. JSON mode carries the sentinel through untouched
+  unless you edit that key yourself.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
 config *values*, the editor prefills from the last config the dashboard applied — not a live read of
 the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
 dashboard apply.
+
+Below the change history sits a **Hashrate by config version** table: each *applied* change, with the
+rig's measured hashrate (the same per-rig `worker_history` samples, taken roughly every 5 minutes)
+averaged over the window that version was active — from the moment it was applied to the moment the
+next one was, or now for the current version. A version with no samples yet (just applied) shows a
+dash rather than zero. This is a correlation over existing data, not a new measurement — no rig-side
+change was needed to add it — so use it to compare versions empirically ("config #3 did 5.1 kH/s,
+config #4 did 4.8 kH/s") rather than as a precise A/B test; a version's window can include restarts,
+sync gaps, or other noise the average doesn't separate out.
 
 ### Simple vs. Advanced view
 
@@ -347,7 +371,7 @@ profit after electricity.
 Power draw comes from RigForge's enriched feed (the `watts` and `hs_per_watt` in the `rigforge`
 block, sampled via RAPL every 15s — see [Connecting Miners](workers.md#rigforge-enriched-feed)). A
 worker whose feed reports no watts (macOS, a non-RigForge rig, an older kit) can carry a manual
-estimate: add `"watts": <number>` to its `dashboard.workers[]` descriptor and it counts toward the
+estimate: add `"watts": <number>` to its `workers.list[]` descriptor and it counts toward the
 total, marked *estimated*. A worker with neither a measured nor a configured draw is left out and
 the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
 
@@ -474,14 +498,31 @@ Edit `config.json` from the dashboard. Off by default: set `dashboard.control.en
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
 button then appears next to the Simple/Advanced toggle.
 
-The flow mirrors the CLI's `apply`:
+Two edit modes build the same candidate config and submit it through the same pipeline below
+([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
 
-1. The form is prefilled from a pre-masked copy of `config.json` the host renders into the
-   control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)), grouped by
-   section. Secrets (the dashboard password, the Telegram bot token, node RPC credentials, the
-   stratum password) show as "set — leave blank to keep"; their values never enter the dashboard
-   container, let alone the browser — leaving one untouched sends a sentinel back, and the host
-   swaps in the live value when it stages the change.
+- **Form** (the default) pins a **Core** group at the top — the same wallet-address /
+  `monero.mode` / `p2pool.pool` / dashboard-auth-and-host shortlist
+  [`./pithead setup`](getting-started.md#3-run-setup) asks, read from the one file the wizard and
+  this view share, [`config.core-keys.json`](../config.core-keys.json), so the two can't drift
+  apart. Below it, the rest of the schema is grouped by its natural top-level section (`monero`,
+  `tari`, `p2pool`, `telegram`, …), each collapsed by default, so a typical edit shows only the
+  handful of fields you're touching instead of the whole schema. `workers.list[]` (the per-rig
+  descriptors) isn't a form field here — a variable-length list has no single form control for it —
+  edit it via [Worker Inspect](#worker-inspect) or `config.json` directly.
+- **JSON** edits the whole fetched config as one text block, for operators who'd rather paste than
+  click through fields. A **Load from file** control (`FileReader`, no upload) fills it from a
+  saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect) uses. A
+  malformed edit is flagged inline before you click Save.
+
+The flow mirrors the CLI's `apply` either way:
+
+1. The form/textarea is prefilled from a pre-masked copy of `config.json` the host renders into the
+   control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)). Secrets (the
+   dashboard password, the Telegram bot token, node RPC credentials, the stratum password) show as
+   "set — leave blank to keep"; their values never enter the dashboard container, let alone the
+   browser — leaving one untouched sends a sentinel back (JSON mode carries it through verbatim
+   too), and the host swaps in the live value when it stages the change.
 2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own
@@ -493,7 +534,9 @@ The flow mirrors the CLI's `apply`:
 Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
 allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
 memory limits, time zone, the energy-calculator prices, …) and default-denies a change, in any
-direction, to anything else:
+direction, to anything else. The allowlist gates BOTH edit modes identically — JSON mode is a
+different way to assemble the candidate config, not a different validation path, so it can't
+smuggle a change the form couldn't make:
 wallets, the dashboard login and onion settings, the control channel itself, the Tor egress
 firewall, clearnet toggles, node endpoints, and every credential. It likewise refuses anything
 the preview flags disruptive (⚠). Apply those from the host with `./pithead apply`; out-of-band

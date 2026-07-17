@@ -9,7 +9,11 @@ from mining_dashboard.client.docker.docker_control import DockerControl
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
 from mining_dashboard.client.tari.tari_client import TariClient
 from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge
+from mining_dashboard.client.xmrig_client import (
+    XMRigWorkerClient,
+    parse_rigforge,
+    parse_worker_control_status,
+)
 from mining_dashboard.client.xvb_client import (
     REG_INVALID,
     REG_NOT_ELIGIBLE,
@@ -97,6 +101,13 @@ _KHS_TO_HS = 1000
 # window shouldn't alarm; a configured-but-refusing endpoint should. At one attempt per 10th poll
 # (~5 min) this is ~15 min of sustained failure.
 _XVB_REGISTER_FAIL_ALERT = 3
+
+# v1.7 telemetry backbone (#196 Wave-0) capture cadences. All wall-clock gated (`time.time() -
+# last >= N`), NOT `iteration_count % k` — the latter silently changes cadence if UPDATE_INTERVAL
+# is ever reconfigured.
+_XVB_HISTORY_CAPTURE_SEC = 300  # ~5 min
+_HOURLY_CAPTURE_SEC = 3600  # disk_growth + network_history
+_WORKER_HISTORY_CAPTURE_SEC = 300  # ~5 min
 
 
 def _parse_proxy_list_worker(w):
@@ -404,6 +415,15 @@ class DataService:
         # Share-health delta baseline (#116): the previous poll's cumulative proxy /summary
         # totals; None until the first poll seeds it (and again after a counter reset).
         self._last_share_totals = None
+        # v1.7 telemetry backbone (#196 Wave-0) capture-cadence state — see the _*_CAPTURE_SEC
+        # constants above. `_last_blocks_found` baselines the cumulative pool blocks_found
+        # counter (reused via `_shares_to_record`, same re-baseline-on-restart contract as
+        # shares); the `_last_*` wall-clock stamps start at 0.0 so each series captures on its
+        # first eligible poll.
+        self._last_blocks_found = None
+        self._last_xvb_history_write = 0.0
+        self._last_hourly_capture = 0.0
+        self._last_worker_capture = 0.0
         # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
         # None until the wallet is first entered. Drives the daily re-register cadence below.
         self._xvb_last_registered = None
@@ -604,6 +624,23 @@ class DataService:
         await asyncio.to_thread(self.state_manager.update_xvb_stats, **real_xvb_stats)
         logger.info(f"External Sync: XvB Stats Updated (1h={real_xvb_stats['avg_1h']:.0f} H/s)")
 
+        # v1.7 telemetry backbone (#196 Wave-0): persist the XvB scalars as a time series, wall-
+        # clock gated to ~5 min so a change to UPDATE_INTERVAL (which also throttles how often
+        # this method is even called) can't silently change the capture cadence.
+        now = time.time()
+        if now - self._last_xvb_history_write >= _XVB_HISTORY_CAPTURE_SEC:
+            xvb = await asyncio.to_thread(self.state_manager.get_xvb_stats)
+            await asyncio.to_thread(
+                self.state_manager.add_xvb_history,
+                now,
+                avg_1h=xvb.get("avg_1h", 0.0),
+                avg_24h=xvb.get("avg_24h", 0.0),
+                fail_count=xvb.get("fail_count", 0),
+                donation_fraction=xvb.get("donation_fraction", 0.0),
+                mode=xvb.get("current_mode", ""),
+            )
+            self._last_xvb_history_write = now
+
     async def _sync_xvb_reward_estimates(self):
         """
         Fetch XvB's published per-tier expected rewards over Tor and cache them (#118).
@@ -746,6 +783,26 @@ class DataService:
             )
             await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
 
+    async def _reconcile_worker_config(self, worker_results):
+        """Catch up any still-``accepted`` #185 worker-config history row whose change_id the rig
+        now reports terminal (#579).
+
+        A rollback slower than the host runner's 20s status-poll deadline (#517/#543) is honestly
+        recorded ``accepted`` and never revisited — this rides THIS poll's already-fetched enriched
+        bodies (``worker_results``, positionally aligned with the worker probes in ``run()``), so
+        there's no new dial and no host-runner change. A plain-xmrig rig, a rig still mid-change, or
+        an unreachable/offline rig (``{}``) all parse to ``None`` via ``parse_worker_control_status``
+        and are a quiet no-op — the row simply stays ``accepted`` until a later poll catches it."""
+        for extra_stats in worker_results:
+            ctrl = parse_worker_control_status(extra_stats) if extra_stats else None
+            if ctrl:
+                await asyncio.to_thread(
+                    self.state_manager.reconcile_worker_config_status,
+                    ctrl["change_id"],
+                    ctrl["status"],
+                    ctrl["reason"],
+                )
+
     def _on_clearnet_transition(self, name, ok):
         """Called by the supervisor after a clearnet→Tor flip attempt (#234)."""
         if ok:
@@ -814,6 +871,10 @@ class DataService:
                     tasks = [worker_client.get_stats(w["ip"], w["name"]) for w in proxy_workers]
                     worker_results = await asyncio.gather(*tasks)
 
+                    # 3a. Reconcile any #185 history row a slow rig rollback left stuck 'accepted'
+                    # (#579) — rides this same poll's results, no new dial.
+                    await self._reconcile_worker_config(worker_results)
+
                     current_mode = self.state_manager.get_xvb_stats().get("current_mode", "P2POOL")
                     # Determine active pool port for UI badges based on current Algo mode
                     active_pool_port = "3344" if "XVB" in current_mode else "3333"
@@ -831,6 +892,24 @@ class DataService:
                     network_stats = get_network_stats()
                     tari_stats = get_tari_stats()
                     p2pool_stats = get_p2pool_stats()
+
+                    # v1.7 telemetry backbone (#196 Wave-0): persist a block-found event as a time
+                    # series. The #336 alert already detects a new block via this same cumulative
+                    # blocks_found counter; `_shares_to_record` re-baselines without backfilling on
+                    # the first poll or a p2pool restart (counter goes backwards), so this fires
+                    # exactly once per genuinely new block. `difficulty` is tagged from the network
+                    # stats at detection time (p2pool exposes no per-block effort figure).
+                    blocks_found_total = p2pool_stats["pool"].get("blocks_found", 0) or 0
+                    new_blocks, self._last_blocks_found = _shares_to_record(
+                        self._last_blocks_found, blocks_found_total
+                    )
+                    if new_blocks > 0:
+                        await asyncio.to_thread(
+                            self.state_manager.add_block,
+                            time.time(),
+                            p2pool_stats["pool"].get("last_block_found", 0) or 0,
+                            network_stats.get("difficulty", 0) or 0,
+                        )
 
                     # Record P2Pool shares from the CUMULATIVE shares_found counter, not just
                     # last_share_time: at 30s polls a burst of shares advances the timestamp only
@@ -1098,6 +1177,50 @@ class DataService:
                     snapshot_data = self.latest_data.copy()
                     snapshot_data.pop("shares", None)
                     await asyncio.to_thread(self.state_manager.save_snapshot, snapshot_data)
+
+                    # 6a2. v1.7 telemetry backbone (#196 Wave-0), hourly wall-clock gate: monerod
+                    # DB size + host disk usage (disk_growth, permanent) and Monero
+                    # difficulty/height/reward + pool hashrate (network_history, 90-day
+                    # retention). Both DB-only — nothing reads either per-cycle.
+                    now_ts = time.time()
+                    if now_ts - self._last_hourly_capture >= _HOURLY_CAPTURE_SEC:
+                        await asyncio.to_thread(
+                            self.state_manager.add_disk_growth,
+                            now_ts,
+                            monero_db_bytes=monero_sync.get("db_size", 0) or 0,
+                            disk_used_gb=(disk_usage or {}).get("used_gb", 0) or 0,
+                            disk_total_gb=(disk_usage or {}).get("total_gb", 0) or 0,
+                        )
+                        await asyncio.to_thread(
+                            self.state_manager.add_network_history,
+                            now_ts,
+                            difficulty=network_stats.get("difficulty", 0) or 0,
+                            height=network_stats.get("height", 0) or 0,
+                            reward=network_stats.get("reward", 0) or 0,
+                            pool_hashrate=pool_local.get("hashrate", 0) or 0,
+                        )
+                        self._last_hourly_capture = now_ts
+
+                    # 6a3. v1.7 telemetry backbone (#196 Wave-0), ~5 min wall-clock gate:
+                    # per-worker hashrate/share history, batched into ONE executemany call rather
+                    # than N inserts per cycle. 30-day retention.
+                    if now_ts - self._last_worker_capture >= _WORKER_HISTORY_CAPTURE_SEC:
+                        worker_rows = [
+                            {
+                                "ts": now_ts,
+                                "name": w.get("name", ""),
+                                "h15": w.get("h15", 0) or 0,
+                                "accepted": w.get("accepted", 0) or 0,
+                                "rejected": w.get("rejected", 0) or 0,
+                            }
+                            for w in final_workers
+                            if w.get("status") == "online"
+                        ]
+                        if worker_rows:
+                            await asyncio.to_thread(
+                                self.state_manager.add_worker_history, worker_rows
+                            )
+                        self._last_worker_capture = now_ts
 
                     # 6b. Healthchecks.io dead-man's switch (Issue #79). Ping each cycle so the
                     # external monitor alerts on the *absence* of a ping if the host ever dies

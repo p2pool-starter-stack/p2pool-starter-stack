@@ -11,6 +11,134 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-17
+
+The **Config UX & telemetry** cycle. Config editing becomes humane — worker
+configuration unifies under `workers.list[]`, the Configuration view regroups
+around a core shortlist with a JSON mode, Worker Inspect gets structured
+editors, and the first-run wizard slims to the essentials with `mini` as the
+default sidechain. Telemetry stops being discarded — a five-table time-series
+backbone persists blocks, XvB, network, disk-growth, and per-worker history,
+with per-config-version hashrate correlation in Worker Inspect. Every new
+surface is exercised end-to-end (the `workers.list` real-rig path and the
+telemetry schema are asserted at tier 4) and the docs were passed for
+cross-consistency before the cut.
+
+### Added
+
+- **Worker Inspect: hashrate correlated to config version (#492).** The per-worker change
+  timeline (#185) now carries the measured hashrate (`worker_history`, #196) each version ran
+  at: a sample is attributed to the most recent *applied* config change at or before its
+  timestamp, then averaged/min/max'd per version, so an operator can compare "config #3 did
+  5.1 kH/s, config #4 did 4.8 kH/s" empirically instead of guessing. Correlation happens in
+  Python (`StateManager.get_worker_hashrate_by_config`) against the existing tables — no new
+  schema, no rig-side change needed. Surfaced as a new table in the Worker Inspect panel,
+  alongside the existing change-history table.
+
+- **Worker Inspect: a table editor and a JSON mode for the writable-config edit path (#518).**
+  The raw JSON textarea is now the fallback of two modes: **Table** (the default) renders one row
+  per writable key (`pools`, `DONATION`, `autotune`, `watchdog`, `watchdog_interval_min`,
+  `max_temp_c`), typed off the value the dashboard last applied, and records only the rows you
+  touch; **JSON** keeps the old paste-a-whole-object flow, with a **Load from file** button
+  (`FileReader`, no upload) to fill it from a local config for pushing one profile to several
+  rigs, and an inline error the moment the JSON stops parsing instead of only on Apply. Both modes
+  submit the same `{worker, changes}` request through the existing `/api/control/worker-apply`
+  path — the writable allowlist is still the only thing that decides what's accepted, at every
+  layer. A masked value (the `{__secret__: true}` sentinel the Configuration view already uses)
+  renders as a blank password field in table mode, never as JSON to mangle, and round-trips
+  untouched in JSON mode unless you edit it yourself.
+
+- **`config.core-keys.json` (#502/#529).** A committed list of the config-key shortlist only the
+  operator can answer — wallet addresses, `monero.mode`, `p2pool.pool`, dashboard auth + host,
+  `workers.list` — the single shared artifact between the first-run wizard and the dashboard's
+  future core form section (#529). A tier-1 test pins every path in it to an entry in
+  `config.reference.json`.
+
+- **Time-series persistence backbone for five telemetry series (#196).** Five dedicated,
+  independently-retained SQLite tables — `blocks` (pool block-found events, permanent),
+  `xvb_history` (XvB scalars, ~5 min wall-clock, 30-day retention), `network_history` (Monero
+  difficulty/height/reward + pool hashrate, hourly, 90-day retention), `disk_growth` (monerod DB
+  size + host disk usage, hourly, permanent), and `worker_history` (per-rig hashrate + share
+  counts, ~5 min wall-clock batched write, 30-day retention). Additive tables (no new columns on
+  the existing `history` table, no row multiplication), each with a per-table "last successful
+  write" health signal so a silently-failing capture hook is visible. Backbone only — capture,
+  storage, retention, and a getter per series; charts/UI and `/api/state` exposure are deliberate
+  follow-ups.
+
+- **The Configuration view regroups around core-vs-sections, plus a JSON edit mode (#529, RATIFIED
+  Wave-0 decision).** **Form** (the default) now pins a **Core** group at the top — the SAME
+  `config.core-keys.json` shortlist the first-run wizard reads, surfaced to the browser as
+  `_core_keys` on `GET /api/config` (one shared artifact, not a hand-maintained duplicate) — above
+  the rest of the schema, regrouped into its natural top-level sections and collapsed by default
+  (native `<details>`), so a typical edit shows a handful of fields instead of all ~94. **JSON**
+  sits beside it: the whole fetched config as one editable text block, with a **Load from file**
+  fill button (`FileReader`, no upload) — mirroring #518's Worker Inspect editor shape exactly,
+  down to reusing its `jsonSyntaxError` helper. Both modes build the identical staged config object
+  and submit it through the unchanged preview → confirm → commit pipeline; the host-side
+  closed-schema gate is still the only validation authority; neither mode opens a path the other
+  lacks. A masked secret (`{__secret__: true}`) still renders as a blank password field in Form
+  mode and round-trips untouched in JSON mode unless you edit it yourself.
+
+### Changed
+
+- **The first-run wizard now asks a pool tier and a few shape questions, instead of hardcoding
+  `p2pool.pool: "main"` (#502).** `./pithead setup` asks two short stages: required answers (wallet
+  addresses, local/remote Monero node, pool tier, an optional dashboard login) and a few
+  Enter-through "how should this run" questions (clearnet initial sync, remote dashboard access
+  over Tor, Telegram alerts). Everything else keeps its `config.reference.json` default silently;
+  the wizard prints a pointer to `config.json` and the docs at the end.
+
+- **The default P2Pool sidechain is now `mini`, not `main` (#502).** `mini` has a lower share
+  difficulty, so a typical home rig — the common case for this stack — finds shares far more often
+  (smoother, more frequent PPLNS payouts). The default is now consistent everywhere: the wizard
+  Enter-through, `config.reference.json`, and the code fallback (`.p2pool.pool // "mini"`) all
+  agree. Raise it to `main` for a large farm. **Existing installs:** a config that explicitly sets
+  `p2pool.pool` is unaffected; one that OMITS the key (relying on the old `main` default) moves to
+  the `mini` sidechain on its next `apply`/`upgrade` — set `p2pool.pool: "main"` to stay on main.
+
+- **Per-worker descriptors moved to `workers.list[]`, out from under `dashboard.*` (#506).** The
+  per-rig `{name, host, port, control_port, token, watts}` entries lived at `dashboard.workers[]`
+  (#172), split from the rest of the fleet's worker-API settings under the top-level `workers.*`
+  block. They're now one block: `workers.list[]`. `dashboard.workers[]` is read as a deprecated
+  fallback when `workers.list` is unset — a config carrying both is refused at apply — and is
+  removed in v1.9.
+
+- **Worker Inspect is a native `<dialog>` (#518).** The hand-rolled overlay `<div>` is now
+  `showModal()` + `::backdrop`, which gets Escape-to-close and focus handling from the browser —
+  the manual click-outside JS is gone, replaced by one `close()` call the dialog's own `close`
+  event already funnels through.
+
+### Testing
+
+- **The tier-4 RigForge control leg now drives `workers.list[]` by default (#506/#513/#514/#516/#517).**
+  The real-rig descriptor injection, and every read/assert site that resolves it, moved to the
+  primary shape; a box whose baseline still carries the deprecated `dashboard.workers[]` fallback
+  is left as-is rather than force-migrated, so that shape stays exercised on real hardware too, at
+  no extra cost, through the v1.9 removal window.
+
+- **A tier-4 `--check` assertion for the #196 telemetry backbone.** After an upgrade, asserts the
+  five additive SQLite tables (`blocks`, `xvb_history`, `network_history`, `disk_growth`,
+  `worker_history`) exist in the live dashboard's database — proof the migration ran against a
+  real, already-populated DB. Row presence isn't asserted; the capture-hook writes are already
+  covered at tier 1.
+
+- **A tier-1 wizard case for the un-auth'd remote branch + the `nano` pool tier (#502).** Neither
+  case arm was reached by the existing piped-answers tests: declining remote-node auth (leaving
+  the RPC credentials empty rather than auto-generated) and picking the `nano` sidechain.
+
+### Fixed
+
+- **A rig rollback slower than the host runner's 20s status-poll deadline never reached a terminal
+  state in the #185 worker-config history (#579).** The runner honestly records `accepted`
+  ("queued; outcome not yet observed") when its poll lapses before a slow auto-rollback
+  (rigforge#236) finishes — observed taking 2-3 minutes on the bench — and nothing revisited that
+  row afterward, even though the rig itself did reach a terminal outcome. The dashboard's regular
+  per-rig read poll now reconciles it: when a RigForge rig mirrors a terminal outcome
+  (`applied`/`rejected`/`rolled_back`) for a `change_id` into its enriched feed, any history row
+  still `accepted` for that `change_id` is updated to match. Rides the existing poll — no new
+  network dial, no host-runner change, and the 20s synchronous deadline is unchanged. A row already
+  terminal is never overwritten by a stale or duplicate report.
+
 ## [1.6.3] - 2026-07-17
 
 The v1.7 plan's Wave 0.5 — the remaining seven findings from the 2026-07 scan (#556–#561, #566),

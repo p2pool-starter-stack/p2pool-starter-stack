@@ -54,6 +54,10 @@ readonly ENV_FILE=".env"
 # schema doesn't know — the "unrecognized key renders to no env var, so no porcelain row" smuggling
 # gap. Relative like CONFIG_FILE/ENV_FILE (the script cd's to its own dir at startup).
 readonly REFERENCE_CONFIG="config.reference.json"
+# The core config-key shortlist (#502/#529): dotted paths only the operator can supply, shared
+# between the first-run wizard below and the dashboard's core form section (once #529's regroup
+# lands there). A tier-1 test asserts every path here exists in REFERENCE_CONFIG.
+readonly CORE_KEYS_CONFIG="config.core-keys.json"
 # Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
 readonly FIRST_RUN_MARKER=".pithead-first-run-done"
@@ -2096,6 +2100,18 @@ persist_node_credentials() {
     fi
 }
 
+# First-run wizard (#502/#529). Split ask/write/pointer into their own functions so the tier-1
+# suite can drive the Q&A directly (piped stdin) without ensure_config_exists's tty gate below —
+# that gate exists to refuse a non-interactive run, not to block testing the prompts themselves.
+# Scope is deliberately narrow: the CORE_KEYS_CONFIG shortlist (wallet addresses, monero.mode,
+# p2pool.pool, dashboard auth) plus a few high-level "how should this run" shape questions.
+# Everything else keeps its config.reference.json default, silently — see wizard_print_pointer.
+# workers.list (also in the shortlist, #529) isn't asked inline: it's a variable-length list of
+# per-rig objects, not a single answer, and the standard fleet needs no entries at all (see
+# docs/workers.md) — so it's covered by the closing pointer instead of a prompt, matching the
+# treatment #502 already prescribes for monero.view_key / dashboard.energy.cost_per_kwh.
+# dashboard.host is asked separately, by resolve_dashboard_host "interactive" (setup(), after this
+# function returns) — not duplicated here.
 ensure_config_exists() {
     [ -f "$CONFIG_FILE" ] && return 0
 
@@ -2104,8 +2120,26 @@ ensure_config_exists() {
     fi
 
     log "$CONFIG_FILE not found. Starting interactive setup..."
+    # Fail fast if the core-key shortlist didn't ship with this checkout/bundle — the wizard's
+    # scope is defined by it (#502/#529), so a missing/corrupt file means the wizard itself is
+    # incomplete, not something to silently ignore.
+    jq -e . "$CORE_KEYS_CONFIG" >/dev/null 2>&1 ||
+        error "$CORE_KEYS_CONFIG is missing or not valid JSON (the wizard's core-key shortlist, #502/#529). Reinstall or redownload the release bundle."
     echo "Please provide the following details to generate a minimal configuration:"
 
+    wizard_ask_core
+    wizard_ask_shape
+    wizard_write_config
+    chmod 600 "$CONFIG_FILE"
+    log "$CONFIG_FILE created successfully."
+    wizard_print_pointer
+}
+
+# Stage 1 (required — only the operator can answer these): wallet addresses, local/remote node
+# (+ remote details), pool tier, and an optional dashboard login. Sets globals consumed by
+# wizard_write_config: IN_MONERO_WALLET, IN_TARI_WALLET, MONERO_MODE_WIZ, REMOTE_HOST, REMOTE_RPC,
+# REMOTE_ZMQ, IN_MONERO_USER, IN_MONERO_PASS, POOL_TIER, IN_DASH_USER, IN_DASH_PASS.
+wizard_ask_core() {
     while :; do
         read -r -p "Enter Monero Wallet Address (primary — starts with 4): " IN_MONERO_WALLET || break
         case "$(monero_address_type "$IN_MONERO_WALLET")" in
@@ -2125,41 +2159,19 @@ ensure_config_exists() {
     echo "--- Node Configuration ---"
     read -r -p "Use LOCAL Monero node? (Y/n): " USE_LOCAL || true
 
+    IN_MONERO_USER="" IN_MONERO_PASS=""
     if [[ ! "$USE_LOCAL" =~ ^[Nn] ]]; then
+        MONERO_MODE_WIZ="local"
         echo "Local node selected."
         # The local node's RPC credentials are internal to the stack, so we generate them rather
         # than asking you to invent some. They're stored in config.json / .env if you ever need
         # them (e.g. to attach a wallet). The same helpers back the auto-fill in
         # parse_and_validate_config, so every path produces the same kind of creds.
-        local IN_MONERO_USER IN_MONERO_PASS
         IN_MONERO_USER=$(default_node_username)
         IN_MONERO_PASS=$(generate_node_password)
         log "Generated internal Monero node RPC credentials (saved in $CONFIG_FILE)."
-        # Subshell umask (#368): the file must be owner-only from its FIRST byte — a chmod after
-        # the redirect leaves a world-readable window under the default umask.
-        (
-            umask 077
-            cat <<EOF >"$CONFIG_FILE"
-{
-    "monero": {
-        "mode": "local",
-        "wallet_address": "$IN_MONERO_WALLET",
-        "node_username": "$IN_MONERO_USER",
-        "node_password": "$IN_MONERO_PASS"
-    },
-    "tari": {
-        "wallet_address": "$IN_TARI_WALLET"
-    },
-    "p2pool": {
-        "pool": "main"
-    },
-    "dashboard": {
-        "secure": true
-    }
-}
-EOF
-        )
     else
+        MONERO_MODE_WIZ="remote"
         echo "Remote node selected."
         read -r -p "Enter Remote Node Host (IP or Domain): " REMOTE_HOST || true
         read -r -p "Enter Remote RPC Port [18081]: " REMOTE_RPC || true
@@ -2167,44 +2179,129 @@ EOF
         REMOTE_RPC=${REMOTE_RPC:-18081}
         REMOTE_ZMQ=${REMOTE_ZMQ:-18083}
 
-        local IN_MONERO_USER="" IN_MONERO_PASS=""
         read -r -p "Does the remote node require authentication? (y/N): " REMOTE_AUTH || true
         if [[ "$REMOTE_AUTH" =~ ^[Yy] ]]; then
             read -r -p "Enter Remote Node Username: " IN_MONERO_USER || true
             read -r -s -p "Enter Remote Node Password: " IN_MONERO_PASS || true
             echo ""
         fi
-        # Subshell umask (#368): owner-only from the first byte, same as the local-mode write.
-        (
-            umask 077
-            cat <<EOF >"$CONFIG_FILE"
-{
-    "monero": {
-        "mode": "remote",
-        "wallet_address": "$IN_MONERO_WALLET",
-        "node_username": "$IN_MONERO_USER",
-        "node_password": "$IN_MONERO_PASS",
-        "remote": {
-            "host": "$REMOTE_HOST",
-            "rpc_port": $REMOTE_RPC,
-            "zmq_port": $REMOTE_ZMQ
-        }
-    },
-    "tari": {
-        "wallet_address": "$IN_TARI_WALLET"
-    },
-    "p2pool": {
-        "pool": "main"
-    },
-    "dashboard": {
-        "secure": true
-    }
-}
-EOF
-        )
     fi
-    chmod 600 "$CONFIG_FILE"
-    log "$CONFIG_FILE created successfully."
+
+    # Pool tier (#502's highest-value gap): p2pool's three sidechains are sized by hashrate, so
+    # picking the wrong one is silently suboptimal (a small miner on "main" waits days between
+    # shares). The old wizard hardcoded "main" and never asked; now it asks, and "mini" is the
+    # global default — the reference, the code fallback (`.p2pool.pool // "mini"`), and this
+    # Enter-through all agree — because a typical home rig is the common case for this stack.
+    echo ""
+    echo "--- Pool Tier ---"
+    echo "p2pool has three sidechains sized by hashrate, so miners find shares at a similar cadence:"
+    echo "  main — high hashrate (large farms); mini — typical home rig; nano — a single low-power rig"
+    read -r -p "Pool tier [mini]: " IN_POOL_TIER || true
+    case "$(printf '%s' "$IN_POOL_TIER" | tr 'A-Z' 'a-z')" in
+    main) POOL_TIER="main" ;;
+    nano) POOL_TIER="nano" ;;
+    "" | mini) POOL_TIER="mini" ;;
+    *)
+        echo "  Not main/mini/nano — defaulting to mini (the default for a typical rig)." >&2
+        POOL_TIER="mini"
+        ;;
+    esac
+
+    # Dashboard login (core shortlist, #529) — optional, Enter-through: no login is the safe
+    # default on a private LAN, so blank means "skip", not "generate one for me."
+    echo ""
+    echo "--- Dashboard Login (optional) ---"
+    echo "No login by default (fine on a private LAN). Set one if you'd like — Enter to skip."
+    read -r -p "Dashboard username [admin]: " IN_DASH_USER || true
+    IN_DASH_USER="${IN_DASH_USER:-admin}"
+    while :; do
+        read -r -s -p "Dashboard password (8+ chars, Enter to skip): " IN_DASH_PASS || break
+        echo ""
+        [ -z "$IN_DASH_PASS" ] && break
+        [ "${#IN_DASH_PASS}" -ge 8 ] && break
+        echo "  ✗ Must be at least 8 characters (or blank to skip). Try again." >&2
+    done
+}
+
+# Stage 2 (#502): a FEW overarching "how should this run" questions, each Enter-through and each
+# driving a whole cluster of keys — never one prompt per key. Sets globals consumed by
+# wizard_write_config: CLEARNET_SYNC, ONION_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+wizard_ask_shape() {
+    echo ""
+    echo "--- A Few More (Enter for the default) ---"
+
+    read -r -p "First sync: fully private over Tor (days), or faster over clearnet (hours)? (y/N = private): " IN_CLEARNET || true
+    CLEARNET_SYNC=false
+    [[ "$IN_CLEARNET" =~ ^[Yy] ]] && CLEARNET_SYNC=true
+
+    read -r -p "Reach the dashboard from outside your LAN over Tor? (y/N): " IN_ONION || true
+    ONION_ENABLED=false
+    [[ "$IN_ONION" =~ ^[Yy] ]] && ONION_ENABLED=true
+
+    # Alerts need an external secret (a bot token), so this is offered, not asked outright — a
+    # trusting operator just hits Enter and sees the doc pointer at the end instead.
+    TELEGRAM_BOT_TOKEN="" TELEGRAM_CHAT_ID=""
+    read -r -p "Set up Telegram alerts (node down, block found, low hashrate) now? (y/N): " IN_TELEGRAM || true
+    if [[ "$IN_TELEGRAM" =~ ^[Yy] ]]; then
+        read -r -p "Telegram bot token: " TELEGRAM_BOT_TOKEN || true
+        read -r -p "Telegram chat id: " TELEGRAM_CHAT_ID || true
+    fi
+}
+
+# Assembles config.json from the globals wizard_ask_core/wizard_ask_shape set, and writes it.
+wizard_write_config() {
+    local cfg
+    cfg=$(jq -n \
+        --arg mode "$MONERO_MODE_WIZ" \
+        --arg mwallet "$IN_MONERO_WALLET" \
+        --arg mu "$IN_MONERO_USER" \
+        --arg mp "$IN_MONERO_PASS" \
+        --arg twallet "$IN_TARI_WALLET" \
+        --arg pool "$POOL_TIER" \
+        '{monero: {mode: $mode, wallet_address: $mwallet, node_username: $mu, node_password: $mp},
+          tari: {wallet_address: $twallet},
+          p2pool: {pool: $pool},
+          dashboard: {secure: true}}')
+
+    if [ "$MONERO_MODE_WIZ" == "remote" ]; then
+        cfg=$(jq --arg h "$REMOTE_HOST" --argjson rpc "${REMOTE_RPC:-18081}" --argjson zmq "${REMOTE_ZMQ:-18083}" \
+            '.monero.remote = {host: $h, rpc_port: $rpc, zmq_port: $zmq}' <<<"$cfg")
+    fi
+
+    if [ -n "$IN_DASH_PASS" ]; then
+        cfg=$(jq --arg u "$IN_DASH_USER" --arg p "$IN_DASH_PASS" '.dashboard.auth = {username: $u, password: $p}' <<<"$cfg")
+    fi
+
+    if [ "$CLEARNET_SYNC" = true ]; then
+        cfg=$(jq '.monero.clearnet_initial_sync = true | .tari.clearnet_initial_sync = true' <<<"$cfg")
+    fi
+
+    if [ "$ONION_ENABLED" = true ]; then
+        # Password (if still unset) and client-auth are handled downstream by
+        # ensure_onion_password, which setup() runs right after ensure_config_exists.
+        cfg=$(jq '.dashboard.onion = {enabled: true}' <<<"$cfg")
+    fi
+
+    if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+        cfg=$(jq --arg t "$TELEGRAM_BOT_TOKEN" --arg c "$TELEGRAM_CHAT_ID" '.telegram = {enabled: true, bot_token: $t, chat_id: $c}' <<<"$cfg")
+    fi
+
+    # Subshell umask (#368): the file must be owner-only from its FIRST byte — a chmod after the
+    # write leaves a world-readable window under the default umask.
+    (
+        umask 077
+        printf '%s\n' "$cfg" >"$CONFIG_FILE"
+    )
+}
+
+# Closing pointer (#502): names what the wizard deliberately didn't ask, so an operator who wants
+# it knows where to look instead of hunting config.reference.json cold.
+wizard_print_pointer() {
+    echo ""
+    echo "That's the core config — everything else (ports, XvB, alerts, energy pricing, per-worker"
+    echo "overrides, ...) keeps its default. Want on-chain payout confirmation, a per-kWh cost, or"
+    echo "per-worker overrides? Set monero.view_key / dashboard.energy.cost_per_kwh / workers.list in"
+    echo "$CONFIG_FILE and run '$0 apply' — see docs/configuration.md, or use the dashboard's config editor."
 }
 
 # Classify a Monero MAINNET address by its network byte (the base58 prefix) + length:
@@ -2237,39 +2334,52 @@ ensure_onion_password() {
     log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
 }
 
-# Validate the per-worker endpoint descriptors, dashboard.workers[] (#172): a list of
-# {name, host?, port?, token?} objects the dashboard uses to override the fleet worker-API
-# defaults per rig. Nothing here renders to .env — the dashboard reads the list straight off its
-# read-only config.json bind mount (tokens stay in the one owner-only file that already holds
-# secrets) — so this validation exists to fail an apply LOUDLY on a typo instead of the dashboard
-# silently dropping the entry at runtime. The `host` charset matters for #122: it must never be
-# able to smuggle a port, path, or userinfo into the dashboard's probe URL.
+# Validate the per-worker endpoint descriptors (#506): a list of {name, host?, port?, token?}
+# objects the dashboard uses to override the fleet worker-API defaults per rig. workers.list[] is
+# the current sub-key; dashboard.workers[] (#172) is read as a deprecated fallback (removed in
+# v1.9, one-time warning below) — setting BOTH is refused outright, since silently picking one
+# would leave the other a stale, unnoticed copy of hosts/tokens. Nothing here renders to .env — the
+# dashboard reads the list straight off its read-only config.json bind mount (tokens stay in the
+# one owner-only file that already holds secrets) — so this validation exists to fail an apply
+# LOUDLY on a typo instead of the dashboard silently dropping the entry at runtime. The `host`
+# charset matters for #122: it must never be able to smuggle a port, path, or userinfo into the
+# dashboard's probe URL.
 validate_worker_endpoints() {
-    local dw_err
-    dw_err=$(jq -r '
-        (.dashboard.workers // []) as $w
-        | if ($w | type) != "array" then "dashboard.workers must be an array of {name, host?, port?, token?} objects."
+    local has_new has_legacy dw_path dw_err dw_dups
+    has_new=$(jq -r '(.workers // {}) | has("list")' "$CONFIG_FILE" 2>/dev/null)
+    has_legacy=$(jq -r '(.dashboard // {}) | has("workers")' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$has_new" = "true" ] && [ "$has_legacy" = "true" ]; then
+        error "config.json sets both workers.list[] and dashboard.workers[] — pick one. dashboard.workers[] is a deprecated alias for workers.list[] (#506, removed in v1.9); move its entries to workers.list[] and delete dashboard.workers."
+    fi
+    if [ "$has_legacy" = "true" ] && [ -z "${PITHEAD_WORKERS_LEGACY_WARNED:-}" ]; then
+        warn "dashboard.workers[] is deprecated — move its entries to workers.list[] (#506, removed in v1.9)."
+        PITHEAD_WORKERS_LEGACY_WARNED=1
+    fi
+    dw_path="workers.list"
+    [ "$has_new" = "true" ] || dw_path="dashboard.workers"
+    dw_err=$(jq -r --arg path "$dw_path" '
+        (.workers.list // .dashboard.workers // []) as $w
+        | if ($w | type) != "array" then "\($path) must be an array of {name, host?, port?, token?} objects."
           else [ $w[] |
-              if type != "object" then "dashboard.workers entries must be objects (got a \(type))."
+              if type != "object" then "\($path) entries must be objects (got a \(type))."
               elif (.name | type) != "string" or (.name | test("^[!-~]{1,128}$") | not)
-                then "dashboard.workers: every entry needs a \"name\" of 1-128 printable non-space characters (its stratum worker name)."
+                then "\($path): every entry needs a \"name\" of 1-128 printable non-space characters (its stratum worker name)."
               elif has("host") and ((.host | type) != "string" or (.host | test("^[A-Za-z0-9._-]{1,253}$") | not))
-                then "dashboard.workers[\(.name)].host must be a hostname or IPv4 address (letters, digits, and . _ - only; no port or path)."
+                then "\($path)[\(.name)].host must be a hostname or IPv4 address (letters, digits, and . _ - only; no port or path)."
               elif has("port") and ((.port | type) != "number" or .port != (.port | floor) or .port < 1 or .port > 65535)
-                then "dashboard.workers[\(.name)].port must be an integer between 1 and 65535."
+                then "\($path)[\(.name)].port must be an integer between 1 and 65535."
               elif has("control_port") and ((.control_port | type) != "number" or .control_port != (.control_port | floor) or .control_port < 1 or .control_port > 65535)
-                then "dashboard.workers[\(.name)].control_port must be an integer between 1 and 65535 (the rig writable control API port, #185)."
+                then "\($path)[\(.name)].control_port must be an integer between 1 and 65535 (the rig writable control API port, #185)."
               elif has("token") and ((.token | type) != "string" or (.token | test("^[!-~]{1,128}$") | not))
-                then "dashboard.workers[\(.name)].token must be 1-128 printable non-space characters."
+                then "\($path)[\(.name)].token must be 1-128 printable non-space characters."
               elif has("watts") and ((.watts | type) != "number" or .watts <= 0 or .watts >= 1000000)
-                then "dashboard.workers[\(.name)].watts must be a positive number of watts (a manual power-draw estimate for the energy calculator, #260)."
+                then "\($path)[\(.name)].watts must be a positive number of watts (a manual power-draw estimate for the energy calculator, #260)."
               else empty end
           ] | first // empty end' "$CONFIG_FILE" 2>/dev/null)
     [ -z "$dw_err" ] || error "$dw_err"
     # Duplicate names are legal but only the FIRST declaration counts — surface that, once.
-    local dw_dups
-    dw_dups=$(jq -r '[(.dashboard.workers // [])[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
-    [ -z "$dw_dups" ] || warn "dashboard.workers has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
+    dw_dups=$(jq -r '[(.workers.list // .dashboard.workers // [])[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$dw_dups" ] || warn "$dw_path has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
 }
 
 # Validate the dashboard.energy block for the energy/profit calculator (#260). Like the worker
@@ -2426,7 +2536,7 @@ parse_and_validate_config() {
         [ -n "$remote_host" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
     fi
 
-    POOL_TYPE=$(jq -r '.p2pool.pool // "main"' "$CONFIG_FILE")
+    POOL_TYPE=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
     case "$POOL_TYPE" in
     main | mini | nano) ;;
     *) error "p2pool.pool must be \"main\", \"mini\", or \"nano\" (got \"$POOL_TYPE\")." ;;
@@ -2746,12 +2856,18 @@ render_masked_config() { # <control-dir>
     local mdir="$1/masked" tmp
     mkdir -p "$mdir" 2>/dev/null || true
     tmp="$mdir/.config.json.tmp"
-    # Per-worker tokens (#172) live in the variable-length .dashboard.workers[] array, out of
-    # reach of the fixed-path walk above — mask each SET .token entry by entry.
+    # Per-worker tokens (#172) live in the variable-length descriptor array, out of reach of the
+    # fixed-path walk above — mask each SET .token entry by entry. workers.list[] is current
+    # (#506); dashboard.workers[] is the deprecated fallback — mask whichever is actually
+    # populated (validate_worker_endpoints already refuses a config that sets both).
     if jq --argjson paths "$CONTROL_SECRET_PATHS" '
         reduce $paths[] as $p (.;
             if ((try getpath($p) catch null) // "") == "" then .
             else setpath($p; {"__secret__": true}) end)
+        | if (.workers | type) == "object" and (.workers.list | type) == "array"
+          then .workers.list |= map(
+              if (.token // "") == "" then . else .token = {"__secret__": true} end)
+          else . end
         | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
           then .dashboard.workers |= map(
               if (.token // "") == "" then . else .token = {"__secret__": true} end)
@@ -3264,7 +3380,7 @@ render_env() {
 
     # P2Pool pool type → flags + p2p port
     local pool_type p2pool_flags p2pool_port
-    pool_type=$(jq -r '.p2pool.pool // "main"' "$CONFIG_FILE")
+    pool_type=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
     p2pool_flags=""
     p2pool_port="37889"
     if [ "$pool_type" == "mini" ]; then
@@ -4702,15 +4818,18 @@ control_approval_gate() { # <staged-file>
     # Two config.json blocks never render to .env — the dashboard reads them straight off its
     # config.json mount (load_worker_endpoints + load_energy_config; these are the ONLY two), so the
     # env-diff allowlist below can't see either. Each config.json-only block must be handled here by
-    # name or a commit could silently change it: dashboard.workers is REFUSED, dashboard.energy is
-    # ALLOWED (#504). Every OTHER config path renders to .env and is gated by the allowlist, so a
+    # name or a commit could silently change it: the worker descriptors are REFUSED, dashboard.energy
+    # is ALLOWED (#504). Every OTHER config path renders to .env and is gated by the allowlist, so a
     # change there is caught below — a NEW config.json-only block, though, MUST add its own line.
     #
-    # dashboard.workers (#172) carries per-rig hosts and API tokens (exactly the "free-form string
+    # The per-worker descriptors — workers.list[] (#506) or its deprecated fallback
+    # dashboard.workers[] (#172) — carry per-rig hosts and API tokens (exactly the "free-form string
     # that reaches a URL or credential" class the allowlist exists to keep host-CLI-only), so refuse
-    # any change to it explicitly.
-    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.workers // []) == ($live[0].dashboard.workers // [])' "$staged" >/dev/null 2>&1; then
-        printf 'this change alters dashboard.workers (per-worker hosts/tokens, #172), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+    # a change to EITHER shape explicitly.
+    if ! jq -e --slurpfile live "$CONFIG_FILE" '
+        (.dashboard.workers // []) == ($live[0].dashboard.workers // [])
+        and (.workers.list // []) == ($live[0].workers.list // [])' "$staged" >/dev/null 2>&1; then
+        printf 'this change alters the per-worker descriptors (workers.list[] / dashboard.workers[], per-rig hosts/tokens, #172/#506), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
     # Closed-schema guard (#33 hardening). A config.json key the stack doesn't recognize renders to
@@ -4719,13 +4838,14 @@ control_approval_gate() { # <staged-file>
     # isn't in the canonical schema (config.reference.json). Numeric path components are dropped so a
     # populated known scalar array (notifications.webhooks, telegram.control.allowed_ids) collapses
     # onto its schema-listed key instead of false-rejecting, while a smuggled OBJECT inside such an
-    # array still surfaces its unknown sub-key. dashboard.workers[] is exempt: its per-rig object
-    # elements aren't enumerated in the reference and the array is already fully guarded above. Fail
-    # closed — an unreadable reference or a jq error refuses the commit.
+    # array still surfaces its unknown sub-key. Both worker-descriptor shapes are exempt: their
+    # per-rig object elements aren't enumerated in the reference and the array is already fully
+    # guarded above. Fail closed — an unreadable reference or a jq error refuses the commit.
     # INVARIANT: config.reference.json MUST stay a complete superset of every config path this script
     # reads (grep the config_bool/`jq ... "$CONFIG_FILE"` sites), or a legit config carrying a
     # read-but-unlisted path is false-rejected on every commit. That includes backward-compat aliases
-    # like xmrig_proxy.* (read at the XvB block). Guarded two ways in tests/stack/run.sh: the
+    # like xmrig_proxy.* (read at the XvB block) and dashboard.workers[] (read at
+    # validate_worker_endpoints, #506). Guarded two ways in tests/stack/run.sh: the
     # legacy-xmrig_proxy round-trip case above, and (#561) an automated drift guard that walks this
     # script's own config_bool/`jq ... "$CONFIG_FILE"` read sites with a conservative fixed-shape
     # extractor and fails loud ("extend the extractor") on a shape it doesn't recognize, rather than
@@ -4734,7 +4854,7 @@ control_approval_gate() { # <staged-file>
     local unknown
     if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
         def norm: [.[] | strings] | join(".");
-        ([$cfg[0] | paths | select(.[0:2] != ["dashboard", "workers"]) | norm]
+        ([$cfg[0] | paths | select(.[0:2] != ["dashboard", "workers"] and .[0:2] != ["workers", "list"]) | norm]
          - [$ref[0] | paths | norm])
         | unique | join(", ")' 2>/dev/null); then
         printf 'could not validate the staged config against the schema (%s) — refusing to commit' "$REFERENCE_CONFIG"
@@ -4829,11 +4949,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     # under umask 077 so it is never even briefly world-readable (create-then-chmod race); the
     # chmod stays as belt-and-suspenders.
     # Per-worker token sentinels (#172) get the same swap, but out of the fixed-path walk: they
-    # live in the .dashboard.workers[] array, so restore each from the live token matched by worker
-    # name (first-declared wins on duplicate names, matching the container's probe). A sentinel for
-    # a rig with no live token collapses to "" too.
+    # live in the variable-length descriptor array — workers.list[] (#506) or its deprecated
+    # fallback dashboard.workers[] — so restore each from the LIVE token matched by worker name
+    # (first-declared wins on duplicate names, matching the container's probe; whichever shape the
+    # live config actually uses). A sentinel for a rig with no live token collapses to "" too, and
+    # the sentinel is restored into whichever shape the submitted doc carries.
     (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" '
-        (reduce (($live[0].dashboard.workers // []) | reverse | .[]) as $w ({};
+        (reduce (($live[0].workers.list // $live[0].dashboard.workers // []) | reverse | .[]) as $w ({};
             if ($w | type) == "object" and ($w.name | type) == "string"
             then .[$w.name] = ($w.token // "") else . end)) as $livetok
         | reduce $paths[] as $p (.config;
@@ -4841,6 +4963,12 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
             | if ($v | type) == "object" and $v.__secret__ == true
               then setpath($p; (($live[0] | try getpath($p) catch null) // ""))
               else . end)
+        | if (.workers | type) == "object" and (.workers.list | type) == "array"
+          then .workers.list |= map(
+              if (.token | type) == "object" and .token.__secret__ == true
+              then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
+              else . end)
+          else . end
         | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
           then .dashboard.workers |= map(
               if (.token | type) == "object" and .token.__secret__ == true
@@ -5149,8 +5277,9 @@ control_lifecycle() { # <verb: restart|apply> <id> <actor> <control-dir>
 # Worker config apply (#185): POST an operator's writable-key change to a RigForge rig's control API
 # and record the outcome for the dashboard's config history. The intent carries ONLY the worker NAME
 # and the CHANGES — never a host, port, or token: the runner resolves the rig's real address + bearer
-# from the HOST's own config.json (dashboard.workers[]), so a tampered intent can at most target
-# another ALREADY-configured rig, never an arbitrary host (#122 SSRF), and the rig's access token —
+# from the HOST's own config.json (workers.list[] / the deprecated dashboard.workers[], #506), so a
+# tampered intent can at most target another ALREADY-configured rig, never an arbitrary host (#122
+# SSRF), and the rig's access token —
 # masked out of the container (#440) — never leaves the host. Changes are re-validated against the
 # same writable allowlist the rig enforces (defence in depth). Every result/audit line the container
 # reads back carries the change_id + status only, never the token.
@@ -5196,11 +5325,11 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     # host or no token cannot be a target (fail closed): the rig's control path is bearer-mandatory and
     # we only ever dial an operator-set host.
     local host cport token
-    host=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
-    cport=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
-    token=$(jq -r --arg n "$worker" '(.dashboard.workers // [])[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    host=$(jq -r --arg n "$worker" '(.workers.list // .dashboard.workers // [])[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    cport=$(jq -r --arg n "$worker" '(.workers.list // .dashboard.workers // [])[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
+    token=$(jq -r --arg n "$worker" '(.workers.list // .dashboard.workers // [])[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
     if [ -z "$host" ]; then
-        _wa_reject "worker '$worker' has no configured host in dashboard.workers[] — set host + control_port + token to edit it."
+        _wa_reject "worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to edit it."
         return 0
     fi
     # host charset guard (#122): no port/path/userinfo can be smuggled into the URL below.
@@ -5213,7 +5342,7 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
         return 0
     fi
     if [ -z "$token" ]; then
-        _wa_reject "worker '$worker' has no token in dashboard.workers[] — the rig's control API is bearer-mandatory."
+        _wa_reject "worker '$worker' has no token in workers.list[] (or the deprecated dashboard.workers[]) — the rig's control API is bearer-mandatory."
         return 0
     fi
     # Per-drain dial budget (hardening): worker-apply is the only control action that blocks the

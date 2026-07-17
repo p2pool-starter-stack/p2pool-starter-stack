@@ -80,6 +80,19 @@ def _deep_merge(base, override):
     return merged
 
 
+def _load_core_keys():
+    """The wizard's core-key shortlist (#502/#529), read from the SAME file ``./pithead setup``
+    reads — the one shared artifact, not a second hand-maintained list. Degrades to an empty list
+    on a missing/unreadable/malformed file, matching the reference-merge fallback below."""
+    try:
+        with open(config.HOST_CORE_KEYS_PATH) as f:
+            keys = json.load(f)
+        return keys if isinstance(keys, list) else []
+    except (OSError, ValueError):
+        logger.warning("config.core-keys.json unavailable — the form renders with no core group.")
+        return []
+
+
 def read_config():
     """The full config schema for the editor's form, every set secret masked to the sentinel.
 
@@ -87,7 +100,11 @@ def read_config():
     pre-masked copy so the form covers the whole schema — a missing/unreadable reference degrades
     to the host copy alone (graft #437). An *empty* secret stays empty, so the UI can tell
     "set — leave blank to keep" from "not set". The copy arrives already masked (#440); the
-    masking pass here is defense-in-depth and runs AFTER the merge."""
+    masking pass here is defense-in-depth and runs AFTER the merge.
+
+    The response also carries ``_core_keys`` (#529) — an underscore-prefixed metadata key, the
+    same convention ``config.reference.json``'s own ``_docs`` uses, so ``buildSections`` on the
+    frontend already skips it as a config section for free."""
     cfg = _load_host_config()
     try:
         with open(config.HOST_REFERENCE_PATH) as f:
@@ -100,6 +117,7 @@ def read_config():
         found, value = _get(cfg, path)
         if found and value:
             _set(cfg, path, dict(SECRET_SENTINEL))
+    cfg["_core_keys"] = _load_core_keys()
     return cfg
 
 

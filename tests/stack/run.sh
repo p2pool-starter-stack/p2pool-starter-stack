@@ -2025,7 +2025,7 @@ assert_contains "signing off announces the skip (#376 opt-in)" "$sign_off_out" "
 )
 assert_contains "bundle signed as a detached blob signature" "$(cat "$SIGN/cosign.log")" \
     "sign-blob --key /release-box/cosign.key --tlog-upload=false --yes --output-signature $SIGN/pithead.tar.gz.sig"
-assert_contains "the bundle ships cosign.pub (the install-side verifier)" "$(cat "$REL")" "config.reference.json cosign.pub"
+assert_contains "the bundle ships cosign.pub (the install-side verifier)" "$(cat "$REL")" "config.reference.json config.core-keys.json cosign.pub"
 
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
@@ -2621,6 +2621,58 @@ dw_case '[{"name":"rig1","token":"has space"}]' "unsafe worker token" "dashboard
 dw_case '[{"name":"rig1","watts":0}]' "non-positive worker watts (#260)" "dashboard.workers[rig1].watts"
 dw_case '[{"name":"rig1","watts":"142"}]' "string worker watts (#260)" "dashboard.workers[rig1].watts"
 
+# Duplicate names are legal (first-declared wins) but warned about, and a valid dashboard.workers[]
+# list applies. Also proves the legacy fallback still validates + warns once (#506).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "valid dashboard.workers applies" "$rc" "0"
+assert_contains "duplicate worker names are warned" "$out" "first-declared"
+assert_contains "legacy dashboard.workers is warned as deprecated (#506)" "$out" "dashboard.workers[] is deprecated"
+# Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
+# per-worker token must not leak into a second secrets file.
+if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
+
+# workers.list[] (#506): the current sub-key validates with the same rules, at the new path — every
+# per-field error message above named its path via dashboard.workers[]; each case repeats here
+# named via workers.list[], proving the dynamic path label in validate_worker_endpoints tracks
+# whichever key is actually in use, not a hardcoded string.
+wl_case() { # <workers-json> <label> <expected-msg-fragment>
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+    rc=$?
+    assert_rc "$2 rejected" "$rc" "1"
+    assert_contains "$2 message" "$out" "$3"
+}
+wl_case '{"name":"rig1"}' "non-array workers.list" "must be an array"
+wl_case '[{"host":"10.0.0.5"}]' "workers.list entry without a name" "name"
+wl_case '[{"name":"rig1","host":"10.0.0.5/path"}]' "workers.list host with URL structure" "workers.list[rig1].host"
+wl_case '[{"name":"rig1","host":"attacker:8080"}]' "workers.list host smuggling a port" "workers.list[rig1].host"
+wl_case '[{"name":"rig1","port":65536}]' "out-of-range workers.list port" "workers.list[rig1].port"
+wl_case '[{"name":"rig1","token":"has space"}]' "unsafe workers.list token" "workers.list[rig1].token"
+wl_case '[{"name":"rig1","watts":0}]' "non-positive workers.list watts (#260)" "workers.list[rig1].watts"
+
+# A valid workers.list[] applies cleanly, warns no deprecation, and — like the legacy shape — never
+# leaks a per-worker token into .env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"rig1","host":"worker-lan.local","token":"tok_xyz789"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "valid workers.list applies" "$?" "0"
+assert_not_contains "workers.list applying raises no deprecation warning" "$out" "deprecated"
+if grep -q 'tok_xyz789' "$V/.env"; then bad "workers.list token stays out of .env" "token landed in .env"; else ok "workers.list token stays out of .env"; fi
+
+# Setting BOTH workers.list[] and dashboard.workers[] is a hard error (#506) — a silent pick would
+# leave the other a stale, unnoticed copy of hosts/tokens. REVERT-PROOF: the exact case a partial
+# revert of the dual-read change would silently start allowing again.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig"}]}, "workers":{"list":[{"name":"new-rig"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "both workers.list and dashboard.workers set is rejected" "$rc" "1"
+assert_contains "both-set refusal names both keys" "$out" "sets both workers.list[] and dashboard.workers[]"
+
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
     seed_env
@@ -2643,17 +2695,6 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"currency":"EUR"},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid dashboard.energy applies" "$?" "0"
-
-# Duplicate names are legal (first-declared wins) but warned about, and a valid list applies.
-seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
-out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
-rc=$?
-assert_rc "valid dashboard.workers applies" "$rc" "0"
-assert_contains "duplicate worker names are warned" "$out" "first-declared"
-# Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
-# per-worker token must not leak into a second secrets file.
-if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
 
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
@@ -3124,6 +3165,15 @@ while IFS= read -r ev; do
     assert_contains "telegram event '$ev' declared in docker-compose.yml" \
         "$compose_text" "TELEGRAM_EVENT_$up="
 done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
+
+# #502/#529: p2pool.pool defaults to "mini" (the global default — config.reference.json, the two
+# `.p2pool.pool // "mini"` code fallbacks, and the wizard Enter-through all agree). A config that
+# OMITS p2pool.pool must render the mini sidechain flag, not the old "main". Standalone config so
+# it doesn't disturb the propagate block above.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$V/docker.log" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_contains "omitted p2pool.pool defaults to the mini sidechain flag (#502)" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)" "--mini"
 
 echo "== black-box: payout-wallet change needs a typed confirm (#375) =="
 # Swapping the payout wallet is the highest-value tamper: apply must demand the first 8 chars of
@@ -4657,6 +4707,12 @@ gate_try "$C/cand.json"
 assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
 assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
+# Same refusal on the CURRENT workers.list[] shape (#506) — the gate must catch either key.
+jq '.workers.list=[{name:"rig1",host:"attacker.example",token:"stolen"}]' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "workers.list change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "workers.list refusal names the per-worker descriptors" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "workers.list"
+assert_eq "config.json keeps no workers.list descriptors" "$(jq -r '.workers.list // "unset"' "$C/config.json")" "unset"
 
 # dashboard.energy (#504) is the ONE config.json-only block a commit MAY change: it never renders
 # to .env, so the host previews it as a normal INFO row (not the old non-committable HOST note) and
@@ -4839,6 +4895,41 @@ jq --arg id "$UUID7" '{id:$id, action:"preview", actor:"admin", config: .}' "$MA
 run_pending >/dev/null
 assert_eq "duplicate-name sentinel restores the first-declared token" "$(jq -r '.dashboard.workers[0].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
 assert_eq "duplicate-name second entry also resolves to first-declared" "$(jq -r '.dashboard.workers[1].token' "$STAGED/$UUID7.json" 2>/dev/null)" "tok_first"
+
+echo "== black-box: per-worker token mask + host-side restore, workers.list[] shape (#506) =="
+# Same mask/restore/commit round-trip as above, but on the CURRENT workers.list[] shape — proves
+# render_masked_config and the control_preview sentinel swap key off whichever shape the live
+# config actually uses, not a hardcoded dashboard.workers path. Clear the legacy key first so the
+# live config carries only the new shape (both-set is refused at apply, asserted earlier).
+jq 'del(.dashboard.workers) | .workers.list=[
+    {name:"rig1",host:"10.0.0.5",token:"tok_rig1secret"},
+    {name:"rig2"},
+    {name:"rig3",token:"tok_rig3secret"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    mv "$C/config.json.tmp" "$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+# 1) masked prefill copy: each SET per-worker token is a sentinel, the raw token never appears.
+assert_eq "workers.list token masked to the sentinel" "$(jq -c '.workers.list[0].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "second workers.list token masked to the sentinel" "$(jq -c '.workers.list[2].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "token-less workers.list worker stays token-less in the masked copy" "$(jq -r '.workers.list[1] | has("token")' "$MASKED" 2>/dev/null)" "false"
+case "$(cat "$MASKED")" in
+*tok_rig1secret* | *tok_rig3secret*) bad "masked copy holds no workers.list token" "a per-worker token leaked into $MASKED" ;;
+*) ok "masked copy holds no workers.list token" ;;
+esac
+# 2) staging swap: a proposal that prefills from the masked copy stages with each token restored
+#    from live BY NAME.
+UUID8="88888888-8888-4888-8888-888888888888"
+jq --arg id "$UUID8" '{id:$id, action:"preview", actor:"admin", config: (.p2pool.pool="nano")}' "$MASKED" >"$REQS/$UUID8.json"
+run_pending >/dev/null
+assert_eq "workers.list-sentinel preview validates" "$(jq -r '.status' "$RESULTS/$UUID8.json" 2>/dev/null)" "previewed"
+assert_eq "workers.list sentinel restored to the live token by name" "$(jq -r '.workers.list[0].token' "$STAGED/$UUID8.json" 2>/dev/null)" "tok_rig1secret"
+assert_eq "second workers.list sentinel restored by name" "$(jq -r '.workers.list[2].token' "$STAGED/$UUID8.json" 2>/dev/null)" "tok_rig3secret"
+# 3) commit: workers.list restored to live == live, so the gate passes on the pool-only change, and
+#    the committed config KEEPS the live per-worker tokens.
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID8" >"$REQS/$UUID8.json"
+run_pending >/dev/null
+assert_eq "workers.list-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID8.json" 2>/dev/null)" "applied"
+assert_eq "committed config keeps the live workers.list token" "$(jq -r '.workers.list[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
 
 echo "== black-box: audit log growth is bounded (#349) =="
 # Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
@@ -5538,6 +5629,23 @@ CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX"
 assert_contains "worker-apply over the dial budget is rejected (no dial)" \
     "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
 
+# workers.list[] (#506): control_worker_apply resolves the rig's host/token the same way from the
+# CURRENT shape. Reuses the budget=0 technique above — a "too many worker config changes" rejection
+# (instead of "no configured host"/"no token") proves resolution succeeded BEFORE the pre-dial
+# budget gate, without needing to stub the actual network dial.
+WA2="$SANDBOX/ctrl506"
+mkdir -p "$WA2/staged" "$WA2/results" "$WA2/audit"
+cat >"$WA2/config.json" <<'EOF'
+{ "workers": { "list": [
+    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" }
+] } }
+EOF
+u8="88888888-9999-4999-8999-888888888888"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"DONATION":2}}\n' "$u8" >"$WA2/req.json"
+CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA2/config.json" run_sourced "$SANDBOX" control_process_request "$WA2/req.json" "$WA2" >/dev/null 2>&1
+assert_contains "workers.list worker-apply resolves the rig (budget rejection proves pre-dial success)" \
+    "$(jq -r '.error // ""' "$WA2/results/$u8.json")" "too many worker config changes"
+
 # ---------------------------------------------------------------------------
 echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
 # The closed-schema control gate (#537, pithead ~L4706) relies on this invariant: every config.json
@@ -5660,6 +5768,143 @@ elif [ "$missing" -eq 0 ] && [ "$DRIFT_BAD" -eq 0 ]; then
     ok "every extracted config-read path ($checked total) exists in config.reference.json"
 fi
 unset DRIFT_FOUND REF_PATHS DRIFT_BAD
+
+echo "== unit: config.core-keys.json — valid JSON, stays inside config.reference.json (#502/#529) =="
+# The core-key shortlist (#529's binding Wave-0 decision) is the ONE shared artifact between the
+# wizard (here) and the dashboard form (later, #529's regroup). Every path it lists must resolve
+# somewhere in config.reference.json, or the wizard could start asking about a key the closed
+# schema (#537/#561) would then refuse — a config the wizard itself just generated getting
+# rejected on the very first apply.
+CORE_KEYS="$(jq -r '.[]' "$ROOT/config.core-keys.json" 2>/dev/null)"
+if [ -z "$CORE_KEYS" ]; then
+    bad "config.core-keys.json parses to a non-empty array" "got nothing — check the file exists and is valid JSON"
+else
+    ok "config.core-keys.json parses to a non-empty array"
+fi
+REF_PATHS_CORE="$(jq -r '[paths | map(select(type=="string")) | join(".")] | unique[]' "$ROOT/config.reference.json")"
+core_checked=0
+core_missing=0
+for p in $CORE_KEYS; do
+    core_checked=$((core_checked + 1))
+    grep -qxF "$p" <<<"$REF_PATHS_CORE" || {
+        bad "core key has a config.reference.json entry" "'$p' is missing from config.reference.json"
+        core_missing=$((core_missing + 1))
+    }
+done
+if [ "$core_checked" -gt 0 ] && [ "$core_missing" -eq 0 ]; then
+    ok "every config.core-keys.json path ($core_checked total) exists in config.reference.json"
+fi
+unset REF_PATHS_CORE CORE_KEYS core_checked core_missing
+
+echo "== unit: wizard prompt count is pinned (#502 — a silently-added prompt fails this loud) =="
+# Structural, not behavioral: every Enter-through default answer looks the same ("blank"), so a
+# NEW prompt slipped into either function wouldn't visibly break a happy-path run — it would just
+# eat one more blank line unnoticed. Pinning the count is what actually catches wizard scope creep.
+core_reads=$(awk '/^wizard_ask_core\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
+shape_reads=$(awk '/^wizard_ask_shape\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
+assert_eq "wizard_ask_core has exactly 12 read prompts (wallets, node config, pool tier, dashboard login)" "$core_reads" "12"
+assert_eq "wizard_ask_shape has exactly 5 read prompts (clearnet-sync, remote-access, alerts cluster)" "$shape_reads" "5"
+
+# A small helper so tests can drive the whole Q&A -> write in one sourced call, sharing the globals
+# wizard_ask_core/wizard_ask_shape set with wizard_write_config (each function's locals don't
+# survive a return, so they must run in the same invocation).
+run_wizard() {
+    wizard_ask_core
+    wizard_ask_shape
+    wizard_write_config
+}
+
+echo "== unit: wizard — Enter-through defaults skip everything but the core answers (#502) =="
+# Local node, every optional prompt left blank. Proves two things at once: the core answers land
+# (wallets, mode, pool tier), and nothing else does — dashboard.hashrate_drop_threshold,
+# network.subnet, xvb.*, telegram.*, dashboard.onion, dashboard.auth all keep their
+# config.reference.json default because the wizard never wrote them at all.
+W1="$SANDBOX/wizard-defaults"
+mkdir -p "$W1"
+printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "TARIWALLETDEFAULT" | run_sourced "$W1" run_wizard >/dev/null 2>&1
+if [ -f "$W1/config.json" ]; then
+    ok "wizard (defaults path) writes config.json"
+else
+    bad "wizard (defaults path) writes config.json" "no file at $W1/config.json"
+fi
+w1_cfg="$(cat "$W1/config.json" 2>/dev/null)"
+assert_eq "defaults path: monero.wallet_address" "$(jq -r '.monero.wallet_address' <<<"$w1_cfg")" "$WALLET"
+assert_eq "defaults path: tari.wallet_address" "$(jq -r '.tari.wallet_address' <<<"$w1_cfg")" "TARIWALLETDEFAULT"
+assert_eq "defaults path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w1_cfg")" "local"
+assert_eq "defaults path: p2pool.pool Enter-through is mini (the global default)" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "mini"
+assert_eq "defaults path: local node RPC creds auto-generated (non-empty)" \
+    "$([ -n "$(jq -r '.monero.node_username' <<<"$w1_cfg")" ] && [ -n "$(jq -r '.monero.node_password' <<<"$w1_cfg")" ] && echo yes)" "yes"
+# The revert-proof core: config.json carries ONLY the four top-level blocks the defaults path
+# writes. If a future prompt silently starts writing e.g. dashboard.hashrate_drop_threshold or
+# network.subnet, this fails — a defaulted key growing a prompt shows up here even though its own
+# (blank) answer looks identical to every other blank answer.
+assert_eq "defaults path: top-level keys are exactly monero/tari/p2pool/dashboard, nothing else" \
+    "$(jq -rc '[keys[]] | sort' <<<"$w1_cfg")" '["dashboard","monero","p2pool","tari"]'
+assert_eq "defaults path: dashboard has only 'secure' — no auth/onion written" \
+    "$(jq -rc '.dashboard | keys' <<<"$w1_cfg")" '["secure"]'
+assert_eq "defaults path: no telegram block written" "$(jq -r 'has("telegram")' <<<"$w1_cfg")" "false"
+assert_eq "defaults path: no clearnet_initial_sync written (stays the reference default)" \
+    "$(jq -r '.monero | has("clearnet_initial_sync")' <<<"$w1_cfg")" "false"
+
+echo "== unit: wizard — remote node branch is unchanged by the ask/write split (#502) =="
+# The remote-node prompts (host/RPC/ZMQ/auth) were only moved into wizard_ask_core, not touched —
+# this catches the refactor breaking the variable handoff to wizard_write_config.
+W3="$SANDBOX/wizard-remote"
+mkdir -p "$W3"
+printf '%s\n%s\nn\nnode.example.com\n\n\ny\nremoteuser\nremotepass\n\n\n\n\n\n\n' \
+    "$WALLET" "TARIWALLETREMOTE" | run_sourced "$W3" run_wizard >/dev/null 2>&1
+w3_cfg="$(cat "$W3/config.json" 2>/dev/null)"
+assert_eq "remote path: monero.mode remote" "$(jq -r '.monero.mode' <<<"$w3_cfg")" "remote"
+assert_eq "remote path: remote host set" "$(jq -r '.monero.remote.host' <<<"$w3_cfg")" "node.example.com"
+assert_eq "remote path: RPC/ZMQ ports default 18081/18083" \
+    "$(jq -rc '[.monero.remote.rpc_port, .monero.remote.zmq_port]' <<<"$w3_cfg")" "[18081,18083]"
+assert_eq "remote path: auth creds carried through" \
+    "$(jq -rc '[.monero.node_username, .monero.node_password]' <<<"$w3_cfg")" '["remoteuser","remotepass"]'
+unset w3_cfg
+
+echo "== unit: wizard — remote node WITHOUT auth + an explicit nano pool tier (#502) =="
+# Two case arms neither W1 (defaults -> mini) nor W2/W3 (main / auth'd remote) reach: REMOTE_AUTH
+# answered "n" (the un-auth'd remote branch skips both credential prompts, leaving them "") and
+# the pool-tier case's "nano" arm. Same run_wizard helper, non-default answers on both axes.
+W4="$SANDBOX/wizard-remote-noauth-nano"
+mkdir -p "$W4"
+printf '%s\n%s\nn\nremote2.example.com\n\n\nn\nnano\n\n\n\n\n\n' \
+    "$WALLET" "TARIWALLETNOAUTH" | run_sourced "$W4" run_wizard >/dev/null 2>&1
+w4_cfg="$(cat "$W4/config.json" 2>/dev/null)"
+assert_eq "remote-noauth path: monero.mode remote" "$(jq -r '.monero.mode' <<<"$w4_cfg")" "remote"
+assert_eq "remote-noauth path: remote host set" "$(jq -r '.monero.remote.host' <<<"$w4_cfg")" "remote2.example.com"
+assert_eq "remote-noauth path: declining auth leaves creds empty, not auto-generated" \
+    "$(jq -rc '[.monero.node_username, .monero.node_password]' <<<"$w4_cfg")" '["",""]'
+assert_eq "remote-noauth path: pool tier nano" "$(jq -r '.p2pool.pool' <<<"$w4_cfg")" "nano"
+unset w4_cfg
+
+echo "== unit: wizard — shape-question and dashboard-login answers flow into config.json (#502) =="
+# The inverse of the defaults test: every optional prompt answered, proving the new logic (pool
+# tier mapping, the dashboard-login cluster, and each Stage-2 cluster) actually wires through.
+W2="$SANDBOX/wizard-full"
+mkdir -p "$W2"
+printf '%s\n%s\n\nmain\nopuser\nsuperSecret1\ny\ny\ny\nmybottoken123\n987654321\n' \
+    "$WALLET" "TARIWALLETFULL" | run_sourced "$W2" run_wizard >/dev/null 2>&1
+w2_cfg="$(cat "$W2/config.json" 2>/dev/null)"
+assert_eq "full path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w2_cfg")" "local"
+assert_eq "full path: p2pool.pool honors an explicit main" "$(jq -r '.p2pool.pool' <<<"$w2_cfg")" "main"
+assert_eq "full path: dashboard.auth.username set" "$(jq -r '.dashboard.auth.username' <<<"$w2_cfg")" "opuser"
+assert_eq "full path: dashboard.auth.password set" "$(jq -r '.dashboard.auth.password' <<<"$w2_cfg")" "superSecret1"
+assert_eq "full path: clearnet-sync cluster sets BOTH chains together" \
+    "$(jq -rc '[.monero.clearnet_initial_sync, .tari.clearnet_initial_sync]' <<<"$w2_cfg")" '[true,true]'
+assert_eq "full path: remote-access sets dashboard.onion.enabled" "$(jq -r '.dashboard.onion.enabled' <<<"$w2_cfg")" "true"
+assert_eq "full path: telegram cluster sets enabled+token+chat_id together" \
+    "$(jq -rc '[.telegram.enabled, .telegram.bot_token, .telegram.chat_id]' <<<"$w2_cfg")" '[true,"mybottoken123","987654321"]'
+
+echo "== unit: wizard_print_pointer — closing pointer names what it deliberately didn't ask (#502) =="
+pointer_out="$(run_sourced "$SANDBOX" wizard_print_pointer 2>&1)"
+assert_contains "pointer mentions monero.view_key (on-chain payout confirmation)" "$pointer_out" "monero.view_key"
+assert_contains "pointer mentions dashboard.energy.cost_per_kwh (#504)" "$pointer_out" "dashboard.energy.cost_per_kwh"
+assert_contains "pointer mentions workers.list (per-worker overrides, #506)" "$pointer_out" "workers.list"
+assert_contains "pointer points at docs/configuration.md" "$pointer_out" "docs/configuration.md"
+assert_contains "pointer mentions the dashboard's config editor" "$pointer_out" "dashboard's config editor"
+
+unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
 
 # ---------------------------------------------------------------------------
 echo ""

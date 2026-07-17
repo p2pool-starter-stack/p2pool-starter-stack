@@ -1,10 +1,11 @@
 import sqlite3
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
 from mining_dashboard.config.config import HISTORY_RETENTION_SEC, TIER_DEFAULTS
-from mining_dashboard.service.storage_service import StateManager
+from mining_dashboard.service.storage_service import NETWORK_HISTORY_RETENTION_SEC, StateManager
 
 
 class TestDefaults:
@@ -751,3 +752,508 @@ class TestPayouts:
         assert state_manager.add_payouts("monero", [{"txid": "x", "amount_atomic": 1}]) == []
         assert state_manager.get_payouts("monero") == []
         assert state_manager.get_payout_max_height("monero") == 0
+
+
+class TestBlocks:
+    """Pool block-found events (#196 Wave-0): permanent — never pruned, unlike the four
+    retention-bound telemetry tables below."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_block(t0, height=3_100_000, difficulty=123456.0)
+        rows = state_manager.get_blocks()
+        assert rows == [{"ts": t0, "height": 3_100_000, "difficulty": 123456.0}]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_block(t0 - 1000, height=1, difficulty=1.0)
+        state_manager.add_block(t0, height=2, difficulty=2.0)
+        rows = state_manager.get_blocks(since=t0 - 10)
+        assert [r["height"] for r in rows] == [2]
+
+    def test_never_pruned(self, state_manager, monkeypatch):
+        # Force the probabilistic-prune roll to "always fire" — blocks has no prune code path at
+        # all, so an ancient row must survive regardless.
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        state_manager.add_block(old_ts, height=1, difficulty=1.0)
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_block(time.time(), height=2, difficulty=2.0)
+        assert len(state_manager.get_blocks()) == 2
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE blocks")
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["blocks"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE blocks")
+        assert state_manager.get_blocks() == []
+
+
+class TestXvbHistory:
+    """XvB scalars over time (#196 Wave-0): 30-day retention, same recipe as share_stats/events."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_xvb_history(
+            t0, avg_1h=1000.0, avg_24h=900.0, fail_count=1, donation_fraction=0.5, mode="XVB"
+        )
+        rows = state_manager.get_xvb_history()
+        assert rows == [
+            {
+                "ts": t0,
+                "avg_1h": 1000.0,
+                "avg_24h": 900.0,
+                "fail_count": 1,
+                "donation_fraction": 0.5,
+                "mode": "XVB",
+            }
+        ]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_xvb_history(t0 - 1000, avg_1h=1.0)
+        state_manager.add_xvb_history(t0, avg_1h=2.0)
+        rows = state_manager.get_xvb_history(since=t0 - 10)
+        assert [r["avg_1h"] for r in rows] == [2.0]
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO xvb_history (ts, avg_1h, avg_24h, fail_count, donation_fraction, mode) "
+                "VALUES (?,?,?,?,?,?)",
+                (old_ts, 1.0, 1.0, 0, 0.0, "P2POOL"),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_xvb_history(time.time(), avg_1h=5.0)
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM xvb_history WHERE ts < ?",
+                (time.time() - HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE xvb_history")
+        state_manager.add_xvb_history(time.time())
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["xvb_history"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE xvb_history")
+        assert state_manager.get_xvb_history() == []
+
+
+class TestNetworkHistory:
+    """Difficulty/height/reward/pool-hashrate over time (#196 Wave-0): 90-day retention, DB-only."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_network_history(
+            t0, difficulty=1e12, height=3_100_000, reward=0.6, pool_hashrate=5e6
+        )
+        rows = state_manager.get_network_history()
+        assert rows == [
+            {
+                "ts": t0,
+                "difficulty": 1e12,
+                "height": 3_100_000,
+                "reward": 0.6,
+                "pool_hashrate": 5e6,
+            }
+        ]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_network_history(t0 - 1000, height=1)
+        state_manager.add_network_history(t0, height=2)
+        rows = state_manager.get_network_history(since=t0 - 10)
+        assert [r["height"] for r in rows] == [2]
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        old_ts = time.time() - NETWORK_HISTORY_RETENTION_SEC - 24 * 3600  # 91 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO network_history (ts, difficulty, height, reward, pool_hashrate) "
+                "VALUES (?,?,?,?,?)",
+                (old_ts, 1.0, 1, 0.0, 0.0),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_network_history(time.time(), difficulty=2.0)
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM network_history WHERE ts < ?",
+                (time.time() - NETWORK_HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0
+
+    def test_retention_is_90_days_not_30(self):
+        assert NETWORK_HISTORY_RETENTION_SEC == 90 * 24 * 3600
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE network_history")
+        state_manager.add_network_history(time.time())
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["network_history"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE network_history")
+        assert state_manager.get_network_history() == []
+
+
+class TestDiskGrowth:
+    """monerod DB size + host disk usage over time (#196 Wave-0): permanent, DB-only."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_disk_growth(
+            t0, monero_db_bytes=200_000_000_000, disk_used_gb=210.5, disk_total_gb=500.0
+        )
+        rows = state_manager.get_disk_growth()
+        assert rows == [
+            {
+                "ts": t0,
+                "monero_db_bytes": 200_000_000_000,
+                "disk_used_gb": 210.5,
+                "disk_total_gb": 500.0,
+            }
+        ]
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_disk_growth(t0 - 1000, monero_db_bytes=1)
+        state_manager.add_disk_growth(t0, monero_db_bytes=2)
+        rows = state_manager.get_disk_growth(since=t0 - 10)
+        assert [r["monero_db_bytes"] for r in rows] == [2]
+
+    def test_never_pruned(self, state_manager, monkeypatch):
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        state_manager.add_disk_growth(old_ts, monero_db_bytes=1)
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_disk_growth(time.time(), monero_db_bytes=2)
+        assert len(state_manager.get_disk_growth()) == 2
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE disk_growth")
+        state_manager.add_disk_growth(time.time())
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["disk_growth"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE disk_growth")
+        assert state_manager.get_disk_growth() == []
+
+
+class TestWorkerHistory:
+    """Per-rig hashrate/share history (#196 Wave-0): 30-day retention, batched executemany write."""
+
+    def test_add_and_get_roundtrip(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1000.0, "accepted": 10, "rejected": 1},
+                {"ts": t0, "name": "rig2", "h15": 2000.0, "accepted": 20, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_history()
+        assert {r["name"] for r in rows} == {"rig1", "rig2"}
+        assert len(rows) == 2
+
+    def test_add_is_a_single_batch_call(self, state_manager, monkeypatch):
+        # Intent: one poll's worker rows land via ONE executemany, not N execute() calls per row.
+        # sqlite3.Connection's methods are read-only slots (can't monkeypatch the real instance),
+        # so swap in a MagicMock connection for this one narrow assertion.
+        mock_conn = MagicMock()
+        monkeypatch.setattr(state_manager, "_conn", mock_conn)
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1.0, "accepted": 1, "rejected": 0},
+                {"ts": t0, "name": "rig2", "h15": 2.0, "accepted": 2, "rejected": 0},
+                {"ts": t0, "name": "rig3", "h15": 3.0, "accepted": 3, "rejected": 0},
+            ]
+        )
+        assert mock_conn.executemany.call_count == 1
+        values = mock_conn.executemany.call_args.args[1]
+        assert len(values) == 3
+
+    def test_get_since_filters_the_window(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [{"ts": t0 - 1000, "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": t0, "name": "rig1", "h15": 2.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_history(since=t0 - 10)
+        assert [r["h15"] for r in rows] == [2.0]
+
+    def test_empty_batch_is_a_noop(self, state_manager):
+        state_manager.add_worker_history([])
+        assert state_manager.get_worker_history() == []
+
+    def test_old_rows_pruned_from_db_when_cleanup_fires(self, state_manager, monkeypatch):
+        old_ts = time.time() - HISTORY_RETENTION_SEC - 10 * 24 * 3600  # 40 days ago
+        with state_manager._db_lock:
+            state_manager._conn.execute(
+                "INSERT INTO worker_history (ts, name, h15, accepted, rejected) VALUES (?,?,?,?,?)",
+                (old_ts, "rig1", 1.0, 0, 0),
+            )
+            state_manager._conn.commit()
+        monkeypatch.setattr("mining_dashboard.service.storage_service.random.random", lambda: 0.0)
+        state_manager.add_worker_history(
+            [{"ts": time.time(), "name": "rig1", "h15": 2.0, "accepted": 0, "rejected": 0}]
+        )
+        with state_manager._db_lock:
+            remaining = state_manager._conn.execute(
+                "SELECT COUNT(*) FROM worker_history WHERE ts < ?",
+                (time.time() - HISTORY_RETENTION_SEC,),
+            ).fetchone()[0]
+        assert remaining == 0
+
+    def test_write_error_flags_table_and_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_history")
+        state_manager.add_worker_history(
+            [{"ts": time.time(), "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+        )
+        assert state_manager.is_db_healthy() is False
+        assert state_manager.get_table_health()["worker_history"]["healthy"] is False
+
+    def test_reads_tolerate_a_missing_table(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_history")
+        assert state_manager.get_worker_history() == []
+
+    def test_get_name_filters_to_one_rig(self, state_manager):
+        t0 = time.time()
+        state_manager.add_worker_history(
+            [
+                {"ts": t0, "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0},
+                {"ts": t0, "name": "rig2", "h15": 2.0, "accepted": 0, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_history(name="rig1")
+        assert [r["name"] for r in rows] == ["rig1"]
+
+
+class TestWorkerHashrateByConfig:
+    """Correlates worker_history samples to the worker_config version active at each sample's
+    ts (#492, rides #185's config timeline + #196's hashrate series)."""
+
+    def test_no_applied_versions_returns_empty(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid1", "rejected", {"a": 1}, "bad", ts=100)
+        assert state_manager.get_worker_hashrate_by_config("rig1") == []
+
+    def test_samples_bucketed_by_version_boundary(self, state_manager):
+        # v1 applied at t=100, v2 applied at t=200. Samples before t=100 have no known version and
+        # are dropped; samples in [100, 200) belong to v1, samples >= 200 belong to v2.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_config_version("rig1", "cid2", "applied", {"a": 2}, None, ts=200)
+        state_manager.add_worker_history(
+            [{"ts": 50, "name": "rig1", "h15": 999.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 120, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 180, "name": "rig1", "h15": 2000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 250, "name": "rig1", "h15": 4000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        # Newest first, matching get_worker_config_history.
+        assert [r["change_id"] for r in rows] == ["cid2", "cid1"]
+        v2, v1 = rows
+        assert v1["sample_count"] == 2
+        assert v1["avg_h15"] == 1500.0
+        assert v1["min_h15"] == 1000.0
+        assert v1["max_h15"] == 2000.0
+        assert v2["sample_count"] == 1
+        assert v2["avg_h15"] == 4000.0
+
+    def test_version_with_no_samples_yet_has_none_aggregates(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_history(
+            [{"ts": 150, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_config_version("rig1", "cid2", "applied", {"a": 2}, None, ts=200)
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        newest = rows[0]
+        assert newest["change_id"] == "cid2"
+        assert newest["sample_count"] == 0
+        assert newest["avg_h15"] is None
+        assert newest["min_h15"] is None
+        assert newest["max_h15"] is None
+
+    def test_non_applied_versions_are_not_boundaries(self, state_manager):
+        # A rejected/failed change never became the active config, so it must not split a segment.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_config_version("rig1", "cid2", "rejected", {"a": 2}, "bad", ts=150)
+        state_manager.add_worker_history(
+            [{"ts": 175, "name": "rig1", "h15": 5000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        assert len(rows) == 1
+        assert rows[0]["change_id"] == "cid1"
+        assert rows[0]["sample_count"] == 1
+
+    def test_other_workers_hashrate_is_excluded(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_history(
+            [
+                {"ts": 150, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0},
+                {"ts": 150, "name": "rig2", "h15": 9999.0, "accepted": 0, "rejected": 0},
+            ]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        assert rows[0]["sample_count"] == 1
+        assert rows[0]["avg_h15"] == 1000.0
+
+    def test_since_bounds_the_samples_but_not_the_version_timeline(self, state_manager):
+        # A version applied before `since` can still be the active version for samples inside the
+        # window — `since` only filters which SAMPLES are read, not which versions exist.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_history(
+            [{"ts": 120, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 500, "name": "rig1", "h15": 3000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1", since=400)
+        assert rows[0]["change_id"] == "cid1"
+        assert rows[0]["sample_count"] == 1
+        assert rows[0]["avg_h15"] == 3000.0
+
+
+class TestTelemetryTableHealth:
+    """Per-table 'last successful write' health signal (#196 Wave-0), mirroring db_healthy so a
+    hook that silently stops writing (the whole poll loop is one try/except) is visible."""
+
+    def test_starts_healthy_with_no_write_yet(self, state_manager):
+        health = state_manager.get_table_health()
+        assert set(health) == {
+            "blocks",
+            "xvb_history",
+            "network_history",
+            "disk_growth",
+            "worker_history",
+        }
+        for row in health.values():
+            assert row == {"healthy": True, "last_write": None}
+
+    def test_last_write_stamps_on_success(self, state_manager):
+        t0 = time.time()
+        state_manager.add_block(t0, height=1, difficulty=1.0)
+        assert state_manager.get_table_health()["blocks"] == {"healthy": True, "last_write": t0}
+        # untouched tables stay at their default
+        assert state_manager.get_table_health()["xvb_history"]["last_write"] is None
+
+    def test_returns_a_copy(self, state_manager):
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        health = state_manager.get_table_health()
+        health["blocks"]["healthy"] = False
+        assert state_manager.get_table_health()["blocks"]["healthy"] is True
+
+
+class TestTelemetryTablesAfterClose:
+    """After close() the connection is None — every v1.7 telemetry-table accessor must no-op /
+    read empty, never raise (mirrors TestPayouts.test_reads_and_writes_after_close_are_safe)."""
+
+    def test_all_five_tables_are_safe_after_close(self, state_manager):
+        state_manager.close()
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        state_manager.add_xvb_history(time.time())
+        state_manager.add_network_history(time.time())
+        state_manager.add_disk_growth(time.time())
+        state_manager.add_worker_history(
+            [{"ts": time.time(), "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+        )
+        assert state_manager.get_blocks() == []
+        assert state_manager.get_xvb_history() == []
+        assert state_manager.get_network_history() == []
+        assert state_manager.get_disk_growth() == []
+        assert state_manager.get_worker_history() == []
+
+
+class TestWorkerConfigReconcile:
+    """Reconcile a stuck-'accepted' #185 history row to its now-known terminal outcome (#579): a
+    rig rollback slower than the host runner's 20s status-poll deadline (#517/#543) is honestly
+    recorded 'accepted' and never revisited otherwise."""
+
+    def _seed(self, state_manager, status, change_id="cid-1", worker="rig1"):
+        state_manager.add_worker_config_version(worker, change_id, status, {"max_temp_c": 80}, None)
+
+    def _status_of(self, state_manager, worker="rig1", change_id="cid-1"):
+        rows = [
+            r
+            for r in state_manager.get_worker_config_history(worker)
+            if r["change_id"] == change_id
+        ]
+        assert len(rows) == 1
+        return rows[0]
+
+    def test_accepted_row_becomes_terminal(self, state_manager):
+        self._seed(state_manager, "accepted")
+        state_manager.reconcile_worker_config_status(
+            "cid-1", "rolled_back", "miner did not return to a live hashrate"
+        )
+        row = self._status_of(state_manager)
+        assert row["status"] == "rolled_back"
+        assert row["reason"] == "miner did not return to a live hashrate"
+
+    def test_applied_row_is_never_overwritten(self, state_manager):
+        # A genuinely terminal row must survive even a (stale/duplicate) reconcile report.
+        self._seed(state_manager, "applied")
+        state_manager.reconcile_worker_config_status("cid-1", "rolled_back", "late report")
+        row = self._status_of(state_manager)
+        assert row["status"] == "applied"
+        assert row["reason"] is None
+
+    def test_rolled_back_row_is_never_overwritten(self, state_manager):
+        self._seed(state_manager, "rolled_back")
+        state_manager.reconcile_worker_config_status("cid-1", "applied", "late report")
+        assert self._status_of(state_manager)["status"] == "rolled_back"
+
+    def test_rejected_row_is_never_overwritten(self, state_manager):
+        self._seed(state_manager, "rejected")
+        state_manager.reconcile_worker_config_status("cid-1", "applied", "late report")
+        assert self._status_of(state_manager)["status"] == "rejected"
+
+    def test_unknown_change_id_is_a_noop(self, state_manager):
+        self._seed(state_manager, "accepted")
+        state_manager.reconcile_worker_config_status("no-such-id", "rolled_back")
+        assert self._status_of(state_manager)["status"] == "accepted"
+
+    def test_non_terminal_status_is_a_noop(self, state_manager):
+        # A defensive guard: reconcile() is only ever called with a terminal status by
+        # parse_worker_control_status, but a bad caller must not be able to write 'accepted' or
+        # 'running' back over itself.
+        self._seed(state_manager, "accepted")
+        state_manager.reconcile_worker_config_status("cid-1", "running")
+        state_manager.reconcile_worker_config_status("cid-1", "accepted")
+        assert self._status_of(state_manager)["status"] == "accepted"
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        self._seed(state_manager, "accepted")
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_config")
+        state_manager.reconcile_worker_config_status("cid-1", "rolled_back")
+        assert state_manager.is_db_healthy() is False
+
+    def test_reads_and_writes_after_close_are_safe(self, state_manager):
+        state_manager.close()
+        state_manager.reconcile_worker_config_status("cid-1", "rolled_back")  # must not raise

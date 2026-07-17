@@ -550,21 +550,21 @@ test('worker names are inspect buttons only when the control channel is on (#185
     assert.match(on, />rig-alpha</);
 });
 
-test('WorkerInspect overlay renders for the selected worker (#185)', () => {
+test('WorkerInspect dialog renders for the selected worker (#185, native <dialog> since #518)', () => {
     const s = clone();
     s.control_enabled = true;
-    // ui.inspectWorker drives the overlay; the render harness runs no effects, so it's the
-    // pre-fetch loading state (the fetch itself is covered by the server tests).
+    // ui.inspectWorker drives the dialog; the render harness runs no effects (no showModal()),
+    // so it's the pre-fetch loading state (the fetch itself is covered by the server tests).
     const html = renderApp({ state: s, ui: { ...UI, inspectWorker: 'rig-alpha' } });
-    assert.match(html, /worker-inspect-overlay/);
+    assert.match(html, /<dialog class="worker-inspect/);
     assert.match(html, /Worker · rig-alpha/);
     assert.match(html, /Loading/);
 });
 
-test('no WorkerInspect overlay when none is selected (#185)', () => {
+test('no WorkerInspect dialog when none is selected (#185)', () => {
     const s = clone();
     s.control_enabled = true;
-    assert.doesNotMatch(renderApp({ state: s }), /worker-inspect-overlay/);
+    assert.doesNotMatch(renderApp({ state: s }), /<dialog class="worker-inspect/);
 });
 
 test('StatsTable renders the enriched feed as a label/value table, colouring warn/bad values (#507)', () => {

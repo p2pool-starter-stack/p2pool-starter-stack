@@ -246,6 +246,8 @@ jq_assert "raw config.json never enters the dashboard container (#440)" \
     '.services.dashboard.volumes | any(.source | tostring | endswith("/config.json")) | not'
 jq_assert "dashboard config.reference.json prefill mounted read-only (#33)" \
     '.services.dashboard.volumes | any((.target == "/host-config/config.reference.json") and (.read_only == true))'
+jq_assert "dashboard config.core-keys.json shortlist mounted read-only (#529)" \
+    '.services.dashboard.volumes | any((.target == "/host-config/config.core-keys.json") and (.read_only == true))'
 jq_assert "control staged/ dir never enters the container (#33)" \
     '.services.dashboard.volumes | any(.target | contains("staged")) | not'
 jq_assert "control channel defaults off in the dashboard env (#33)" \
