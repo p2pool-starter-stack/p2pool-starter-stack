@@ -2196,10 +2196,10 @@ wizard_ask_core() {
     echo "p2pool has three sidechains sized by hashrate, so miners find shares at a similar cadence:"
     echo "  main — high hashrate (large farms); mini — typical home rig; nano — a single low-power rig"
     read -r -p "Pool tier [mini]: " IN_POOL_TIER || true
-    case "$IN_POOL_TIER" in
-    main | Main | MAIN) POOL_TIER="main" ;;
-    nano | Nano | NANO) POOL_TIER="nano" ;;
-    "" | mini | Mini | MINI) POOL_TIER="mini" ;;
+    case "$(printf '%s' "$IN_POOL_TIER" | tr 'A-Z' 'a-z')" in
+    main) POOL_TIER="main" ;;
+    nano) POOL_TIER="nano" ;;
+    "" | mini) POOL_TIER="mini" ;;
     *)
         echo "  Not main/mini/nano — defaulting to mini (the safe choice for a typical rig)." >&2
         POOL_TIER="mini"
