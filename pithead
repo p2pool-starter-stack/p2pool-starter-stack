@@ -1856,9 +1856,11 @@ check_tor_clearnet_egress() {
 # True if $1 is a plausible hostname or IP literal — i.e. only the characters a host can contain
 # (letters, digits, dot, hyphen, colon for IPv6). Used to validate dashboard.host before it's
 # rendered into the Caddyfile site address: anything with whitespace, a newline, or Caddy-significant
-# characters ({ } /) could break or inject into the generated Caddyfile.
+# characters ({ } /) could break or inject into the generated Caddyfile. Length-capped at 253 (#558),
+# mirroring the worker-host charset check elsewhere in this file (control_worker_apply's host guard,
+# validate_worker_endpoints) — the max length of a DNS name.
 is_valid_host() {
-    [[ "$1" =~ ^[A-Za-z0-9.:_-]+$ ]]
+    [[ "$1" =~ ^[A-Za-z0-9.:_-]{1,253}$ ]]
 }
 
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
