@@ -8,11 +8,9 @@ from mining_dashboard.config.config import (
     WALLET_RPC_PASSWORD,
     WALLET_RPC_USERNAME,
 )
+from mining_dashboard.service.earnings import ATOMIC_PER_XMR
 
 logger = logging.getLogger("MoneroWalletClient")
-
-# Monero amounts are reported in atomic units (piconero); 1 XMR = 1e12 atomic.
-ATOMIC_PER_XMR = 1_000_000_000_000
 
 
 class MoneroWalletClient:
