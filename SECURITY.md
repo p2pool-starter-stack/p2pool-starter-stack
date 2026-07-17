@@ -39,25 +39,18 @@ The stack's defaults:
   run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
   Docker-socket-facing services also use a read-only root filesystem.
 - SHA256-verified, version-pinned binaries.
-- Signed releases, verified before upgrade
-  ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): every published image
-  digest and the install bundle carry a cosign key signature made on the release box; only the
-  public key (`cosign.pub`) is committed, and it ships in every bundle. `pithead up`, `pithead
-  upgrade`, and the dashboard's one-click upgrade verify against it before anything is pulled or
-  extracted, and fail closed while a key is present — a bad signature, a stripped `.sig`, or a
-  missing cosign binary aborts. A fresh install's first pull is verified too, not just later
-  upgrades ([#452](https://github.com/p2pool-starter-stack/pithead/issues/452)). The image verify
-  binds to the same bytes the pull fetches
-  ([#451](https://github.com/p2pool-starter-stack/pithead/issues/451)): the bundle pins every
-  first-party image to an immutable `@sha256` digest, and cosign verifies that digest rather than
-  the mutable tag, so a tampered registry cannot show one manifest to cosign and serve another to
-  docker. The bundle check anchors trust in the key *already on disk*, so a malicious bundle cannot
-  vouch for itself with a swapped key, and because a signature binds bytes rather than a version,
-  the dashboard upgrade also refuses a bundle whose own `VERSION` does not match the requested tag —
-  closing a rollback to an older, validly-signed release. Limits: installs without `cosign.pub`
-  (releases before signing landed) pull unverified with a warning — the digest-pinned bundle is
-  then the protection; and a compromise of the release box itself — which holds the private key — is
-  outside what a signature can prove. See
+- Digest-pinned images, unsigned by default
+  ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): the release bundle pins
+  every first-party image to an immutable `@sha256` digest, so a tampered registry can't swap what
+  gets pulled, and the bundle itself is fetched over TLS from GitHub Releases. Cosign signing is
+  opt-in and off for every release shipped so far (`scripts/release.sh`) — it turns on only when a
+  signing key is present on the release box and `cosign.pub` is committed alongside it. When that
+  happens, `pithead up` and `pithead upgrade` verify the pinned digests against `cosign.pub` before
+  pulling and fail closed on a bad signature, a stripped `.sig`, or a missing `cosign` binary.
+  Today, with no `cosign.pub` next to `pithead`, the script warns and proceeds unverified rather
+  than blocking the pull — the digest pins above are the actual protection, not a signature.
+  Limits: a compromise of the release box itself, which would hold the signing key, is outside
+  what a signature can prove even once signing is on. See
   [Releasing › Signed releases](docs/releasing.md#signed-releases).
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
