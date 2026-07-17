@@ -2425,6 +2425,13 @@ out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pi
 assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
 out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
 assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod wallet-rpc tari tari-wallet p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+# Bare-name invocation via $PATH from an unrelated cwd must resolve the same way (#566) — a
+# symlink in a fake bin dir stands in for a real `$PATH` install.
+BAREBIN="$SANDBOX/completion-barebin"
+mkdir -p "$BAREBIN"
+ln -sf "$ROOT/pithead" "$BAREBIN/pithead"
+out="$(cd "$SANDBOX" && PATH="$BAREBIN:$PATH" bash -c "source '$COMP'; COMP_WORDS=('pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'logs <tab>' resolves via \$PATH bare name from an unrelated cwd" "$out" "tor monerod wallet-rpc tari tari-wallet p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
 
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
