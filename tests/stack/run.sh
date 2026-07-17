@@ -2025,7 +2025,7 @@ assert_contains "signing off announces the skip (#376 opt-in)" "$sign_off_out" "
 )
 assert_contains "bundle signed as a detached blob signature" "$(cat "$SIGN/cosign.log")" \
     "sign-blob --key /release-box/cosign.key --tlog-upload=false --yes --output-signature $SIGN/pithead.tar.gz.sig"
-assert_contains "the bundle ships cosign.pub (the install-side verifier)" "$(cat "$REL")" "config.reference.json cosign.pub"
+assert_contains "the bundle ships cosign.pub (the install-side verifier)" "$(cat "$REL")" "config.reference.json config.core-keys.json cosign.pub"
 
 echo "== unit: pull-vs-build mode (#44) =="
 # is_source_checkout / resolve_pull_policy / STACK_VERSION key off whether the image build CONTEXTS
@@ -5759,6 +5759,127 @@ elif [ "$missing" -eq 0 ] && [ "$DRIFT_BAD" -eq 0 ]; then
     ok "every extracted config-read path ($checked total) exists in config.reference.json"
 fi
 unset DRIFT_FOUND REF_PATHS DRIFT_BAD
+
+echo "== unit: config.core-keys.json — valid JSON, stays inside config.reference.json (#502/#529) =="
+# The core-key shortlist (#529's binding Wave-0 decision) is the ONE shared artifact between the
+# wizard (here) and the dashboard form (later, #529's regroup). Every path it lists must resolve
+# somewhere in config.reference.json, or the wizard could start asking about a key the closed
+# schema (#537/#561) would then refuse — a config the wizard itself just generated getting
+# rejected on the very first apply.
+CORE_KEYS="$(jq -r '.[]' "$ROOT/config.core-keys.json" 2>/dev/null)"
+if [ -z "$CORE_KEYS" ]; then
+    bad "config.core-keys.json parses to a non-empty array" "got nothing — check the file exists and is valid JSON"
+else
+    ok "config.core-keys.json parses to a non-empty array"
+fi
+REF_PATHS_CORE="$(jq -r '[paths | map(select(type=="string")) | join(".")] | unique[]' "$ROOT/config.reference.json")"
+core_checked=0
+core_missing=0
+for p in $CORE_KEYS; do
+    core_checked=$((core_checked + 1))
+    grep -qxF "$p" <<<"$REF_PATHS_CORE" || {
+        bad "core key has a config.reference.json entry" "'$p' is missing from config.reference.json"
+        core_missing=$((core_missing + 1))
+    }
+done
+if [ "$core_checked" -gt 0 ] && [ "$core_missing" -eq 0 ]; then
+    ok "every config.core-keys.json path ($core_checked total) exists in config.reference.json"
+fi
+unset REF_PATHS_CORE CORE_KEYS core_checked core_missing
+
+echo "== unit: wizard prompt count is pinned (#502 — a silently-added prompt fails this loud) =="
+# Structural, not behavioral: every Enter-through default answer looks the same ("blank"), so a
+# NEW prompt slipped into either function wouldn't visibly break a happy-path run — it would just
+# eat one more blank line unnoticed. Pinning the count is what actually catches wizard scope creep.
+core_reads=$(awk '/^wizard_ask_core\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
+shape_reads=$(awk '/^wizard_ask_shape\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
+assert_eq "wizard_ask_core has exactly 12 read prompts (wallets, node config, pool tier, dashboard login)" "$core_reads" "12"
+assert_eq "wizard_ask_shape has exactly 5 read prompts (clearnet-sync, remote-access, alerts cluster)" "$shape_reads" "5"
+
+# A small helper so tests can drive the whole Q&A -> write in one sourced call, sharing the globals
+# wizard_ask_core/wizard_ask_shape set with wizard_write_config (each function's locals don't
+# survive a return, so they must run in the same invocation).
+run_wizard() {
+    wizard_ask_core
+    wizard_ask_shape
+    wizard_write_config
+}
+
+echo "== unit: wizard — Enter-through defaults skip everything but the core answers (#502) =="
+# Local node, every optional prompt left blank. Proves two things at once: the core answers land
+# (wallets, mode, pool tier), and nothing else does — dashboard.hashrate_drop_threshold,
+# network.subnet, xvb.*, telegram.*, dashboard.onion, dashboard.auth all keep their
+# config.reference.json default because the wizard never wrote them at all.
+W1="$SANDBOX/wizard-defaults"
+mkdir -p "$W1"
+printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "TARIWALLETDEFAULT" | run_sourced "$W1" run_wizard >/dev/null 2>&1
+if [ -f "$W1/config.json" ]; then
+    ok "wizard (defaults path) writes config.json"
+else
+    bad "wizard (defaults path) writes config.json" "no file at $W1/config.json"
+fi
+w1_cfg="$(cat "$W1/config.json" 2>/dev/null)"
+assert_eq "defaults path: monero.wallet_address" "$(jq -r '.monero.wallet_address' <<<"$w1_cfg")" "$WALLET"
+assert_eq "defaults path: tari.wallet_address" "$(jq -r '.tari.wallet_address' <<<"$w1_cfg")" "TARIWALLETDEFAULT"
+assert_eq "defaults path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w1_cfg")" "local"
+assert_eq "defaults path: p2pool.pool defaults to mini, not the old hardcoded main" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "mini"
+assert_eq "defaults path: local node RPC creds auto-generated (non-empty)" \
+    "$([ -n "$(jq -r '.monero.node_username' <<<"$w1_cfg")" ] && [ -n "$(jq -r '.monero.node_password' <<<"$w1_cfg")" ] && echo yes)" "yes"
+# The revert-proof core: config.json carries ONLY the four top-level blocks the defaults path
+# writes. If a future prompt silently starts writing e.g. dashboard.hashrate_drop_threshold or
+# network.subnet, this fails — a defaulted key growing a prompt shows up here even though its own
+# (blank) answer looks identical to every other blank answer.
+assert_eq "defaults path: top-level keys are exactly monero/tari/p2pool/dashboard, nothing else" \
+    "$(jq -rc '[keys[]] | sort' <<<"$w1_cfg")" '["dashboard","monero","p2pool","tari"]'
+assert_eq "defaults path: dashboard has only 'secure' — no auth/onion written" \
+    "$(jq -rc '.dashboard | keys' <<<"$w1_cfg")" '["secure"]'
+assert_eq "defaults path: no telegram block written" "$(jq -r 'has("telegram")' <<<"$w1_cfg")" "false"
+assert_eq "defaults path: no clearnet_initial_sync written (stays the reference default)" \
+    "$(jq -r '.monero | has("clearnet_initial_sync")' <<<"$w1_cfg")" "false"
+
+echo "== unit: wizard — remote node branch is unchanged by the ask/write split (#502) =="
+# The remote-node prompts (host/RPC/ZMQ/auth) were only moved into wizard_ask_core, not touched —
+# this catches the refactor breaking the variable handoff to wizard_write_config.
+W3="$SANDBOX/wizard-remote"
+mkdir -p "$W3"
+printf '%s\n%s\nn\nnode.example.com\n\n\ny\nremoteuser\nremotepass\n\n\n\n\n\n\n' \
+    "$WALLET" "TARIWALLETREMOTE" | run_sourced "$W3" run_wizard >/dev/null 2>&1
+w3_cfg="$(cat "$W3/config.json" 2>/dev/null)"
+assert_eq "remote path: monero.mode remote" "$(jq -r '.monero.mode' <<<"$w3_cfg")" "remote"
+assert_eq "remote path: remote host set" "$(jq -r '.monero.remote.host' <<<"$w3_cfg")" "node.example.com"
+assert_eq "remote path: RPC/ZMQ ports default 18081/18083" \
+    "$(jq -rc '[.monero.remote.rpc_port, .monero.remote.zmq_port]' <<<"$w3_cfg")" "[18081,18083]"
+assert_eq "remote path: auth creds carried through" \
+    "$(jq -rc '[.monero.node_username, .monero.node_password]' <<<"$w3_cfg")" '["remoteuser","remotepass"]'
+unset w3_cfg
+
+echo "== unit: wizard — shape-question and dashboard-login answers flow into config.json (#502) =="
+# The inverse of the defaults test: every optional prompt answered, proving the new logic (pool
+# tier mapping, the dashboard-login cluster, and each Stage-2 cluster) actually wires through.
+W2="$SANDBOX/wizard-full"
+mkdir -p "$W2"
+printf '%s\n%s\n\nmain\nopuser\nsuperSecret1\ny\ny\ny\nmybottoken123\n987654321\n' \
+    "$WALLET" "TARIWALLETFULL" | run_sourced "$W2" run_wizard >/dev/null 2>&1
+w2_cfg="$(cat "$W2/config.json" 2>/dev/null)"
+assert_eq "full path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w2_cfg")" "local"
+assert_eq "full path: p2pool.pool honors an explicit main" "$(jq -r '.p2pool.pool' <<<"$w2_cfg")" "main"
+assert_eq "full path: dashboard.auth.username set" "$(jq -r '.dashboard.auth.username' <<<"$w2_cfg")" "opuser"
+assert_eq "full path: dashboard.auth.password set" "$(jq -r '.dashboard.auth.password' <<<"$w2_cfg")" "superSecret1"
+assert_eq "full path: clearnet-sync cluster sets BOTH chains together" \
+    "$(jq -rc '[.monero.clearnet_initial_sync, .tari.clearnet_initial_sync]' <<<"$w2_cfg")" '[true,true]'
+assert_eq "full path: remote-access sets dashboard.onion.enabled" "$(jq -r '.dashboard.onion.enabled' <<<"$w2_cfg")" "true"
+assert_eq "full path: telegram cluster sets enabled+token+chat_id together" \
+    "$(jq -rc '[.telegram.enabled, .telegram.bot_token, .telegram.chat_id]' <<<"$w2_cfg")" '[true,"mybottoken123","987654321"]'
+
+echo "== unit: wizard_print_pointer — closing pointer names what it deliberately didn't ask (#502) =="
+pointer_out="$(run_sourced "$SANDBOX" wizard_print_pointer 2>&1)"
+assert_contains "pointer mentions monero.view_key (on-chain payout confirmation)" "$pointer_out" "monero.view_key"
+assert_contains "pointer mentions dashboard.energy.cost_per_kwh (#504)" "$pointer_out" "dashboard.energy.cost_per_kwh"
+assert_contains "pointer mentions workers.list (per-worker overrides, #506)" "$pointer_out" "workers.list"
+assert_contains "pointer points at docs/configuration.md" "$pointer_out" "docs/configuration.md"
+assert_contains "pointer mentions the dashboard's config editor" "$pointer_out" "dashboard's config editor"
+
+unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
 
 # ---------------------------------------------------------------------------
 echo ""

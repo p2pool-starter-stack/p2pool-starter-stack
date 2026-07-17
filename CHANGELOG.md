@@ -26,7 +26,22 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   renders as a blank password field in table mode, never as JSON to mangle, and round-trips
   untouched in JSON mode unless you edit it yourself.
 
+- **`config.core-keys.json` (#502/#529).** A committed list of the config-key shortlist only the
+  operator can answer — wallet addresses, `monero.mode`, `p2pool.pool`, dashboard auth + host,
+  `workers.list` — the single shared artifact between the first-run wizard and the dashboard's
+  future core form section (#529). A tier-1 test pins every path in it to an entry in
+  `config.reference.json`.
+
 ### Changed
+
+- **The first-run wizard now asks a pool tier and a few shape questions, instead of hardcoding
+  `p2pool.pool: "main"` (#502).** `./pithead setup` asks two short stages: required answers (wallet
+  addresses, local/remote Monero node, pool tier, an optional dashboard login) and a few
+  Enter-through "how should this run" questions (clearnet initial sync, remote dashboard access
+  over Tor, Telegram alerts). Everything else keeps its `config.reference.json` default silently;
+  the wizard prints a pointer to `config.json` and the docs at the end. The pool tier was
+  previously hardcoded to `main`, which silently starves a low-hashrate rig of shares — the wizard
+  now defaults to `mini` instead.
 
 - **Per-worker descriptors moved to `workers.list[]`, out from under `dashboard.*` (#506).** The
   per-rig `{name, host, port, control_port, token, watts}` entries lived at `dashboard.workers[]`

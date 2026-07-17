@@ -1,7 +1,10 @@
 # Configuration
 
-`config.json` is the stack's only config file. `./pithead setup` writes a minimal one. To change the
-stack afterward, edit `config.json` and run `./pithead apply`.
+`config.json` is the stack's only config file. `./pithead setup` writes a minimal one, asking only
+for what only you can answer plus a few high-level shape questions — see
+[Getting Started › Run setup](getting-started.md#3-run-setup) for the exact list. Everything else
+keeps its default below; edit `config.json` directly for anything the wizard doesn't ask. To change
+the stack afterward, edit `config.json` and run `./pithead apply`.
 
 ## The minimal config
 

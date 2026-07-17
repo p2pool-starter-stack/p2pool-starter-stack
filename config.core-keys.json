@@ -1,0 +1,10 @@
+[
+    "monero.wallet_address",
+    "tari.wallet_address",
+    "monero.mode",
+    "p2pool.pool",
+    "dashboard.auth.username",
+    "dashboard.auth.password",
+    "dashboard.host",
+    "workers.list"
+]

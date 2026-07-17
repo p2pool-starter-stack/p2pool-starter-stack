@@ -588,7 +588,7 @@ make_bundle() {
     mkdir -p "$d"
     # cosign.pub rides in the bundle (#376) so a release install (no git checkout) has the verifier
     # next to pithead; preflight guarantees it exists on a real run.
-    cp pithead pithead-completion.bash VERSION docker-compose.yml config.minimal.json config.reference.json cosign.pub "$d/" 2>/dev/null || true
+    cp pithead pithead-completion.bash VERSION docker-compose.yml config.minimal.json config.reference.json config.core-keys.json cosign.pub "$d/" 2>/dev/null || true
     local m
     while IFS= read -r m; do
         [ -e "$m" ] || {
