@@ -395,6 +395,18 @@ assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SA
 # Dev-fee donate-level (#173): a brief restart (INFO), shown as a percentage.
 assert_contains "donate-level is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "INFO"
 assert_contains "donate-level shows pct" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "0% → 1%"
+# COMPOSE_PROFILES (#552): the payout-confirm profiles (#381/#462) share this key with local_node,
+# so the node-switch text must key off the local_node token, not old/new emptiness.
+case "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES "" tari_payout_confirm)" in
+*"LOCAL Monero node"*) bad "payout-confirm enable is not a node switch" "got node-switch text" ;;
+*) ok "payout-confirm enable is not a node switch" ;;
+esac
+case "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES "local_node,payout_confirm" local_node)" in
+*"LOCAL Monero node"* | *"REMOTE Monero node"*) bad "payout-confirm disable (node stays local) is not a node switch" "got node-switch text" ;;
+*) ok "payout-confirm disable (node stays local) is not a node switch" ;;
+esac
+assert_contains "empty to local_node is a LOCAL switch" "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES "" local_node)" "LOCAL Monero node"
+assert_contains "local_node to empty is a REMOTE switch" "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES local_node "")" "REMOTE Monero node"
 assert_contains "wallet is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
 assert_contains "xvb url is INFO" "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)" "INFO"
 assert_contains "data_dir is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)" "DEST"

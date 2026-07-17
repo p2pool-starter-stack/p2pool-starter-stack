@@ -3989,11 +3989,20 @@ describe_change() {
         msg="Monero pruning ($old → $new) — enabling prunes existing blocks; disabling needs a full re-sync (pruned data can't be restored). Wipe the Monero data dir to fully re-sync."
         ;;
     COMPOSE_PROFILES)
-        flag=DEST
-        if [ -z "$new" ]; then
+        # #552: COMPOSE_PROFILES also carries payout_confirm/tari_payout_confirm (#381/#462), so an
+        # empty-vs-non-empty check misreads those toggles as a node switch. Decide by presence of the
+        # local_node token instead — only a real flip of that token is a node switch (DEST).
+        local old_local=false new_local=false
+        case ",$old," in *,local_node,*) old_local=true ;; esac
+        case ",$new," in *,local_node,*) new_local=true ;; esac
+        if [ "$old_local" = false ] && [ "$new_local" = true ]; then
+            flag=DEST
+            msg="Switching to a LOCAL Monero node — monerod will start and SYNC the blockchain (large download / disk use)."
+        elif [ "$old_local" = true ] && [ "$new_local" = false ]; then
+            flag=DEST
             msg="Switching to a REMOTE Monero node — the local monerod container will be STOPPED and removed (its on-disk data is kept)."
         else
-            msg="Switching to a LOCAL Monero node — monerod will start and SYNC the blockchain (large download / disk use)."
+            msg="Payout confirmation profile changed ($old → $new)."
         fi
         ;;
     MONERO_WALLET_ADDRESS)
