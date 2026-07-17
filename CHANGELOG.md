@@ -11,6 +11,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-07-17
+
+The v1.7 plan's Wave 0.5 — the remaining seven findings from the 2026-07 scan (#556–#561, #566),
+shipped early as a patch so the fixes reach live boxes before the longer config-UX cycle lands —
+plus the applied cuts from a whole-repo over-engineering audit.
+
 ### Fixed
 
 - **`apply --dry-run` no longer writes to `config.json` (#556).** A dry run that saw empty or
@@ -19,6 +25,36 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   channel, dirtying the host-side staged copy the commit gate re-validates. `persist_node_credentials`
   now skips the write while in dry-run mode; the generated credentials are still used in memory so
   the preview stays accurate, and a real `apply` persists them exactly as before.
+
+- **Four friendly-error branches were unreachable under `errexit` (#557).** A plain
+  `var="$(cmd)"` assignment aborts the script before the crafted diagnostic on the next line can
+  run. Fixed in `verify_release_images` (the "#451 not digest-pinned" abort), both digest reads in
+  `scripts/release.sh` (`stage_push` and the `--resume-promote` recovery path — the fourth site,
+  found in review), and `reset-dashboard`'s final `compose_up_checked` call (the #180
+  subnet-collision explanation). The new tests deliberately keep `errexit` ON — the suite's usual
+  `set +e` harness was masking exactly this bug class.
+
+- **`dashboard.host` length bound (#558).** Charset validation has existed since #130; the check
+  now also caps the value at 253 characters (a DNS name's maximum), matching the worker-host guard.
+
+- **"Last update" reports the snapshot's real age (#559).** After a restart the dashboard serves
+  the restored snapshot until the first collection cycle; `/api/state` stamped it with the current
+  time, so hours-old workers and hashrate read as fresh. It now uses the snapshot's own timestamp.
+
+- **A rejected Healthchecks ping no longer counts as sent (#560).** Any HTTP response — including
+  a 404 from a revoked or typo'd ping URL — advanced the throttle silently. Only 2xx counts now;
+  a rejection logs one WARNING on the transition (and an INFO on recovery) instead of spamming.
+
+- **Bash completion works when pithead is invoked from `$PATH` (#566).** The service lookup
+  resolved `docker-compose.yml` relative to the literal command word; a bare-name invocation from
+  an unrelated directory completed nothing. The real script path is now resolved (symlinks
+  followed, bounded), with the old behavior as the silent fallback.
+
+### Changed
+
+- Applied the cuts from a whole-repo over-engineering audit: two dead CSS rules removed and a
+  duplicated `ATOMIC_PER_XMR` constant now imported from its one home. The bash surface and the
+  Python package audited clean.
 
 ### Testing
 
