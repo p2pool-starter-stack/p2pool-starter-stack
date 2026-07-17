@@ -1,7 +1,11 @@
 import pytest
 
 from mining_dashboard.client import xmrig_client as xc
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge
+from mining_dashboard.client.xmrig_client import (
+    XMRigWorkerClient,
+    parse_rigforge,
+    parse_worker_control_status,
+)
 
 # A full enriched `rigforge` block from the RigForge superset /1/summary (rigforge#99), matching the
 # verified producer contract: version/tune/power/health/watchdog with real field names and units.
@@ -463,3 +467,52 @@ def test_parse_rigforge_all_null_fields():
         "temp_c": None,
         "max_temp_c": None,
     }
+
+
+# --- Control-apply status mirrored into the enriched feed (#579) ---------------------------------
+# rigforge.control mirrors the rig's own /status response read-only into the SAME already-polled
+# body, so a slow rollback (past the host runner's 20s deadline) can be reconciled without a new
+# authenticated dial to the control port.
+
+
+def test_parse_worker_control_status_absent_is_none():
+    # No rigforge block at all, or a rigforge block that doesn't mirror `control` yet (older
+    # RigForge, or a rig that has never taken a control-apply) — both a quiet None.
+    assert parse_worker_control_status({"rigforge": RIGFORGE_BLOCK}) is None
+    assert parse_worker_control_status({}) is None
+    assert parse_worker_control_status(["not", "a", "dict"]) is None
+
+
+def test_parse_worker_control_status_non_terminal_is_none():
+    # 'accepted' (queued, outcome not yet observed) and 'running' are in-flight — never reconciled.
+    for status in ("accepted", "running", "unknown", ""):
+        block = {**RIGFORGE_BLOCK, "control": {"change_id": "abc123", "status": status}}
+        assert parse_worker_control_status({"rigforge": block}) is None
+
+
+def test_parse_worker_control_status_malformed_change_id_is_none():
+    for change_id in (None, "", 123):
+        block = {**RIGFORGE_BLOCK, "control": {"change_id": change_id, "status": "rolled_back"}}
+        assert parse_worker_control_status({"rigforge": block}) is None
+
+
+def test_parse_worker_control_status_terminal_outcome():
+    block = {
+        **RIGFORGE_BLOCK,
+        "control": {
+            "change_id": "abc123",
+            "status": "rolled_back",
+            "reason": "miner did not return to a live hashrate",
+        },
+    }
+    assert parse_worker_control_status({"rigforge": block}) == {
+        "change_id": "abc123",
+        "status": "rolled_back",
+        "reason": "miner did not return to a live hashrate",
+    }
+
+
+def test_parse_worker_control_status_reason_defaults_none():
+    block = {**RIGFORGE_BLOCK, "control": {"change_id": "abc123", "status": "applied"}}
+    ctrl = parse_worker_control_status({"rigforge": block})
+    assert ctrl == {"change_id": "abc123", "status": "applied", "reason": None}

@@ -1086,3 +1086,73 @@ class TestTelemetryTablesAfterClose:
         assert state_manager.get_network_history() == []
         assert state_manager.get_disk_growth() == []
         assert state_manager.get_worker_history() == []
+
+
+class TestWorkerConfigReconcile:
+    """Reconcile a stuck-'accepted' #185 history row to its now-known terminal outcome (#579): a
+    rig rollback slower than the host runner's 20s status-poll deadline (#517/#543) is honestly
+    recorded 'accepted' and never revisited otherwise."""
+
+    def _seed(self, state_manager, status, change_id="cid-1", worker="rig1"):
+        state_manager.add_worker_config_version(worker, change_id, status, {"max_temp_c": 80}, None)
+
+    def _status_of(self, state_manager, worker="rig1", change_id="cid-1"):
+        rows = [
+            r
+            for r in state_manager.get_worker_config_history(worker)
+            if r["change_id"] == change_id
+        ]
+        assert len(rows) == 1
+        return rows[0]
+
+    def test_accepted_row_becomes_terminal(self, state_manager):
+        self._seed(state_manager, "accepted")
+        state_manager.reconcile_worker_config_status(
+            "cid-1", "rolled_back", "miner did not return to a live hashrate"
+        )
+        row = self._status_of(state_manager)
+        assert row["status"] == "rolled_back"
+        assert row["reason"] == "miner did not return to a live hashrate"
+
+    def test_applied_row_is_never_overwritten(self, state_manager):
+        # A genuinely terminal row must survive even a (stale/duplicate) reconcile report.
+        self._seed(state_manager, "applied")
+        state_manager.reconcile_worker_config_status("cid-1", "rolled_back", "late report")
+        row = self._status_of(state_manager)
+        assert row["status"] == "applied"
+        assert row["reason"] is None
+
+    def test_rolled_back_row_is_never_overwritten(self, state_manager):
+        self._seed(state_manager, "rolled_back")
+        state_manager.reconcile_worker_config_status("cid-1", "applied", "late report")
+        assert self._status_of(state_manager)["status"] == "rolled_back"
+
+    def test_rejected_row_is_never_overwritten(self, state_manager):
+        self._seed(state_manager, "rejected")
+        state_manager.reconcile_worker_config_status("cid-1", "applied", "late report")
+        assert self._status_of(state_manager)["status"] == "rejected"
+
+    def test_unknown_change_id_is_a_noop(self, state_manager):
+        self._seed(state_manager, "accepted")
+        state_manager.reconcile_worker_config_status("no-such-id", "rolled_back")
+        assert self._status_of(state_manager)["status"] == "accepted"
+
+    def test_non_terminal_status_is_a_noop(self, state_manager):
+        # A defensive guard: reconcile() is only ever called with a terminal status by
+        # parse_worker_control_status, but a bad caller must not be able to write 'accepted' or
+        # 'running' back over itself.
+        self._seed(state_manager, "accepted")
+        state_manager.reconcile_worker_config_status("cid-1", "running")
+        state_manager.reconcile_worker_config_status("cid-1", "accepted")
+        assert self._status_of(state_manager)["status"] == "accepted"
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        self._seed(state_manager, "accepted")
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_config")
+        state_manager.reconcile_worker_config_status("cid-1", "rolled_back")
+        assert state_manager.is_db_healthy() is False
+
+    def test_reads_and_writes_after_close_are_safe(self, state_manager):
+        state_manager.close()
+        state_manager.reconcile_worker_config_status("cid-1", "rolled_back")  # must not raise
