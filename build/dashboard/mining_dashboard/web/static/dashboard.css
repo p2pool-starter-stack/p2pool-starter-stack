@@ -679,9 +679,6 @@ button.upgrade-btn {
 .items-center {
   align-items: center;
 }
-.justify-end {
-  justify-content: flex-end;
-}
 .text-center {
   text-align: center;
 }
@@ -705,9 +702,6 @@ button.upgrade-btn {
 }
 .mr-2 {
   margin-right: 0.5rem;
-}
-.ml-1 {
-  margin-left: 8px;
 }
 .ml-2 {
   margin-left: 10px;
