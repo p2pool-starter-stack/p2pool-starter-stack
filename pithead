@@ -434,8 +434,14 @@ stack_upgrade() {
     # read it back into .env so `status`/`onion-client-key` show the address (mirrors apply's capture at
     # the end of a change). No-op when the onion is off or already captured. Without this, enabling the
     # onion via `upgrade` left the address uncaptured (apply's capture only runs when config changed).
+    # #546: and regenerate the Caddyfile + restart caddy, exactly like apply's capture — the render
+    # preamble above ran while the address was still the placeholder, so without this the HTTPS onion
+    # vhost (#360) would never appear (the next apply no-ops on an unchanged config).
     if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
-        provision_dashboard_onion && render_env
+        if provision_dashboard_onion && render_env; then
+            generate_caddyfile
+            docker compose restart caddy
+        fi
     fi
     update_current_symlink # #455: only a SUCCESSFUL upgrade moves the `current ->` pointer
     log "Stack upgraded."
@@ -3056,7 +3062,8 @@ rotate_dashboard_onion() {
     # doesn't carry it, so preserve the current value — otherwise rotate silently reset the flag to false
     # and the next apply/upgrade errored "Stack is not fully provisioned. Run setup first."
     DEPLOYMENT_COMPLETED=$(env_get DEPLOYMENT_COMPLETED)
-    render_env # persist the new address + keys
+    render_env         # persist the new address + keys
+    generate_caddyfile # #546: without this the Caddyfile still points at the retired address's vhost
     docker compose restart caddy >/dev/null 2>&1 || true
     log "Dashboard onion rotated."
     if [ "$DASHBOARD_ONION_CLIENT_AUTH" == "true" ]; then
@@ -3698,8 +3705,9 @@ EOF
         # CA) for the .onion — a .onion can't get a browser-trusted cert without a manual CA process, and
         # Tor already encrypts the tunnel, so the browser shows a one-time "accept the risk" prompt. SNI
         # (the .onion name) routes this apart from the LAN vhost, both on host-networked :443. Rendered
-        # only once the address is provisioned; a fresh enable serves HTTP now and adds HTTPS on the next
-        # apply once the address is captured.
+        # only once the address is provisioned; a fresh enable serves HTTP immediately, and apply,
+        # upgrade, and rotate-dashboard-onion regenerate this Caddyfile (and restart caddy) the moment
+        # the capture step lands the real address, so HTTPS appears in that same run (#546).
         if [ -n "${DASHBOARD_ONION:-}" ] && [ "${DASHBOARD_ONION:-}" != "placeholder" ]; then
             log "Adding HTTPS onion vhost (self-signed cert for the .onion)..."
             cat <<EOF >>"Caddyfile"
@@ -4522,10 +4530,15 @@ apply() {
         docker compose restart caddy
     fi
     # If the dashboard onion was just turned on, the recreated tor container generated its hostname;
-    # read it back into .env so `pithead status` can surface the address (#343). The onion already
-    # serves via Caddy regardless — this only makes the address visible to the operator.
+    # read it back into .env so `pithead status` can surface the address (#343) — and regenerate the
+    # Caddyfile + restart caddy so the HTTPS onion vhost (#360) actually appears this run instead of
+    # never (#546): a re-render off the committed .env sees no change and no-ops before ever reaching
+    # generate_caddyfile above.
     if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
-        provision_dashboard_onion && render_env
+        if provision_dashboard_onion && render_env; then
+            generate_caddyfile
+            docker compose restart caddy
+        fi
     fi
     rm -f "$apply_marker"
     log "Configuration applied."

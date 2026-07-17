@@ -11,6 +11,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dashboard's HTTPS onion vhost now appears on the run that captures the address (#546).**
+  Enabling the onion via `apply` rendered the Caddyfile while the address was still `placeholder`;
+  the capture that runs after `docker compose up` only refreshed `.env`, so the `https://<onion>`
+  vhost (#360) never appeared until some unrelated later config change. `rotate-dashboard-onion`
+  restarted Caddy without regenerating the Caddyfile at all, so it kept serving the retired onion's
+  vhost with none for the new address. Enabling via `upgrade` had the same hole as `apply` (#355's
+  supported path). All three paths now regenerate the Caddyfile (and restart Caddy) the moment the
+  address is captured.
+
 ## [1.6.1] - 2026-07-16
 
 Supersedes 1.6.0, which was withdrawn before general adoption: the #459 post-publish smoke caught
