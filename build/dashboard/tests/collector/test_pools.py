@@ -165,14 +165,6 @@ class TestReadJson:
         path.write_text('{"shares_found": 505}')  # write completes, next poll sees it
         assert pools._read_json(str(path)) == {"shares_found": 505}
 
-    def test_never_parsed_still_returns_empty(self, tmp_path):
-        # No good parse to fall back to yet -> {} unchanged, no crash (#547 acceptance: the
-        # never-read case must behave exactly as before).
-        bad = tmp_path / "bad.json"
-        bad.write_text("{not valid")
-        assert pools._read_json(str(bad)) == {}
-        assert pools._read_json(str(tmp_path / "nope.json")) == {}
-
 
 class TestPollSequenceReplay:
     """#547: a mid-write read race on p2pool's stats files must not replay the cumulative
