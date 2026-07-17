@@ -36,11 +36,21 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   guide](docs/privacy.md) maps every connection.
 - 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
   address in the miner config; the stack routes the hashrate.
-- 📊 **Live dashboard, now with config editing.** Hashrate, the P2Pool/XvB split, the PPLNS window,
-  and per-worker updates over HTTPS on your LAN. Opt in with `dashboard.control.enabled` to edit
-  `config.json`, one-click upgrade to a new release, and watch the access + config-change audit logs
-  from the browser — every change gated host-side behind a login. See
+- 📊 **Live dashboard, with history.** Hashrate, the P2Pool/XvB split, the PPLNS window, and
+  per-worker stats over HTTPS on your LAN — and a time-series store keeps blocks found, XvB credit,
+  network difficulty, disk growth, and per-rig hashrate as trends, not just the latest reading.
+- 🎛️ **Configure and tune from the browser.** Opt in with `dashboard.control.enabled` to edit
+  `config.json` from a guided form — or raw JSON, with file upload — inspect and retune each rig,
+  see how a rig's hashrate tracks each config version, one-click upgrade to a new release, and read
+  the access and config-change audit logs. Every change is gated host-side behind a login. See
   [The Dashboard](docs/dashboard.md).
+- ⚙️ **One config, tuned to your setup.** A local or remote Monero node, pruned or full; the P2Pool
+  tier (`main`, `mini`, or `nano`); XvB donation strategy; per-worker power and API settings; four
+  alert channels; timezone, memory limits, and every privacy toggle — around 94 keys across 13
+  sections, all in one `config.json` and validated on every `apply`. Most have defaults you'll never
+  touch. See [Configuration](docs/configuration.md).
+- 💡 **Energy-aware earnings.** Set your electricity cost and XMR price and add each rig's watts; the
+  Energy tab shows fleet power draw, efficiency in hashes per watt, and estimated profit after power.
 - 📟 **Telegram operator bot.** Opt-in alerts for a downed node, a worker that dropped off, sync
   finishing, low disk, a clearnet leak, or a sustained hashrate drop — plus a daily digest and
   read-only commands (`/status`, `/hashrate`, `/workers`, `/earnings`). Routed over Tor. The same
@@ -48,6 +58,9 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   [Telegram guide](docs/telegram.md).
 - 🔔 **Dead-man's switch.** An optional [Healthchecks.io](https://healthchecks.io/) ping tells you
   when the whole box goes dark — the one failure a monitor running *on* that box can never report.
+- 💾 **Encrypted backups.** `./pithead backup` writes config, secrets, and onion keys to a single
+  AES-256 archive (the blockchains too, with `--with-chains`); `restore` brings a box back on new
+  hardware with the same onion address.
 - 🚀 **Interactive setup.** `./pithead setup` checks dependencies, writes config, provisions Tor, and
   (on Linux) tunes HugePages for RandomX. It prompts before any GRUB change, then offers to start.
 - 🔒 **Hardened defaults.** Non-root containers, SHA256-verified binaries, digest-pinned base and
