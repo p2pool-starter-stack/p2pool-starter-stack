@@ -11,9 +11,11 @@ Design notes:
   immediately, opens no socket, and logs nothing. Setting a URL is what turns it on.
 - **Always over Tor.** The ping rides the bridge Tor SOCKS proxy so the endpoint sees a Tor
   exit, not the host IP — it's never a clearnet beacon.
-- **Fails silently.** A ping that can't reach the endpoint (offline, or Tor momentarily down)
-  is logged at DEBUG only — never WARNING/ERROR — so the log stays quiet, consistent with the
-  stack's offline check discipline (#59).
+- **Fails silently, but rejection is loud.** A ping that can't *reach* the endpoint (offline, or
+  Tor momentarily down) is logged at DEBUG only, consistent with the stack's offline check
+  discipline (#59). A ping the endpoint *rejects* (non-2xx — a revoked or typo'd URL) is a
+  different failure mode: it doesn't self-heal, so it logs a WARNING, once, on the transition
+  from OK to rejected (and an INFO on recovery) — #560.
 - **Throttled.** :data:`interval` is a floor between pings; the loop calls every cycle but we
   only hit the network once per interval. The throttle clock only advances on a *successful*
   send, so while offline we keep retrying every cycle rather than backing off.
@@ -68,6 +70,7 @@ class HealthchecksClient:
         self._proxies = {"http": tor_proxy, "https": tor_proxy} if tor_proxy else None
         self._clock = clock
         self._last_ping = None  # monotonic time of the last *successful* send
+        self._last_ping_ok = None  # tri-state (None/True/False): logs only on state change
 
         if self.enabled:
             logger.info(
@@ -97,8 +100,8 @@ class HealthchecksClient:
         alive. Node-health alerting — monerod/Tari down while the box is up — is out of scope and
         handled in-stack by the Telegram alerter (#121), which can say more than a red check can.
 
-        Returns ``True`` if a request was sent and accepted, else ``False`` (not configured,
-        throttled, or the request failed).
+        Returns ``True`` if a request was sent and accepted (2xx), else ``False`` (not configured,
+        throttled, the request failed, or the endpoint rejected it — a revoked/typo'd URL, #560).
         """
         if not self.url:
             return False
@@ -108,10 +111,23 @@ class HealthchecksClient:
             return False
 
         try:
-            requests.get(self.url, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
-            # Advance the throttle only on success so a transient outage keeps retrying.
-            self._last_ping = now
-            return True
+            resp = requests.get(self.url, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
+            if 200 <= resp.status_code < 300:
+                if self._last_ping_ok is False:
+                    logger.info(
+                        "Healthchecks ping recovered (was failing, now %s).", resp.status_code
+                    )
+                self._last_ping_ok = True
+                # Advance the throttle only on success so a transient outage keeps retrying.
+                self._last_ping = now
+                return True
+            # A revoked/typo'd URL still passes the scheme check but never counts as accepted;
+            # don't advance the throttle so the next cycle retries. Warn once on the transition
+            # so a dead URL doesn't spam every cycle.
+            if self._last_ping_ok is not False:
+                logger.warning("Healthchecks ping rejected: HTTP %s.", resp.status_code)
+            self._last_ping_ok = False
+            return False
         except requests.RequestException as e:
             # Offline / Tor down / endpoint hiccup: the whole point is to survive these
             # silently — Healthchecks.io will alert on the missed ping. DEBUG, never noise.
