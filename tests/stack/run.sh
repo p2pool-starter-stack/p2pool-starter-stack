@@ -368,6 +368,12 @@ run_sourced "$SANDBOX" is_valid_host "a/b" >/dev/null 2>&1
 assert_rc "rejects slash" "$?" "1"
 run_sourced "$SANDBOX" is_valid_host "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
+# #558: length-bound at 253 (a DNS name's max length), mirroring the worker-host charset check
+# (control_worker_apply / validate_worker_endpoints) rather than leaving this one check unbounded.
+run_sourced "$SANDBOX" is_valid_host "$(printf 'a%.0s' $(seq 1 253))" >/dev/null 2>&1
+assert_rc "accepts 253 chars (the DNS name bound)" "$?" "0"
+run_sourced "$SANDBOX" is_valid_host "$(printf 'a%.0s' $(seq 1 254))" >/dev/null 2>&1
+assert_rc "rejects 254 chars, past the bound (#558)" "$?" "1"
 
 echo "== unit: describe_change =="
 assert_contains "prune is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)" "DEST"
