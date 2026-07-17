@@ -63,6 +63,15 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 > Only `monero.wallet_address` and `tari.wallet_address` are required. Everything below is optional
 > and has a default. Add a key only when you want to change its behavior.
 
+The table below has ~94 keys across 13 sections — most of it you'll never touch. A handful of keys
+are **core**: wallet addresses, `monero.mode`, `p2pool.pool`, the dashboard login and host, and
+`workers.list` — the ones `./pithead setup` asks about (see
+[Getting Started › Run setup](getting-started.md#3-run-setup)) and, if `dashboard.control.enabled`
+is on, the group the dashboard's [Configuration view](dashboard.md#configuration-view) pins at the
+top of its form, above the rest of the schema grouped by section and collapsed by default. Both
+read the exact same list, [`config.core-keys.json`](../config.core-keys.json) — there's only ever
+one shortlist to keep in sync with this table, not two.
+
 | Key | Default | Description |
 |---|---|---|
 | `monero.mode` | `local` | `local` runs the bundled Monero node; `remote` connects to an external node (see `monero.remote`). |

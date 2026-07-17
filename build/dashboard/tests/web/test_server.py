@@ -234,6 +234,26 @@ class TestControlRoutesEnabled:
         assert "correct horse" not in json.dumps(body)
         assert "SECRET-UUID" not in json.dumps(body)
 
+    async def test_get_config_carries_core_keys_from_the_shared_file(
+        self, control_client, control_spool, monkeypatch
+    ):
+        # #529: the Configuration view's core group reads the SAME config.core-keys.json file the
+        # wizard reads (config.HOST_CORE_KEYS_PATH), not a hand-maintained duplicate.
+        core_keys_path = control_spool / "config.core-keys.json"
+        core_keys_path.write_text(json.dumps(["p2pool.pool", "dashboard.auth.username"]))
+        monkeypatch.setattr(control_service.config, "HOST_CORE_KEYS_PATH", str(core_keys_path))
+        resp = await control_client.get("/api/config")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["_core_keys"] == ["p2pool.pool", "dashboard.auth.username"]
+
+    async def test_get_config_degrades_to_no_core_keys_when_file_is_missing(self, control_client):
+        # control_spool doesn't write config.core-keys.json, so HOST_CORE_KEYS_PATH points nowhere.
+        resp = await control_client.get("/api/config")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["_core_keys"] == []
+
     async def test_post_without_control_header_forbidden(self, control_client):
         # The custom header forces a CORS preflight cross-site, which is never granted (CSRF).
         for path in ("/api/control/preview", "/api/control/commit", "/api/control/upgrade"):

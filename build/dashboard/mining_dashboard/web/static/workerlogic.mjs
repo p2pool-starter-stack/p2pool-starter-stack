@@ -11,6 +11,11 @@
 
 import { isSecretSentinel } from "./configlogic.mjs";
 
+// jsonSyntaxError is generic (no worker-specific shape) — configlogic.mjs owns it (#529, the
+// Configuration view's own JSON mode uses it too); re-exported here so workerview.mjs's existing
+// import keeps working unchanged.
+export { jsonSyntaxError } from "./configlogic.mjs";
+
 // One row per writable key, typed off the current (last-applied) value's JSON shape. A key never
 // applied yet has no value to type off, so it falls back to an empty JSON sub-editor.
 export function buildFields(writableKeys, lastApplied) {
@@ -77,16 +82,4 @@ export function parseJsonChanges(text, writableKeys) {
   const bad = Object.keys(changes).filter((k) => !allowed.has(k));
   if (bad.length) return { error: `Not writable: ${bad.join(", ")}` };
   return { changes };
-}
-
-// Live syntax check for the JSON textarea, surfaced inline as the operator types (not only on
-// Apply). Blank is not an error yet — the operator hasn't finished typing.
-export function jsonSyntaxError(text) {
-  if (!text.trim()) return null;
-  try {
-    JSON.parse(text);
-    return null;
-  } catch {
-    return "Not valid JSON.";
-  }
 }

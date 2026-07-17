@@ -1,9 +1,15 @@
 // Pure logic for the Configuration view (#33), kept DOM-free so node --test covers it.
 //
 // GET /api/config returns the live config.json with every set secret masked to the
-// {__secret__: true} sentinel. buildSections flattens that into render-ready form fields;
-// applyEdits folds the user's edits back into a proposed config for POST /api/control/preview.
-// A secret left blank keeps its sentinel — the server swaps it for the live value ("unchanged").
+// {__secret__: true} sentinel, plus _core_keys — the wizard's core-key shortlist
+// (config.core-keys.json, #502/#529), the SAME shared artifact, not a hand-maintained duplicate.
+// buildSections flattens the config into render-ready form fields; regroupCore (#529) pulls the
+// core-key fields out of their natural sections into one pinned group, mirroring the RATIFIED
+// Wave-0 decision: core shortlist at the top + the config's natural sections, collapsed by
+// default. applyEdits folds the user's edits back into a proposed config for
+// POST /api/control/preview — it takes the ORIGINAL (ungrouped) sections, so it doesn't care
+// whether a field rendered in the core group or its section. A secret left blank keeps its
+// sentinel — the server swaps it for the live value ("unchanged").
 
 export const SECRET_HINT = "set — leave blank to keep";
 
@@ -100,4 +106,48 @@ export function applyEdits(cfg, sections, edits) {
     }
   }
   return proposed;
+}
+
+// The core-vs-sections regroup (#529, RATIFIED Wave-0): lift every field whose dotted key is in
+// the core shortlist out of its natural section into one pinned `core` group; the same sections
+// keep every OTHER field (never emptied outright — the shortlist is a handful of keys against ~94
+// leaves). workers.list isn't a leaf (buildSections already skips arrays, #172), so it never
+// produces a field to lift — it stays core-in-spirit only, exactly like the wizard treats it.
+// coreKeys missing/empty degrades to no core group; every field still renders in its section.
+export function regroupCore(sections, coreKeys) {
+  const coreSet = new Set(coreKeys || []);
+  const core = sections.flatMap((s) => s.fields).filter((f) => coreSet.has(f.key));
+  const rest = sections
+    .map((s) => ({ name: s.name, fields: s.fields.filter((f) => !coreSet.has(f.key)) }))
+    .filter((s) => s.fields.length);
+  return { core, sections: rest };
+}
+
+// JSON mode's own path (#529): the textarea holds the WHOLE candidate config (not a diff, unlike
+// Worker Inspect's writable-key changes, #518) — parse it into the same shape applyEdits produces,
+// so either mode can POST straight to /api/control/preview. Returns { config } or { error }.
+export function parseConfigJson(text) {
+  let cfg;
+  try {
+    cfg = JSON.parse(text);
+  } catch {
+    return { error: "Not valid JSON." };
+  }
+  if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) {
+    return { error: "Enter a JSON object." };
+  }
+  return { config: cfg };
+}
+
+// Live syntax check for the JSON textarea, surfaced inline as the operator types (not only on
+// Save). Blank is not an error yet — the operator hasn't finished typing. Shared with
+// workerlogic.mjs's JSON mode (re-exported from there) so both editors give the same feedback.
+export function jsonSyntaxError(text) {
+  if (!text.trim()) return null;
+  try {
+    JSON.parse(text);
+    return null;
+  } catch {
+    return "Not valid JSON.";
+  }
 }

@@ -561,6 +561,10 @@ services:
       # config.reference.json (every key with its default), read-only, so the editor form covers the
       # full schema even for keys the operator's sparse config.json omits (#33). No secrets.
       - ./config.reference.json:/host-config/config.reference.json:ro
+      # config.core-keys.json (#502/#529), read-only: the SAME core-key shortlist file the wizard
+      # reads, so the Configuration view's pinned core section is never a second hand-maintained
+      # list. No secrets — it's a list of dotted key paths, not values.
+      - ./config.core-keys.json:/host-config/config.core-keys.json:ro
     environment:
       - HOST_IP=${HOST_IP:-127.0.0.1}
       # Timezone for dashboard timestamps/charts. Set via `dashboard.timezone` in config.json
