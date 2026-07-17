@@ -1,7 +1,7 @@
 """Tests for the Healthchecks.io dead-man's-switch client (Issue #79)."""
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import requests
 
@@ -68,15 +68,77 @@ class TestPingUnconfigured:
         assert not caplog.records
 
 
+def _resp(status_code):
+    r = MagicMock()
+    r.status_code = status_code
+    return r
+
+
 class TestPingSuccess:
     def test_healthy_ping_hits_the_url(self):
         # Pure liveness: every ping hits the configured URL (no /fail path — health-aware was
         # dropped; node-health alerting is the Telegram alerter's job, #121).
         c = _client()
-        with patch.object(hc_mod.requests, "get") as get:
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
             assert c.ping() is True
         get.assert_called_once()
         assert get.call_args.args[0] == "https://hc-ping.com/abc"
+
+
+class TestPingRejected:
+    """#560: a non-2xx response (revoked/typo'd ping URL) must not count as accepted."""
+
+    def test_404_returns_false_and_does_not_advance_throttle(self, caplog):
+        clock = _Clock(1000.0)
+        c = _client(clock=clock, interval_seconds=60)
+        with (
+            patch.object(hc_mod.requests, "get", return_value=_resp(404)),
+            caplog.at_level(logging.WARNING, logger="Healthchecks"),
+        ):
+            assert c.ping() is False
+            # Throttle didn't advance -> the very next cycle retries immediately.
+            assert c.ping() is False
+        assert [r for r in caplog.records if r.levelno == logging.WARNING and "404" in r.message]
+
+    def test_200_still_returns_true_and_advances_throttle(self):
+        # Regression guard: the happy path must keep working once status is checked.
+        clock = _Clock(1000.0)
+        c = _client(clock=clock, interval_seconds=60)
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)):
+            assert c.ping() is True
+            assert c.ping() is False  # throttled, since the first ping DID advance the clock
+        clock.t += 61
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)):
+            assert c.ping() is True
+
+    def test_two_consecutive_404s_warn_only_once(self, caplog):
+        clock = _Clock(1000.0)
+        c = _client(clock=clock, interval_seconds=60)
+        with (
+            patch.object(hc_mod.requests, "get", return_value=_resp(404)),
+            caplog.at_level(logging.WARNING, logger="Healthchecks"),
+        ):
+            assert c.ping() is False
+            assert c.ping() is False
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+
+    def test_404_then_200_logs_recovery(self, caplog):
+        clock = _Clock(1000.0)
+        c = _client(clock=clock, interval_seconds=60)
+        with caplog.at_level(logging.DEBUG, logger="Healthchecks"):
+            with patch.object(hc_mod.requests, "get", return_value=_resp(404)):
+                assert c.ping() is False
+            with patch.object(hc_mod.requests, "get", return_value=_resp(200)):
+                assert c.ping() is True
+        recoveries = [r for r in caplog.records if "recovered" in r.message]
+        assert len(recoveries) == 1
+        assert recoveries[0].levelno == logging.INFO
+
+    def test_5xx_also_rejected(self):
+        c = _client()
+        with patch.object(hc_mod.requests, "get", return_value=_resp(503)):
+            assert c.ping() is False
 
 
 class TestTorRouting:
@@ -84,7 +146,7 @@ class TestTorRouting:
         # tor_proxy set → the ping rides the bridge Tor SOCKS (host IP hidden from the endpoint).
         proxy = "socks5h://172.28.0.25:9050"
         c = _client(tor_proxy=proxy)
-        with patch.object(hc_mod.requests, "get") as get:
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
             assert c.ping() is True
         assert get.call_args.kwargs["proxies"] == {"http": proxy, "https": proxy}
 
@@ -104,7 +166,7 @@ class TestThrottle:
     def test_second_immediate_ping_is_throttled(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get") as get:
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
             assert c.ping() is True  # first ping goes out
             assert c.ping() is False  # within the interval → skipped
         get.assert_called_once()
@@ -112,7 +174,7 @@ class TestThrottle:
     def test_ping_again_after_interval_elapses(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get") as get:
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
             assert c.ping() is True
             clock.t += 61  # interval elapsed
             assert c.ping() is True
@@ -121,7 +183,7 @@ class TestThrottle:
     def test_zero_interval_pings_every_call(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=0)
-        with patch.object(hc_mod.requests, "get") as get:
+        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
             assert c.ping() is True
             assert c.ping() is True
         assert get.call_count == 2
@@ -148,7 +210,9 @@ class TestPingFailsSilently:
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
         with patch.object(
-            hc_mod.requests, "get", side_effect=[requests.exceptions.ConnectionError("x"), None]
+            hc_mod.requests,
+            "get",
+            side_effect=[requests.exceptions.ConnectionError("x"), _resp(200)],
         ):
             assert c.ping() is False  # failed, no throttle advance
             assert c.ping() is True  # retried immediately, succeeded → throttle set

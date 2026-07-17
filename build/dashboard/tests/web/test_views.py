@@ -1775,6 +1775,26 @@ class TestBuildState:
     def test_window_null_on_preset(self):
         assert build_state(_data(), _state_mgr(), "24h")["window"] is None
 
+    def test_last_update_reflects_snapshot_timestamp_not_now(self):
+        # #559: a restored stale snapshot (dashboard was down) must report its own age, not the
+        # current time -- otherwise stale workers/hashrate read as "just now" until the first
+        # post-restart collection cycle completes.
+        old_ts = time.time() - 6 * 3600
+        st = build_state(_data(timestamp=old_ts), _state_mgr(), "all")
+        assert st["last_update"] == views.format_time_abs(old_ts)
+        assert st["last_update"] != views.format_time_abs(time.time())
+
+    def test_last_update_falls_back_to_now_when_timestamp_missing(self):
+        # No "timestamp" key (or the pre-first-collection default of 0) -> fall back to now
+        # rather than showing "Never".
+        with patch("mining_dashboard.web.views.time.time", return_value=12345.0):
+            assert build_state(_data(), _state_mgr(), "all")["last_update"] == (
+                views.format_time_abs(12345.0)
+            )
+            assert build_state(_data(timestamp=0), _state_mgr(), "all")["last_update"] == (
+                views.format_time_abs(12345.0)
+            )
+
     def test_window_echoed_when_zoomed(self):
         # A custom zoom window is echoed so the client can render Reset / re-request on refresh.
         st = build_state(_data(), _state_mgr(), "all", window=(1000.0, 2000.0))

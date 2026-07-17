@@ -368,6 +368,12 @@ run_sourced "$SANDBOX" is_valid_host "a/b" >/dev/null 2>&1
 assert_rc "rejects slash" "$?" "1"
 run_sourced "$SANDBOX" is_valid_host "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
+# #558: length-bound at 253 (a DNS name's max length), mirroring the worker-host charset check
+# (control_worker_apply / validate_worker_endpoints) rather than leaving this one check unbounded.
+run_sourced "$SANDBOX" is_valid_host "$(printf 'a%.0s' $(seq 1 253))" >/dev/null 2>&1
+assert_rc "accepts 253 chars (the DNS name bound)" "$?" "0"
+run_sourced "$SANDBOX" is_valid_host "$(printf 'a%.0s' $(seq 1 254))" >/dev/null 2>&1
+assert_rc "rejects 254 chars, past the bound (#558)" "$?" "1"
 
 echo "== unit: describe_change =="
 assert_contains "prune is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)" "DEST"
@@ -800,6 +806,24 @@ out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_LOG="$VRI/cosign.log" run_sourced "$
 assert_rc "un-pinned compose + key -> pull aborts (#451)" "$?" "1"
 assert_contains "un-pinned abort explains the missing digest bind" "$out" "not digest-pinned"
 assert_eq "un-pinned -> cosign never asked to verify a tag" "$(cat "$VRI/cosign.log")" ""
+
+# #557: run_sourced disables errexit (`set +e`, right after sourcing) for every test above, which
+# happens to mask a real bug: the bare `sha="$(compose_pinned_digest ...)"` assignment aborts under
+# pithead's own `set -Eeuo pipefail` BEFORE the crafted error() above ever runs, so a real invocation
+# got a silent abort instead of the "not digest-pinned" diagnostic. Reproduce with errexit left ON —
+# source directly and call the function, no run_sourced/`set +e`.
+# shellcheck disable=SC1090  # dynamic source: the script under test
+out557_vri="$(
+    (
+        cd "$UNPINNED" || exit 1
+        PATH="$VRI/bin:/usr/bin:/bin"
+        source "$STACK" 2>/dev/null
+        verify_release_images
+    ) 2>&1
+)"
+assert_rc "un-pinned + key, real errexit -> still aborts (#557)" "$?" "1"
+assert_contains "un-pinned + key, real errexit -> crafted message still reaches the operator (#557)" \
+    "$out557_vri" "not digest-pinned"
 
 # Source checkout: locally built images are unsigned by design — skipped, silently and completely.
 mkdir -p "$VRI/build/dashboard"
@@ -1845,6 +1869,63 @@ assert_contains "exhausted retries -> empty digest (caller dies)" "$exhaust_out"
 assert_contains "smoke stage reads the manifest via retry_registry_read (#429)" \
     "$(cat "$REL")" "retry_registry_read buildx_inspect \"\$repo:\$STAGING_TAG\" --raw"
 
+# #557: the test above disables errexit (`set +eu`, right after sourcing) to observe the bare helper
+# in isolation, which happens to mask a real bug in stage_push itself: the bare
+# `digest="$(manifest_digest ...)"` assignment aborts under release.sh's own `set -euo pipefail`
+# BEFORE the crafted die() ever runs, so a real release run got a silent abort instead of a diagnosed
+# digest-read failure. Reproduce with errexit left ON, driving the REAL stage_push (not the bare
+# helper) so the actual call site is exercised.
+# shellcheck disable=SC1090,SC2034  # dynamic source; the globals are consumed inside stage_push
+stage_push_out="$(
+    (
+        cd "$ROOT" || exit 1
+        set --
+        source "$REL" 2>/dev/null
+        DRY_RUN=0
+        IMAGES=(tor)
+        REGISTRY="ghcr.io/test"
+        REGISTRY_READ_RETRIES=1
+        REGISTRY_READ_BACKOFF=0
+        WORKDIR="$SANDBOX/stagepush557"
+        mkdir -p "$WORKDIR"
+        buildx_inspect() { return 1; } # every registry read fails -> retries exhaust
+        stage_push
+    ) 2>&1
+)"
+assert_rc "stage_push, real errexit: retries-exhausted digest read still aborts (#557)" "$?" "1"
+assert_contains "stage_push, real errexit: crafted die() reaches the operator (#557)" \
+    "$stage_push_out" "Could not read the pushed manifest digest"
+
+# #557: main()'s --resume-promote branch has the exact same shape (a second, separately-written
+# instance of the bug — found in review, not part of the original 3 sites). Drive the real `main`
+# (preflight/ghcr_login stubbed no-op) with RESUME_PROMOTE=1 and errexit left ON.
+# shellcheck disable=SC1090,SC2034  # dynamic source; the globals are consumed inside main
+resume_out="$(
+    (
+        cd "$ROOT" || exit 1
+        set --
+        source "$REL" 2>/dev/null
+        preflight() { :; }
+        ghcr_login() { :; }
+        promote() { :; }
+        sign_images() { :; }
+        publish() { :; }
+        DRY_RUN=0
+        RESUME_PROMOTE=1
+        IMAGES=(tor)
+        TAG="v9.9.9"
+        STAGING_TAG="v9.9.9-rc.1"
+        REGISTRY="ghcr.io/test"
+        REGISTRY_READ_RETRIES=1
+        REGISTRY_READ_BACKOFF=0
+        buildx_inspect() { return 1; } # every registry read fails -> retries exhaust
+        main
+    ) 2>&1
+)"
+assert_rc "--resume-promote, real errexit: retries-exhausted digest read still aborts (#557)" "$?" "1"
+assert_contains "--resume-promote, real errexit: crafted die() reaches the operator (#557)" \
+    "$resume_out" "Cannot resolve a staged digest"
+
 echo "== unit: release.sh preflight checks the lint toolchain (#426) =="
 # A reimaged release box loses shellcheck/shfmt/node/uv — the v1.3.0 cut died ~1 min in mid-gate with a
 # bare `shellcheck: not found`. check_release_toolchain must fail fast BEFORE building, naming the tool
@@ -2425,6 +2506,13 @@ out="$(bash -c "source '$COMP'; COMP_WORDS=('./pithead' 'up'); COMP_CWORD=1; _pi
 assert_eq "'up<tab>' offers up + upgrade" "$out" "up upgrade "
 out="$(bash -c "source '$COMP'; COMP_WORDS=('$ROOT/pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
 assert_eq "'logs <tab>' offers the compose service names" "$out" "tor monerod wallet-rpc tari tari-wallet p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
+# Bare-name invocation via $PATH from an unrelated cwd must resolve the same way (#566) — a
+# symlink in a fake bin dir stands in for a real `$PATH` install.
+BAREBIN="$SANDBOX/completion-barebin"
+mkdir -p "$BAREBIN"
+ln -sf "$ROOT/pithead" "$BAREBIN/pithead"
+out="$(cd "$SANDBOX" && PATH="$BAREBIN:$PATH" bash -c "source '$COMP'; COMP_WORDS=('pithead' 'logs' ''); COMP_CWORD=2; _pithead; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null | tr '\n' ' ')"
+assert_eq "'logs <tab>' resolves via \$PATH bare name from an unrelated cwd" "$out" "tor monerod wallet-rpc tari tari-wallet p2pool xmrig-proxy dashboard docker-proxy docker-control caddy "
 
 echo "== black-box: guards =="
 G="$SANDBOX/guard"
@@ -3812,6 +3900,43 @@ rc=$?
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
 
+echo "== black-box: reset-dashboard's final compose_up_checked is if!-guarded, not bare (#557/#180) =="
+# Before #557: the last compose_up_checked call in reset_dashboard was bare (every OTHER call site
+# wraps it in `if !`, per the contract at compose_up_checked's own definition). A bare call let a real
+# compose failure trip errexit INSIDE compose_up_checked's own `docker compose up | tee` pipeline,
+# before the #180 subnet-collision explanation printed. Real `./pithead` (not sourced) arms
+# `trap on_err ERR` exactly like production, so this reproduces the actual operator experience.
+RD557="$SANDBOX/reset557"
+mkdir -p "$RD557/bin" "$RD557/envdir/dashboard" "$RD557/envdir/p2pool"
+cp "$STACK" "$RD557/pithead"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$RD557/bin/sudo"
+cat >"$RD557/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+"compose up"*)
+    echo "Error response from daemon: Pool overlaps with other one on this address space" >&2
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$RD557/bin/docker" "$RD557/bin/sudo"
+cat >"$RD557/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+HOST_IP=box.lan
+NETWORK_SUBNET=172.28.0.0/24
+DASHBOARD_DATA_DIR=$RD557/envdir/dashboard
+P2POOL_DATA_DIR=$RD557/envdir/p2pool
+EOF
+printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"} }\n' "$WALLET" >"$RD557/config.json"
+out="$(cd "$RD557" && PATH="$RD557/bin:$PATH" ./pithead reset-dashboard -y 2>&1)"
+rc=$?
+assert_rc "reset-dashboard: compose failure still exits 1 (fail-closed unchanged)" "$rc" "1"
+assert_contains "reset-dashboard: #180 subnet-collision explanation reaches the operator (#557)" \
+    "$out" "Docker refused the stack's bridge subnet"
+assert_contains "reset-dashboard: crafted failure message names the retry command" "$out" "did NOT come back up"
+
 echo "== black-box: rotate-secrets regenerates the internal credentials (#378) =="
 # One command rotates the local Monero RPC password, the "auto" stratum password, and
 # PROXY_AUTH_TOKEN — the three values apply/load_preserved_state otherwise preserve forever.
@@ -4074,6 +4199,46 @@ out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" PITHEAD_CONFIG_FILE
 assert_contains "PITHEAD_CONFIG_FILE override is honoured" "$out" "37890" # nano's p2p port
 out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
 assert_eq "without the override, config.json shows no changes" "$out" ""
+
+echo "== black-box: apply --dry-run is read-only re: node credential generation (#556) =="
+# Direct CLI leg: a fresh/hand-edited local-node config with placeholder/empty creds must not have
+# config.json rewritten by a --dry-run preview — the read-only contract #556 reported broken
+# (persist_node_credentials was writing the freshly-generated creds back to disk).
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"","node_password":""},
+          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"},
+          "dashboard":{"secure":true,"host":"box.lan",
+                       "auth":{"username":"admin","password":"a control passphrase"},
+                       "control":{"enabled":true}} }\n' "$WALLET" >"$C/config.json"
+cp "$C/config.json" "$C/config.json.556before"
+out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" NO_COLOR=1 ./pithead apply --dry-run 2>&1)"
+assert_rc "dry-run with placeholder node creds still validates" "$?" "0"
+if cmp -s "$C/config.json" "$C/config.json.556before"; then
+    ok "dry-run leaves config.json byte-identical with placeholder node creds (#556)"
+else
+    bad "dry-run leaves config.json byte-identical with placeholder node creds (#556)" "config.json was rewritten"
+fi
+assert_contains "dry-run still previews the credential it would generate (in-memory only)" "$out" "Monero node RPC credential"
+rm -f "$C/config.json.556before"
+
+# Control-channel leg: the same blank-creds config staged through the control path must not have
+# its ON-DISK STAGED COPY rewritten by the dry-run re-validation either (#556) — the same write,
+# one level removed, that used to leave a generated secret sitting in data/control/staged/ and
+# could dirty the diff a later commit gate re-derives from that file.
+UUID0="00000000-0000-4000-8000-000000000000"
+REQS0="$C/data/control/requests"
+STAGED0="$C/data/control/staged"
+RESULTS0="$C/data/control/results"
+jq -n --arg w "$WALLET" --arg id "$UUID0" '{id:$id, action:"preview", actor:"admin", config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"",node_password:""},
+    tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS0/$UUID0.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "blank-creds preview status" "$(jq -r '.status' "$RESULTS0/$UUID0.json" 2>/dev/null)" "previewed"
+assert_eq "staged copy keeps the blank node_username — not persisted (#556)" "$(jq -r '.monero.node_username' "$STAGED0/$UUID0.json" 2>/dev/null)" ""
+assert_eq "staged copy keeps the blank node_password — not persisted (#556)" "$(jq -r '.monero.node_password' "$STAGED0/$UUID0.json" 2>/dev/null)" ""
+# Clean up: the result/staged counters the tests below assume start from a clean spool.
+rm -f "$RESULTS0/$UUID0.json" "$STAGED0/$UUID0.json"
+control_config main # restore config.json to the state control-run-pending below expects
 
 echo "== black-box: control-run-pending (#33) =="
 UUID1="11111111-1111-4111-8111-111111111111"
@@ -5372,6 +5537,129 @@ printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","chan
 CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
 assert_contains "worker-apply over the dial budget is rejected (no dial)" \
     "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
+
+# ---------------------------------------------------------------------------
+echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
+# The closed-schema control gate (#537, pithead ~L4706) relies on this invariant: every config.json
+# path pithead reads must exist in config.reference.json, or a legitimate config carrying that path
+# is false-rejected on every control-channel commit (a control-plane DoS). Until now the only guard
+# was the single legacy-xmrig_proxy round-trip case above. This walks pithead's own read sites,
+# mirroring the #515 cross-file drift guard's shape (build/dashboard/tests/service/test_control_service.py,
+# test_writable_key_allowlist_has_no_intra_repo_drift): a conservative, fixed-shape extractor over
+# the literal read sites that FAILS LOUD on a shape it doesn't recognize (rather than silently
+# skipping it), so a new read shape can't slip through unchecked.
+
+# Deliberate exceptions: paths this extractor finds that are NOT required to have a reference
+# entry. Empty today — every path pithead reads already has one (this test itself verifies that).
+# Keep the mechanism here for the day a genuinely internal/env-only read needs one; each entry
+# needs a why-comment.
+# macOS ships bash 3.2 (no associative arrays / mapfile — matches the rest of this file), so
+# extracted paths accumulate as a newline-separated string, deduped with `sort -u` at the end.
+declare -a DRIFT_EXCEPTIONS=()
+
+DRIFT_FOUND="" # newline-separated normalized dotted paths (no leading dot), deduped at the end
+DRIFT_BAD=0
+
+drift_add_path() { # <.dotted.path> (leading dot optional)
+    local p="${1#.}"
+    [ -n "$p" ] && DRIFT_FOUND="$DRIFT_FOUND
+$p"
+}
+
+# Split a jq `//`-alternative chain into its parts and record each leading-dot part as a read
+# path. A part that isn't a path must be one of the literal default shapes this codebase uses
+# (empty/true/false/[]/{}, a quoted string, or a number) — anything else fails the whole test
+# loudly, naming the culprit, so a new default shape gets a deliberate look instead of a silent
+# pass-through.
+drift_classify_chain() { # <chain> <line-label>
+    local chain="$1" line="$2" part
+    while [ -n "$chain" ]; do
+        if [[ "$chain" == *" // "* ]]; then
+            part="${chain%% // *}"
+            chain="${chain#* // }"
+        else
+            part="$chain"
+            chain=""
+        fi
+        if [[ "$part" == .* ]]; then
+            if [[ "$part" =~ ^\.[A-Za-z_][A-Za-z0-9_.]*$ ]]; then
+                drift_add_path "$part"
+            else
+                bad "config-read extractor (#561)" "unrecognized path shape '$part' in $line — extend the extractor"
+                DRIFT_BAD=1
+            fi
+        elif [ "$part" = "empty" ] || [ "$part" = "true" ] || [ "$part" = "false" ] || [ "$part" = "[]" ] || [ "$part" = "{}" ]; then
+            : # known default literal, not a path
+        elif [[ "$part" =~ ^\"[^\"]*\"$ ]] || [[ "$part" =~ ^-?[0-9]+$ ]]; then
+            : # quoted-string or numeric default
+        else
+            bad "config-read extractor (#561)" "unrecognized default shape '$part' in $line — extend the extractor"
+            DRIFT_BAD=1
+        fi
+    done
+}
+
+# config_bool '<path>' <default> call sites (pithead's null-aware boolean reader) — the path arg
+# is always a plain single-quoted leading-dot literal.
+while IFS= read -r p; do
+    drift_add_path "$p"
+done < <(grep -oE "config_bool '\.[A-Za-z0-9_.]+'" "$STACK" | sed -E "s/^config_bool '(.*)'\$/\1/")
+
+# Single-line jq reads against $CONFIG_FILE. Filtered down to genuine simple `config_get`-style
+# reads: this excludes multi-line validator blocks (an unterminated quote leaves an odd '-count on
+# its opening/closing line), writes (`= $var`), and the closed-schema gate's own whole-block
+# --slurpfile comparisons (those compare already-covered blocks wholesale, not a new leaf path).
+while IFS=: read -r lineno text; do
+    [[ "$text" == *'--slurpfile'* ]] && continue
+    [[ "$text" == *' = $'* ]] && continue
+    [[ "$text" == *'jq'* ]] || continue
+    qcount=$(grep -o "'" <<<"$text" | wc -l)
+    [ "$qcount" -eq 2 ] || continue
+    filter="${text#*\'}"
+    filter="${filter%\'*}"
+    # In scope only if the filter is itself a path read: a bare path, a parenthesized
+    # `(path // default)` prefix, or an `if path <op> ...` boolean read. Anything else (`.`,
+    # `any(..|strings;...)`, an array-literal walk like `[(.path // [])[] | .name] | group_by(.)`)
+    # is a structural check or a nested-element walk, not a new top-level path — out of scope.
+    if [[ "$filter" == .* ]]; then
+        drift_classify_chain "$filter" "pithead:$lineno"
+    elif [[ "$filter" == \(* ]]; then
+        # Only the parenthesized `(path // default)` prefix is attributed; whatever follows the
+        # closing paren (e.g. `[] | select(.name == $n) | .host // ""`) is relative to an
+        # iterated element, not a new root path — deliberately not walked further.
+        inner="${filter#\(}"
+        inner="${inner%%\)*}"
+        drift_classify_chain "$inner" "pithead:$lineno"
+    elif [[ "$filter" == "if "* ]]; then
+        while IFS= read -r tok; do
+            [ -n "$tok" ] && drift_add_path "$tok"
+        done < <(grep -oE '\.[A-Za-z_][A-Za-z0-9_.]*(\[[^]]*\])?[[:space:]]+(!=|==)' <<<"$filter" |
+            sed -E 's/(\[[^]]*\])?[[:space:]]+(!=|==)$//')
+    fi
+done < <(grep -n '"\$CONFIG_FILE"' "$STACK")
+
+REF_PATHS="$(jq -r '[paths | map(select(type=="string")) | join(".")] | unique[]' "$ROOT/config.reference.json")"
+DRIFT_FOUND="$(sort -u <<<"$DRIFT_FOUND")"
+
+checked=0
+missing=0
+for p in $DRIFT_FOUND; do
+    checked=$((checked + 1))
+    grep -qxF "$p" <<<"$REF_PATHS" && continue
+    allowed=0
+    for a in "${DRIFT_EXCEPTIONS[@]:-}"; do
+        [ "$a" = "$p" ] && allowed=1 && break
+    done
+    [ "$allowed" -eq 1 ] && continue
+    bad "config path pithead reads has a config.reference.json entry" "'$p' is missing from config.reference.json"
+    missing=$((missing + 1))
+done
+if [ "$checked" -eq 0 ]; then
+    bad "the extractor found at least one config-read path" "found zero — extend the extractor"
+elif [ "$missing" -eq 0 ] && [ "$DRIFT_BAD" -eq 0 ]; then
+    ok "every extracted config-read path ($checked total) exists in config.reference.json"
+fi
+unset DRIFT_FOUND REF_PATHS DRIFT_BAD
 
 # ---------------------------------------------------------------------------
 echo ""

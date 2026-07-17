@@ -69,6 +69,10 @@ readonly APP_GID=1000
 REBOOT_REQUIRED=false
 SKIP_OPTIMIZE=0
 SKIP_DEPS=0
+# Set by apply_dry_run before it calls parse_and_validate_config (#556). A dry run must only
+# read — persist_node_credentials checks this to skip its config.json write-back while still
+# generating in-memory creds so the preview/diff is realistic.
+PITHEAD_DRY_RUN=0
 
 # Detect whether we're being sourced (e.g. by the test suite). When sourced we only define
 # functions/constants and skip all side effects (cd, traps, running main).
@@ -365,9 +369,11 @@ verify_release_images() {
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
         repo="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-${suffix}"
-        sha="$(compose_pinned_digest "$suffix")"
-        [ -n "$sha" ] ||
+        # #557: plain `sha="$(...)"` aborts under errexit on a no-match grep BEFORE this error()
+        # fires — `if !` suspends errexit for the assignment so the crafted diagnostic is reachable.
+        if ! sha="$(compose_pinned_digest "$suffix")" || [ -z "$sha" ]; then
             error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing (#451). A signed release bundle pins every first-party image by @sha256 (#461)."
+        fi
         image="${repo}@${sha}"
         if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
             # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
@@ -1079,8 +1085,15 @@ reset_dashboard() {
     # Idempotent if it's already present from `up`; closes the gap where running reset-dashboard on a
     # `down` stack would otherwise bring p2pool up with no firewall installed at all.
     apply_tor_egress_firewall
-    # Route through compose_up_checked so a subnet collision (#180) gets explained, like every other up-path.
-    compose_up_checked -d dashboard p2pool
+    # Route through compose_up_checked so a subnet collision (#180) gets explained, like every other
+    # up-path. #557: wrapped in `if !` (mirroring the apply call site) — a bare call lets a compose
+    # failure trip errexit inside compose_up_checked's own pipeline, before the #180 explanation
+    # prints and before the mktemp temp file is cleaned up.
+    if ! compose_up_checked -d dashboard p2pool; then
+        warn "Data directories were reset, but dashboard/p2pool did NOT come back up ('docker compose up' failed)."
+        warn "Fix the cause shown above, then re-run '$0 up' to bring them back."
+        exit 1
+    fi
 }
 
 # --- Backup / Restore ---
@@ -1852,9 +1865,11 @@ check_tor_clearnet_egress() {
 # True if $1 is a plausible hostname or IP literal — i.e. only the characters a host can contain
 # (letters, digits, dot, hyphen, colon for IPv6). Used to validate dashboard.host before it's
 # rendered into the Caddyfile site address: anything with whitespace, a newline, or Caddy-significant
-# characters ({ } /) could break or inject into the generated Caddyfile.
+# characters ({ } /) could break or inject into the generated Caddyfile. Length-capped at 253 (#558),
+# mirroring the worker-host charset check elsewhere in this file (control_worker_apply's host guard,
+# validate_worker_endpoints) — the max length of a DNS name.
 is_valid_host() {
-    [[ "$1" =~ ^[A-Za-z0-9.:_-]+$ ]]
+    [[ "$1" =~ ^[A-Za-z0-9.:_-]{1,253}$ ]]
 }
 
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
@@ -2062,6 +2077,9 @@ cred_needs_generating() {
 # rather than aborting, since the in-memory creds still make this run work.
 persist_node_credentials() {
     local user="$1" pass="$2" tmp="${CONFIG_FILE}.tmp"
+    # A dry run must only read (#556) — the caller already generated the creds in memory for the
+    # render/diff; skip the write-back to config.json (or a staged control-channel copy).
+    [ "$PITHEAD_DRY_RUN" -eq 1 ] && return 0
     # Subshell umask (#368): the temp file carries the credentials, so it too must be owner-only
     # from creation — mv preserves its mode onto config.json.
     if (
@@ -4344,6 +4362,7 @@ describe_change() {
 apply_dry_run() {
     local porcelain="$1"
     local newenv="${ENV_FILE}.dryrun"
+    PITHEAD_DRY_RUN=1 # #556: parse_and_validate_config -> persist_node_credentials checks this
     {
         # NOTE: no ensure_onion_password here — it would write an auto-generated password into
         # the candidate config. A dry run must only read; an invalid candidate fails validation.
@@ -4706,9 +4725,12 @@ control_approval_gate() { # <staged-file>
     # INVARIANT: config.reference.json MUST stay a complete superset of every config path this script
     # reads (grep the config_bool/`jq ... "$CONFIG_FILE"` sites), or a legit config carrying a
     # read-but-unlisted path is false-rejected on every commit. That includes backward-compat aliases
-    # like xmrig_proxy.* (read at the XvB block). A grep-based test would false-alarm on jq-internal
-    # and filename dotted tokens, so the invariant is guarded by the legacy-xmrig_proxy round-trip
-    # case in tests/stack/run.sh rather than an automated path diff.
+    # like xmrig_proxy.* (read at the XvB block). Guarded two ways in tests/stack/run.sh: the
+    # legacy-xmrig_proxy round-trip case above, and (#561) an automated drift guard that walks this
+    # script's own config_bool/`jq ... "$CONFIG_FILE"` read sites with a conservative fixed-shape
+    # extractor and fails loud ("extend the extractor") on a shape it doesn't recognize, rather than
+    # risking the false-alarms a naive grep-based path diff would hit on jq-internal and filename
+    # dotted tokens.
     local unknown
     if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
         def norm: [.[] | strings] | join(".");
