@@ -865,6 +865,67 @@ rd_order=$(
 )
 assert_eq "reset-dashboard applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$rd_order")" "firewall,compose,"
 
+echo "== regression: mkdir runs before chown -R of the same tree (#550) =="
+# prepare_directories and reset_dashboard used to `sudo chown -R` a data dir tree and only THEN
+# `mkdir -p` inside it (the p2pool stats subdir) — EACCES for any operator uid != APP_UID, since
+# the tree no longer belongs to them. ensure_directories already got this right (mkdir first,
+# ensure_owner/chown last); pin the other two to the same order. Shadow sudo/mkdir to log just the
+# two ops that matter, in call order — same technique as fw_then_compose above.
+mkdir_before_chown() { printf '%s\n' "$1" | grep -xE 'mkdir-stats|chown-p2pool' | tr '\n' ','; }
+
+pd_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    # shellcheck disable=SC2034  # read by the sourced prepare_directories, unseen here
+    MONERO_DIR="$SANDBOX/pd-monero"
+    # shellcheck disable=SC2034
+    TARI_DIR="$SANDBOX/pd-tari"
+    P2POOL_DIR="$SANDBOX/pd-p2pool"
+    TOR_DATA_DIR="$SANDBOX/pd-tor"
+    DASHBOARD_DIR="$SANDBOX/pd-dashboard"
+    # shellcheck disable=SC2034
+    CLEARNET_STATE_DIR="$SANDBOX/pd-clearnet"
+    log() { :; }
+    prepare_control_dirs() { :; }
+    mkdir() {
+        [[ "$*" == *"$P2POOL_DIR/stats"* ]] && echo mkdir-stats
+        return 0
+    }
+    sudo() {
+        [[ "$*" == *"chown -R"*"$P2POOL_DIR"* ]] && echo chown-p2pool
+        return 0
+    }
+    prepare_directories
+)
+assert_eq "prepare_directories: mkdir p2pool/stats precedes chown -R of P2POOL_DIR" \
+    "$(mkdir_before_chown "$pd_order")" "mkdir-stats,chown-p2pool,"
+
+rd2_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    env_get() { echo "/nonexistent/rd2-$1"; } # non-existent dirs -> the destructive rm is skipped
+    assert_safe_dir() { :; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    compose_up_checked() { :; }
+    mkdir() {
+        [[ "$*" == *"/nonexistent/rd2-P2POOL_DATA_DIR/stats"* ]] && echo mkdir-stats
+        return 0
+    }
+    sudo() {
+        [[ "$*" == *"chown -R"*"/nonexistent/rd2-P2POOL_DATA_DIR"* ]] && echo chown-p2pool
+        return 0
+    }
+    reset_dashboard -y
+)
+assert_eq "reset-dashboard: mkdir p2pool/stats precedes chown -R of p2pool_dir" \
+    "$(mkdir_before_chown "$rd2_order")" "mkdir-stats,chown-p2pool,"
+
 echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
 # Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
 # empty), which silently broke the #270 firewall opt-out (config false → .env stayed true) and
