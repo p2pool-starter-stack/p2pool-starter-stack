@@ -806,6 +806,7 @@ assert_eq "un-pinned -> cosign never asked to verify a tag" "$(cat "$VRI/cosign.
 # pithead's own `set -Eeuo pipefail` BEFORE the crafted error() above ever runs, so a real invocation
 # got a silent abort instead of the "not digest-pinned" diagnostic. Reproduce with errexit left ON —
 # source directly and call the function, no run_sourced/`set +e`.
+# shellcheck disable=SC1090  # dynamic source: the script under test
 out557_vri="$(
     (
         cd "$UNPINNED" || exit 1
