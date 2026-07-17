@@ -362,8 +362,11 @@ stage_push() {
             log "  digest: $repo@sha256:<dry-run>"
             continue
         fi
-        digest="$(manifest_digest "$repo:$STAGING_TAG")"
-        [ -n "$digest" ] || die "Could not read the pushed manifest digest for $repo:$STAGING_TAG."
+        # #557: plain `digest="$(...)"` aborts under errexit once retries are exhausted, BEFORE this
+        # die() fires — `if !` suspends errexit for the assignment so the message is reachable.
+        if ! digest="$(manifest_digest "$repo:$STAGING_TAG")" || [ -z "$digest" ]; then
+            die "Could not read the pushed manifest digest for $repo:$STAGING_TAG."
+        fi
         set_digest "$suffix" "$repo@$digest"
         log "  digest: $repo@$digest"
     done
@@ -665,8 +668,11 @@ main() {
         local suffix repo digest
         for suffix in "${IMAGES[@]}"; do
             repo="$(image_for "$suffix")"
-            digest="$(manifest_digest "$repo:$STAGING_TAG")"
-            [ -n "$digest" ] || die "Cannot resolve a staged digest for $repo:$STAGING_TAG — stage first."
+            # #557: same errexit-unreachable shape as stage_push above — a bare assignment aborts
+            # under errexit once retries are exhausted, before this die() fires.
+            if ! digest="$(manifest_digest "$repo:$STAGING_TAG")" || [ -z "$digest" ]; then
+                die "Cannot resolve a staged digest for $repo:$STAGING_TAG — stage first."
+            fi
             set_digest "$suffix" "$repo@$digest"
         done
     else

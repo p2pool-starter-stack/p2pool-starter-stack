@@ -807,6 +807,24 @@ assert_rc "un-pinned compose + key -> pull aborts (#451)" "$?" "1"
 assert_contains "un-pinned abort explains the missing digest bind" "$out" "not digest-pinned"
 assert_eq "un-pinned -> cosign never asked to verify a tag" "$(cat "$VRI/cosign.log")" ""
 
+# #557: run_sourced disables errexit (`set +e`, right after sourcing) for every test above, which
+# happens to mask a real bug: the bare `sha="$(compose_pinned_digest ...)"` assignment aborts under
+# pithead's own `set -Eeuo pipefail` BEFORE the crafted error() above ever runs, so a real invocation
+# got a silent abort instead of the "not digest-pinned" diagnostic. Reproduce with errexit left ON —
+# source directly and call the function, no run_sourced/`set +e`.
+# shellcheck disable=SC1090  # dynamic source: the script under test
+out557_vri="$(
+    (
+        cd "$UNPINNED" || exit 1
+        PATH="$VRI/bin:/usr/bin:/bin"
+        source "$STACK" 2>/dev/null
+        verify_release_images
+    ) 2>&1
+)"
+assert_rc "un-pinned + key, real errexit -> still aborts (#557)" "$?" "1"
+assert_contains "un-pinned + key, real errexit -> crafted message still reaches the operator (#557)" \
+    "$out557_vri" "not digest-pinned"
+
 # Source checkout: locally built images are unsigned by design — skipped, silently and completely.
 mkdir -p "$VRI/build/dashboard"
 touch "$VRI/build/dashboard/Dockerfile"
@@ -1850,6 +1868,63 @@ assert_contains "exhausted retries -> empty digest (caller dies)" "$exhaust_out"
 # The smoke stage's raw manifest read has the same read-after-push exposure — wire it through the retry.
 assert_contains "smoke stage reads the manifest via retry_registry_read (#429)" \
     "$(cat "$REL")" "retry_registry_read buildx_inspect \"\$repo:\$STAGING_TAG\" --raw"
+
+# #557: the test above disables errexit (`set +eu`, right after sourcing) to observe the bare helper
+# in isolation, which happens to mask a real bug in stage_push itself: the bare
+# `digest="$(manifest_digest ...)"` assignment aborts under release.sh's own `set -euo pipefail`
+# BEFORE the crafted die() ever runs, so a real release run got a silent abort instead of a diagnosed
+# digest-read failure. Reproduce with errexit left ON, driving the REAL stage_push (not the bare
+# helper) so the actual call site is exercised.
+# shellcheck disable=SC1090,SC2034  # dynamic source; the globals are consumed inside stage_push
+stage_push_out="$(
+    (
+        cd "$ROOT" || exit 1
+        set --
+        source "$REL" 2>/dev/null
+        DRY_RUN=0
+        IMAGES=(tor)
+        REGISTRY="ghcr.io/test"
+        REGISTRY_READ_RETRIES=1
+        REGISTRY_READ_BACKOFF=0
+        WORKDIR="$SANDBOX/stagepush557"
+        mkdir -p "$WORKDIR"
+        buildx_inspect() { return 1; } # every registry read fails -> retries exhaust
+        stage_push
+    ) 2>&1
+)"
+assert_rc "stage_push, real errexit: retries-exhausted digest read still aborts (#557)" "$?" "1"
+assert_contains "stage_push, real errexit: crafted die() reaches the operator (#557)" \
+    "$stage_push_out" "Could not read the pushed manifest digest"
+
+# #557: main()'s --resume-promote branch has the exact same shape (a second, separately-written
+# instance of the bug — found in review, not part of the original 3 sites). Drive the real `main`
+# (preflight/ghcr_login stubbed no-op) with RESUME_PROMOTE=1 and errexit left ON.
+# shellcheck disable=SC1090,SC2034  # dynamic source; the globals are consumed inside main
+resume_out="$(
+    (
+        cd "$ROOT" || exit 1
+        set --
+        source "$REL" 2>/dev/null
+        preflight() { :; }
+        ghcr_login() { :; }
+        promote() { :; }
+        sign_images() { :; }
+        publish() { :; }
+        DRY_RUN=0
+        RESUME_PROMOTE=1
+        IMAGES=(tor)
+        TAG="v9.9.9"
+        STAGING_TAG="v9.9.9-rc.1"
+        REGISTRY="ghcr.io/test"
+        REGISTRY_READ_RETRIES=1
+        REGISTRY_READ_BACKOFF=0
+        buildx_inspect() { return 1; } # every registry read fails -> retries exhaust
+        main
+    ) 2>&1
+)"
+assert_rc "--resume-promote, real errexit: retries-exhausted digest read still aborts (#557)" "$?" "1"
+assert_contains "--resume-promote, real errexit: crafted die() reaches the operator (#557)" \
+    "$resume_out" "Cannot resolve a staged digest"
 
 echo "== unit: release.sh preflight checks the lint toolchain (#426) =="
 # A reimaged release box loses shellcheck/shfmt/node/uv — the v1.3.0 cut died ~1 min in mid-gate with a
@@ -3824,6 +3899,43 @@ out="$(cd "$R" && SUDO_LOG=/dev/null PATH="$R/bin:$PATH" ./pithead reset-dashboa
 rc=$?
 assert_rc "reset refuses with no data dirs in .env" "$rc" "1"
 assert_contains "reset refuse message" "$out" "refusing to guess"
+
+echo "== black-box: reset-dashboard's final compose_up_checked is if!-guarded, not bare (#557/#180) =="
+# Before #557: the last compose_up_checked call in reset_dashboard was bare (every OTHER call site
+# wraps it in `if !`, per the contract at compose_up_checked's own definition). A bare call let a real
+# compose failure trip errexit INSIDE compose_up_checked's own `docker compose up | tee` pipeline,
+# before the #180 subnet-collision explanation printed. Real `./pithead` (not sourced) arms
+# `trap on_err ERR` exactly like production, so this reproduces the actual operator experience.
+RD557="$SANDBOX/reset557"
+mkdir -p "$RD557/bin" "$RD557/envdir/dashboard" "$RD557/envdir/p2pool"
+cp "$STACK" "$RD557/pithead"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$RD557/bin/sudo"
+cat >"$RD557/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+"compose up"*)
+    echo "Error response from daemon: Pool overlaps with other one on this address space" >&2
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$RD557/bin/docker" "$RD557/bin/sudo"
+cat >"$RD557/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+HOST_IP=box.lan
+NETWORK_SUBNET=172.28.0.0/24
+DASHBOARD_DATA_DIR=$RD557/envdir/dashboard
+P2POOL_DATA_DIR=$RD557/envdir/p2pool
+EOF
+printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"} }\n' "$WALLET" >"$RD557/config.json"
+out="$(cd "$RD557" && PATH="$RD557/bin:$PATH" ./pithead reset-dashboard -y 2>&1)"
+rc=$?
+assert_rc "reset-dashboard: compose failure still exits 1 (fail-closed unchanged)" "$rc" "1"
+assert_contains "reset-dashboard: #180 subnet-collision explanation reaches the operator (#557)" \
+    "$out" "Docker refused the stack's bridge subnet"
+assert_contains "reset-dashboard: crafted failure message names the retry command" "$out" "did NOT come back up"
 
 echo "== black-box: rotate-secrets regenerates the internal credentials (#378) =="
 # One command rotates the local Monero RPC password, the "auto" stratum password, and
