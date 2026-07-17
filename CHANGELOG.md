@@ -11,6 +11,19 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Energy calculator: Tari revenue in net profit (#520).** `dashboard.energy.tari_price` (fiat
+  price of 1 XTM, default `0`/off) folds the estimated Tari merge-mining revenue into the Energy
+  tab's net profit once it's set alongside the existing `xmr_price` — previously net profit counted
+  P2Pool XMR only, undercounting a Tari merge-miner's actual revenue. Uses the same what-if Tari/day
+  estimate the Tari tab already shows, no new estimate invented. XvB stays excluded (raffle status,
+  not a clean per-day income estimate). The card's heading and Net/day tooltip now say exactly
+  what's counted ("P2Pool + Tari, after power" vs "P2Pool XMR only, after power") so the figure is
+  never silently partial. Static, operator-supplied price only — an opt-in Tor-routed price feed is
+  a deferred follow-up, not implemented here (fetching one is a clearnet egress this privacy-first
+  stack avoids).
+
 ## [1.7.0] - 2026-07-17
 
 The **Config UX & telemetry** cycle. Config editing becomes humane — worker

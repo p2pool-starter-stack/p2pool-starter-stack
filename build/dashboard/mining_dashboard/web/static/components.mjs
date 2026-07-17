@@ -566,12 +566,21 @@ class EarningsCard extends Component {
 // Energy & profit tab body (#260). Fleet power draw + efficiency (always, when any power is known),
 // then energy cost once an electricity price is set, then net profit once an XMR price is also set —
 // each layer appears only when its inputs exist, so the operator never sees a fabricated figure.
-// `est` is the earnings for the shared what-if hashrate; the client does the kWh/cost/net math.
+// Setting a Tari price too (#520) folds the Tari merge-mining estimate into gross; the heading and
+// the Net/day tooltip say exactly what's counted so a Tari merge-miner's net is never silently
+// P2Pool-only. `est` is the earnings for the shared what-if hashrate; the client does the
+// kWh/cost/net math.
 function EnergyPanel({ energy, est }) {
   const en = computeEnergy(energy, est);
   const cur = energy.currency;
   const haveCost = energy.cost_per_kwh > 0;
   const haveNet = haveCost && energy.xmr_price > 0;
+  // Honest label (#520): say exactly what gross counts so the net figure is never silently
+  // partial. XvB never appears here — raffle status, not a clean per-day estimate.
+  const netLabel = en.includesTari ? "P2Pool + Tari, after power" : "P2Pool XMR only, after power";
+  const netTitle = en.includesTari
+    ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, minus power cost. Excludes XvB (raffle status, not a per-day income estimate)."
+    : "P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it) and XvB (raffle status, not a per-day income estimate).";
   return html`
     <div class="stat-grid">
         <${StatCard} label="Fleet Power" value=${formatUnit(energy.total_watts, "W")}
@@ -590,7 +599,7 @@ function EnergyPanel({ energy, est }) {
     ${
       haveCost
         ? html`
-    <h4 class="text-small mt-2">Cost${haveNet ? " & Net Profit" : ""} (${cur})</h4>
+    <h4 class="text-small mt-2">Cost${haveNet ? ` & Net Profit — ${netLabel}` : ""} (${cur})</h4>
     <div class="stat-grid">
         <${StatCard} label="Power cost / day" value=${formatFiat(en.costDay, cur)} />
         <${StatCard} label="Power cost / month" value=${formatFiat(en.costMonth, cur)} />
@@ -600,7 +609,7 @@ function EnergyPanel({ energy, est }) {
             ? html`
         <${StatCard} label="Net / day" value=${formatFiat(en.netDay, cur)}
                      cls=${en.netDay !== null && en.netDay < 0 ? "c-bad" : "text-accent"}
-                     title="P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari and XvB." />
+                     title=${netTitle} />
         <${StatCard} label="Net / month" value=${formatFiat(en.netMonth, cur)}
                      cls=${en.netMonth !== null && en.netMonth < 0 ? "c-bad" : "text-accent"} />
         <${StatCard} label="Net / year" value=${formatFiat(en.netYear, cur)}

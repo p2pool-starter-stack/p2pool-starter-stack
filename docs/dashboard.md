@@ -376,24 +376,29 @@ total, marked *estimated*. A worker with neither a measured nor a configured dra
 the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
 
 The tab always shows fleet watts, H/s-per-watt, and energy use (kWh per day/month/year, a naive
-extrapolation of the current draw). Two prices add the rest, and each is optional:
+extrapolation of the current draw). Three prices add the rest, and each is optional:
 
 | Config | Adds |
 |---|---|
 | `dashboard.energy.cost_per_kwh` | **Power cost** per day/month/year (`kWh × price`). |
-| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year (`P2Pool XMR earnings × your XMR price − power cost`). |
+| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year, P2Pool XMR earnings × your XMR price, minus power cost. |
+| `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same net profit, at your Tari price. Requires `xmr_price` to be set too. |
 
-Both are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no conversion
-happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it but leave
-`xmr_price` unset and you get the energy cost but no net. Net profit scales with the same what-if
-hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red when
-power costs more than it earns.
+All three are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no
+conversion happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it
+but leave `xmr_price` unset and you get the energy cost but no net. Net profit scales with the same
+what-if hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red
+when power costs more than it earns.
 
-Net profit counts **P2Pool XMR only**. Tari is lumpy solo merge-mining priced separately, and XvB
-is raffle status rather than income, so both are excluded — the same honesty the earnings tabs
-already apply. **No price feed ships:** fetching an exchange rate is a clearnet request this
-privacy-first stack avoids, so you supply the XMR price yourself (see
-[Privacy › Runtime egress](privacy.md#runtime-egress)).
+Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once you also set
+`tari_price` (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already
+shows). Leave `tari_price` at `0`/unset and net profit is P2Pool XMR only — the card's heading and
+the Net/day tooltip say exactly which figure you're looking at, so it's never silently partial.
+**XvB stays excluded** either way: it's raffle status, not a clean per-day income estimate, so
+folding it in would mean guessing. **No price feed ships for either coin:** fetching an exchange
+rate is a clearnet request this privacy-first stack avoids, so you supply both prices yourself (see
+[Privacy › Runtime egress](privacy.md#runtime-egress)). An opt-in, Tor-routed price feed is a
+possible follow-up, not implemented here.
 
 ### Payout confirmation
 

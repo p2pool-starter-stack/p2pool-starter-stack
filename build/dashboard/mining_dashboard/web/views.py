@@ -845,21 +845,25 @@ def build_workers(workers):
 
 
 # --------------------------------------------------------------------------------------
-# Energy & profit calculator (Issue #260): fleet power draw + efficiency, and — once the operator
-# sets an electricity price (and an XMR price) — the net profit after power. The server totals the
-# measured draw and publishes the prices; the client does the per-day/month/year arithmetic and the
-# net = gross − cost, scaling gross with the same what-if hashrate the earnings card already uses
-# (one source of truth, #61). Deliberately NO price feed: fetching one is a clearnet egress this
-# privacy-first stack avoids (#160), so both prices are operator-supplied.
+# Energy & profit calculator (Issue #260, Tari revenue #520): fleet power draw + efficiency, and —
+# once the operator sets an electricity price (and an XMR price) — the net profit after power.
+# Setting a Tari price too folds the estimated Tari merge-mining revenue into gross so a Tari
+# merge-miner's net profit isn't silently undercounted (P2Pool-only was the #520 bug). The server
+# totals the measured draw and publishes the prices; the client does the per-day/month/year
+# arithmetic and the net = gross − cost, scaling gross with the same what-if hashrate the earnings
+# card already uses (one source of truth, #61). Deliberately NO price feed for either coin: fetching
+# one is a clearnet egress this privacy-first stack avoids (#160) — an opt-in Tor-routed feed is
+# deferred, see #520 — so all prices are operator-supplied.
 # --------------------------------------------------------------------------------------
 
 _ENERGY_DISCLAIMER = (
     "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting "
     "neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the "
     "current draw at a constant rate — a naive projection, not a metered bill. Net profit is "
-    "P2Pool XMR earnings valued at your XMR price, minus power cost: it excludes Tari (lumpy solo "
-    "merge-mining, priced separately) and XvB (raffle status, not income). Estimates, not "
-    "guarantees."
+    "P2Pool XMR earnings valued at your XMR price, plus Tari merge-mining earnings valued at your "
+    "Tari price once dashboard.energy.tari_price is set (0/unset counts P2Pool XMR only) — minus "
+    "power cost. XvB stays excluded: it's raffle status, not a clean per-day income estimate. "
+    "Estimates, not guarantees."
 )
 
 
@@ -924,6 +928,7 @@ def build_energy(workers):
         "incomplete": incomplete,
         "cost_per_kwh": cfg["cost_per_kwh"],
         "xmr_price": cfg["xmr_price"],
+        "tari_price": cfg["tari_price"],
         "currency": cfg["currency"],
         "per_worker": per_worker,
         "disclaimer": _ENERGY_DISCLAIMER,

@@ -2021,7 +2021,7 @@ class TestBuildEnergy:
         monkeypatch.setattr(
             views.config,
             "DASHBOARD_ENERGY",
-            energy or {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"},
+            energy or {"cost_per_kwh": 0.0, "xmr_price": 0.0, "tari_price": 0.0, "currency": "USD"},
         )
         monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
         return build_energy(workers)
@@ -2066,10 +2066,16 @@ class TestBuildEnergy:
         got = self._energy(
             monkeypatch,
             [self._worker("r1", watts=100)],
-            energy={"cost_per_kwh": 0.2, "xmr_price": 150.0, "currency": "EUR"},
+            energy={
+                "cost_per_kwh": 0.2,
+                "xmr_price": 150.0,
+                "tari_price": 2.5,
+                "currency": "EUR",
+            },
         )
         assert got["cost_per_kwh"] == 0.2
         assert got["xmr_price"] == 150.0
+        assert got["tari_price"] == 2.5
         assert got["currency"] == "EUR"
 
 
