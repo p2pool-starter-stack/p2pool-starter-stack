@@ -5862,6 +5862,22 @@ assert_eq "remote path: auth creds carried through" \
     "$(jq -rc '[.monero.node_username, .monero.node_password]' <<<"$w3_cfg")" '["remoteuser","remotepass"]'
 unset w3_cfg
 
+echo "== unit: wizard — remote node WITHOUT auth + an explicit nano pool tier (#502) =="
+# Two case arms neither W1 (defaults -> mini) nor W2/W3 (main / auth'd remote) reach: REMOTE_AUTH
+# answered "n" (the un-auth'd remote branch skips both credential prompts, leaving them "") and
+# the pool-tier case's "nano" arm. Same run_wizard helper, non-default answers on both axes.
+W4="$SANDBOX/wizard-remote-noauth-nano"
+mkdir -p "$W4"
+printf '%s\n%s\nn\nremote2.example.com\n\n\nn\nnano\n\n\n\n\n\n' \
+    "$WALLET" "TARIWALLETNOAUTH" | run_sourced "$W4" run_wizard >/dev/null 2>&1
+w4_cfg="$(cat "$W4/config.json" 2>/dev/null)"
+assert_eq "remote-noauth path: monero.mode remote" "$(jq -r '.monero.mode' <<<"$w4_cfg")" "remote"
+assert_eq "remote-noauth path: remote host set" "$(jq -r '.monero.remote.host' <<<"$w4_cfg")" "remote2.example.com"
+assert_eq "remote-noauth path: declining auth leaves creds empty, not auto-generated" \
+    "$(jq -rc '[.monero.node_username, .monero.node_password]' <<<"$w4_cfg")" '["",""]'
+assert_eq "remote-noauth path: pool tier nano" "$(jq -r '.p2pool.pool' <<<"$w4_cfg")" "nano"
+unset w4_cfg
+
 echo "== unit: wizard — shape-question and dashboard-login answers flow into config.json (#502) =="
 # The inverse of the defaults test: every optional prompt answered, proving the new logic (pool
 # tier mapping, the dashboard-login cluster, and each Stage-2 cluster) actually wires through.
