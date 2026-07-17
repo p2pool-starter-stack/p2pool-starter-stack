@@ -87,10 +87,12 @@ class TestConfig:
 
 
 class TestWorkerEndpoints:
-    """dashboard.workers[] loader (#172): validated per-worker endpoint descriptors, read from
-    the read-only config.json mount. Every field bar `name` is optional; an entry with any
-    invalid field is dropped WHOLE (fail closed — a typo'd host must not leave its token
-    attached to the miner-IP fallback path)."""
+    """Per-worker endpoint descriptor validation (#172), read from the read-only config.json
+    mount. Exercised here via the deprecated dashboard.workers[] fallback shape — the field
+    validation below is shared code, identical for the current workers.list[] shape (dual-read
+    precedence is covered separately in TestWorkerEndpointsDualRead, #506). Every field bar
+    `name` is optional; an entry with any invalid field is dropped WHOLE (fail closed — a typo'd
+    host must not leave its token attached to the miner-IP fallback path)."""
 
     def _load(self, tmp_path, payload):
         from mining_dashboard.config.config import load_worker_endpoints
@@ -229,6 +231,61 @@ class TestWorkerEndpoints:
             },
         )
         assert got == [{"name": "rig1", "watts": 142.5}, {"name": "ok", "port": 8081}]
+
+
+class TestWorkerEndpointsDualRead:
+    """workers.list[] (#506) is the current sub-key; dashboard.workers[] (#172) is read as a
+    deprecated fallback only when workers.list is unset. pithead's apply-time validation refuses
+    a config that sets both, so the loader only has to pick whichever is present and prefer the
+    new shape."""
+
+    def _load(self, tmp_path, payload):
+        from mining_dashboard.config.config import load_worker_endpoints
+
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps(payload))
+        return load_worker_endpoints(str(p))
+
+    def test_new_shape_loads(self, tmp_path):
+        got = self._load(
+            tmp_path,
+            {"workers": {"list": [{"name": "rig1", "host": "10.0.0.5", "port": 18088}]}},
+        )
+        assert got == [{"name": "rig1", "host": "10.0.0.5", "port": 18088}]
+
+    def test_new_shape_wins_when_both_present(self, tmp_path):
+        # pithead's apply-time validation refuses a config that sets both, but the loader must
+        # still resolve deterministically for a stale/hand-edited mount: new shape wins.
+        got = self._load(
+            tmp_path,
+            {
+                "workers": {"list": [{"name": "new-rig"}]},
+                "dashboard": {"workers": [{"name": "legacy-rig"}]},
+            },
+        )
+        assert got == [{"name": "new-rig"}]
+
+    def test_legacy_fallback_used_when_new_shape_unset(self, tmp_path):
+        got = self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}})
+        assert got == [{"name": "legacy-rig"}]
+
+    def test_legacy_fallback_logs_a_deprecation_notice(self, tmp_path, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="Config"):
+            self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}})
+        assert any("deprecated" in r.message for r in caplog.records)
+
+    def test_new_shape_logs_no_deprecation_notice(self, tmp_path, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="Config"):
+            self._load(tmp_path, {"workers": {"list": [{"name": "rig1"}]}})
+        assert not any("deprecated" in r.message for r in caplog.records)
+
+    def test_neither_shape_set_reads_empty(self, tmp_path):
+        assert self._load(tmp_path, {}) == []
+        assert self._load(tmp_path, {"workers": {"api_port": 8080}}) == []
 
 
 class TestEnergyConfig:
