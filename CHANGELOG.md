@@ -11,6 +11,21 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Worker Inspect: a table editor and a JSON mode for the writable-config edit path (#518).**
+  The raw JSON textarea is now the fallback of two modes: **Table** (the default) renders one row
+  per writable key (`pools`, `DONATION`, `autotune`, `watchdog`, `watchdog_interval_min`,
+  `max_temp_c`), typed off the value the dashboard last applied, and records only the rows you
+  touch; **JSON** keeps the old paste-a-whole-object flow, with a **Load from file** button
+  (`FileReader`, no upload) to fill it from a local config for pushing one profile to several
+  rigs, and an inline error the moment the JSON stops parsing instead of only on Apply. Both modes
+  submit the same `{worker, changes}` request through the existing `/api/control/worker-apply`
+  path — the writable allowlist is still the only thing that decides what's accepted, at every
+  layer. A masked value (the `{__secret__: true}` sentinel the Configuration view already uses)
+  renders as a blank password field in table mode, never as JSON to mangle, and round-trips
+  untouched in JSON mode unless you edit it yourself.
+
 ### Changed
 
 - **Per-worker descriptors moved to `workers.list[]`, out from under `dashboard.*` (#506).** The
@@ -19,6 +34,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   block. They're now one block: `workers.list[]`. `dashboard.workers[]` is read as a deprecated
   fallback when `workers.list` is unset — a config carrying both is refused at apply — and is
   removed in v1.9.
+
+- **Worker Inspect is a native `<dialog>` (#518).** The hand-rolled overlay `<div>` is now
+  `showModal()` + `::backdrop`, which gets Escape-to-close and focus handling from the browser —
+  the manual click-outside JS is gone, replaced by one `close()` call the dialog's own `close`
+  event already funnels through.
 
 ## [1.6.3] - 2026-07-17
 

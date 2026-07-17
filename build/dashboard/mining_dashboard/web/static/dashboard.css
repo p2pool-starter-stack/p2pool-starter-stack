@@ -1126,8 +1126,9 @@ button.upgrade-btn {
   white-space: pre-wrap;
 }
 
-/* Worker Inspect (#185): a modal overlay opened from a worker name in the Workers Alive table.
- * Shows the rig's live telemetry, a writable-config editor, and the change history. */
+/* Worker Inspect (#185): a native <dialog> opened from a worker name in the Workers Alive table.
+ * Shows the rig's live telemetry, a writable-config editor, and the change history. showModal()
+ * gives Escape-to-close and focus trapping for free; ::backdrop replaces the old overlay div. */
 .worker-name-link {
   background: none;
   border: none;
@@ -1141,21 +1142,15 @@ button.upgrade-btn {
 .worker-name-link:hover {
   color: var(--text);
 }
-.worker-inspect-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 5vh 16px;
-  background: rgba(0, 0, 0, 0.5);
-  overflow-y: auto;
-}
 .worker-inspect {
-  width: min(720px, 100%);
+  box-sizing: border-box;
+  width: min(720px, calc(100% - 32px));
   max-height: 90vh;
   overflow-y: auto;
+  margin: 5vh auto;
+}
+.worker-inspect::backdrop {
+  background: rgba(0, 0, 0, 0.5);
 }
 .worker-edit {
   width: 100%;
