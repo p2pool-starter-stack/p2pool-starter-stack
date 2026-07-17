@@ -140,7 +140,11 @@ verify_release() {
     #    genuinely-signed bundle served at the $TAG URL is caught. Read without extracting — the same
     #    check control_upgrade makes before it unpacks a byte.
     local bv
-    bv="$(tar -xzOf "$bundle" pithead/VERSION 2>/dev/null | tr -d '[:space:]')"
+    # #548: plain assignment — under errexit a tar failure here would kill the smoke test with a
+    # bare trap instead of the die() message below. Guard it like every other check in this script.
+    if ! bv="$(tar -xzOf "$bundle" pithead/VERSION 2>/dev/null | tr -d '[:space:]')"; then
+        die "Published $TAG bundle is missing pithead/VERSION — cannot verify against the tag (corrupt or not a pithead bundle)."
+    fi
     [ "v$bv" = "$TAG" ] ||
         die "Published $TAG bundle contains VERSION '$bv' — a version mismatch (possible rollback). control_upgrade refuses this (#376)."
     ok "Bundle VERSION matches the tag ($TAG) — no rollback substitution."
