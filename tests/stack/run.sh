@@ -5822,7 +5822,7 @@ w1_cfg="$(cat "$W1/config.json" 2>/dev/null)"
 assert_eq "defaults path: monero.wallet_address" "$(jq -r '.monero.wallet_address' <<<"$w1_cfg")" "$WALLET"
 assert_eq "defaults path: tari.wallet_address" "$(jq -r '.tari.wallet_address' <<<"$w1_cfg")" "TARIWALLETDEFAULT"
 assert_eq "defaults path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w1_cfg")" "local"
-assert_eq "defaults path: p2pool.pool defaults to mini, not the old hardcoded main" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "mini"
+assert_eq "defaults path: p2pool.pool Enter-through keeps main (matches the reference default)" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "main"
 assert_eq "defaults path: local node RPC creds auto-generated (non-empty)" \
     "$([ -n "$(jq -r '.monero.node_username' <<<"$w1_cfg")" ] && [ -n "$(jq -r '.monero.node_password' <<<"$w1_cfg")" ] && echo yes)" "yes"
 # The revert-proof core: config.json carries ONLY the four top-level blocks the defaults path
