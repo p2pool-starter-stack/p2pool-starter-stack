@@ -4750,7 +4750,20 @@ UPGAUDIT="$UPG/data/control/audit/control.log"
 mkdir -p "$UPGREQS" "$UPG/data/control/staged" "$UPGRESULTS" "$UPG/data/control/audit"
 cp "$STACK" "$UPG/pithead"
 make_stubs "$UPG/bin"
+# The #544 abort ("Cannot unlink: Directory not empty") is GNU-tar behaviour — macOS's bsdtar -U
+# tolerates non-empty dirs and would mask the regression. CI (Linux) and real installs run GNU
+# tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
+command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
 printf '1.3.1' >"$UPG/VERSION"
+# #544/#555: a real release install carries non-empty build/* config-template mounts (see the
+# bundle's build/* below) — pre-seed them here with STALE content from "the previous version",
+# including a file the new bundle does NOT ship, so the extraction below runs over the exact shape
+# that made v1.6.0's single -U tar pass abort ("Cannot unlink: Directory not empty").
+mkdir -p "$UPG/build/monero" "$UPG/build/tari" "$UPG/build/tari-wallet"
+printf 'stale-monero-template-v1.3.1\n' >"$UPG/build/monero/bitmonero.conf.template"
+printf 'stale-tari-template-v1.3.1\n' >"$UPG/build/tari/config.toml.template"
+printf 'stale-tari-wallet-entry-v1.3.1\n' >"$UPG/build/tari-wallet/entrypoint.sh"
+printf 'leftover-from-a-removed-mount\n' >"$UPG/build/monero/leftover.conf" # absent from the new bundle
 # The stub curl serves the canned API response for the release-API URL and copies the fake bundle
 # for the download URL; every call is logged so the tests can assert what was (not) dialled.
 cat >"$UPG/bin/curl" <<'EOF'
@@ -4774,7 +4787,7 @@ EOF
 chmod +x "$UPG/bin/curl"
 # The fake v9.9.9 release bundle: a pithead that logs its invocation (and can be told to fail).
 UPGB="$SANDBOX/upgrade59-bundle"
-mkdir -p "$UPGB/pithead"
+mkdir -p "$UPGB/pithead/build/monero" "$UPGB/pithead/build/tari" "$UPGB/pithead/build/tari-wallet"
 cat >"$UPGB/pithead/pithead" <<'EOF'
 #!/usr/bin/env bash
 echo "new-pithead $*" >>upgrade-invocations.log
@@ -4783,6 +4796,12 @@ exit 0
 EOF
 chmod +x "$UPGB/pithead/pithead"
 printf '9.9.9' >"$UPGB/pithead/VERSION"
+# build/* members mirror the real bundle layout (scripts/release.sh's compose_build_mounts): every
+# release install carries these non-empty config-template mounts, which is exactly what #544/#555
+# tests below — a bundle with only the "pithead" script can't reproduce that bug.
+printf 'new-monero-template-v9.9.9\n' >"$UPGB/pithead/build/monero/bitmonero.conf.template"
+printf 'new-tari-template-v9.9.9\n' >"$UPGB/pithead/build/tari/config.toml.template"
+printf 'new-tari-wallet-entry-v9.9.9\n' >"$UPGB/pithead/build/tari-wallet/entrypoint.sh"
 tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead
 printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel"}' >"$UPGB/api.json"
 seed_upgrade_env() { # <control-enabled true|false>
@@ -4922,6 +4941,20 @@ assert_eq "both GitHub dials went over Tor SOCKS" "$(grep -c -- '--socks5-hostna
 assert_eq "no cosign.pub -> no signature dial (documented fallback)" "$(grep -c '\.sig' "$UPG/curl.log" || true)" "0"
 assert_contains "upgrade start audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"started\""
 assert_contains "upgrade completion audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+# #544/#555: the extraction above ran over the non-empty build/* dirs pre-seeded near the top of
+# this block — this is the regression test for the withdrawn v1.6.0 bug. Pin b12082c's documented
+# semantics: pass 1 MERGES directories with plain tar (never purges), so new build/* content lands
+# and a stale file the new bundle doesn't carry survives untouched.
+assert_eq "build/* new content lands (monero template)" "$(cat "$UPG/build/monero/bitmonero.conf.template" 2>/dev/null)" "new-monero-template-v9.9.9"
+assert_eq "build/* new content lands (tari template)" "$(cat "$UPG/build/tari/config.toml.template" 2>/dev/null)" "new-tari-template-v9.9.9"
+assert_eq "build/* new content lands (tari-wallet entrypoint)" "$(cat "$UPG/build/tari-wallet/entrypoint.sh" 2>/dev/null)" "new-tari-wallet-entry-v9.9.9"
+assert_eq "a stale build/* file absent from the new bundle survives the merge" "$(cat "$UPG/build/monero/leftover.conf" 2>/dev/null)" "leftover-from-a-removed-mount"
+# No partial/temp extraction residue after a successful run: the staged bundle + tar log are gone.
+if [ ! -e "$UPG/data/control/staged/.$UUPG.tar.gz" ] && [ ! -e "$UPG/data/control/staged/.$UUPG.log" ]; then
+    ok "no staged bundle/log residue after a successful upgrade"
+else
+    bad "no staged bundle/log residue after a successful upgrade" "leftover staging file present"
+fi
 
 # #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
 # bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
