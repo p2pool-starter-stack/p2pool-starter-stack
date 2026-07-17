@@ -31,8 +31,8 @@ The product version lives in a top-level [`VERSION`](../VERSION) file: plain tex
 - The dashboard's `pyproject.toml` is kept in lockstep (packaging metadata only); a shell test fails
   if it drifts from `VERSION`.
 
-> NOTE: `VERSION` is `1.0.3`. Set it to the version you want to publish; the `pyproject.toml`
-> metadata must match, enforced by the drift-guard test.
+> NOTE: `VERSION` holds the last released version. Set it to the version you want to publish; the
+> `pyproject.toml` metadata must match, enforced by the drift-guard test.
 
 ## Component pins = an ingredients manifest
 

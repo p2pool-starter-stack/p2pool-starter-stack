@@ -196,7 +196,7 @@ Use a **separate** check for the host timer if you want to tell "the host is up"
   enabled` line at startup — if it's absent, no ping URL is configured. The ping is always over
   Tor, so a URL your Tor exit can't reach (e.g. a LAN-only self-hosted instance) will never land;
   ping failures themselves are logged at debug level only.
-- **Test it end to end.** Stop the stack (`./pithead stop`) and wait for the period + grace to
+- **Test it end to end.** Stop the stack (`./pithead down`) and wait for the period + grace to
   elapse — you should get the alert. Start it again and the check recovers.
 - **Too many false alarms.** Increase the **period** and/or **grace** on Healthchecks.io.
 

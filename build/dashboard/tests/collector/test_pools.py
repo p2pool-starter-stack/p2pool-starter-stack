@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import mining_dashboard.collector.pools as pools
@@ -14,6 +15,7 @@ from mining_dashboard.config.config import (
     SECOND_PER_BLOCK_MAIN,
     STRATUM_STATS_PATH,
 )
+from mining_dashboard.service.data_service import _shares_to_record
 
 
 class TestDetectPoolType:
@@ -72,6 +74,14 @@ class TestP2poolStats:
             s = get_p2pool_stats()
         assert s["p2p"]["type"] == "Unknown"
         assert s["pool"]["hashrate"] == 0
+
+    def test_missing_pplns_window_key_omitted(self):
+        # A failed pool-stats read (raw_pool == {}) must leave "pplns_window" OUT of the dict
+        # entirely, not fill it with 0 — a materialized 0 defeats every downstream
+        # `.get("pplns_window", DEFAULT_PPLNS_WINDOW)` fallback (#547).
+        with patch.object(pools, "_read_json", return_value={}):
+            s = get_p2pool_stats()
+        assert "pplns_window" not in s["pool"]
 
 
 class TestNetworkStats:
@@ -141,3 +151,76 @@ class TestReadJson:
         good = tmp_path / "good.json"
         good.write_text('{"a": 1}')
         assert pools._read_json(str(good)) == {"a": 1}
+
+    def test_read_failure_after_a_good_parse_serves_last_good(self, tmp_path):
+        # #547: p2pool rewrites these files in place, so a poll can catch one mid-write. That
+        # must serve the LAST successful parse, not {} — {} looks like a real reset to callers.
+        path = tmp_path / "stratum"
+        path.write_text('{"shares_found": 500}')
+        assert pools._read_json(str(path)) == {"shares_found": 500}
+
+        path.write_text("{not valid")  # caught mid-write
+        assert pools._read_json(str(path)) == {"shares_found": 500}
+
+        path.write_text('{"shares_found": 505}')  # write completes, next poll sees it
+        assert pools._read_json(str(path)) == {"shares_found": 505}
+
+
+class TestPollSequenceReplay:
+    """#547: a mid-write read race on p2pool's stats files must not replay the cumulative
+    shares_found counter as fresh PPLNS shares, and must not blank pplns_window to 0."""
+
+    def _point_at_tmp(self, tmp_path, monkeypatch):
+        pool_path = tmp_path / "pool_stats"
+        stratum_path = tmp_path / "stratum"
+        p2p_path = tmp_path / "p2p"
+        monkeypatch.setattr(pools, "POOL_STATS_PATH", str(pool_path))
+        monkeypatch.setattr(pools, "STRATUM_STATS_PATH", str(stratum_path))
+        monkeypatch.setattr(pools, "P2P_STATS_PATH", str(p2p_path))
+        p2p_path.write_text("{}")
+        return pool_path, stratum_path
+
+    def test_good_fail_good_records_only_the_delta_and_keeps_the_window(
+        self, tmp_path, monkeypatch
+    ):
+        pool_path, stratum_path = self._point_at_tmp(tmp_path, monkeypatch)
+
+        def write_good(shares_total):
+            pool_path.write_text(json.dumps({"pool_statistics": {"pplnsWindowSize": 2160}}))
+            stratum_path.write_text(
+                json.dumps({"shares_found": shares_total, "last_share_found_time": 1})
+            )
+
+        # Poll 1: good read, cumulative total 500 -> baselines, records nothing (#129).
+        write_good(500)
+        s1 = get_p2pool_stats()
+        recorded, baseline = _shares_to_record(None, s1["pool"]["shares_found"])
+        total_recorded = recorded
+        assert s1["pool"]["pplns_window"] == 2160
+
+        # Poll 2: both stats files caught mid-write -> JSONDecodeError on each.
+        pool_path.write_text("{not valid")
+        stratum_path.write_text("{not valid")
+        s2 = get_p2pool_stats()
+        recorded, baseline = _shares_to_record(baseline, s2["pool"]["shares_found"])
+        total_recorded += recorded
+        assert s2["pool"]["shares_found"] == 500  # last-good served, NOT 0
+        assert s2["pool"]["pplns_window"] == 2160  # last-good served, NEVER 0
+
+        # Poll 3: write completes, cumulative total 505 (5 real shares since poll 1).
+        write_good(505)
+        s3 = get_p2pool_stats()
+        recorded, baseline = _shares_to_record(baseline, s3["pool"]["shares_found"])
+        total_recorded += recorded
+
+        assert total_recorded == 5  # not 505: the read-race poll never replayed the counter
+        assert baseline == 505
+
+    def test_never_read_case_unchanged(self, tmp_path, monkeypatch):
+        # First poll ever fails (files don't exist yet) -> {} behavior, no crash, no shares.
+        self._point_at_tmp(tmp_path, monkeypatch)
+        s = get_p2pool_stats()
+        assert s["pool"]["shares_found"] == 0
+        assert "pplns_window" not in s["pool"]
+        recorded, baseline = _shares_to_record(None, s["pool"]["shares_found"])
+        assert (recorded, baseline) == (0, 0)

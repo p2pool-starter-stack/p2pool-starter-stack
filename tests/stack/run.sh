@@ -395,6 +395,18 @@ assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SA
 # Dev-fee donate-level (#173): a brief restart (INFO), shown as a percentage.
 assert_contains "donate-level is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "INFO"
 assert_contains "donate-level shows pct" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "0% → 1%"
+# COMPOSE_PROFILES (#552): the payout-confirm profiles (#381/#462) share this key with local_node,
+# so the node-switch text must key off the local_node token, not old/new emptiness.
+case "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES "" tari_payout_confirm)" in
+*"LOCAL Monero node"*) bad "payout-confirm enable is not a node switch" "got node-switch text" ;;
+*) ok "payout-confirm enable is not a node switch" ;;
+esac
+case "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES "local_node,payout_confirm" local_node)" in
+*"LOCAL Monero node"* | *"REMOTE Monero node"*) bad "payout-confirm disable (node stays local) is not a node switch" "got node-switch text" ;;
+*) ok "payout-confirm disable (node stays local) is not a node switch" ;;
+esac
+assert_contains "empty to local_node is a LOCAL switch" "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES "" local_node)" "LOCAL Monero node"
+assert_contains "local_node to empty is a REMOTE switch" "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES local_node "")" "REMOTE Monero node"
 assert_contains "wallet is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
 assert_contains "xvb url is INFO" "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)" "INFO"
 assert_contains "data_dir is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)" "DEST"
@@ -853,6 +865,67 @@ rd_order=$(
 )
 assert_eq "reset-dashboard applies the firewall before 'compose up' (#291)" "$(fw_then_compose "$rd_order")" "firewall,compose,"
 
+echo "== regression: mkdir runs before chown -R of the same tree (#550) =="
+# prepare_directories and reset_dashboard used to `sudo chown -R` a data dir tree and only THEN
+# `mkdir -p` inside it (the p2pool stats subdir) — EACCES for any operator uid != APP_UID, since
+# the tree no longer belongs to them. ensure_directories already got this right (mkdir first,
+# ensure_owner/chown last); pin the other two to the same order. Shadow sudo/mkdir to log just the
+# two ops that matter, in call order — same technique as fw_then_compose above.
+mkdir_before_chown() { printf '%s\n' "$1" | grep -xE 'mkdir-stats|chown-p2pool' | tr '\n' ','; }
+
+pd_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    # shellcheck disable=SC2034  # read by the sourced prepare_directories, unseen here
+    MONERO_DIR="$SANDBOX/pd-monero"
+    # shellcheck disable=SC2034
+    TARI_DIR="$SANDBOX/pd-tari"
+    P2POOL_DIR="$SANDBOX/pd-p2pool"
+    TOR_DATA_DIR="$SANDBOX/pd-tor"
+    DASHBOARD_DIR="$SANDBOX/pd-dashboard"
+    # shellcheck disable=SC2034
+    CLEARNET_STATE_DIR="$SANDBOX/pd-clearnet"
+    log() { :; }
+    prepare_control_dirs() { :; }
+    mkdir() {
+        [[ "$*" == *"$P2POOL_DIR/stats"* ]] && echo mkdir-stats
+        return 0
+    }
+    sudo() {
+        [[ "$*" == *"chown -R"*"$P2POOL_DIR"* ]] && echo chown-p2pool
+        return 0
+    }
+    prepare_directories
+)
+assert_eq "prepare_directories: mkdir p2pool/stats precedes chown -R of P2POOL_DIR" \
+    "$(mkdir_before_chown "$pd_order")" "mkdir-stats,chown-p2pool,"
+
+rd2_order=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    env_get() { echo "/nonexistent/rd2-$1"; } # non-existent dirs -> the destructive rm is skipped
+    assert_safe_dir() { :; }
+    log() { :; }
+    docker() { :; }
+    apply_tor_egress_firewall() { :; }
+    compose_up_checked() { :; }
+    mkdir() {
+        [[ "$*" == *"/nonexistent/rd2-P2POOL_DATA_DIR/stats"* ]] && echo mkdir-stats
+        return 0
+    }
+    sudo() {
+        [[ "$*" == *"chown -R"*"/nonexistent/rd2-P2POOL_DATA_DIR"* ]] && echo chown-p2pool
+        return 0
+    }
+    reset_dashboard -y
+)
+assert_eq "reset-dashboard: mkdir p2pool/stats precedes chown -R of p2pool_dir" \
+    "$(mkdir_before_chown "$rd2_order")" "mkdir-stats,chown-p2pool,"
+
 echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
 # Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
 # empty), which silently broke the #270 firewall opt-out (config false → .env stayed true) and
@@ -1277,7 +1350,7 @@ assert_contains "rotate preserves DEPLOYMENT_COMPLETED across render_env (#356)"
 echo "== black-box: upgrade captures a just-enabled dashboard onion address (#356) =="
 # Enabling the onion via `upgrade` must read the freshly-generated .onion back into .env; apply's
 # capture only runs when the config changed, so an upgrade-based enable left the address uncaptured.
-upg_capture() { # <onion_enabled> <current_onion> -> prints "captured" if provision_dashboard_onion ran
+upg_capture() { # <onion_enabled> <current_onion> -> "captured" when provision runs, "caddyfile-rendered" per generate_caddyfile call
     cd "$SANDBOX" || exit
     # shellcheck disable=SC1090
     source "$STACK"
@@ -1291,20 +1364,129 @@ upg_capture() { # <onion_enabled> <current_onion> -> prints "captured" if provis
     render_env() { :; }
     mv() { :; }
     inject_service_configs() { :; }
-    generate_caddyfile() { :; }
+    generate_caddyfile() { echo caddyfile-rendered; }
     migrate_compose_project() { :; }
     is_source_checkout() { return 1; }
     log() { :; }
     docker() { :; }
     apply_tor_egress_firewall() { :; }
     compose_up_checked() { :; }
-    provision_dashboard_onion() { echo captured; }
+    provision_dashboard_onion() {
+        DASHBOARD_ONION="upgcap5678.onion"
+        echo captured
+    }
     export DASHBOARD_ONION_ENABLED="$1"
     export DASHBOARD_ONION="$2"
     stack_upgrade
 }
 assert_contains "upgrade captures the onion address when enabled + uncaptured (#356)" "$(upg_capture true '')" "captured"
 assert_not_contains "upgrade skips capture when the onion is disabled (#356)" "$(upg_capture false '')" "captured"
+
+# #546: the upgrade-path capture must ALSO regenerate the Caddyfile — the render preamble ran while
+# the address was still the placeholder, so a capture without a re-render leaves the HTTPS onion
+# vhost missing forever (the next apply no-ops on an unchanged config). Count generate_caddyfile
+# calls: once from the preamble, a second time only when the capture leg runs.
+upg_regen_on=$(upg_capture true '' | grep -c "caddyfile-rendered")
+case "$upg_regen_on" in
+2) ok "upgrade capture regenerates the Caddyfile (#546)" ;;
+*) bad "upgrade capture regenerates the Caddyfile (#546)" "generate_caddyfile ran $upg_regen_on time(s), want 2 (preamble + capture)" ;;
+esac
+upg_regen_off=$(upg_capture false '' | grep -c "caddyfile-rendered")
+case "$upg_regen_off" in
+1) ok "upgrade without onion renders the Caddyfile once (#546)" ;;
+*) bad "upgrade without onion renders the Caddyfile once (#546)" "generate_caddyfile ran $upg_regen_off time(s), want 1" ;;
+esac
+
+echo "== black-box: apply captures + renders the HTTPS onion vhost in the SAME run (#546) =="
+# Before the fix, apply's post-up capture block (provision_dashboard_onion && render_env) never
+# re-ran generate_caddyfile, so the https://<onion> vhost (#360) only appeared on some LATER,
+# unrelated apply — a re-apply that changed nothing hit the "No configuration changes detected"
+# early return before ever reaching generate_caddyfile. Drive the real apply() with the heavy
+# machinery stubbed away but generate_caddyfile left REAL, so the Caddyfile is the actual proof.
+AOC="$SANDBOX/apply-onion-capture"
+mkdir -p "$AOC"
+printf 'DEPLOYMENT_COMPLETED=true\n' >"$AOC/.env"
+caddy_apply_capture=$(
+    cd "$AOC" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    ensure_onion_password() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    ensure_directories() { :; }
+    resolve_dashboard_host() { :; }
+    render_env() { :; }
+    mv() { :; }
+    env_changed_keys() { echo DASHBOARD_ONION_ENABLED; }
+    inject_service_configs() { :; }
+    provision_onion_client_auth() { :; }
+    provision_control_runner() { :; }
+    migrate_compose_project() { :; }
+    apply_tor_egress_firewall() { :; }
+    migrate_dashboard_data() { :; }
+    compose_up_checked() { :; }
+    announce_dashboard_url() { :; }
+    log() { :; }
+    warn() { :; }
+    docker() { :; }
+    # The shadowed capture: the address is unknown until the recreated tor container publishes it
+    # post-up, exactly like the real provision_dashboard_onion.
+    provision_dashboard_onion() { DASHBOARD_ONION="captured1234abcd.onion"; }
+    MONERO_ONION=mona.onion HOST_IP=box.lan DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$auth_hb64" NETWORK_PREFIX=172.28.0 DASHBOARD_ONION_ENABLED=true \
+        DASHBOARD_ONION=placeholder apply -y >/dev/null 2>&1
+    cat Caddyfile
+)
+assert_contains "apply: HTTPS onion vhost appears in the SAME apply run (#546)" "$caddy_apply_capture" "https://captured1234abcd.onion {"
+assert_contains "apply: HTTP onion vhost (bridge gateway) still present" "$caddy_apply_capture" "http://172.28.0.1 {"
+
+echo "== black-box: rotate-dashboard-onion regenerates the Caddyfile (#546) =="
+# Before the fix, rotate restarted caddy WITHOUT regenerating the Caddyfile, so caddy kept serving
+# the retired onion's HTTPS vhost and the new address had none. Seed a Caddyfile as if a PRIOR
+# generate_caddyfile ran for the old address, then rotate with a shadowed provision_tor that
+# returns a new one — the fix must leave exactly the new address's vhost behind.
+ROC="$SANDBOX/rotate-onion-capture"
+mkdir -p "$ROC/rot-tor/dashboard"
+cat >"$ROC/Caddyfile" <<'EOF'
+https://box.lan {
+    tls internal
+}
+
+http://172.28.0.1 {
+}
+
+https://oldaddr1234.onion {
+    tls internal
+}
+EOF
+caddy_rotate_capture=$(
+    cd "$ROC" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    require_env() { :; }
+    parse_and_validate_config() { :; }
+    load_preserved_state() { :; }
+    warn() { :; }
+    log() { :; }
+    docker() { :; }
+    sudo() { :; }
+    env_get() { :; }
+    render_env() { :; }
+    resolve_dashboard_host() { HOST_IP=box.lan; }
+    # The shadowed provision the issue asks for: a fresh address on rotate.
+    provision_tor() { DASHBOARD_ONION="newaddr5678.onion"; }
+    onion_client_key() { :; }
+    export DASHBOARD_ONION_ENABLED=true
+    export DASHBOARD_ONION_CLIENT_AUTH=false
+    TOR_DATA_DIR="$ROC/rot-tor" DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$auth_hb64" NETWORK_PREFIX=172.28.0 rotate_dashboard_onion -y >/dev/null 2>&1
+    cat Caddyfile
+)
+assert_not_contains "rotate drops the retired onion's HTTPS vhost (#546)" "$caddy_rotate_capture" "oldaddr1234.onion"
+assert_contains "rotate adds the new onion's HTTPS vhost in the same run (#546)" "$caddy_rotate_capture" "https://newaddr5678.onion {"
 
 echo "== unit: dashboard_onion_status surfaces the onion URL for status/doctor (#343) =="
 # The shared resolver behind both `pithead status` and `pithead doctor`: it returns the onion URL +
@@ -3501,6 +3683,22 @@ assert_rc "plaintext archive still restores" "$rc" "0"
 assert_eq "plaintext restore brings back the Caddyfile" "$(cat "$BK/Caddyfile")" "CADDY-ORIG"
 rm -f "$BK"/backups/pithead-backup-*
 
+# 6b) Truncated plaintext archive (#549): mirrors the encrypted-branch tamper/truncation check
+# (4b above) on the gzip path — a truncated archive must be rejected by a full-stream `tar -tzf`
+# verify BEFORE extraction, with nothing written, instead of half-overwriting config.json/.env.
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+plain_trunc_src="$(ls "$BK"/backups/pithead-backup-*.tar.gz 2>/dev/null | head -1)"
+config_before="$(cat "$BK/config.json")"
+env_before="$(cat "$BK/.env")"
+head -c "$(($(wc -c <"$plain_trunc_src") / 2))" "$plain_trunc_src" >"$BK/backups/truncated-plain.tar.gz"
+out="$(cd "$BK" && PATH="$BK/bin:$PATH" ./pithead restore -y "$BK/backups/truncated-plain.tar.gz" 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "truncated plaintext archive exits non-zero" || bad "truncated plaintext archive exits non-zero" "rc=0"
+assert_contains "truncated plaintext archive names integrity failure" "$out" "integrity"
+assert_eq "truncated plaintext archive leaves config.json untouched" "$(cat "$BK/config.json")" "$config_before"
+assert_eq "truncated plaintext archive leaves .env untouched" "$(cat "$BK/.env")" "$env_before"
+rm -f "$BK"/backups/pithead-backup-* "$BK/backups/truncated-plain.tar.gz"
+
 # 7) A failed encrypted backup (openssl dies mid-stream) removes the partial archive.
 cat >"$BK/bin/openssl" <<'EOF'
 #!/usr/bin/env bash
@@ -3529,6 +3727,51 @@ rc=$?
 [ "$rc" -ne 0 ] && ok "encrypted restore w/o passphrase exits non-zero" || bad "encrypted restore w/o passphrase exits non-zero" "rc=0"
 assert_contains "encrypted restore w/o passphrase explains" "$out" "PITHEAD_BACKUP_PASSPHRASE"
 rm -f "$BK"/backups/pithead-backup-*
+
+echo "== black-box: failed plaintext backup restarts a running stack, removes the partial archive (#551) =="
+# Companion to the #549 test above: a failed tar must not strand the stack stopped, nor leave a
+# partial (root-owned) archive that looks like a valid backup. Shadow tar to fail unconditionally
+# and simulate a RUNNING stack (was_running=1), so the failure path must call stack_up for real —
+# proven here by "compose up" showing up in the docker log, not by stubbing stack_up away.
+FB="$SANDBOX/failbackup"
+mkdir -p "$FB/build/tari" "$FB/data/tor" "$FB/data/dashboard" "$FB/bin"
+cp "$STACK" "$FB/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$FB/build/tari/"
+cat >"$FB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >>"${DOCKER_LOG:-/dev/null}"
+case "$*" in
+  "compose ps --status running -q") echo cid123 ;; # non-empty -> stack treated as RUNNING
+esac
+exit 0
+EOF
+cat >"$FB/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+EOF
+cat >"$FB/bin/tar" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$FB/bin/docker" "$FB/bin/sudo" "$FB/bin/tar"
+cat >"$FB/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=FBTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$FB/config.json"
+
+out="$(cd "$FB" && DOCKER_LOG="$FB/docker.log" PATH="$FB/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
+rc=$?
+[ "$rc" -ne 0 ] && ok "failed plaintext backup (running stack) exits non-zero" || bad "failed plaintext backup (running stack) exits non-zero" "rc=0"
+assert_contains "failed plaintext backup names the cause" "$out" "partial archive was removed"
+assert_eq "failed plaintext backup leaves no archive behind" "$(ls "$FB"/backups/pithead-backup-* 2>/dev/null | head -1)" ""
+assert_contains "failed plaintext backup restarts the stack" "$(cat "$FB/docker.log" 2>/dev/null)" "compose up"
 
 echo "== black-box: reset-dashboard targets .env dirs, not config.json (#139) =="
 # reset-dashboard must wipe the LIVE deployment's data dirs (from .env), not a path the user may
@@ -4479,6 +4722,11 @@ touch -t 202001010000 "$REQS/stale-req.json"
 run_pending >/dev/null
 [ ! -f "$STAGED/stale.json" ] && ok "aged staged file swept" || bad "aged staged file swept" "still present"
 [ ! -f "$REQS/stale-req.json" ] && ok "aged request file swept" || bad "aged request file swept" "still present"
+# Orphaned claim sweep (#548): a `.claim.<pid>` left behind by a runner that died mid-dispatch
+# (the errexit gap this issue closes) is swept the same way as stale staged/request files.
+touch -t 202001010000 "$C/data/control/.claim.12345"
+run_pending >/dev/null
+[ ! -f "$C/data/control/.claim.12345" ] && ok "stale orphaned claim swept" || bad "stale orphaned claim swept" "still present"
 # Per-run intake cap: 60 pending intents → one run claims exactly 50 and LEAVES the remainder in
 # requests/ for the next path-unit fire (deterministic overflow — nothing is dropped). Invalid
 # JSON bodies keep each of the 60 on the cheap discard path; they still count against the cap.
@@ -4502,7 +4750,20 @@ UPGAUDIT="$UPG/data/control/audit/control.log"
 mkdir -p "$UPGREQS" "$UPG/data/control/staged" "$UPGRESULTS" "$UPG/data/control/audit"
 cp "$STACK" "$UPG/pithead"
 make_stubs "$UPG/bin"
+# The #544 abort ("Cannot unlink: Directory not empty") is GNU-tar behaviour — macOS's bsdtar -U
+# tolerates non-empty dirs and would mask the regression. CI (Linux) and real installs run GNU
+# tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
+command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
 printf '1.3.1' >"$UPG/VERSION"
+# #544/#555: a real release install carries non-empty build/* config-template mounts (see the
+# bundle's build/* below) — pre-seed them here with STALE content from "the previous version",
+# including a file the new bundle does NOT ship, so the extraction below runs over the exact shape
+# that made v1.6.0's single -U tar pass abort ("Cannot unlink: Directory not empty").
+mkdir -p "$UPG/build/monero" "$UPG/build/tari" "$UPG/build/tari-wallet"
+printf 'stale-monero-template-v1.3.1\n' >"$UPG/build/monero/bitmonero.conf.template"
+printf 'stale-tari-template-v1.3.1\n' >"$UPG/build/tari/config.toml.template"
+printf 'stale-tari-wallet-entry-v1.3.1\n' >"$UPG/build/tari-wallet/entrypoint.sh"
+printf 'leftover-from-a-removed-mount\n' >"$UPG/build/monero/leftover.conf" # absent from the new bundle
 # The stub curl serves the canned API response for the release-API URL and copies the fake bundle
 # for the download URL; every call is logged so the tests can assert what was (not) dialled.
 cat >"$UPG/bin/curl" <<'EOF'
@@ -4526,7 +4787,7 @@ EOF
 chmod +x "$UPG/bin/curl"
 # The fake v9.9.9 release bundle: a pithead that logs its invocation (and can be told to fail).
 UPGB="$SANDBOX/upgrade59-bundle"
-mkdir -p "$UPGB/pithead"
+mkdir -p "$UPGB/pithead/build/monero" "$UPGB/pithead/build/tari" "$UPGB/pithead/build/tari-wallet"
 cat >"$UPGB/pithead/pithead" <<'EOF'
 #!/usr/bin/env bash
 echo "new-pithead $*" >>upgrade-invocations.log
@@ -4535,6 +4796,12 @@ exit 0
 EOF
 chmod +x "$UPGB/pithead/pithead"
 printf '9.9.9' >"$UPGB/pithead/VERSION"
+# build/* members mirror the real bundle layout (scripts/release.sh's compose_build_mounts): every
+# release install carries these non-empty config-template mounts, which is exactly what #544/#555
+# tests below — a bundle with only the "pithead" script can't reproduce that bug.
+printf 'new-monero-template-v9.9.9\n' >"$UPGB/pithead/build/monero/bitmonero.conf.template"
+printf 'new-tari-template-v9.9.9\n' >"$UPGB/pithead/build/tari/config.toml.template"
+printf 'new-tari-wallet-entry-v9.9.9\n' >"$UPGB/pithead/build/tari-wallet/entrypoint.sh"
 tar -czf "$UPGB/bundle.tar.gz" -C "$UPGB" pithead
 printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel"}' >"$UPGB/api.json"
 seed_upgrade_env() { # <control-enabled true|false>
@@ -4674,6 +4941,20 @@ assert_eq "both GitHub dials went over Tor SOCKS" "$(grep -c -- '--socks5-hostna
 assert_eq "no cosign.pub -> no signature dial (documented fallback)" "$(grep -c '\.sig' "$UPG/curl.log" || true)" "0"
 assert_contains "upgrade start audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"started\""
 assert_contains "upgrade completion audited" "$(cat "$UPGAUDIT")" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+# #544/#555: the extraction above ran over the non-empty build/* dirs pre-seeded near the top of
+# this block — this is the regression test for the withdrawn v1.6.0 bug. Pin b12082c's documented
+# semantics: pass 1 MERGES directories with plain tar (never purges), so new build/* content lands
+# and a stale file the new bundle doesn't carry survives untouched.
+assert_eq "build/* new content lands (monero template)" "$(cat "$UPG/build/monero/bitmonero.conf.template" 2>/dev/null)" "new-monero-template-v9.9.9"
+assert_eq "build/* new content lands (tari template)" "$(cat "$UPG/build/tari/config.toml.template" 2>/dev/null)" "new-tari-template-v9.9.9"
+assert_eq "build/* new content lands (tari-wallet entrypoint)" "$(cat "$UPG/build/tari-wallet/entrypoint.sh" 2>/dev/null)" "new-tari-wallet-entry-v9.9.9"
+assert_eq "a stale build/* file absent from the new bundle survives the merge" "$(cat "$UPG/build/monero/leftover.conf" 2>/dev/null)" "leftover-from-a-removed-mount"
+# No partial/temp extraction residue after a successful run: the staged bundle + tar log are gone.
+if [ ! -e "$UPG/data/control/staged/.$UUPG.tar.gz" ] && [ ! -e "$UPG/data/control/staged/.$UUPG.log" ]; then
+    ok "no staged bundle/log residue after a successful upgrade"
+else
+    bad "no staged bundle/log residue after a successful upgrade" "leftover staging file present"
+fi
 
 # #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
 # bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
@@ -4692,6 +4973,34 @@ assert_eq "version-mismatched (rollback) bundle is refused" "$(jq -r '.status' "
 assert_contains "rollback refusal names the mismatch" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rollback"
 assert_eq "rollback bundle extracts nothing (VERSION untouched)" "$(cat "$UPG/VERSION")" "1.3.1"
 assert_eq "rollback bundle never ran a new pithead" "$(cat "$UPG/upgrade-invocations.log" 2>/dev/null || echo none)" "none"
+
+# #548: a bundle that gzips fine but carries no pithead/VERSION at all (corrupt download, or a
+# hostile non-pithead archive) must fail cleanly — not kill the runner via errexit and leave the
+# result stuck at "running" with an orphaned claim and the rest of the queue abandoned.
+reset_upgrade_state
+mkdir -p "$UPGB/noversion/pithead"
+cp "$UPGB/pithead/pithead" "$UPGB/noversion/pithead/pithead"
+tar -czf "$UPGB/noversion.tar.gz" -C "$UPGB/noversion" pithead
+UUPG2="77777777-7777-4777-8777-777777777777"
+upgrade_intent "$UUPG" "v9.9.9"
+# The drain orders requests by mtime (ls -1tr); a same-second tie breaks differently between GNU
+# (CI) and BSD (macOS) ls, flipping which intent runs first — and the second one is throttled.
+# One second between the writes makes "UUPG first" deterministic everywhere.
+sleep 1
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG2" >"$UPGREQS/$UUPG2.json"
+(cd "$UPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$UPG/curl.log" \
+    CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/noversion.tar.gz" \
+    ./pithead control-run-pending >/dev/null 2>&1)
+assert_eq "bundle missing pithead/VERSION reports failed (not stuck running)" \
+    "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "missing-VERSION failure names the cause" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "missing pithead/VERSION"
+assert_eq "missing-VERSION bundle extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+[ -z "$(find "$UPG/data/control" -maxdepth 1 -name '.claim.*' 2>/dev/null)" ] &&
+    ok "missing-VERSION failure releases its claim" || bad "missing-VERSION failure releases its claim" "claim file left behind"
+[ -f "$UPGRESULTS/$UUPG2.json" ] &&
+    ok "the rest of the queue is not abandoned (second intent still processed)" ||
+    bad "the rest of the queue is not abandoned (second intent still processed)" "no result written for the second intent"
+rm -f "$UPGRESULTS/$UUPG2.json" "$UPGREQS/$UUPG2.json"
 
 # Throttle: a second attempt straight after is refused for 10 minutes (egress-beacon guard).
 # The happy path replaced $U/pithead with the fake bundle's script — restore the real runner
