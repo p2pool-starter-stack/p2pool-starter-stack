@@ -44,14 +44,12 @@ The stack's defaults:
   every first-party image to an immutable `@sha256` digest, so a tampered registry can't swap what
   gets pulled, and the bundle itself is fetched over TLS from GitHub Releases. Cosign signing is
   opt-in and off for every release shipped so far (`scripts/release.sh`) — it turns on only when a
-  signing key is present on the release box and `cosign.pub` is committed alongside it. When that
-  happens, `pithead up` and `pithead upgrade` verify the pinned digests against `cosign.pub` before
-  pulling and fail closed on a bad signature, a stripped `.sig`, or a missing `cosign` binary.
-  Today, with no `cosign.pub` next to `pithead`, the script warns and proceeds unverified rather
-  than blocking the pull — the digest pins above are the actual protection, not a signature.
-  Limits: a compromise of the release box itself, which would hold the signing key, is outside
-  what a signature can prove even once signing is on. See
-  [Releasing › Signed releases](docs/releasing.md#signed-releases).
+  signing key is present on the release box and `cosign.pub` is committed alongside it, and fails
+  closed once it is. Today, with no `cosign.pub` next to `pithead`, the script warns and proceeds
+  unverified rather than blocking the pull — the digest pins above are the actual protection, not
+  a signature. Limits: a compromise of the release box itself, which would hold the signing key,
+  is outside what a signature can prove even once signing is on. See
+  [Releasing › Signed releases](docs/releasing.md#signed-releases) for the verification mechanics.
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.
