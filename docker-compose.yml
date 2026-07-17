@@ -509,7 +509,7 @@ services:
         PITHEAD_GIT_BRANCH: ${PITHEAD_GIT_BRANCH:-}
         PITHEAD_RELEASE: ${PITHEAD_RELEASE:-}
     container_name: dashboard
-    # Memory ceiling (#132 — see monerod). A small Flask + SQLite app (~0.06 GiB observed); a tight
+    # Memory ceiling (#132 — see monerod). A small aiohttp + SQLite app (~0.06 GiB observed); a tight
     # cap is pure upside — a memory regression OOM-restarts the dashboard, not the revenue services.
     mem_limit: 512m
     memswap_limit: 512m
