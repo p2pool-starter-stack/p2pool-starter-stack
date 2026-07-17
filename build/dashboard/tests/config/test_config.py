@@ -304,15 +304,30 @@ class TestEnergyConfig:
         assert self._load(tmp_path, {"dashboard": {}}) == {
             "cost_per_kwh": 0.0,
             "xmr_price": 0.0,
+            "tari_price": 0.0,
             "currency": "USD",
         }
 
     def test_valid_values_load(self, tmp_path):
         got = self._load(
             tmp_path,
-            {"dashboard": {"energy": {"cost_per_kwh": 0.18, "xmr_price": 150, "currency": "EUR"}}},
+            {
+                "dashboard": {
+                    "energy": {
+                        "cost_per_kwh": 0.18,
+                        "xmr_price": 150,
+                        "tari_price": 2.5,
+                        "currency": "EUR",
+                    }
+                }
+            },
         )
-        assert got == {"cost_per_kwh": 0.18, "xmr_price": 150.0, "currency": "EUR"}
+        assert got == {
+            "cost_per_kwh": 0.18,
+            "xmr_price": 150.0,
+            "tari_price": 2.5,
+            "currency": "EUR",
+        }
 
     def test_invalid_values_degrade_to_defaults(self, tmp_path):
         got = self._load(
@@ -322,17 +337,18 @@ class TestEnergyConfig:
                     "energy": {
                         "cost_per_kwh": -1,
                         "xmr_price": "expensive",
+                        "tari_price": -2,
                         "currency": "has space",
                     }
                 }
             },
         )
-        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"}
+        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "tari_price": 0.0, "currency": "USD"}
 
     def test_non_object_energy_degrades_to_defaults(self, tmp_path):
         # A hand-edited `energy` that isn't an object mustn't crash — fall back to defaults.
         got = self._load(tmp_path, {"dashboard": {"energy": "nope"}})
-        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "currency": "USD"}
+        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "tari_price": 0.0, "currency": "USD"}
 
     def test_missing_file_reads_defaults(self, tmp_path):
         from mining_dashboard.config.config import load_energy_config
@@ -340,5 +356,6 @@ class TestEnergyConfig:
         assert load_energy_config(str(tmp_path / "absent.json")) == {
             "cost_per_kwh": 0.0,
             "xmr_price": 0.0,
+            "tari_price": 0.0,
             "currency": "USD",
         }

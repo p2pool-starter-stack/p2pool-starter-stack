@@ -508,7 +508,48 @@ test('computeEnergy: unavailable / zero watts returns all nulls', () => {
         const en = computeEnergy(bad, { day: 1 });
         assert.equal(en.kwhDay, null);
         assert.equal(en.netDay, null);
+        assert.equal(en.includesTari, false);
     }
+});
+
+// --- Tari revenue in net profit (#520) ---------------------------------------------------
+
+test('computeEnergy: both prices set -> gross combines P2Pool XMR + Tari', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150, tari_price: 2 },
+        { day: 0.1, tariDay: 5 }, // 0.1 XMR/day, 5 XTM/day
+    );
+    // gross = 0.1*150 + 5*2 = 15 + 10 = 25; cost = 24*0.2 = 4.8; net = 20.2
+    assert.ok(Math.abs(en.netDay - 20.2) < 1e-9);
+    assert.equal(en.includesTari, true);
+});
+
+test('computeEnergy: only xmr_price set -> P2Pool-only net, includesTari false', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150, tari_price: 0 },
+        { day: 0.1, tariDay: 5 }, // Tari estimate exists but is unpriced
+    );
+    // gross = 0.1*150 = 15 (Tari excluded); cost = 4.8; net = 10.2
+    assert.ok(Math.abs(en.netDay - 10.2) < 1e-9);
+    assert.equal(en.includesTari, false);
+});
+
+test('computeEnergy: tari_price set but no xmr_price -> no net at all (xmr_price is the base gate)', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 0, tari_price: 2 },
+        { day: 0.1, tariDay: 5 },
+    );
+    assert.equal(en.netDay, null);
+    assert.equal(en.includesTari, false);
+});
+
+test('computeEnergy: tari_price set but Tari not merge-mining (tariDay null) -> P2Pool-only', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150, tari_price: 2 },
+        { day: 0.1, tariDay: null },
+    );
+    assert.ok(Math.abs(en.netDay - 10.2) < 1e-9); // same as P2Pool-only case above
+    assert.equal(en.includesTari, false);
 });
 
 test('formatFiat: currency label, two decimals, keeps the sign', () => {

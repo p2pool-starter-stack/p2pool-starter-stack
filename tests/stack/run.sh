@@ -2685,14 +2685,15 @@ en_case() { # <energy-json> <label> <expected-msg-fragment>
 en_case '"nope"' "non-object dashboard.energy" "dashboard.energy must be an object"
 en_case '{"cost_per_kwh":-1}' "negative cost_per_kwh" "dashboard.energy.cost_per_kwh"
 en_case '{"xmr_price":"lots"}' "non-number xmr_price" "dashboard.energy.xmr_price"
+en_case '{"tari_price":-2}' "negative tari_price (#520)" "dashboard.energy.tari_price"
 en_case '{"currency":"US Dollars"}' "unsafe currency label" "dashboard.energy.currency"
 # Closed schema (#33 hardening): the validator rejects any key outside {cost_per_kwh, currency,
-# xmr_price} — defense in depth beneath the control gate's own unknown-path refusal.
+# xmr_price, tari_price} — defense in depth beneath the control gate's own unknown-path refusal.
 en_case '{"cost_per_kwh":0.1,"__evil":{"x":1}}' "unknown dashboard.energy subkey" "dashboard.energy has an unknown key"
 
 # A valid energy block (prices + per-worker watts) applies; like workers[], nothing reaches .env.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"currency":"EUR"},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"tari_price":2.5,"currency":"EUR"},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid dashboard.energy applies" "$?" "0"
 

@@ -243,11 +243,42 @@ test('EarningsCard Energy tab shows cost then net as prices are set (#260)', () 
     assert.match(html, /Power cost \/ day/);
     assert.match(html, /set xmr_price/);
     assert.doesNotMatch(html, /Net \/ day/);
-    // Both prices set → net profit appears.
+    // Both prices set → net profit appears, labelled P2Pool-only since tari_price is still unset.
     s.energy.xmr_price = 150;
     html = renderApp({ state: s });
     assert.match(html, /Net \/ day/);
     assert.match(html, /Net \/ year/);
+    assert.match(html, /P2Pool XMR only, after power/);
+    assert.doesNotMatch(html, /P2Pool \+ Tari, after power/);
+});
+
+test('EarningsCard Energy tab folds Tari into net profit once tari_price is set and Tari is merge-mining (#520)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8;
+    s.earnings.tari_available = true;
+    s.earnings.tari_coeff_day = 1e-6;
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.xmr_price = 150;
+    s.energy.tari_price = 2;
+    const html = renderApp({ state: s });
+    assert.match(html, /Net \/ day/);
+    assert.match(html, /P2Pool \+ Tari, after power/);
+    assert.doesNotMatch(html, /P2Pool XMR only, after power/);
+});
+
+test('EarningsCard Energy tab keeps the P2Pool-only label when tari_price is set but Tari is not merge-mining (#520)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8;
+    s.earnings.tari_available = false; // no Tari estimate to fold in
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.xmr_price = 150;
+    s.energy.tari_price = 2;
+    const html = renderApp({ state: s });
+    assert.match(html, /Net \/ day/);
+    assert.match(html, /P2Pool XMR only, after power/);
+    assert.doesNotMatch(html, /P2Pool \+ Tari, after power/);
 });
 
 test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
