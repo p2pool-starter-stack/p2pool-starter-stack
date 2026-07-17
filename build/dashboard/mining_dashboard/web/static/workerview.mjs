@@ -7,8 +7,20 @@
 // the writable allowlist the rig enforces; the rig re-validates and rolls back if the miner doesn't
 // return to a live hashrate. Prefill comes from Pithead's own last-applied record — the rig's
 // enriched feed doesn't expose the writable config values.
+//
+// Two edit modes (#518, ratified in #529): a table editor (one row per writable key, typed off its
+// current value) and a raw JSON textarea — both fold to the same {changes} diff and go through the
+// one apply() below. A "Load from file" button inside JSON mode reads a local file into the
+// textarea (FileReader, no upload) for pushing the same profile to several rigs.
 
-import { Component, html } from "./preact.mjs";
+import { SECRET_HINT } from "./configlogic.mjs";
+import { Component, createRef, html } from "./preact.mjs";
+import {
+  buildFields,
+  buildTableChanges,
+  jsonSyntaxError,
+  parseJsonChanges,
+} from "./workerlogic.mjs";
 
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
 const POLL_MS = 2000;
@@ -70,22 +82,56 @@ function HistoryRow({ row }) {
     </tr>`;
 }
 
+// One table-editor row. `value` falls back to the field's prefilled value until the operator
+// edits it (edits is keyed like ConfigView's own `edits` state). A secret row is a masked
+// password input (#508) — never the raw sentinel JSON — so it can only be left alone or replaced.
+function fieldValue(field, edits) {
+  if (field.key in edits) return edits[field.key];
+  return field.type === "boolean" ? String(field.value) : field.value;
+}
+
+function WorkerField({ field, edits, onEdit, busy }) {
+  const value = fieldValue(field, edits);
+  let input;
+  if (field.type === "boolean") {
+    input = html`<select disabled=${busy} value=${value} onChange=${(e) => onEdit(field.key, e.target.value)}>
+        <option value="true">true</option><option value="false">false</option>
+    </select>`;
+  } else if (field.type === "secret") {
+    input = html`<input type="password" disabled=${busy} value=${value} placeholder=${SECRET_HINT}
+        onInput=${(e) => onEdit(field.key, e.target.value)} />`;
+  } else if (field.type === "json") {
+    input = html`<textarea class="worker-edit" spellcheck="false" rows="3" disabled=${busy} value=${value}
+        onInput=${(e) => onEdit(field.key, e.target.value)}></textarea>`;
+  } else {
+    input = html`<input type=${field.type === "number" ? "number" : "text"} disabled=${busy} value=${value}
+        onInput=${(e) => onEdit(field.key, e.target.value)} />`;
+  }
+  return html`<label class="config-field"><span class="config-field-name">${field.key}</span>${input}</label>`;
+}
+
 export class WorkerInspect extends Component {
   constructor(props) {
     super(props);
-    // phase: loading | ready | error ; busy = an apply is in flight.
+    // phase: loading | ready | error ; busy = an apply is in flight. mode picks which editor
+    // drives apply(); tableEdits/editText/jsonError are that editor's own state.
     this.state = {
       phase: "loading",
       detail: null,
       error: null,
+      mode: "table",
+      tableEdits: {},
       editText: "",
+      jsonError: null,
       busy: false,
       result: null,
     };
+    this.dialogRef = createRef();
   }
 
   componentDidMount() {
     this.load();
+    this.dialogRef.current?.showModal();
   }
 
   async load() {
@@ -96,38 +142,50 @@ export class WorkerInspect extends Component {
       const detail = await res.json();
       // Prefill the editor with the last-applied writable config, or an empty object to start from.
       const editText = JSON.stringify(detail.last_applied || {}, null, 2);
-      this.setState({ phase: "ready", detail, editText });
+      this.setState({ phase: "ready", detail, editText, tableEdits: {}, jsonError: null });
     } catch (e) {
       this.setState({ phase: "error", error: String(e) });
     }
   }
 
+  onJsonInput(text) {
+    this.setState({ editText: text, jsonError: jsonSyntaxError(text) });
+  }
+
+  // Fill the JSON textarea from a local file (#518) — a FileReader read, never an upload; the
+  // operator still reviews and clicks Apply like any other JSON-mode edit.
+  onFilePick(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => this.onJsonInput(String(reader.result));
+    reader.readAsText(file);
+  }
+
   async apply() {
-    const { detail, editText } = this.state;
+    const { detail, mode, editText, tableEdits } = this.state;
     let changes;
-    try {
-      changes = JSON.parse(editText);
-    } catch {
-      this.setState({ result: { status: "error", error: "Not valid JSON." } });
-      return;
-    }
-    if (
-      !changes ||
-      typeof changes !== "object" ||
-      Array.isArray(changes) ||
-      !Object.keys(changes).length
-    ) {
-      this.setState({
-        result: { status: "error", error: "Enter a non-empty JSON object of writable keys." },
-      });
-      return;
-    }
-    // Client-side allowlist check (the server, host runner, and rig all re-check — this is UX).
-    const allowed = new Set(detail.writable_keys || []);
-    const bad = Object.keys(changes).filter((k) => !allowed.has(k));
-    if (bad.length) {
-      this.setState({ result: { status: "error", error: `Not writable: ${bad.join(", ")}` } });
-      return;
+    if (mode === "json") {
+      const out = parseJsonChanges(editText, detail.writable_keys);
+      if (out.error) {
+        this.setState({ result: { status: "error", error: out.error } });
+        return;
+      }
+      changes = out.changes;
+    } else {
+      const fields = buildFields(detail.writable_keys, detail.last_applied);
+      try {
+        changes = buildTableChanges(fields, tableEdits);
+      } catch {
+        this.setState({
+          result: { status: "error", error: "One of the edited rows isn't valid JSON." },
+        });
+        return;
+      }
+      if (!Object.keys(changes).length) {
+        this.setState({ result: { status: "error", error: "No changes to apply." } });
+        return;
+      }
     }
     this.setState({ busy: true, result: { status: "running" } });
     try {
@@ -146,23 +204,24 @@ export class WorkerInspect extends Component {
   }
 
   render() {
-    const { phase, detail, error, editText, busy, result } = this.state;
+    const { phase, detail, error } = this.state;
     const { name, onClose } = this.props;
+    const close = () => this.dialogRef.current?.close();
     return html`
-        <div class="worker-inspect-overlay" onClick=${(e) => e.target === e.currentTarget && onClose()}>
-            <div class="worker-inspect card" role="dialog" aria-label=${"Worker " + name}>
-                <div class="flex items-center justify-between">
-                    <h3>Worker · ${name}</h3>
-                    <button class="btn-toggle" onClick=${onClose} aria-label="Close">✕</button>
-                </div>
-                ${phase === "loading" ? html`<p class="text-muted">Loading…</p>` : null}
-                ${phase === "error" ? html`<p class="status-bad">Couldn't load this worker: ${error}</p>` : null}
-                ${phase === "ready" ? this.renderBody(detail, editText, busy, result) : null}
+        <dialog class="worker-inspect card" ref=${this.dialogRef} aria-label=${"Worker " + name}
+                onClose=${onClose} onClick=${(e) => e.target === this.dialogRef.current && close()}>
+            <div class="flex items-center justify-between">
+                <h3>Worker · ${name}</h3>
+                <button class="btn-toggle" onClick=${close} aria-label="Close">✕</button>
             </div>
-        </div>`;
+            ${phase === "loading" ? html`<p class="text-muted">Loading…</p>` : null}
+            ${phase === "error" ? html`<p class="status-bad">Couldn't load this worker: ${error}</p>` : null}
+            ${phase === "ready" ? this.renderBody(detail) : null}
+        </dialog>`;
   }
 
-  renderBody(detail, editText, busy, result) {
+  renderBody(detail) {
+    const { mode, tableEdits, editText, jsonError, busy, result } = this.state;
     const canEdit = detail.control_enabled && detail.editable;
     return html`
         <div class="worker-inspect-body">
@@ -180,8 +239,28 @@ export class WorkerInspect extends Component {
             <p class="text-muted text-xs">Writable keys: <span class="font-mono">${(detail.writable_keys || []).join(", ")}</span>.
                Prefilled with the last config applied from the dashboard — the rig's live feed doesn't expose these values.
                The rig validates and rolls back if the miner doesn't come back live.</p>
+            <div class="toggle-group mb-1">
+                <button class=${"btn-toggle" + (mode === "table" ? " active" : "")} onClick=${() => this.setState({ mode: "table" })}>Table</button>
+                <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} onClick=${() => this.setState({ mode: "json" })}>JSON</button>
+            </div>
+            ${
+              mode === "table"
+                ? html`<div>
+                    ${buildFields(detail.writable_keys, detail.last_applied).map(
+                      (f) => html`<${WorkerField} field=${f} edits=${tableEdits} busy=${busy}
+                          onEdit=${(k, v) => this.setState({ tableEdits: { ...tableEdits, [k]: v } })} />`,
+                    )}
+                  </div>`
+                : html`
             <textarea class="worker-edit" spellcheck="false" rows="10" disabled=${busy}
-                      value=${editText} onInput=${(e) => this.setState({ editText: e.target.value })}></textarea>
+                      value=${editText} onInput=${(e) => this.onJsonInput(e.target.value)}></textarea>
+            ${jsonError ? html`<p class="status-bad text-xs">${jsonError}</p>` : null}
+            <div class="mt-1">
+                <label class="text-muted text-xs">Load from file:
+                    <input type="file" accept="application/json,.json" disabled=${busy} onChange=${(e) => this.onFilePick(e)} />
+                </label>
+            </div>`
+            }
             <div class="mt-1">
                 <button class="btn-toggle" disabled=${busy} onClick=${() => this.apply()}>${busy ? "Applying…" : "Apply to rig"}</button>
             </div>

@@ -244,18 +244,28 @@ crosses 5%.
 ### Worker Inspect
 
 With the control channel on (`dashboard.control.enabled`), a worker's name in the Workers Alive table
-is a link. Click it to open **Worker Inspect** — a panel with that rig's live telemetry, an editor for
-the writable slice of its config, and the change history.
+is a link. Click it to open **Worker Inspect** — a dialog with that rig's live telemetry, an editor
+for the writable slice of its config, and the change history. Close it with the ✕ button, a click
+outside it, or Escape.
 
 The editor covers the keys RigForge lets the control path change: `pools`, `DONATION`, `autotune`,
 `watchdog`, `watchdog_interval_min`, and `max_temp_c`. Nothing else (identity, filesystem paths, API
-ports, the control token) is editable from here. Enter the changes as a JSON object of those keys and
-**Apply to rig**; RigForge validates the change, applies it, and — if the miner doesn't come back to a
-live hashrate — rolls it back on its own. The panel shows the outcome (applied / rejected / rolled
-back) and appends it to the history.
+ports, the control token) is editable from here. Two modes edit the same set of keys and submit the
+same `{worker, changes}` request:
+
+- **Table** (the default) — one row per writable key, prefilled from the last config the dashboard
+  applied. Only the rows you touch go into the change.
+- **JSON** — paste or edit the writable-keys object directly, for copying a whole profile between
+  rigs or moving faster than the table allows. A **Load from file** control inside this mode reads
+  a local JSON file into the textarea (`FileReader`, no upload) so you can push the same profile to
+  several rigs without retyping it. A malformed edit is flagged inline before you click Apply.
+
+Either way, click **Apply to rig**; RigForge validates the change, applies it, and — if the miner
+doesn't come back to a live hashrate — rolls it back on its own. The panel shows the outcome
+(applied / rejected / rolled back) and appends it to the history.
 
 To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
-in its [`dashboard.workers[]`](configuration.md#configuration-reference) descriptor. Without a host, or
+in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
 without a token, the rig isn't a write target and the panel says so.
 
 How it stays safe:
@@ -268,6 +278,11 @@ How it stays safe:
 - **Fail-closed.** The write path exists only when the control channel is on, which requires a
   dashboard password; every request carries the CSRF header; and only the writable allowlist is
   accepted, at every layer.
+- **Masked values stay masked.** If a writable value is ever a masked secret (the same
+  `{__secret__: true}` sentinel the [Configuration view](#configuration-view) uses), the table
+  editor renders it as a blank password field, never as JSON you could copy or mangle; leave it
+  blank to keep it, type a value to replace it. JSON mode carries the sentinel through untouched
+  unless you edit that key yourself.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
