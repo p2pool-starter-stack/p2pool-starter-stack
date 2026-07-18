@@ -859,6 +859,7 @@ doctor() {
     echo "Network:"
     check_stratum_exposure doctor
     check_stratum_listening
+    check_tor_running
     check_egress_firewall_installed
     check_tor_clearnet_egress
     # Clearnet initial sync (#183): a deliberate, privacy-relevant opt-in. Warn whenever it's on so
@@ -1763,6 +1764,24 @@ mining_stack_running() {
     container_is_running p2pool || container_is_running monerod || container_is_running xmrig-proxy
 }
 
+# doctor (#563): the tor container is unconditional (no compose profile gates it — it's the
+# Tor-first backbone in every deployment, remote-node mode included). So "revenue containers up
+# but tor down" is never a legitimate state: it means tor crashed or was stopped individually
+# while the stack kept mining, leaving clearnet dials no longer fail-closed and every off-box
+# connection (Healthchecks, Telegram, XvB, p2pool/Tari peers) without its Tor path. FAIL loudly so
+# doctor can't report all-clear on a silent privacy outage. A clean `down` (nothing running) is
+# fine — nothing to guard.
+check_tor_running() {
+    if container_is_running tor; then
+        dr_ok "Tor container is running — the privacy backbone is up."
+    elif mining_stack_running; then
+        dr_fail "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. Restart it ('./pithead restart tor'; set tor.auto_heal:true to self-heal), or bring the stack down ('./pithead down')."
+    else
+        dr_info "Tor container isn't running — the stack is down (expected after './pithead down')."
+    fi
+    return 0
+}
+
 # doctor (#383): verify the #270 fail-closed egress rules are ACTUALLY installed while the stack
 # runs. `down` removes them, and a host reboot silently drops them while `restart: unless-stopped`
 # brings every container back — that reboot gap is the state this catches. Read-only: `sudo -n`
@@ -1776,11 +1795,10 @@ check_egress_firewall_installed() {
         return 0
     fi
     if ! container_is_running tor; then
-        if mining_stack_running; then
-            dr_fail "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead and clearnet dials are no longer fail-closed. Restart Tor ('./pithead restart tor'), or bring the stack down ('./pithead down')."
-        else
-            dr_info "Tor-egress firewall check skipped — the stack isn't running (rules are removed at 'down')."
-        fi
+        # tor down while the stack runs is caught by check_tor_running (a dedicated, loud verdict);
+        # here it's just an info-skip either way — a clean `down` removed the rules, and a tor-only
+        # outage is already being FAILed above.
+        dr_info "Tor-egress firewall check skipped — the tor container isn't running."
         return 0
     fi
     if ! command -v iptables >/dev/null 2>&1; then
@@ -1859,11 +1877,9 @@ check_dashboard_answers() {
 # must not fail cron health gates on a slow circuit.
 check_tor_clearnet_egress() {
     if ! container_is_running tor; then
-        if mining_stack_running; then
-            dr_fail "The Tor container is DOWN while the mining stack runs — every off-box connection (Healthchecks, Telegram, XvB, p2pool/Tari peers) has lost its Tor path. Restart Tor ('./pithead restart tor'; set tor.auto_heal:true to self-heal), or bring the stack down."
-        else
-            dr_info "Tor clearnet-egress check skipped — the tor container isn't running."
-        fi
+        # A tor-only outage is FAILed by check_tor_running; this test can't probe egress without a
+        # live tor either way, so it just info-skips.
+        dr_info "Tor clearnet-egress check skipped — the tor container isn't running."
         return 0
     fi
     if ! command -v curl >/dev/null 2>&1; then
