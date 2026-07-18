@@ -20,6 +20,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   no manual edits. Existing installs are untouched: the key is written explicitly for new
   configs, never assumed for old ones, so an upgrade flips nothing and a fleet on the open
   `:3333` keeps mining. Set the key to `""` (or delete it) to run unauthenticated.
+- **Stratum-over-TLS (#261).** `p2pool.stratum_tls: true` serves TLS on the same stratum port —
+  xmrig-proxy detects TLS vs plain per connection, so a mixed fleet migrates one rig at a time
+  with nothing re-pointed. The stack generates a self-signed certificate once (under the data
+  root, so its fingerprint survives upgrades) and prints the SHA-256 fingerprint each rig pins
+  (`pools[].tls-fingerprint` — XMRig does no CA validation for stratum, so the pin is the trust
+  model; the RigForge side shipped in rigforge#21/#115). Default off; confidentiality only —
+  the #152 access-password stays the access control; use both.
 
 ### Fixed
 

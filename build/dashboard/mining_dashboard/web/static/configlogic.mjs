@@ -123,6 +123,7 @@ export const LOGICAL_GROUPS = [
       "p2pool.stratum_bind",
       "p2pool.stratum_port",
       "p2pool.stratum_password",
+      "p2pool.stratum_tls",
       "p2pool.clearnet",
       "proxy",
       "xvb",

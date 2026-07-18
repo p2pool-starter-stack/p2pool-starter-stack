@@ -433,14 +433,18 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Immutable root filesystem (#377). Pure network proxy, no bind mounts; the wrapper entrypoint
-    # writes nothing, but the cwd /home/ubuntu exists only in the image and xmrig-proxy may drop a
+    # Immutable root filesystem (#377). Near-pure network proxy; the wrapper entrypoint writes
+    # nothing, but the cwd /home/ubuntu exists only in the image and xmrig-proxy may drop a
     # config/log there (e.g. persisting an API-driven pool switch), so give it uid-1000 tmpfs
     # scratch. Ephemeral by design — the config is re-rendered from the compose command every start.
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
       - /home/ubuntu:size=64m,uid=1000,gid=1000
+    volumes:
+      # Stratum TLS keypair (#261), read-only; the wrapper passes the cert flags only when
+      # PROXY_STRATUM_TLS=true, so an empty dir (TLS off) changes nothing.
+      - ${PROXY_TLS_DIR:-./data/proxy-tls}:/tls:ro
     ports:
       # The stratum endpoint your rigs connect to. Published on 0.0.0.0 (all interfaces) by
       # default so LAN workers can reach it; set p2pool.stratum_bind in config.json to a specific
@@ -457,6 +461,9 @@ services:
       # that item renders a stray '' positional arg (xmrig-proxy warns `unsupported non-option
       # argument ''`). The wrapper entrypoint appends the flag only when this is non-empty.
       - PROXY_STRATUM_PASSWORD=${PROXY_STRATUM_PASSWORD:-}
+      # Stratum-over-TLS (#261): when true the wrapper appends the cert flags and xmrig-proxy
+      # autodetects TLS vs cleartext per-connection on the same stratum port.
+      - PROXY_STRATUM_TLS=${PROXY_STRATUM_TLS:-false}
     command:
       - -o
       - ${P2POOL_URL}
