@@ -3406,6 +3406,17 @@ render_env() {
         [ "$prep_threads" -gt 8 ] && prep_threads=8
     fi
 
+    # Outbound peer target (#595): over Tor, each outbound peer is roughly one long-lived circuit,
+    # so out-peers is the biggest steady-state knob on Tor's CPU (circuit maintenance + rebuild).
+    # The default STAYS 48 — more peers means more aggregate bandwidth during a Tor initial sync,
+    # and a new operator's first run is exactly that. Once synced, 32 (P2Pool's clearnet
+    # recommendation) cuts monerod's circuit count by a third with no mining impact.
+    local out_peers
+    out_peers=$(jq -r '.monero.out_peers // 48' "$CONFIG_FILE")
+    if ! [[ "$out_peers" =~ ^[0-9]+$ ]] || [ "$out_peers" -lt 8 ] || [ "$out_peers" -gt 1024 ]; then
+        error "monero.out_peers must be an integer between 8 and 1024 (got \"$out_peers\")."
+    fi
+
     # monerod RPC LAN exposure. Default localhost-only: p2pool reaches monerod over the internal
     # Docker network regardless, so the published port is only for external wallets.
     local rpc_bind rpc_lan
@@ -3728,6 +3739,7 @@ MONERO_CLEARNET_SYNC=$monero_clearnet
 TARI_CLEARNET_SYNC=$tari_clearnet
 CLEARNET_STATE_DIR=$CLEARNET_STATE_DIR
 MONERO_PREP_THREADS=$prep_threads
+MONERO_OUT_PEERS=$out_peers
 MONERO_RPC_BIND=$rpc_bind
 MONERO_NODE_HOST=$mono_host
 MONERO_RPC_PORT=$rpc_port
@@ -4345,6 +4357,9 @@ describe_change() {
         ;;
     MONERO_PREP_THREADS)
         msg="Monero block-prep threads: $old → $new."
+        ;;
+    MONERO_OUT_PEERS)
+        msg="Monero outbound peer target: $old → $new (#595) — monerod restarts; over Tor each outbound peer is roughly one circuit."
         ;;
     HEALTHCHECKS_PING_URL)
         # The ping URL is both the on/off switch and a capability secret — report the change

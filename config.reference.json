@@ -12,6 +12,7 @@
         "prune": true,
         "clearnet_initial_sync": false,
         "prep_blocks_threads": "auto",
+        "out_peers": 48,
         "rpc_lan_access": false,
         "data_dir": "auto",
         "mem_limit": "auto",

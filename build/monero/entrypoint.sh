@@ -59,7 +59,7 @@ echo "Initializing Monero configuration from template..."
 
 # Inject environment variables into the configuration template
 # We explicitly list variables to avoid accidental substitution of system environment variables
-envsubst '${MONERO_NODE_USERNAME}${MONERO_NODE_PASSWORD}${MONERO_ONION_ADDRESS}${MONERO_PRUNE}${MONERO_PREP_THREADS}${NETWORK_PREFIX}' <"$TEMPLATE_PATH" >"$CONFIG_PATH"
+envsubst '${MONERO_NODE_USERNAME}${MONERO_NODE_PASSWORD}${MONERO_ONION_ADDRESS}${MONERO_PRUNE}${MONERO_PREP_THREADS}${MONERO_OUT_PEERS}${NETWORK_PREFIX}' <"$TEMPLATE_PATH" >"$CONFIG_PATH"
 
 # Apply the optional clearnet initial-sync transform (#183) and warn loudly while it's active.
 if clearnet_sync_active; then
