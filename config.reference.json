@@ -144,7 +144,8 @@
             "block_found": true,
             "payout_found": true,
             "payout_confirmed": true,
-            "container_unhealthy": true
+            "container_unhealthy": true,
+            "raffle_win": true
         },
         "daily_summary_time": "08:00",
         "commands": {

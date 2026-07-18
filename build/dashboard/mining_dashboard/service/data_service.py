@@ -692,6 +692,9 @@ class DataService:
                 f"XvB raffle WIN: {win['tier']} round won at "
                 f"{format_hashrate(win['hashrate'])} credited (height {win['height']}) 🎉"
             )
+            # One Telegram/webhook alert per genuinely new win — add_raffle_wins' idempotent
+            # insert contract is what makes this fire-once, same as payout_confirmed.
+            await self.alert_service.raffle_win_alert(win["tier"], win["hashrate"])
 
     async def _maybe_register_xvb(self, shares, p2pool_stats):
         """

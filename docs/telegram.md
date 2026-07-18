@@ -180,6 +180,7 @@ block and set it to `false` — any event you don't list stays on:
 | `payout_found` | `true` | That block pays you — this node held a share in the PPLNS window when it was found |
 | `payout_confirmed` | `true` | A payout (Monero or Tari) confirmed on-chain by the view-only wallet |
 | `container_unhealthy` | `true` | A stack container is crash-looping or stuck failing its healthcheck / recovered |
+| `raffle_win` | `true` | This wallet won an XvB raffle round, per XvB's public winners file — fires once per win, with the round type and credited hashrate |
 
 Run `./pithead apply` after editing.
 

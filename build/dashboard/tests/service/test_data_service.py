@@ -1591,21 +1591,26 @@ class TestXvbWinnersSync:
         assert xvb.get_recent_wins.call_count == 2
 
     async def test_a_new_win_round_trips_through_real_storage(self):
-        # A real in-memory StateManager so the persisted row is provable end to end.
+        # A real in-memory StateManager so the persisted row is provable end to end — and the
+        # raffle_win alert fires exactly once per new win: the idempotent insert means the
+        # second sync re-reading the same file window neither re-stores nor re-alerts.
         from mining_dashboard.service.storage_service import StateManager
 
         sm = StateManager(db_path=":memory:")
         svc = DataService(sm, MagicMock(), MagicMock())
+        svc.alert_service = AsyncMock()
         try:
             svc.xvb_client.get_recent_wins.return_value = [self._WIN]
             await svc._sync_xvb_winners()
             rows = sm.get_raffle_wins()
             assert len(rows) == 1
             assert rows[0]["block_id"] == "aa11"
-            # A second sync past the gate re-reads the same file window — still one row.
+            svc.alert_service.raffle_win_alert.assert_awaited_once_with("donor", 4.2e6)
+            # A second sync past the gate re-reads the same file window — still one row, no re-alert.
             svc._last_xvb_winners_sync -= 1801
             await svc._sync_xvb_winners()
             assert len(sm.get_raffle_wins()) == 1
+            svc.alert_service.raffle_win_alert.assert_awaited_once()
         finally:
             sm.close()
 

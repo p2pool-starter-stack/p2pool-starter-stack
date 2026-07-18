@@ -3522,6 +3522,7 @@ render_env() {
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
     local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed tg_ev_high_reject_rate
     local tg_ev_block_found tg_ev_payout_found tg_ev_payout_confirmed tg_ev_container_unhealthy
+    local tg_ev_raffle_win
     local hr_drop_threshold hr_drop_minutes
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
@@ -3549,6 +3550,7 @@ render_env() {
     tg_ev_payout_found=$(tg_event payout_found)
     tg_ev_payout_confirmed=$(tg_event payout_confirmed)
     tg_ev_container_unhealthy=$(tg_event container_unhealthy)
+    tg_ev_raffle_win=$(tg_event raffle_win)
     # Degradation detector (#99): drop-below-% and sustained-minutes; defaults 50 / 10.
     hr_drop_threshold=$(jq -r '.dashboard.hashrate_drop_threshold // 50' "$CONFIG_FILE")
     hr_drop_minutes=$(jq -r '.dashboard.hashrate_drop_minutes // 10' "$CONFIG_FILE")
@@ -3718,6 +3720,7 @@ TELEGRAM_EVENT_BLOCK_FOUND=$tg_ev_block_found
 TELEGRAM_EVENT_PAYOUT_FOUND=$tg_ev_payout_found
 TELEGRAM_EVENT_PAYOUT_CONFIRMED=$tg_ev_payout_confirmed
 TELEGRAM_EVENT_CONTAINER_UNHEALTHY=$tg_ev_container_unhealthy
+TELEGRAM_EVENT_RAFFLE_WIN=$tg_ev_raffle_win
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
