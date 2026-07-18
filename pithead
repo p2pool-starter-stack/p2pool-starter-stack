@@ -5254,9 +5254,10 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # `pithead/` extract has no versioned layout to maintain, and data living under this dir
     # (the pre-#455 default) would be stranded by a dir swap — the new render would re-derive
     # its default paths under the NEW dir and the stack would come up beside its own data.
-    local new_dir=""
-    if [[ "$(basename "$PWD")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        new_dir="$(dirname "$PWD")/pithead-$tag"
+    local new_dir="" cwd
+    cwd=$(pwd -P) # physical path: the guard below compares canonicalized values on BOTH sides
+    if [[ "$(basename "$cwd")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        new_dir="$(dirname "$cwd")/pithead-$tag"
         local dvar dval
         for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR TOR_DATA_DIR DASHBOARD_DATA_DIR; do
             dval=$(env_get "$dvar")
@@ -5264,7 +5265,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
             # Canonicalize: the .env value may reach the same place through the `current` symlink.
             dval=$( (cd "$dval" 2>/dev/null && pwd -P) || printf '%s' "$dval")
             case "$dval" in
-            "$PWD" | "$PWD"/*)
+            "$cwd" | "$cwd"/*)
                 warn "$dvar resolves inside the install dir — upgrading in place; move the data to a shared root outside the version dir to get per-version rollback dirs (#629)."
                 new_dir=""
                 break
@@ -5272,11 +5273,17 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
             esac
         done
     fi
+    # Atomic create, no -p and no pre-check: root must never extract into (or follow a symlink
+    # planted at) a path some other local account pre-created — mkdir fails on ANY existing
+    # entry, closing the check-to-use race outright (#629 security review). A leftover dir from
+    # an earlier failed attempt therefore also lands here: fall back to in-place and say why.
+    if [ -n "$new_dir" ] && ! mkdir "$new_dir" 2>/dev/null; then
+        warn "$new_dir already exists (a previous attempt, or not ours to create) — upgrading in place. Remove it to get the fresh-dir layout back (#629)."
+        new_dir=""
+    fi
     if [ -n "$new_dir" ]; then
-        # Fresh-dir deploy (#629). Plain tar throughout: nothing in $new_dir is running, and a
-        # leftover dir from an earlier failed attempt is merged over, never a reason to refuse.
-        if ! mkdir -p "$new_dir" 2>"$logf" ||
-            ! tar -xzf "$bundle" --strip-components=1 -C "$new_dir" 2>>"$logf"; then
+        # Fresh-dir deploy (#629). Plain tar throughout: nothing in $new_dir is running.
+        if ! tar -xzf "$bundle" --strip-components=1 -C "$new_dir" 2>"$logf"; then
             rm -f "$bundle"
             _upg_fail "could not extract the $tag bundle into $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
             rm -f "$logf"

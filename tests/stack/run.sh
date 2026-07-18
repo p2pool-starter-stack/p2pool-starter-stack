@@ -5362,13 +5362,16 @@ reset_v629_state
 printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
 vrun NEW_PITHEAD_FAIL=1 >/dev/null
 assert_eq "failed fresh-dir upgrade reports failed" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
-assert_contains "failed fresh-dir upgrade points at the new dir" "$(jq -r '.error' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "cd $VNEW && ./pithead upgrade"
+# The runner derives its paths from `pwd -P`, so on macOS the /var/folders sandbox reports as
+# /private/var/... — assert on the path's tail, not the unresolved $VNEW.
+assert_contains "failed fresh-dir upgrade points at the new dir" "$(jq -r '.error' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v9.9.9 && ./pithead upgrade"
 assert_eq "failed fresh-dir upgrade leaves the old install intact" "$(cat "$VUPG/VERSION")" "1.3.1"
 assert_eq "failed fresh-dir upgrade wrote the result to the new spool too" "$(jq -r '.status' "$VNEW/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
 
 # Data inside the install dir (the pre-#455 default): a dir swap would strand it — the runner
 # must fall back to the in-place path: no sibling dir, the new release lands in THIS dir.
 reset_v629_state
+mkdir -p "$VUPG/data/monero" # must exist: the guard canonicalizes via cd/pwd -P
 cat >"$VUPG/.env" <<EOF
 DEPLOYMENT_COMPLETED=true
 DASHBOARD_CONTROL_ENABLED=true
@@ -5383,6 +5386,31 @@ assert_eq "data-inside-install falls back to in-place upgrade" "$(cat "$VUPG/VER
     bad "data-inside-install creates no sibling version dir" "$VNEW exists"
 assert_contains "in-place fallback names the stranded data dir" "$out" "MONERO_DATA_DIR resolves inside the install dir"
 assert_eq "in-place fallback still upgrades" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+seed_v629_env
+
+# A pre-existing entry at the target path — a leftover failed attempt, or a co-tenant's planted
+# dir/symlink (the mkdir-without--p TOCTOU guard): root must never extract into it. The runner
+# refuses the fresh-dir path and upgrades in place instead.
+reset_v629_state
+mkdir -p "$VNEW"
+printf 'not-ours' >"$VNEW/marker"
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_contains "pre-existing target dir falls back to in-place" "$out" "already exists"
+assert_eq "pre-existing target dir is never written into" "$(
+    cat "$VNEW/marker" 2>/dev/null
+    ls "$VNEW" | wc -l | tr -d ' '
+)" "not-ours1"
+assert_eq "pre-existing target still upgrades in place" "$(cat "$VUPG/VERSION")" "9.9.9"
+reset_v629_state
+mkdir -p "$VROOT/plant"      # the attacker-controlled tree behind the symlink
+ln -s "$VROOT/plant" "$VNEW" # a planted symlink must fail the atomic mkdir, not be followed
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_contains "planted symlink at the target falls back to in-place" "$out" "already exists"
+[ -z "$(ls -A "$VROOT/plant" 2>/dev/null)" ] && ok "planted symlink is not followed (nothing extracted through it)" ||
+    bad "planted symlink is not followed (nothing extracted through it)" "files appeared behind the symlink"
+rm -f "$VNEW"
 seed_v629_env
 
 echo "== black-box: control upgrade verifies the bundle signature (#376) =="
