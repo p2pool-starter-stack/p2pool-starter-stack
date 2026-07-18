@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import UTC, datetime
 
 import requests
 
@@ -35,6 +36,61 @@ def parse_reward_estimates(text):
     return out
 
 
+# XvB's public raffle-winners log (`winners_recent_full_pub.txt`): one row per won round, newest
+# first, covering roughly the last four days of hourly rounds. Wallets are masked to their first
+# and last 8 characters, so matching our own wallet uses the same masked form. Splitting a row on
+# whitespace yields 9 stable tokens — masked-wallet, date, time, hashrate, height, block-id,
+# paid-ratio, position, round-type — which sidesteps the file's empty tab-separated column.
+_WINNERS_FIELD_COUNT = 9
+
+# The hashrate token in a winners row, e.g. "4203.5kH/s" — value and unit, no space between them.
+_REGEX_WINNER_HASHRATE = re.compile(r"([\d.]+)\s*([kKmMgG]?H/s)?$")
+
+
+def mask_wallet(address):
+    """The ``first8...last8`` masked form XvB uses for wallet addresses in its public files."""
+    return f"{address[:8]}...{address[-8:]}"
+
+
+def parse_winners(text, wallet_address):
+    """Parse XvB's ``winners_recent_full_pub.txt`` and return THIS wallet's wins, oldest first.
+
+    Each win is ``{ts, hashrate, height, block_id, tier}`` — ``ts`` in epoch seconds (the file's
+    timestamps are UTC: its newest row tracks the hourly round cadence against UTC wall-clock),
+    ``hashrate`` the credited rate XvB published for the win in H/s, ``tier`` the round type
+    (e.g. ``donor_whale``). Rows for other wallets and malformed rows are skipped; a garbage file
+    yields an empty list, never a raise (same tolerance as ``parse_reward_estimates``).
+    """
+    masked = mask_wallet(wallet_address or "")
+    wins = []
+    for line in (text or "").splitlines():
+        fields = line.split()
+        if len(fields) != _WINNERS_FIELD_COUNT or fields[0] != masked:
+            continue
+        try:
+            ts = (
+                datetime.strptime(f"{fields[1]} {fields[2]}", "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=UTC)
+                .timestamp()
+            )
+            height = int(fields[4])
+        except ValueError:
+            continue
+        hr_match = _REGEX_WINNER_HASHRATE.match(fields[3])
+        hashrate = parse_hashrate(hr_match.group(1), hr_match.group(2)) if hr_match else 0.0
+        wins.append(
+            {
+                "ts": ts,
+                "hashrate": hashrate,
+                "height": height,
+                "block_id": fields[5],
+                "tier": fields[8],
+            }
+        )
+    wins.reverse()  # the file is newest-first; callers store/plot oldest-first
+    return wins
+
+
 # register() outcomes (#263). The endpoint returns plaintext "ERROR: ..." with a 422 for the error
 # cases (not a 200/JSON contract), so success/failure is classified from status + body, not status
 # alone. The caller maps these to dashboard state + retry behaviour.
@@ -65,6 +121,9 @@ class XvbClient:
         # reward_calc or needs Monero difficulty/reward (#118). Carries no wallet, so no IP<->wallet
         # correlation risk — but routed over Tor anyway to keep all XvB egress on one path.
         self.reward_estimate_url = "https://xmrvsbeast.com/p2pool/reward_estimate_pub.txt"
+        # XvB's public raffle-winners log (see parse_winners). Carries no full wallet (masked
+        # rows only) and our request sends none — but routed over Tor with the rest anyway.
+        self.winners_url = "https://xmrvsbeast.com/p2pool/winners_recent_full_pub.txt"
         self.tor_proxy = tor_proxy if tor_proxy is not None else TOR_SOCKS_PROXY
         self.submit_url = submit_url if submit_url is not None else XVB_SUBMIT_URL
 
@@ -134,6 +193,37 @@ class XvbClient:
             return None
         except Exception as e:
             self.logger.error(f"Unexpected error fetching XvB reward estimates: {e}")
+            return None
+
+    def get_recent_wins(self):
+        """Fetch XvB's public raffle-winners log over Tor and return THIS wallet's wins,
+        oldest first.
+
+        An empty list is a normal, successful read (no wins in the file's ~4-day window);
+        ``None`` means the fetch failed — same "None means keep what you have" contract as
+        ``get_stats``, so the caller writes nothing and retries later. The file carries only
+        masked wallets and the request carries none, so there's no IP<->wallet correlation
+        risk — but it rides the same Tor proxy as every other XvB fetch to keep all XvB
+        egress on one path (#163).
+        """
+        if not self.wallet_address or self.wallet_address == "placeholder":
+            self.logger.warning("Configuration Error: MONERO_WALLET_ADDRESS is missing or invalid.")
+            return None
+
+        proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
+        try:
+            response = requests.get(self.winners_url, timeout=20, proxies=proxies)
+            if response.status_code != 200:
+                self.logger.error(
+                    f"XvB winners fetch failed with status code: {response.status_code}"
+                )
+                return None
+            return parse_winners(response.text, self.wallet_address)
+        except requests.RequestException as e:
+            self.logger.error(f"Network error while fetching XvB winners: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Unexpected error fetching XvB winners: {e}")
             return None
 
     def register(self):

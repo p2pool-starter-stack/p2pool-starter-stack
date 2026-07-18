@@ -686,6 +686,50 @@ class TestShareStatsSeries:
             sm.close()
 
 
+class TestRaffleWins:
+    """XvB raffle wins mirrored from the public winners file, keyed block_id (idempotent)."""
+
+    def _wins(self):
+        return [
+            {"ts": 1000.0, "hashrate": 4.2e6, "height": 100, "block_id": "aa11", "tier": "donor"},
+            {
+                "ts": 2000.0,
+                "hashrate": 5.0e6,
+                "height": 200,
+                "block_id": "bb22",
+                "tier": "donor_whale",
+            },
+        ]
+
+    def test_add_returns_only_new_rows(self, state_manager):
+        new = state_manager.add_raffle_wins(self._wins())
+        assert {w["block_id"] for w in new} == {"aa11", "bb22"}
+
+    def test_add_is_idempotent_on_block_id(self, state_manager):
+        state_manager.add_raffle_wins(self._wins())
+        # Re-adding the same rows (re-reading the file's ~4-day window) inserts nothing new,
+        # so a win is never re-announced.
+        assert state_manager.add_raffle_wins(self._wins()) == []
+        assert len(state_manager.get_raffle_wins()) == 2
+
+    def test_get_raffle_wins_oldest_first_with_since(self, state_manager):
+        state_manager.add_raffle_wins(self._wins())
+        got = state_manager.get_raffle_wins()
+        assert [w["block_id"] for w in got] == ["aa11", "bb22"]  # ts ASC
+        assert got[1]["tier"] == "donor_whale"
+        assert got[1]["hashrate"] == 5.0e6
+        assert [w["block_id"] for w in state_manager.get_raffle_wins(since=1500.0)] == ["bb22"]
+
+    def test_empty_input_is_a_noop(self, state_manager):
+        assert state_manager.add_raffle_wins([]) == []
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE raffle_wins")
+        assert state_manager.add_raffle_wins(self._wins()) == []
+        assert state_manager.is_db_healthy() is False
+
+
 class TestPayouts:
     """Confirmed on-chain payouts (#381), keyed (chain, txid) so the Tari sibling (#462) reuses it."""
 

@@ -314,6 +314,15 @@ class StateManager:
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS blocks (ts REAL, height INTEGER, difficulty REAL)"
         )
+        # raffle_wins: rounds THIS wallet won in the XvB raffle, mirrored from XvB's public
+        # winners file (client/xvb_client.parse_winners). Permanent (no pruning — wins are
+        # rare, like payouts) and idempotent on block_id (the won round's block identifier),
+        # so re-reading the ~4-day window the file covers never duplicates a win. Additive,
+        # forward-only, same as payouts: no _migrate_db entry needed.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS raffle_wins "
+            "(block_id TEXT PRIMARY KEY, ts REAL, hashrate REAL, height INTEGER, tier TEXT)"
+        )
         # xvb_history: XvB scalars sampled ~5 min wall-clock. 30-day retention.
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS xvb_history "
@@ -908,6 +917,61 @@ class StateManager:
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
             self.logger.error(f"Block Read Error: {e}")
+            return []
+
+    def add_raffle_wins(self, wins: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Persist XvB raffle wins mirrored from the public winners file, idempotent on
+        ``block_id``, and return only the rows NEWLY inserted this call.
+
+        Same contract as ``add_payouts``: the caller announces each returned win exactly once,
+        and a dashboard restart re-reading the file's window is silently ignored (INSERT OR
+        IGNORE), so a win is never re-announced. Not held in memory — the view reads straight
+        from the DB, and win history is small and permanent."""
+        if not wins:
+            return []
+        new_rows = []
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                with self._conn:
+                    for w in wins:
+                        cur = self._conn.execute(
+                            "INSERT OR IGNORE INTO raffle_wins "
+                            "(block_id, ts, hashrate, height, tier) VALUES (?, ?, ?, ?, ?)",
+                            (
+                                w["block_id"],
+                                float(w.get("ts", 0) or 0),
+                                float(w.get("hashrate", 0) or 0),
+                                int(w.get("height", 0) or 0),
+                                w.get("tier", ""),
+                            ),
+                        )
+                        # rowcount == 1 means the row was actually inserted (not an ignored
+                        # dup), so it's a genuinely new win worth announcing exactly once.
+                        if cur.rowcount == 1:
+                            new_rows.append(w)
+        except (sqlite3.Error, KeyError, ValueError, TypeError) as e:
+            self._db_error("Raffle Win Insert Error", e)
+            return []
+        return new_rows
+
+    def get_raffle_wins(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """This wallet's recorded XvB raffle wins at or after ``since`` (default: all),
+        oldest first."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT ts, hashrate, height, block_id, tier "
+                    "FROM raffle_wins WHERE ts >= ? ORDER BY ts ASC",
+                    (since,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Raffle Win Read Error: {e}")
             return []
 
     def add_xvb_history(

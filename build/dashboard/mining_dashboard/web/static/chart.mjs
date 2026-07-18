@@ -78,6 +78,7 @@ function paletteColors() {
     shares: v("--bad", "#da3633"),
     evtLoss: v("--warn", "#d29922"), // degradation event marker (#99)
     evtOk: v("--ok", "#3fb950"), // recovery event marker
+    raffleWin: v("--warn", "#d29922"), // XvB raffle-win star — the warn gold reads as gold here
     grid: v("--border", "#30363d"),
     ticks: v("--text-muted", "#8b949e"),
     band: withAlpha(accent, "26"), // drag-to-zoom selection band (≈ 0.15 alpha)
@@ -236,6 +237,21 @@ export class ChartCard extends Component {
             pointBackgroundColor: eventColors(d.events, c),
             pointBorderColor: eventColors(d.events, c),
           },
+          // XvB raffle wins: a gold star per round this wallet won, on the same hidden 0–1 axis
+          // as the event diamonds, one step below them. Tooltip carries tier + credited rate.
+          {
+            label: "Raffle",
+            data: d.raffle || [],
+            yAxisID: "events",
+            pointStyle: "star",
+            pointRadius: 8,
+            pointBorderWidth: 2,
+            pointHoverRadius: 11,
+            pointHitRadius: 100,
+            showLine: false,
+            pointBackgroundColor: c.raffleWin,
+            pointBorderColor: c.raffleWin,
+          },
         ],
       },
       options: {
@@ -254,7 +270,8 @@ export class ChartCard extends Component {
               label(context) {
                 if (context.dataset.label === "Shares")
                   return self.shareCounts[context.dataIndex] + " Shares";
-                if (context.dataset.label === "Events") return context.raw.label;
+                if (context.dataset.label === "Events" || context.dataset.label === "Raffle")
+                  return context.raw.label;
                 let label = context.dataset.label || "";
                 if (label) label += ": ";
                 // Same abbreviated style as the cards/Telegram (#387), e.g. "12.35 kH/s".
@@ -342,6 +359,9 @@ export class ChartCard extends Component {
     ds[3].data = d.events || [];
     ds[3].pointBackgroundColor = eventColors(d.events, c);
     ds[3].pointBorderColor = eventColors(d.events, c);
+    ds[4].data = d.raffle || [];
+    ds[4].pointBackgroundColor = c.raffleWin;
+    ds[4].pointBorderColor = c.raffleWin;
     this.chart.options.scales.y.grid.color = c.grid;
     this.chart.options.scales.y.ticks.color = c.ticks;
     this.applyVisibility();

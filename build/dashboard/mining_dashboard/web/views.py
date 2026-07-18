@@ -137,6 +137,25 @@ _XVB_FAILING_TITLE = (
 )
 
 
+# The XvB card's raffle-wins log shows the most recent wins only; the chart still gets every win
+# in the selected range. Keeps a long-lived fleet's history from bloating every /api/state payload.
+_RAFFLE_LOG_LIMIT = 20
+
+
+def build_raffle_log(wins):
+    """The XvB card's raffle-wins log: newest first, display-formatted, capped at
+    ``_RAFFLE_LOG_LIMIT``. ``wins`` is ``StateManager.get_raffle_wins()`` output (oldest first)."""
+    return [
+        {
+            "time": format_time_abs(w["ts"]),
+            "tier": w["tier"],
+            "hashrate": format_hashrate(w["hashrate"]),
+            "height": w["height"],
+        }
+        for w in list(reversed(wins))[:_RAFFLE_LOG_LIMIT]
+    ]
+
+
 def build_raffle_eligibility(metrics):
     """Raffle-eligibility status — are you set up to both WIN and COLLECT an XvB payout? (#158)
 
@@ -164,7 +183,13 @@ def build_raffle_eligibility(metrics):
 
 
 def build_chart(
-    history, shares, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW, events=None
+    history,
+    shares,
+    range_arg,
+    window=None,
+    avg_window=DEFAULT_HASHRATE_WINDOW,
+    events=None,
+    raffle_wins=None,
 ):
     """Build the Chart.js datasets from history. Each point carries its real timestamp as the
     x value (epoch ms) so a linear time axis spaces points to scale; runs of missing samples
@@ -175,7 +200,8 @@ def build_chart(
     duration (Issue #47). ``avg_window`` (#168) selects which hashrate-averaging window's columns
     to plot (1m / 10m / 1h / 12h / 24h); 10m is the default headline series.
 
-    Returns ``{"p2pool": [{x, y}], "xvb": [{x, y}], "shares": [{x, y, r, c}], "tension": float}``
+    Returns ``{"p2pool": [{x, y}], "xvb": [{x, y}], "shares": [{x, y, r, c}], "events": [...],
+    "raffle": [...], "tension": float}``
     — the P2Pool/XvB series are stacked on the client (they sum to the total hashrate) and may
     contain ``{x, y: None}`` break markers, kept index-aligned across both series so stacking
     stays correct; ``shares`` is a sparse scatter (rendered un-stacked)."""
@@ -203,6 +229,8 @@ def build_chart(
         "xvb": xvb,
         "shares": _share_points(filtered_history, filtered_shares),
         "events": _event_points(_filter_events(events or [], range_arg, window)),
+        # _filter_events bounds any ts-keyed list, so the raffle wins reuse it as-is.
+        "raffle": _raffle_points(_filter_events(raffle_wins or [], range_arg, window)),
         "tension": _chart_tension(duration_s),
     }
 
@@ -447,6 +475,24 @@ def _event_points(filtered_events):
             "label": e.get("detail") or e.get("type", "event"),
         }
         for e in filtered_events
+    ]
+
+
+# Raffle-win markers ride the same hidden 0–1 axis as the event markers, one step below them, so a
+# win sits at its real time without touching the hashrate y-range.
+_RAFFLE_MARKER_Y = 0.70
+
+
+def _raffle_points(filtered_wins):
+    """Sparse XvB raffle-win markers: one gold star per round this wallet won, at the round's
+    timestamp, with the tooltip carrying the round type and the credited hashrate."""
+    return [
+        {
+            "x": int(w["ts"] * 1000),
+            "y": _RAFFLE_MARKER_Y,
+            "label": f"XvB raffle win — {w['tier']} round at {format_hashrate(w['hashrate'])}",
+        }
+        for w in filtered_wins
     ]
 
 
@@ -1490,6 +1536,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     data = data or {}
     history = state_mgr.get_history()
     share_stats = state_mgr.get_share_stats()  # per-poll share-health deltas (#116)
+    raffle_wins = state_mgr.get_raffle_wins()  # rounds this wallet won, from XvB's winners file
     metrics = build_metrics(data, state_mgr, history)
     db_healthy = state_mgr.is_db_healthy()
 
@@ -1539,6 +1586,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "shares_window": pool_net["shares_window"],
         "cadence": build_cadence(metrics),
         "raffle_eligible": build_raffle_eligibility(metrics),
+        "raffle_wins": build_raffle_log(raffle_wins),
         "proxy_workers": metrics.workers_online,
         # Confirmed payouts (#381): pass the stored list when the feature is on, else None (feature
         # off → earnings shows only the estimate). config read at call time so tests can flip it.
@@ -1569,6 +1617,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
             window,
             avg_window,
             events=state_mgr.get_events(),
+            raffle_wins=raffle_wins,
         ),
     }
 

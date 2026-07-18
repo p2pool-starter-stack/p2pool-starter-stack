@@ -109,6 +109,11 @@ _XVB_HISTORY_CAPTURE_SEC = 300  # ~5 min
 _HOURLY_CAPTURE_SEC = 3600  # disk_growth + network_history
 _WORKER_HISTORY_CAPTURE_SEC = 300  # ~5 min
 
+# XvB's public winners file updates once per hourly round and covers ~4 days, so a 30-min re-read
+# can never miss a win while keeping the fetch off the every-10th-poll cadence. Wall-clock gated
+# like the capture cadences above.
+_XVB_WINNERS_SYNC_SEC = 1800
+
 
 def _parse_proxy_list_worker(w):
     """Parse one xmrig-proxy 6.x positional row into a worker dict.
@@ -424,6 +429,10 @@ class DataService:
         self._last_xvb_history_write = 0.0
         self._last_hourly_capture = 0.0
         self._last_worker_capture = 0.0
+        # XvB raffle-winners mirror: wall-clock of the last successful winners-file read. Starts
+        # at 0.0 so the first eligible poll reads it; NOT stamped on a failed fetch, so a failure
+        # retries on the next 10th poll instead of waiting out the 30-min gate.
+        self._last_xvb_winners_sync = 0.0
         # XvB raffle auto-registration (#263): wall-clock of the last successful register() call,
         # None until the wallet is first entered. Drives the daily re-register cadence below.
         self._xvb_last_registered = None
@@ -656,6 +665,33 @@ class DataService:
             return  # fetch failed / unparseable — keep the last-good estimates + last_update frozen
         await asyncio.to_thread(self.state_manager.set_xvb_reward_estimates, estimates)
         logger.info(f"External Sync: XvB Reward Estimates Updated ({len(estimates)} tiers)")
+
+    async def _sync_xvb_winners(self):
+        """
+        Mirror XvB's public raffle-winners file into the ``raffle_wins`` table.
+
+        This is the only place raffle WINS are visible — the stats endpoint reports only
+        fail_count — so the dashboard reads XvB's published winners log, keeps our wallet's rows
+        (matched by XvB's masked form), and persists them idempotently. Each genuinely NEW win
+        (add_raffle_wins' insert contract) is announced once in the dashboard log; the chart and
+        the XvB card read the table.
+
+        Same "no write on failure" contract as the other XvB syncs: a failed fetch returns None,
+        nothing is written, and the 30-min gate is NOT stamped so the next 10th poll retries.
+        """
+        now = time.time()
+        if now - self._last_xvb_winners_sync < _XVB_WINNERS_SYNC_SEC:
+            return
+        wins = await asyncio.to_thread(self.xvb_client.get_recent_wins)
+        if wins is None:
+            return  # fetch failed — retry next eligible poll; don't stamp the gate
+        self._last_xvb_winners_sync = now
+        new_wins = await asyncio.to_thread(self.state_manager.add_raffle_wins, wins)
+        for win in new_wins:
+            logger.info(
+                f"XvB raffle WIN: {win['tier']} round won at "
+                f"{format_hashrate(win['hashrate'])} credited (height {win['height']}) 🎉"
+            )
 
     async def _maybe_register_xvb(self, shares, p2pool_stats):
         """
@@ -1252,13 +1288,17 @@ class DataService:
                         # share existing — before then the endpoint is a no-op, so we just retry.
                         await self._maybe_register_xvb(shares_list, p2pool_stats)
 
-                    # 7c. On-chain payout confirmation (#381), every 10th poll (~5 min). Independent
+                        # 7c. XvB raffle winners. Rides the same throttle/egress, with its own
+                        # 30-min wall-clock gate inside (the winners file updates ~hourly).
+                        await self._sync_xvb_winners()
+
+                    # 7d. On-chain payout confirmation (#381), every 10th poll (~5 min). Independent
                     # of XvB — gated on the view-only wallet-rpc being configured (local node + view
                     # key). Polls get_transfers, persists new confirmed payouts, fires one alert each.
                     if self.wallet_client is not None and iteration_count % 10 == 0:
                         await self._sync_payouts()
 
-                    # 7d. Tari on-chain payout confirmation (#462), same cadence — gated on the
+                    # 7e. Tari on-chain payout confirmation (#462), same cadence — gated on the
                     # view-only Tari console wallet being configured (local node + tari view key).
                     if self.tari_wallet_client is not None and iteration_count % 10 == 0:
                         await self._sync_tari_payouts()

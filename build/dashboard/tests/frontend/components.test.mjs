@@ -387,6 +387,20 @@ test('XvBStats greys the credited figures and flags the footer when the fetch is
     assert.match(stale, /status-warn/);
 });
 
+test('XvBStats lists recorded raffle wins, with a placeholder when there are none', () => {
+    // The base fixture carries one recorded win → the wins log shows it, no placeholder.
+    const withWin = renderApp();
+    assert.match(withWin, /Raffle Wins/);
+    assert.match(withWin, /won a donor_whale round, credited 4\.20 MH\/s/);
+    assert.doesNotMatch(withWin, /No wins recorded yet/);
+    // No wins → the muted placeholder pointing at the chart's gold-star marker.
+    const s = clone();
+    s.raffle_wins = [];
+    const empty = renderApp({ state: s });
+    assert.match(empty, /No wins recorded yet/);
+    assert.doesNotMatch(empty, /won a donor_whale round/);
+});
+
 // --- Workers table ----------------------------------------------------------------------
 
 test('WorkersTable renders headers and a row per worker with status classes', () => {
