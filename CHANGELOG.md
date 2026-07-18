@@ -11,6 +11,52 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-17
+
+**Config UX round 2.** The Configuration view is regrouped around logical
+sections (not one-per-service), the telegram/ntfy event toggles collapse into
+nested groups, and fields the control gate can't commit — pruning, data
+directories, secrets — are greyed out with a host-only note instead of failing
+at commit. The energy calculator's net profit now folds in Tari revenue, not
+just P2Pool XMR. Alongside the features, a coverage push added the failover and
+privacy behaviors that were previously real-hardware-only: a fake monerod in
+the CI mini-stack (monerod-down/busy/double-outage failover, Tari-optional
+keeps mining), and tier-4 fault-injection for Tor-down, cosign verification,
+clock drift, and ENOSPC — which surfaced and fixed a real gap where `doctor`
+reported all-clear while the Tor privacy backbone was down.
+
+### Added
+
+- **Energy calculator: Tari revenue in net profit (#520).** `dashboard.energy.tari_price` (fiat
+  price of 1 XTM, default `0`/off) folds the estimated Tari merge-mining revenue into the Energy
+  tab's net profit once it's set alongside the existing `xmr_price` — previously net profit counted
+  P2Pool XMR only, undercounting a Tari merge-miner's actual revenue. Uses the same what-if Tari/day
+  estimate the Tari tab already shows, no new estimate invented. XvB stays excluded (raffle status,
+  not a clean per-day income estimate). The card's heading and Net/day tooltip now say exactly
+  what's counted ("P2Pool + Tari, after power" vs "P2Pool XMR only, after power") so the figure is
+  never silently partial. Static, operator-supplied price only — an opt-in Tor-routed price feed is
+  a deferred follow-up, not implemented here (fetching one is a clearnet egress this privacy-first
+  stack avoids).
+
+### Changed
+
+- **Configuration view: logical section grouping, nested event groups, host-only grey-out
+  (#611/#612/#613).** The form no longer groups fields one section per top-level `config.json`
+  key — a display-layer map now groups them the way an operator thinks about them (Wallets &
+  payout, Monero node, Mining, Workers, Dashboard & access, Notifications, Energy, Alerts &
+  thresholds, System / advanced), so a grab-bag key like `dashboard` splits across the sections
+  its fields actually belong to; a path no group claims still renders, in a catch-all **Other**
+  group, and a frontend test fails if any `config.reference.json` path would ever land there
+  unclaimed (#611). Within Notifications, the 26 `telegram.events` toggles, the ntfy/webhook
+  sinks, and Healthchecks each nest one level deeper into their own collapsed sub-group instead of
+  dominating the section (#612). And a field the control-channel gate wouldn't actually commit —
+  derived from the SAME allowlist the gate enforces, surfaced to the browser as `_editable_keys` on
+  `GET /api/config` — now renders disabled with a "Host-only" tooltip up front, instead of letting
+  it be edited and rejected only at Save; a drift-guard test keeps the surfaced set in lockstep
+  with the gate's real allowlist (#613). `config.json` itself is unchanged; the staged-preview →
+  closed-schema gate → commit pipeline is unaffected. JSON mode (which edits the whole config as
+  text) is unaffected by any of this.
+
 ## [1.7.0] - 2026-07-17
 
 The **Config UX & telemetry** cycle. Config editing becomes humane — worker

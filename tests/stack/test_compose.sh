@@ -253,6 +253,34 @@ jq_assert "control staged/ dir never enters the container (#33)" \
 jq_assert "control channel defaults off in the dashboard env (#33)" \
     '.services.dashboard.environment["DASHBOARD_CONTROL_ENABLED"] == "false"'
 
+# depends_on startup ordering (#565): "wait until healthy" vs "wait until started" is a startup-
+# correctness guarantee, not decoration — e.g. p2pool must not merge-mine against a Tari node that's
+# still starting up. Render with the optional payout-confirmation profiles too
+# (payout_confirm/tari_payout_confirm, #381/#462) so the profile-gated wallet-rpc/tari-wallet edges
+# are covered, not just the always-on services. Edges enumerated from the compose file itself (6
+# depends_on stanzas total): xmrig-proxy -> p2pool is the one deliberate exception that only waits
+# for service_started, since p2pool's own healthcheck already proves what xmrig-proxy needs and
+# health-gating it too would be circular (p2pool depends on tari, not on xmrig-proxy).
+DEPS_ENV="$(mktemp)"
+sed 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=local_node,payout_confirm,tari_payout_confirm/' "$ENV_FILE" >"$DEPS_ENV"
+JSON="$(docker compose --env-file "$DEPS_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+rm -f "$DEPS_ENV"
+for edge in "monerod=tor" "tari=tor" "p2pool=tari" "wallet-rpc=monerod" "tari-wallet=tari"; do
+    svc="${edge%%=*}" dep="${edge#*=}"
+    jq_assert "$svc waits for $dep to be service_healthy (#565)" \
+        ".services[\"$svc\"].depends_on[\"$dep\"].condition == \"service_healthy\""
+done
+jq_assert "xmrig-proxy waits for p2pool service_started only, not health-gated (#565)" \
+    '.services["xmrig-proxy"].depends_on["p2pool"].condition == "service_started"'
+# Count guard: a NEW depends_on edge (health-gated or not) added anywhere in the file must show up
+# in the enumeration above too, or this trips before it ships unasserted.
+jq_assert "exactly 5 service_healthy depends_on edges total (#565)" \
+    '[.services[] | (.depends_on // {}) | to_entries[] | select(.value.condition == "service_healthy")] | length == 5'
+jq_assert "exactly 6 depends_on edges total (#565)" \
+    '[.services[] | (.depends_on // {}) | to_entries[]] | length == 6'
+# Restore $JSON to the default-profile render for every check below this point.
+JSON="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+
 # Configurable bridge subnet (#180): a custom network.subnet must rebase every static IP, the bridge
 # CIDR, and the dashboard's derived bridge endpoints — the host address-space-collision install fix.
 CUSTOM_ENV="$(mktemp)"

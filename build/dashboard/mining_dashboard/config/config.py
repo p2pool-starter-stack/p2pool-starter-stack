@@ -315,7 +315,10 @@ def load_energy_config(path=None):
     ``xmr_price``    — operator-supplied fiat price of 1 XMR (0/unset ⇒ net profit hidden). No price
                        feed ships: fetching one is a clearnet egress this privacy-first stack avoids,
                        so the operator supplies it, in the same ``currency`` as ``cost_per_kwh``.
-    ``currency``     — display label for both figures (e.g. USD, EUR). Label only — no conversion.
+    ``tari_price``   — operator-supplied fiat price of 1 XTM (#520; 0/unset ⇒ net profit counts
+                       P2Pool XMR only). Same no-price-feed reasoning as ``xmr_price``; folds Tari's
+                       merge-mined earnings into net profit once both this and ``xmr_price`` are set.
+    ``currency``     — display label for all figures (e.g. USD, EUR). Label only — no conversion.
     """
     try:
         with open(path or HOST_CONFIG_PATH) as f:
@@ -336,6 +339,7 @@ def load_energy_config(path=None):
     return {
         "cost_per_kwh": _nonneg(raw.get("cost_per_kwh")),
         "xmr_price": _nonneg(raw.get("xmr_price")),
+        "tari_price": _nonneg(raw.get("tari_price")),
         "currency": currency,
     }
 

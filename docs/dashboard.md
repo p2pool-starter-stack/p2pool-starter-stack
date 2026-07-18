@@ -376,24 +376,29 @@ total, marked *estimated*. A worker with neither a measured nor a configured dra
 the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
 
 The tab always shows fleet watts, H/s-per-watt, and energy use (kWh per day/month/year, a naive
-extrapolation of the current draw). Two prices add the rest, and each is optional:
+extrapolation of the current draw). Three prices add the rest, and each is optional:
 
 | Config | Adds |
 |---|---|
 | `dashboard.energy.cost_per_kwh` | **Power cost** per day/month/year (`kWh × price`). |
-| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year (`P2Pool XMR earnings × your XMR price − power cost`). |
+| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year, P2Pool XMR earnings × your XMR price, minus power cost. |
+| `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same net profit, at your Tari price. Requires `xmr_price` to be set too. |
 
-Both are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no conversion
-happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it but leave
-`xmr_price` unset and you get the energy cost but no net. Net profit scales with the same what-if
-hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red when
-power costs more than it earns.
+All three are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no
+conversion happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it
+but leave `xmr_price` unset and you get the energy cost but no net. Net profit scales with the same
+what-if hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red
+when power costs more than it earns.
 
-Net profit counts **P2Pool XMR only**. Tari is lumpy solo merge-mining priced separately, and XvB
-is raffle status rather than income, so both are excluded — the same honesty the earnings tabs
-already apply. **No price feed ships:** fetching an exchange rate is a clearnet request this
-privacy-first stack avoids, so you supply the XMR price yourself (see
-[Privacy › Runtime egress](privacy.md#runtime-egress)).
+Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once you also set
+`tari_price` (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already
+shows). Leave `tari_price` at `0`/unset and net profit is P2Pool XMR only — the card's heading and
+the Net/day tooltip say exactly which figure you're looking at, so it's never silently partial.
+**XvB stays excluded** either way: it's raffle status, not a clean per-day income estimate, so
+folding it in would mean guessing. **No price feed ships for either coin:** fetching an exchange
+rate is a clearnet request this privacy-first stack avoids, so you supply both prices yourself (see
+[Privacy › Runtime egress](privacy.md#runtime-egress)). An opt-in, Tor-routed price feed is a
+possible follow-up, not implemented here.
 
 ### Payout confirmation
 
@@ -505,15 +510,34 @@ Two edit modes build the same candidate config and submit it through the same pi
   `monero.mode` / `p2pool.pool` / dashboard-auth-and-host shortlist
   [`./pithead setup`](getting-started.md#3-run-setup) asks, read from the one file the wizard and
   this view share, [`config.core-keys.json`](../config.core-keys.json), so the two can't drift
-  apart. Below it, the rest of the schema is grouped by its natural top-level section (`monero`,
-  `tari`, `p2pool`, `telegram`, …), each collapsed by default, so a typical edit shows only the
-  handful of fields you're touching instead of the whole schema. `workers.list[]` (the per-rig
-  descriptors) isn't a form field here — a variable-length list has no single form control for it —
-  edit it via [Worker Inspect](#worker-inspect) or `config.json` directly.
+  apart. Below it, the rest of the schema is grouped into **logical sections**
+  ([#611](https://github.com/p2pool-starter-stack/pithead/issues/611)) an operator recognizes —
+  Wallets & payout, Monero node, Mining, Workers, Dashboard & access, Notifications, Energy, Alerts
+  & thresholds, System / advanced — instead of one section per top-level `config.json` key, so a
+  grab-bag key like `dashboard` (auth, remote access, the energy calculator, alert thresholds, …)
+  splits across the sections its fields actually belong to. Each section is a collapsed `<details>`
+  as before; within **Notifications**, the 26 `telegram.events` toggles, the ntfy/webhook sinks,
+  and Healthchecks each nest one level deeper into their own collapsed sub-group
+  ([#612](https://github.com/p2pool-starter-stack/pithead/issues/612)) instead of dominating the
+  section's field list. A config path no logical section claims still renders, in a catch-all
+  **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
+  fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
+  here — a variable-length list has no single form control for it — edit it via
+  [Worker Inspect](#worker-inspect) or `config.json` directly.
+
+  A field the control gate wouldn't actually commit renders **greyed out**
+  ([#613](https://github.com/p2pool-starter-stack/pithead/issues/613)): disabled, its value shown
+  read-only, with a tooltip ("Host-only — edit `config.json` and run `./pithead apply`") instead of
+  letting you edit it and finding out only at Save. The editable set is derived from the same
+  allowlist the gate enforces (see below) and surfaced on `GET /api/config` as `_editable_keys`, so
+  it can't drift from what the gate actually accepts; a greyed field never enters the staged edit
+  set at all.
 - **JSON** edits the whole fetched config as one text block, for operators who'd rather paste than
   click through fields. A **Load from file** control (`FileReader`, no upload) fills it from a
   saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect) uses. A
-  malformed edit is flagged inline before you click Save.
+  malformed edit is flagged inline before you click Save. JSON mode edits the whole config as text,
+  so grouping and the host-only grey-out (both display-layer, form-mode only) don't apply to it —
+  the gate still validates and gates it identically to form mode.
 
 The flow mirrors the CLI's `apply` either way:
 
@@ -534,7 +558,9 @@ The flow mirrors the CLI's `apply` either way:
 Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
 allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
 memory limits, time zone, the energy-calculator prices, …) and default-denies a change, in any
-direction, to anything else. The allowlist gates BOTH edit modes identically — JSON mode is a
+direction, to anything else. Form mode's grey-out (above) is that SAME allowlist surfaced to the
+browser up front, not a separate approximation of it — so what renders editable is exactly what
+the gate will commit. The allowlist gates BOTH edit modes identically regardless — JSON mode is a
 different way to assemble the candidate config, not a different validation path, so it can't
 smuggle a change the form couldn't make:
 wallets, the dashboard login and onion settings, the control channel itself, the Tor egress

@@ -396,6 +396,36 @@ addresses, so a webhook or ntfy server on your LAN needs `tor: false`. Flipping 
 POSTs directly — a **clearnet** endpoint then sees your host IP on every alert, so keep `tor:
 true` unless every configured endpoint is on your own network.
 
+### Setting up ntfy, step by step
+
+[ntfy](https://ntfy.sh) pushes each alert to your phone or desktop with no account — you pick a
+topic name and subscribe to it.
+
+1. **Pick a topic.** A topic is the name on the end of the URL. Anyone who knows it can read your
+   alerts, so treat it like a password: make it long and unguessable — e.g.
+   `pithead-a7f3k9x2-alerts`. On the public server that's `https://ntfy.sh/pithead-a7f3k9x2-alerts`.
+2. **Subscribe.** Install the ntfy app (Android or iOS) or open [ntfy.sh](https://ntfy.sh) in a
+   browser, and subscribe to that same topic. Nothing arrives yet — you have only started
+   listening.
+3. **Point the stack at it.** Add the topic URL to `config.json`, then `./pithead apply`:
+
+   ```json
+   "notifications": { "ntfy": { "url": "https://ntfy.sh/pithead-a7f3k9x2-alerts" }, "tor": true }
+   ```
+
+   The URL is the capability, so it is treated as a secret: it lives only in the owner-only `.env`
+   and is never printed or logged.
+4. **Test it.** Trigger an alert — stop a worker, or run `./pithead down` then `./pithead up` for a
+   node-down/recovery pair — and confirm it lands on your device.
+
+**Protected topics.** For a self-hosted ntfy with access control, add `"token": "tk_..."` to the
+`ntfy` block; it is sent as an `Authorization: Bearer` header (also a secret).
+
+**Over Tor (the default).** With `tor: true`, alerts reach the ntfy server through a Tor exit, so
+it never sees your home IP — public `ntfy.sh` works fine this way. A self-hosted ntfy on your own
+**LAN** is not Tor-reachable (Tor exits cannot reach private addresses), so set `tor: false` for
+it; that sends directly, and the LAN server seeing your host IP is expected on your own network.
+
 ---
 
 ## Privacy and secrets

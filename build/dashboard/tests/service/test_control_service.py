@@ -225,6 +225,71 @@ class TestCoreKeys:
         assert cfg["_core_keys"] == []
 
 
+class TestEditableKeys:
+    """read_config's ``_editable_keys`` field (#613): the config paths the control gate will
+    actually commit, derived from EDITABLE_ENV_KEY_PATHS (mirroring pithead's
+    CONTROL_DASHBOARD_EDITABLE_KEYS) plus the dashboard.energy special-case (#504). Surfaced the
+    same underscore-metadata way ``_core_keys`` is, so the Configuration view can grey out
+    everything else up front instead of edit-then-reject."""
+
+    def test_editable_keys_served_on_read_config(self, spool):
+        cfg = control_service.read_config()
+        assert "p2pool.pool" in cfg["_editable_keys"]
+        assert "xvb.donation_level" in cfg["_editable_keys"]
+        assert cfg["_editable_keys"] == sorted(cfg["_editable_keys"])  # stable, deterministic order
+
+    def test_dashboard_energy_is_the_special_case_addition(self, spool):
+        # dashboard.energy.* never renders to .env (control.approval reads it straight off
+        # config.json), so it can't come from the env-var map — it's allowed by name (#504).
+        cfg = control_service.read_config()
+        assert "dashboard.energy.cost_per_kwh" in cfg["_editable_keys"]
+        assert "dashboard.energy.currency" in cfg["_editable_keys"]
+        assert "dashboard.energy.xmr_price" in cfg["_editable_keys"]
+
+    def test_host_only_security_fields_are_not_editable(self, spool):
+        # Wallets, auth, remote-node RPC creds, and worker descriptors are exactly the class of
+        # field #613 exists to grey out — never on the list.
+        cfg = control_service.read_config()
+        for path in (
+            "monero.wallet_address",
+            "monero.view_key",
+            "dashboard.auth.password",
+            "monero.node_password",
+            "workers.api_token",
+            "workers.list",
+        ):
+            assert path not in cfg["_editable_keys"], path
+
+    def test_telegram_tamper_evidence_alarms_stay_host_only(self, spool):
+        # wallet_changed / clearnet_exposed are the alarms a compromised container must not be
+        # able to silence from the very channel it would use to do it.
+        cfg = control_service.read_config()
+        assert "telegram.events.wallet_changed" not in cfg["_editable_keys"]
+        assert "telegram.events.clearnet_exposed" not in cfg["_editable_keys"]
+        assert "telegram.events.node_down" in cfg["_editable_keys"]  # a normal event IS editable
+
+
+def test_editable_keys_have_no_intra_repo_drift():
+    """#613 (mirrors #515's WORKER_WRITABLE_KEYS check): EDITABLE_ENV_KEY_PATHS is a second copy of
+    pithead's CONTROL_DASHBOARD_EDITABLE_KEYS, kept in sync only by this test. Drift means the
+    dashboard either greys out something the gate would actually commit, or — worse — shows
+    something editable that the gate silently refuses at Save, exactly the edit-then-reject
+    experience #613 exists to remove."""
+    import re
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    pithead_path = next((p / "pithead" for p in here.parents if (p / "pithead").is_file()), None)
+    if pithead_path is None:
+        pytest.skip("pithead CLI not present in this test context (dashboard-only image)")
+    pithead = pithead_path.read_text()
+    m = re.search(r"CONTROL_DASHBOARD_EDITABLE_KEYS='([^']*)'", pithead)
+    assert m, "could not find CONTROL_DASHBOARD_EDITABLE_KEYS in pithead"
+    pithead_keys = set(m.group(1).split())
+    assert pithead_keys, "extracted an empty allowlist — the regex likely stopped matching"
+    assert set(control_service.EDITABLE_ENV_KEY_PATHS.keys()) == pithead_keys
+
+
 class TestWorkerApply:
     """Worker config-apply spooling + validation (#185). The intent carries only the worker name +
     writable-key changes — never a host, port, or token (those stay host-side, #440)."""

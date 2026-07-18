@@ -102,8 +102,12 @@ MATRIX:
                          makes the dashboard data dir read-only and asserts /api/state flags
                          db_healthy:false, then restores it (#202), and forces a real
                          `iptables -I` failure and asserts the #270 firewall rolls back
-                         fail-closed (no half-open ruleset). DESTRUCTIVE-then-restored;
-                         local mode only. Slow (healthcheck + node-health debounce).
+                         fail-closed (no half-open ruleset). Also stops the tor container and
+                         asserts no clearnet egress leaks while SOCKS is down AND that
+                         `doctor` flags the outage loudly (#563), shadows timedatectl for a
+                         real clock-drift verdict, and tmpfs-fills the dashboard data dir for
+                         a real ENOSPC verdict (#383). DESTRUCTIVE-then-restored; local mode
+                         only. Slow (healthcheck + node-health debounce).
   --auth-fail-closed     also run the fail-closed auth phase (#153/#203): empty PROXY_AUTH_TOKEN
                          in .env and assert `pithead up` REFUSES to start (the live counterpart
                          to the tier-1 compose-config check), then restore the exact token and
@@ -608,6 +612,26 @@ assert_running_state() {
             memlim="$(rx "docker inspect $svc --format '{{.HostConfig.Memory}}' 2>/dev/null")"
             assert_num_gt "memory ceiling live on $svc (#132)" "${memlim:-0}" 0
         done
+        # Per-service runtime uid (#255/#91): compose only pins tari's `user: 1000:1000` at
+        # config time (tests/stack/test_compose.sh) — nothing checks what's actually running. The
+        # 5 first-party pithead-* images run their own build-time USER (tor's alpine 'tor' package
+        # user is uid 100; monerod/p2pool/xmrig-proxy/dashboard, built on ubuntu:24.04's built-in
+        # 'ubuntu' user or an explicit useradd, are uid 1000) and tari pins 1000 via the compose
+        # override (the pulled image ships no non-root user of its own). Caddy and the two Docker
+        # socket proxies are the audited exception — verified against the upstream images
+        # (caddy:2.11.4, tecnativa/docker-socket-proxy:v0.4.2): neither ships a non-root user, so
+        # they run as root, mitigated by cap_drop: ALL + read_only rootfs and (the proxies) sitting
+        # off mining_net on host-loopback-only ports (#345) rather than by uid. Pin ALL 9 so a
+        # silent drift either way — a hardened image reverting to root, or an accepted-root service
+        # unexpectedly changing uid — is caught.
+        local pair svc uid_want uid_got
+        for pair in "tor=100" "monerod=1000" "p2pool=1000" "tari=1000" "xmrig-proxy=1000" \
+            "dashboard=1000" "caddy=0" "docker-proxy=0" "docker-control=0"; do
+            svc="${pair%%=*}"
+            uid_want="${pair#*=}"
+            uid_got="$(rx "docker exec $svc id -u" 2>/dev/null)"
+            assert_eq "runtime uid of $svc is $uid_want (#255/#91)" "$uid_got" "$uid_want"
+        done
         assert_num_ge "monerod DNS checkpoints disabled (#161)" \
             "$(rx "docker exec monerod grep -c '^disable-dns-checkpoints=1' /home/ubuntu/.bitmonero/bitmonero.conf 2>/dev/null")" 1
         assert_eq "monerod has no clearnet priority-node hostnames (#161)" \
@@ -1050,6 +1074,12 @@ _pred_monerod_missing() { _monerod_is missing; }
 _pred_monerod_unhealthy() { _monerod_is running unhealthy; }
 _pred_monerod_healthy() { _monerod_is running healthy; }
 _pred_proxy_stopped() { [ "$(svc_state_of "$(service_state xmrig-proxy)")" != "running" ]; }
+_pred_tor_stopped() { [ "$(svc_state_of "$(service_state tor)")" != "running" ]; }
+_pred_tor_healthy() {
+    local s
+    s="$(service_state tor)"
+    [ "$(svc_state_of "$s")" = "running" ] && { [ "$(svc_health_of "$s")" = "healthy" ] || [ "$(svc_health_of "$s")" = "none" ]; }
+}
 
 fault_node_down() {
     it_step "fault: stop monerod (required node down)…"
@@ -1163,6 +1193,100 @@ fault_firewall_rollback() {
         "$(rx 'sudo iptables-save 2>/dev/null | grep -c pithead-tor-egress')" 0
 }
 
+# TOP PRIVACY PRIORITY (#563): stop the tor container — the SOCKS proxy every app dials through
+# (#270) — and prove two things a healthy-box run never exercises: (a) nothing falls back to a
+# direct clearnet dial while SOCKS is unreachable (reuses assert_egress_posture, the same
+# /proc/net/tcp proof the steady-state battery runs, now during the one window it's never been
+# live-checked: SOCKS itself down), and (b) `doctor` names the outage rather than staying quiet —
+# today check_egress_firewall_installed and check_tor_clearnet_egress both SKIP (dr_info, not
+# dr_fail/dr_warn) once the tor container isn't running, so a doctor run with everything else
+# healthy can print "All checks passed." while the whole privacy backbone is gone. Local mode only
+# (needs a local tor container to break).
+fault_tor_down() {
+    it_step "fault: stop the tor container — SOCKS unreachable (#563)…"
+    rx "docker compose stop tor" >/dev/null 2>&1
+    wait_for 30 3 "tor to be stopped" _pred_tor_stopped || true
+    assert_eq "tor reported stopped" "$(svc_state_of "$(service_state tor)")" "exited"
+
+    # (a) No clearnet egress leak while the Tor SOCKS is unreachable.
+    assert_egress_posture
+
+    # (b) doctor must FLAG the outage loudly, not pass silently.
+    local doc rc
+    doc="$(pithead doctor 2>&1)"
+    rc=$?
+    assert_ne "doctor exits non-zero while the tor container is down — loud failure, not silence (#563)" "$rc" "0"
+    case "$doc" in
+    *"All checks passed."*)
+        it_fail "doctor does not silently report all-clear with tor down (#563)" \
+            "doctor printed 'All checks passed.' while the tor container was stopped"
+        ;;
+    *) it_pass "doctor does not silently report all-clear with tor down (#563)" ;;
+    esac
+
+    it_step "recover: start tor…"
+    rx "docker compose start tor" >/dev/null 2>&1
+    wait_for 180 5 "tor healthy" _pred_tor_healthy || true
+    wait_status_ok 180 || true
+    pithead status >/dev/null 2>&1
+    assert_rc "status OK after tor recovery" "$?" "0"
+    # Recovery isn't just "container up" — a flapping SOCKS during reconnect is exactly when a
+    # leak would show, so re-run the same egress proof once Tor is back.
+    assert_egress_posture
+}
+
+# Clock-drift verdict (#383): doctor's NTP check (clock_sync_status, reading `timedatectl show -p
+# NTPSynchronized --value`) is unit-tested only against a stubbed timedatectl — never against a
+# real doctor run on a real box. Shadowing the timedatectl BINARY (the same PATH-prepend trick
+# fault_firewall_rollback uses for sudo) proves the real function reads a real timedatectl's real
+# output shape and classifies it correctly end to end, WITHOUT actually skewing the box's clock —
+# mining is time-sensitive (P2Pool/Monero reject skewed shares/blocks), so touching the real clock
+# on a precious release-gate box is exactly what this harness avoids elsewhere (#54 safety model).
+fault_clock_drift() {
+    it_step "fault: shadow timedatectl to report NTPSynchronized=no (clock-drift, #383)…"
+    rx 'mkdir -p .itest-bin && printf "%s\n" "#!/usr/bin/env bash" "if [ \"\$1\" = show ]; then echo no; fi" > .itest-bin/timedatectl && chmod +x .itest-bin/timedatectl' >/dev/null 2>&1
+    local out
+    out="$(rx "PATH=\"\$PWD/.itest-bin:\$PATH\" $IT_PITHEAD doctor 2>&1")"
+    assert_contains "doctor flags clock skew — NOT NTP-synchronized (#383)" "$out" "NOT NTP-synchronized"
+    it_step "recover: drop the timedatectl shadow…"
+    rx 'rm -rf .itest-bin' >/dev/null 2>&1
+    out="$(pithead doctor 2>&1)"
+    assert_eq "doctor's clock-sync verdict no longer flags unsynced once the shadow is gone (#383)" \
+        "$(printf '%s' "$out" | grep -c 'NOT NTP-synchronized')" "0"
+}
+
+# ENOSPC / db-unhealthy verdict (#383): fault_db_readonly (above) proves the #131 db_healthy flag
+# under a PERMISSION failure (chmod a-w); a genuinely FULL disk is a different real failure mode
+# (ENOSPC, not EACCES) and is never forced — only a disk-headroom *warning* is checked (doctor's
+# check_disk_grouped). A 1MiB tmpfs bind-mounted OVER the dashboard data dir shadows its real
+# contents (nothing on the box's actual disk is touched; unmounting restores them) and fills solid,
+# so the dashboard's sqlite writes there hit a REAL kernel ENOSPC. Reuses the same db_healthy
+# predicate/assertions as fault_db_readonly — the trigger differs, the observable contract doesn't.
+fault_disk_enospc() {
+    local ddir
+    ddir="$(env_on_box DASHBOARD_DATA_DIR)"
+    if [ -z "$ddir" ]; then
+        it_warn "skipping ENOSPC fault (no DASHBOARD_DATA_DIR in .env)"
+        return 0
+    fi
+    it_step "fault: mount a 1MiB tmpfs over the dashboard data dir and fill it (real ENOSPC, #383)…"
+    if ! rx "sudo mount -t tmpfs -o size=1m,uid=1000,gid=1000 tmpfs $(quote_arg "$ddir")" >/dev/null 2>&1; then
+        it_warn "could not mount a tmpfs over the data dir (no root / tmpfs support?) — skipping the ENOSPC fault"
+        return 0
+    fi
+    rx "dd if=/dev/zero of=$(quote_arg "$ddir/.itest-fill") bs=1M count=4 >/dev/null 2>&1" >/dev/null 2>&1 || true
+    rx "docker compose restart dashboard" >/dev/null 2>&1
+    wait_for 90 5 "dashboard to report db_healthy=false under real ENOSPC" _pred_db_healthy_is false || true
+    assert_eq "db_healthy false under a real full disk (ENOSPC, #383)" \
+        "$(jq_get "$(api_state)" '.db_healthy')" "false"
+    it_step "recover: unmount the tmpfs, restoring the real data dir…"
+    rx "sudo umount $(quote_arg "$ddir")" >/dev/null 2>&1
+    rx "docker compose restart dashboard" >/dev/null 2>&1
+    wait_for 90 5 "dashboard to report db_healthy=true after ENOSPC recovery" _pred_db_healthy_is true || true
+    assert_eq "db_healthy true after real disk restored" \
+        "$(jq_get "$(api_state)" '.db_healthy')" "true"
+}
+
 run_fault_injection() {
     # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="fault-injection"
@@ -1179,16 +1303,24 @@ run_fault_injection() {
     fault_missing
     fault_db_readonly
     fault_firewall_rollback
+    fault_tor_down
+    fault_clock_drift
+    fault_disk_enospc
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "fault-injection" "$OUT_DIR"
 
-    # Belt-and-braces: whatever happened above, leave monerod up, the dashboard data dir writable,
-    # the firewall reinstated, and the stack healthy (the writability and firewall reinstates are
-    # unconditional so a mid-phase abort can't leave the box read-only or with clearnet egress open).
+    # Belt-and-braces: whatever happened above, leave monerod + tor up, the dashboard data dir
+    # writable (real fs, not the ENOSPC tmpfs), the firewall reinstated, the timedatectl shadow
+    # gone, and the stack healthy — all unconditional so a mid-phase abort can't leave the box
+    # read-only, tmpfs-shadowed, clock-shadowed, or with clearnet egress open.
     rx "docker compose up -d monerod" >/dev/null 2>&1 || true
+    rx "docker compose up -d tor" >/dev/null 2>&1 || true
+    rx "sudo umount $(quote_arg "$(env_on_box DASHBOARD_DATA_DIR)")" >/dev/null 2>&1 || true
     rx "sudo chmod -R u+w $(quote_arg "$(env_on_box DASHBOARD_DATA_DIR)")" >/dev/null 2>&1 || true
     rx "docker compose restart dashboard" >/dev/null 2>&1 || true
     rx 'bash -c "source ./pithead && apply_tor_egress_firewall" >/dev/null 2>&1' || true
+    rx 'rm -rf .itest-bin' >/dev/null 2>&1 || true
     wait_for 240 5 "monerod healthy after fault phase" _pred_monerod_healthy || true
+    wait_for 240 5 "tor healthy after fault phase" _pred_tor_healthy || true
     wait_status_ok 240 || true
 }
 

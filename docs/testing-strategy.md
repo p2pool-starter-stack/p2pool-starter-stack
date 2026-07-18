@@ -64,10 +64,11 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Situation | Trigger | Tier |
 |---|---|---|
 | monerod down → **reject workers** (stop `xmrig-proxy`) | unreachable ≥ `NODE_DOWN_AFTER_SEC` | 1 ✅ · 3 ▶ · 4 ▶ |
-| Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ |
+| monerod busy / mid-reorg (HTTP 200, `status≠OK`) → **reject workers** | RPC answers but distrusted | 1 ✅ · 3 ▶ |
+| Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ · 3 ▶ |
 | Recovery hysteresis — readmit only after stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
 | Transient blip / never-reachable → **no** false reject | debounce / `ever_up` | 1 ✅ |
-| Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) |
+| Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) · 3 ▶ |
 | #35 latch × #31 failover coexist after release | down post-release | 1 ✅ (added) · 3 ▶ |
 | Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |
 
@@ -259,31 +260,55 @@ tier 3/4:
   root-owned file under the dashboard data dir and asserts the pool-flip `apply` (which runs
   `ensure_directories` → `ensure_owner`) chowns it to uid 1000 — the #255 "scan contents, not just
   the dir" regression. Runs at the release gate only (needs root to create a foreign-uid inode).
-- **Real-container monerod failover in PR CI.** The primary-node reject/readmit cycle only runs on
-  the manual tier-4 box (`--fault-injection`); the mini-stack (tier 3) breaks Tari, not monerod.
-- **Non-blocking-Tari "ignore" path with real containers.** Unit-tested only; the mini-stack proves
-  Tari-down-while-required (reject) but never Tari-down-while-optional (keep mining). This is the
-  path that silently kills yield if it regresses to a reject.
-- **monerod busy / mid-reorg failover.** The contract test proves the client reads a busy node as
-  unreachable; no mini-stack or fault-injection scenario asserts the dashboard actually rejects
-  workers on a busy-but-alive node (a real reorg state, distinct from a clean stop).
-- **Double outage, both-must-recover.** Unit-tested (monerod ∧ Tari down → readmit only when both
-  healthy); never driven with real containers, so the recovery ordering is unproven end-to-end.
+- **Real-container monerod failover in PR CI.** ✅ Now tier-3 scenarios 6/7 in the mini-stack: the
+  compose env had a fake `monerod` container wired at the network level (`MONERO_RPC_URL`) but the
+  dashboard's `LOCAL_MONERO_HOST` default didn't match it, so `MONERO_NODE_HOST != LOCAL_MONERO_HOST`
+  put the dashboard on the "remote" code path, which never probes reachability — a monerod outage
+  was a silent no-op end-to-end. Setting `LOCAL_MONERO_HOST` to the fake's hostname fixed the wiring;
+  scenarios 6/7 down/readmit the real `itest-xmrig-proxy` container against it. The tier-4
+  `--fault-injection` box run still covers the real binary/real kernel leg.
+- **Non-blocking-Tari "ignore" path with real containers.** ✅ Mini-stack scenario 11: recreates the
+  stack with `dashboard.tari_required=false` (baked in at container boot, so it needs its own
+  compose cycle) and asserts `itest-xmrig-proxy` stays running through a Tari outage — the path that
+  silently kills yield if it regresses to a reject.
+- **monerod busy / mid-reorg failover.** ✅ Mini-stack scenario 8: the fake's `busy` mode (HTTP 200,
+  `status≠OK`) drives the same reject/readmit cycle as a clean outage.
+- **Double outage, both-must-recover.** ✅ Mini-stack scenario 9: both monerod and Tari down →
+  rejected; recovering only Tari leaves it rejected; recovering monerod too readmits — the recovery
+  ordering proven end-to-end, not just at the unit level.
 - **Partial-start / stop-failure idempotency.** The control loop's "container fails to start/stop →
   retry next cycle" is unit-only; no tier-3/4 scenario injects a docker start/stop error.
 - **`pithead doctor` on a real box.** ✅ The `--check` phase now runs `doctor` and asserts exit 0
   plus the three #383 runtime OK verdicts (egress firewall installed, stratum listening, dashboard
-  answers). Still open: its NTP/clock-drift check (mining is time-sensitive) is never
-  fault-injected.
-- **Disk-full / ENOSPC verdict.** Only a disk-headroom *warning* is checked; a real
-  container-unhealthy-on-ENOSPC verdict is never forced, though the disk badge + db-write-error
-  paths are unit-tested.
-- **Tor-container-down partial start.** No Caddy/Tor services exist in the mini-stack compose, so
-  "what happens when the Tor container is down" (SOCKS unreachable) is exercised at no tier below
-  the manual real box; every all-Tor egress assertion is read-path only.
+  answers). ✅ Its NTP/clock-drift check is now fault-injected too (`--fault-injection`): a
+  PATH-shadowed `timedatectl` (no real clock skew — mining is time-sensitive) proves doctor
+  classifies a real unsynced report correctly, then the shadow is dropped and recovery is asserted.
+- **Disk-full / ENOSPC verdict.** ✅ Now a tier-4 `--fault-injection` case: a 1MiB tmpfs bind-mounted
+  over the dashboard data dir and filled solid forces a real kernel ENOSPC (distinct from
+  `fault_db_readonly`'s EACCES), and asserts `db_healthy:false`, then unmounts and asserts recovery.
+- **Tor-container-down partial start.** ✅ Now a tier-4 `--fault-injection` case (#563, TOP PRIVACY
+  PRIORITY): `docker compose stop tor` and assert BOTH no clearnet egress leak appears (reuses
+  `bench-verify-egress.sh`'s `/proc/net/tcp` proof, the same one the steady-state battery runs) and
+  that `doctor` flags the outage loudly rather than passing silently, then restart tor and re-assert
+  both the egress proof and `pithead status`. The doctor-loud-failure leg is the harness *proving*
+  the gap: `check_egress_firewall_installed` and `check_tor_clearnet_egress` both currently SKIP
+  (not FAIL) when the tor container isn't running, so this assertion is expected to fail against
+  today's `doctor` until it gains an explicit tor-down verdict — filed as a follow-up, not silently
+  softened here.
 - **Insecure + main matrix row.** `dashboard.secure=false` only ever pairs with `p2pool.pool=nano`,
   so the Caddy-scheme / bind assertions for insecure mode are entangled with the nano path; an
   insecure+main regression has no row.
+- **`verify_release_images()` against a real signed bundle.** ✅ Now exercised directly (not
+  reimplemented) by `scripts/release-smoke.sh`: the real function runs in the extracted, published
+  bundle dir against the real pinned digests + committed `cosign.pub` (positive, needs a signed
+  release) and against a digest tampered in a copy of the bundle (negative, fail-closed, runs
+  regardless of signing) — the security-critical proof that the exact function `up`/`upgrade` run on
+  every install refuses a mismatched digest, not just that a hand-rolled cosign call does (#376/#459).
+- **Per-service runtime uid.** ✅ Now asserted every matrix run and at `--check`: `docker exec <svc>
+  id -u` for all 9 services against their audited expected uid (tor 100; monerod/p2pool/
+  xmrig-proxy/dashboard/tari 1000; caddy/docker-proxy/docker-control root, mitigated by
+  `cap_drop: ALL` + isolation rather than uid) — compose only pinned tari's `user:` at config time
+  (#255/#91); nothing checked what actually runs.
 
 ## Adding a scenario
 

@@ -594,6 +594,7 @@
     "incomplete": false,
     "cost_per_kwh": 0.0,
     "xmr_price": 0.0,
+    "tari_price": 0.0,
     "currency": "USD",
     "per_worker": [
       {

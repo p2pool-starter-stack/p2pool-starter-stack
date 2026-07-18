@@ -7,17 +7,28 @@
 //
 // Two edit modes (#529, RATIFIED Wave-0 decision — mirrors #518's Worker Inspect shape exactly):
 // **Form** (the default) pins a `core` group — the wizard's own shortlist, `_core_keys` on the
-// fetched config, sourced from config.core-keys.json so the two never drift apart — above the
-// config's natural sections, each a native <details> collapsed by default. **JSON** is the same
-// fetched config as one editable textarea, with a Load-from-file fill button (FileReader, no
-// upload). Both modes build the SAME `proposed` config object and POST it to the SAME
-// /api/control/preview → confirm → /api/control/commit pipeline — the closed-schema gate on the
-// host is the only validation authority; neither mode adds a server-side path the other lacks.
+// fetched config, sourced from config.core-keys.json so the two never drift apart — above LOGICAL
+// sections (#611, configlogic.js buildSections) an operator recognizes (Wallets & payout, Monero
+// node, Dashboard & access, …) rather than one section per top-level config.json key, each a
+// native <details> collapsed by default. Within a section, a noisy cluster (telegram.events' 26
+// toggles, the notification sinks, healthchecks) nests one level deeper into its own collapsed
+// <details> (#612, configlogic.js nestSection). A field the control gate won't actually commit —
+// derived from `_editable_keys` on the fetched config (#613, configlogic.js markEditable) —
+// renders disabled: read-only value, a tooltip explaining why, and no onChange wired at all, so it
+// can never enter `edits`. **JSON** is the same fetched config
+// as one editable textarea, with a Load-from-file fill button (FileReader, no upload); JSON mode
+// edits the whole config and isn't affected by grouping or grey-out. Both modes build the SAME
+// `proposed` config object and POST it to the SAME /api/control/preview → confirm →
+// /api/control/commit pipeline — the closed-schema gate on the host is the only validation
+// authority; neither mode adds a server-side path the other lacks, and none of this display layer
+// changes what the gate will actually accept.
 
 import {
   applyEdits,
   buildSections,
   jsonSyntaxError,
+  markEditable,
+  nestSection,
   parseConfigJson,
   regroupCore,
   SECRET_HINT,
@@ -54,30 +65,41 @@ async function pollResult(id, skip, max = POLL_MAX) {
   );
 }
 
+const HOST_ONLY_TITLE = "Host-only — edit config.json and run ./pithead apply";
+
 // `full` (#529): the pinned Core card mixes fields from several sections, so its rows need the
 // FULL dotted key ("monero.wallet_address") to stay unambiguous; a natural section already says
 // which section it is via its own heading, so its rows keep the shorter relative label.
+//
+// `field.editable` (#613): a field the control gate would refuse at commit renders disabled, its
+// live value read-only, with a tooltip explaining why — and, critically, no onChange/onInput is
+// wired at all when disabled, so a greyed field can never add itself to `edits` (defense in
+// depth; the gate is still the real authority). Preact skips an event prop entirely when it's
+// `undefined`, so passing `undefined` rather than a no-op is what actually removes the listener.
 const Field = ({ field, edits, onEdit, full }) => {
+  const editable = field.editable !== false;
   const value = field.key in edits ? edits[field.key] : field.value;
   const label = full ? field.key : field.path.slice(1).join(".") || field.path[0];
+  const title = editable ? undefined : HOST_ONLY_TITLE;
+  const change = editable ? (e) => onEdit(field.key, e.target.value) : undefined;
   let input;
   if (field.type === "boolean") {
-    input = html`<select value=${String(value)} onChange=${(e) => onEdit(field.key, e.target.value)}>
+    input = html`<select value=${String(value)} disabled=${!editable} onChange=${change}>
         <option value="true">true</option>
         <option value="false">false</option>
     </select>`;
   } else if (field.type === "select") {
-    input = html`<select value=${value} onChange=${(e) => onEdit(field.key, e.target.value)}>
+    input = html`<select value=${value} disabled=${!editable} onChange=${change}>
         ${field.options.map((o) => html`<option value=${o}>${o}</option>`)}
     </select>`;
   } else if (field.type === "secret") {
     input = html`<input type="password" value=${value} placeholder=${SECRET_HINT}
-        onInput=${(e) => onEdit(field.key, e.target.value)} />`;
+        disabled=${!editable} onInput=${change} />`;
   } else {
     input = html`<input type=${field.type === "number" ? "number" : "text"} value=${value}
-        onInput=${(e) => onEdit(field.key, e.target.value)} />`;
+        disabled=${!editable} onInput=${change} />`;
   }
-  return html`<label class="config-field">
+  return html`<label class="config-field" title=${title}>
       <span class="config-field-name">${label}</span>
       ${input}
       ${field.warning ? html`<span class="config-field-warning">⚠ ${field.warning}</span>` : null}
@@ -133,6 +155,7 @@ export class ConfigView extends Component {
       cfg: null,
       sections: [],
       coreKeys: [],
+      editableKeys: [], // #613: config paths the control gate will actually commit
       edits: {},
       mode: "form", // form | json (#529)
       editText: "",
@@ -162,6 +185,7 @@ export class ConfigView extends Component {
         cfg,
         sections: buildSections(cfg),
         coreKeys: cfg._core_keys || [],
+        editableKeys: cfg._editable_keys || [],
         edits: {},
         editText: JSON.stringify(cfg, null, 2),
         jsonError: null,
@@ -252,10 +276,12 @@ export class ConfigView extends Component {
     }
   }
 
-  // Form mode (#529): the core group (pinned, never collapsed) above the config's natural
-  // sections, each a native <details> — collapsed by default (no `open` attribute), which gets
+  // Form mode (#529): the core group (pinned, never collapsed) above the LOGICAL sections (#611),
+  // each a native <details> — collapsed by default (no `open` attribute), which gets
   // keyboard/a11y toggling for free, the same "native platform feature over JS state" call
-  // Worker Inspect's own <dialog> made (#518).
+  // Worker Inspect's own <dialog> made (#518). Within a section, nestSection (#612) pulls a noisy
+  // cluster (telegram.events, the notification sinks, healthchecks) into its own nested <details>,
+  // one level deeper, also collapsed by default.
   renderForm(core, groups, edits) {
     const onEdit = (k, v) => this.setState({ edits: { ...edits, [k]: v } });
     const field = (f, full) =>
@@ -269,12 +295,19 @@ export class ConfigView extends Component {
             </div>`
             : null
         }
-        ${groups.map(
-          (s) => html`<details class="card config-section">
+        ${groups.map((s) => {
+          const { fields, subgroups } = nestSection(s);
+          return html`<details class="card config-section">
               <summary>${s.name}</summary>
-              ${s.fields.map((f) => field(f))}
-          </details>`,
-        )}
+              ${fields.map((f) => field(f))}
+              ${subgroups.map(
+                (g) => html`<details class="config-subsection">
+                    <summary>${g.label} (${g.fields.length})</summary>
+                    ${g.fields.map((f) => field(f))}
+                </details>`,
+              )}
+          </details>`;
+        })}
     </div>`;
   }
 
@@ -298,6 +331,7 @@ export class ConfigView extends Component {
       phase,
       sections,
       coreKeys,
+      editableKeys,
       edits,
       mode,
       editText,
@@ -341,7 +375,7 @@ export class ConfigView extends Component {
     const busy = phase === "previewing" || phase === "committing";
     const dirty = Object.keys(edits).length > 0;
     const canSave = mode === "json" ? !jsonError : dirty;
-    const { core, sections: groups } = regroupCore(sections, coreKeys);
+    const { core, sections: groups } = regroupCore(markEditable(sections, editableKeys), coreKeys);
     return html`<div class="config-view">
         ${error ? html`<div class="card"><p class="status-bad">${error}</p></div>` : null}
         <div class="toggle-group mb-1">
