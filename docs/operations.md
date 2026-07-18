@@ -306,6 +306,11 @@ State lives in the data directories (by default under `./data/`, or wherever eac
 points; see [Configuration › Data directories](configuration.md#data-directories)):
 
 - **`config.json`**: settings. `chmod 600`; keep a copy off-host.
+- **`config.json.bak-upgrade-*` / `.env.bak-upgrade-*`**: pre-upgrade copies the dashboard's
+  one-click upgrade keeps before an in-place extraction
+  ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)). The newest three pairs
+  are kept; older ones are pruned automatically. The `.env` copies carry secrets — handle them
+  like `.env` itself.
 - **`data/tor/`**: onion service keys. Back up to keep the same onion addresses across a rebuild.
 - **`data/monero/`**, **`data/tari/`**: the blockchains. Large; backing them up saves a re-sync,
   but they re-download from the network if lost.

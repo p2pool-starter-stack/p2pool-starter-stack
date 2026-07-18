@@ -5414,22 +5414,63 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         # control-runner units onto the new path, pulls the $tag images, and repoints
         # `current ->` on success. The outcome goes to BOTH spools: the recreated dashboard
         # mounts the new one, a failure before the recreate is read from the old one.
+        # #637: this dir — untouched by the whole deploy — is the restore point; name it in the
+        # result so the operator learns it exists without reading docs/operations.md first.
         local rdir
         if (cd "$new_dir" && ./pithead upgrade) >"$logf" 2>&1; then
             for rdir in "$cdir" "$new_dir/data/control"; do
-                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"upgraded",version:$v,ts:(now|floor)}')"
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg r "$cwd" '{status:"upgraded",version:$v,rollback:$r,ts:(now|floor)}')"
                 control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
             done
         else
             for rdir in "$cdir" "$new_dir/data/control"; do
-                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" --arg d "$new_dir" \
-                    '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host: cd " + $d + " && ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" --arg d "$new_dir" --arg r "$cwd" \
+                    '{status:"failed",version:$v,rollback:$r,error:($e + " — finish the upgrade from the host: cd " + $d + " && ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
                 control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
             done
         fi
         rm -f "$logf"
         return 0
     fi
+    # #637: unlike the fresh-dir path, this one has no surviving previous dir — and the new
+    # release's `upgrade` below re-renders .env (and may migrate config.json). Keep a timestamped
+    # pre-upgrade copy of both next to the originals before a byte changes (cp -p keeps .env's
+    # 0600; a fresh stamp per attempt so a failed try never overwrites the good copy) and refuse
+    # to overwrite the install without one. The destination name is predictable, so root must
+    # never write through a symlink a co-tenant planted there (the #629 mkdir guard's attack
+    # class): copy to an unpredictable mktemp name first, then rename onto the final name —
+    # rename(2) replaces a planted entry without following it.
+    _upg_snapshot() { # <src> <dst>
+        local tmp
+        tmp=$(mktemp "$PWD/.bak-upgrade.XXXXXX") || return 1
+        if ! cp -p "$1" "$tmp"; then
+            rm -f "$tmp"
+            return 1
+        fi
+        mv -f "$tmp" "$2"
+    }
+    local bak
+    bak="bak-upgrade-$(date +%Y%m%d-%H%M%S)"
+    if ! _upg_snapshot "$CONFIG_FILE" "$CONFIG_FILE.$bak" 2>"$logf" ||
+        ! _upg_snapshot "$ENV_FILE" "$ENV_FILE.$bak" 2>>"$logf"; then
+        rm -f "$bundle"
+        _upg_fail "could not keep a pre-upgrade copy of config.json/.env: $(tail -c 500 "$logf") — refusing to overwrite the install without a restore point; the stack keeps running v$PITHEAD_VERSION."
+        rm -f "$logf"
+        return 0
+    fi
+    # Older snapshots hold yesterday's secrets: keep the newest three pairs, prune the rest.
+    # Lexical order IS chronological for this stamp format; `|| true` — an empty glob under
+    # pipefail must not kill the runner.
+    ls -1r "$CONFIG_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
+    ls -1r "$ENV_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
+    # The reported paths: CONFIG_FILE is cwd-relative unless the (test-only) override made it
+    # absolute — don't prepend $PWD onto an already-absolute path.
+    local bak_paths
+    case "$CONFIG_FILE" in
+    /*) bak_paths="$CONFIG_FILE.$bak" ;;
+    *) bak_paths="$PWD/$CONFIG_FILE.$bak" ;;
+    esac
+    bak_paths="$bak_paths $PWD/$ENV_FILE.$bak"
     # In-place extraction over the running install, in two passes. Pass 1 lays down everything
     # EXCEPT the running script with plain tar, which MERGES existing directories — a release
     # install already carries the non-empty build/* config-template mounts — and overwrites files.
@@ -5454,7 +5495,8 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
     else
         control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" \
-            '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+            --arg b "$bak_paths" \
+            '{status:"failed",version:$v,backup:$b,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
     fi
     rm -f "$logf"

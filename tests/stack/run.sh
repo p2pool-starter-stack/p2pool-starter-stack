@@ -5120,6 +5120,7 @@ make_stubs "$UPG/bin"
 # tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
 command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
 printf '1.3.1' >"$UPG/VERSION"
+printf '{}' >"$UPG/config.json" # #637: the in-place path snapshots config.json before extracting
 # #544/#555: a real release install carries non-empty build/* config-template mounts (see the
 # bundle's build/* below) — pre-seed them here with STALE content from "the previous version",
 # including a file the new bundle does NOT ship, so the extraction below runs over the exact shape
@@ -5194,6 +5195,7 @@ reset_upgrade_state() { # restore between attempts: fresh runner copy, running v
     cp "$STACK" "$UPG/pithead"
     printf '1.3.1' >"$UPG/VERSION"
     rm -f "$UPG/data/control/staged/.upgrade-stamp" "$UPGRESULTS/$UUPG.json" "$UPG/upgrade-invocations.log"
+    rm -f "$UPG"/config.json.bak-upgrade-* "$UPG"/.env.bak-upgrade-* # #637 snapshots
     : >"$UPG/curl.log"
 }
 
@@ -5289,6 +5291,12 @@ upgrade_intent "$UUPG" "v9.9.9"
 assert_eq "failed upgrade run reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
 assert_contains "failed upgrade points at the host CLI" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "./pithead upgrade"
 assert_contains "failed upgrade audited" "$(cat "$UPGAUDIT" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"failed\""
+# #637: the failure result names the pre-upgrade config/.env copies, and they exist on disk.
+upg_bak="$(jq -r '.backup // ""' "$UPGRESULTS/$UUPG.json" 2>/dev/null)"
+assert_contains "failed in-place upgrade names the pre-upgrade copies (#637)" "$upg_bak" ".bak-upgrade-"
+upg_bak_cfg="${upg_bak%% *}"
+[ -n "$upg_bak_cfg" ] && [ -f "$upg_bak_cfg" ] && ok "the named config.json copy exists (#637)" ||
+    bad "the named config.json copy exists (#637)" "missing: $upg_bak_cfg"
 
 # Happy path: proposed == host-derived latest and newer than running → bundle extracted, the NEW
 # pithead's `upgrade` ran, both dials went through the stack's Tor SOCKS, everything audited.
@@ -5320,6 +5328,59 @@ if [ ! -e "$UPG/data/control/staged/.$UUPG.tar.gz" ] && [ ! -e "$UPG/data/contro
 else
     bad "no staged bundle/log residue after a successful upgrade" "leftover staging file present"
 fi
+# #637: before the extraction overwrote the install, the runner kept timestamped copies of the
+# operator's config and the rendered .env — the in-place layout's only restore point.
+upg_bak_env="$(ls "$UPG"/.env.bak-upgrade-* 2>/dev/null | head -1)"
+[ -n "$upg_bak_env" ] && ok "in-place upgrade keeps a pre-upgrade .env copy (#637)" ||
+    bad "in-place upgrade keeps a pre-upgrade .env copy (#637)" "no .env.bak-upgrade-* in $UPG"
+assert_contains "the .env copy holds the pre-upgrade content (#637)" "$(cat "$upg_bak_env" 2>/dev/null)" "DEPLOYMENT_COMPLETED=true"
+upg_bak_cfg2="$(ls "$UPG"/config.json.bak-upgrade-* 2>/dev/null | head -1)"
+assert_eq "the config.json copy holds the pre-upgrade content (#637)" "$(cat "$upg_bak_cfg2" 2>/dev/null)" "{}"
+
+# #637 fail-closed: no snapshot, no upgrade. With config.json unreadable the runner must refuse
+# BEFORE a byte of the bundle lands — the whole point of the restore point is that it exists
+# before the mutation does.
+reset_upgrade_state
+mv "$UPG/config.json" "$UPG/config.json.hidden"
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_eq "failed snapshot fails the upgrade (#637)" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "snapshot refusal names the missing restore point (#637)" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "restore point"
+assert_eq "failed snapshot extracts nothing (#637)" "$(cat "$UPG/VERSION")" "1.3.1"
+[ -z "$(ls "$UPG"/.bak-upgrade.* 2>/dev/null)" ] && ok "failed snapshot leaves no mktemp residue (#637)" ||
+    bad "failed snapshot leaves no mktemp residue (#637)" "leftover temp file"
+mv "$UPG/config.json.hidden" "$UPG/config.json"
+
+# #637 hardening: the snapshot destination name is predictable, so a co-tenant can plant a
+# symlink there and hope root writes through it (the #629 attack class) — the runner must
+# replace the planted entry, never follow it. And old snapshots hold yesterday's secrets, so
+# only the newest three pairs survive. Freeze `date` so the destination name is known.
+reset_upgrade_state
+cat >"$UPG/bin/date" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "+%Y%m%d-%H%M%S" ]; then echo "20990101-000000"; else exec /bin/date "$@"; fi
+EOF
+chmod +x "$UPG/bin/date"
+printf 'victim-untouched' >"$UPG/victim"
+ln -s "$UPG/victim" "$UPG/config.json.bak-upgrade-20990101-000000"
+for bakstamp in 20200101-000000 20200102-000000 20200103-000000; do
+    printf 'stale' >"$UPG/.env.bak-upgrade-$bakstamp"
+    printf 'stale' >"$UPG/config.json.bak-upgrade-$bakstamp"
+done
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_eq "planted symlink at the snapshot name is not written through (#637)" "$(cat "$UPG/victim")" "victim-untouched"
+if [ ! -L "$UPG/config.json.bak-upgrade-20990101-000000" ] && [ -f "$UPG/config.json.bak-upgrade-20990101-000000" ]; then
+    ok "the snapshot replaced the planted entry with a regular file (#637)"
+else
+    bad "the snapshot replaced the planted entry with a regular file (#637)" "still a symlink or missing"
+fi
+assert_eq "snapshots pruned to the newest three .env copies (#637)" "$(ls -1 "$UPG"/.env.bak-upgrade-* 2>/dev/null | wc -l | tr -d ' ')" "3"
+assert_eq "snapshots pruned to the newest three config.json copies (#637)" "$(ls -1 "$UPG"/config.json.bak-upgrade-* 2>/dev/null | wc -l | tr -d ' ')" "3"
+[ ! -e "$UPG/.env.bak-upgrade-20200101-000000" ] && ok "the oldest .env snapshot was pruned (#637)" ||
+    bad "the oldest .env snapshot was pruned (#637)" "still present"
+rm -f "$UPG/bin/date" "$UPG/victim"
+reset_upgrade_state
 
 # #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
 # bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
@@ -5414,6 +5475,7 @@ reset_v629_state() {
     cp "$STACK" "$VUPG/pithead"
     printf '1.3.1' >"$VUPG/VERSION"
     rm -f "$VUPG/data/control/staged/.upgrade-stamp" "$VUPG/data/control/results/$UUPG.json"
+    rm -f "$VUPG"/config.json.bak-upgrade-* "$VUPG"/.env.bak-upgrade-* # #637 snapshots
     rm -rf "$VNEW"
 }
 
@@ -5433,6 +5495,12 @@ assert_contains "rendered .env seeded into the new dir" "$(cat "$VNEW/.env" 2>/d
 assert_eq "clearnet sync markers carried over" "$(cat "$VNEW/data/clearnet-state/monero.synced" 2>/dev/null)" "clearnet-marker"
 assert_contains "fresh-dir upgrade audited in the old spool" "$(cat "$VUPG/data/control/audit/control.log" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"upgraded\""
 assert_contains "fresh-dir upgrade audited in the new spool" "$(cat "$VNEW/data/control/audit/control.log" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+# #637: the result names the old dir as the restore point (pwd -P tail, macOS /private prefix).
+assert_contains "fresh-dir result names the old dir as the rollback copy (#637)" \
+    "$(jq -r '.rollback // ""' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v1.3.1"
+[ -z "$(ls "$VUPG"/.env.bak-upgrade-* 2>/dev/null)" ] &&
+    ok "fresh-dir path takes no file snapshots — the old dir IS the restore point (#637)" ||
+    bad "fresh-dir path takes no file snapshots — the old dir IS the restore point (#637)" "found .bak-upgrade-* in $VUPG"
 
 # The new release's upgrade fails: both spools say failed, the error points at the NEW dir for
 # the host-side finish, and the old install keeps running — still intact for rollback.
@@ -5445,6 +5513,8 @@ assert_eq "failed fresh-dir upgrade reports failed" "$(jq -r '.status' "$VUPG/da
 assert_contains "failed fresh-dir upgrade points at the new dir" "$(jq -r '.error' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v9.9.9 && ./pithead upgrade"
 assert_eq "failed fresh-dir upgrade leaves the old install intact" "$(cat "$VUPG/VERSION")" "1.3.1"
 assert_eq "failed fresh-dir upgrade wrote the result to the new spool too" "$(jq -r '.status' "$VNEW/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "failed fresh-dir result still names the rollback dir (#637)" \
+    "$(jq -r '.rollback // ""' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v1.3.1"
 
 # Data inside the install dir (the pre-#455 default): a dir swap would strand it — the runner
 # must fall back to the in-place path: no sibling dir, the new release lands in THIS dir.
@@ -5464,6 +5534,9 @@ assert_eq "data-inside-install falls back to in-place upgrade" "$(cat "$VUPG/VER
     bad "data-inside-install creates no sibling version dir" "$VNEW exists"
 assert_contains "in-place fallback names the stranded data dir" "$out" "MONERO_DATA_DIR resolves inside the install dir"
 assert_eq "in-place fallback still upgrades" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+[ -n "$(ls "$VUPG"/.env.bak-upgrade-* 2>/dev/null)" ] &&
+    ok "in-place fallback keeps the pre-upgrade config/.env copies (#637)" ||
+    bad "in-place fallback keeps the pre-upgrade config/.env copies (#637)" "no .bak-upgrade-* in $VUPG"
 seed_v629_env
 
 # A pre-existing entry at the target path — a leftover failed attempt, or a co-tenant's planted
