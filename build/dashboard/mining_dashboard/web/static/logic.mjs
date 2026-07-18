@@ -352,6 +352,38 @@ export function formatFiat(value, currency) {
   return sign + (currency || "USD") + " " + Math.abs(value).toFixed(2);
 }
 
+// Fiat value of a coin estimate (#520 price feed): null unless both the estimate and a positive
+// price exist, so the coin tabs only grow fiat rows once a price is configured or fetched.
+export function coinFiat(value, price) {
+  return Number.isFinite(value) && Number.isFinite(price) && price > 0 ? value * price : null;
+}
+
+// Format a fiat *price* (a per-coin exchange rate, #520). Unlike formatFiat (aggregates, 2 dp) a
+// price can be tiny — XTM trades at fractions of a cent — so scale the decimals like formatCoin
+// does, or the price line would read "USD 0.00". "—" when the price is unset (0/invalid).
+export function formatFiatPrice(value, currency) {
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  const dp = value >= 1 ? 2 : value >= 0.001 ? 4 : 6;
+  return (currency || "USD") + " " + value.toFixed(dp);
+}
+
+// Provenance of the prices in use (#520): the calculator always says which price its fiat figures
+// are valued at — live feed (with age), feed-enabled-but-waiting (static still in use), or static
+// config. Null when the feed is off and no price is set: there are no fiat figures to attribute.
+export function priceSourceLabel(energy) {
+  if (!energy) return null;
+  const src = energy.price_source || {};
+  const havePrice = energy.xmr_price > 0 || energy.tari_price > 0;
+  if (src.live) {
+    const age = Number.isFinite(src.age_sec)
+      ? ", updated " + fmtWindowDuration(src.age_sec * 1000) + " ago"
+      : "";
+    return "live from CoinGecko over Tor" + age;
+  }
+  if (src.feed) return "price feed waiting for its first fetch — static config.json values in use";
+  return havePrice ? "static, set in config.json" : null;
+}
+
 // Format a power draw / energy figure with its unit (W, kWh); "—" for the null/invalid case.
 export function formatUnit(value, unit, dp = 1) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";

@@ -41,6 +41,7 @@ def compute_egress_posture(
     remote_monero,
     healthchecks_enabled,
     telegram_enabled,
+    price_feed_enabled=False,
 ):
     """Pure derivation of the egress posture from config knobs. Returns ``{components, summary}``."""
     xvb = _xvb_route(xvb_enabled, xvb_tor)
@@ -102,6 +103,11 @@ def compute_egress_posture(
                 {"to": "Healthchecks.io ping", "route": TOR if healthchecks_enabled else INACTIVE},
                 # Telegram bot (alerts + command long-poll) — always over Tor when on (#121/#340).
                 {"to": "Telegram bot", "route": TOR if telegram_enabled else INACTIVE},
+                # XMR/XTM price feed (#520) — always over Tor when opted in (energy.price_feed).
+                {
+                    "to": "price feed (coingecko.com)",
+                    "route": TOR if price_feed_enabled else INACTIVE,
+                },
             ],
         },
         {
@@ -155,6 +161,7 @@ def egress_posture_from_config():
         remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
+        price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
     )
 
 
@@ -207,6 +214,7 @@ def compute_topology(
     remote_monero,
     healthchecks_enabled,
     telegram_enabled,
+    price_feed_enabled=False,
 ):
     """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
 
@@ -224,6 +232,7 @@ def compute_topology(
         remote_monero=remote_monero,
         healthchecks_enabled=healthchecks_enabled,
         telegram_enabled=telegram_enabled,
+        price_feed_enabled=price_feed_enabled,
     )
     xvb = _xvb_route(xvb_enabled, xvb_tor)
     sidechain = CLEARNET if p2pool_clearnet else TOR
@@ -255,6 +264,14 @@ def compute_topology(
             "tor",
             TOR if telegram_enabled else INACTIVE,
             "Telegram bot",
+            "egress",
+        ),
+        # XMR/XTM price feed (#520) — always over Tor when opted in (energy.price_feed).
+        _edge(
+            "dashboard",
+            "tor",
+            TOR if price_feed_enabled else INACTIVE,
+            "price feed",
             "egress",
         ),
         # The Tor hub to the network: SOCKS egress for every daemon + onion-service ingress.
@@ -300,4 +317,5 @@ def topology_from_config():
         remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
+        price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
     )

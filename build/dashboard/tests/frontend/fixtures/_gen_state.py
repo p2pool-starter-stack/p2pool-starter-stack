@@ -32,10 +32,9 @@ HISTORY = [
     {"timestamp": NOW - 300, "v": 10500, "v_p2pool": 8100, "v_xvb": 2400, "t": "b"},
 ]
 
+# `h60` + the RigForge enriched `power` block feed build_energy (#260), so the fixture carries an
+# available energy block (watts, efficiency) for the EarningsCard Energy-tab render tests.
 WORKERS = [
-    # rig-alpha carries a RigForge power reading (#260) so the fixture's energy block is
-    # available (Energy tab rendered) exactly as build_energy computes it — the energy figures
-    # in state.json are real build_state output, never hand-edited.
     {
         "name": "rig-alpha",
         "ip": "192.168.1.10",
@@ -47,7 +46,7 @@ WORKERS = [
         "hashrate_1m": 5100,
         "hashrate_15m": 5000,
         "h60": 5100,
-        "rigforge": {"power": {"watts": 142.0}},
+        "rigforge": {"power": {"watts": 142.0, "hs_per_watt": 35.9}},
     },
     {
         "name": "rig-bravo",
@@ -59,8 +58,8 @@ WORKERS = [
         "hashrate_10s": 0,
         "hashrate_1m": 0,
         "hashrate_15m": 4800,
-        "h60": 5100,
-        "rigforge": {"power": {"watts": 143.0}},
+        "h60": 4800,
+        "rigforge": {"power": {"watts": 143.0, "hs_per_watt": 33.6}},
     },
 ]
 
@@ -81,17 +80,6 @@ def _state_mgr():
         "estimates": {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9},
         "last_update": NOW,
     }
-    # One recorded XvB raffle win (inside the chart window) so the fixture carries both the
-    # chart's gold-star marker and the XvB card's wins-log row.
-    sm.get_raffle_wins.return_value = [
-        {
-            "ts": NOW - 600,
-            "hashrate": 4.2e6,
-            "height": 3720833,
-            "block_id": "0525a913e879",
-            "tier": "donor_whale",
-        }
-    ]
     sm.is_db_healthy.return_value = True
     return sm
 
