@@ -11,6 +11,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-17
+
+**Config UX round 2.** The Configuration view is regrouped around logical
+sections (not one-per-service), the telegram/ntfy event toggles collapse into
+nested groups, and fields the control gate can't commit — pruning, data
+directories, secrets — are greyed out with a host-only note instead of failing
+at commit. The energy calculator's net profit now folds in Tari revenue, not
+just P2Pool XMR. Alongside the features, a coverage push added the failover and
+privacy behaviors that were previously real-hardware-only: a fake monerod in
+the CI mini-stack (monerod-down/busy/double-outage failover, Tari-optional
+keeps mining), and tier-4 fault-injection for Tor-down, cosign verification,
+clock drift, and ENOSPC — which surfaced and fixed a real gap where `doctor`
+reported all-clear while the Tor privacy backbone was down.
+
 ### Added
 
 - **Energy calculator: Tari revenue in net profit (#520).** `dashboard.energy.tari_price` (fiat
