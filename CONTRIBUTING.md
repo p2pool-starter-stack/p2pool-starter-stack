@@ -49,6 +49,8 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% total coverage gate**).
      CI also runs **`make test-patch-coverage`** (`diff-cover`): new/changed lines must be **≥ 90%**
      covered vs `origin/develop`, the ratchet that stops coverage rotting at the margin.
+   - **test-frontend** — the frontend logic tests (`node --test`); uses the same Node that the
+     lint surfaces already require.
    - **test-stack** — the `pithead` shell test suite.
    - **test-compose** — `docker-compose.yml` interpolation validation.
    - **test-integration-selftest** — the integration harness's own pure logic.

@@ -622,10 +622,15 @@ the host, with no SSH:
    it is newer than the running version — the container proposes, the host decides what gets
    installed. Attempts are limited to one per 10 minutes, and every one is written to the audit
    log.
-3. The runner downloads the release bundle (over Tor), extracts it over the install directory,
-   and runs the new release's `./pithead upgrade`, which re-renders the generated config and
-   pulls the new images. The page rides out its own restart and reports the outcome; reload when
-   it says the new version is up.
+3. The runner downloads the release bundle (over Tor). On the
+   [versioned deploy layout](operations.md#the-deploy-box-layout) — a `pithead-vX.Y.Z` install
+   dir with its data directories outside it — the bundle is extracted into a fresh sibling
+   `pithead-v<new>/`, `config.json`, `.env`, and the control spool are carried over, and the new
+   dir's `./pithead upgrade` runs; on success `current ->` repoints there and the previous dir
+   stays intact as the rollback copy. Any other layout (a plain `pithead/` extract, or data
+   directories living inside the install dir) gets the bundle extracted in place instead. Either
+   way, `upgrade` re-renders the generated config and pulls the new images. The page rides out
+   its own restart and reports the outcome; reload when it says the new version is up.
 
 The version the container proposes is never trusted as the target: the host independently fetches
 the latest tag from GitHub, and the bundle it downloads is for that host-derived tag. The bundle
@@ -639,6 +644,15 @@ with nothing changed, and a swapped key inside a malicious bundle cannot vouch f
 install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
 (over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
 picks up the key. See [Releasing › Signed releases](releasing.md#signed-releases).
+
+**Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
+v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates
+itself — as a hard failure, and the page polling during the upgrade is still the *old* version:
+the fix ships inside the release being installed, so it cannot protect the jump that installs
+it. If the modal reports "Error: HTTP 502" but the version badge shows the new version and the
+new-release banner is gone, the upgrade landed; reload the page to clear the modal (or confirm
+with `./pithead version` on the host). This happens once — upgrades started from v1.8.1 or
+later ride out the restart.
 
 The button never appears on a source checkout — the runner refuses the request there, since a dev
 install updates with `git pull`. If the upgrade fails, the result says so in the view: a failed
