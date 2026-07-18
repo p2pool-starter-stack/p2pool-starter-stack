@@ -447,6 +447,30 @@ delivered to the container through a tmpfs secret mount, so they never appear in
 Local Tari node only. Its restore point is a **birthday** (`tari.payout_scan_birthday`, days since
 the Unix epoch), not a block height. Leave `tari.view_key` empty and none of the Tari half runs.
 
+#### Exporting your keys
+
+**Monero.** Open the wallet that owns your payout address in `monero-wallet-cli` and run:
+
+```text
+viewkey
+```
+
+It prints the secret and public view keys; copy the **secret** one into `monero.view_key`. In the
+Monero GUI the same key is under **Settings → Seed & keys** as *Secret view key*. Do not copy the
+spend key or the mnemonic seed — the stack only ever needs the view key.
+
+**Tari.** Export both keys in one command from the wallet that owns your payout address:
+
+```bash
+minotari_console_wallet --base-path <your-wallet-dir> export-view-key-and-spend-key
+```
+
+Enter the wallet password when prompted. It prints the private **view key** (goes in
+`tari.view_key`) and the public **spend key** (goes in `tari.spend_public_key`).
+
+Set the keys in `config.json` and run `./pithead apply`. Key reference: the `monero.view_key` and
+`tari.*` rows in [Configuration](configuration.md#configuration-reference).
+
 ### XvB Tier (raffle)
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
