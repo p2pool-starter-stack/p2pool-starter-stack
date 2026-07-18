@@ -11,6 +11,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **One-click upgrade no longer shows a false "HTTP 502 — did not complete" on a
+  successful upgrade (#622).** The self-upgrade recreates the dashboard container
+  itself; while it restarts, caddy (the reverse proxy) stays up and answers
+  502/503/504 because the upstream is briefly gone. The result poller already rode
+  out a dropped connection but treated a gateway 5xx as terminal, so the modal
+  jumped to "failed" even though the upgrade landed. Gateway 502/503/504 are now
+  ridden out like a dropped connection; the durable control result is the real
+  outcome. A genuine backend 500 still fast-fails.
+
 ## [1.8.0] - 2026-07-17
 
 **Config UX round 2.** The Configuration view is regrouped around logical
