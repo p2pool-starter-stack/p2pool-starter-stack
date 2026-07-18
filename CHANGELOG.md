@@ -11,6 +11,30 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **One-click upgrade keeps the versioned deploy layout honest (#629).** On the documented
+  layout (`pithead-vX.Y.Z` dirs beside a shared data root), the dashboard upgrade used to
+  extract the new release *over* the running install: the dir name and `current ->` symlink
+  kept the old version string while holding the new release, and the previous bundle — the
+  rollback copy — was destroyed. It now extracts into a fresh `pithead-v<new>/` sibling,
+  seeds `config.json`, `.env`, and the control spool, runs the new dir's `pithead upgrade`,
+  and repoints `current ->` on success, leaving the previous dir intact for rollback — the
+  same steps as a manual bundle deploy. Installs whose data directories resolve inside the
+  install dir still upgrade in place (a dir swap would strand the data) and say so in the
+  journal.
+- **`make test` now runs the frontend logic suite (#632).** The `node --test` frontend tests
+  ran only in CI; a local `make test` could pass with a frontend regression. Local and CI now
+  run the same chain.
+
+### Documentation
+
+- **The one-time false "HTTP 502 — did not complete" when upgrading from ≤ v1.7.x is
+  documented (#631).** The #622 fix rides in the release being installed, so the upgrade that
+  delivers it still polls with the old, unfixed client. The dashboard guide now says how to
+  confirm the upgrade landed (version badge, cleared release banner) and that the modal is a
+  one-time artifact.
+
 ## [1.8.1] - 2026-07-18
 
 ### Fixed

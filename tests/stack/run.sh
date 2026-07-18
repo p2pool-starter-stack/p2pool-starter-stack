@@ -5298,6 +5298,121 @@ urun >/dev/null
 assert_contains "immediate second upgrade attempt is throttled" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
 reset_upgrade_state
 
+echo "== black-box: control upgrade extracts to a fresh version dir (#629) =="
+# A VERSIONED release install (deploy629/pithead-v1.3.1) whose data dirs all resolve OUTSIDE the
+# install dir — the documented bundle-deploy layout. The runner must extract v9.9.9 into a fresh
+# sibling pithead-v9.9.9/, seed config.json/.env and the install-local state dirs, run the NEW
+# dir's pithead upgrade from the new dir, write the result into BOTH spools, and leave this dir
+# intact as the rollback copy. Reuses the upgrade59 stubs ($UPG/bin) and fake bundle ($UPGB).
+VROOT="$SANDBOX/deploy629"
+VUPG="$VROOT/pithead-v1.3.1"
+VNEW="$VROOT/pithead-v9.9.9"
+mkdir -p "$VUPG/data/control/requests" "$VUPG/data/control/staged" "$VUPG/data/control/results" \
+    "$VUPG/data/control/audit" "$VUPG/data/clearnet-state" "$VROOT/data/monero"
+cp "$STACK" "$VUPG/pithead"
+printf '1.3.1' >"$VUPG/VERSION"
+printf '{}' >"$VUPG/config.json"
+printf 'clearnet-marker' >"$VUPG/data/clearnet-state/monero.synced"
+seed_v629_env() { # data dirs OUTSIDE the install dir → fresh-dir mode
+    cat >"$VUPG/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=true
+CONTROL_DIR=$VUPG/data/control
+NETWORK_PREFIX=10.9.0
+MONERO_DATA_DIR=$VROOT/data/monero
+TARI_DATA_DIR=$VROOT/data/tari
+P2POOL_DATA_DIR=$VROOT/data/p2pool
+TOR_DATA_DIR=$VROOT/data/tor
+DASHBOARD_DATA_DIR=$VROOT/data/dashboard
+EOF
+}
+seed_v629_env
+vrun() { # <extra env VAR=val...>
+    (cd "$VUPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$VUPG/curl.log" \
+        CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/bundle.tar.gz" \
+        env "$@" ./pithead control-run-pending 2>&1)
+}
+reset_v629_state() {
+    cp "$STACK" "$VUPG/pithead"
+    printf '1.3.1' >"$VUPG/VERSION"
+    rm -f "$VUPG/data/control/staged/.upgrade-stamp" "$VUPG/data/control/results/$UUPG.json"
+    rm -rf "$VNEW"
+}
+
+# Happy path: fresh sibling dir, seeded state, new pithead ran FROM the new dir, both spools
+# carry the result, and the running install — the rollback copy — is byte-for-byte untouched.
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+vrun >/dev/null
+assert_eq "fresh-dir upgrade result status (old spool)" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "fresh-dir upgrade result status (new spool)" "$(jq -r '.status' "$VNEW/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "new version dir holds the new release" "$(cat "$VNEW/VERSION" 2>/dev/null)" "9.9.9"
+assert_eq "old version dir still holds the old release (rollback preserved)" "$(cat "$VUPG/VERSION")" "1.3.1"
+cmp -s "$VUPG/pithead" "$STACK" && ok "old dir's pithead untouched by the extraction" ||
+    bad "old dir's pithead untouched by the extraction" "the running script was overwritten"
+assert_contains "the NEW pithead ran the upgrade from the NEW dir" "$(cat "$VNEW/upgrade-invocations.log" 2>/dev/null)" "new-pithead upgrade"
+[ -f "$VNEW/config.json" ] && ok "config.json seeded into the new dir" || bad "config.json seeded into the new dir" "missing"
+assert_contains "rendered .env seeded into the new dir" "$(cat "$VNEW/.env" 2>/dev/null)" "DEPLOYMENT_COMPLETED=true"
+assert_eq "clearnet sync markers carried over" "$(cat "$VNEW/data/clearnet-state/monero.synced" 2>/dev/null)" "clearnet-marker"
+assert_contains "fresh-dir upgrade audited in the old spool" "$(cat "$VUPG/data/control/audit/control.log" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+assert_contains "fresh-dir upgrade audited in the new spool" "$(cat "$VNEW/data/control/audit/control.log" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+
+# The new release's upgrade fails: both spools say failed, the error points at the NEW dir for
+# the host-side finish, and the old install keeps running — still intact for rollback.
+reset_v629_state
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+vrun NEW_PITHEAD_FAIL=1 >/dev/null
+assert_eq "failed fresh-dir upgrade reports failed" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
+# The runner derives its paths from `pwd -P`, so on macOS the /var/folders sandbox reports as
+# /private/var/... — assert on the path's tail, not the unresolved $VNEW.
+assert_contains "failed fresh-dir upgrade points at the new dir" "$(jq -r '.error' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v9.9.9 && ./pithead upgrade"
+assert_eq "failed fresh-dir upgrade leaves the old install intact" "$(cat "$VUPG/VERSION")" "1.3.1"
+assert_eq "failed fresh-dir upgrade wrote the result to the new spool too" "$(jq -r '.status' "$VNEW/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
+
+# Data inside the install dir (the pre-#455 default): a dir swap would strand it — the runner
+# must fall back to the in-place path: no sibling dir, the new release lands in THIS dir.
+reset_v629_state
+mkdir -p "$VUPG/data/monero" # must exist: the guard canonicalizes via cd/pwd -P
+cat >"$VUPG/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=true
+CONTROL_DIR=$VUPG/data/control
+NETWORK_PREFIX=10.9.0
+MONERO_DATA_DIR=$VUPG/data/monero
+EOF
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_eq "data-inside-install falls back to in-place upgrade" "$(cat "$VUPG/VERSION")" "9.9.9"
+[ ! -e "$VNEW" ] && ok "data-inside-install creates no sibling version dir" ||
+    bad "data-inside-install creates no sibling version dir" "$VNEW exists"
+assert_contains "in-place fallback names the stranded data dir" "$out" "MONERO_DATA_DIR resolves inside the install dir"
+assert_eq "in-place fallback still upgrades" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+seed_v629_env
+
+# A pre-existing entry at the target path — a leftover failed attempt, or a co-tenant's planted
+# dir/symlink (the mkdir-without--p TOCTOU guard): root must never extract into it. The runner
+# refuses the fresh-dir path and upgrades in place instead.
+reset_v629_state
+mkdir -p "$VNEW"
+printf 'not-ours' >"$VNEW/marker"
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_contains "pre-existing target dir falls back to in-place" "$out" "already exists"
+assert_eq "pre-existing target dir is never written into" "$(
+    cat "$VNEW/marker" 2>/dev/null
+    ls "$VNEW" | wc -l | tr -d ' '
+)" "not-ours1"
+assert_eq "pre-existing target still upgrades in place" "$(cat "$VUPG/VERSION")" "9.9.9"
+reset_v629_state
+mkdir -p "$VROOT/plant"      # the attacker-controlled tree behind the symlink
+ln -s "$VROOT/plant" "$VNEW" # a planted symlink must fail the atomic mkdir, not be followed
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_contains "planted symlink at the target falls back to in-place" "$out" "already exists"
+[ -z "$(ls -A "$VROOT/plant" 2>/dev/null)" ] && ok "planted symlink is not followed (nothing extracted through it)" ||
+    bad "planted symlink is not followed (nothing extracted through it)" "files appeared behind the symlink"
+rm -f "$VNEW"
+seed_v629_env
+
 echo "== black-box: control upgrade verifies the bundle signature (#376) =="
 # Give the install a trust anchor (cosign.pub next to pithead — what a signed release bundle
 # ships) plus a fake cosign; the runner must fetch pithead.tar.gz.sig over the same Tor SOCKS and

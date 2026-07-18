@@ -5245,6 +5245,94 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
+    # #629: pick the extraction target. A versioned install (pithead-vX.Y.Z dir) whose data dirs
+    # all resolve OUTSIDE the install dir gets the documented bundle-deploy layout
+    # (docs/operations.md § A recommended layout): extract into a fresh sibling pithead-<tag>/,
+    # seed the operator's config + the install-local state, and run the NEW dir's upgrade — on
+    # success its update_current_symlink repoints `current`, and this dir survives untouched as
+    # the rollback copy. Anything else falls back to the historical in-place extraction: a plain
+    # `pithead/` extract has no versioned layout to maintain, and data living under this dir
+    # (the pre-#455 default) would be stranded by a dir swap — the new render would re-derive
+    # its default paths under the NEW dir and the stack would come up beside its own data.
+    local new_dir="" cwd
+    cwd=$(pwd -P) # physical path: the guard below compares canonicalized values on BOTH sides
+    if [[ "$(basename "$cwd")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        new_dir="$(dirname "$cwd")/pithead-$tag"
+        local dvar dval
+        for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR TOR_DATA_DIR DASHBOARD_DATA_DIR; do
+            dval=$(env_get "$dvar")
+            [ -n "$dval" ] || continue
+            # Canonicalize: the .env value may reach the same place through the `current` symlink.
+            dval=$( (cd "$dval" 2>/dev/null && pwd -P) || printf '%s' "$dval")
+            case "$dval" in
+            "$cwd" | "$cwd"/*)
+                warn "$dvar resolves inside the install dir — upgrading in place; move the data to a shared root outside the version dir to get per-version rollback dirs (#629)."
+                new_dir=""
+                break
+                ;;
+            esac
+        done
+    fi
+    # Atomic create, no -p and no pre-check: root must never extract into (or follow a symlink
+    # planted at) a path some other local account pre-created — mkdir fails on ANY existing
+    # entry, closing the check-to-use race outright (#629 security review). A leftover dir from
+    # an earlier failed attempt therefore also lands here: fall back to in-place and say why.
+    if [ -n "$new_dir" ] && ! mkdir "$new_dir" 2>/dev/null; then
+        warn "$new_dir already exists (a previous attempt, or not ours to create) — upgrading in place. Remove it to get the fresh-dir layout back (#629)."
+        new_dir=""
+    fi
+    if [ -n "$new_dir" ]; then
+        # Fresh-dir deploy (#629). Plain tar throughout: nothing in $new_dir is running.
+        if ! tar -xzf "$bundle" --strip-components=1 -C "$new_dir" 2>"$logf"; then
+            rm -f "$bundle"
+            _upg_fail "could not extract the $tag bundle into $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
+            rm -f "$logf"
+            return 0
+        fi
+        rm -f "$bundle"
+        # Seed what only the running install has: the operator's config, the rendered .env
+        # (preserved secrets — onions, RPC creds; cp -p keeps it 0600), and the install-local
+        # state dirs — the control spool (so the audit trail and results history carry over,
+        # and the result written below is visible to the RECREATED dashboard, which mounts the
+        # new dir's spool), the clearnet sync markers, and the caddy access log. Chain and
+        # dashboard data live outside this dir (guarded above) and carry over by path.
+        local sdir
+        if ! cp -p "$CONFIG_FILE" "$new_dir/config.json" 2>"$logf" ||
+            ! cp -p "$ENV_FILE" "$new_dir/.env" 2>>"$logf" ||
+            ! mkdir -p "$new_dir/data" 2>>"$logf"; then
+            _upg_fail "could not seed config into $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
+            rm -f "$logf"
+            return 0
+        fi
+        for sdir in control clearnet-state caddy-logs; do
+            [ -d "$PWD/data/$sdir" ] || continue
+            if ! cp -a "$PWD/data/$sdir" "$new_dir/data/" 2>"$logf"; then
+                _upg_fail "could not carry data/$sdir over to $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
+                rm -f "$logf"
+                return 0
+            fi
+        done
+        # Run the NEW release's upgrade from the NEW dir: it re-renders the generated config
+        # (recomputing every $PWD-derived path, including CONTROL_DIR), re-provisions the
+        # control-runner units onto the new path, pulls the $tag images, and repoints
+        # `current ->` on success. The outcome goes to BOTH spools: the recreated dashboard
+        # mounts the new one, a failure before the recreate is read from the old one.
+        local rdir
+        if (cd "$new_dir" && ./pithead upgrade) >"$logf" 2>&1; then
+            for rdir in "$cdir" "$new_dir/data/control"; do
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"upgraded",version:$v,ts:(now|floor)}')"
+                control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
+            done
+        else
+            for rdir in "$cdir" "$new_dir/data/control"; do
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" --arg d "$new_dir" \
+                    '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host: cd " + $d + " && ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+                control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
+            done
+        fi
+        rm -f "$logf"
+        return 0
+    fi
     # In-place extraction over the running install, in two passes. Pass 1 lays down everything
     # EXCEPT the running script with plain tar, which MERGES existing directories — a release
     # install already carries the non-empty build/* config-template mounts — and overwrites files.
