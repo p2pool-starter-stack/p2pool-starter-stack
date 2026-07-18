@@ -460,8 +460,7 @@ minotari_console_wallet --base-path <your-wallet-dir> export-view-key-and-spend-
 ```
 
 Enter the wallet password when prompted. It prints the private **view key** (goes in
-`tari.view_key`) and the public **spend key** (goes in `tari.spend_public_key`). The spend key it
-exports is the *public* one — the command never reveals anything that can spend.
+`tari.view_key`) and the public **spend key** (goes in `tari.spend_public_key`).
 
 Set the keys in `config.json` and run `./pithead apply`. Key reference: the `monero.view_key` and
 `tari.*` rows in [Configuration](configuration.md#configuration-reference).
