@@ -142,6 +142,15 @@ the set-and-forget choice). Full minimum-vs-recommended sizing for the stack hos
 [Hardware Requirements](hardware.md). (Miner hardware is sized separately in
 [RigForge](https://github.com/p2pool-starter-stack/rigforge).)
 
+### How do I know a payout actually arrived?
+
+Give the stack a private view key and it confirms payouts on-chain. Set `monero.view_key` (and for
+Tari, `tari.view_key` + `tari.spend_public_key`) and a view-only wallet scans your local node for
+incoming payouts; the dashboard's earnings card then shows confirmed totals beside the estimate,
+and a `payout_confirmed` alert fires once per payout. A view key can see incoming amounts but never
+spend. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation) — including
+[how to export the keys](dashboard.md#exporting-your-keys) from your wallets.
+
 ### How do I connect my miners?
 
 Point any [XMRig](https://github.com/xmrig/xmrig) (or other RandomX miner) at

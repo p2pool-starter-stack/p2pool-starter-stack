@@ -35,6 +35,7 @@ stack. The other guides cover individual topics once you're running.
 - **Edit config or upgrade from the browser?** → [Dashboard › Configuration view](dashboard.md#configuration-view)
 - **Watching for break-in attempts?** → [Operations › Watching for intruders](operations.md#watching-for-intruders)
 - **Already have a synced Monero node?** → [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node)
+- **Want proof a payout landed in your wallet?** → [Dashboard › Payout confirmation](dashboard.md#payout-confirmation)
 - **Want to be alerted if the host dies?** → [Monitoring & Alerting](monitoring.md)
 - **Worried about your IP / what leaves the box?** → [Privacy & Network Egress](privacy.md)
 - **Something's not working?** → [Operations › Troubleshooting](operations.md#troubleshooting)
