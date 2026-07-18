@@ -645,7 +645,10 @@ the host, with no SSH:
    `pithead-v<new>/`, `config.json`, `.env`, and the control spool are carried over, and the new
    dir's `./pithead upgrade` runs; on success `current ->` repoints there and the previous dir
    stays intact as the rollback copy. Any other layout (a plain `pithead/` extract, or data
-   directories living inside the install dir) gets the bundle extracted in place instead. Either
+   directories living inside the install dir) gets the bundle extracted in place instead — and
+   because no previous dir survives there, the runner first copies `config.json` and `.env` to
+   timestamped `.bak-upgrade-*` siblings, refusing to proceed if it cannot
+   ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)). Either
    way, `upgrade` re-renders the generated config and pulls the new images. The page rides out
    its own restart and reports the outcome; reload when it says the new version is up.
 
@@ -677,7 +680,9 @@ release lookup or bundle download changes nothing; a failure during `pithead upg
 containers that were not yet recreated on the previous images, and finishing up is one
 `./pithead upgrade` on the host. There is no automatic rollback — the images of the previous
 release stay on disk, and `docker compose` state is recoverable the same way as a failed
-CLI upgrade.
+CLI upgrade. The result names the restore point ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)):
+on the versioned layout, the previous `pithead-vX.Y.Z` dir; in place, the pre-upgrade
+`config.json`/`.env` copies.
 
 ## Tips
 

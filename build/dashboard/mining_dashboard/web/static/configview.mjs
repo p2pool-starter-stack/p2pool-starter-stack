@@ -490,6 +490,12 @@ export class UpgradeControl extends Component {
           <div class="card config-modal">
               <h3>Upgraded to ${result.version || version}</h3>
               <p class="status-ok">The stack is running the new release.</p>
+              ${
+                result.rollback
+                  ? html`<p class="text-muted">The previous release is kept at <code>${result.rollback}</code>
+                    on the host — the rollback copy if this version misbehaves.</p>`
+                  : null
+              }
               <div class="config-modal-actions">
                   <button class="btn-toggle active" onClick=${() => window.location.reload()}>Reload the dashboard</button>
               </div>
@@ -500,6 +506,12 @@ export class UpgradeControl extends Component {
           <div class="card config-modal">
               <h3>Upgrade did not complete</h3>
               <p class="status-bad">${result.error || "The host runner reported a failure."}</p>
+              ${
+                result.backup
+                  ? html`<p class="text-muted">Pre-upgrade copies of <code>config.json</code> and
+                    <code>.env</code> are kept on the host: <code>${result.backup}</code>.</p>`
+                  : null
+              }
               <div class="config-modal-actions">
                   <button class="btn-toggle" onClick=${() => this.setState({ phase: "idle", confirmText: "" })}>Close</button>
               </div>

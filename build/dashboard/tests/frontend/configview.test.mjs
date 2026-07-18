@@ -142,6 +142,31 @@ test("the confirm modal arms only on a typed UPGRADE", () => {
   assert.doesNotMatch(renderToString(inst.render()), /disabled/);
 });
 
+// #637: the host names the restore point in the result — the done modal shows the fresh-dir
+// rollback copy, the failed modal shows the in-place pre-upgrade config/.env copies. A result
+// without the field (an in-place success, an old runner) renders neither sentence.
+test("the done modal names the rollback dir when the result carries one (#637)", () => {
+  const props = { update: UPDATE, enabled: true };
+  const inst = new UpgradeControl(props);
+  inst.props = props;
+  inst.state.phase = "done";
+  inst.state.result = { status: "upgraded", version: "v9.9.9", rollback: "/srv/pithead-v1.3.1" };
+  assert.match(renderToString(inst.render()), /\/srv\/pithead-v1\.3\.1/);
+  inst.state.result = { status: "upgraded", version: "v9.9.9" };
+  assert.doesNotMatch(renderToString(inst.render()), /rollback copy/);
+});
+
+test("the failed modal names the pre-upgrade config/.env copies when the result carries them (#637)", () => {
+  const props = { update: UPDATE, enabled: true };
+  const inst = new UpgradeControl(props);
+  inst.props = props;
+  inst.state.phase = "failed";
+  inst.state.result = { status: "failed", error: "boom", backup: "/x/config.json.bak-upgrade-1 /x/.env.bak-upgrade-1" };
+  assert.match(renderToString(inst.render()), /bak-upgrade-1/);
+  inst.state.result = { status: "failed", error: "boom" };
+  assert.doesNotMatch(renderToString(inst.render()), /Pre-upgrade copies/);
+});
+
 // --- Preview modal (#504) --------------------------------------------------------------
 //
 // dashboard.energy is config.json-only, so the host runner previews an energy edit as a normal

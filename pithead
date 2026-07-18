@@ -5414,19 +5414,35 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         # control-runner units onto the new path, pulls the $tag images, and repoints
         # `current ->` on success. The outcome goes to BOTH spools: the recreated dashboard
         # mounts the new one, a failure before the recreate is read from the old one.
+        # #637: this dir — untouched by the whole deploy — is the restore point; name it in the
+        # result so the operator learns it exists without reading docs/operations.md first.
         local rdir
         if (cd "$new_dir" && ./pithead upgrade) >"$logf" 2>&1; then
             for rdir in "$cdir" "$new_dir/data/control"; do
-                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"upgraded",version:$v,ts:(now|floor)}')"
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg r "$cwd" '{status:"upgraded",version:$v,rollback:$r,ts:(now|floor)}')"
                 control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
             done
         else
             for rdir in "$cdir" "$new_dir/data/control"; do
-                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" --arg d "$new_dir" \
-                    '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host: cd " + $d + " && ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" --arg d "$new_dir" --arg r "$cwd" \
+                    '{status:"failed",version:$v,rollback:$r,error:($e + " — finish the upgrade from the host: cd " + $d + " && ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
                 control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
             done
         fi
+        rm -f "$logf"
+        return 0
+    fi
+    # #637: unlike the fresh-dir path, this one has no surviving previous dir — and the new
+    # release's `upgrade` below re-renders .env (and may migrate config.json). Keep a timestamped
+    # pre-upgrade copy of both next to the originals before a byte changes (cp -p keeps .env's
+    # 0600; a fresh stamp per attempt so a failed try never overwrites the good copy) and refuse
+    # to overwrite the install without one.
+    local bak
+    bak="bak-upgrade-$(date +%Y%m%d-%H%M%S)"
+    if ! cp -p "$CONFIG_FILE" "$CONFIG_FILE.$bak" 2>"$logf" ||
+        ! cp -p "$ENV_FILE" "$ENV_FILE.$bak" 2>>"$logf"; then
+        rm -f "$bundle"
+        _upg_fail "could not keep a pre-upgrade copy of config.json/.env: $(tail -c 500 "$logf") — refusing to overwrite the install without a restore point; the stack keeps running v$PITHEAD_VERSION."
         rm -f "$logf"
         return 0
     fi
@@ -5454,7 +5470,8 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
     else
         control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" \
-            '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+            --arg b "$PWD/$CONFIG_FILE.$bak $PWD/$ENV_FILE.$bak" \
+            '{status:"failed",version:$v,backup:$b,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
     fi
     rm -f "$logf"
