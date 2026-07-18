@@ -647,8 +647,8 @@ the host, with no SSH:
    stays intact as the rollback copy. Any other layout (a plain `pithead/` extract, or data
    directories living inside the install dir) gets the bundle extracted in place instead — and
    because no previous dir survives there, the runner first copies `config.json` and `.env` to
-   timestamped `.bak-upgrade-*` siblings, refusing to proceed if it cannot
-   ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)). Either
+   timestamped `.bak-upgrade-*` siblings, refusing to proceed if it cannot; the newest three
+   pairs are kept ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)). Either
    way, `upgrade` re-renders the generated config and pulls the new images. The page rides out
    its own restart and reports the outcome; reload when it says the new version is up.
 

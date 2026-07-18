@@ -5337,6 +5337,35 @@ assert_contains "the .env copy holds the pre-upgrade content (#637)" "$(cat "$up
 upg_bak_cfg2="$(ls "$UPG"/config.json.bak-upgrade-* 2>/dev/null | head -1)"
 assert_eq "the config.json copy holds the pre-upgrade content (#637)" "$(cat "$upg_bak_cfg2" 2>/dev/null)" "{}"
 
+# #637 hardening: the snapshot destination name is predictable, so a co-tenant can plant a
+# symlink there and hope root writes through it (the #629 attack class) — the runner must
+# replace the planted entry, never follow it. And old snapshots hold yesterday's secrets, so
+# only the newest three pairs survive. Freeze `date` so the destination name is known.
+reset_upgrade_state
+cat >"$UPG/bin/date" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "+%Y%m%d-%H%M%S" ]; then echo "20990101-000000"; else exec /bin/date "$@"; fi
+EOF
+chmod +x "$UPG/bin/date"
+printf 'victim-untouched' >"$UPG/victim"
+ln -s "$UPG/victim" "$UPG/config.json.bak-upgrade-20990101-000000"
+for bakstamp in 20200101-000000 20200102-000000 20200103-000000; do
+    printf 'stale' >"$UPG/.env.bak-upgrade-$bakstamp"
+done
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_eq "planted symlink at the snapshot name is not written through (#637)" "$(cat "$UPG/victim")" "victim-untouched"
+if [ ! -L "$UPG/config.json.bak-upgrade-20990101-000000" ] && [ -f "$UPG/config.json.bak-upgrade-20990101-000000" ]; then
+    ok "the snapshot replaced the planted entry with a regular file (#637)"
+else
+    bad "the snapshot replaced the planted entry with a regular file (#637)" "still a symlink or missing"
+fi
+assert_eq "snapshots pruned to the newest three .env copies (#637)" "$(ls -1 "$UPG"/.env.bak-upgrade-* 2>/dev/null | wc -l | tr -d ' ')" "3"
+[ ! -e "$UPG/.env.bak-upgrade-20200101-000000" ] && ok "the oldest .env snapshot was pruned (#637)" ||
+    bad "the oldest .env snapshot was pruned (#637)" "still present"
+rm -f "$UPG/bin/date" "$UPG/victim"
+reset_upgrade_state
+
 # #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
 # bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
 # runner refuses BEFORE extraction. A cosign signature binds bytes, not a version, so without

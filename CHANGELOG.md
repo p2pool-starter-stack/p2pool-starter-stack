@@ -18,7 +18,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   `.bak-upgrade-*` siblings — and refuses to proceed if it cannot; a failure during the
   upgrade names those copies in the result and the dashboard modal. On the versioned layout
   the result (and the "Upgraded" modal) names the previous version dir — the rollback copy
-  #629 already kept but never pointed at.
+  #629 already kept but never pointed at. The copies are written symlink-safely (mktemp +
+  rename, the #629 co-tenant threat model) and pruned to the newest three pairs.
 
 ## [1.9.0] - 2026-07-18
 
