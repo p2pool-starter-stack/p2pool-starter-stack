@@ -47,10 +47,9 @@ def parse_prices(data, currency):
 class CoinGeckoClient:
     """Fetches the XMR + XTM spot prices from CoinGecko, fail-silent over Tor."""
 
-    def __init__(self, currency, tor_proxy=None, api_url=COINGECKO_SIMPLE_PRICE):
+    def __init__(self, currency, tor_proxy=None):
         self.currency = currency
         self.tor_proxy = tor_proxy
-        self.api_url = api_url
 
     def fetch(self):
         """Return ``{"xmr": ..., "tari": ...}`` in ``self.currency``, or ``None`` on any failure
@@ -64,7 +63,7 @@ class CoinGeckoClient:
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
             resp = requests.get(
-                self.api_url,
+                COINGECKO_SIMPLE_PRICE,
                 params={
                     "ids": ",".join(COINGECKO_IDS.values()),
                     "vs_currencies": self.currency.lower(),
