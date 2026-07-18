@@ -242,6 +242,33 @@ test("form mode: a core key is lifted out of its own section (no duplicate row)"
   assert.match(out, /config-field-name">auth\.password/); // relative label inside its section
 });
 
+test("form mode: a section mixing top-level keys renders full labels — no two rows both named view_key (#611)", () => {
+  // Wallets & payout pulls from monero.* AND tari.*; with relative labels both view_keys
+  // rendered as a bare "view_key". Mixed sections must use the full dotted key.
+  const cfg = {
+    monero: { view_key: "", payout_scan_height: "auto" },
+    tari: { view_key: "", spend_public_key: "" },
+  };
+  const inst = readyView(cfg, []);
+  const out = renderToString(inst.render());
+  assert.match(out, /config-field-name">monero\.view_key/);
+  assert.match(out, /config-field-name">tari\.view_key/);
+  assert.doesNotMatch(out, /config-field-name">view_key</); // no ambiguous bare label
+});
+
+test("form mode: a section mixing top-level keys only via subgroups keeps short labels on its flat fields", () => {
+  // Notifications spans telegram + notifications + healthchecks, but the latter two live in their
+  // own labelled subgroup <details> — the flat telegram.* remainder is single-key, so the mixed
+  // check runs AFTER nestSection and the flat rows keep their relative labels.
+  const cfg = {
+    telegram: { enabled: false, bot_token: "" },
+    healthchecks: { ping_url: "" },
+  };
+  const out = renderToString(readyView(cfg, []).render());
+  assert.match(out, /config-field-name">enabled/); // relative, not telegram.enabled
+  assert.doesNotMatch(out, /config-field-name">telegram\./);
+});
+
 test("mode toggle switches between Form and JSON rendering", () => {
   const inst = readyView();
   assert.match(renderToString(inst.render()), /config-section-core/);
