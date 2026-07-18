@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mining_dashboard.config.config import HISTORY_RETENTION_SEC, TIER_DEFAULTS
+from mining_dashboard.service import storage_service
 from mining_dashboard.service.storage_service import NETWORK_HISTORY_RETENTION_SEC, StateManager
 
 
@@ -728,6 +729,19 @@ class TestRaffleWins:
             state_manager._conn.execute("DROP TABLE raffle_wins")
         assert state_manager.add_raffle_wins(self._wins()) == []
         assert state_manager.is_db_healthy() is False
+
+    def test_table_bounded_to_newest_max_rows(self, state_manager, monkeypatch):
+        # Security bound: the source file is untrusted, so the table keeps only the newest
+        # RAFFLE_WINS_MAX_ROWS — a hostile feed cannot grow it without limit, and the read
+        # side never returns more than the bound either.
+        monkeypatch.setattr(storage_service, "RAFFLE_WINS_MAX_ROWS", 3)
+        wins = [
+            {"ts": float(i), "hashrate": 1.0, "height": i, "block_id": f"id{i}", "tier": "t"}
+            for i in range(6)
+        ]
+        state_manager.add_raffle_wins(wins)
+        got = state_manager.get_raffle_wins()
+        assert [w["block_id"] for w in got] == ["id3", "id4", "id5"]  # newest 3, oldest first
 
 
 class TestPayouts:

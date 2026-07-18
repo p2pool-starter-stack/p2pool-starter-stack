@@ -191,6 +191,20 @@ def test_parse_winners_garbage_or_empty_is_empty_list():
     assert parse_winners("no\ttabs here\n\n???", _WIN_WALLET) == []
 
 
+def test_parse_winners_bounds_hostile_input():
+    # Security bound: a hostile/oversized response can neither make the parser scan unbounded
+    # lines nor return more than _WINNERS_MAX_WINS rows in one sync (the legit file is ~100
+    # lines, so the caps are pure headroom).
+    row = "48M2j8Gj...d8KgGBwa 2026-07-18 15:40:26 1kH/s 1 blk{i} 1/1 1 donor"
+    flood = "\n".join(row.replace("blk{i}", f"blk{i}") for i in range(10_000))
+    wins = parse_winners(flood, _WIN_WALLET)
+    assert len(wins) == xvb_mod._WINNERS_MAX_WINS
+    # Rows beyond the line cap are never scanned: a matching row placed after 10k junk lines
+    # is ignored entirely.
+    tail = ("junk\n" * 9_999) + row.replace("blk{i}", "blktail")
+    assert parse_winners(tail, _WIN_WALLET) == []
+
+
 def test_get_recent_wins_success_routes_over_tor():
     client = XvbClient(_WIN_WALLET)
     resp = MagicMock(status_code=200, text=SAMPLE_WINNERS_TXT)

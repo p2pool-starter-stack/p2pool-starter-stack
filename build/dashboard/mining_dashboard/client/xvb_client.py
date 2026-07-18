@@ -43,6 +43,13 @@ def parse_reward_estimates(text):
 # paid-ratio, position, round-type — which sidesteps the file's empty tab-separated column.
 _WINNERS_FIELD_COUNT = 9
 
+# Bounds on the UNTRUSTED winners file (security review): the legit file is ~4 days of hourly
+# rounds (~100 lines), so these are ~50x headroom — a hostile/compromised response can neither
+# make the parser chew an arbitrarily long body nor flood the permanent raffle_wins table with
+# fabricated rows for our (publicly derivable) masked wallet in a single sync.
+_WINNERS_MAX_LINES = 5000
+_WINNERS_MAX_WINS = 200
+
 # The hashrate token in a winners row, e.g. "4203.5kH/s" — value and unit, no space between them.
 _REGEX_WINNER_HASHRATE = re.compile(r"([\d.]+)\s*([kKmMgG]?H/s)?$")
 
@@ -63,7 +70,9 @@ def parse_winners(text, wallet_address):
     """
     masked = mask_wallet(wallet_address or "")
     wins = []
-    for line in (text or "").splitlines():
+    for line in (text or "").splitlines()[:_WINNERS_MAX_LINES]:
+        if len(wins) >= _WINNERS_MAX_WINS:
+            break
         fields = line.split()
         if len(fields) != _WINNERS_FIELD_COUNT or fields[0] != masked:
             continue
