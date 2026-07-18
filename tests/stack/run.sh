@@ -1028,6 +1028,8 @@ assert_contains "monero default: out-peers config-driven for Tor (#183/#595)" "$
 # it re-reads the host-rendered config.toml (a bind-mount content change alone won't recreate it).
 assert_contains "compose passes MONERO_CLEARNET_SYNC to monerod (#183)" "$(cat "$ROOT/docker-compose.yml")" 'MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC'
 assert_contains "compose passes TARI_CLEARNET_SYNC to tari (#183)" "$(cat "$ROOT/docker-compose.yml")" 'TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC'
+# #595: the render chain for the out-peers knob is only complete if compose forwards it.
+assert_contains "compose passes MONERO_OUT_PEERS to monerod (#595)" "$(cat "$ROOT/docker-compose.yml")" 'MONERO_OUT_PEERS=${MONERO_OUT_PEERS'
 
 # --- Auto-transition (#234): the entrypoints gate clearnet on flag AND the absence of the
 # dashboard-written marker, so a node returns to Tor on its own once synced. ---
@@ -3039,6 +3041,11 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":4}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "below-minimum out_peers refused" "$?" "1"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":2000}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "above-maximum out_peers refused" "$?" "1"
+assert_contains "above-maximum refusal names the bounds" "$out" "between 8 and 1024"
 
 echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
