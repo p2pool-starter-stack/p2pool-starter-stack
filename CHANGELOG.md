@@ -11,6 +11,8 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-07-18
+
 ### Fixed
 
 - **One-click upgrade no longer shows a false "HTTP 502 — did not complete" on a
