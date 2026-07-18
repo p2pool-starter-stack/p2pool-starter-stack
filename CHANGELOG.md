@@ -11,6 +11,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-18
+
+**Stratum link security.** v1.9 locks the last cleartext link — miner ↔ stack
+stratum. New installs ship with the stratum access-password on (#208), and
+`p2pool.stratum_tls` serves TLS on the same stratum port with per-rig
+fingerprint pinning (#261), so a mixed fleet migrates one rig at a time.
+Around the theme: the one-click upgrade now keeps the versioned deploy
+layout honest and preserves the rollback bundle (#629), and Tor's
+steady-state CPU cost drops via healthcheck and peer-count tuning (#595).
+
 ### Added
 
 - **Stratum authentication is on by default for new installs (#208, #152 Phase 2).** The setup
