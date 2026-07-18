@@ -127,11 +127,20 @@ the internal wiring is untouched.
 
 ### Authentication
 
-By default `3333` accepts any rig that can reach it; the stratum `pass` is ignored. To require a
-shared secret, set [`p2pool.stratum_password`](configuration.md#configuration-reference). The proxy
-then rejects any rig whose stratum `pass` doesn't match, so only devices you've configured can mine.
-That also means only they can register a worker name, which shrinks the worker-name SSRF surface (a
-malicious worker name is how an untrusted device could otherwise probe the dashboard's internals).
+New installs ship with stratum authentication **on** (#208): the setup wizard and
+`config.minimal.json` both write `p2pool.stratum_password: "auto"` into the new `config.json`, the
+stack generates a stable secret and prints it after `setup`/`apply` (also shown by
+`pithead status`), and RigForge's own setup prompts for it — a fresh stack plus fresh rigs
+authenticate end-to-end with no manual config edits. The proxy rejects any rig whose stratum
+`pass` doesn't match, so only devices you've configured can mine. That also means only they can
+register a worker name, which shrinks the worker-name SSRF surface (a malicious worker name is
+how an untrusted device could otherwise probe the dashboard's internals).
+
+An install that predates this default keeps its open `:3333` on upgrade — the key is written
+explicitly into new configs, never assumed for old ones. To adopt it on an existing fleet, update
+the rigs first (set each rig's `pass`, or push it over the rigs' control API from the dashboard's
+Worker Inspect), then set the password on the stack — a rig with the wrong `pass` is rejected the
+moment the stack enforces it.
 
 ```jsonc
 // config.json — "auto" generates a stable random secret; or set your own string
@@ -159,8 +168,8 @@ Using [RigForge](https://github.com/p2pool-starter-stack/rigforge) (below)? It's
 
 NOTE: the password travels in cleartext over the LAN (plain stratum has no TLS), so this is access
 control (who may mine), not eavesdropping protection. On a trusted LAN it's enough; if you must
-expose `3333` more widely, combine it with `stratum_bind` and a firewall (above). Leaving it unset
-(`""`, the default) keeps the open, no-password behavior.
+expose `3333` more widely, combine it with `stratum_bind` and a firewall (above). Setting it to
+`""` (or deleting the key) turns authentication off and keeps the open, no-password behavior.
 
 ### Reading each worker's stats (the dashboard's worker API probe)
 

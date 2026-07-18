@@ -11,6 +11,16 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Stratum authentication is on by default for new installs (#208, #152 Phase 2).** The setup
+  wizard and `config.minimal.json` now write `p2pool.stratum_password: "auto"` into every new
+  `config.json`: the stack generates a stable secret, prints it after `setup`/`apply`, and
+  RigForge's setup prompts for it — a fresh stack plus fresh rigs authenticate end-to-end with
+  no manual edits. Existing installs are untouched: the key is written explicitly for new
+  configs, never assumed for old ones, so an upgrade flips nothing and a fleet on the open
+  `:3333` keeps mining. Set the key to `""` (or delete it) to run unauthenticated.
+
 ### Fixed
 
 - **One-click upgrade keeps the versioned deploy layout honest (#629).** On the documented

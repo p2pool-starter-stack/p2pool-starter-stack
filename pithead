@@ -650,6 +650,10 @@ stack_status() {
     if onion_line=$(dashboard_onion_status); then
         log "Dashboard onion (remote access): $onion_line"
     fi
+    # #208: RigForge's setup prompt (and docs/workers.md) tell the operator the stratum
+    # access-password is "shown by 'pithead status'" — honor that contract here. No-op when
+    # auth is off; the same secret already lives in the owner-only .env.
+    announce_stratum_auth
     if [ "$problems" -eq 0 ]; then
         log "All expected services are up."
     else
@@ -2292,7 +2296,7 @@ wizard_write_config() {
         --arg pool "$POOL_TIER" \
         '{monero: {mode: $mode, wallet_address: $mwallet, node_username: $mu, node_password: $mp},
           tari: {wallet_address: $twallet},
-          p2pool: {pool: $pool},
+          p2pool: {pool: $pool, stratum_password: "auto"},
           dashboard: {secure: true}}')
 
     if [ "$MONERO_MODE_WIZ" == "remote" ]; then
