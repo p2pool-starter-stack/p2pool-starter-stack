@@ -3336,6 +3336,34 @@ assert_contains "stratum auth surfaced for rigs" "$(run_sourced "$V" announce_st
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum_password auto stable across apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "$sp1"
 
+echo "== black-box: stratum-over-TLS render + cert lifecycle (#261) =="
+# Default: off, no cert generated. The dir var still renders (compose always mounts it :ro).
+assert_eq "stratum TLS off by default" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_TLS)" "false"
+[ ! -f "$V/data/proxy-tls/cert.pem" ] && ok "no cert generated while TLS is off" ||
+    bad "no cert generated while TLS is off" "cert.pem exists"
+# Knob on: real openssl generates the keypair once; key owner-only; fingerprint announced and
+# STABLE across a second apply (the fingerprint is what every rig pins — regenerating it on each
+# apply would break every TLS rig).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "stratum TLS renders true" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_TLS)" "true"
+[ -f "$V/data/proxy-tls/cert.pem" ] && [ -f "$V/data/proxy-tls/key.pem" ] &&
+    ok "TLS keypair generated on first apply" || bad "TLS keypair generated on first apply" "missing files"
+assert_eq "TLS key is owner-only" "$(file_mode "$V/data/proxy-tls/key.pem")" "600"
+assert_contains "fingerprint announced for rig pinning" "$out" "Stratum TLS is ON"
+fp1="$(openssl x509 -in "$V/data/proxy-tls/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "cert (and its pinned fingerprint) stable across apply" \
+    "$(openssl x509 -in "$V/data/proxy-tls/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)" "$fp1"
+# announce_stratum_tls prints the pin in xmrig's format: 64 lowercase hex chars, no colons.
+announced="$(run_sourced "$V" announce_stratum_tls 2>&1 | grep -oE '[0-9a-f]{64}' | head -1)"
+assert_eq "announced fingerprint is the cert's own, xmrig format" \
+    "$announced" "$(printf '%s' "$fp1" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+# compose forwards the toggle and mounts the keypair dir read-only.
+assert_contains "compose passes PROXY_STRATUM_TLS to the proxy (#261)" "$(cat "$ROOT/docker-compose.yml")" 'PROXY_STRATUM_TLS=${PROXY_STRATUM_TLS'
+assert_contains "compose mounts the TLS keypair dir :ro (#261)" "$(cat "$ROOT/docker-compose.yml")" 'PROXY_TLS_DIR:-./data/proxy-tls}:/tls:ro'
+
 echo "== black-box: clearnet initial sync render (#183) =="
 # Default (no flags): both daemons stay Tor-only — .env flags are false and the rendered Tari config
 # keeps the Tor transport, empty DNS seeds, and an onion public address.
@@ -4180,6 +4208,27 @@ assert_eq "xmrig-proxy entrypoint: unset password appends no flag (#152)" \
     "$(xp_argv '')" "[--http-no-restricted][--donate-level=0]"
 assert_eq "xmrig-proxy entrypoint: set password appends --access-password (#152)" \
     "$(xp_argv 's3cret')" "[--http-no-restricted][--donate-level=0][--access-password=s3cret]"
+# #261: the TLS cert flags append only when the toggle is on AND both keypair files exist at the
+# mount (PROXY_TLS_MOUNT overrides the fixed /tls so the suite can use a temp dir).
+xp_tls_argv() { # <PROXY_STRATUM_TLS value> <tls dir>
+    local d
+    d="$(mktemp -d)"
+    printf '#!/bin/sh\nfor a in "$@"; do printf "[%%s]" "$a"; done\n' >"$d/xmrig-proxy"
+    chmod +x "$d/xmrig-proxy"
+    PATH="$d:$PATH" PROXY_STRATUM_PASSWORD='' PROXY_STRATUM_TLS="$1" PROXY_TLS_MOUNT="$2" sh "$XP_ENTRY" -b 0.0.0.0:3333
+    rm -rf "$d"
+}
+XPTLS="$(mktemp -d)"
+printf 'cert' >"$XPTLS/cert.pem"
+printf 'key' >"$XPTLS/key.pem"
+assert_eq "xmrig-proxy entrypoint: TLS on + keypair appends the cert flags (#261)" \
+    "$(xp_tls_argv true "$XPTLS")" "[-b][0.0.0.0:3333][--tls-cert=$XPTLS/cert.pem][--tls-cert-key=$XPTLS/key.pem]"
+assert_eq "xmrig-proxy entrypoint: TLS off appends nothing (#261)" \
+    "$(xp_tls_argv false "$XPTLS")" "[-b][0.0.0.0:3333]"
+rm -f "$XPTLS/key.pem"
+assert_eq "xmrig-proxy entrypoint: TLS on but keypair incomplete appends nothing (#261)" \
+    "$(xp_tls_argv true "$XPTLS")" "[-b][0.0.0.0:3333]"
+rm -rf "$XPTLS"
 
 # tor wrapper entrypoint: opt-in dashboard hidden service (#343). The HiddenService block is appended
 # to the rendered torrc ONLY when DASHBOARD_ONION_ENABLED=true, targeting the bridge gateway

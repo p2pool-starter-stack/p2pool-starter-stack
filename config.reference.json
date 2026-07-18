@@ -40,6 +40,7 @@
         "stratum_bind": "0.0.0.0",
         "stratum_port": 3333,
         "stratum_password": "",
+        "stratum_tls": false,
         "clearnet": false,
         "data_dir": "auto"
     },

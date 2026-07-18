@@ -654,6 +654,7 @@ stack_status() {
     # access-password is "shown by 'pithead status'" — honor that contract here. No-op when
     # auth is off; the same secret already lives in the owner-only .env.
     announce_stratum_auth
+    announce_stratum_tls # #261: same contract for the TLS pin — status repeats the fingerprint
     if [ "$problems" -eq 0 ]; then
         log "All expected services are up."
     else
@@ -1028,6 +1029,7 @@ announce_dashboard_url() {
         log "Dashboard available at: http://$display_host"
     fi
     announce_stratum_auth
+    announce_stratum_tls # #261: prints the fingerprint rigs pin; no-op when TLS is off
 }
 
 # Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
@@ -2622,6 +2624,16 @@ parse_and_validate_config() {
         error "p2pool.stratum_password must be \"auto\", empty, or 1–128 chars of letters, digits, and . _ : @ - (no spaces or quotes)."
     fi
 
+    # Stratum-over-TLS (#261): confidentiality on the miner↔stack leg, on top of the access
+    # control above — orthogonal, usable together. Single-port model: with a cert configured,
+    # xmrig-proxy AUTODETECTS TLS on the same stratum bind (verified against the pinned 6.26.0
+    # binary), so cleartext rigs keep mining while rigs opt in one at a time (pools[].tls +
+    # fingerprint pinning, rigforge#115). Rigs authenticate the server by pinning the cert's
+    # SHA-256 fingerprint — xmrig does no CA validation for stratum — so the cert is self-signed
+    # and long-lived, and enforcing TLS-only is deliberately NOT a v1.9 knob (rigs first, posture
+    # flip later — the same discipline as the #208 default).
+    STRATUM_TLS=$(normalize_bool "$(config_bool '.p2pool.stratum_tls' false)")
+
     # xmrig-proxy dev-fee donation level (#173). xmrig-proxy's own compiled default is 0% (no
     # donation) — which the stack inherited silently; expose it so operators can both SEE it and
     # opt in. Default 0 (off); set N to donate N% of submitted hashrate to the xmrig developers
@@ -2678,6 +2690,10 @@ parse_and_validate_config() {
     # location — an operator-pinned dashboard.data_dir is theirs, never touched.
     DASHBOARD_DIR_IS_DEFAULT=1
     [ "$DASHBOARD_DIR" == "$_dash_cfg" ] && DASHBOARD_DIR_IS_DEFAULT=0
+    # Stratum TLS keypair home (#261): joins the shared data root when one exists — the cert's
+    # FINGERPRINT is what every rig pins, so it must survive versioned deploys like the chain
+    # data does, not move with the code. Internal (not config-driven), like CONTROL_DIR.
+    PROXY_TLS_DIR="$_data_root/proxy-tls"
     # Internal shared state dir (#234): the dashboard (rw) drops a per-chain "clearnet sync complete"
     # marker here and the monerod/tari entrypoints (ro) read it to decide Tor-vs-clearnet. Not a
     # user-facing data dir, so it's fixed under ./data rather than config-driven.
@@ -2692,7 +2708,7 @@ parse_and_validate_config() {
 
     # Guard every data dir against catastrophic chown -R / rm -rf targets before we touch them.
     local d
-    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR" "$CADDY_LOG_DIR"; do
+    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR" "$CADDY_LOG_DIR" "$PROXY_TLS_DIR"; do
         assert_safe_dir "$d"
     done
 
@@ -2983,7 +2999,7 @@ ensure_owner() {
 # sudo-free once ownership is correct; the first run after the non-root switch migrates the data.
 ensure_directories() {
     local d created=()
-    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR"; do
+    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$PROXY_TLS_DIR"; do
         [ -d "$d" ] || { mkdir -p "$d" && created+=("$d"); }
     done
     mkdir -p "$P2POOL_DIR/stats"
@@ -2992,9 +3008,52 @@ ensure_directories() {
     ensure_owner "$TARI_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$P2POOL_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
-    prepare_control_dirs # #33: spool dirs exist + requests/ writable by the dashboard uid
+    prepare_control_dirs    # #33: spool dirs exist + requests/ writable by the dashboard uid
+    ensure_stratum_tls_cert # #261: keypair exists before compose mounts $PROXY_TLS_DIR
     [ "${#created[@]}" -gt 0 ] && sudo chmod -R 755 "$P2POOL_DIR/stats"
     return 0
+}
+
+# Generate the stratum TLS keypair once (#261). Self-signed and long-lived (3650 days): rigs
+# authenticate the server by PINNING the certificate's SHA-256 fingerprint (xmrig does no CA
+# validation for stratum), so CA trust and expiry play no part in the model — regenerating the
+# cert IS the rotation, and every rig re-pins. The key is created under umask 077 and handed to
+# the proxy uid read-only; the dir is mounted :ro into the container. No-op while the knob is
+# off, and idempotent while the keypair exists — the fingerprint stays stable across applies.
+ensure_stratum_tls_cert() {
+    [ "${STRATUM_TLS:-false}" = "true" ] || return 0
+    [ -f "$PROXY_TLS_DIR/cert.pem" ] && [ -f "$PROXY_TLS_DIR/key.pem" ] && return 0
+    command -v openssl >/dev/null 2>&1 ||
+        error "p2pool.stratum_tls is true but openssl is not installed — it is needed once, to generate the stratum certificate."
+    log "Generating the stratum TLS certificate (#261) — self-signed; rigs pin its fingerprint..."
+    (
+        umask 077
+        openssl req -x509 -newkey rsa:2048 -keyout "$PROXY_TLS_DIR/key.pem" \
+            -out "$PROXY_TLS_DIR/cert.pem" -days 3650 -nodes -subj "/CN=pithead-stratum" 2>/dev/null
+    ) || error "OpenSSL could not generate the stratum TLS certificate in $PROXY_TLS_DIR."
+    # The proxy runs as the unprivileged app uid (#255) and must read the key through the :ro
+    # mount; the umask above already keeps both files owner-only until this narrows them.
+    ensure_owner "$PROXY_TLS_DIR" "$APP_UID" "$APP_GID"
+    chmod 600 "$PROXY_TLS_DIR/key.pem" 2>/dev/null || sudo chmod 600 "$PROXY_TLS_DIR/key.pem"
+    chmod 644 "$PROXY_TLS_DIR/cert.pem" 2>/dev/null || sudo chmod 644 "$PROXY_TLS_DIR/cert.pem"
+    announce_stratum_tls
+}
+
+# Surface the stratum TLS state + the fingerprint rigs must pin (#261) — the companion to
+# announce_stratum_auth: the fingerprint is what RigForge setup asks for (pools[].tls-fingerprint).
+# Public data (it's the cert's own digest), so printing it is safe anywhere.
+announce_stratum_tls() {
+    # Callable with or without a prior parse (status vs apply): fall back to the rendered .env.
+    local enabled="${STRATUM_TLS:-}" dir="${PROXY_TLS_DIR:-}"
+    [ -n "$enabled" ] || enabled=$(env_get PROXY_STRATUM_TLS)
+    [ -n "$dir" ] || dir=$(env_get PROXY_TLS_DIR)
+    [ "$enabled" = "true" ] && [ -n "$dir" ] && [ -f "$dir/cert.pem" ] || return 0
+    command -v openssl >/dev/null 2>&1 || return 0
+    local fp
+    fp=$(openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha256 2>/dev/null |
+        cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+    [ -n "$fp" ] || return 0
+    log "Stratum TLS is ON (#261): rigs may connect with TLS on the same stratum port (cleartext still accepted). Pin this fingerprint on each rig (pools[].tls-fingerprint): $fp"
 }
 
 # One-time dashboard-data migration (#455): the dashboard DB used to default INSIDE the install
@@ -3676,6 +3735,8 @@ P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
 STRATUM_PORT=$STRATUM_PORT
 PROXY_STRATUM_PASSWORD=$STRATUM_PASSWORD
+PROXY_STRATUM_TLS=$STRATUM_TLS
+PROXY_TLS_DIR=$PROXY_TLS_DIR
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
@@ -4246,6 +4307,16 @@ describe_change() {
             flag=DEST
             msg="Stratum port: $old → $new (#172) — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
         fi
+        ;;
+    PROXY_STRATUM_TLS)
+        if [ "$new" = "true" ]; then
+            msg="Stratum TLS ENABLED (#261) — the proxy serves TLS and cleartext on the same port; rigs opt in by pinning the cert fingerprint (shown after apply). xmrig-proxy is recreated."
+        else
+            msg="Stratum TLS DISABLED (#261) — rigs with pools[].tls:true will fail to connect until switched back to cleartext. xmrig-proxy is recreated."
+        fi
+        ;;
+    PROXY_TLS_DIR)
+        msg="Stratum TLS keypair directory: $old → $new — the cert (and its pinned fingerprint) does NOT move with it; rigs re-pin if a new cert is generated."
         ;;
     PROXY_STRATUM_PASSWORD)
         # Secret — never echo the value into the change preview / logs.

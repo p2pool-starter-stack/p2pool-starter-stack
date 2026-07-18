@@ -166,10 +166,35 @@ Using [RigForge](https://github.com/p2pool-starter-stack/rigforge) (below)? It's
 `pools[].pass` field. Set it in the rig's `config.json` and run `rigforge apply`. See
 [RigForge › Pithead Integration › Stratum authentication](https://github.com/p2pool-starter-stack/rigforge/blob/main/docs/pithead-integration.md#stratum-authentication-optional).
 
-NOTE: the password travels in cleartext over the LAN (plain stratum has no TLS), so this is access
-control (who may mine), not eavesdropping protection. On a trusted LAN it's enough; if you must
-expose `3333` more widely, combine it with `stratum_bind` and a firewall (above). Setting it to
-`""` (or deleting the key) turns authentication off and keeps the open, no-password behavior.
+NOTE: the password travels in cleartext over plain stratum, so this is access control (who may
+mine), not eavesdropping protection. On a trusted LAN it's enough; on a shared or untrusted
+network, add [TLS](#stratum-over-tls) for confidentiality. Setting it to `""` (or deleting the key)
+turns authentication off and keeps the open, no-password behavior.
+
+### Stratum over TLS
+
+`p2pool.stratum_tls: true` (default off) makes the stack serve TLS on the **same** stratum port
+(#261). xmrig-proxy detects TLS vs plain per connection, so nothing re-points and a mixed fleet
+migrates one rig at a time — rigs still on cleartext keep mining throughout. On the first
+`apply`, the stack generates a self-signed certificate (kept beside the chain data, so its
+identity survives upgrades) and prints the **SHA-256 fingerprint**; `pithead status` repeats it.
+
+The fingerprint is the whole trust model: XMRig does no CA validation for stratum, so each rig
+pins it explicitly. On a rig, set:
+
+```jsonc
+// the rig's pool entry (RigForge: same fields, prompted at setup)
+{ "url": "YOUR_STACK_IP:3333", "tls": true, "tls-fingerprint": "<the printed fingerprint>" }
+```
+
+A pinned rig refuses to talk to anything that doesn't hold the stack's exact certificate — a
+man-in-the-middle on the LAN gets a handshake failure, not shares. Rotation is regenerate +
+re-pin: delete the two files in the stack's `proxy-tls` data directory, run `./pithead apply`,
+and update the fingerprint on each TLS rig (cleartext rigs are unaffected).
+
+TLS adds confidentiality (nobody on the network reads your worker names or the access password);
+the [password](#authentication) stays the access control. Use both. Turning the knob off again
+only affects rigs with `tls: true` — switch them back to cleartext first.
 
 ### Reading each worker's stats (the dashboard's worker API probe)
 
