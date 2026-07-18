@@ -169,6 +169,12 @@ Hover for the size of the drop. They mark the same transitions as the `hashrate_
 alert and survive a dashboard restart, so a drop that happened overnight is still on the chart in the
 morning.
 
+A gold **star** marks each **XvB raffle round your wallet won**, at the time the round was drawn.
+Hover for the round type and the hashrate XvB credited the win at. Wins come from XvB's published
+winners log (fetched over Tor, like every XvB read) and are stored permanently, so the stars stay on
+the chart across restarts; the same wins are listed in the *XvB Donation Stats* card's
+[Raffle Wins log](#xvb-tier-raffle).
+
 An **Avg** control picks the hashrate-averaging window the chart plots: `1 Min` / `10 Min` /
 `1 Hr` / `12 Hr` / `24 Hr` (the native windows xmrig-proxy reports). It is independent of the Range
 control: the range sets how much *time* the x-axis spans; the averaging window sets how *smooth* each
@@ -477,6 +483,14 @@ server's tier table — the same one the donation controller steers by — so th
 
 NOTE: on the mini/nano sidechains the block adds a reminder that switching the P2Pool sidechain
 resets your PPLNS shares — and with them XvB win collectability until a new share lands.
+
+**Raffle Wins log.** The *XvB Donation Stats* card (Advanced view) lists the rounds your wallet
+actually won — time, round type, and the hashrate XvB credited the win at — newest first, capped at
+the 20 most recent. The dashboard reads XvB's public winners log about every half hour over Tor,
+matches your wallet by the masked form the file uses, and stores each win permanently, so the list
+(and the chart's gold stars) survives restarts and covers wins far older than the ~4 days the file
+itself keeps. Each new win is also announced once in the dashboard's container log. The file
+carries only masked wallets and the fetch sends nothing about you.
 
 ### Pool Cadence & Luck
 

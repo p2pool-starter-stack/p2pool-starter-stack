@@ -338,6 +338,17 @@ function XvBStats({ state }) {
             <${StatCard} label=${credLabel("24h Avg (Credited)")} value=${hr.xvb_24h} cls=${credCls} title=${credTitle} />
             <${StatCard} label="Fail Count" value=${hr.xvb_fail_count} />
         </div>
+        <div class="mt-2">
+            <div class="text-small text-muted">Raffle Wins</div>
+            ${
+              (state.raffle_wins || []).length
+                ? state.raffle_wins.map(
+                    (w) => html`<div class="text-xs" title=${"Round block height " + w.height}>
+                        ★ ${w.time} — won a ${w.tier} round, credited ${w.hashrate}</div>`,
+                  )
+                : html`<div class="text-xs text-muted">No wins recorded yet — a win lands here and as a gold star on the chart.</div>`
+            }
+        </div>
         <div class=${"text-xs mt-2 " + (hr.xvb_stale ? "status-warn" : "text-muted")} title=${credTitle}>
             ${hr.xvb_stale ? "⚠ Stale — last successful fetch from xmrvsbeast.com: " : "Stats fetched from xmrvsbeast.com (Updated: "}${hr.xvb_updated}${hr.xvb_stale ? "" : ")"}
         </div>

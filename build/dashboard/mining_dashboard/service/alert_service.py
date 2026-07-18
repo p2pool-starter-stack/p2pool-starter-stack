@@ -12,6 +12,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TELEGRAM_EVENTS,
 )
+from mining_dashboard.helper.utils import format_hashrate
 from mining_dashboard.service.container_health import ContainerHealthMonitor
 from mining_dashboard.service.notify_sinks import config_sinks
 from mining_dashboard.service.telegram_notifier import TelegramNotifier
@@ -125,6 +126,7 @@ class AlertService:
     EVT_PAYOUT_FOUND = "payout_found"
     EVT_PAYOUT_CONFIRMED = "payout_confirmed"
     EVT_CONTAINER_UNHEALTHY = "container_unhealthy"
+    EVT_RAFFLE_WIN = "raffle_win"
 
     # WorkerPresenceMonitor edge -> (event key, message template).
     _WORKER_EDGES = {
@@ -814,6 +816,23 @@ class AlertService:
         )
         for sink in sinks:
             await asyncio.to_thread(sink.send, text, self.EVT_PAYOUT_CONFIRMED)
+        return text
+
+    async def raffle_win_alert(self, tier, hashrate):
+        """Push an XvB raffle-win alert: this wallet won a round, per XvB's public winners file.
+        "Alert once" is enforced upstream exactly like payout_confirmed — the caller only invokes
+        this for genuinely-new rows the idempotent ``raffle_wins`` table just inserted, so a
+        restart re-reading the file's window replays nothing. No-op when the event is toggled
+        off. Returns the text sent (handy for tests), else ``None``."""
+        sinks = self._event_sinks(self.EVT_RAFFLE_WIN)
+        if not sinks:
+            return None
+        text = self._fmt(
+            f"\U0001f3c6 XvB raffle WIN: this wallet won a {tier} round "
+            f"(credited {format_hashrate(hashrate)})."
+        )
+        for sink in sinks:
+            await asyncio.to_thread(sink.send, text, self.EVT_RAFFLE_WIN)
         return text
 
     async def tor_heal_alert(self, text):

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mining_dashboard.config.config import HISTORY_RETENTION_SEC, TIER_DEFAULTS
+from mining_dashboard.service import storage_service
 from mining_dashboard.service.storage_service import NETWORK_HISTORY_RETENTION_SEC, StateManager
 
 
@@ -684,6 +685,63 @@ class TestShareStatsSeries:
             assert sm.get_share_stats() == []
         finally:
             sm.close()
+
+
+class TestRaffleWins:
+    """XvB raffle wins mirrored from the public winners file, keyed block_id (idempotent)."""
+
+    def _wins(self):
+        return [
+            {"ts": 1000.0, "hashrate": 4.2e6, "height": 100, "block_id": "aa11", "tier": "donor"},
+            {
+                "ts": 2000.0,
+                "hashrate": 5.0e6,
+                "height": 200,
+                "block_id": "bb22",
+                "tier": "donor_whale",
+            },
+        ]
+
+    def test_add_returns_only_new_rows(self, state_manager):
+        new = state_manager.add_raffle_wins(self._wins())
+        assert {w["block_id"] for w in new} == {"aa11", "bb22"}
+
+    def test_add_is_idempotent_on_block_id(self, state_manager):
+        state_manager.add_raffle_wins(self._wins())
+        # Re-adding the same rows (re-reading the file's ~4-day window) inserts nothing new,
+        # so a win is never re-announced.
+        assert state_manager.add_raffle_wins(self._wins()) == []
+        assert len(state_manager.get_raffle_wins()) == 2
+
+    def test_get_raffle_wins_oldest_first_with_since(self, state_manager):
+        state_manager.add_raffle_wins(self._wins())
+        got = state_manager.get_raffle_wins()
+        assert [w["block_id"] for w in got] == ["aa11", "bb22"]  # ts ASC
+        assert got[1]["tier"] == "donor_whale"
+        assert got[1]["hashrate"] == 5.0e6
+        assert [w["block_id"] for w in state_manager.get_raffle_wins(since=1500.0)] == ["bb22"]
+
+    def test_empty_input_is_a_noop(self, state_manager):
+        assert state_manager.add_raffle_wins([]) == []
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE raffle_wins")
+        assert state_manager.add_raffle_wins(self._wins()) == []
+        assert state_manager.is_db_healthy() is False
+
+    def test_table_bounded_to_newest_max_rows(self, state_manager, monkeypatch):
+        # Security bound: the source file is untrusted, so the table keeps only the newest
+        # RAFFLE_WINS_MAX_ROWS — a hostile feed cannot grow it without limit, and the read
+        # side never returns more than the bound either.
+        monkeypatch.setattr(storage_service, "RAFFLE_WINS_MAX_ROWS", 3)
+        wins = [
+            {"ts": float(i), "hashrate": 1.0, "height": i, "block_id": f"id{i}", "tier": "t"}
+            for i in range(6)
+        ]
+        state_manager.add_raffle_wins(wins)
+        got = state_manager.get_raffle_wins()
+        assert [w["block_id"] for w in got] == ["id3", "id4", "id5"]  # newest 3, oldest first
 
 
 class TestPayouts:

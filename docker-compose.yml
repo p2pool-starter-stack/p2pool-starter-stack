@@ -711,6 +711,9 @@ services:
       # (which is p2pool's block/share view). Fires once per confirmed incoming transfer.
       - TELEGRAM_EVENT_PAYOUT_CONFIRMED=${TELEGRAM_EVENT_PAYOUT_CONFIRMED:-true}
       - TELEGRAM_EVENT_CONTAINER_UNHEALTHY=${TELEGRAM_EVENT_CONTAINER_UNHEALTHY:-true}
+      # An XvB raffle round this wallet won, mirrored from XvB's public winners file. Fires once
+      # per genuinely new win (the raffle_wins table is idempotent on the round's block id).
+      - TELEGRAM_EVENT_RAFFLE_WIN=${TELEGRAM_EVENT_RAFFLE_WIN:-true}
       - TELEGRAM_DAILY_SUMMARY_TIME=${TELEGRAM_DAILY_SUMMARY_TIME:-08:00}
       # Hashrate-degradation detector (#99).
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}

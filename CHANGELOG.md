@@ -23,6 +23,13 @@ steady-state CPU cost drops via healthcheck and peer-count tuning (#595).
 
 ### Added
 
+- **XvB raffle wins on the chart and in a log.** The dashboard reads XvB's public winners log
+  (over Tor, about every 30 minutes) and records every round your wallet won. Wins show as gold
+  stars on the hashrate chart (hover for the round type and credited hashrate), as a **Raffle
+  Wins** list in the XvB Donation Stats card, and each new win is announced once in the dashboard
+  log. Wins are stored permanently, so the history outlives the ~4-day window the winners file
+  itself keeps. Each new win also fires a Telegram/webhook alert (`raffle_win` event, on by
+  default like the rest; opt out via `telegram.events.raffle_win: false`).
 - **Stratum authentication is on by default for new installs (#208, #152 Phase 2).** The setup
   wizard and `config.minimal.json` now write `p2pool.stratum_password: "auto"` into every new
   `config.json`: the stack generates a stable secret, prints it after `setup`/`apply`, and
