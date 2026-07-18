@@ -55,6 +55,12 @@ async function pollResult(id, skip, max = POLL_MAX) {
       continue;
     }
     if (res.status === 202) continue;
+    // An upgrade (#59) recreates the dashboard container itself; while it restarts, the reverse
+    // proxy stays up and answers 502/503/504 — the upstream is briefly gone, not failed. Ride
+    // these out like a dropped connection (the `catch` above), otherwise the poll rejects mid-
+    // restart and a SUCCEEDED upgrade shows "did not complete" (#622). The durable control result
+    // is the real outcome; the loop's `max` is the timeout backstop. A backend 500 still fails.
+    if (res.status === 502 || res.status === 503 || res.status === 504) continue;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const out = await res.json();
     if (out.status === skip) continue;

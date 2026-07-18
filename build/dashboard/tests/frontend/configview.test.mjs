@@ -94,6 +94,30 @@ test("runUpgrade posts the seen version, skips 'running', rides out the restart,
   assert.equal(posted.headers["X-Pithead-Control"], "1"); // CSRF guard rides every mutation
 });
 
+test("runUpgrade rides out a 502 from the proxy while the dashboard restarts (#622)", async () => {
+  // The upgrade recreates the dashboard container itself while caddy stays up, so mid-restart
+  // polls get 502/503/504 (upstream gone) rather than a dropped connection. These must be
+  // tolerated, or a SUCCEEDED upgrade shows "did not complete".
+  let polls = 0;
+  const fetchStub = async (url) => {
+    if (url === "/api/control/upgrade")
+      return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+    polls++;
+    if (polls <= 3) return { status: [502, 503, 504][polls - 1], ok: false, json: async () => ({}) };
+    return okResult({ status: "upgraded", version: "v9.9.9" });
+  };
+  const out = await withFastPoll(fetchStub, () => runUpgrade("v9.9.9"));
+  assert.equal(out.status, "upgraded");
+});
+
+test("runUpgrade still fails fast on a real backend error (500), not just times out (#622)", async () => {
+  const fetchStub = async (url) =>
+    url === "/api/control/upgrade"
+      ? { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) }
+      : { status: 500, ok: false, json: async () => ({}) };
+  await assert.rejects(withFastPoll(fetchStub, () => runUpgrade("v9.9.9")), /HTTP 500/);
+});
+
 test("runUpgrade surfaces a host-side rejection as the outcome, not a throw", async () => {
   const fetchStub = async (url) =>
     url === "/api/control/upgrade"
