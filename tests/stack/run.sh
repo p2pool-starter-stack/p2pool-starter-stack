@@ -202,12 +202,17 @@ rm -f "$SANDBOX/.env"
 # Stack down (tor not running) -> info skip: rules are legitimately absent after 'down'.
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
 assert_contains "egress check: stack down -> info" "$out" "isn't running"
-# tor DOWN while the mining stack runs -> FAIL, not a silent skip: the privacy backbone is dead but
-# revenue containers are live (tor crashed / stopped individually). doctor must not report all-clear.
+# The tor-down-while-mining verdict lives in the dedicated check_tor_running (#563), so the egress
+# checks just info-skip when tor is down — they don't double-FAIL the same root cause.
 out="$(RUNNING_CONTAINERS="p2pool" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
-assert_contains "egress check: tor down + mining up -> FAIL" "$out" "Tor container is DOWN"
-out="$(RUNNING_CONTAINERS="p2pool" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
-assert_contains "clearnet-egress check: tor down + mining up -> FAIL" "$out" "Tor container is DOWN"
+assert_contains "egress check: tor down -> info skip (dedicated check owns the verdict)" "$out" "isn't running"
+# check_tor_running: the loud, dedicated privacy-outage verdict.
+out="$(RUNNING_CONTAINERS="tor" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_running 2>&1)"
+assert_contains "tor-running check: tor up -> OK" "$out" "privacy backbone is up"
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_running 2>&1)"
+assert_contains "tor-running check: whole stack down -> info" "$out" "stack is down"
+out="$(RUNNING_CONTAINERS="p2pool" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_running 2>&1)"
+assert_contains "tor-running check: tor down + mining up -> FAIL" "$out" "Tor container is DOWN"
 # Running + tagged rules present -> OK.
 out="$(RUNNING_CONTAINERS="tor" IPT_TAGGED=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
 assert_contains "egress check: rules installed -> OK" "$out" "installed"

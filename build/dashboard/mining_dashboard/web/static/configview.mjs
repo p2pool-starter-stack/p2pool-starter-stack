@@ -43,8 +43,9 @@ const UPGRADE_POLL_MAX = 450; // 15 minutes — an upgrade pulls a whole release
 // Poll /api/control/result until a terminal result lands; shared by the Configuration view and
 // the Upgrade button (#59). `skip` ignores an intermediate status under the same id (the
 // still-present "previewed" result while a commit runs; "running" while an upgrade runs). Both
-// flows recreate the dashboard container itself, so a fetch here can transiently fail (connection
-// refused mid-restart) — ride it out and keep polling until the result file answers.
+// flows recreate the dashboard container itself, so a fetch here can transiently fail — either a
+// dropped connection (proxy down) or a 502/503/504 (proxy up, upstream mid-restart, #622). Ride
+// both out and keep polling until the result file answers.
 async function pollResult(id, skip, max = POLL_MAX) {
   for (let i = 0; i < max; i++) {
     await new Promise((r) => setTimeout(r, POLL_MS));
@@ -55,6 +56,11 @@ async function pollResult(id, skip, max = POLL_MAX) {
       continue;
     }
     if (res.status === 202) continue;
+    // Both flows recreate the dashboard container itself; while it restarts, the reverse proxy
+    // (caddy) stays up and answers 502/503/504 — the upstream is briefly gone, not failed. Ride
+    // these out like a dropped connection (#59/#622); the durable control result is the real
+    // outcome and `max` is the backstop. A real backend 500 (upstream up, erroring) still throws.
+    if (res.status === 502 || res.status === 503 || res.status === 504) continue;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const out = await res.json();
     if (out.status === skip) continue;
