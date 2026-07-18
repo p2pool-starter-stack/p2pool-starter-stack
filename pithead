@@ -2292,7 +2292,7 @@ wizard_write_config() {
         --arg pool "$POOL_TIER" \
         '{monero: {mode: $mode, wallet_address: $mwallet, node_username: $mu, node_password: $mp},
           tari: {wallet_address: $twallet},
-          p2pool: {pool: $pool},
+          p2pool: {pool: $pool, stratum_password: "auto"},
           dashboard: {secure: true}}')
 
     if [ "$MONERO_MODE_WIZ" == "remote" ]; then
