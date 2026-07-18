@@ -922,6 +922,8 @@ pd_order=$(
     DASHBOARD_DIR="$SANDBOX/pd-dashboard"
     # shellcheck disable=SC2034
     CLEARNET_STATE_DIR="$SANDBOX/pd-clearnet"
+    # shellcheck disable=SC2034
+    PROXY_TLS_DIR="$SANDBOX/pd-proxy-tls" # #261: prepare_directories now creates it too
     log() { :; }
     prepare_control_dirs() { :; }
     mkdir() {
@@ -6208,6 +6210,24 @@ assert_contains "'pithead setup' reports completion" "$su_out" "Deployment prepa
 assert_eq "'pithead setup' writes a completed .env" \
     "$(run_sourced "$SU" env_get_file "$SU/.env" DEPLOYMENT_COMPLETED)" "true"
 unset SU su_out su_rc
+
+echo "== black-box: 'pithead setup' with stratum_tls in a hand-written config generates the keypair (#261) =="
+# The setup path reaches compose through prepare_directories, never ensure_directories — a
+# hand-written config.json with stratum_tls:true at FIRST setup must still get its cert + the
+# fingerprint announcement (verifier catch: only the apply path was covered).
+SUT="$SANDBOX/setup-tls"
+mkdir -p "$SUT/build/tari" "$SUT/build/dashboard"
+: >"$SUT/build/dashboard/Dockerfile"
+cp "$STACK" "$SUT/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$SUT/build/tari/"
+make_stubs "$SUT/bin"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false} }\n' "$WALLET" >"$SUT/config.json"
+sut_out="$(cd "$SUT" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$SUT/bin:$PATH" ./pithead setup --skip-deps --skip-optimize 2>&1)"
+assert_rc "setup with stratum_tls exits 0" "$?" "0"
+[ -f "$SUT/data/proxy-tls/cert.pem" ] && [ -f "$SUT/data/proxy-tls/key.pem" ] &&
+    ok "setup generates the TLS keypair (#261)" || bad "setup generates the TLS keypair (#261)" "missing under $SUT/data/proxy-tls"
+assert_contains "setup announces the fingerprint for rig pinning" "$sut_out" "Stratum TLS is ON"
+unset SUT sut_out
 
 unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
 

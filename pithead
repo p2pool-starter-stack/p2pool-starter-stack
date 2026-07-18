@@ -2867,7 +2867,7 @@ load_preserved_state() {
 
 prepare_directories() {
     log "Initializing data directories..."
-    mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR"
+    mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$PROXY_TLS_DIR"
     mkdir -p "$P2POOL_DIR/stats"
 
     # Enforce permissions. Each data dir is owned by the uid its container runs as: Tor keeps its
@@ -2881,6 +2881,10 @@ prepare_directories() {
     # marker (#234) while monerod/tari mount it read-only. It holds only non-secret state markers.
     sudo chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || true
     prepare_control_dirs
+    # #261: setup reaches compose through THIS function (stack_up never runs ensure_directories),
+    # so a hand-written config with stratum_tls:true at first setup must get its keypair here —
+    # otherwise the mount is root-created empty and no fingerprint is ever announced.
+    ensure_stratum_tls_cert
 }
 
 # Secret leaves in config.json, as jq path arrays. The single host-side source for BOTH control-

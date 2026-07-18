@@ -193,8 +193,10 @@ re-pin: delete the two files in the stack's `proxy-tls` data directory, run `./p
 and update the fingerprint on each TLS rig (cleartext rigs are unaffected).
 
 TLS adds confidentiality (nobody on the network reads your worker names or the access password);
-the [password](#authentication) stays the access control. Use both. Turning the knob off again
-only affects rigs with `tls: true` — switch them back to cleartext first.
+the [password](#authentication) stays the access control. Use both. The protection is per-rig:
+a rig still on cleartext is still readable — and silently downgradeable — by an on-path
+attacker; only the pinned-TLS rigs are covered. Turning the knob off again only affects rigs
+with `tls: true` — switch them back to cleartext first.
 
 ### Reading each worker's stats (the dashboard's worker API probe)
 
