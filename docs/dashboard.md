@@ -519,7 +519,10 @@ Two edit modes build the same candidate config and submit it through the same pi
   as before; within **Notifications**, the 26 `telegram.events` toggles, the ntfy/webhook sinks,
   and Healthchecks each nest one level deeper into their own collapsed sub-group
   ([#612](https://github.com/p2pool-starter-stack/pithead/issues/612)) instead of dominating the
-  section's field list. A config path no logical section claims still renders, in a catch-all
+  section's field list. Rows in a section whose fields span more than one top-level key carry their
+  full dotted path (`monero.view_key`, `tari.view_key`) so two leaves with the same name read as two
+  different keys; a single-key section keeps the shorter relative label — its heading names the rest.
+  A config path no logical section claims still renders, in a catch-all
   **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
   fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
   here — a variable-length list has no single form control for it — edit it via
