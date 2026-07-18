@@ -50,9 +50,12 @@ services:
     # Healthy only once Tor has finished bootstrapping (circuits built), not merely
     # when the SOCKS port is open — so tari/monerod don't start against a Tor that
     # can't route yet. start_period covers a cold bootstrap without counting failures.
+    # 30s interval (#595): each probe opens a control connection; at 10s that was steady
+    # log spam + wasted cycles on the stack's busiest single-threaded service. Failure
+    # detection worst-case moves from ~50s to ~150s — dependents only gate on STARTUP order.
     healthcheck:
       test: ["CMD", "/usr/local/bin/tor-healthcheck.sh"]
-      interval: 10s
+      interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
@@ -85,6 +88,8 @@ services:
       # P2P proxy from the rendered config so IBD runs over clearnet (tx broadcast stays on Tor).
       - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
       - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
+      # Outbound peer target (#595): ~1 Tor circuit per peer; the steady-state Tor-CPU lever.
+      - MONERO_OUT_PEERS=${MONERO_OUT_PEERS:-48}
       # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     # Immutable root filesystem (#377). The entrypoint renders bitmonero.conf INTO the bind-mounted

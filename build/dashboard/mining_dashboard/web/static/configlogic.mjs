@@ -153,6 +153,7 @@ export const LOGICAL_GROUPS = [
       "monero.mem_limit",
       "monero.data_dir",
       "monero.prep_blocks_threads",
+      "monero.out_peers",
       "tari.mem_limit",
       "tari.data_dir",
       "p2pool.data_dir",
