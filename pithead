@@ -2436,6 +2436,42 @@ validate_worker_endpoints() {
     [ -z "$dw_dups" ] || warn "$dw_path has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
 }
 
+# Migrate a validated deprecated dashboard.workers[] (#172) to workers.list[] (#506) in place:
+# move the entries, drop the old key, keep the pre-migration file as ${CONFIG_FILE}.bak-workers
+# (the control channel's .bak-control naming). Runs AFTER validate_worker_endpoints, so only a
+# config whose legacy entries already passed validation is ever rewritten. Write-back rules
+# follow persist_node_credentials: never on a dry run (#556) — which also covers every
+# control-channel preview, since preview dry-runs a staged copy — atomic temp+mv under umask 077,
+# and best-effort: a failed write warns and the run continues reading the legacy key via
+# worker_list. The pre-migration owner is restored after the mv so a root control-runner apply
+# (#33) cannot strand config.json root-owned — the #480 bug class control_reown_operator_files
+# exists for, handled here because this write happens mid-apply, before that reown runs.
+migrate_legacy_workers() {
+    local new_n legacy_n owner tmp="${CONFIG_FILE}.tmp"
+    [ "$PITHEAD_DRY_RUN" -eq 1 ] && return 0
+    new_n=$(jq -r '(.workers // {}) | (.list // []) | if type == "array" then length else -1 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    legacy_n=$(jq -r '(.dashboard // {}) | (.workers // []) | if type == "array" then length else -1 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    { [ "${legacy_n:-0}" -gt 0 ] && [ "${new_n:-0}" = "0" ]; } || return 0
+    if ! cp -p "$CONFIG_FILE" "${CONFIG_FILE}.bak-workers" 2>/dev/null; then
+        warn "Could not back up $CONFIG_FILE before migrating dashboard.workers[] — leaving the deprecated key in place."
+        return 0
+    fi
+    owner=$(stat -c '%u:%g' "$CONFIG_FILE" 2>/dev/null || stat -f '%u:%g' "$CONFIG_FILE" 2>/dev/null) || owner=""
+    if (
+        umask 077
+        jq '.workers = ((.workers // {}) + {list: .dashboard.workers}) | .dashboard |= del(.workers)' \
+            "$CONFIG_FILE" >"$tmp" 2>/dev/null
+    ); then
+        mv "$tmp" "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
+        if [ -n "$owner" ]; then chown "$owner" "$CONFIG_FILE" 2>/dev/null || true; fi
+        log "Migrated dashboard.workers[] to workers.list[] (#506) — the old copy is at ${CONFIG_FILE}.bak-workers."
+    else
+        rm -f "$tmp"
+        warn "Could not migrate dashboard.workers[] to workers.list[] — continuing on the deprecated key (backup left at ${CONFIG_FILE}.bak-workers)."
+    fi
+}
+
 # Validate the dashboard.energy block for the energy/profit calculator (#260). Like the worker
 # descriptors, this renders nothing to .env — the dashboard reads it off the read-only config.json
 # bind mount — so validation exists only to fail an apply loudly on a typo. Prices are operator-set
@@ -2619,6 +2655,7 @@ parse_and_validate_config() {
     fi
 
     validate_worker_endpoints
+    migrate_legacy_workers
     validate_energy_config
 
     # Optional miner authentication on the stratum port (#152). xmrig-proxy's --access-password
@@ -5165,7 +5202,7 @@ control_reown_operator_files() {
     # GNU stat first, BSD fallback (see the provision_onion_client_auth note). No owner → skip.
     owner=$(stat -c '%u:%g' "$CONFIG_FILE" 2>/dev/null || stat -f '%u:%g' "$CONFIG_FILE" 2>/dev/null) || owner=""
     [ -n "$owner" ] || return 0
-    for f in "$ENV_FILE" "Caddyfile" "${CONFIG_FILE}.bak-control"; do
+    for f in "$ENV_FILE" "Caddyfile" "${CONFIG_FILE}.bak-control" "${CONFIG_FILE}.bak-workers"; do
         [ -e "$f" ] || continue
         # Fail safe: a chown that can't complete leaves the pre-existing bug, never corrupts state.
         chown "$owner" "$f" 2>/dev/null ||

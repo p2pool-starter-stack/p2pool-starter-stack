@@ -246,10 +246,12 @@ multi-homed), or carries its own token — override just that rig with
 ```
 
 `dashboard.workers` is a deprecated alias for `workers.list` (#506): a config from before the move
-still works — the old location is read as a fallback with a one-time warning — but populating both
-is refused at apply, and the old location is removed in v1.9. An empty array beside the populated
-key is fine: `[]` is the schema default `config.reference.json` ships for both keys, and the
-dashboard's config editor round-trips it (#679).
+still works — the old location is read as a fallback with a one-time warning, and the next
+`./pithead apply` migrates it in place (#679): the entries move to `workers.list`, the old key is
+deleted, and the pre-migration file is kept beside the config as `config.json.bak-workers`.
+Populating both locations is refused at apply. An empty array beside the populated key is fine:
+`[]` is the schema default `config.reference.json` ships for both keys, and the dashboard's config
+editor round-trips it (#679).
 
 The merge rule is: **per-worker field > fleet default > built-in default.** A rig with no entry (or
 an entry that only sets `port`) inherits everything else from `workers.*`. A per-worker `token`
