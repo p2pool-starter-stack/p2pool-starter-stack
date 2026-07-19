@@ -379,8 +379,6 @@ th:has(.th-sort-btn) {
   font: inherit;
   color: inherit;
   text-align: inherit;
-  text-transform: inherit;
-  white-space: inherit;
   cursor: pointer;
 }
 .sort-arrow {
