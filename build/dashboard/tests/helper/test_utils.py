@@ -6,6 +6,7 @@ from mining_dashboard.helper.utils import (
     PPLNS_BLOCK_TIME_DEFAULT,
     PPLNS_BLOCK_TIME_NANO,
     detect_host_ipv4,
+    format_disk_size,
     format_duration,
     format_hashrate,
     format_time_abs,
@@ -118,6 +119,23 @@ class TestFormatHashrate:
         assert format_hashrate(0) == "0.00 H/s"
         assert format_hashrate("invalid") == "0 H/s"
         assert format_hashrate(None) == "0 H/s"
+
+
+class TestFormatDiskSize:
+    """#677: GB below 1 TB, TB at or above it; both values switch together."""
+
+    def test_stays_gb_below_1024(self):
+        assert format_disk_size(408.6, 931.5) == ("408.6", "931.5", "GB")
+
+    def test_switches_to_tb_at_boundary(self):
+        assert format_disk_size(512, 1024) == ("0.5", "1.0", "TB")
+
+    def test_large_volume_reads_in_tb(self):
+        assert format_disk_size(408.6, 3666.4) == ("0.4", "3.6", "TB")
+
+    def test_bad_data(self):
+        assert format_disk_size(None, None) == ("0.0", "0.0", "GB")
+        assert format_disk_size("invalid", "invalid") == ("0.0", "0.0", "GB")
 
 
 class TestFormatXmr:

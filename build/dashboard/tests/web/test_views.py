@@ -778,6 +778,17 @@ class TestSystem:
     def test_warning_fill_between_70_and_90(self):
         assert build_system({"system": {"disk": {"percent": 75}}})["disk"]["fill"] == "warning"
 
+    def test_disk_unit_switches_to_tb_on_large_volumes(self):
+        # Threshold mechanics live in test_utils.py; this proves the card wires the unit through.
+        s = build_system(
+            {"system": {"disk": {"used_gb": 408.6, "total_gb": 3666.4, "percent_str": "11.1%"}}}
+        )
+        assert (s["disk"]["used"], s["disk"]["total"], s["disk"]["unit"]) == ("0.4", "3.6", "TB")
+
+    def test_disk_unit_stays_gb_on_small_volumes(self):
+        s = build_system({"system": {"disk": {"used_gb": 90, "total_gb": 100}}})
+        assert (s["disk"]["total"], s["disk"]["unit"]) == ("100.0", "GB")
+
     def test_unparseable_cpu_is_ok(self):
         assert build_system({"system": {"cpu_percent": "n/a"}})["cpu"]["level"] == "ok"
 

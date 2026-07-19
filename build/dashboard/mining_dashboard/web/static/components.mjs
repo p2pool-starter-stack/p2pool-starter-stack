@@ -164,7 +164,7 @@ function Header({ state }) {
                     <span class=${s.hugepages.variant === "ok" ? "status-ok" : "status-bad"}>Huge Pages: ${s.hugepages.status} (${s.hugepages.value})</span>
                 </div>
                 <div class="flex items-center">
-                    <span class=${(s.disk.level === "high" ? "status-bad" : "text-muted") + " mr-2"}>Disk: ${s.disk.used} / ${s.disk.total} GB (${s.disk.percent})</span> <${HighUsage} level=${s.disk.level} />
+                    <span class=${(s.disk.level === "high" ? "status-bad" : "text-muted") + " mr-2"}>Disk: ${s.disk.used} / ${s.disk.total} ${s.disk.unit} (${s.disk.percent})</span> <${HighUsage} level=${s.disk.level} />
                     <div class="disk-bar">
                         <div class="progress-bg">
                             <div class=${"progress-fill " + s.disk.fill} style=${{ width: s.disk.width }}></div>

@@ -79,8 +79,10 @@ successful refresh.
 ### Top bar
 
 A status strip across the top shows the hostname, host telemetry (CPU, load, RAM, HugePages, disk),
-total hashrate, and 1h / 24h routed averages for both P2Pool and XvB (your split). Next to the disk
-readout, an `XMR Pruned` / `XMR Full` badge shows the Monero node's blockchain mode.
+total hashrate, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
+switches from GB to TB once the volume reaches 1 TB, on the same scale in the Telegram `/system`
+reply. Next to the disk readout, an `XMR Pruned` / `XMR Full` badge shows the Monero node's
+blockchain mode.
 
 When the dashboard host is a name (not already an IP), the machine's IP shows beside it as
 `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), a way back in when the hostname doesn't
