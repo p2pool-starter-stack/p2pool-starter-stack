@@ -11,12 +11,38 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Event and raffle markers join the chart legend (#652).** The hashrate chart's legend now
+  toggles every layer, not just the three series: the degradation/recovery diamonds (#99) and
+  the XvB raffle-win stars (#644) each get a show/hide button, persisted across reloads like
+  the rest.
+
 ### Fixed
 
 - **UI preferences now all survive a reload (#658).** The Workers-table sort, earnings tab,
   Form/JSON and Table/JSON editor modes, and the topology mesh toggle join the already-persisted
   theme, view, averaging window and series toggles. A saved choice that becomes invalid (a
   removed column, an unavailable tab) falls back to the default.
+- **Every toggle control now announces itself like the theme switcher (#657).** The chart
+  Range row becomes real buttons in a labelled group (it was bare links), and the view
+  toggle, Form/JSON and Table/JSON editors, and the topology mesh button gain
+  `aria-pressed` and hover titles. The button resets move into `.btn-range`, which also
+  gives the Avg buttons the pointer cursor they were missing.
+- **The Workers table shows its sort state (#656).** The sorted column now carries a direction
+  arrow and `aria-sort`, and every header names its action on hover — before, clicking sorted
+  the rows with no indication of which column or direction was active.
+- **The chart's default full-history range gets an "All" button (#655).** Before, no range
+  button read as selected on first load, and once a preset was clicked the full-history view
+  was unreachable without hand-editing the URL.
+- **The header no longer advertises the release you are already running (#664).** Right after an
+  upgrade, the "New release vX.Y.Z available" badge and the Upgrade button could linger while the
+  version badge already showed vX.Y.Z — the pre-upgrade check result was restored from the
+  persisted snapshot and nothing was obligated to clear it promptly. Two fixes: derived update
+  state is no longer restored across a restart (the checker recomputes it), and the render seam
+  now suppresses the badge whenever the advertised release is not strictly newer than the running
+  one — the contradictory state is unrepresentable, whatever produces it. Clicking the stale
+  button was always refused host-side; this was display-truth damage only.
 
 ## [1.9.1] - 2026-07-19
 

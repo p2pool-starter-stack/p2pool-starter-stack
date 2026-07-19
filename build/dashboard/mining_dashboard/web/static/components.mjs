@@ -783,7 +783,18 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
         <div class="table-scroll">
             <table id="workers-table">
                 <thead>
-                    <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
+                    <tr>${WORKER_COLUMNS.map(
+                      // Sorted column carries the direction, visibly (arrow) and for AT (aria-sort);
+                      // the title makes clickability discoverable without hovering rows (#656).
+                      (c, i) => html`<th onClick=${() => onSort(i)}
+                            class=${i === ui.sortIndex ? "sorted" : null}
+                            aria-sort=${i === ui.sortIndex ? (ui.sortAsc ? "ascending" : "descending") : null}
+                            title=${"Sort by " + c.label}>${c.label}${
+                              i === ui.sortIndex
+                                ? html`<span class="sort-arrow">${ui.sortAsc ? " ▲" : " ▼"}</span>`
+                                : ""
+                            }</th>`,
+                    )}</tr>
                 </thead>
                 <tbody id="workers-tbody">
                     ${rows.map(
@@ -906,10 +917,13 @@ function DashboardView({
   return html`
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
-            <div class="toggle-group">
-                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
-                <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
-                <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
+            <div class="toggle-group" role="group" aria-label="Dashboard view">
+                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} aria-pressed=${!advanced && !configView}
+                    title="Chart, workers and the headline numbers" onClick=${() => onView("simple")}>Simple</button>
+                <button class=${"btn-toggle" + (advanced ? " active" : "")} aria-pressed=${advanced}
+                    title="Every stats card, calculators and diagnostics" onClick=${() => onView("advanced")}>Advanced</button>
+                <button class=${"btn-toggle" + (configView ? " active" : "")} aria-pressed=${configView}
+                    title="View or edit the stack configuration" onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />

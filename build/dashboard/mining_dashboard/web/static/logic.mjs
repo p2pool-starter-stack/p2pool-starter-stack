@@ -98,7 +98,7 @@ export function clampZoomWindow(aMs, bMs, minSpanMs = 60000) {
 // Chart series the user can show/hide, and a normalizer for the persisted state (Issue #47).
 // Kept pure so the default-visible logic is unit-tested; dashboard.js persists it in localStorage
 // and chart.mjs applies it. Anything not explicitly false defaults to visible.
-export const SERIES_KEYS = ["p2pool", "xvb", "shares"];
+export const SERIES_KEYS = ["p2pool", "xvb", "shares", "events", "raffle"];
 export function normalizeSeries(obj) {
   const o = obj && typeof obj === "object" ? obj : {};
   const out = {};
