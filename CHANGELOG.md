@@ -9,10 +9,16 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
-## [Unreleased]
+## [1.9.3] - 2026-07-19
 
 ### Fixed
 
+- **Keyboard users can sort the Workers table (#671).** Each sort header's click target is now a
+  real `<button>` (the #657 pattern), so it is focusable and activates on Enter/Space. The
+  worker-history table also stops advertising a pointer cursor on headers that do nothing.
+- **The configuration reference says how to make an edit take effect (#675).** The callout above
+  the key table now states that editing `config.json` changes nothing until `./pithead apply`,
+  for readers who deep-link into the table and never see the intro.
 - **Config editor saves work again (#679).** Every save through the dashboard's Configuration
   editor — Form and JSON mode alike — was rejected with the "sets both workers.list[] and
   dashboard.workers[]" error: the editor merges `config.reference.json` (which ships both worker
@@ -24,6 +30,10 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Changed
 
+- **The disk readout switches to TB at 1 TB (#677).** The system card and the Telegram `/system`
+  reply format disk used/total through one shared helper: GB with one decimal below 1024 GB
+  (unchanged), both values scaled to TB together at or above it — `Disk: 0.4 / 3.6 TB` instead
+  of `Disk: 408.6 / 3666.4 GB`. RAM, stored telemetry, and the metrics endpoint stay GB.
 - **`apply` migrates the deprecated `dashboard.workers[]` to `workers.list[]` (#679).** A
   validated legacy list is moved in place on the next apply: entries land under `workers.list`,
   the old key is deleted, and the pre-migration file is kept beside the config as
