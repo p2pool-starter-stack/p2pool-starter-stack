@@ -11,6 +11,14 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every toggle control now announces itself like the theme switcher (#657).** The chart
+  Range row becomes real buttons in a labelled group (it was bare links), and the view
+  toggle, Form/JSON and Table/JSON editors, and the topology mesh button gain
+  `aria-pressed` and hover titles. The button resets move into `.btn-range`, which also
+  gives the Avg buttons the pointer cursor they were missing.
+
 ## [1.9.1] - 2026-07-19
 
 ### Added

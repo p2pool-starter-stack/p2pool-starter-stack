@@ -897,10 +897,13 @@ function DashboardView({
   return html`
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
-            <div class="toggle-group">
-                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
-                <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
-                <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
+            <div class="toggle-group" role="group" aria-label="Dashboard view">
+                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} aria-pressed=${!advanced && !configView}
+                    title="Chart, workers and the headline numbers" onClick=${() => onView("simple")}>Simple</button>
+                <button class=${"btn-toggle" + (advanced ? " active" : "")} aria-pressed=${advanced}
+                    title="Every stats card, calculators and diagnostics" onClick=${() => onView("advanced")}>Advanced</button>
+                <button class=${"btn-toggle" + (configView ? " active" : "")} aria-pressed=${configView}
+                    title="View or edit the stack configuration" onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />

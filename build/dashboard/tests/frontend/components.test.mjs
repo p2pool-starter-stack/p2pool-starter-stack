@@ -83,6 +83,20 @@ test('operational App renders the hero band and the headline cards', () => {
     assert.match(html, /Stack Topology & Egress/);
 });
 
+test('toggle groups carry the ARIA affordances of the theme-switcher pattern (#657)', () => {
+    // The vnode walker serializes boolean true as a bare attribute and drops false, so a bare
+    // `aria-pressed` marks the pressed control (in the browser Preact writes true/false strings).
+    const html = renderApp({ ui: { ...UI, range: '1w' } });
+    // Range row: real buttons in a labelled group; the active preset is pressed and titled.
+    assert.match(html, /aria-label="Chart range"/);
+    assert.match(html, /class="btn-range active" aria-pressed title="Chart range: 1 Wk">1 Wk</);
+    // View toggle: labelled group; the active view's button is pressed.
+    assert.match(html, /aria-label="Dashboard view"/);
+    assert.match(html, /class="btn-toggle active" aria-pressed title="[^"]+">Advanced</);
+    // Topology mesh toggle explains itself without hovering the diagram.
+    assert.match(html, /class="topo-toggle" title="Container-to-container links inside the stack"/);
+});
+
 test('operational App renders the remaining advanced cards', () => {
     const html = renderApp();
     assert.match(html, /Global P2Pool Stats/);

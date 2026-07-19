@@ -391,9 +391,11 @@ export class ConfigView extends Component {
     const { core, sections: groups } = regroupCore(markEditable(sections, editableKeys), coreKeys);
     return html`<div class="config-view">
         ${error ? html`<div class="card"><p class="status-bad">${error}</p></div>` : null}
-        <div class="toggle-group mb-1">
-            <button class=${"btn-toggle" + (mode === "form" ? " active" : "")} onClick=${() => this.setState({ mode: "form" })}>Form</button>
-            <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} onClick=${() => this.setState({ mode: "json" })}>JSON</button>
+        <div class="toggle-group mb-1" role="group" aria-label="Config editor mode">
+            <button class=${"btn-toggle" + (mode === "form" ? " active" : "")} aria-pressed=${mode === "form"}
+                title="Edit settings as a form" onClick=${() => this.setState({ mode: "form" })}>Form</button>
+            <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} aria-pressed=${mode === "json"}
+                title="Edit the raw config.json" onClick=${() => this.setState({ mode: "json" })}>JSON</button>
         </div>
         ${mode === "form" ? this.renderForm(core, groups, edits) : this.renderJson(editText, jsonError, busy)}
         <div class="config-actions">
