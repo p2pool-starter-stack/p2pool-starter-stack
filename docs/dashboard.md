@@ -194,18 +194,18 @@ The summary panel pulls the key numbers together:
 
 | Field | Meaning |
 |---|---|
-| **Mining Mode** | What the stack is routing hashrate to right now (e.g. P2Pool, XvB, or a split). |
 | **Total Hashrate** | Your combined hashrate across all workers. |
+| **Mining Mode** | What the stack is routing hashrate to right now (e.g. P2Pool, XvB, or a split). |
 | **Workers Alive** | How many rigs are connected and online right now. |
-| **Share in Window** | Your shares in the current P2Pool PPLNS window. |
+| **Current Tier** | The XvB tier you're currently holding, the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
 | **Raffle Eligible** | **Yes** only when you're set up to both *win* and *collect* an XvB payout: you're donating at least the **donor tier** (1 kH/s on XvB's *credited* 1h **and** 24h averages, the same threshold as **Current Tier**) **and** you hold a P2Pool PPLNS share (XvB's "VIP" gate; without it a win is skipped and you take a fail). Reads **No** when donating but a gate is unmet, and **N/A (XvB off)** when XvB is disabled. Intentionally stricter than XvB's bare "VIP = just a share" so a green Yes means a win is paid. |
-| **Last Share** | Time since your last accepted share. |
+| **Share in Window** | Your shares in the current P2Pool PPLNS window. |
+| **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
 | **P2Pool 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually routed to P2Pool. |
 | **XvB 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually **routed** to XvB. (The XvB-API *credited* figure, XvB's definitive record, appears in the **Advanced** view's *XvB Donation Stats* card.) |
-| **Current Tier** | The XvB tier you're currently holding, the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
-| **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
+| **Last Share** | Time since your last accepted share. |
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
-| **Wallets** | Your configured Monero and Tari payout addresses. |
+| **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
 ### Workers Alive
 

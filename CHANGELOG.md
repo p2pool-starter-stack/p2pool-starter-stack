@@ -11,6 +11,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Overview docs match the rendered card (#659).** The doc's field table follows the actual
+  #159 stat order, names the two wallet cards (Wallet XMR / Wallet TARI) instead of a single
+  "Wallets" row, and the stat card's label casing unifies on "Share in Window" to match the
+  hero KPI and the doc.
+
 ## [1.9.1] - 2026-07-19
 
 ### Added
