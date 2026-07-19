@@ -2699,6 +2699,41 @@ rc=$?
 assert_rc "both workers.list and dashboard.workers set is rejected" "$rc" "1"
 assert_contains "both-set refusal names both keys" "$out" "sets both workers.list[] and dashboard.workers[]"
 
+# The refusal keys on CONTENT, not presence (#679): the dashboard config editor merges
+# config.reference.json (which ships BOTH keys as empty-array schema defaults) under the
+# operator's config before serving the form, and round-trips the merged doc on save — so an
+# empty array beside the populated key must neither refuse nor warn.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[]}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "workers.list beside an empty dashboard.workers applies (#679)" "$?" "0"
+assert_not_contains "empty legacy default does not trip the both-set refusal" "$out" "sets both workers.list[] and dashboard.workers[]"
+assert_not_contains "empty legacy default raises no deprecation warning" "$out" "deprecated"
+
+# Mirror: a populated legacy list beside an empty workers.list (the same reference-merge shape,
+# for an operator still on the deprecated key) selects — and still validates — the legacy entries.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"10.0.0.5"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "populated dashboard.workers beside an empty workers.list applies (#679)" "$?" "0"
+assert_contains "legacy shape beside the empty default still warns as deprecated" "$out" "dashboard.workers[] is deprecated"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "an empty workers.list must not shadow legacy entries from validation (#679)" "$?" "1"
+assert_contains "shadowed legacy entry is flagged under its own path label" "$out" "dashboard.workers[legacy-rig].host"
+
+# The editor contract itself (#679): the shipped config.reference.json deep-merged UNDER a valid
+# operator config — exactly the document read_config serves and the editor POSTs back — must
+# survive the same dry-run the control channel's preview leg runs. Fails on any future schema
+# default that trips validation, whatever the key.
+seed_env
+cp "$ROOT/config.reference.json" "$V/reference.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/operator.json"
+jq -s '(.[0] | del(._docs)) * .[1]' "$V/reference.json" "$V/operator.json" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "reference-merged editor round-trip survives the preview dry-run (#679)" "$?" "0"
+
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
     seed_env

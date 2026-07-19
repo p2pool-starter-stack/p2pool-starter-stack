@@ -2372,31 +2372,47 @@ ensure_onion_password() {
     log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
 }
 
+# The one selection rule for every reader of the per-worker descriptors (#506): workers.list[]
+# wins whenever it is set to anything but an empty array; an empty or absent workers.list falls
+# back to the deprecated dashboard.workers[] (#172). An empty array is a schema default, not an
+# operator choice — the dashboard config editor merges config.reference.json UNDER the operator's
+# config, so a staged editor config always carries BOTH keys with at least one of them empty
+# (#679); keying any decision on mere presence picks (or refuses) the wrong shape. A set-but-not-
+# an-array workers.list still wins, so validation flags it under its own name.
+readonly WORKER_LIST_JQ='def worker_list:
+    ((.workers // {}) | .list // []) as $n
+    | if ($n | type) == "array" and ($n | length) == 0
+      then ((.dashboard // {}) | .workers // []) else $n end;'
+
 # Validate the per-worker endpoint descriptors (#506): a list of {name, host?, port?, token?}
 # objects the dashboard uses to override the fleet worker-API defaults per rig. workers.list[] is
 # the current sub-key; dashboard.workers[] (#172) is read as a deprecated fallback (removed in
-# v1.9, one-time warning below) — setting BOTH is refused outright, since silently picking one
-# would leave the other a stale, unnoticed copy of hosts/tokens. Nothing here renders to .env — the
+# v1.9, one-time warning below) — POPULATING both is refused outright, since silently picking one
+# would leave the other a stale, unnoticed copy of hosts/tokens. Presence alone never refuses
+# (#679, see WORKER_LIST_JQ above). Nothing here renders to .env — the
 # dashboard reads the list straight off its read-only config.json bind mount (tokens stay in the
 # one owner-only file that already holds secrets) — so this validation exists to fail an apply
 # LOUDLY on a typo instead of the dashboard silently dropping the entry at runtime. The `host`
 # charset matters for #122: it must never be able to smuggle a port, path, or userinfo into the
 # dashboard's probe URL.
 validate_worker_endpoints() {
-    local has_new has_legacy dw_path dw_err dw_dups
-    has_new=$(jq -r '(.workers // {}) | has("list")' "$CONFIG_FILE" 2>/dev/null)
-    has_legacy=$(jq -r '(.dashboard // {}) | has("workers")' "$CONFIG_FILE" 2>/dev/null)
-    if [ "$has_new" = "true" ] && [ "$has_legacy" = "true" ]; then
+    local new_n legacy_n dw_path dw_err dw_dups
+    # Length, not presence (#679): 0 = absent or empty array (schema default — never an operator
+    # signal), >0 = populated, -1 = set to something that isn't an array (validated below under
+    # the right path label). A jq parse hiccup degrades to 0, same as the old has() going silent.
+    new_n=$(jq -r '(.workers // {}) | (.list // []) | if type == "array" then length else -1 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    legacy_n=$(jq -r '(.dashboard // {}) | (.workers // []) | if type == "array" then length else -1 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    if [ "${new_n:-0}" != "0" ] && [ "${legacy_n:-0}" != "0" ]; then
         error "config.json sets both workers.list[] and dashboard.workers[] — pick one. dashboard.workers[] is a deprecated alias for workers.list[] (#506, removed in v1.9); move its entries to workers.list[] and delete dashboard.workers."
     fi
-    if [ "$has_legacy" = "true" ] && [ -z "${PITHEAD_WORKERS_LEGACY_WARNED:-}" ]; then
+    if [ "${legacy_n:-0}" != "0" ] && [ -z "${PITHEAD_WORKERS_LEGACY_WARNED:-}" ]; then
         warn "dashboard.workers[] is deprecated — move its entries to workers.list[] (#506, removed in v1.9)."
         PITHEAD_WORKERS_LEGACY_WARNED=1
     fi
     dw_path="workers.list"
-    [ "$has_new" = "true" ] || dw_path="dashboard.workers"
-    dw_err=$(jq -r --arg path "$dw_path" '
-        (.workers.list // .dashboard.workers // []) as $w
+    if [ "${new_n:-0}" = "0" ] && [ "${legacy_n:-0}" != "0" ]; then dw_path="dashboard.workers"; fi
+    dw_err=$(jq -r --arg path "$dw_path" "$WORKER_LIST_JQ"'
+        worker_list as $w
         | if ($w | type) != "array" then "\($path) must be an array of {name, host?, port?, token?} objects."
           else [ $w[] |
               if type != "object" then "\($path) entries must be objects (got a \(type))."
@@ -2416,7 +2432,7 @@ validate_worker_endpoints() {
           ] | first // empty end' "$CONFIG_FILE" 2>/dev/null)
     [ -z "$dw_err" ] || error "$dw_err"
     # Duplicate names are legal but only the FIRST declaration counts — surface that, once.
-    dw_dups=$(jq -r '[(.workers.list // .dashboard.workers // [])[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
+    dw_dups=$(jq -r "$WORKER_LIST_JQ"'[worker_list[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "$CONFIG_FILE" 2>/dev/null)
     [ -z "$dw_dups" ] || warn "$dw_path has duplicate names ($dw_dups) — the first-declared entry wins; a renamed rig needs its config entry updated."
 }
 
@@ -2918,8 +2934,9 @@ render_masked_config() { # <control-dir>
     tmp="$mdir/.config.json.tmp"
     # Per-worker tokens (#172) live in the variable-length descriptor array, out of reach of the
     # fixed-path walk above — mask each SET .token entry by entry. workers.list[] is current
-    # (#506); dashboard.workers[] is the deprecated fallback — mask whichever is actually
-    # populated (validate_worker_endpoints already refuses a config that sets both).
+    # (#506); dashboard.workers[] is the deprecated fallback — mask BOTH shapes unconditionally
+    # (validate_worker_endpoints refuses a config that populates both, but empty schema defaults
+    # may sit alongside the populated one, #679, and masking an empty array is a no-op).
     if jq --argjson paths "$CONTROL_SECRET_PATHS" '
         reduce $paths[] as $p (.;
             if ((try getpath($p) catch null) // "") == "" then .
@@ -5087,8 +5104,8 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     # (first-declared wins on duplicate names, matching the container's probe; whichever shape the
     # live config actually uses). A sentinel for a rig with no live token collapses to "" too, and
     # the sentinel is restored into whichever shape the submitted doc carries.
-    (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" '
-        (reduce (($live[0].workers.list // $live[0].dashboard.workers // []) | reverse | .[]) as $w ({};
+    (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" "$WORKER_LIST_JQ"'
+        (reduce (($live[0] | worker_list) | reverse | .[]) as $w ({};
             if ($w | type) == "object" and ($w.name | type) == "string"
             then .[$w.name] = ($w.token // "") else . end)) as $livetok
         | reduce $paths[] as $p (.config;
@@ -5588,9 +5605,9 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     # host or no token cannot be a target (fail closed): the rig's control path is bearer-mandatory and
     # we only ever dial an operator-set host.
     local host cport token
-    host=$(jq -r --arg n "$worker" '(.workers.list // .dashboard.workers // [])[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
-    cport=$(jq -r --arg n "$worker" '(.workers.list // .dashboard.workers // [])[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
-    token=$(jq -r --arg n "$worker" '(.workers.list // .dashboard.workers // [])[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    host=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    cport=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
+    token=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
     if [ -z "$host" ]; then
         _wa_reject "worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to edit it."
         return 0

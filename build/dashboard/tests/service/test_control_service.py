@@ -119,6 +119,25 @@ class TestSubmit:
         with pytest.raises(ValueError):
             control_service.submit("commit", intent_id="../../etc/passwd")
 
+    def test_read_config_metadata_stripped_from_the_intent(self, spool):
+        # The editor round-trips the fetched doc wholesale, so read_config's own metadata
+        # injections (_core_keys/_editable_keys) ride back with the POST; the host gate's
+        # closed-schema check refuses a commit carrying them (#679). submit is the choke point.
+        rid = control_service.submit(
+            "preview",
+            {"p2pool": {"pool": "main"}, "_core_keys": ["a"], "_editable_keys": ["b"]},
+            actor="admin",
+        )
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req["config"] == {"p2pool": {"pool": "main"}}
+
+    def test_non_dict_config_passes_through_for_the_host_to_reject(self, spool):
+        # Malformed client payloads keep their host-side rejection ("config must be a JSON
+        # object") instead of dying in the container on the metadata strip.
+        rid = control_service.submit("preview", ["not", "a", "config"], actor="admin")
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req["config"] == ["not", "a", "config"]
+
 
 class TestResult:
     def test_result_pending_then_ready(self, spool):
