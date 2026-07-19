@@ -11,6 +11,17 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The header no longer advertises the release you are already running (#664).** Right after an
+  upgrade, the "New release vX.Y.Z available" badge and the Upgrade button could linger while the
+  version badge already showed vX.Y.Z — the pre-upgrade check result was restored from the
+  persisted snapshot and nothing was obligated to clear it promptly. Two fixes: derived update
+  state is no longer restored across a restart (the checker recomputes it), and the render seam
+  now suppresses the badge whenever the advertised release is not strictly newer than the running
+  one — the contradictory state is unrepresentable, whatever produces it. Clicking the stale
+  button was always refused host-side; this was display-truth damage only.
+
 ## [1.9.1] - 2026-07-19
 
 ### Added
