@@ -5857,7 +5857,7 @@ upg455_fail=$(
 assert_not_contains "failed upgrade does NOT move the current pointer (#455)" "$upg455_fail" "symlink"
 
 echo "== black-box: deploy-box layout (#455) =="
-# A sandboxed source-checkout install whose chain data dirs share one root — the prod/gouda
+# A sandboxed source-checkout install whose chain data dirs share one root — the live deploy-box
 # layout. Proves the default resolution, the apply-time migration, and the upgrade-time
 # symlink end to end through the real CLI (docker/sudo stubbed).
 L="$SANDBOX/boxroot/pithead-v9.9.9"

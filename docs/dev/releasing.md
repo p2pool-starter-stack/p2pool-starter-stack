@@ -110,6 +110,31 @@ required, blocking pre-release gate. A release must not be promoted or published
 matrix is green against the real Monero + Tari nodes. This is what makes every published version
 a single, validated bundle.
 
+Two runs of the matrix are required, and the automated one is the smaller of the two:
+
+1. `release.sh` stage 2 runs the non-destructive `--readiness` assessment against the live
+   stack (via `RELEASE_INTEGRATION_ARGS`). It proves the box is fit to cut from — it does not
+   mine, restart anything, or touch a rig.
+2. Before cutting, run the targeted end-to-end matrix on the release candidate with a borrowed
+   loaner rig:
+
+   ```bash
+   BENCH_HOST=<bench> MINER_HOST=<loaner-rig> tests/integration/e2e.sh <ref> --mode targeted
+   ```
+
+   This deploys the candidate to the bench's dedicated e2e checkout, repoints the rig at it
+   (under the [rig lock](release-server.md#bench-allocation-and-the-rig-lock), with automatic
+   restore of both), and proves what `--readiness` cannot: a real miner mining through the
+   stack, the lifecycle phase (restart, apply secret-preservation, node-down failover), and
+   fail-closed auth. If the release's diff touches the worker or control-descriptor path, add
+   the `--rigforge-control` legs (needs a rig with its control API enabled). The readiness
+   gate alone does not satisfy this requirement; abort the release on any failure.
+
+After deploying the published release to the bench, run the non-destructive live sweep as the
+closing check: `tests/integration/run.sh --local --dir <stack-dir> --check`. On a bench with no
+miners connected, exactly two failures are expected — `workers online` and `stratum total
+hashes` — anything else is a regression.
+
 ## Signed releases
 
 Every promoted image digest and the install bundle carry a cosign key signature

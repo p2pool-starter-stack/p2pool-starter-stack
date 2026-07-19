@@ -9,6 +9,17 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+### Changed
+
+- **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now
+  states that the borrowed-rig `e2e.sh --mode targeted` pass on the release candidate is a
+  required pre-release gate — `release.sh`'s `--readiness` assessment alone is not enough — and
+  documents the post-deploy `--check` sweep and its expected parked-bench baseline. Private
+  bench hostnames in docs, comments, and one harness message are replaced with generic role
+  names; each box's specifics live in its own `~/README.md`, not the repo.
+
 ## [1.9.3] - 2026-07-19
 
 ### Fixed
@@ -1053,7 +1064,7 @@ tabbed earnings panel.
   time out, so the dead-man's-switch pings, the Telegram bot, and XvB stats all stop while mining
   (onion circuits) keeps working — the stack looks healthy as three features die. A new doctor check
   makes one request through Tor's SOCKS to a no-content endpoint and WARNs with the fix (restart the
-  tor container to pick fresh guards) when clearnet exits fail. Found live on pithead-prod after the
+  tor container to pick fresh guards) when clearnet exits fail. Found live on the production stack after the
   v1.3.0 deploy.
 - **A release-box checkout that has run the stack no longer fails `lint-toml` (#421).** taplo globs
   the filesystem, not the git index, so the generated (git-ignored) `build/tari/config.toml` left by
