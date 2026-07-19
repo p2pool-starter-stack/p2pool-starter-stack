@@ -70,7 +70,9 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 ## Configuration reference
 
 > Only `monero.wallet_address` and `tari.wallet_address` are required. Everything below is optional
-> and has a default. Add a key only when you want to change its behavior.
+> and has a default. Add a key only when you want to change its behavior. Editing `config.json`
+> changes nothing by itself — run `./pithead apply` afterward (see
+> [Changing settings later](#changing-settings-later)).
 
 The table below has ~94 keys across 13 sections — most of it you'll never touch. A handful of keys
 are **core**: wallet addresses, `monero.mode`, `p2pool.pool`, the dashboard login and host, and
