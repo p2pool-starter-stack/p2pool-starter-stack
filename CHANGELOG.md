@@ -20,6 +20,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The Workers table shows its sort state (#656).** The sorted column now carries a direction
+  arrow and `aria-sort`, and every header names its action on hover — before, clicking sorted
+  the rows with no indication of which column or direction was active.
 - **The chart's default full-history range gets an "All" button (#655).** Before, no range
   button read as selected on first load, and once a preset was clicked the full-history view
   was unreachable without hand-editing the URL.

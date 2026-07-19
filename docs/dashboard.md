@@ -238,8 +238,8 @@ offline. Point the rig's descriptor at the enriched feed to turn this on — see
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
 rejected count — a rig submitting stale or bad shares (bad overclock, flaky network, clock drift)
-rather than earning. Every column is sortable; click **Rejected** to float the worst offenders to the
-top. Shares are cumulative since the proxy last started, so a brief early-run blip clears as good
+rather than earning. Every column is sortable — the sorted column shows a direction arrow; click
+**Rejected** to float the worst offenders to the top. Shares are cumulative since the proxy last started, so a brief early-run blip clears as good
 shares accumulate.
 
 Below the table, a **Proxy totals** line sums the stack's share health as reported by xmrig-proxy:
