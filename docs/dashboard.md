@@ -160,8 +160,8 @@ progress until it catches up and merge-mining resumes.
 
 ### Hashrate chart
 
-A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch without
-reloading. Shaded bands show the P2Pool/XvB split over time.
+A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo / all history) that
+switch without reloading. Shaded bands show the P2Pool/XvB split over time.
 
 Diamond markers along the top flag **hashrate events** (#99): an amber one where total hashrate
 dropped sharply and stayed down (an outage or a rig gone dark), a green one where it recovered.

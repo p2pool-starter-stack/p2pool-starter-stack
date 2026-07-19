@@ -11,6 +11,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The chart's default full-history range gets an "All" button (#655).** Before, no range
+  button read as selected on first load, and once a preset was clicked the full-history view
+  was unreachable without hand-editing the URL.
+
 ## [1.9.1] - 2026-07-19
 
 ### Added

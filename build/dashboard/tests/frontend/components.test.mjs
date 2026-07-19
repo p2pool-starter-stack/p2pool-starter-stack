@@ -83,6 +83,15 @@ test('operational App renders the hero band and the headline cards', () => {
     assert.match(html, /Stack Topology & Egress/);
 });
 
+test('chart range buttons include All, active on the default full-history view (#655)', () => {
+    // Default UI state is range 'all' — without an All button no range reads as selected,
+    // and after picking a preset there is no way back to full history.
+    assert.match(renderApp(), /class="btn-range active"[^>]*>All</);
+    const weekly = renderApp({ ui: { ...UI, range: '1w' } });
+    assert.match(weekly, /class="btn-range active"[^>]*>1 Wk</);
+    assert.doesNotMatch(weekly, /class="btn-range active"[^>]*>All</);
+});
+
 test('operational App renders the remaining advanced cards', () => {
     const html = renderApp();
     assert.match(html, /Global P2Pool Stats/);
