@@ -3,7 +3,7 @@
 The decision core is what must be right: the healer restarts tor ONLY when egress is broken
 past the sustained threshold AND the cooldown has elapsed AND the per-outage restart budget
 isn't spent. Each guard is pinned separately, so inverting or deleting any of them fails a
-test. The actual container restart against a real stuck guard is tier 4 (gouda).
+test. The actual container restart against a real stuck guard is tier 4 (the live bench).
 """
 
 from unittest.mock import patch

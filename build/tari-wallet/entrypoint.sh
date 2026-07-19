@@ -53,7 +53,7 @@ birthday="$(resolve_birthday)"
 echo "Starting view-only Tari payout wallet (birthday $birthday, base node $BASE_NODE_GRPC) (#462)..."
 
 # Point the wallet at the LOCAL base node. The exact config-override key for the base-node peer is
-# the one item pinned to tier-4 (gouda) — confirmed there against a live minotari_console_wallet
+# the one item pinned to tier-4 (the live bench) — confirmed there against a live minotari_console_wallet
 # alongside whether the merge-mine coinbase surfaces via GetCompletedTransactions. Passed via the
 # Tari config env-override convention so it is NON-secret and stays out of argv.
 export MINOTARI_WALLET__BASE_NODE__GRPC_BASE_NODE_ADDRESS="/dns4/${BASE_NODE_GRPC%%:*}/tcp/${BASE_NODE_GRPC##*:}"

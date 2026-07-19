@@ -1957,7 +1957,7 @@ run_rigforge_control() {
 
     # The write path resolves the rig's host + token from workers.list[] (#506), or the deprecated
     # dashboard.workers[] fallback if that's what the box's baseline already carries. Use the
-    # baseline's descriptor if it already pins this rig's host (the gouda/prod case, whichever shape);
+    # baseline's descriptor if it already pins this rig's host (the live-box case, whichever shape);
     # otherwise inject one into workers.list[] from --rig-host + IT_RIG_TOKEN (local-only, so the token
     # never leaves the bench). No source for either -> skip: we won't drive an edit we can't address,
     # nor mutate what we can't restore.

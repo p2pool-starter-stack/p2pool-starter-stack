@@ -3,7 +3,7 @@
 Tor can bootstrap to 100% yet sit on a FAILING GUARD: circuits build but clearnet exits time
 out at the 60s cutoff, so every Tor-clearnet feature (Healthchecks pings, the Telegram bot,
 XvB stats) dies at once while mining — onion / already-established circuits — keeps working
-and the stack looks healthy. Seen live on pithead-prod after the v1.3.0 deploy: ~6 hours dark
+and the stack looks healthy. Seen live in production after the v1.3.0 deploy: ~6 hours dark
 until a manual ``docker compose restart tor`` reselected guards. The doctor check (v1.3.1)
 detects this state; this monitor is the heal half.
 
@@ -32,7 +32,7 @@ Tor network is overloaded", so fresh guards may be just as bad):
   healed.
 
 The restart goes through the same start/stop-only docker-control proxy as the #31 failover.
-The manual leg is ``./pithead restart tor``. Real stuck-guard recovery is tier 4 (gouda).
+The manual leg is ``./pithead restart tor``. Real stuck-guard recovery is tier 4 (the live bench).
 """
 
 import asyncio

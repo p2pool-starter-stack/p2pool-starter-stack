@@ -14,7 +14,7 @@ from .generated import wallet_pb2, wallet_pb2_grpc
 # The direction/status gate is generous on purpose: p2pool's Tari coinbase is a one-sided output to
 # wallet_payment_address, and which enum a view-only wallet reports it under
 # (COINBASE_CONFIRMED vs ONE_SIDED_CONFIRMED vs a plain INBOUND) is the one item pinned to tier-4
-# (gouda). Keeping the accept-set here isolated means tightening it after that check is a one-line
+# (the live bench). Keeping the accept-set here isolated means tightening it after that check is a one-line
 # change. Enum values are the wallet.proto constants (TransactionStatus / TransactionDirection).
 _DIRECTION_INBOUND = 1  # TRANSACTION_DIRECTION_INBOUND
 _COINBASE_STATUSES = frozenset(
