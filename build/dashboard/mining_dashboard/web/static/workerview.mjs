@@ -14,6 +14,7 @@
 // textarea (FileReader, no upload) for pushing the same profile to several rigs.
 
 import { SECRET_HINT } from "./configlogic.mjs";
+import { loadPref, savePref } from "./logic.mjs";
 import { Component, createRef, html } from "./preact.mjs";
 import {
   buildFields,
@@ -135,7 +136,7 @@ export class WorkerInspect extends Component {
       phase: "loading",
       detail: null,
       error: null,
-      mode: "table",
+      mode: loadPref("dashboardWorkerMode", ["table", "json"], "table"), // persisted (#658)
       tableEdits: {},
       editText: "",
       jsonError: null,
@@ -148,6 +149,11 @@ export class WorkerInspect extends Component {
   componentDidMount() {
     this.load();
     this.dialogRef.current?.showModal();
+  }
+
+  setMode(mode) {
+    savePref("dashboardWorkerMode", mode);
+    this.setState({ mode });
   }
 
   async load() {
@@ -255,9 +261,11 @@ export class WorkerInspect extends Component {
             <p class="text-muted text-xs">Writable keys: <span class="font-mono">${(detail.writable_keys || []).join(", ")}</span>.
                Prefilled with the last config applied from the dashboard — the rig's live feed doesn't expose these values.
                The rig validates and rolls back if the miner doesn't come back live.</p>
-            <div class="toggle-group mb-1">
-                <button class=${"btn-toggle" + (mode === "table" ? " active" : "")} onClick=${() => this.setState({ mode: "table" })}>Table</button>
-                <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} onClick=${() => this.setState({ mode: "json" })}>JSON</button>
+            <div class="toggle-group mb-1" role="group" aria-label="Worker config mode">
+                <button class=${"btn-toggle" + (mode === "table" ? " active" : "")} aria-pressed=${mode === "table"}
+                    title="View the config as a table" onClick=${() => this.setMode("table")}>Table</button>
+                <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} aria-pressed=${mode === "json"}
+                    title="View the raw config JSON" onClick=${() => this.setMode("json")}>JSON</button>
             </div>
             ${
               mode === "table"

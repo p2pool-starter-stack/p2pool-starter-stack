@@ -86,6 +86,41 @@ test('operational App renders the hero band and the headline cards', () => {
     assert.doesNotMatch(html, /Share In Window/);
 });
 
+test('toggle groups carry the ARIA affordances of the theme-switcher pattern (#657)', () => {
+    // The vnode walker serializes boolean true as a bare attribute and drops false, so a bare
+    // `aria-pressed` marks the pressed control (in the browser Preact writes true/false strings).
+    const html = renderApp({ ui: { ...UI, range: '1w' } });
+    // Range row: real buttons in a labelled group; the active preset is pressed and titled.
+    assert.match(html, /aria-label="Chart range"/);
+    assert.match(html, /class="btn-range active" aria-pressed title="Chart range: 1 Wk">1 Wk</);
+    // View toggle: labelled group; the active view's button is pressed.
+    assert.match(html, /aria-label="Dashboard view"/);
+    assert.match(html, /class="btn-toggle active" aria-pressed title="[^"]+">Advanced</);
+    // Topology mesh toggle explains itself without hovering the diagram.
+    assert.match(html, /class="topo-toggle" title="Container-to-container links inside the stack"/);
+});
+
+test('chart range buttons include All, active on the default full-history view (#655)', () => {
+    // Default UI state is range 'all' — without an All button no range reads as selected,
+    // and after picking a preset there is no way back to full history.
+    assert.match(renderApp(), /class="btn-range active"[^>]*>All</);
+    const weekly = renderApp({ ui: { ...UI, range: '1w' } });
+    assert.match(weekly, /class="btn-range active"[^>]*>1 Wk</);
+    assert.doesNotMatch(weekly, /class="btn-range active"[^>]*>All</);
+});
+
+test('chart legend renders a toggle for every layer, including the marker datasets (#652)', () => {
+    const html = renderApp();
+    for (const label of ['P2Pool (routed)', 'XvB (routed)', 'Shares', 'Events', 'Raffle wins']) {
+        assert.match(html, new RegExp(`legend-item[^>]*>.*?${label.replace(/[()]/g, '\\$&')}</button>`),
+            `missing legend toggle: ${label}`);
+    }
+    // A hidden marker layer renders its button in the off state, like the line series do.
+    const hidden = renderApp({ ui: { ...UI, series: { events: false } } });
+    assert.match(hidden, /class="legend-item off"[^>]*title="Show Events"/);
+    assert.match(hidden, /class="legend-item"[^>]*title="Hide Raffle wins"/);
+});
+
 test('operational App renders the remaining advanced cards', () => {
     const html = renderApp();
     assert.match(html, /Global P2Pool Stats/);
@@ -451,6 +486,15 @@ test('WorkersTable renders headers and a row per worker with status classes', ()
     assert.match(html, /status-ok/); // the online worker's row
     assert.match(html, /status-bad/); // the offline worker's row
     assert.match(html, /badge-ok">P2Pool/); // PoolBadge for a p2pool worker
+});
+
+test('WorkersTable marks the sorted column, visibly and via aria-sort (#656)', () => {
+    // No sort chosen (server order): no column claims a direction.
+    assert.doesNotMatch(renderApp(), /aria-sort/);
+    const asc = renderApp({ ui: { ...UI, sortIndex: 0, sortAsc: true } });
+    assert.match(asc, /<th[^>]*class="sorted"[^>]*aria-sort="ascending"[^>]*>Worker<span class="sort-arrow"> ▲<\/span>/);
+    const desc = renderApp({ ui: { ...UI, sortIndex: 0, sortAsc: false } });
+    assert.match(desc, /aria-sort="descending"[^>]*>Worker<span class="sort-arrow"> ▼<\/span>/);
 });
 
 test('WorkersTable with no workers shows the connect hint instead of a bare table (#385)', () => {

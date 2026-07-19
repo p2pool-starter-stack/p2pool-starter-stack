@@ -24,6 +24,7 @@ const RANGES = [
   ["24h", "24 Hr"],
   ["1w", "1 Wk"],
   ["1m", "1 Mo"],
+  ["all", "All"],
 ];
 
 // Hashrate-averaging windows for the chart toggle (#168): [param key, button label]. The keys match
@@ -48,6 +49,8 @@ const SERIES = [
   { key: "p2pool", label: "P2Pool (routed)", idx: 0, dot: "dot-p2pool" },
   { key: "xvb", label: "XvB (routed)", idx: 1, dot: "dot-xvb" },
   { key: "shares", label: "Shares", idx: 2, dot: "dot-shares" },
+  { key: "events", label: "Events", idx: 3, dot: "dot-events" },
+  { key: "raffle", label: "Raffle wins", idx: 4, dot: "dot-raffle" },
 ];
 
 // Smallest zoom window (ms) — guards against requesting a sub-sample slice (30s native cadence).
@@ -229,6 +232,7 @@ export class ChartCard extends Component {
             label: "Events",
             data: d.events || [],
             yAxisID: "events",
+            hidden: vis.events === false,
             pointStyle: "rectRot",
             pointRadius: 7,
             pointHoverRadius: 10,
@@ -243,6 +247,7 @@ export class ChartCard extends Component {
             label: "Raffle",
             data: d.raffle || [],
             yAxisID: "events",
+            hidden: vis.raffle === false,
             pointStyle: "star",
             pointRadius: 8,
             pointBorderWidth: 2,
@@ -385,15 +390,16 @@ export class ChartCard extends Component {
     const zoomed = !!props.window;
     return html`
         <div class="card">
-            <div class="chart-controls">
+            <div class="chart-controls" role="group" aria-label="Chart range">
                 <span class="text-muted text-small mr-1">Range:</span>
                 ${RANGES.map(
-                  ([r, label]) => html`<a href=${"?range=" + r}
+                  // Real buttons like the Avg/legend siblings (#657); the ?range= deep link
+                  // survives because setRange writes it via history.replaceState.
+                  ([r, label]) => html`<button type="button"
                     class=${"btn-range" + (!zoomed && props.range === r ? " active" : "")}
-                    onClick=${(e) => {
-                      e.preventDefault();
-                      props.onRange(r);
-                    }}>${label}</a>`,
+                    aria-pressed=${!zoomed && props.range === r}
+                    title=${"Chart range: " + label}
+                    onClick=${() => props.onRange(r)}>${label}</button>`,
                 )}
                 ${
                   zoomed

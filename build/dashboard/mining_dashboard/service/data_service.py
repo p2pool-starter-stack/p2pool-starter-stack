@@ -538,6 +538,11 @@ class DataService:
         # Restore persistent state from DB to prevent empty dashboard on service restart
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
+            # Derived state must not outlive its inputs across a restart (#664): `update` is a
+            # pure function of (running version, latest tag), and the running version may have
+            # JUST changed — the very upgrade the restored badge advertised. The checker
+            # recomputes it on its own cadence; never resurrect the pre-upgrade banner.
+            loaded_snapshot.pop("update", None)
             self.latest_data.update(loaded_snapshot)
             self.workers_rejected = bool(self.latest_data.get("workers_rejected", False))
             self.miner_released = bool(self.latest_data.get("miner_released", False))

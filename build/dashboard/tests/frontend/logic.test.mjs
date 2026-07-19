@@ -14,6 +14,7 @@ import {
     THEMES, THEME_ORDER, normalizeTheme,
     clampZoomWindow, fmtWindowDuration,
     SERIES_KEYS, normalizeSeries,
+    normalizeChoice, normalizeSort, loadPref, savePref,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
     parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare,
@@ -158,12 +159,40 @@ test('fmtWindowDuration: two coarsest units, trailing zeros dropped', () => {
 });
 
 test('normalizeSeries: defaults every series to visible, only explicit false hides', () => {
-    assert.deepEqual(normalizeSeries(null), { p2pool: true, xvb: true, shares: true });
-    assert.deepEqual(normalizeSeries({}), { p2pool: true, xvb: true, shares: true });
-    assert.deepEqual(normalizeSeries({ xvb: false }), { p2pool: true, xvb: false, shares: true });
+    const allOn = { p2pool: true, xvb: true, shares: true, events: true, raffle: true };
+    assert.deepEqual(normalizeSeries(null), allOn);
+    assert.deepEqual(normalizeSeries({}), allOn);
+    assert.deepEqual(normalizeSeries({ xvb: false }), { ...allOn, xvb: false });
+    // Marker datasets (#652) toggle like the line series.
+    assert.deepEqual(normalizeSeries({ events: false, raffle: false }), { ...allOn, events: false, raffle: false });
     // Garbage / stray keys are ignored; output is always the full key set.
     assert.deepEqual(Object.keys(normalizeSeries({ junk: 1 })).sort(), [...SERIES_KEYS].sort());
-    assert.deepEqual(normalizeSeries('nope'), { p2pool: true, xvb: true, shares: true });
+    assert.deepEqual(normalizeSeries('nope'), allOn);
+});
+
+// --- Issue #658: persisted single-choice UI preferences --------------------------------
+
+test('normalizeChoice: allowed values pass, anything else falls back', () => {
+    assert.equal(normalizeChoice('json', ['form', 'json'], 'form'), 'json');
+    assert.equal(normalizeChoice('garbage', ['form', 'json'], 'form'), 'form');
+    assert.equal(normalizeChoice(null, ['form', 'json'], 'form'), 'form');
+});
+
+test('normalizeSort: round-trips a valid choice, rejects garbage and stale columns', () => {
+    assert.deepEqual(normalizeSort('2:desc', 10), { sortIndex: 2, sortAsc: false });
+    assert.deepEqual(normalizeSort('0:asc', 10), { sortIndex: 0, sortAsc: true });
+    // A column index that no longer exists (column removed) → server order.
+    assert.deepEqual(normalizeSort('99:asc', 10), { sortIndex: null, sortAsc: true });
+    for (const bad of [null, '', 'x:asc', '1:up', '-1:asc']) {
+        assert.deepEqual(normalizeSort(bad, 10), { sortIndex: null, sortAsc: true }, `raw: ${bad}`);
+    }
+});
+
+test('loadPref/savePref: no localStorage (node) means fallback and no throw', () => {
+    // Under node --test there is no localStorage — the guards must make these safe, because
+    // components call them from constructors and the render tests import those components.
+    assert.equal(loadPref('anyKey', ['a', 'b'], 'a'), 'a');
+    assert.doesNotThrow(() => savePref('anyKey', 'b'));
 });
 
 // --- Issue #12: expected-earnings what-if --------------------------------------------
