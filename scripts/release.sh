@@ -2,7 +2,7 @@
 #
 # Pithead release pipeline (#44) — run from the private build/test server.
 #
-# Implements the documented stage -> smoke-test -> promote-by-digest flow (docs/releasing.md):
+# Implements the documented stage -> smoke-test -> promote-by-digest flow (docs/dev/releasing.md):
 #
 #   1. Preflight      clean tree, read VERSION, ensure the tag isn't already released, resolve pins
 #   2. Test gate      `make test` (+ the #54 integration matrix, unless skipped) — blocking
@@ -211,7 +211,7 @@ check_release_toolchain() {
         command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
     done
     if [ "${#missing[@]}" -gt 0 ]; then
-        die "Missing lint/test tool(s): ${missing[*]} — the release box needs the lint toolchain before the test gate can run. Provision it (apt + the pinned uv installer): see docs/release-server.md § Provisioning the server. (Or --skip-tests to bypass the gate — NOT recommended.)"
+        die "Missing lint/test tool(s): ${missing[*]} — the release box needs the lint toolchain before the test gate can run. Provision it (apt + the pinned uv installer): see docs/dev/release-server.md § Provisioning the server. (Or --skip-tests to bypass the gate — NOT recommended.)"
     fi
     ok "Lint/test toolchain present (${LINT_TOOLCHAIN[*]})."
 }
@@ -241,7 +241,7 @@ preflight() {
             COSIGN_ENABLED=1
             ok "Release signing ON (cosign key + committed cosign.pub present)."
         else
-            warn "Release signing OFF — shipping digest-pinned images + bundle without cosign signatures (#376 is opt-in). Installs are protected by the pinned digests; to also sign, see docs/release-server.md § The release signing key."
+            warn "Release signing OFF — shipping digest-pinned images + bundle without cosign signatures (#376 is opt-in). Installs are protected by the pinned digests; to also sign, see docs/dev/release-server.md § The release signing key."
         fi
     fi
 

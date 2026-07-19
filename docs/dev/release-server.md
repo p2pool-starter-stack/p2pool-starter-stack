@@ -61,7 +61,7 @@ The safe rule: the keyed server only ever runs code you trust. Concretely:
   raw key files.
 
 This is how the workflow ships.
-[`.github/workflows/release-gate.yml`](../.github/workflows/release-gate.yml) runs only on
+[`.github/workflows/release-gate.yml`](../../.github/workflows/release-gate.yml) runs only on
 `workflow_dispatch` (and `push` to `main`) on a `[self-hosted, pithead-release]` runner, never
 automatically on a PR.
 
@@ -69,7 +69,7 @@ automatically on a PR.
 
 Target an LTS Ubuntu (22.04 / 24.04). One-time:
 
-1. Install Pithead and let it fully sync ([Getting Started](getting-started.md)): full Monero +
+1. Install Pithead and let it fully sync ([Getting Started](../getting-started.md)): full Monero +
    full Tari, all containers healthy, a worker (ideally two) mining. The synced
    `monero.data_dir` / `tari.data_dir` are the asset the harness reuses.
 2. Keep the active chain on fast storage (SSD/NVMe). monerod is random-I/O heavy, so the chain
@@ -98,7 +98,7 @@ owner-only, the dashboard is bound to localhost, and the backup/rollback net is 
 `node`/`npx`, and `uv`/`uvx`. A reimaged box loses these, so the release preflight
 ([#426](https://github.com/p2pool-starter-stack/pithead/issues/426)) stops early and names the
 missing tool rather than dying mid-gate. Restore them with the same pinned versions CI uses
-([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) — apt's `shellcheck`/`shfmt` are older
+([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) — apt's `shellcheck`/`shfmt` are older
 and reformat differently, so a version skew would fail `make lint` on the box for diffs the merge
 gate never saw:
 
@@ -190,7 +190,7 @@ covered by the fake mini-stack ([integration-testing](integration-testing.md)) p
 compose/config tests, which need no real chain. Supply the opposite-mode chain only to exercise
 it end-to-end, and build it on fast storage:
 
-- Pruned chain next to a full one? [`build-pruned-chain.sh`](../tests/integration/build-pruned-chain.sh)
+- Pruned chain next to a full one? [`build-pruned-chain.sh`](../../tests/integration/build-pruned-chain.sh)
   copies the LMDB consistently (brief monerod stop, then immediate restart) and prunes the copy,
   leaving the canonical chain untouched. Fetch `monero-blockchain-prune` at the same version as
   the running monerod and verify it against the hash the image pins (`build/monero/Dockerfile`
@@ -209,7 +209,7 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 > stays at the full-chain high-water mark (~250 GiB) with the freed space sitting as internal
 > free pages (Monero reuses them as the chain grows). To reclaim it you must rewrite the DB with
 > `monero-blockchain-prune --copy-pruned-database` (see
-> [`compact-chain.sh`](../tests/integration/compact-chain.sh)). It's slow (it copies every block
+> [`compact-chain.sh`](../../tests/integration/compact-chain.sh)). It's slow (it copies every block
 > over hours), though it reads through a snapshot so monerod keeps mining; you then swap the
 > compact copy in during a ~2 min window. The generic `mdb_copy -c` does not work: Monero ships a
 > patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest
@@ -264,7 +264,7 @@ Treat the box as production-sensitive. It holds keys and it's the thing that sig
   [#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): owner-only on this box,
   only its public half (`cosign.pub`) is committed.
 - Network. Firewall to least exposure: inbound SSH (key-only, no root login, fail2ban) and the
-  stratum port scoped to the LAN ([workers › firewall](workers.md#firewall)); the dashboard
+  stratum port scoped to the LAN ([workers › firewall](../workers.md#firewall)); the dashboard
   stays on localhost behind Caddy and the monerod RPC on localhost (both asserted by
   `--readiness`). Nothing else should be reachable from the internet.
 - Untrusted code. The runner only runs trusted code (see above). Prefer ephemeral/JIT runners;

@@ -66,7 +66,7 @@ A 1 TB NVMe holds the pruned bench with ~650 GB to spare, room for a full node a
 > onto it; mount the data dir by UUID via fstab (ext4, `noatime`, `nofail`) and keep the OS on a
 > separate disk. monerod then opens the ~266 GB pruned LMDB in seconds and the full integration
 > matrix runs green. Compaction to ~95 GB uses
-> [`compact-chain.sh`](../tests/integration/compact-chain.sh)
+> [`compact-chain.sh`](../../tests/integration/compact-chain.sh)
 > (`monero-blockchain-prune --copy-pruned-database`) — the chain is correctly pruned; the extra
 > size is reclaimable free-page bloat, not a full chain. Stock `mdb_copy -c` does not work: Monero
 > ships a patched LMDB and stock `mdb_copy` rejects the format (`MDB_VERSION_MISMATCH`). CoW

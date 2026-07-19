@@ -368,7 +368,7 @@ verify_release_images() {
         return 0
     fi
     command -v cosign >/dev/null 2>&1 ||
-        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull (#376). Install cosign (docs/releasing.md § Verifying a release) and re-run '$0'."
+        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull (#376). Install cosign (docs/dev/releasing.md § Verifying a release) and re-run '$0'."
     # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
@@ -766,7 +766,7 @@ doctor() {
     elif command -v cosign >/dev/null 2>&1; then
         dr_ok "cosign found — 'up' and 'upgrade' verify the release images against cosign.pub (#376/#452)."
     else
-        dr_warn "cosign.pub is present but cosign is not installed — 'up'/'upgrade' refuse to pull until it is (#376). Install: docs/releasing.md § Verifying a release."
+        dr_warn "cosign.pub is present but cosign is not installed — 'up'/'upgrade' refuse to pull until it is (#376). Install: docs/dev/releasing.md § Verifying a release."
     fi
 
     # --- Docker daemon ---
@@ -5287,7 +5287,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # #376: with a release key on disk the bundle WILL be verified below — so an install that can't
     # verify (cosign.pub present, cosign binary missing) is refused here, before the download.
     if [ -f cosign.pub ] && ! command -v cosign >/dev/null 2>&1; then
-        _upg_reject "cosign.pub is present but cosign is not installed on the host — refusing an unverified bundle (#376). Install cosign (docs/releasing.md § Verifying a release) and retry."
+        _upg_reject "cosign.pub is present but cosign is not installed on the host — refusing an unverified bundle (#376). Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
         return 0
     fi
     control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"

@@ -6,7 +6,7 @@ validated end-to-end here before release. This guide covers how to provision and
 substitute your own host, user, and paths throughout. The examples assume the host is reachable
 over SSH as `$BENCH_HOST`.
 
-See `docs/test-server-architecture.md` for the full architecture and how to stand a box up from
+See `docs/dev/test-server-architecture.md` for the full architecture and how to stand a box up from
 scratch.
 
 ## ⚠️ Golden rules
@@ -82,7 +82,7 @@ cd <checkout> && tests/integration/run.sh --local --dir "$PWD" --lifecycle
 ```
 
 Always start with `--check`/`--readiness`. Use `--safety-backup` for the destructive matrix so a
-failure rolls the box back (down → restore → up). See `docs/integration-testing.md`.
+failure rolls the box back (down → restore → up). See `docs/dev/integration-testing.md`.
 
 ## End-to-end coverage: validated live vs. gaps
 

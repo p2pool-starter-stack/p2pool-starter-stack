@@ -710,7 +710,7 @@ with nothing changed, and a swapped key inside a malicious bundle cannot vouch f
 `pithead upgrade` that follows verifies each image's signature the same way before pulling. An
 install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
 (over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
-picks up the key. See [Releasing › Signed releases](releasing.md#signed-releases).
+picks up the key. See [Releasing › Signed releases](dev/releasing.md#signed-releases).
 
 **Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
 v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates

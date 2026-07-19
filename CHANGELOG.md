@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pithead ships as **one product, one version** — the version lives in the top-level
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
-per the process in [`docs/releasing.md`](docs/releasing.md).
+per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
@@ -432,7 +432,7 @@ the regression test for the bug that withdrew 1.6.0.
   warns rather than blocks when `cosign.pub` is absent. The policy now says exactly that.
 
 - **Small accuracy fixes (#554).** `docs/monitoring.md` told operators to run `./pithead stop`
-  (the command is `down`); `docs/releasing.md` claimed `VERSION` is `1.0.3`; a compose comment
+  (the command is `down`); `docs/dev/releasing.md` claimed `VERSION` is `1.0.3`; a compose comment
   called the dashboard a Flask app (it is aiohttp).
 
 ### Testing
@@ -554,7 +554,7 @@ its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the 
   and asserts the whole `none`/`name`/`token` auth matrix (the #315 model), a wrong-token 401, and
   that the enriched `/1/summary` (rigforge#99 shape) parses through the real consumer — so a drift in
   either the auth handshake or the enriched-feed shape goes red in CI instead of only on a live rig.
-  `docs/testing-strategy.md` gains a per-flow tier map for the two-repo contract; the real-mining and
+  `docs/dev/testing-strategy.md` gains a per-flow tier map for the two-repo contract; the real-mining and
   real-proxy accept/reject legs stay tier-4 (documented, run on a bench rig).
 
 - **Energy & profit calculator on the dashboard (#260).** The Advanced-view earnings card gains an
@@ -927,7 +927,7 @@ its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the 
   can lack `shellcheck`/`shfmt`/`node`/`uv`; the release used to die about a minute in with a bare
   `shellcheck: not found` mid-gate. Preflight now verifies the tools the test gate needs are on PATH
   and fails fast, naming the missing tool and pointing at the provisioning steps in
-  `docs/release-server.md`, before anything is built.
+  `docs/dev/release-server.md`, before anything is built.
 - **`tests/integration/build-pruned-chain.sh`** no longer defaults `SRC_DIR` to a maintainer's
   personal path (baked in under the pre-rename repo name); it's now a required variable with a clear
   error (#373).
@@ -944,7 +944,7 @@ its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the 
   missing cosign binary aborts the upgrade with nothing pulled or restarted. Installs without
   `cosign.pub` (bundles up to v1.3.x) keep today's TLS-to-GitHub + tag-pinning behaviour with a
   loud warning, and `doctor` reports the verification state. See
-  [Releasing › Signed releases](docs/releasing.md#signed-releases).
+  [Releasing › Signed releases](docs/dev/releasing.md#signed-releases).
 - **Read-only root filesystems on every service (#377).** tor, monerod, tari, p2pool, xmrig-proxy
   and the dashboard now run with `read_only: true` like Caddy and the two socket proxies already
   did. Each service keeps exactly its verified write paths: the bind-mounted data dir plus a
@@ -1588,7 +1588,7 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   never fatal; `doctor` prints a ✓ when not exposed. A pure, unit-tested `is_public_ip` classifier
   handles the RFC1918 / CGNAT / ULA / link-local / loopback exclusions (IPv4 + IPv6).
 - A four-tier test strategy for simulating every runtime situation (#54), documented in
-  `docs/testing-strategy.md` with a full scenario catalog:
+  `docs/dev/testing-strategy.md` with a full scenario catalog:
   - **Live config-matrix suite** (`tests/integration/`, tier 4) that drives a real, synced
     server through the config matrix and asserts the stack behaves — containers healthy, nodes
     synced, miners mining, dashboard reading correct live state, `status` exit codes, secrets
@@ -1605,14 +1605,14 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
     ports) so it can run safely beside a live deployment.
   - New dashboard unit tests for the required-Tari sync gate, the #35-latch × #31-failover
     interaction, and simultaneous double outages.
-  - A generated **test inventory** (`docs/test-inventory.md`, `make test-inventory`) listing
+  - A generated **test inventory** (`docs/dev/test-inventory.md`, `make test-inventory`) listing
     every test/scenario across all suites, kept honest by a CI drift check.
   - A non-destructive **`--check`** mode for the live harness (assert the box's current state —
     no config change/apply/restore); the safe first run / ongoing health check. Validated with
     a 22/22 green run against a real synced, mining box, which calibrated the harness to trust
     monerod's own sync flag as the readiness gate, and `proxy_workers` for mining liveness
     (`stratum.conns` can read 0 while mining).
-  - A developer testing guide (`docs/testing-guide.md`): per-change recipes, conventions, and
+  - A developer testing guide (`docs/dev/testing-guide.md`): per-change recipes, conventions, and
     the calibration gotchas learned on real hardware.
   - Regression guards for past bugs/security fixes: extended the #90 hardening section of
     `tests/stack/test_compose.sh` with per-service least-privilege checks for the Docker socket
@@ -1624,7 +1624,7 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   - Release/validation-server tooling: a `--readiness` mode for the live harness (non-destructive
     assessment that a box is fit to be a release server — synced chains reusable, snapshot-capable
     filesystem, disk headroom, secrets owner-only, dashboard localhost-only), a
-    `docs/release-server.md` guide (why end-to-end validation needs a dedicated server vs. what
+    `docs/dev/release-server.md` guide (why end-to-end validation needs a dedicated server vs. what
     GitHub Actions runs free on every PR, the hardening checklist, and the **safe** self-hosted-
     runner setup), and a `release-gate.yml` workflow that runs the tier-4 matrix on a self-hosted
     runner only on trusted code (manual dispatch / push to main — never on a fork PR).
@@ -1667,9 +1667,9 @@ cd pithead && cp config.json.template config.json   # set your Monero + Tari pay
   the host IP to a subtitle, and a hero KPI band above the dashboard surfaces the headline
   numbers — total hashrate, shares in the PPLNS window, blocks found, XvB tier, and mining mode.
 - Release & versioning scaffold: top-level `VERSION` file (single source of truth),
-  this changelog, and `docs/releasing.md` documenting the release process. The
+  this changelog, and `docs/dev/releasing.md` documenting the release process. The
   GHCR publishing pipeline and `make release` / `pithead release` command are still
-  to come (see `docs/releasing.md`).
+  to come (see `docs/dev/releasing.md`).
 - `p2pool.stratum_bind` config option to choose which host interface the stratum port
   (`3333`) is published on (default `0.0.0.0`; set a LAN IP or `127.0.0.1` to narrow it).
 - Liveness healthcheck for the p2pool container (probes the stratum port), so a stalled

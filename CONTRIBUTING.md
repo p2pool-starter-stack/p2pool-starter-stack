@@ -60,8 +60,8 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    `make test-integration` (tier-4 live, against a real box; start with `--check`).
 
 4. Add or update tests for your change. Cover the *intent* (a behavior/contract), not just
-   the line. The [Testing Guide](docs/testing-guide.md) has per-change recipes; the
-   [Testing Strategy](docs/testing-strategy.md) explains the tiers.
+   the line. The [Testing Guide](docs/dev/testing-guide.md) has per-change recipes; the
+   [Testing Strategy](docs/dev/testing-strategy.md) explains the tiers.
 5. Update the docs in [`docs/`](docs/) (and the README, if relevant) for any
    user-facing change. To see what the suites cover, `make test-inventory` writes a
    generated (git-ignored) inventory you can read locally.
