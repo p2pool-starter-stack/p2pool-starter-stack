@@ -488,6 +488,18 @@ class TestInit:
         assert svc.latest_data["total_live_h15"] == 5000
         assert svc.latest_data["extra"] == "kept"
 
+    def test_restored_snapshot_never_resurrects_the_update_badge(self):
+        # #664: `update` is derived state — a pre-upgrade "new release available" restored after
+        # the very upgrade it advertised must be dropped; the checker recomputes on its cadence.
+        sm = MagicMock()
+        sm.load_snapshot.return_value = {
+            "total_live_h15": 5000,
+            "update": {"available": True, "latest": "v1.9.1", "url": "u"},
+        }
+        svc = DataService(sm, MagicMock(), MagicMock())
+        assert svc.latest_data.get("update") in (None, {})  # never the restored dict
+        assert svc.latest_data["total_live_h15"] == 5000  # the rest of the snapshot survives
+
     def test_ignores_non_dict_snapshot(self):
         sm = MagicMock()
         sm.load_snapshot.return_value = None
