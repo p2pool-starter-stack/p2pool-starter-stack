@@ -450,6 +450,15 @@ test('WorkersTable renders headers and a row per worker with status classes', ()
     assert.match(html, /badge-ok">P2Pool/); // PoolBadge for a p2pool worker
 });
 
+test('WorkersTable marks the sorted column, visibly and via aria-sort (#656)', () => {
+    // No sort chosen (server order): no column claims a direction.
+    assert.doesNotMatch(renderApp(), /aria-sort/);
+    const asc = renderApp({ ui: { ...UI, sortIndex: 0, sortAsc: true } });
+    assert.match(asc, /<th[^>]*class="sorted"[^>]*aria-sort="ascending"[^>]*>Worker<span class="sort-arrow"> ▲<\/span>/);
+    const desc = renderApp({ ui: { ...UI, sortIndex: 0, sortAsc: false } });
+    assert.match(desc, /aria-sort="descending"[^>]*>Worker<span class="sort-arrow"> ▼<\/span>/);
+});
+
 test('WorkersTable with no workers shows the connect hint instead of a bare table (#385)', () => {
     // The fixture's host_ip is "Unknown Host" — the hint must fall back to the docs placeholder.
     const s = clone();

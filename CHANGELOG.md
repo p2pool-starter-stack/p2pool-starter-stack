@@ -11,6 +11,12 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Workers table shows its sort state (#656).** The sorted column now carries a direction
+  arrow and `aria-sort`, and every header names its action on hover — before, clicking sorted
+  the rows with no indication of which column or direction was active.
+
 ## [1.9.1] - 2026-07-19
 
 ### Added

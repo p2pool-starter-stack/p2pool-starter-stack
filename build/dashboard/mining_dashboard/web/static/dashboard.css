@@ -362,6 +362,12 @@ th {
   text-transform: uppercase;
   cursor: pointer;
 }
+th.sorted {
+  color: var(--text);
+}
+.sort-arrow {
+  font-size: 0.6rem;
+}
 td {
   padding: 10px;
   border-bottom: 1px solid var(--border);

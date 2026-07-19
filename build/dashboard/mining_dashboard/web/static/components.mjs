@@ -774,7 +774,18 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
         <div class="table-scroll">
             <table id="workers-table">
                 <thead>
-                    <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
+                    <tr>${WORKER_COLUMNS.map(
+                      // Sorted column carries the direction, visibly (arrow) and for AT (aria-sort);
+                      // the title makes clickability discoverable without hovering rows (#656).
+                      (c, i) => html`<th onClick=${() => onSort(i)}
+                            class=${i === ui.sortIndex ? "sorted" : null}
+                            aria-sort=${i === ui.sortIndex ? (ui.sortAsc ? "ascending" : "descending") : null}
+                            title=${"Sort by " + c.label}>${c.label}${
+                              i === ui.sortIndex
+                                ? html`<span class="sort-arrow">${ui.sortAsc ? " ▲" : " ▼"}</span>`
+                                : ""
+                            }</th>`,
+                    )}</tr>
                 </thead>
                 <tbody id="workers-tbody">
                     ${rows.map(
