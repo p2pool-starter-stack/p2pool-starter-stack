@@ -47,7 +47,13 @@
         "y": 8100
       }
     ],
-    "raffle": [],
+    "raffle": [
+      {
+        "label": "XvB raffle win \u2014 donor_whale round at 4.20 MH/s",
+        "x": 1735689000000,
+        "y": 0.7
+      }
+    ],
     "shares": [
       {
         "c": 1,
@@ -289,7 +295,14 @@
     "eligible": false,
     "label": "No"
   },
-  "raffle_wins": [],
+  "raffle_wins": [
+    {
+      "hashrate": "4.20 MH/s",
+      "height": 3720833,
+      "tier": "donor_whale",
+      "time": "23:50:00"
+    }
+  ],
   "range": "all",
   "reject_pct_24h": "\u2014",
   "share_stats": [],

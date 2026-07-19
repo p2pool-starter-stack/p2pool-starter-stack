@@ -80,6 +80,17 @@ def _state_mgr():
         "estimates": {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9},
         "last_update": NOW,
     }
+    # One recorded XvB raffle win (inside the chart window) so the fixture carries both the
+    # chart's gold-star marker and the XvB card's wins-log row.
+    sm.get_raffle_wins.return_value = [
+        {
+            "ts": NOW - 600,
+            "hashrate": 4.2e6,
+            "height": 3720833,
+            "block_id": "0525a913e879",
+            "tier": "donor_whale",
+        }
+    ]
     sm.is_db_healthy.return_value = True
     return sm
 
