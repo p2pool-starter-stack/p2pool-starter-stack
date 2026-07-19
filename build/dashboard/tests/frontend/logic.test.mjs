@@ -158,12 +158,15 @@ test('fmtWindowDuration: two coarsest units, trailing zeros dropped', () => {
 });
 
 test('normalizeSeries: defaults every series to visible, only explicit false hides', () => {
-    assert.deepEqual(normalizeSeries(null), { p2pool: true, xvb: true, shares: true });
-    assert.deepEqual(normalizeSeries({}), { p2pool: true, xvb: true, shares: true });
-    assert.deepEqual(normalizeSeries({ xvb: false }), { p2pool: true, xvb: false, shares: true });
+    const allOn = { p2pool: true, xvb: true, shares: true, events: true, raffle: true };
+    assert.deepEqual(normalizeSeries(null), allOn);
+    assert.deepEqual(normalizeSeries({}), allOn);
+    assert.deepEqual(normalizeSeries({ xvb: false }), { ...allOn, xvb: false });
+    // Marker datasets (#652) toggle like the line series.
+    assert.deepEqual(normalizeSeries({ events: false, raffle: false }), { ...allOn, events: false, raffle: false });
     // Garbage / stray keys are ignored; output is always the full key set.
     assert.deepEqual(Object.keys(normalizeSeries({ junk: 1 })).sort(), [...SERIES_KEYS].sort());
-    assert.deepEqual(normalizeSeries('nope'), { p2pool: true, xvb: true, shares: true });
+    assert.deepEqual(normalizeSeries('nope'), allOn);
 });
 
 // --- Issue #12: expected-earnings what-if --------------------------------------------
