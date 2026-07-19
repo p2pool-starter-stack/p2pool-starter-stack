@@ -41,7 +41,7 @@ function loadSeries() {
 const ui = {
   range: new URL(location.href).searchParams.get("range") || "all",
   window: windowFromUrl(), // {from,to} epoch-s when zoomed, else null
-  series: loadSeries(), // {p2pool, xvb, shares} booleans (Issue #47)
+  series: loadSeries(), // one boolean per SERIES_KEYS entry (Issue #47)
   // Hashrate-averaging window the chart plots (#168); persisted, default 10m (today's series).
   avg: normalizeAvgWindow(localStorage.getItem("dashboardAvgWindow")),
   sortIndex: null,

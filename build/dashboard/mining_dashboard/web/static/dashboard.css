@@ -584,6 +584,13 @@ button.upgrade-btn {
 .dot-shares {
   background: var(--bad);
 }
+.dot-events {
+  /* Half loss (warn), half recovery (ok) — the diamond markers carry both colours. */
+  background: linear-gradient(90deg, var(--warn) 50%, var(--ok) 50%);
+}
+.dot-raffle {
+  background: var(--warn);
+}
 
 /* View Toggle */
 .view-controls {

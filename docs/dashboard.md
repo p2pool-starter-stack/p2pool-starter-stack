@@ -93,6 +93,9 @@ When a newer Pithead release is out, a clickable `New release vX.Y.Z available â
 to the version badge, linking to the GitHub release. The badge itself never updates anything. The
 check is on by default and routed over Tor, so it does not reveal your IP. Turn it off with
 `dashboard.check_for_updates: false` (see [Configuration](configuration.md#configuration-reference)).
+The badge can never name the version you are already running: it is suppressed whenever the
+advertised release is not strictly newer than the running one, so right after an upgrade it clears
+with the restart instead of lingering until the next hourly check (#664).
 
 With the [control channel](#configuration-view) enabled, an **Upgrade to vX.Y.Z** button appears
 beside the badge â€” see [Upgrading from the dashboard](#upgrading-from-the-dashboard). Without it,
@@ -160,8 +163,12 @@ progress until it catches up and merge-mining resumes.
 
 ### Hashrate chart
 
-A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch without
-reloading. Shaded bands show the P2Pool/XvB split over time.
+A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo / all history) that
+switch without reloading. Shaded bands show the P2Pool/XvB split over time.
+
+Every layer on the chart has a legend button that shows or hides it: the two routed bands, the
+share triangles, the event diamonds, and the raffle stars. A hidden layer stays hidden across
+reloads.
 
 Diamond markers along the top flag **hashrate events** (#99): an amber one where total hashrate
 dropped sharply and stayed down (an outage or a rig gone dark), a green one where it recovered.

@@ -51,6 +51,7 @@ from mining_dashboard.web.views import (
     host_display_addr,
     parse_window,
     recent_wallet_change,
+    visible_update,
 )
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
@@ -1737,11 +1738,52 @@ class TestBuildState:
         assert isinstance(v["dev"], bool)
 
     def test_update_section_surfaced_and_defaults_none(self):
-        # The new-release badge (#224) rides on the shared payload; the checker's result passes
-        # through verbatim, and absence defaults to None (no badge).
+        # The new-release badge (#224) rides on the shared payload; a genuinely-newer result
+        # passes through, and absence defaults to None (no badge).
         upd = {"available": True, "latest": "v9.9.9", "url": "https://x/releases/tag/v9.9.9"}
         assert build_state(_data(update=upd), _state_mgr(), "all")["update"] == upd
         assert build_state(_data(), _state_mgr(), "all")["update"] is None
+
+    def test_update_badge_never_advertises_the_running_version(self, monkeypatch):
+        # #664: a restored snapshot can resurrect a pre-upgrade badge right after the upgrade it
+        # advertised — "new release X available" while RUNNING X must be unrepresentable at the
+        # render seam, whatever put it in the state.
+        monkeypatch.setattr(
+            "mining_dashboard.web.views.resolve_version",
+            lambda: {"text": "v1.9.1", "title": "Release build", "dev": False},
+        )
+        stale = {"available": True, "latest": "v1.9.1", "url": "https://x/releases/tag/v1.9.1"}
+        assert build_state(_data(update=stale), _state_mgr(), "all")["update"] is None
+        older = {"available": True, "latest": "v1.8.0", "url": "https://x/releases/tag/v1.8.0"}
+        assert build_state(_data(update=older), _state_mgr(), "all")["update"] is None
+        newer = {"available": True, "latest": "v2.0.0", "url": "https://x/releases/tag/v2.0.0"}
+        assert build_state(_data(update=newer), _state_mgr(), "all")["update"] == newer
+
+
+class TestVisibleUpdate:
+    """#664: the pure self-consistency guard on the new-release badge."""
+
+    UPD = {"available": True, "latest": "v1.9.1", "url": "https://x/releases/tag/v1.9.1"}
+
+    def test_suppressed_when_latest_equals_running(self):
+        assert visible_update(self.UPD, running="v1.9.1") is None
+        assert visible_update(self.UPD, running="1.9.1") is None  # bare VERSION form too
+
+    def test_suppressed_when_latest_is_older_than_running(self):
+        assert visible_update(self.UPD, running="v1.10.0") is None
+
+    def test_kept_when_latest_is_newer(self):
+        assert visible_update(self.UPD, running="v1.9.0") == self.UPD
+
+    def test_dev_build_keeps_the_badge(self):
+        # An unparseable running version (dev build) cannot prove the badge stale — keep it,
+        # mirroring compute_update's own semantics.
+        assert visible_update(self.UPD, running="pithead@main abc1234 (dev)") == self.UPD
+
+    def test_none_and_malformed_latest_pass_through(self):
+        assert visible_update(None, running="v1.9.1") is None
+        odd = {"available": True, "latest": "nightly", "url": "u"}
+        assert visible_update(odd, running="v1.9.1") == odd  # unprovable -> unchanged
 
     def test_is_json_serializable(self):
         json.dumps(build_state(_data(), _state_mgr(), "all"))
