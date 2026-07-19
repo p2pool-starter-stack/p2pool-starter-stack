@@ -6,7 +6,14 @@
 // the simple/advanced view — plus the latest data snapshot and connection status.
 
 import { App } from "./components.mjs";
-import { normalizeAvgWindow, normalizeSeries, normalizeTheme } from "./logic.mjs";
+import {
+  normalizeAvgWindow,
+  normalizeSeries,
+  normalizeSort,
+  normalizeTheme,
+  savePref,
+  WORKER_COLUMNS,
+} from "./logic.mjs";
 import { html, render } from "./preact.mjs";
 
 const root = document.getElementById("app");
@@ -44,8 +51,8 @@ const ui = {
   series: loadSeries(), // one boolean per SERIES_KEYS entry (Issue #47)
   // Hashrate-averaging window the chart plots (#168); persisted, default 10m (today's series).
   avg: normalizeAvgWindow(localStorage.getItem("dashboardAvgWindow")),
-  sortIndex: null,
-  sortAsc: true,
+  // Workers-table sort (#658); persisted like the other view preferences.
+  ...normalizeSort(localStorage.getItem("dashboardSort"), WORKER_COLUMNS.length),
   view: ["advanced", "config"].includes(localStorage.getItem("dashboardView"))
     ? localStorage.getItem("dashboardView")
     : "simple",
@@ -143,6 +150,7 @@ function resetZoom() {
 function onSort(idx) {
   ui.sortAsc = ui.sortIndex === idx ? !ui.sortAsc : true;
   ui.sortIndex = idx;
+  savePref("dashboardSort", `${idx}:${ui.sortAsc ? "asc" : "desc"}`);
   rerender(); // client-side sort only, no fetch
 }
 

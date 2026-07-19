@@ -20,6 +20,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **UI preferences now all survive a reload (#658).** The Workers-table sort, earnings tab,
+  Form/JSON and Table/JSON editor modes, and the topology mesh toggle join the already-persisted
+  theme, view, averaging window and series toggles. A saved choice that becomes invalid (a
+  removed column, an unavailable tab) falls back to the default.
 - **Every toggle control now announces itself like the theme switcher (#657).** The chart
   Range row becomes real buttons in a labelled group (it was bare links), and the view
   toggle, Form/JSON and Table/JSON editors, and the topology mesh button gain
