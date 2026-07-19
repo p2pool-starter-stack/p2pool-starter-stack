@@ -18,6 +18,7 @@ import {
     heroKpis, raffleCls,
     parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare,
     computeEnergy, formatFiat, formatUnit,
+    coinFiat, formatFiatPrice, priceSourceLabel,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
     egressRoute, boxAnchor,
@@ -532,6 +533,50 @@ test('computeEnergy: only xmr_price set -> P2Pool-only net, includesTari false',
     // gross = 0.1*150 = 15 (Tari excluded); cost = 4.8; net = 10.2
     assert.ok(Math.abs(en.netDay - 10.2) < 1e-9);
     assert.equal(en.includesTari, false);
+});
+
+// --- Fiat estimates + price provenance (#520 price feed) ---------------------------------
+
+test('coinFiat: multiplies only when both estimate and positive price exist', () => {
+    assert.equal(coinFiat(0.1, 150), 15);
+    assert.equal(coinFiat(null, 150), null);   // no estimate -> no fiat row
+    assert.equal(coinFiat(0.1, 0), null);      // unset price -> no fiat row
+    assert.equal(coinFiat(0.1, undefined), null);
+});
+
+test('formatFiatPrice: scales decimals so a tiny XTM price never reads 0.00', () => {
+    assert.equal(formatFiatPrice(333.97, 'USD'), 'USD 333.97');
+    assert.equal(formatFiatPrice(0.0004, 'USD'), 'USD 0.000400');
+    assert.equal(formatFiatPrice(0.0521, 'EUR'), 'EUR 0.0521');
+    assert.equal(formatFiatPrice(0, 'USD'), '—');   // unset price
+});
+
+test('priceSourceLabel: live feed states source and age', () => {
+    const label = priceSourceLabel({
+        xmr_price: 333.97, tari_price: 0.0004, currency: 'USD',
+        price_source: { feed: true, live: true, age_sec: 720 },
+    });
+    assert.match(label, /CoinGecko over Tor/);
+    assert.match(label, /12m ago/);
+});
+
+test('priceSourceLabel: feed waiting vs static vs nothing to attribute', () => {
+    // Feed on, first fetch pending -> says the static values still stand.
+    assert.match(
+        priceSourceLabel({ xmr_price: 150, tari_price: 0, price_source: { feed: true, live: false } }),
+        /waiting.*static/,
+    );
+    // Feed off with a static price -> attributed to config.json.
+    assert.match(
+        priceSourceLabel({ xmr_price: 150, tari_price: 0, price_source: { feed: false, live: false } }),
+        /static, set in config\.json/,
+    );
+    // No prices, no feed -> null (no fiat figures exist, nothing to attribute).
+    assert.equal(
+        priceSourceLabel({ xmr_price: 0, tari_price: 0, price_source: { feed: false, live: false } }),
+        null,
+    );
+    assert.equal(priceSourceLabel(null), null);
 });
 
 test('computeEnergy: tari_price set but no xmr_price -> no net at all (xmr_price is the base gate)', () => {

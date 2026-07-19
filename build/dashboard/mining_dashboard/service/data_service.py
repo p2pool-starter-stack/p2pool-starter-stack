@@ -38,6 +38,7 @@ from mining_dashboard.collector.system import (
 from mining_dashboard.config.config import (
     CHECK_FOR_UPDATES,
     CLEARNET_STATE_DIR,
+    DASHBOARD_ENERGY,
     ENABLE_XVB,
     GITHUB_RELEASES_API,
     HASHRATE_DROP_MINUTES,
@@ -71,6 +72,7 @@ from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.service.node_health import NodeHealthMonitor
+from mining_dashboard.service.price_feed import CoinGeckoClient, PriceFeed
 from mining_dashboard.service.telegram_commands import format_daily_summary
 from mining_dashboard.service.tor_heal import TorEgressHealer
 from mining_dashboard.service.update_checker import GitHubReleaseClient, UpdateChecker
@@ -416,6 +418,12 @@ class DataService:
             (os.environ.get("PITHEAD_VERSION") or "").strip(),
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
+        )
+        # Live XMR/XTM price feed (#520's auto half): off unless dashboard.energy.price_feed is
+        # set. Same Tor SOCKS route as the update check — CoinGecko only ever sees a Tor exit.
+        self.price_feed = PriceFeed(
+            CoinGeckoClient(DASHBOARD_ENERGY["currency"], TOR_SOCKS_PROXY),
+            enabled=DASHBOARD_ENERGY["price_feed"],
         )
         # Share-health delta baseline (#116): the previous poll's cumulative proxy /summary
         # totals; None until the first poll seeds it (and again after a counter reset).
@@ -773,6 +781,15 @@ class DataService:
                 await asyncio.to_thread(
                     self.state_manager.update_xvb_stats, registration_state="failing"
                 )
+
+    async def _sync_prices(self):
+        """Refresh the live XMR/XTM prices (#520) into ``latest_data["prices"]`` — a no-op with the
+        feed off. The PriceFeed self-throttles and keeps its last good result, so calling this every
+        poll is safe; ``build_energy`` swaps the result in for the static config prices."""
+        if self.price_feed.enabled:
+            self.latest_data["prices"] = await asyncio.to_thread(
+                self.price_feed.maybe_fetch, time.time()
+            )
 
     async def _sync_payouts(self):
         """Confirm on-chain payouts from the view-only wallet-rpc (#381), throttled by the caller.
@@ -1313,6 +1330,12 @@ class DataService:
                         self.latest_data["update"] = await asyncio.to_thread(
                             self.update_checker.maybe_check, time.time()
                         )
+
+                    # 9. Live XMR/XTM prices over Tor (#520) — ONLY when dashboard.energy.price_feed
+                    # is set (default off, so the appliance never dials CoinGecko unbidden). The
+                    # feed self-throttles (15 min) and keeps the last good prices on failure;
+                    # surfaced as state.energy price fields via build_energy.
+                    await self._sync_prices()
 
                     iteration_count += 1
                 except Exception as e:

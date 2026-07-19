@@ -281,6 +281,41 @@ test('EarningsCard Energy tab keeps the P2Pool-only label when tari_price is set
     assert.doesNotMatch(html, /P2Pool \+ Tari, after power/);
 });
 
+test('EarningsCard grows fiat rows + a price provenance line once a price is known (#520)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8;
+    s.earnings.tari_available = true;
+    s.earnings.tari_coeff_day = 1e-6;
+    // No price anywhere → no fiat rows, no provenance line (nothing to attribute).
+    let html = renderApp({ state: s });
+    assert.doesNotMatch(html, /≈ \/ day/);
+    assert.doesNotMatch(html, /id="earnings-price-source"/);
+    // Static prices set → Monero + Tari tabs grow ≈-fiat rows, XvB gets its fiat mirror line,
+    // and the footer attributes the prices to config.json.
+    s.energy.xmr_price = 150;
+    s.energy.tari_price = 2;
+    html = renderApp({ state: s });
+    assert.match(html, /≈ \/ day/); // Monero tab fiat rows
+    assert.match(html, /≈ per Block/); // Tari tab fiat rows
+    assert.match(html, /id="xvb-fiat-line"/); // XvB tab fiat mirror
+    assert.match(html, /id="earnings-price-source"/);
+    assert.match(html, /USD 150\.00/); // the XMR price in use, stated
+    assert.match(html, /static, set in config\.json/);
+});
+
+test('EarningsCard provenance line reflects the live price feed (#520)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.energy.xmr_price = 333.97;
+    s.energy.tari_price = 0.0004;
+    s.energy.price_source = { feed: true, live: true, age_sec: 720 };
+    const html = renderApp({ state: s });
+    assert.match(html, /live from CoinGecko over Tor/);
+    assert.match(html, /12m ago/);
+    assert.match(html, /USD 0\.000400/); // tiny XTM price keeps its precision
+});
+
 test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
     const base = clone();
     base.earnings.available = true;
