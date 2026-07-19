@@ -5852,9 +5852,21 @@ control_run_pending() {
 provision_control_runner() {
     [ "$OS_TYPE" == "Linux" ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
-    local unit_dir="/etc/systemd/system"
+    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
     if [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ]; then
         if [ -e "$unit_dir/pithead-control.path" ] || [ -e "$unit_dir/pithead-control.service" ]; then
+            # The unit names are box-global but a box can hold several checkouts (release bench:
+            # live stack + e2e harness + bundle-smoke tmp dirs). Only remove units whose ExecStart
+            # points at THIS checkout — deleting a sibling's runner strands its dashboard control
+            # requests unprocessed (the editor hangs at "Previewing…" until that stack's next
+            # apply/upgrade reinstalls the units).
+            # -F: $PWD is a literal, not a regex — versioned dirs carry dots (pithead-v1.9.3),
+            # and a dot that matches "any char" could claim a sibling's unit as our own.
+            if [ -e "$unit_dir/pithead-control.service" ] &&
+                ! grep -qsF "ExecStart=$PWD/pithead control-run-pending" "$unit_dir/pithead-control.service"; then
+                log "Leaving the dashboard control runner units alone (#33) — they belong to another checkout."
+                return 0
+            fi
             log "Removing the dashboard control runner units (#33)..."
             sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
             sudo rm -f "$unit_dir/pithead-control.path" "$unit_dir/pithead-control.service"
@@ -5862,9 +5874,10 @@ provision_control_runner() {
         fi
         return 0
     fi
-    # Already installed for this checkout — keep the routine apply sudo-free.
-    if grep -qs "PathExistsGlob=$CONTROL_DIR/requests/\*.json" "$unit_dir/pithead-control.path" &&
-        grep -qs "ExecStart=$PWD/pithead control-run-pending" "$unit_dir/pithead-control.service"; then
+    # Already installed for this checkout — keep the routine apply sudo-free. (-F as above:
+    # both paths are literals, and the glob star must not read as a regex repeat.)
+    if grep -qsF "PathExistsGlob=$CONTROL_DIR/requests/*.json" "$unit_dir/pithead-control.path" &&
+        grep -qsF "ExecStart=$PWD/pithead control-run-pending" "$unit_dir/pithead-control.service"; then
         return 0
     fi
     log "Installing the dashboard control runner (systemd path unit, #33)..."

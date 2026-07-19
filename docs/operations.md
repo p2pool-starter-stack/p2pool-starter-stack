@@ -134,6 +134,11 @@ on, and remove them when it is off:
 - `pithead-control.service` — a root oneshot running `pithead control-run-pending` from the
   install directory. Fixed command, no parameters from the container.
 
+The unit names are global to the host, so removal is ownership-checked: a checkout with the flag
+off only removes units whose `ExecStart` points at itself. Another checkout on the same box (an
+e2e harness, a bundle smoke test) therefore cannot delete the live stack's runner and strand its
+queued requests.
+
 The runner dispatches exactly three actions: `apply --dry-run --porcelain` (preview), `apply -y`
 (commit), and a release upgrade — the dashboard's
 [Upgrade button](dashboard.md#upgrading-from-the-dashboard), for which the runner re-derives the
