@@ -17,7 +17,7 @@ mini-stack/    docker overlay running the real dashboard + docker-control vs the
 ```
 
 The live matrix here is tier 4 of the broader plan. See
-[`docs/testing-strategy.md`](../../docs/testing-strategy.md) for all four tiers and the full
+[`docs/dev/testing-strategy.md`](../../docs/dev/testing-strategy.md) for all four tiers and the full
 scenario catalog.
 
 Quick start:
@@ -34,4 +34,4 @@ make test-integration-selftest
 ```
 
 Full guide — provisioning the box, the safety model, the matrix, artifacts, and CI/release
-wiring — is in [`docs/integration-testing.md`](../../docs/integration-testing.md).
+wiring — is in [`docs/dev/integration-testing.md`](../../docs/dev/integration-testing.md).

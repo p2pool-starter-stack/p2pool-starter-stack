@@ -24,7 +24,7 @@
 # one at a time, not two stacks. That's why borrow→test→restore is a code/image swap, not a re-sync.
 #
 # Requires: SSH access to the test bench and the miner (keys, LAN reachable), and `jq` on both.
-# See tests/integration/testbench-README.md and docs/integration-testing.md.
+# See tests/integration/testbench-README.md and docs/dev/integration-testing.md.
 
 set -uo pipefail
 

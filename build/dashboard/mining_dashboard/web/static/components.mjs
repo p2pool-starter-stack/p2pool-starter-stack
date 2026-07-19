@@ -19,9 +19,11 @@ import {
   formatXmr,
   formatXtm,
   heroKpis,
+  loadPref,
   parseHashrate,
   priceSourceLabel,
   raffleCls,
+  savePref,
   sortWorkers,
   THEME_LABELS,
   THEME_ORDER,
@@ -45,7 +47,7 @@ const StatCard = ({ label, value, cls, span, title }) => html`
         <p class=${cls || ""}>${value}</p>
     </div>`;
 
-const SharesStat = ({ sw, label = "Share In Window" }) => html`
+const SharesStat = ({ sw, label = "Share in Window" }) => html`
     <div class="stat-card">
         <h5>${label}</h5>
         <p><span class=${sw.ok ? "status-ok" : "status-bad"}>${sw.count}</span></p>
@@ -492,10 +494,17 @@ class EarningsCard extends Component {
   constructor(props) {
     super(props);
     // `input` (what-if hashrate) is SHARED across tabs — it lives above the tab strip so switching
-    // tabs keeps the entered value. `tab` is the active earnings tab (Monero / Tari / XvB).
-    this.state = { input: null, tab: "monero" };
+    // tabs keeps the entered value. `tab` is the active earnings tab (Monero / Tari / XvB),
+    // persisted (#658); render() already falls back to monero when the saved tab isn't available.
+    this.state = {
+      input: null,
+      tab: loadPref("dashboardEarningsTab", ["monero", "tari", "xvb", "energy"], "monero"),
+    };
     this.onInput = (e) => this.setState({ input: e.target.value });
-    this.onTab = (tab) => this.setState({ tab });
+    this.onTab = (tab) => {
+      savePref("dashboardEarningsTab", tab);
+      this.setState({ tab });
+    };
   }
 
   render() {
@@ -774,7 +783,18 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
         <div class="table-scroll">
             <table id="workers-table">
                 <thead>
-                    <tr>${WORKER_COLUMNS.map((c, i) => html`<th onClick=${() => onSort(i)}>${c.label}</th>`)}</tr>
+                    <tr>${WORKER_COLUMNS.map(
+                      // Sorted column carries the direction, visibly (arrow) and for AT (aria-sort);
+                      // the title makes clickability discoverable without hovering rows (#656).
+                      (c, i) => html`<th onClick=${() => onSort(i)}
+                            class=${i === ui.sortIndex ? "sorted" : null}
+                            aria-sort=${i === ui.sortIndex ? (ui.sortAsc ? "ascending" : "descending") : null}
+                            title=${"Sort by " + c.label}>${c.label}${
+                              i === ui.sortIndex
+                                ? html`<span class="sort-arrow">${ui.sortAsc ? " ▲" : " ▼"}</span>`
+                                : ""
+                            }</th>`,
+                    )}</tr>
                 </thead>
                 <tbody id="workers-tbody">
                     ${rows.map(
@@ -897,10 +917,13 @@ function DashboardView({
   return html`
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
-            <div class="toggle-group">
-                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} onClick=${() => onView("simple")}>Simple</button>
-                <button class=${"btn-toggle" + (advanced ? " active" : "")} onClick=${() => onView("advanced")}>Advanced</button>
-                <button class=${"btn-toggle" + (configView ? " active" : "")} onClick=${() => onView("config")}>Configuration</button>
+            <div class="toggle-group" role="group" aria-label="Dashboard view">
+                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} aria-pressed=${!advanced && !configView}
+                    title="Chart, workers and the headline numbers" onClick=${() => onView("simple")}>Simple</button>
+                <button class=${"btn-toggle" + (advanced ? " active" : "")} aria-pressed=${advanced}
+                    title="Every stats card, calculators and diagnostics" onClick=${() => onView("advanced")}>Advanced</button>
+                <button class=${"btn-toggle" + (configView ? " active" : "")} aria-pressed=${configView}
+                    title="View or edit the stack configuration" onClick=${() => onView("config")}>Configuration</button>
             </div>
         </div>
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />

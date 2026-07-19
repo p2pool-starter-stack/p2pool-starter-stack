@@ -114,11 +114,11 @@ verify_release() {
     fi
     # A half state is a misconfiguration, not a pass — surface it.
     [ -f "$pub" ] ||
-        die "pithead.tar.gz.sig is published but no cosign.pub is committed — cannot anchor trust. Commit the release cosign.pub (docs/releasing.md § Signed releases)."
+        die "pithead.tar.gz.sig is published but no cosign.pub is committed — cannot anchor trust. Commit the release cosign.pub (docs/dev/releasing.md § Signed releases)."
     [ "$SIG_PUBLISHED" -eq 1 ] ||
         die "cosign.pub is committed but release $TAG published no pithead.tar.gz.sig — it was cut with signing off, so no install can verify the bundle (#376). Re-cut with COSIGN_KEY set."
     command -v cosign >/dev/null 2>&1 ||
-        die "cosign is not installed — cannot verify a signed release. Install it: docs/release-server.md § The release signing key."
+        die "cosign is not installed — cannot verify a signed release. Install it: docs/dev/release-server.md § The release signing key."
     SIGNED=1
 
     # 1. A good signature passes.
@@ -266,7 +266,7 @@ smoke_upgrade() {
         '{id:$id, action:"upgrade", actor:$a, version:$v}' >"$spool/requests/$id.json"
     ok "Enqueued upgrade intent $id ($TAG) into the control spool."
 
-    # Drive the runner exactly as the systemd path unit does (docs/releasing.md documents the manual
+    # Drive the runner exactly as the systemd path unit does (docs/dev/releasing.md documents the manual
     # `control-run-pending` drain).
     (cd "$dir" && ./pithead control-run-pending) || die "control-run-pending failed — see the output above."
 

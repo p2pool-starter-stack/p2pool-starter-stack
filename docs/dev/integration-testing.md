@@ -13,11 +13,11 @@ real `apply → sync-gate → mine → status` flow works on a real host. This s
 > This live matrix is tier 4 of a four-tier plan. The runtime situations a healthy box can't
 > show (cold sync, node-down, unhealthy containers, XvB tiers) are simulated more cheaply at
 > lower tiers: unit tests, a client contract test against controllable fakes
-> ([`tests/integration/fakes/`](../tests/integration/fakes/)), and a fake-daemon docker
-> mini-stack ([`tests/integration/mini-stack/`](../tests/integration/mini-stack/)). See
+> ([`tests/integration/fakes/`](../../tests/integration/fakes/)), and a fake-daemon docker
+> mini-stack ([`tests/integration/mini-stack/`](../../tests/integration/mini-stack/)). See
 > [Testing Strategy](testing-strategy.md) for the full picture and scenario catalog.
 
-The suite lives under [`tests/integration/`](../tests/integration/):
+The suite lives under [`tests/integration/`](../../tests/integration/):
 
 | File | Role |
 |---|---|
@@ -74,7 +74,7 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
 
 A one-time setup. Target the Ubuntu LTS releases the stack supports (22.04 / 24.04).
 
-1. Install and deploy Pithead normally (see [Getting Started](getting-started.md)) and let it
+1. Install and deploy Pithead normally (see [Getting Started](../getting-started.md)) and let it
    fully sync. You want the box in steady state: all containers healthy, Monero + Tari synced,
    and at least one miner (ideally two) connected and submitting shares.
 2. Reusable synced data. The synced `monero.data_dir` and `tari.data_dir` are reused across
@@ -114,7 +114,7 @@ tests/integration/run.sh --host miner@10.0.0.5 --scenario remote-main-secure-tar
 # Cover the OPPOSITE prune mode. The box mines one mode against its live chain; the other is
 # skipped unless you supply a chain for it (it's otherwise covered by the fake mini-stack). A
 # pruned box supplies a full chain; a full box supplies a pruned one (build one with
-# tests/integration/build-pruned-chain.sh). See docs/release-server.md → prune-axis recipe.
+# tests/integration/build-pruned-chain.sh). See docs/dev/release-server.md → prune-axis recipe.
 tests/integration/run.sh --host miner@10.0.0.5 --full-data-dir /srv/monero-full
 ```
 
@@ -148,7 +148,7 @@ The runner exits non-zero if any assertion failed.
 
 ## One-command branch e2e (`e2e.sh`)
 
-`run.sh` assumes a stack is already deployed on the box. [`tests/integration/e2e.sh`](../tests/integration/e2e.sh)
+`run.sh` assumes a stack is already deployed on the box. [`tests/integration/e2e.sh`](../../tests/integration/e2e.sh)
 is the wrapper that does the whole thing for a branch against the live test bench in one command:
 deploy, borrow a real miner, run the matrix, and put everything back.
 
@@ -191,7 +191,7 @@ restarts reload the existing chain and re-confirm the tip in seconds. `check` is
 hardening + `--subnet`, plus `--rigforge-control` when a rig is borrowed, all under `--safety-backup`
 auto-rollback) for a pre-release tier-4 gate. `--keep` leaves it deployed for
 inspection (skips the restore). Requires SSH access to the test bench and the miner; see the
-[testbench README](../tests/integration/testbench-README.md).
+[testbench README](../../tests/integration/testbench-README.md).
 
 ---
 

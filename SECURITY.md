@@ -49,7 +49,7 @@ The stack's defaults:
   unverified rather than blocking the pull — the digest pins above are the actual protection, not
   a signature. Limits: a compromise of the release box itself, which would hold the signing key,
   is outside what a signature can prove even once signing is on. See
-  [Releasing › Signed releases](docs/releasing.md#signed-releases) for the verification mechanics.
+  [Releasing › Signed releases](docs/dev/releasing.md#signed-releases) for the verification mechanics.
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.

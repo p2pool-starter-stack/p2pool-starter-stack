@@ -68,7 +68,10 @@ Once both nodes are synced, the dashboard shows the operational view.
 </picture>
 
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
-position, the worker-table sort column, and the chart stay put between updates. A poll that fails —
+position, the worker-table sort column, and the chart stay put between updates. View preferences —
+theme, Simple/Advanced view, the chart's averaging window and series toggles, the worker-table
+sort, the earnings tab, the Form/JSON editor modes, and the topology mesh toggle — are also
+remembered across reloads. A poll that fails —
 or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
 timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
 successful refresh.
@@ -93,6 +96,9 @@ When a newer Pithead release is out, a clickable `New release vX.Y.Z available �
 to the version badge, linking to the GitHub release. The badge itself never updates anything. The
 check is on by default and routed over Tor, so it does not reveal your IP. Turn it off with
 `dashboard.check_for_updates: false` (see [Configuration](configuration.md#configuration-reference)).
+The badge can never name the version you are already running: it is suppressed whenever the
+advertised release is not strictly newer than the running one, so right after an upgrade it clears
+with the restart instead of lingering until the next hourly check (#664).
 
 With the [control channel](#configuration-view) enabled, an **Upgrade to vX.Y.Z** button appears
 beside the badge — see [Upgrading from the dashboard](#upgrading-from-the-dashboard). Without it,
@@ -160,8 +166,12 @@ progress until it catches up and merge-mining resumes.
 
 ### Hashrate chart
 
-A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch without
-reloading. Shaded bands show the P2Pool/XvB split over time.
+A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo / all history) that
+switch without reloading. Shaded bands show the P2Pool/XvB split over time.
+
+Every layer on the chart has a legend button that shows or hides it: the two routed bands, the
+share triangles, the event diamonds, and the raffle stars. A hidden layer stays hidden across
+reloads.
 
 Diamond markers along the top flag **hashrate events** (#99): an amber one where total hashrate
 dropped sharply and stayed down (an outage or a rig gone dark), a green one where it recovered.
@@ -194,18 +204,18 @@ The summary panel pulls the key numbers together:
 
 | Field | Meaning |
 |---|---|
-| **Mining Mode** | What the stack is routing hashrate to right now (e.g. P2Pool, XvB, or a split). |
 | **Total Hashrate** | Your combined hashrate across all workers. |
+| **Mining Mode** | What the stack is routing hashrate to right now (e.g. P2Pool, XvB, or a split). |
 | **Workers Alive** | How many rigs are connected and online right now. |
-| **Share in Window** | Your shares in the current P2Pool PPLNS window. |
+| **Current Tier** | The XvB tier you're currently holding, the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
 | **Raffle Eligible** | **Yes** only when you're set up to both *win* and *collect* an XvB payout: you're donating at least the **donor tier** (1 kH/s on XvB's *credited* 1h **and** 24h averages, the same threshold as **Current Tier**) **and** you hold a P2Pool PPLNS share (XvB's "VIP" gate; without it a win is skipped and you take a fail). Reads **No** when donating but a gate is unmet, and **N/A (XvB off)** when XvB is disabled. Intentionally stricter than XvB's bare "VIP = just a share" so a green Yes means a win is paid. |
-| **Last Share** | Time since your last accepted share. |
+| **Share in Window** | Your shares in the current P2Pool PPLNS window. |
+| **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
 | **P2Pool 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually routed to P2Pool. |
 | **XvB 1h / 24h (routed)** | Time-weighted average hashrate the proxy actually **routed** to XvB. (The XvB-API *credited* figure, XvB's definitive record, appears in the **Advanced** view's *XvB Donation Stats* card.) |
-| **Current Tier** | The XvB tier you're currently holding, the one cleared by the **lower of your credited 1h and 24h** donation averages, so a recent hashrate drop shows up right away. |
-| **Target Tier** | The tier the engine is aiming for (from `xvb.donation_level`). If your hashrate can't sustain an explicitly chosen tier, a **⚠ Hashrate low for tier** badge appears. |
+| **Last Share** | Time since your last accepted share. |
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
-| **Wallets** | Your configured Monero and Tari payout addresses. |
+| **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
 ### Workers Alive
 
@@ -231,8 +241,8 @@ offline. Point the rig's descriptor at the enriched feed to turn this on — see
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
 rejected count — a rig submitting stale or bad shares (bad overclock, flaky network, clock drift)
-rather than earning. Every column is sortable; click **Rejected** to float the worst offenders to the
-top. Shares are cumulative since the proxy last started, so a brief early-run blip clears as good
+rather than earning. Every column is sortable — the sorted column shows a direction arrow; click
+**Rejected** to float the worst offenders to the top. Shares are cumulative since the proxy last started, so a brief early-run blip clears as good
 shares accumulate.
 
 Below the table, a **Proxy totals** line sums the stack's share health as reported by xmrig-proxy:
@@ -700,7 +710,7 @@ with nothing changed, and a swapped key inside a malicious bundle cannot vouch f
 `pithead upgrade` that follows verifies each image's signature the same way before pulling. An
 install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
 (over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
-picks up the key. See [Releasing › Signed releases](releasing.md#signed-releases).
+picks up the key. See [Releasing › Signed releases](dev/releasing.md#signed-releases).
 
 **Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
 v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates

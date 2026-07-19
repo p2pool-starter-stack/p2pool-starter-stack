@@ -15,7 +15,7 @@
 #   ./run.sh --local             [--dir /path/to/stack] [options]
 #
 # Read-only against the canonical chain data dirs; safe to run against the live box. See
-# docs/integration-testing.md for provisioning, the safety model, and CI/release wiring.
+# docs/dev/integration-testing.md for provisioning, the safety model, and CI/release wiring.
 #
 set -uo pipefail # NOT -e: we deliberately continue-on-error to collect the whole matrix.
 

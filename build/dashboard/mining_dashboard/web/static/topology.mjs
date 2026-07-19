@@ -6,7 +6,7 @@
 // view stays focused on what crosses the trust boundary. Geometry is pure (boxAnchor, logic.mjs);
 // this file is presentation only — it carries no routing logic of its own (the #61 principle).
 
-import { boxAnchor } from "./logic.mjs";
+import { boxAnchor, loadPref, savePref } from "./logic.mjs";
 import { Component, html } from "./preact.mjs";
 
 // Fixed layout — the stack is a known, fixed set of components, so positions are hand-placed
@@ -67,7 +67,8 @@ export function edgePath(e, a, b) {
 export class StackTopology extends Component {
   constructor(props) {
     super(props);
-    this.state = { internal: false };
+    // Mesh visibility is a persisted preference (#658), stored as "1"/"0".
+    this.state = { internal: loadPref("dashboardTopoMesh", ["1", "0"], "0") === "1" };
   }
 
   render({ topology }, { internal }) {
@@ -83,7 +84,12 @@ export class StackTopology extends Component {
           <span class="topo-legend"><i class="topo-sw" style="background:var(--ok)"></i>Tor</span>
           <span class="topo-legend"><i class="topo-sw" style="background:var(--bad)"></i>Clearnet</span>
           <span class="topo-legend"><i class="topo-sw" style="background:var(--text-muted)"></i>Local / LAN</span>
-          <button class="topo-toggle" onClick=${() => this.setState({ internal: !internal })}>
+          <button class="topo-toggle" aria-pressed=${internal}
+            title="Container-to-container links inside the stack"
+            onClick=${() => {
+              savePref("dashboardTopoMesh", internal ? "0" : "1");
+              this.setState({ internal: !internal });
+            }}>
             ${internal ? "Hide internal mesh" : "Show internal mesh"}
           </button>
         </div>

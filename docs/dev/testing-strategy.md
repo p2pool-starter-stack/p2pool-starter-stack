@@ -148,7 +148,7 @@ it — the worker-API **auth model is the #315 none/name/token matrix**, not the
 
 The deferred tier-4 legs need a real RigForge rig against a real proxy — provisioned via
 `rigforge.sh setup` on a bench box and driven by the live matrix (`run.sh --workers`), gated on the
-`/var/lock/rig-e2e.lock` bench reservation (see [docs/release-server.md](release-server.md)). They
+`/var/lock/rig-e2e.lock` bench reservation (see [docs/dev/release-server.md](release-server.md)). They
 are **not** re-provable at a lower tier: the auth-header logic (tier 1) and the wire handshake
 (tier 2) already are, so the only thing left for the real rig is real mining and the real proxy's
 accept/reject — which only a real xmrig-proxy binary can prove.

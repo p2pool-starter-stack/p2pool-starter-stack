@@ -24,7 +24,7 @@ make test-dashboard       # dashboard pytest + 80% coverage gate
 make test-stack           # pithead shell suite
 make test-fakes           # tier-2 contract test (real clients vs fakes)
 make test-integration-selftest   # the integration harness's own logic
-make test-inventory       # write a generated (git-ignored) coverage list to docs/test-inventory.md
+make test-inventory       # write a generated (git-ignored) coverage list to docs/dev/test-inventory.md
 make test-mini-stack      # tier-3 docker mini-stack (needs docker)
 make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 live, non-destructive
 ```
