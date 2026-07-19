@@ -234,6 +234,67 @@ test("no applied config versions yet falls back to an explanatory message", () =
   assert.match(out, /No applied config changes to correlate hashrate against yet/);
 });
 
+// --- One-click rig upgrade (#597) -------------------------------------------------------------
+
+const UPG_DETAIL = {
+  ...DETAIL,
+  rigforge: { version: "1.11.1", stats: [] },
+  rigforge_update: { available: true, latest: "v1.11.2", url: "https://h/v1.11.2" },
+};
+
+test("upgrade button gates on rigforge_update + an editable, control-enabled worker (#597)", () => {
+  assert.match(renderToString(readyInstance(UPG_DETAIL).render()), /Upgrade rig…/);
+  // Notify-only without an operator-set host or with control off — badge yes, button no.
+  const noEdit = renderToString(readyInstance({ ...UPG_DETAIL, editable: false }).render());
+  assert.match(noEdit, /New RigForge release/);
+  assert.doesNotMatch(noEdit, /Upgrade rig…/);
+  const noCtl = renderToString(readyInstance({ ...UPG_DETAIL, control_enabled: false }).render());
+  assert.doesNotMatch(noCtl, /Upgrade rig…/);
+  // No update derived -> no badge, no button.
+  const current = renderToString(readyInstance({ ...UPG_DETAIL, rigforge_update: null }).render());
+  assert.doesNotMatch(current, /Upgrade rig…|New RigForge release/);
+});
+
+test("arming swaps the button for confirm/cancel; cancel disarms (#597)", () => {
+  const inst = readyInstance(UPG_DETAIL);
+  inst.state.upgArmed = true;
+  const armed = renderToString(inst.render());
+  assert.match(armed, /Confirm upgrade/);
+  assert.match(armed, /Cancel/);
+  assert.doesNotMatch(armed, /Upgrade rig…/);
+});
+
+test("upgrade() POSTs {worker, version} and renders the terminal result (#597)", async () => {
+  const inst = readyInstance(UPG_DETAIL);
+  let posted = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (posted === null && url === "/api/control/worker-upgrade") {
+      posted = { url, body: JSON.parse(opts.body) };
+      return { status: 200, json: async () => ({ status: "noop", note: "already on v1.11.2" }) };
+    }
+    return { ok: true, status: 200, json: async () => UPG_DETAIL }; // the load() refresh
+  };
+  try {
+    await inst.upgrade();
+    await new Promise((r) => setImmediate(r)); // flush the fire-and-forget load() refresh
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(posted.url, "/api/control/worker-upgrade");
+  assert.deepEqual(posted.body, { worker: "rig1", version: "v1.11.2" });
+  assert.equal(inst.state.upgBusy, false);
+  assert.match(renderToString(inst.render()), /Already up to date/);
+});
+
+test("terminal statuses render their calm/red variants (#597)", () => {
+  const inst = readyInstance(UPG_DETAIL);
+  inst.state.upgResult = { status: "throttled", reason: "throttled: retry after the window" };
+  assert.match(renderToString(inst.render()), /Throttled by the rig — retry later/);
+  inst.state.upgResult = { status: "rolled_back", reason: "miner did not return live" };
+  assert.match(renderToString(inst.render()), /Rolled back/);
+});
+
 // --- RigForge new-release callout (#596) ----------------------------------------------------
 
 test("Inspect surfaces the RigForge new-release callout only when the server derived one (#596)", () => {

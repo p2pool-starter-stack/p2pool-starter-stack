@@ -291,6 +291,15 @@ To make a rig editable, give it `host`, `token`, and (unless it's the default `8
 in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
 without a token, the rig isn't a write target and the panel says so.
 
+When the rig's [new-release badge](#workers-alive) shows and the rig is editable, an **Upgrade
+rig…** button appears beside it: arm it, confirm, and the rig upgrades its own RigForge to the
+latest release — the per-worker twin of the stack's one-click upgrade. The rig may rebuild its
+miner (about ten minutes when the XMRig pin changed) and rolls itself back if the miner doesn't
+come back live. The panel shows the outcome (applied / rolled back / failed); a repeat click inside
+the rig's own six-hour upgrade window reads as "throttled — retry later", not an error. See
+[Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
+must enable and how the target is derived.
+
 How it stays safe:
 
 - **The dashboard never holds the rig's token.** It spools the worker name and the change into the

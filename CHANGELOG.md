@@ -13,6 +13,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **One-click remote worker upgrade** (#597). Where the per-worker badge shows and the rig is
+  editable, Worker Inspect gains an Upgrade rig… button: arm, confirm, and the rig installs the
+  latest RigForge release itself (rig ≥ v1.11.2 with its default-off `control_upgrade` flag chain
+  enabled). The intent carries the worker name and confirmed version only; the host runner
+  re-derives the real target from the RigForge release API over Tor (throttled, cached), resolves
+  the rig's address and bearer from `config.json`, dials over the LAN, and polls the rig to a
+  terminal applied / rolled-back / failed with a hard cap. Already-current rigs no-op without
+  dialing; a rig-side throttle refusal reads as retry-later. Per-rig only — no "upgrade all".
+
 - **Per-worker RigForge "new version available" badge** (#596). A rig whose reported RigForge
   version is older than the latest published release gets a clickable badge in the Workers Alive
   table and in Worker Inspect, linking to the release notes — the worker-level twin of the

@@ -336,6 +336,33 @@ stack's own new-release check, and fails silent offline (no badge, no error). Th
 Only rigs on the enriched `8081` feed report a version. A plain-xmrig rig on `8080` has no version
 to compare, so it shows no badge — that reads as "unknown", not "up to date".
 
+#### One-click rig upgrade
+
+With the control channel on (`dashboard.control.enabled`) and the rig editable (an operator-set
+`host` + `token` in `workers.list[]`), the badge gains an **Upgrade rig…** button in
+[Worker Inspect](dashboard.md#worker-inspect): arm, confirm, and the rig checks out and installs
+the latest RigForge release itself — the per-worker twin of the stack's one-click upgrade.
+
+The rig side must opt in: RigForge's `control_upgrade` capability (default off, on top of its
+`control` flag, bearer token, and source pin) and RigForge **v1.11.2 or newer** — earlier versions
+refuse legitimate upgrades on a fresh clone. See
+[RigForge › ADR 0002](https://github.com/p2pool-starter-stack/rigforge/blob/main/docs/adr/0002-remote-upgrade.md)
+for the rig's own guard chain (monotonic version, tag must be an ancestor of `main`, rollback when
+the miner doesn't come back live, and a six-hour throttle between attempts).
+
+What the dashboard sends is a proposal, not a target: the host-side runner re-derives the real
+latest release from the RigForge release API over Tor and refuses a mismatch, then resolves the
+rig's address and bearer from `config.json` — the container never holds the token and cannot choose
+what gets installed. The dial to the rig itself rides the mining LAN, like every control-path dial.
+A rig already on the latest release short-circuits to a no-op without dialing, so the rig's
+six-hour window isn't burned; a repeat click inside that window surfaces as retry-later.
+
+An upgrade can rebuild the rig's miner (about ten minutes when the XMRig pin changed). The runner
+polls the rig to a terminal outcome with a hard cap; past the cap the panel reports the upgrade
+still running and the badge clears on its own once the rig's next poll reports the new version.
+Upgrades are per-rig only — there is deliberately no "upgrade all" button, so one click can never
+stagger rebuilds across the whole farm.
+
 ---
 
 ## New to mining? Start with RigForge
