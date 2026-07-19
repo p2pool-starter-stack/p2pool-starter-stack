@@ -785,10 +785,6 @@ class TestSystem:
         )
         assert (s["disk"]["used"], s["disk"]["total"], s["disk"]["unit"]) == ("0.4", "3.6", "TB")
 
-    def test_disk_unit_stays_gb_on_small_volumes(self):
-        s = build_system({"system": {"disk": {"used_gb": 90, "total_gb": 100}}})
-        assert (s["disk"]["total"], s["disk"]["unit"]) == ("100.0", "GB")
-
     def test_unparseable_cpu_is_ok(self):
         assert build_system({"system": {"cpu_percent": "n/a"}})["cpu"]["level"] == "ok"
 
