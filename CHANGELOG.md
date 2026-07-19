@@ -11,6 +11,8 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-07-19
+
 ### Added
 
 - **Event and raffle markers join the chart legend (#652).** The hashrate chart's legend now
@@ -47,6 +49,12 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   now suppresses the badge whenever the advertised release is not strictly newer than the running
   one — the contradictory state is unrepresentable, whatever produces it. Clicking the stale
   button was always refused host-side; this was display-truth damage only.
+
+### Changed
+
+- **Developer docs moved to `docs/dev/` (#669).** `STYLE.md`, the testing docs, and the
+  release/server docs now live under `docs/dev/`; `docs/` keeps the operator guides. Old
+  in-repo links are updated; bookmarks to the old paths need a refresh.
 
 ## [1.9.1] - 2026-07-19
 
