@@ -20,6 +20,9 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **The chart's default full-history range gets an "All" button (#655).** Before, no range
+  button read as selected on first load, and once a preset was clicked the full-history view
+  was unreachable without hand-editing the URL.
 - **The header no longer advertises the release you are already running (#664).** Right after an
   upgrade, the "New release vX.Y.Z available" badge and the Upgrade button could linger while the
   version badge already showed vX.Y.Z — the pre-upgrade check result was restored from the

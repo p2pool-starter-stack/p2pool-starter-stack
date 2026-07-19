@@ -24,6 +24,7 @@ const RANGES = [
   ["24h", "24 Hr"],
   ["1w", "1 Wk"],
   ["1m", "1 Mo"],
+  ["all", "All"],
 ];
 
 // Hashrate-averaging windows for the chart toggle (#168): [param key, button label]. The keys match

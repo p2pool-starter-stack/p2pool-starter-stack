@@ -83,6 +83,15 @@ test('operational App renders the hero band and the headline cards', () => {
     assert.match(html, /Stack Topology & Egress/);
 });
 
+test('chart range buttons include All, active on the default full-history view (#655)', () => {
+    // Default UI state is range 'all' — without an All button no range reads as selected,
+    // and after picking a preset there is no way back to full history.
+    assert.match(renderApp(), /class="btn-range active"[^>]*>All</);
+    const weekly = renderApp({ ui: { ...UI, range: '1w' } });
+    assert.match(weekly, /class="btn-range active"[^>]*>1 Wk</);
+    assert.doesNotMatch(weekly, /class="btn-range active"[^>]*>All</);
+});
+
 test('chart legend renders a toggle for every layer, including the marker datasets (#652)', () => {
     const html = renderApp();
     for (const label of ['P2Pool (routed)', 'XvB (routed)', 'Shares', 'Events', 'Raffle wins']) {

@@ -163,8 +163,8 @@ progress until it catches up and merge-mining resumes.
 
 ### Hashrate chart
 
-A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo) that switch without
-reloading. Shaded bands show the P2Pool/XvB split over time.
+A time-series chart of hashrate with selectable ranges (1h / 24h / 1w / 1mo / all history) that
+switch without reloading. Shaded bands show the P2Pool/XvB split over time.
 
 Every layer on the chart has a legend button that shows or hides it: the two routed bands, the
 share triangles, the event diamonds, and the raffle stars. A hidden layer stays hidden across
