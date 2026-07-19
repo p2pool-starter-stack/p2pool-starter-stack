@@ -276,6 +276,9 @@ data root:
   names the version that last came up. It is informational — the containers mount the absolute
   paths in `.env` — but it makes the live install discoverable without `docker inspect`. Any
   other directory name (a source checkout, a plain `pithead/` extract) leaves the symlink alone.
+  Running `pithead` through `current` and from the version directory are equivalent: a re-render
+  (`apply`, or the dashboard's preview) keeps whatever spelling `.env` already uses for a path
+  that resolves to the same place, so it never rewrites `.env` from one spelling to the other.
 - **Version dirs** — keep `current`'s target plus one older dir for rollback; delete anything
   older. Each release lands in a fresh dir: extract the bundle, copy `config.json` and `.env`
   from the previous dir, run `./pithead upgrade`. Rollback is the same two steps from the older

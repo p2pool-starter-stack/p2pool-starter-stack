@@ -11,6 +11,21 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An unedited dashboard config preview reports zero changes again.** Two phantom rows crept
+  into the preview on the versioned deploy layout. First, the control runner's systemd unit
+  invokes `pithead` from the version directory while `.env` was rendered through the `current`
+  symlink, so every `$PWD`-derived path (`CLEARNET_STATE_DIR`, the control spool, default data
+  dirs) re-rendered under the other spelling and previewed as a change — and a commit rewrote
+  `.env` to the versioned spelling, breaking the repoint-`current` rollback convention. The
+  render now keeps the spelling already in `.env` whenever both resolve to the same physical
+  directory; a real move still previews (and warns) as before. Second, the editor round-trip
+  carries the `config.reference.json` default for every `dashboard.energy` key the live config
+  omits, and the raw comparison read those spelled-out defaults as an energy edit. Both sides
+  are now filled from the same reference defaults before comparing, so only a real value change
+  reports.
+
 ### Changed
 
 - **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now

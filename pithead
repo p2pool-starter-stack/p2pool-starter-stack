@@ -1526,6 +1526,37 @@ env_get_file() {
 
 env_get() { env_get_file "$ENV_FILE" "$1"; }
 
+# Canonical (symlink-resolved) form of a path, for same-physical-location comparisons. Resolves a
+# directory with `pwd -P`; a file resolves its parent and keeps its basename. Falls back to the
+# path as given when nothing resolves, so comparing against it degrades to string equality.
+physical_path() {
+    local p="$1" d
+    if d=$( (cd "$p" 2>/dev/null && pwd -P)); then
+        printf '%s' "$d"
+    elif d=$( (cd "$(dirname "$p")" 2>/dev/null && pwd -P)); then
+        printf '%s/%s' "$d" "$(basename "$p")"
+    else
+        printf '%s' "$p"
+    fi
+}
+
+# Keep the live .env's SPELLING of a path when it points at the same physical location as the
+# freshly computed one. Every $PWD-derived path changes spelling with the invocation path — the
+# `current` symlink (operator shell) vs the versioned install dir it points at (the control
+# runner's systemd unit) — and a re-render must not read that as a config change, nor rewrite
+# .env to the versioned spelling: rollback repoints `current`, and .env should keep following it.
+# A real move (a different physical location) always takes the newly computed value.
+preserve_path_spelling() { # <env-key> <computed-path> — prints the value to render
+    local old new="$2"
+    old=$(env_get "$1")
+    if [ -n "$old" ] && [ "$old" != "$new" ] &&
+        [ "$(physical_path "$old")" = "$(physical_path "$new")" ]; then
+        printf '%s' "$old"
+    else
+        printf '%s' "$new"
+    fi
+}
+
 # Normalize a config truthy value to the literal "true"/"false". Accepts 1/true/yes/on
 # (case-insensitive) as true; everything else (incl. empty/absent) is false. Matches the
 # dashboard's MONERO_PRUNE parsing so config booleans read the same on both sides (#183).
@@ -2729,6 +2760,13 @@ parse_and_validate_config() {
     TARI_DIR=$(resolve_default "$(jq -r '.tari.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/tari")
     P2POOL_DIR=$(resolve_default "$(jq -r '.p2pool.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/p2pool")
     TOR_DATA_DIR=$(resolve_default "$(jq -r '.tor.data_dir // empty' "$CONFIG_FILE")" "$PWD/data/tor")
+    # Two spellings of one physical directory (the `current` symlink vs the versioned install dir)
+    # must not read as a data-dir change: keep the live .env spelling (preserve_path_spelling).
+    # Done before _data_root below, so the derived defaults join the preserved spelling too.
+    MONERO_DIR=$(preserve_path_spelling MONERO_DATA_DIR "$MONERO_DIR")
+    TARI_DIR=$(preserve_path_spelling TARI_DATA_DIR "$TARI_DIR")
+    P2POOL_DIR=$(preserve_path_spelling P2POOL_DATA_DIR "$P2POOL_DIR")
+    TOR_DATA_DIR=$(preserve_path_spelling TOR_DATA_DIR "$TOR_DATA_DIR")
     # Shared data root (#455): when monero/tari/p2pool/tor all resolve under ONE parent, that
     # parent is the box's data root and the dashboard's DEFAULT joins it — before this, the
     # dashboard DB was the only data living inside the (per-version) install dir, moving with the
@@ -2745,21 +2783,22 @@ parse_and_validate_config() {
     # location — an operator-pinned dashboard.data_dir is theirs, never touched.
     DASHBOARD_DIR_IS_DEFAULT=1
     [ "$DASHBOARD_DIR" == "$_dash_cfg" ] && DASHBOARD_DIR_IS_DEFAULT=0
+    DASHBOARD_DIR=$(preserve_path_spelling DASHBOARD_DATA_DIR "$DASHBOARD_DIR")
     # Stratum TLS keypair home (#261): joins the shared data root when one exists — the cert's
     # FINGERPRINT is what every rig pins, so it must survive versioned deploys like the chain
     # data does, not move with the code. Internal (not config-driven), like CONTROL_DIR.
-    PROXY_TLS_DIR="$_data_root/proxy-tls"
+    PROXY_TLS_DIR=$(preserve_path_spelling PROXY_TLS_DIR "$_data_root/proxy-tls")
     # Internal shared state dir (#234): the dashboard (rw) drops a per-chain "clearnet sync complete"
     # marker here and the monerod/tari entrypoints (ro) read it to decide Tor-vs-clearnet. Not a
     # user-facing data dir, so it's fixed under ./data rather than config-driven.
-    CLEARNET_STATE_DIR="$PWD/data/clearnet-state"
+    CLEARNET_STATE_DIR=$(preserve_path_spelling CLEARNET_STATE_DIR "$PWD/data/clearnet-state")
     # Control-channel spool (#33): requests/ (container rw) + staged/results/audit (host-only /
     # container ro). Fixed under ./data like CLEARNET_STATE_DIR — not a user-facing data dir.
     # Deliberately NOT inside DASHBOARD_DIR, which is mounted rw wholesale into the container.
-    CONTROL_DIR="$PWD/data/control"
+    CONTROL_DIR=$(preserve_path_spelling CONTROL_DIR "$PWD/data/control")
     # Caddy access log (#349): Caddy (rw) writes access.log here, the dashboard mounts it
     # read-only. Fixed under ./data like the spool above — internal, not a user-facing data dir.
-    CADDY_LOG_DIR="$PWD/data/caddy-logs"
+    CADDY_LOG_DIR=$(preserve_path_spelling CADDY_LOG_DIR "$PWD/data/caddy-logs")
 
     # Guard every data dir against catastrophic chown -R / rm -rf targets before we touch them.
     local d
@@ -3126,7 +3165,11 @@ announce_stratum_tls() {
 # retried on the next run and the recreated dashboard always mounts the migrated directory.
 migrate_dashboard_data() {
     local old="$PWD/data/dashboard" new="${DASHBOARD_DIR:-}"
-    [ -n "$new" ] && [ "$old" != "$new" ] || return 0   # classic layout — nothing to move
+    [ -n "$new" ] && [ "$old" != "$new" ] || return 0 # classic layout — nothing to move
+    # The render prefers the live .env spelling (preserve_path_spelling), so old and new can be
+    # two spellings of ONE physical dir (`current` symlink vs versioned dir) — that is the classic
+    # layout too, and the both-locations check below would count the same data twice.
+    [ "$(physical_path "$old")" != "$(physical_path "$new")" ] || return 0
     [ -n "$(ls -A "$old" 2>/dev/null)" ] || return 0    # old default empty/absent — nothing to move
     if [ "${DASHBOARD_DIR_IS_DEFAULT:-1}" -eq 0 ]; then # operator-pinned path: their data, their call
         warn "Dashboard data found at the old default $old, but dashboard.data_dir is set explicitly ($new) — leaving both alone. Move or remove $old yourself."
@@ -3746,7 +3789,8 @@ render_env() {
     # wrapper entrypoint exports them into the wallet child process only. Kept under data/ (gitignored
     # like .env). Written for the REAL .env target only, so a dry-run render never mutates it; the
     # values are empty (harmless) when the feature is off, so the compose secret always resolves.
-    local tari_secret_file="$PWD/data/tari-wallet-secret.env"
+    local tari_secret_file
+    tari_secret_file=$(preserve_path_spelling TARI_WALLET_SECRET_FILE "$PWD/data/tari-wallet-secret.env")
     if [ "$target" != "${ENV_FILE}.dryrun" ]; then
         mkdir -p "$PWD/data"
         (
@@ -4994,6 +5038,18 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_HIGH_REJECT_RATE TELEGRAM_EVENT_BLOCK_FOUND
     TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_PAYOUT_CONFIRMED TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
 
+# Effective dashboard.energy comparison for the control channel (#504). The editor's prefill
+# merges config.reference.json defaults UNDER the sparse live config (read_config, #437), so an
+# unedited round-trip comes back with every energy default spelled out. Fill BOTH sides from the
+# same reference defaults before comparing, or a live config that omits any energy key phantom-
+# reports an energy edit on every preview. Fails toward "changed" on a jq error or an unreadable
+# reference — a phantom INFO row, never a silently dropped real edit.
+energy_block_changed() { # <staged-config> — rc 0 when the effective energy settings differ
+    ! jq -e --slurpfile live "$CONFIG_FILE" --slurpfile ref "$REFERENCE_CONFIG" '
+        (($ref[0].dashboard.energy // {}) + ($live[0].dashboard.energy // {}))
+        == (($ref[0].dashboard.energy // {}) + (.dashboard.energy // {}))' "$1" >/dev/null 2>&1
+}
+
 control_approval_gate() { # <staged-file>
     local staged="$1" porcelain
     # Fail closed if we cannot re-derive the change set (the staged config was validated at
@@ -5073,7 +5129,7 @@ control_approval_gate() { # <staged-file>
     # name into the list when that block changed, else an energy-only commit would audit no key.
     local keys
     keys=$(porcelain_keys "$porcelain")
-    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+    if energy_block_changed "$staged"; then
         keys="${keys:+$keys }DASHBOARD_ENERGY"
     fi
     printf '%s' "$keys"
@@ -5172,7 +5228,7 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         # arms Apply and the commit lands it in config.json. The approval gate allowlists exactly
         # this config.json-only block; any OTHER config.json-only delta still refuses (see
         # control_approval_gate). INFO never flips destructive, so the existing verdict stands.
-        if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+        if energy_block_changed "$staged"; then
             result=$(printf '%s' "$result" | jq '.changes += [{flag:"INFO",key:"dashboard.energy",msg:"Energy calculator settings (dashboard.energy) — electricity price / currency / XMR price updated."}]')
         fi
         control_write_result "$cdir/results" "$id" "$result"

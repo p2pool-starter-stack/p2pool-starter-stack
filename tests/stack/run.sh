@@ -4904,6 +4904,26 @@ assert_eq "energy cost landed in config.json" "$(jq -r '.dashboard.energy.cost_p
 assert_eq "energy currency landed in config.json" "$(jq -r '.dashboard.energy.currency' "$C/config.json")" "EUR"
 assert_contains "energy commit audits the synthetic key name (#504)" "$(grep '"action":"commit","status":"applied"' "$AUDIT" | tail -n 1)" "DASHBOARD_ENERGY"
 
+# NO PHANTOM on an unedited round-trip: the editor prefills from config.reference.json deep-merged
+# UNDER the live config (read_config, #437), so an untouched save posts back every energy default
+# the live config omits, spelled out. Effective values are identical — the preview must report
+# ZERO changes (no synthetic dashboard.energy row) and a commit must not audit DASHBOARD_ENERGY.
+UUID6="56565656-5656-4656-8656-565656565656"
+jq --slurpfile ref "$C/config.reference.json" \
+    '.dashboard.energy = ($ref[0].dashboard.energy + (.dashboard.energy // {}))' \
+    "$C/config.json" >"$C/cand.json"
+jq --arg id "$UUID6" '{id:$id,action:"preview",actor:"admin",config:.}' "$C/cand.json" >"$REQS/$UUID6.json"
+run_pending >/dev/null
+assert_eq "unedited round-trip previews cleanly" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "previewed"
+assert_eq "unedited round-trip reports zero changes" "$(jq -r '.changes | length' "$RESULTS/$UUID6.json" 2>/dev/null)" "0"
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID6" >"$REQS/$UUID6.json"
+run_pending >/dev/null
+assert_eq "unedited round-trip still commits" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "applied"
+assert_not_contains "unedited commit audits no DASHBOARD_ENERGY key" \
+    "$(grep '"action":"commit","status":"applied"' "$AUDIT" | tail -n 1)" "DASHBOARD_ENERGY"
+assert_eq "unedited commit keeps the committed energy cost" "$(jq -r '.dashboard.energy.cost_per_kwh' "$C/config.json")" "0.18"
+rm -f "$RESULTS/$UUID6.json" "$STAGED/$UUID6.json"
+
 # NEGATIVE — the #504 security teeth: an energy edit BUNDLED with a change that is NOT on the env
 # allowlist (monero.rpc_lan_access -> MONERO_RPC_BIND) must be REFUSED. The energy exemption must
 # not become a carrier for other config: the gate re-derives the env change set host-side and the
@@ -6384,6 +6404,55 @@ assert_contains "setup announces the fingerprint for rig pinning" "$sut_out" "St
 unset SUT sut_out
 
 unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
+
+echo "== black-box: .env path spellings survive a symlinked re-render (versioned layout) =="
+# The versioned layout drives pithead through TWO spellings of one directory: the operator's
+# `current` symlink and the versioned install dir the control runner's systemd unit points at.
+# Every $PWD-derived path (data dirs, spool, clearnet-state, ...) must keep the spelling already
+# in .env when both resolve to the same physical location — otherwise an UNEDITED dashboard
+# preview reports phantom path changes, and a commit rewrites .env to the versioned spelling,
+# breaking the repoint-`current`-to-roll-back convention.
+SPD="$SANDBOX/spell"
+SP="$SPD/pithead-v9.9.9"
+CUR="$SPD/current"
+mkdir -p "$SP/build/tari" "$SP/build/dashboard"
+: >"$SP/build/dashboard/Dockerfile"
+cp "$STACK" "$SP/pithead"
+cp "$ROOT/config.reference.json" "$SP/config.reference.json"
+cp "$ROOT/docker-compose.yml" "$SP/docker-compose.yml"
+cp "$ROOT/build/tari/config.toml.template" "$SP/build/tari/"
+make_stubs "$SP/bin"
+ln -s "pithead-v9.9.9" "$CUR"
+printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$SP/config.json"
+cat >"$SP/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=ORIGINALTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+# Baseline apply THROUGH THE SYMLINK — .env records every default path under the `current` spelling.
+(cd "$CUR" && DOCKER_LOG=/dev/null PATH="$SP/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+assert_contains "baseline .env spells clearnet-state via the symlink" "$(cat "$SP/.env")" "CLEARNET_STATE_DIR=$CUR/data/clearnet-state"
+assert_contains "baseline .env spells the monero data dir via the symlink" "$(cat "$SP/.env")" "MONERO_DATA_DIR=$CUR/data/monero"
+# Unedited dry-run FROM THE VERSIONED DIR (the control runner's invocation shape): zero changes.
+out="$(cd "$SP" && DOCKER_LOG=/dev/null PATH="$SP/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_rc "unedited dry-run from the versioned dir exits 0" "$?" "0"
+assert_eq "unedited dry-run from the versioned dir reports zero changes" "$out" ""
+# A real apply from the versioned dir keeps the symlink spellings — rollback stays a repoint.
+(cd "$SP" && DOCKER_LOG=/dev/null PATH="$SP/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+assert_contains "apply from the versioned dir keeps the symlink clearnet-state spelling" "$(cat "$SP/.env")" "CLEARNET_STATE_DIR=$CUR/data/clearnet-state"
+assert_contains "apply from the versioned dir keeps the symlink data-dir spelling" "$(cat "$SP/.env")" "MONERO_DATA_DIR=$CUR/data/monero"
+assert_contains "apply from the versioned dir keeps the symlink tari-secret spelling" "$(cat "$SP/.env")" "TARI_WALLET_SECRET_FILE=$CUR/data/tari-wallet-secret.env"
+# NEGATIVE: a genuinely different location is still a real change — spelling preservation must
+# never swallow an actual data-dir move.
+jq --arg d "$SPD/moved-monero" '.monero.data_dir=$d' "$SP/config.json" >"$SP/config.json.tmp" && mv "$SP/config.json.tmp" "$SP/config.json"
+out="$(cd "$SP" && DOCKER_LOG=/dev/null PATH="$SP/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_contains "a real data-dir move still previews as a change" "$out" "MONERO_DATA_DIR"
+assert_contains "a real data-dir move is still flagged DEST" "$out" "$(printf 'DEST\tMONERO_DATA_DIR')"
+unset SPD SP CUR
 
 # ---------------------------------------------------------------------------
 echo ""
