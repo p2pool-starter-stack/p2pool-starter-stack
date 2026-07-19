@@ -11,6 +11,77 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-18
+
+**Stratum link security.** v1.9 locks the last cleartext link — miner ↔ stack
+stratum. New installs ship with the stratum access-password on (#208), and
+`p2pool.stratum_tls` serves TLS on the same stratum port with per-rig
+fingerprint pinning (#261), so a mixed fleet migrates one rig at a time.
+Around the theme: the one-click upgrade now keeps the versioned deploy
+layout honest and preserves the rollback bundle (#629), and Tor's
+steady-state CPU cost drops via healthcheck and peer-count tuning (#595).
+
+### Added
+
+- **One-click upgrade names its restore point (#637).** Before an in-place upgrade overwrites
+  the running install, the runner copies `config.json` and the rendered `.env` to timestamped
+  `.bak-upgrade-*` siblings — and refuses to proceed if it cannot; a failure during the
+  upgrade names those copies in the result and the dashboard modal. On the versioned layout
+  the result (and the "Upgraded" modal) names the previous version dir — the rollback copy
+  #629 already kept but never pointed at. The copies are written symlink-safely (mktemp +
+  rename, the #629 co-tenant threat model) and pruned to the newest three pairs.
+
+- **XvB raffle wins on the chart and in a log (#644).** The dashboard reads XvB's public winners
+  log (over Tor, about every 30 minutes) and records every round your wallet won. Wins show as
+  gold stars on the hashrate chart (hover for the round type and credited hashrate), as a
+  **Raffle Wins** list in the XvB Donation Stats card, and each new win is announced once in the
+  dashboard log. Win history outlives the ~4-day window the winners file itself keeps — it is
+  kept effectively forever (bounded only far beyond any real win history, since the file is
+  remote content the stack does not control). Each new win also fires a Telegram/webhook alert (`raffle_win` event, on by
+  default like the rest; opt out via `telegram.events.raffle_win: false`).
+- **Stratum authentication is on by default for new installs (#208, #152 Phase 2).** The setup
+  wizard and `config.minimal.json` now write `p2pool.stratum_password: "auto"` into every new
+  `config.json`: the stack generates a stable secret, prints it after `setup`/`apply`, and
+  RigForge's setup prompts for it — a fresh stack plus fresh rigs authenticate end-to-end with
+  no manual edits. Existing installs are untouched: the key is written explicitly for new
+  configs, never assumed for old ones, so an upgrade flips nothing and a fleet on the open
+  `:3333` keeps mining. Set the key to `""` (or delete it) to run unauthenticated.
+- **Stratum-over-TLS (#261).** `p2pool.stratum_tls: true` serves TLS on the same stratum port —
+  xmrig-proxy detects TLS vs plain per connection, so a mixed fleet migrates one rig at a time
+  with nothing re-pointed. The stack generates a self-signed certificate once (under the data
+  root, so its fingerprint survives upgrades) and prints the SHA-256 fingerprint each rig pins
+  (`pools[].tls-fingerprint` — XMRig does no CA validation for stratum, so the pin is the trust
+  model; the RigForge side shipped in rigforge#21/#115). Default off; confidentiality only —
+  the #152 access-password stays the access control; use both.
+
+### Fixed
+
+- **Configuration form: sections that mix top-level keys label rows with the full dotted path
+  (#640).** "Wallets & payout" showed two rows both named `view_key`; they are
+  `monero.view_key` and `tari.view_key` and now say so. Single-key sections keep their short
+  labels.
+- **One-click upgrade keeps the versioned deploy layout honest (#629).** On the documented
+  layout (`pithead-vX.Y.Z` dirs beside a shared data root), the dashboard upgrade used to
+  extract the new release *over* the running install: the dir name and `current ->` symlink
+  kept the old version string while holding the new release, and the previous bundle — the
+  rollback copy — was destroyed. It now extracts into a fresh `pithead-v<new>/` sibling,
+  seeds `config.json`, `.env`, and the control spool, runs the new dir's `pithead upgrade`,
+  and repoints `current ->` on success, leaving the previous dir intact for rollback — the
+  same steps as a manual bundle deploy. Installs whose data directories resolve inside the
+  install dir still upgrade in place (a dir swap would strand the data) and say so in the
+  journal.
+- **`make test` now runs the frontend logic suite (#632).** The `node --test` frontend tests
+  ran only in CI; a local `make test` could pass with a frontend regression. Local and CI now
+  run the same chain.
+
+### Documentation
+
+- **The one-time false "HTTP 502 — did not complete" when upgrading from ≤ v1.7.x is
+  documented (#631).** The #622 fix rides in the release being installed, so the upgrade that
+  delivers it still polls with the old, unfixed client. The dashboard guide now says how to
+  confirm the upgrade landed (version badge, cleared release banner) and that the modal is a
+  one-time artifact.
+
 ## [1.8.1] - 2026-07-18
 
 ### Fixed

@@ -169,6 +169,12 @@ Hover for the size of the drop. They mark the same transitions as the `hashrate_
 alert and survive a dashboard restart, so a drop that happened overnight is still on the chart in the
 morning.
 
+A gold **star** marks each **XvB raffle round your wallet won**, at the time the round was drawn.
+Hover for the round type and the hashrate XvB credited the win at. Wins come from XvB's published
+winners log (fetched over Tor, like every XvB read) and are stored permanently, so the stars stay on
+the chart across restarts; the same wins are listed in the *XvB Donation Stats* card's
+[Raffle Wins log](#xvb-tier-raffle).
+
 An **Avg** control picks the hashrate-averaging window the chart plots: `1 Min` / `10 Min` /
 `1 Hr` / `12 Hr` / `24 Hr` (the native windows xmrig-proxy reports). It is independent of the Range
 control: the range sets how much *time* the x-axis spans; the averaging window sets how *smooth* each
@@ -441,6 +447,30 @@ delivered to the container through a tmpfs secret mount, so they never appear in
 Local Tari node only. Its restore point is a **birthday** (`tari.payout_scan_birthday`, days since
 the Unix epoch), not a block height. Leave `tari.view_key` empty and none of the Tari half runs.
 
+#### Exporting your keys
+
+**Monero.** Open the wallet that owns your payout address in `monero-wallet-cli` and run:
+
+```text
+viewkey
+```
+
+It prints the secret and public view keys; copy the **secret** one into `monero.view_key`. In the
+Monero GUI the same key is under **Settings → Seed & keys** as *Secret view key*. Do not copy the
+spend key or the mnemonic seed — the stack only ever needs the view key.
+
+**Tari.** Export both keys in one command from the wallet that owns your payout address:
+
+```bash
+minotari_console_wallet --base-path <your-wallet-dir> export-view-key-and-spend-key
+```
+
+Enter the wallet password when prompted. It prints the private **view key** (goes in
+`tari.view_key`) and the public **spend key** (goes in `tari.spend_public_key`).
+
+Set the keys in `config.json` and run `./pithead apply`. Key reference: the `monero.view_key` and
+`tari.*` rows in [Configuration](configuration.md#configuration-reference).
+
 ### XvB Tier (raffle)
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
@@ -477,6 +507,14 @@ server's tier table — the same one the donation controller steers by — so th
 
 NOTE: on the mini/nano sidechains the block adds a reminder that switching the P2Pool sidechain
 resets your PPLNS shares — and with them XvB win collectability until a new share lands.
+
+**Raffle Wins log.** The *XvB Donation Stats* card (Advanced view) lists the rounds your wallet
+actually won — time, round type, and the hashrate XvB credited the win at — newest first, capped at
+the 20 most recent. The dashboard reads XvB's public winners log about every half hour over Tor,
+matches your wallet by the masked form the file uses, and stores each win permanently, so the list
+(and the chart's gold stars) survives restarts and covers wins far older than the ~4 days the file
+itself keeps. Each new win is also announced once in the dashboard's container log. The file
+carries only masked wallets and the fetch sends nothing about you.
 
 ### Pool Cadence & Luck
 
@@ -519,7 +557,10 @@ Two edit modes build the same candidate config and submit it through the same pi
   as before; within **Notifications**, the 26 `telegram.events` toggles, the ntfy/webhook sinks,
   and Healthchecks each nest one level deeper into their own collapsed sub-group
   ([#612](https://github.com/p2pool-starter-stack/pithead/issues/612)) instead of dominating the
-  section's field list. A config path no logical section claims still renders, in a catch-all
+  section's field list. Rows in a section whose fields span more than one top-level key carry their
+  full dotted path (`monero.view_key`, `tari.view_key`) so two leaves with the same name read as two
+  different keys; a single-key section keeps the shorter relative label — its heading names the rest.
+  A config path no logical section claims still renders, in a catch-all
   **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
   fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
   here — a variable-length list has no single form control for it — edit it via
@@ -622,10 +663,18 @@ the host, with no SSH:
    it is newer than the running version — the container proposes, the host decides what gets
    installed. Attempts are limited to one per 10 minutes, and every one is written to the audit
    log.
-3. The runner downloads the release bundle (over Tor), extracts it over the install directory,
-   and runs the new release's `./pithead upgrade`, which re-renders the generated config and
-   pulls the new images. The page rides out its own restart and reports the outcome; reload when
-   it says the new version is up.
+3. The runner downloads the release bundle (over Tor). On the
+   [versioned deploy layout](operations.md#the-deploy-box-layout) — a `pithead-vX.Y.Z` install
+   dir with its data directories outside it — the bundle is extracted into a fresh sibling
+   `pithead-v<new>/`, `config.json`, `.env`, and the control spool are carried over, and the new
+   dir's `./pithead upgrade` runs; on success `current ->` repoints there and the previous dir
+   stays intact as the rollback copy. Any other layout (a plain `pithead/` extract, or data
+   directories living inside the install dir) gets the bundle extracted in place instead — and
+   because no previous dir survives there, the runner first copies `config.json` and `.env` to
+   timestamped `.bak-upgrade-*` siblings, refusing to proceed if it cannot; the newest three
+   pairs are kept ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)). Either
+   way, `upgrade` re-renders the generated config and pulls the new images. The page rides out
+   its own restart and reports the outcome; reload when it says the new version is up.
 
 The version the container proposes is never trusted as the target: the host independently fetches
 the latest tag from GitHub, and the bundle it downloads is for that host-derived tag. The bundle
@@ -640,13 +689,24 @@ install without `cosign.pub` (older than the first signed release) still rests o
 (over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
 picks up the key. See [Releasing › Signed releases](releasing.md#signed-releases).
 
+**Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
+v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates
+itself — as a hard failure, and the page polling during the upgrade is still the *old* version:
+the fix ships inside the release being installed, so it cannot protect the jump that installs
+it. If the modal reports "Error: HTTP 502" but the version badge shows the new version and the
+new-release banner is gone, the upgrade landed; reload the page to clear the modal (or confirm
+with `./pithead version` on the host). This happens once — upgrades started from v1.8.1 or
+later ride out the restart.
+
 The button never appears on a source checkout — the runner refuses the request there, since a dev
 install updates with `git pull`. If the upgrade fails, the result says so in the view: a failed
 release lookup or bundle download changes nothing; a failure during `pithead upgrade` leaves
 containers that were not yet recreated on the previous images, and finishing up is one
 `./pithead upgrade` on the host. There is no automatic rollback — the images of the previous
 release stay on disk, and `docker compose` state is recoverable the same way as a failed
-CLI upgrade.
+CLI upgrade. The result names the restore point ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)):
+on the versioned layout, the previous `pithead-vX.Y.Z` dir; in place, the pre-upgrade
+`config.json`/`.env` copies.
 
 ## Tips
 

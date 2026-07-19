@@ -280,7 +280,12 @@ data root:
   older. Each release lands in a fresh dir: extract the bundle, copy `config.json` and `.env`
   from the previous dir, run `./pithead upgrade`. Rollback is the same two steps from the older
   dir. The single-directory overlay under [Updating the stack](#updating-the-stack) also works;
-  the per-version layout is what a long-lived box converges to.
+  the per-version layout is what a long-lived box converges to. The dashboard's one-click
+  upgrade follows the same discipline on this layout: it extracts the new release into a fresh
+  `pithead-v<new>/` beside the running one, seeds `config.json`, `.env`, and the control spool,
+  and leaves the previous dir intact for rollback. Only when a data directory resolves *inside*
+  the install dir (the pre-shared-root default) does it extract in place instead — a dir swap
+  would strand that data — and says so in the journal.
 - **Shared data root** — point `monero.data_dir`, `tari.data_dir`, `p2pool.data_dir`, and
   `tor.data_dir` at absolute paths under one parent (here `~/mining/data`). When all four share
   a parent, the dashboard database defaults there as well (`<root>/dashboard`) instead of inside
@@ -301,6 +306,11 @@ State lives in the data directories (by default under `./data/`, or wherever eac
 points; see [Configuration › Data directories](configuration.md#data-directories)):
 
 - **`config.json`**: settings. `chmod 600`; keep a copy off-host.
+- **`config.json.bak-upgrade-*` / `.env.bak-upgrade-*`**: pre-upgrade copies the dashboard's
+  one-click upgrade keeps before an in-place extraction
+  ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)). The newest three pairs
+  are kept; older ones are pruned automatically. The `.env` copies carry secrets — handle them
+  like `.env` itself.
 - **`data/tor/`**: onion service keys. Back up to keep the same onion addresses across a rebuild.
 - **`data/monero/`**, **`data/tari/`**: the blockchains. Large; backing them up saves a re-sync,
   but they re-download from the network if lost.

@@ -10,4 +10,13 @@ if [ -n "${PROXY_STRATUM_PASSWORD:-}" ]; then
     set -- "$@" "--access-password=$PROXY_STRATUM_PASSWORD"
 fi
 
+# Stratum-over-TLS (#261): with the cert flags present, xmrig-proxy autodetects TLS vs cleartext
+# per-connection on the same bind — no second port. Same append-here pattern as the password.
+# TLS_MOUNT is fixed by the compose mount; the override exists so the shell suite can exercise
+# this branch against a temp dir instead of a root-owned /tls.
+TLS_MOUNT="${PROXY_TLS_MOUNT:-/tls}"
+if [ "${PROXY_STRATUM_TLS:-false}" = "true" ] && [ -f "$TLS_MOUNT/cert.pem" ] && [ -f "$TLS_MOUNT/key.pem" ]; then
+    set -- "$@" "--tls-cert=$TLS_MOUNT/cert.pem" "--tls-cert-key=$TLS_MOUNT/key.pem"
+fi
+
 exec xmrig-proxy "$@"

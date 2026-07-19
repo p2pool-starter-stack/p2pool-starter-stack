@@ -922,6 +922,8 @@ pd_order=$(
     DASHBOARD_DIR="$SANDBOX/pd-dashboard"
     # shellcheck disable=SC2034
     CLEARNET_STATE_DIR="$SANDBOX/pd-clearnet"
+    # shellcheck disable=SC2034
+    PROXY_TLS_DIR="$SANDBOX/pd-proxy-tls" # #261: prepare_directories now creates it too
     log() { :; }
     prepare_control_dirs() { :; }
     mkdir() {
@@ -1021,12 +1023,15 @@ assert_contains "monero clearnet: xmrvsbeast priority node (v4.16)" "$(cat "$MON
 assert_contains "monero clearnet: hashvault priority node (v4.16)" "$(cat "$MONT")" "add-priority-node=nodes.hashvault.pro:18080"
 # The committed template (the Tor-only default) keeps the proxy line + the Tor-tuned out-peers.
 assert_contains "monero default: Tor P2P proxy present (#183)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" 'proxy=${NETWORK_PREFIX}.25:9050'
-assert_contains "monero default: out-peers 48 for Tor (#183)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" "out-peers=48"
+# #595: the template's out-peers is now config-driven (monero.out_peers, default 48 in the render).
+assert_contains "monero default: out-peers config-driven for Tor (#183/#595)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" 'out-peers=${MONERO_OUT_PEERS}'
 # Compose wires both flags into container env: monerod reads MONERO_CLEARNET_SYNC in its entrypoint;
 # TARI_CLEARNET_SYNC is inert in the container but its presence makes a flag change recreate tari so
 # it re-reads the host-rendered config.toml (a bind-mount content change alone won't recreate it).
 assert_contains "compose passes MONERO_CLEARNET_SYNC to monerod (#183)" "$(cat "$ROOT/docker-compose.yml")" 'MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC'
 assert_contains "compose passes TARI_CLEARNET_SYNC to tari (#183)" "$(cat "$ROOT/docker-compose.yml")" 'TARI_CLEARNET_SYNC=${TARI_CLEARNET_SYNC'
+# #595: the render chain for the out-peers knob is only complete if compose forwards it.
+assert_contains "compose passes MONERO_OUT_PEERS to monerod (#595)" "$(cat "$ROOT/docker-compose.yml")" 'MONERO_OUT_PEERS=${MONERO_OUT_PEERS'
 
 # --- Auto-transition (#234): the entrypoints gate clearnet on flag AND the absence of the
 # dashboard-written marker, so a node returns to Tor on its own once synced. ---
@@ -3020,6 +3025,30 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "rpc_lan_access true binds monerod RPC to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "0.0.0.0"
 assert_eq "prep_blocks_threads override reflected verbatim" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_PREP_THREADS)" "6"
 
+echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
+# Default 48 when unset (the Tor-IBD bandwidth default); an explicit value lands verbatim in
+# MONERO_OUT_PEERS (each outbound peer ≈ one Tor circuit — the steady-state Tor CPU lever);
+# out-of-range or non-integer values are refused before anything is written.
+assert_eq "out_peers default renders 48" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_OUT_PEERS)" "48"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":32}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "out_peers 32 reflected verbatim" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_OUT_PEERS)" "32"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":"lots"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "non-integer out_peers refused" "$?" "1"
+assert_contains "out_peers refusal names the bounds" "$out" "between 8 and 1024"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":4}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "below-minimum out_peers refused" "$?" "1"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":2000}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "above-maximum out_peers refused" "$?" "1"
+assert_contains "above-maximum refusal names the bounds" "$out" "between 8 and 1024"
+
 echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
 # restarts its privacy boundary unbidden); explicit true -> on.
@@ -3308,6 +3337,34 @@ assert_contains "stratum auth surfaced for rigs" "$(run_sourced "$V" announce_st
 # Re-apply: an "auto" password must be STABLE (reused, not rotated) — like the proxy token.
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum_password auto stable across apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "$sp1"
+
+echo "== black-box: stratum-over-TLS render + cert lifecycle (#261) =="
+# Default: off, no cert generated. The dir var still renders (compose always mounts it :ro).
+assert_eq "stratum TLS off by default" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_TLS)" "false"
+[ ! -f "$V/data/proxy-tls/cert.pem" ] && ok "no cert generated while TLS is off" ||
+    bad "no cert generated while TLS is off" "cert.pem exists"
+# Knob on: real openssl generates the keypair once; key owner-only; fingerprint announced and
+# STABLE across a second apply (the fingerprint is what every rig pins — regenerating it on each
+# apply would break every TLS rig).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "stratum TLS renders true" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_TLS)" "true"
+[ -f "$V/data/proxy-tls/cert.pem" ] && [ -f "$V/data/proxy-tls/key.pem" ] &&
+    ok "TLS keypair generated on first apply" || bad "TLS keypair generated on first apply" "missing files"
+assert_eq "TLS key is owner-only" "$(file_mode "$V/data/proxy-tls/key.pem")" "600"
+assert_contains "fingerprint announced for rig pinning" "$out" "Stratum TLS is ON"
+fp1="$(openssl x509 -in "$V/data/proxy-tls/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "cert (and its pinned fingerprint) stable across apply" \
+    "$(openssl x509 -in "$V/data/proxy-tls/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)" "$fp1"
+# announce_stratum_tls prints the pin in xmrig's format: 64 lowercase hex chars, no colons.
+announced="$(run_sourced "$V" announce_stratum_tls 2>&1 | grep -oE '[0-9a-f]{64}' | head -1)"
+assert_eq "announced fingerprint is the cert's own, xmrig format" \
+    "$announced" "$(printf '%s' "$fp1" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+# compose forwards the toggle and mounts the keypair dir read-only.
+assert_contains "compose passes PROXY_STRATUM_TLS to the proxy (#261)" "$(cat "$ROOT/docker-compose.yml")" 'PROXY_STRATUM_TLS=${PROXY_STRATUM_TLS'
+assert_contains "compose mounts the TLS keypair dir :ro (#261)" "$(cat "$ROOT/docker-compose.yml")" 'PROXY_TLS_DIR:-./data/proxy-tls}:/tls:ro'
 
 echo "== black-box: clearnet initial sync render (#183) =="
 # Default (no flags): both daemons stay Tor-only — .env flags are false and the rendered Tari config
@@ -4153,6 +4210,27 @@ assert_eq "xmrig-proxy entrypoint: unset password appends no flag (#152)" \
     "$(xp_argv '')" "[--http-no-restricted][--donate-level=0]"
 assert_eq "xmrig-proxy entrypoint: set password appends --access-password (#152)" \
     "$(xp_argv 's3cret')" "[--http-no-restricted][--donate-level=0][--access-password=s3cret]"
+# #261: the TLS cert flags append only when the toggle is on AND both keypair files exist at the
+# mount (PROXY_TLS_MOUNT overrides the fixed /tls so the suite can use a temp dir).
+xp_tls_argv() { # <PROXY_STRATUM_TLS value> <tls dir>
+    local d
+    d="$(mktemp -d)"
+    printf '#!/bin/sh\nfor a in "$@"; do printf "[%%s]" "$a"; done\n' >"$d/xmrig-proxy"
+    chmod +x "$d/xmrig-proxy"
+    PATH="$d:$PATH" PROXY_STRATUM_PASSWORD='' PROXY_STRATUM_TLS="$1" PROXY_TLS_MOUNT="$2" sh "$XP_ENTRY" -b 0.0.0.0:3333
+    rm -rf "$d"
+}
+XPTLS="$(mktemp -d)"
+printf 'cert' >"$XPTLS/cert.pem"
+printf 'key' >"$XPTLS/key.pem"
+assert_eq "xmrig-proxy entrypoint: TLS on + keypair appends the cert flags (#261)" \
+    "$(xp_tls_argv true "$XPTLS")" "[-b][0.0.0.0:3333][--tls-cert=$XPTLS/cert.pem][--tls-cert-key=$XPTLS/key.pem]"
+assert_eq "xmrig-proxy entrypoint: TLS off appends nothing (#261)" \
+    "$(xp_tls_argv false "$XPTLS")" "[-b][0.0.0.0:3333]"
+rm -f "$XPTLS/key.pem"
+assert_eq "xmrig-proxy entrypoint: TLS on but keypair incomplete appends nothing (#261)" \
+    "$(xp_tls_argv true "$XPTLS")" "[-b][0.0.0.0:3333]"
+rm -rf "$XPTLS"
 
 # tor wrapper entrypoint: opt-in dashboard hidden service (#343). The HiddenService block is appended
 # to the rendered torrc ONLY when DASHBOARD_ONION_ENABLED=true, targeting the bridge gateway
@@ -5042,6 +5120,7 @@ make_stubs "$UPG/bin"
 # tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
 command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
 printf '1.3.1' >"$UPG/VERSION"
+printf '{}' >"$UPG/config.json" # #637: the in-place path snapshots config.json before extracting
 # #544/#555: a real release install carries non-empty build/* config-template mounts (see the
 # bundle's build/* below) — pre-seed them here with STALE content from "the previous version",
 # including a file the new bundle does NOT ship, so the extraction below runs over the exact shape
@@ -5116,6 +5195,7 @@ reset_upgrade_state() { # restore between attempts: fresh runner copy, running v
     cp "$STACK" "$UPG/pithead"
     printf '1.3.1' >"$UPG/VERSION"
     rm -f "$UPG/data/control/staged/.upgrade-stamp" "$UPGRESULTS/$UUPG.json" "$UPG/upgrade-invocations.log"
+    rm -f "$UPG"/config.json.bak-upgrade-* "$UPG"/.env.bak-upgrade-* # #637 snapshots
     : >"$UPG/curl.log"
 }
 
@@ -5211,6 +5291,12 @@ upgrade_intent "$UUPG" "v9.9.9"
 assert_eq "failed upgrade run reports failed" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
 assert_contains "failed upgrade points at the host CLI" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "./pithead upgrade"
 assert_contains "failed upgrade audited" "$(cat "$UPGAUDIT" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"failed\""
+# #637: the failure result names the pre-upgrade config/.env copies, and they exist on disk.
+upg_bak="$(jq -r '.backup // ""' "$UPGRESULTS/$UUPG.json" 2>/dev/null)"
+assert_contains "failed in-place upgrade names the pre-upgrade copies (#637)" "$upg_bak" ".bak-upgrade-"
+upg_bak_cfg="${upg_bak%% *}"
+[ -n "$upg_bak_cfg" ] && [ -f "$upg_bak_cfg" ] && ok "the named config.json copy exists (#637)" ||
+    bad "the named config.json copy exists (#637)" "missing: $upg_bak_cfg"
 
 # Happy path: proposed == host-derived latest and newer than running → bundle extracted, the NEW
 # pithead's `upgrade` ran, both dials went through the stack's Tor SOCKS, everything audited.
@@ -5242,6 +5328,59 @@ if [ ! -e "$UPG/data/control/staged/.$UUPG.tar.gz" ] && [ ! -e "$UPG/data/contro
 else
     bad "no staged bundle/log residue after a successful upgrade" "leftover staging file present"
 fi
+# #637: before the extraction overwrote the install, the runner kept timestamped copies of the
+# operator's config and the rendered .env — the in-place layout's only restore point.
+upg_bak_env="$(ls "$UPG"/.env.bak-upgrade-* 2>/dev/null | head -1)"
+[ -n "$upg_bak_env" ] && ok "in-place upgrade keeps a pre-upgrade .env copy (#637)" ||
+    bad "in-place upgrade keeps a pre-upgrade .env copy (#637)" "no .env.bak-upgrade-* in $UPG"
+assert_contains "the .env copy holds the pre-upgrade content (#637)" "$(cat "$upg_bak_env" 2>/dev/null)" "DEPLOYMENT_COMPLETED=true"
+upg_bak_cfg2="$(ls "$UPG"/config.json.bak-upgrade-* 2>/dev/null | head -1)"
+assert_eq "the config.json copy holds the pre-upgrade content (#637)" "$(cat "$upg_bak_cfg2" 2>/dev/null)" "{}"
+
+# #637 fail-closed: no snapshot, no upgrade. With config.json unreadable the runner must refuse
+# BEFORE a byte of the bundle lands — the whole point of the restore point is that it exists
+# before the mutation does.
+reset_upgrade_state
+mv "$UPG/config.json" "$UPG/config.json.hidden"
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_eq "failed snapshot fails the upgrade (#637)" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "snapshot refusal names the missing restore point (#637)" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "restore point"
+assert_eq "failed snapshot extracts nothing (#637)" "$(cat "$UPG/VERSION")" "1.3.1"
+[ -z "$(ls "$UPG"/.bak-upgrade.* 2>/dev/null)" ] && ok "failed snapshot leaves no mktemp residue (#637)" ||
+    bad "failed snapshot leaves no mktemp residue (#637)" "leftover temp file"
+mv "$UPG/config.json.hidden" "$UPG/config.json"
+
+# #637 hardening: the snapshot destination name is predictable, so a co-tenant can plant a
+# symlink there and hope root writes through it (the #629 attack class) — the runner must
+# replace the planted entry, never follow it. And old snapshots hold yesterday's secrets, so
+# only the newest three pairs survive. Freeze `date` so the destination name is known.
+reset_upgrade_state
+cat >"$UPG/bin/date" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "+%Y%m%d-%H%M%S" ]; then echo "20990101-000000"; else exec /bin/date "$@"; fi
+EOF
+chmod +x "$UPG/bin/date"
+printf 'victim-untouched' >"$UPG/victim"
+ln -s "$UPG/victim" "$UPG/config.json.bak-upgrade-20990101-000000"
+for bakstamp in 20200101-000000 20200102-000000 20200103-000000; do
+    printf 'stale' >"$UPG/.env.bak-upgrade-$bakstamp"
+    printf 'stale' >"$UPG/config.json.bak-upgrade-$bakstamp"
+done
+upgrade_intent "$UUPG" "v9.9.9"
+urun >/dev/null
+assert_eq "planted symlink at the snapshot name is not written through (#637)" "$(cat "$UPG/victim")" "victim-untouched"
+if [ ! -L "$UPG/config.json.bak-upgrade-20990101-000000" ] && [ -f "$UPG/config.json.bak-upgrade-20990101-000000" ]; then
+    ok "the snapshot replaced the planted entry with a regular file (#637)"
+else
+    bad "the snapshot replaced the planted entry with a regular file (#637)" "still a symlink or missing"
+fi
+assert_eq "snapshots pruned to the newest three .env copies (#637)" "$(ls -1 "$UPG"/.env.bak-upgrade-* 2>/dev/null | wc -l | tr -d ' ')" "3"
+assert_eq "snapshots pruned to the newest three config.json copies (#637)" "$(ls -1 "$UPG"/config.json.bak-upgrade-* 2>/dev/null | wc -l | tr -d ' ')" "3"
+[ ! -e "$UPG/.env.bak-upgrade-20200101-000000" ] && ok "the oldest .env snapshot was pruned (#637)" ||
+    bad "the oldest .env snapshot was pruned (#637)" "still present"
+rm -f "$UPG/bin/date" "$UPG/victim"
+reset_upgrade_state
 
 # #376 rollback guard: an attacker who controls the release response serves an OLDER (genuine)
 # bundle at the v9.9.9 URL — its VERSION (1.0.0) does not match the host-derived tag, so the
@@ -5297,6 +5436,133 @@ upgrade_intent "$UUPG" "v9.9.9"
 urun >/dev/null
 assert_contains "immediate second upgrade attempt is throttled" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "less than 10 minutes"
 reset_upgrade_state
+
+echo "== black-box: control upgrade extracts to a fresh version dir (#629) =="
+# A VERSIONED release install (deploy629/pithead-v1.3.1) whose data dirs all resolve OUTSIDE the
+# install dir — the documented bundle-deploy layout. The runner must extract v9.9.9 into a fresh
+# sibling pithead-v9.9.9/, seed config.json/.env and the install-local state dirs, run the NEW
+# dir's pithead upgrade from the new dir, write the result into BOTH spools, and leave this dir
+# intact as the rollback copy. Reuses the upgrade59 stubs ($UPG/bin) and fake bundle ($UPGB).
+VROOT="$SANDBOX/deploy629"
+VUPG="$VROOT/pithead-v1.3.1"
+VNEW="$VROOT/pithead-v9.9.9"
+mkdir -p "$VUPG/data/control/requests" "$VUPG/data/control/staged" "$VUPG/data/control/results" \
+    "$VUPG/data/control/audit" "$VUPG/data/clearnet-state" "$VROOT/data/monero"
+cp "$STACK" "$VUPG/pithead"
+printf '1.3.1' >"$VUPG/VERSION"
+printf '{}' >"$VUPG/config.json"
+printf 'clearnet-marker' >"$VUPG/data/clearnet-state/monero.synced"
+seed_v629_env() { # data dirs OUTSIDE the install dir → fresh-dir mode
+    cat >"$VUPG/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=true
+CONTROL_DIR=$VUPG/data/control
+NETWORK_PREFIX=10.9.0
+MONERO_DATA_DIR=$VROOT/data/monero
+TARI_DATA_DIR=$VROOT/data/tari
+P2POOL_DATA_DIR=$VROOT/data/p2pool
+TOR_DATA_DIR=$VROOT/data/tor
+DASHBOARD_DATA_DIR=$VROOT/data/dashboard
+EOF
+}
+seed_v629_env
+vrun() { # <extra env VAR=val...>
+    (cd "$VUPG" && PATH="$UPG/bin:$PATH" CURL_LOG="$VUPG/curl.log" \
+        CURL_API_RESPONSE="$UPGB/api.json" CURL_BUNDLE="$UPGB/bundle.tar.gz" \
+        env "$@" ./pithead control-run-pending 2>&1)
+}
+reset_v629_state() {
+    cp "$STACK" "$VUPG/pithead"
+    printf '1.3.1' >"$VUPG/VERSION"
+    rm -f "$VUPG/data/control/staged/.upgrade-stamp" "$VUPG/data/control/results/$UUPG.json"
+    rm -f "$VUPG"/config.json.bak-upgrade-* "$VUPG"/.env.bak-upgrade-* # #637 snapshots
+    rm -rf "$VNEW"
+}
+
+# Happy path: fresh sibling dir, seeded state, new pithead ran FROM the new dir, both spools
+# carry the result, and the running install — the rollback copy — is byte-for-byte untouched.
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+vrun >/dev/null
+assert_eq "fresh-dir upgrade result status (old spool)" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "fresh-dir upgrade result status (new spool)" "$(jq -r '.status' "$VNEW/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+assert_eq "new version dir holds the new release" "$(cat "$VNEW/VERSION" 2>/dev/null)" "9.9.9"
+assert_eq "old version dir still holds the old release (rollback preserved)" "$(cat "$VUPG/VERSION")" "1.3.1"
+cmp -s "$VUPG/pithead" "$STACK" && ok "old dir's pithead untouched by the extraction" ||
+    bad "old dir's pithead untouched by the extraction" "the running script was overwritten"
+assert_contains "the NEW pithead ran the upgrade from the NEW dir" "$(cat "$VNEW/upgrade-invocations.log" 2>/dev/null)" "new-pithead upgrade"
+[ -f "$VNEW/config.json" ] && ok "config.json seeded into the new dir" || bad "config.json seeded into the new dir" "missing"
+assert_contains "rendered .env seeded into the new dir" "$(cat "$VNEW/.env" 2>/dev/null)" "DEPLOYMENT_COMPLETED=true"
+assert_eq "clearnet sync markers carried over" "$(cat "$VNEW/data/clearnet-state/monero.synced" 2>/dev/null)" "clearnet-marker"
+assert_contains "fresh-dir upgrade audited in the old spool" "$(cat "$VUPG/data/control/audit/control.log" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+assert_contains "fresh-dir upgrade audited in the new spool" "$(cat "$VNEW/data/control/audit/control.log" 2>/dev/null)" "\"action\":\"upgrade\",\"status\":\"upgraded\""
+# #637: the result names the old dir as the restore point (pwd -P tail, macOS /private prefix).
+assert_contains "fresh-dir result names the old dir as the rollback copy (#637)" \
+    "$(jq -r '.rollback // ""' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v1.3.1"
+[ -z "$(ls "$VUPG"/.env.bak-upgrade-* 2>/dev/null)" ] &&
+    ok "fresh-dir path takes no file snapshots — the old dir IS the restore point (#637)" ||
+    bad "fresh-dir path takes no file snapshots — the old dir IS the restore point (#637)" "found .bak-upgrade-* in $VUPG"
+
+# The new release's upgrade fails: both spools say failed, the error points at the NEW dir for
+# the host-side finish, and the old install keeps running — still intact for rollback.
+reset_v629_state
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+vrun NEW_PITHEAD_FAIL=1 >/dev/null
+assert_eq "failed fresh-dir upgrade reports failed" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
+# The runner derives its paths from `pwd -P`, so on macOS the /var/folders sandbox reports as
+# /private/var/... — assert on the path's tail, not the unresolved $VNEW.
+assert_contains "failed fresh-dir upgrade points at the new dir" "$(jq -r '.error' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v9.9.9 && ./pithead upgrade"
+assert_eq "failed fresh-dir upgrade leaves the old install intact" "$(cat "$VUPG/VERSION")" "1.3.1"
+assert_eq "failed fresh-dir upgrade wrote the result to the new spool too" "$(jq -r '.status' "$VNEW/data/control/results/$UUPG.json" 2>/dev/null)" "failed"
+assert_contains "failed fresh-dir result still names the rollback dir (#637)" \
+    "$(jq -r '.rollback // ""' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "/deploy629/pithead-v1.3.1"
+
+# Data inside the install dir (the pre-#455 default): a dir swap would strand it — the runner
+# must fall back to the in-place path: no sibling dir, the new release lands in THIS dir.
+reset_v629_state
+mkdir -p "$VUPG/data/monero" # must exist: the guard canonicalizes via cd/pwd -P
+cat >"$VUPG/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=true
+CONTROL_DIR=$VUPG/data/control
+NETWORK_PREFIX=10.9.0
+MONERO_DATA_DIR=$VUPG/data/monero
+EOF
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_eq "data-inside-install falls back to in-place upgrade" "$(cat "$VUPG/VERSION")" "9.9.9"
+[ ! -e "$VNEW" ] && ok "data-inside-install creates no sibling version dir" ||
+    bad "data-inside-install creates no sibling version dir" "$VNEW exists"
+assert_contains "in-place fallback names the stranded data dir" "$out" "MONERO_DATA_DIR resolves inside the install dir"
+assert_eq "in-place fallback still upgrades" "$(jq -r '.status' "$VUPG/data/control/results/$UUPG.json" 2>/dev/null)" "upgraded"
+[ -n "$(ls "$VUPG"/.env.bak-upgrade-* 2>/dev/null)" ] &&
+    ok "in-place fallback keeps the pre-upgrade config/.env copies (#637)" ||
+    bad "in-place fallback keeps the pre-upgrade config/.env copies (#637)" "no .bak-upgrade-* in $VUPG"
+seed_v629_env
+
+# A pre-existing entry at the target path — a leftover failed attempt, or a co-tenant's planted
+# dir/symlink (the mkdir-without--p TOCTOU guard): root must never extract into it. The runner
+# refuses the fresh-dir path and upgrades in place instead.
+reset_v629_state
+mkdir -p "$VNEW"
+printf 'not-ours' >"$VNEW/marker"
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_contains "pre-existing target dir falls back to in-place" "$out" "already exists"
+assert_eq "pre-existing target dir is never written into" "$(
+    cat "$VNEW/marker" 2>/dev/null
+    ls "$VNEW" | wc -l | tr -d ' '
+)" "not-ours1"
+assert_eq "pre-existing target still upgrades in place" "$(cat "$VUPG/VERSION")" "9.9.9"
+reset_v629_state
+mkdir -p "$VROOT/plant"      # the attacker-controlled tree behind the symlink
+ln -s "$VROOT/plant" "$VNEW" # a planted symlink must fail the atomic mkdir, not be followed
+printf '{"id":"%s","action":"upgrade","actor":"admin","version":"v9.9.9"}\n' "$UUPG" >"$VUPG/data/control/requests/$UUPG.json"
+out="$(vrun)"
+assert_contains "planted symlink at the target falls back to in-place" "$out" "already exists"
+[ -z "$(ls -A "$VROOT/plant" 2>/dev/null)" ] && ok "planted symlink is not followed (nothing extracted through it)" ||
+    bad "planted symlink is not followed (nothing extracted through it)" "files appeared behind the symlink"
+rm -f "$VNEW"
+seed_v629_env
 
 echo "== black-box: control upgrade verifies the bundle signature (#376) =="
 # Give the install a trust anchor (cosign.pub next to pithead — what a signed release bundle
@@ -5969,6 +6235,10 @@ printf '%s\n%s\n\nmain\nopuser\nsuperSecret1\ny\ny\ny\nmybottoken123\n987654321\
 w2_cfg="$(cat "$W2/config.json" 2>/dev/null)"
 assert_eq "full path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w2_cfg")" "local"
 assert_eq "full path: p2pool.pool honors an explicit main" "$(jq -r '.p2pool.pool' <<<"$w2_cfg")" "main"
+assert_eq "full path: stratum auth defaults on for new installs (#208)" "$(jq -r '.p2pool.stratum_password' <<<"$w2_cfg")" "auto"
+# The other new-install path — `cp config.minimal.json config.json` (the bundle quick-start,
+# which bypasses the wizard) — must carry the same default, or only wizard users get auth.
+assert_eq "config.minimal.json ships stratum auth on (#208)" "$(jq -r '.p2pool.stratum_password' "$ROOT/config.minimal.json")" "auto"
 assert_eq "full path: dashboard.auth.username set" "$(jq -r '.dashboard.auth.username' <<<"$w2_cfg")" "opuser"
 assert_eq "full path: dashboard.auth.password set" "$(jq -r '.dashboard.auth.password' <<<"$w2_cfg")" "superSecret1"
 assert_eq "full path: clearnet-sync cluster sets BOTH chains together" \
@@ -6013,6 +6283,24 @@ assert_contains "'pithead setup' reports completion" "$su_out" "Deployment prepa
 assert_eq "'pithead setup' writes a completed .env" \
     "$(run_sourced "$SU" env_get_file "$SU/.env" DEPLOYMENT_COMPLETED)" "true"
 unset SU su_out su_rc
+
+echo "== black-box: 'pithead setup' with stratum_tls in a hand-written config generates the keypair (#261) =="
+# The setup path reaches compose through prepare_directories, never ensure_directories — a
+# hand-written config.json with stratum_tls:true at FIRST setup must still get its cert + the
+# fingerprint announcement (verifier catch: only the apply path was covered).
+SUT="$SANDBOX/setup-tls"
+mkdir -p "$SUT/build/tari" "$SUT/build/dashboard"
+: >"$SUT/build/dashboard/Dockerfile"
+cp "$STACK" "$SUT/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$SUT/build/tari/"
+make_stubs "$SUT/bin"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false} }\n' "$WALLET" >"$SUT/config.json"
+sut_out="$(cd "$SUT" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$SUT/bin:$PATH" ./pithead setup --skip-deps --skip-optimize 2>&1)"
+assert_rc "setup with stratum_tls exits 0" "$?" "0"
+[ -f "$SUT/data/proxy-tls/cert.pem" ] && [ -f "$SUT/data/proxy-tls/key.pem" ] &&
+    ok "setup generates the TLS keypair (#261)" || bad "setup generates the TLS keypair (#261)" "missing under $SUT/data/proxy-tls"
+assert_contains "setup announces the fingerprint for rig pinning" "$sut_out" "Stratum TLS is ON"
+unset SUT sut_out
 
 unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
 

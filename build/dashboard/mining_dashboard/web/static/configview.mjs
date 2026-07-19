@@ -74,8 +74,11 @@ async function pollResult(id, skip, max = POLL_MAX) {
 const HOST_ONLY_TITLE = "Host-only — edit config.json and run ./pithead apply";
 
 // `full` (#529): the pinned Core card mixes fields from several sections, so its rows need the
-// FULL dotted key ("monero.wallet_address") to stay unambiguous; a natural section already says
-// which section it is via its own heading, so its rows keep the shorter relative label.
+// FULL dotted key ("monero.wallet_address") to stay unambiguous. A natural section keeps the
+// shorter relative label ONLY while all its fields share one top-level key (its heading then says
+// the rest); a logical section that mixes top-level keys (#611 — Wallets & payout spans monero.*
+// AND tari.*) gets full keys too, or monero.view_key and tari.view_key would both render as a
+// bare "view_key" (and System / advanced would show four identical "data_dir" rows).
 //
 // `field.editable` (#613): a field the control gate would refuse at commit renders disabled, its
 // live value read-only, with a tooltip explaining why — and, critically, no onChange/onInput is
@@ -303,9 +306,13 @@ export class ConfigView extends Component {
         }
         ${groups.map((s) => {
           const { fields, subgroups } = nestSection(s);
+          // Computed on the flat fields AFTER nestSection, so a section that only mixes top-level
+          // keys via its subgroups (Notifications: telegram + notifications + healthchecks, each
+          // in its own labelled <details>) keeps short labels for the flat telegram.* remainder.
+          const mixed = new Set(fields.map((f) => f.path[0])).size > 1;
           return html`<details class="card config-section">
               <summary>${s.name}</summary>
-              ${fields.map((f) => field(f))}
+              ${fields.map((f) => field(f, mixed))}
               ${subgroups.map(
                 (g) => html`<details class="config-subsection">
                     <summary>${g.label} (${g.fields.length})</summary>
@@ -483,6 +490,12 @@ export class UpgradeControl extends Component {
           <div class="card config-modal">
               <h3>Upgraded to ${result.version || version}</h3>
               <p class="status-ok">The stack is running the new release.</p>
+              ${
+                result.rollback
+                  ? html`<p class="text-muted">The previous release is kept at <code>${result.rollback}</code>
+                    on the host — the rollback copy if this version misbehaves.</p>`
+                  : null
+              }
               <div class="config-modal-actions">
                   <button class="btn-toggle active" onClick=${() => window.location.reload()}>Reload the dashboard</button>
               </div>
@@ -493,6 +506,12 @@ export class UpgradeControl extends Component {
           <div class="card config-modal">
               <h3>Upgrade did not complete</h3>
               <p class="status-bad">${result.error || "The host runner reported a failure."}</p>
+              ${
+                result.backup
+                  ? html`<p class="text-muted">Pre-upgrade copies of <code>config.json</code> and
+                    <code>.env</code> are kept on the host: <code>${result.backup}</code>.</p>`
+                  : null
+              }
               <div class="config-modal-actions">
                   <button class="btn-toggle" onClick=${() => this.setState({ phase: "idle", confirmText: "" })}>Close</button>
               </div>

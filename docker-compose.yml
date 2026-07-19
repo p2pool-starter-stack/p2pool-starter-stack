@@ -50,9 +50,12 @@ services:
     # Healthy only once Tor has finished bootstrapping (circuits built), not merely
     # when the SOCKS port is open — so tari/monerod don't start against a Tor that
     # can't route yet. start_period covers a cold bootstrap without counting failures.
+    # 30s interval (#595): each probe opens a control connection; at 10s that was steady
+    # log spam + wasted cycles on the stack's busiest single-threaded service. Failure
+    # detection worst-case moves from ~50s to ~150s — dependents only gate on STARTUP order.
     healthcheck:
       test: ["CMD", "/usr/local/bin/tor-healthcheck.sh"]
-      interval: 10s
+      interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
@@ -85,6 +88,8 @@ services:
       # P2P proxy from the rendered config so IBD runs over clearnet (tx broadcast stays on Tor).
       - MONERO_CLEARNET_SYNC=${MONERO_CLEARNET_SYNC:-false}
       - MONERO_PREP_THREADS=${MONERO_PREP_THREADS}
+      # Outbound peer target (#595): ~1 Tor circuit per peer; the steady-state Tor-CPU lever.
+      - MONERO_OUT_PEERS=${MONERO_OUT_PEERS:-48}
       # Subnet prefix (#180): the entrypoint envsubst's it into the Tor SOCKS IP in bitmonero.conf.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
     # Immutable root filesystem (#377). The entrypoint renders bitmonero.conf INTO the bind-mounted
@@ -428,14 +433,18 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Immutable root filesystem (#377). Pure network proxy, no bind mounts; the wrapper entrypoint
-    # writes nothing, but the cwd /home/ubuntu exists only in the image and xmrig-proxy may drop a
+    # Immutable root filesystem (#377). Near-pure network proxy; the wrapper entrypoint writes
+    # nothing, but the cwd /home/ubuntu exists only in the image and xmrig-proxy may drop a
     # config/log there (e.g. persisting an API-driven pool switch), so give it uid-1000 tmpfs
     # scratch. Ephemeral by design — the config is re-rendered from the compose command every start.
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
       - /home/ubuntu:size=64m,uid=1000,gid=1000
+    volumes:
+      # Stratum TLS keypair (#261), read-only; the wrapper passes the cert flags only when
+      # PROXY_STRATUM_TLS=true, so an empty dir (TLS off) changes nothing.
+      - ${PROXY_TLS_DIR:-./data/proxy-tls}:/tls:ro
     ports:
       # The stratum endpoint your rigs connect to. Published on 0.0.0.0 (all interfaces) by
       # default so LAN workers can reach it; set p2pool.stratum_bind in config.json to a specific
@@ -452,6 +461,9 @@ services:
       # that item renders a stray '' positional arg (xmrig-proxy warns `unsupported non-option
       # argument ''`). The wrapper entrypoint appends the flag only when this is non-empty.
       - PROXY_STRATUM_PASSWORD=${PROXY_STRATUM_PASSWORD:-}
+      # Stratum-over-TLS (#261): when true the wrapper appends the cert flags and xmrig-proxy
+      # autodetects TLS vs cleartext per-connection on the same stratum port.
+      - PROXY_STRATUM_TLS=${PROXY_STRATUM_TLS:-false}
     command:
       - -o
       - ${P2POOL_URL}
@@ -699,6 +711,9 @@ services:
       # (which is p2pool's block/share view). Fires once per confirmed incoming transfer.
       - TELEGRAM_EVENT_PAYOUT_CONFIRMED=${TELEGRAM_EVENT_PAYOUT_CONFIRMED:-true}
       - TELEGRAM_EVENT_CONTAINER_UNHEALTHY=${TELEGRAM_EVENT_CONTAINER_UNHEALTHY:-true}
+      # An XvB raffle round this wallet won, mirrored from XvB's public winners file. Fires once
+      # per genuinely new win (the raffle_wins table is idempotent on the round's block id).
+      - TELEGRAM_EVENT_RAFFLE_WIN=${TELEGRAM_EVENT_RAFFLE_WIN:-true}
       - TELEGRAM_DAILY_SUMMARY_TIME=${TELEGRAM_DAILY_SUMMARY_TIME:-08:00}
       # Hashrate-degradation detector (#99).
       - HASHRATE_DROP_THRESHOLD_PCT=${HASHRATE_DROP_THRESHOLD_PCT:-50}

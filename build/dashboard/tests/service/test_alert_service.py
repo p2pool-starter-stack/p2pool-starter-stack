@@ -818,6 +818,23 @@ class TestSinkFanout:
         assert text and "0.250000" in text and "TARI" in text and "abcdef12" in text
         assert "abcdef1234567890" not in text  # only the 8-char prefix, never the full txid
 
+    async def test_raffle_win_alert_fans_out(self):
+        # Fans to every sink carrying raffle_win, with the round type and the credited hashrate
+        # formatted like the dashboard. Telegram off, webhook on → only the webhook receives it.
+        tg, hook = _FakeNotifier(enabled=False), _FakeNotifier()
+        svc = _svc(notifier=tg, sinks=[tg, hook])
+        text = await svc.raffle_win_alert("donor_whale", 4.2e6)
+        assert text and tg.sent == []
+        assert hook.sent == [text]
+        assert hook.sent_events == [AlertService.EVT_RAFFLE_WIN]
+        assert "donor_whale" in text and "4.20 MH/s" in text
+
+    async def test_raffle_win_alert_noop_when_toggled_off(self):
+        hook = _FakeNotifier(allow=set())  # enabled transport, but no events allowed
+        svc = _svc(notifier=hook, sinks=[hook])
+        assert await svc.raffle_win_alert("donor", 1000.0) is None
+        assert hook.sent == []
+
     async def test_default_sinks_are_just_the_notifier(self):
         # No webhook/ntfy config in the test env → the sink list is exactly [notifier], so the
         # default stack's behaviour is unchanged.

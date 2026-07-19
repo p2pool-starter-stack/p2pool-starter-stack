@@ -10,7 +10,9 @@ from mining_dashboard.client.xvb_client import (
     REG_NOT_ELIGIBLE,
     REG_OK,
     XvbClient,
+    mask_wallet,
     parse_reward_estimates,
+    parse_winners,
 )
 
 SAMPLE_HTML = "Fail Count: 2\n1hr avg: 1.5 kH/s\n24hr avg: 3.0 kH/s\n"
@@ -142,6 +144,98 @@ def test_get_reward_estimates_unexpected_error_returns_none():
     client = XvbClient("49abc")
     with patch.object(xvb_mod.requests, "get", side_effect=ValueError("kaboom")):
         assert client.get_reward_estimates() is None
+
+
+# --- Raffle-winners parser + fetch ----------------------------------------------------------
+
+# A wallet whose masked form appears in the sample below; 8 + inner + 8 chars like a real address.
+_WIN_WALLET = "48M2j8GjINNERPARTd8KgGBwa"
+
+# Verbatim-shaped sample of winners_recent_full_pub.txt: newest-first rows with a masked wallet,
+# timestamp, credited hashrate, height, an EMPTY tab column, block id, paid-ratio, position and
+# round type. Includes another wallet's row, a malformed row and a bad-date row — all skipped.
+SAMPLE_WINNERS_TXT = (
+    "48M2j8Gj...d8KgGBwa\t2026-07-18 20:41:38\t4203.5kH/s\t3720833\t\t0525a913e879\t1/1\t1\tdonor_mega\n"
+    "47sctNyW...JBFt8g8K\t2026-07-18 17:42:00\t4027.1kH/s\t3720742\t\t630b59612166\t1/1\t27\tdonor_vip\n"
+    "48M2j8Gj...d8KgGBwa\t2026-07-18 15:40:26\t4272.2MH/s\t3720688\t\t1776517ac4dd\t1/1\t10\tdonor_whale\n"
+    "garbage line\n"
+    "48M2j8Gj...d8KgGBwa\tnot-a-date badtime\t1kH/s\t1\t\tdeadbeef0000\t1/1\t1\tdonor\n"
+)
+
+
+def test_mask_wallet_matches_xvb_form():
+    assert mask_wallet(_WIN_WALLET) == "48M2j8Gj...d8KgGBwa"
+
+
+def test_parse_winners_keeps_own_wallet_oldest_first():
+    wins = parse_winners(SAMPLE_WINNERS_TXT, _WIN_WALLET)
+    # The other wallet's row, the garbage row and the bad-date row are skipped; ours come back
+    # oldest first (the file is newest-first) with UTC timestamps and parsed hashrates.
+    assert [w["block_id"] for w in wins] == ["1776517ac4dd", "0525a913e879"]
+    assert wins[0]["tier"] == "donor_whale"
+    assert wins[0]["hashrate"] == 4272.2e6  # MH/s parsed to H/s
+    assert wins[0]["height"] == 3720688
+    assert wins[0]["ts"] == 1784389226.0  # 2026-07-18 15:40:26 UTC
+    assert wins[1] == {
+        "ts": 1784407298.0,  # 2026-07-18 20:41:38 UTC
+        "hashrate": 4203.5e3,
+        "height": 3720833,
+        "block_id": "0525a913e879",
+        "tier": "donor_mega",
+    }
+
+
+def test_parse_winners_garbage_or_empty_is_empty_list():
+    assert parse_winners("", _WIN_WALLET) == []
+    assert parse_winners(None, _WIN_WALLET) == []
+    assert parse_winners("no\ttabs here\n\n???", _WIN_WALLET) == []
+
+
+def test_parse_winners_bounds_hostile_input():
+    # Security bound: a hostile/oversized response can neither make the parser scan unbounded
+    # lines nor return more than _WINNERS_MAX_WINS rows in one sync (the legit file is ~100
+    # lines, so the caps are pure headroom).
+    row = "48M2j8Gj...d8KgGBwa 2026-07-18 15:40:26 1kH/s 1 blk{i} 1/1 1 donor"
+    flood = "\n".join(row.replace("blk{i}", f"blk{i}") for i in range(10_000))
+    wins = parse_winners(flood, _WIN_WALLET)
+    assert len(wins) == xvb_mod._WINNERS_MAX_WINS
+    # Rows beyond the line cap are never scanned: a matching row placed after 10k junk lines
+    # is ignored entirely.
+    tail = ("junk\n" * 9_999) + row.replace("blk{i}", "blktail")
+    assert parse_winners(tail, _WIN_WALLET) == []
+
+
+def test_get_recent_wins_success_routes_over_tor():
+    client = XvbClient(_WIN_WALLET)
+    resp = MagicMock(status_code=200, text=SAMPLE_WINNERS_TXT)
+    with patch.object(xvb_mod.requests, "get", return_value=resp) as mock_get:
+        wins = client.get_recent_wins()
+    assert len(wins) == 2
+    assert mock_get.call_args.args[0].endswith("winners_recent_full_pub.txt")
+    assert mock_get.call_args.kwargs["proxies"]["https"].startswith("socks5h://")
+
+
+def test_get_recent_wins_no_wins_is_empty_list_not_none():
+    # An empty list is a successful "no wins yet" read — distinct from a failed fetch (None).
+    client = XvbClient("49abcSOMEOTHERWALLETxyz99")
+    resp = MagicMock(status_code=200, text=SAMPLE_WINNERS_TXT)
+    with patch.object(xvb_mod.requests, "get", return_value=resp):
+        assert client.get_recent_wins() == []
+
+
+def test_get_recent_wins_failures_return_none():
+    client = XvbClient(_WIN_WALLET)
+    with patch.object(xvb_mod.requests, "get", return_value=MagicMock(status_code=503)):
+        assert client.get_recent_wins() is None
+    with patch.object(xvb_mod.requests, "get", side_effect=requests.RequestException("boom")):
+        assert client.get_recent_wins() is None
+    with patch.object(xvb_mod.requests, "get", side_effect=ValueError("kaboom")):
+        assert client.get_recent_wins() is None
+
+
+def test_get_recent_wins_missing_wallet_returns_none():
+    assert XvbClient("").get_recent_wins() is None
+    assert XvbClient("placeholder").get_recent_wins() is None
 
 
 _SUBMIT = (

@@ -264,6 +264,7 @@ class TestChart:
             "xvb": [],
             "shares": [],
             "events": [],
+            "raffle": [],
             "tension": 0.0,
         }
 
@@ -1673,6 +1674,7 @@ def _state_mgr(history=None, mode="P2POOL", share_stats=None):
     sm.get_tiers.return_value = {}
     sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
     sm.get_share_stats.return_value = share_stats or []
+    sm.get_raffle_wins.return_value = []
     sm.is_db_healthy.return_value = True
     return sm
 
@@ -1997,6 +1999,60 @@ class TestChartEvents:
             e["label"] for e in build_chart(self._hist(now), [], "1h", events=events)["events"]
         ]
         assert labels == ["recent"]  # the 2h-old marker is outside the 1h window
+
+
+class TestChartRaffle:
+    """XvB raffle-win markers flow through build_chart's `raffle_wins` kwarg: gold-star points on
+    the hidden 0-1 event axis, tooltip carrying tier + credited rate, window-filtered like events."""
+
+    def _hist(self, now):
+        return [{"timestamp": now, "v": 800, "v_p2pool": 800, "v_xvb": 0, "t": "a"}]
+
+    def _win(self, ts):
+        return {"ts": ts, "hashrate": 4.2e6, "height": 100, "block_id": "aa11", "tier": "donor"}
+
+    def test_absent_wins_default_to_empty(self):
+        now = time.time()
+        assert build_chart(self._hist(now), [], "all")["raffle"] == []
+
+    def test_raffle_point_shape(self):
+        now = time.time()
+        pt = build_chart(self._hist(now), [], "all", raffle_wins=[self._win(now)])["raffle"]
+        assert pt == [
+            {
+                "x": int(now * 1000),
+                "y": views._RAFFLE_MARKER_Y,
+                "label": "XvB raffle win — donor round at 4.20 MH/s",
+            }
+        ]
+
+    def test_wins_filtered_by_range(self):
+        now = time.time()
+        wins = [self._win(now - 7200), self._win(now - 60)]
+        pts = build_chart(self._hist(now), [], "1h", raffle_wins=wins)["raffle"]
+        assert len(pts) == 1  # the 2h-old win is outside the 1h window
+
+
+class TestBuildRaffleLog:
+    """The XvB card's raffle-wins log: newest first, display-formatted, capped at 20 rows."""
+
+    def _win(self, ts, tier="donor"):
+        return {"ts": ts, "hashrate": 4.2e6, "height": int(ts), "block_id": f"b{ts}", "tier": tier}
+
+    def test_formats_newest_first(self):
+        rows = views.build_raffle_log([self._win(1000.0), self._win(2000.0, "donor_whale")])
+        assert [r["tier"] for r in rows] == ["donor_whale", "donor"]  # storage is oldest-first
+        assert rows[0]["hashrate"] == "4.20 MH/s"
+        assert rows[0]["height"] == 2000
+        assert rows[0]["time"]  # display-formatted timestamp, non-empty
+
+    def test_capped_at_limit(self):
+        rows = views.build_raffle_log([self._win(float(i)) for i in range(30)])
+        assert len(rows) == views._RAFFLE_LOG_LIMIT
+        assert rows[0]["height"] == 29  # newest kept, oldest dropped
+
+    def test_empty_is_empty(self):
+        assert views.build_raffle_log([]) == []
 
 
 class TestBuildEnergy:

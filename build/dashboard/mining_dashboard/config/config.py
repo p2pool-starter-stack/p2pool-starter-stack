@@ -521,6 +521,7 @@ TELEGRAM_EVENTS = {
     "payout_found": _telegram_event_enabled("payout_found"),
     "payout_confirmed": _telegram_event_enabled("payout_confirmed"),
     "container_unhealthy": _telegram_event_enabled("container_unhealthy"),
+    "raffle_win": _telegram_event_enabled("raffle_win"),
 }
 # ponytail: daily_summary is a scheduled push, not an edge — it lives in the events dict only so it
 # gets a per-event on/off toggle like the rest; its time is TELEGRAM_DAILY_SUMMARY_TIME below.

@@ -142,6 +142,31 @@ test("the confirm modal arms only on a typed UPGRADE", () => {
   assert.doesNotMatch(renderToString(inst.render()), /disabled/);
 });
 
+// #637: the host names the restore point in the result — the done modal shows the fresh-dir
+// rollback copy, the failed modal shows the in-place pre-upgrade config/.env copies. A result
+// without the field (an in-place success, an old runner) renders neither sentence.
+test("the done modal names the rollback dir when the result carries one (#637)", () => {
+  const props = { update: UPDATE, enabled: true };
+  const inst = new UpgradeControl(props);
+  inst.props = props;
+  inst.state.phase = "done";
+  inst.state.result = { status: "upgraded", version: "v9.9.9", rollback: "/srv/pithead-v1.3.1" };
+  assert.match(renderToString(inst.render()), /\/srv\/pithead-v1\.3\.1/);
+  inst.state.result = { status: "upgraded", version: "v9.9.9" };
+  assert.doesNotMatch(renderToString(inst.render()), /rollback copy/);
+});
+
+test("the failed modal names the pre-upgrade config/.env copies when the result carries them (#637)", () => {
+  const props = { update: UPDATE, enabled: true };
+  const inst = new UpgradeControl(props);
+  inst.props = props;
+  inst.state.phase = "failed";
+  inst.state.result = { status: "failed", error: "boom", backup: "/x/config.json.bak-upgrade-1 /x/.env.bak-upgrade-1" };
+  assert.match(renderToString(inst.render()), /bak-upgrade-1/);
+  inst.state.result = { status: "failed", error: "boom" };
+  assert.doesNotMatch(renderToString(inst.render()), /Pre-upgrade copies/);
+});
+
 // --- Preview modal (#504) --------------------------------------------------------------
 //
 // dashboard.energy is config.json-only, so the host runner previews an energy edit as a normal
@@ -240,6 +265,33 @@ test("form mode: a core key is lifted out of its own section (no duplicate row)"
   assert.equal(matches.length, 1); // rendered once (in Core), not twice
   assert.match(out, /config-field-name">dashboard\.auth\.username/); // full key inside Core
   assert.match(out, /config-field-name">auth\.password/); // relative label inside its section
+});
+
+test("form mode: a section mixing top-level keys renders full labels — no two rows both named view_key (#611)", () => {
+  // Wallets & payout pulls from monero.* AND tari.*; with relative labels both view_keys
+  // rendered as a bare "view_key". Mixed sections must use the full dotted key.
+  const cfg = {
+    monero: { view_key: "", payout_scan_height: "auto" },
+    tari: { view_key: "", spend_public_key: "" },
+  };
+  const inst = readyView(cfg, []);
+  const out = renderToString(inst.render());
+  assert.match(out, /config-field-name">monero\.view_key/);
+  assert.match(out, /config-field-name">tari\.view_key/);
+  assert.doesNotMatch(out, /config-field-name">view_key</); // no ambiguous bare label
+});
+
+test("form mode: a section mixing top-level keys only via subgroups keeps short labels on its flat fields", () => {
+  // Notifications spans telegram + notifications + healthchecks, but the latter two live in their
+  // own labelled subgroup <details> — the flat telegram.* remainder is single-key, so the mixed
+  // check runs AFTER nestSection and the flat rows keep their relative labels.
+  const cfg = {
+    telegram: { enabled: false, bot_token: "" },
+    healthchecks: { ping_url: "" },
+  };
+  const out = renderToString(readyView(cfg, []).render());
+  assert.match(out, /config-field-name">enabled/); // relative, not telegram.enabled
+  assert.doesNotMatch(out, /config-field-name">telegram\./);
 });
 
 test("mode toggle switches between Form and JSON rendering", () => {

@@ -47,6 +47,13 @@
         "y": 8100
       }
     ],
+    "raffle": [
+      {
+        "label": "XvB raffle win \u2014 donor_whale round at 4.20 MH/s",
+        "x": 1735689000000,
+        "y": 0.7
+      }
+    ],
     "shares": [
       {
         "c": 1,
@@ -188,6 +195,33 @@
       "level": "ok"
     }
   },
+  "energy": {
+    "available": true,
+    "cost_per_kwh": 0.0,
+    "currency": "USD",
+    "disclaimer": "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the current draw at a constant rate \u2014 a naive projection, not a metered bill. Net profit is P2Pool XMR earnings valued at your XMR price, plus Tari merge-mining earnings valued at your Tari price once dashboard.energy.tari_price is set (0/unset counts P2Pool XMR only) \u2014 minus power cost. XvB stays excluded: it's raffle status, not a clean per-day income estimate. Estimates, not guarantees.",
+    "hs_per_watt": 35.79,
+    "incomplete": false,
+    "per_worker": [
+      {
+        "estimated": false,
+        "hs": 5100,
+        "hs_per_watt": 35.92,
+        "name": "rig-alpha",
+        "watts": 142.0
+      },
+      {
+        "estimated": false,
+        "hs": 5100,
+        "hs_per_watt": 35.66,
+        "name": "rig-bravo",
+        "watts": 143.0
+      }
+    ],
+    "tari_price": 0.0,
+    "total_watts": 285.0,
+    "xmr_price": 0.0
+  },
   "hashrate": {
     "low_hr": null,
     "mode_name": "P2POOL",
@@ -252,6 +286,14 @@
     "eligible": false,
     "label": "No"
   },
+  "raffle_wins": [
+    {
+      "hashrate": "4.20 MH/s",
+      "height": 3720833,
+      "tier": "donor_whale",
+      "time": "23:50:00"
+    }
+  ],
   "range": "all",
   "reject_pct_24h": "\u2014",
   "share_stats": [],
@@ -550,8 +592,8 @@
       "api_ok": null,
       "h15": 0,
       "h15_str": "0.00 H/s",
-      "h60": 0,
-      "h60_str": "0.00 H/s",
+      "h60": 5100,
+      "h60_str": "5.10 kH/s",
       "invalid": 0,
       "ip": "192.168.1.10",
       "ip_sort": 3232235786,
@@ -560,7 +602,25 @@
       "reject_flag": null,
       "rejected": 1,
       "rejected_str": "1",
-      "rigforge": null,
+      "rigforge": {
+        "chips": [
+          {
+            "text": "142 W",
+            "title": "Power draw / efficiency.",
+            "variant": "outline"
+          }
+        ],
+        "miner_down": false,
+        "stats": [
+          {
+            "label": "Power / efficiency",
+            "title": "Power draw / efficiency.",
+            "value": "142 W",
+            "variant": "outline"
+          }
+        ],
+        "version": null
+      },
       "status": "online",
       "uptime": 0,
       "uptime_str": "0m 0s"
@@ -571,8 +631,8 @@
       "api_ok": null,
       "h15": 0,
       "h15_str": "0.00 H/s",
-      "h60": 0,
-      "h60_str": "0.00 H/s",
+      "h60": 5100,
+      "h60_str": "5.10 kH/s",
       "invalid": 0,
       "ip": "192.168.1.11",
       "ip_sort": 3232235787,
@@ -581,39 +641,30 @@
       "reject_flag": null,
       "rejected": 40,
       "rejected_str": "40",
-      "rigforge": null,
+      "rigforge": {
+        "chips": [
+          {
+            "text": "143 W",
+            "title": "Power draw / efficiency.",
+            "variant": "outline"
+          }
+        ],
+        "miner_down": false,
+        "stats": [
+          {
+            "label": "Power / efficiency",
+            "title": "Power draw / efficiency.",
+            "value": "143 W",
+            "variant": "outline"
+          }
+        ],
+        "version": null
+      },
       "status": "offline",
       "uptime": 0,
       "uptime_str": "0m 0s"
     }
   ],
-  "energy": {
-    "available": true,
-    "total_watts": 285.0,
-    "hs_per_watt": 35.8,
-    "incomplete": false,
-    "cost_per_kwh": 0.0,
-    "xmr_price": 0.0,
-    "tari_price": 0.0,
-    "currency": "USD",
-    "per_worker": [
-      {
-        "name": "rig-1",
-        "watts": 142.0,
-        "estimated": false,
-        "hs": 5100,
-        "hs_per_watt": 35.9
-      },
-      {
-        "name": "rig-2",
-        "watts": 143.0,
-        "estimated": false,
-        "hs": 5100,
-        "hs_per_watt": 35.7
-      }
-    ],
-    "disclaimer": "Power draw is measured or estimated; net profit is P2Pool XMR only."
-  },
   "xvb_calc": {
     "current_tier": "None",
     "enabled": true,

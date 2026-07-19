@@ -650,6 +650,11 @@ stack_status() {
     if onion_line=$(dashboard_onion_status); then
         log "Dashboard onion (remote access): $onion_line"
     fi
+    # #208: RigForge's setup prompt (and docs/workers.md) tell the operator the stratum
+    # access-password is "shown by 'pithead status'" — honor that contract here. No-op when
+    # auth is off; the same secret already lives in the owner-only .env.
+    announce_stratum_auth
+    announce_stratum_tls # #261: same contract for the TLS pin — status repeats the fingerprint
     if [ "$problems" -eq 0 ]; then
         log "All expected services are up."
     else
@@ -1024,6 +1029,7 @@ announce_dashboard_url() {
         log "Dashboard available at: http://$display_host"
     fi
     announce_stratum_auth
+    announce_stratum_tls # #261: prints the fingerprint rigs pin; no-op when TLS is off
 }
 
 # Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
@@ -2292,7 +2298,7 @@ wizard_write_config() {
         --arg pool "$POOL_TIER" \
         '{monero: {mode: $mode, wallet_address: $mwallet, node_username: $mu, node_password: $mp},
           tari: {wallet_address: $twallet},
-          p2pool: {pool: $pool},
+          p2pool: {pool: $pool, stratum_password: "auto"},
           dashboard: {secure: true}}')
 
     if [ "$MONERO_MODE_WIZ" == "remote" ]; then
@@ -2618,6 +2624,16 @@ parse_and_validate_config() {
         error "p2pool.stratum_password must be \"auto\", empty, or 1–128 chars of letters, digits, and . _ : @ - (no spaces or quotes)."
     fi
 
+    # Stratum-over-TLS (#261): confidentiality on the miner↔stack leg, on top of the access
+    # control above — orthogonal, usable together. Single-port model: with a cert configured,
+    # xmrig-proxy AUTODETECTS TLS on the same stratum bind (verified against the pinned 6.26.0
+    # binary), so cleartext rigs keep mining while rigs opt in one at a time (pools[].tls +
+    # fingerprint pinning, rigforge#115). Rigs authenticate the server by pinning the cert's
+    # SHA-256 fingerprint — xmrig does no CA validation for stratum — so the cert is self-signed
+    # and long-lived, and enforcing TLS-only is deliberately NOT a v1.9 knob (rigs first, posture
+    # flip later — the same discipline as the #208 default).
+    STRATUM_TLS=$(normalize_bool "$(config_bool '.p2pool.stratum_tls' false)")
+
     # xmrig-proxy dev-fee donation level (#173). xmrig-proxy's own compiled default is 0% (no
     # donation) — which the stack inherited silently; expose it so operators can both SEE it and
     # opt in. Default 0 (off); set N to donate N% of submitted hashrate to the xmrig developers
@@ -2674,6 +2690,10 @@ parse_and_validate_config() {
     # location — an operator-pinned dashboard.data_dir is theirs, never touched.
     DASHBOARD_DIR_IS_DEFAULT=1
     [ "$DASHBOARD_DIR" == "$_dash_cfg" ] && DASHBOARD_DIR_IS_DEFAULT=0
+    # Stratum TLS keypair home (#261): joins the shared data root when one exists — the cert's
+    # FINGERPRINT is what every rig pins, so it must survive versioned deploys like the chain
+    # data does, not move with the code. Internal (not config-driven), like CONTROL_DIR.
+    PROXY_TLS_DIR="$_data_root/proxy-tls"
     # Internal shared state dir (#234): the dashboard (rw) drops a per-chain "clearnet sync complete"
     # marker here and the monerod/tari entrypoints (ro) read it to decide Tor-vs-clearnet. Not a
     # user-facing data dir, so it's fixed under ./data rather than config-driven.
@@ -2688,7 +2708,7 @@ parse_and_validate_config() {
 
     # Guard every data dir against catastrophic chown -R / rm -rf targets before we touch them.
     local d
-    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR" "$CADDY_LOG_DIR"; do
+    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$CONTROL_DIR" "$CADDY_LOG_DIR" "$PROXY_TLS_DIR"; do
         assert_safe_dir "$d"
     done
 
@@ -2847,7 +2867,7 @@ load_preserved_state() {
 
 prepare_directories() {
     log "Initializing data directories..."
-    mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR"
+    mkdir -p "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$CLEARNET_STATE_DIR" "$PROXY_TLS_DIR"
     mkdir -p "$P2POOL_DIR/stats"
 
     # Enforce permissions. Each data dir is owned by the uid its container runs as: Tor keeps its
@@ -2861,6 +2881,10 @@ prepare_directories() {
     # marker (#234) while monerod/tari mount it read-only. It holds only non-secret state markers.
     sudo chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || chmod 777 "$CLEARNET_STATE_DIR" 2>/dev/null || true
     prepare_control_dirs
+    # #261: setup reaches compose through THIS function (stack_up never runs ensure_directories),
+    # so a hand-written config with stratum_tls:true at first setup must get its keypair here —
+    # otherwise the mount is root-created empty and no fingerprint is ever announced.
+    ensure_stratum_tls_cert
 }
 
 # Secret leaves in config.json, as jq path arrays. The single host-side source for BOTH control-
@@ -2979,7 +3003,7 @@ ensure_owner() {
 # sudo-free once ownership is correct; the first run after the non-root switch migrates the data.
 ensure_directories() {
     local d created=()
-    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR"; do
+    for d in "$MONERO_DIR" "$TARI_DIR" "$P2POOL_DIR" "$TOR_DATA_DIR" "$DASHBOARD_DIR" "$PROXY_TLS_DIR"; do
         [ -d "$d" ] || { mkdir -p "$d" && created+=("$d"); }
     done
     mkdir -p "$P2POOL_DIR/stats"
@@ -2988,9 +3012,52 @@ ensure_directories() {
     ensure_owner "$TARI_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$P2POOL_DIR" "$APP_UID" "$APP_GID"
     ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
-    prepare_control_dirs # #33: spool dirs exist + requests/ writable by the dashboard uid
+    prepare_control_dirs    # #33: spool dirs exist + requests/ writable by the dashboard uid
+    ensure_stratum_tls_cert # #261: keypair exists before compose mounts $PROXY_TLS_DIR
     [ "${#created[@]}" -gt 0 ] && sudo chmod -R 755 "$P2POOL_DIR/stats"
     return 0
+}
+
+# Generate the stratum TLS keypair once (#261). Self-signed and long-lived (3650 days): rigs
+# authenticate the server by PINNING the certificate's SHA-256 fingerprint (xmrig does no CA
+# validation for stratum), so CA trust and expiry play no part in the model — regenerating the
+# cert IS the rotation, and every rig re-pins. The key is created under umask 077 and handed to
+# the proxy uid read-only; the dir is mounted :ro into the container. No-op while the knob is
+# off, and idempotent while the keypair exists — the fingerprint stays stable across applies.
+ensure_stratum_tls_cert() {
+    [ "${STRATUM_TLS:-false}" = "true" ] || return 0
+    [ -f "$PROXY_TLS_DIR/cert.pem" ] && [ -f "$PROXY_TLS_DIR/key.pem" ] && return 0
+    command -v openssl >/dev/null 2>&1 ||
+        error "p2pool.stratum_tls is true but openssl is not installed — it is needed once, to generate the stratum certificate."
+    log "Generating the stratum TLS certificate (#261) — self-signed; rigs pin its fingerprint..."
+    (
+        umask 077
+        openssl req -x509 -newkey rsa:2048 -keyout "$PROXY_TLS_DIR/key.pem" \
+            -out "$PROXY_TLS_DIR/cert.pem" -days 3650 -nodes -subj "/CN=pithead-stratum" 2>/dev/null
+    ) || error "OpenSSL could not generate the stratum TLS certificate in $PROXY_TLS_DIR."
+    # The proxy runs as the unprivileged app uid (#255) and must read the key through the :ro
+    # mount; the umask above already keeps both files owner-only until this narrows them.
+    ensure_owner "$PROXY_TLS_DIR" "$APP_UID" "$APP_GID"
+    chmod 600 "$PROXY_TLS_DIR/key.pem" 2>/dev/null || sudo chmod 600 "$PROXY_TLS_DIR/key.pem"
+    chmod 644 "$PROXY_TLS_DIR/cert.pem" 2>/dev/null || sudo chmod 644 "$PROXY_TLS_DIR/cert.pem"
+    announce_stratum_tls
+}
+
+# Surface the stratum TLS state + the fingerprint rigs must pin (#261) — the companion to
+# announce_stratum_auth: the fingerprint is what RigForge setup asks for (pools[].tls-fingerprint).
+# Public data (it's the cert's own digest), so printing it is safe anywhere.
+announce_stratum_tls() {
+    # Callable with or without a prior parse (status vs apply): fall back to the rendered .env.
+    local enabled="${STRATUM_TLS:-}" dir="${PROXY_TLS_DIR:-}"
+    [ -n "$enabled" ] || enabled=$(env_get PROXY_STRATUM_TLS)
+    [ -n "$dir" ] || dir=$(env_get PROXY_TLS_DIR)
+    [ "$enabled" = "true" ] && [ -n "$dir" ] && [ -f "$dir/cert.pem" ] || return 0
+    command -v openssl >/dev/null 2>&1 || return 0
+    local fp
+    fp=$(openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha256 2>/dev/null |
+        cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+    [ -n "$fp" ] || return 0
+    log "Stratum TLS is ON (#261): rigs may connect with TLS on the same stratum port (cleartext still accepted). Pin this fingerprint on each rig (pools[].tls-fingerprint): $fp"
 }
 
 # One-time dashboard-data migration (#455): the dashboard DB used to default INSIDE the install
@@ -3406,6 +3473,17 @@ render_env() {
         [ "$prep_threads" -gt 8 ] && prep_threads=8
     fi
 
+    # Outbound peer target (#595): over Tor, each outbound peer is roughly one long-lived circuit,
+    # so out-peers is the biggest steady-state knob on Tor's CPU (circuit maintenance + rebuild).
+    # The default STAYS 48 — more peers means more aggregate bandwidth during a Tor initial sync,
+    # and a new operator's first run is exactly that. Once synced, 32 (P2Pool's clearnet
+    # recommendation) cuts monerod's circuit count by a third with no mining impact.
+    local out_peers
+    out_peers=$(jq -r '.monero.out_peers // 48' "$CONFIG_FILE")
+    if ! [[ "$out_peers" =~ ^[0-9]+$ ]] || [ "$out_peers" -lt 8 ] || [ "$out_peers" -gt 1024 ]; then
+        error "monero.out_peers must be an integer between 8 and 1024 (got \"$out_peers\")."
+    fi
+
     # monerod RPC LAN exposure. Default localhost-only: p2pool reaches monerod over the internal
     # Docker network regardless, so the published port is only for external wallets.
     local rpc_bind rpc_lan
@@ -3507,6 +3585,7 @@ render_env() {
     local tg_ev_daily_summary tg_summary_time tg_ev_hashrate_low tg_ev_hashrate_loss
     local tg_ev_hugepages tg_ev_low_ram tg_ev_wallet_changed tg_ev_high_reject_rate
     local tg_ev_block_found tg_ev_payout_found tg_ev_payout_confirmed tg_ev_container_unhealthy
+    local tg_ev_raffle_win
     local hr_drop_threshold hr_drop_minutes
     tg_ev_node_down=$(tg_event node_down)
     tg_ev_node_recovered=$(tg_event node_recovered)
@@ -3534,6 +3613,7 @@ render_env() {
     tg_ev_payout_found=$(tg_event payout_found)
     tg_ev_payout_confirmed=$(tg_event payout_confirmed)
     tg_ev_container_unhealthy=$(tg_event container_unhealthy)
+    tg_ev_raffle_win=$(tg_event raffle_win)
     # Degradation detector (#99): drop-below-% and sustained-minutes; defaults 50 / 10.
     hr_drop_threshold=$(jq -r '.dashboard.hashrate_drop_threshold // 50' "$CONFIG_FILE")
     hr_drop_minutes=$(jq -r '.dashboard.hashrate_drop_minutes // 10' "$CONFIG_FILE")
@@ -3661,6 +3741,8 @@ P2POOL_PORT=$p2pool_port
 STRATUM_BIND=$STRATUM_BIND
 STRATUM_PORT=$STRATUM_PORT
 PROXY_STRATUM_PASSWORD=$STRATUM_PASSWORD
+PROXY_STRATUM_TLS=$STRATUM_TLS
+PROXY_TLS_DIR=$PROXY_TLS_DIR
 XVB_POOL_URL=$xvb_url
 XVB_DONOR_ID=$xvb_donor
 XVB_ENABLED=$xvb_enabled
@@ -3703,6 +3785,7 @@ TELEGRAM_EVENT_BLOCK_FOUND=$tg_ev_block_found
 TELEGRAM_EVENT_PAYOUT_FOUND=$tg_ev_payout_found
 TELEGRAM_EVENT_PAYOUT_CONFIRMED=$tg_ev_payout_confirmed
 TELEGRAM_EVENT_CONTAINER_UNHEALTHY=$tg_ev_container_unhealthy
+TELEGRAM_EVENT_RAFFLE_WIN=$tg_ev_raffle_win
 HASHRATE_DROP_THRESHOLD_PCT=$hr_drop_threshold
 HASHRATE_DROP_MINUTES=$hr_drop_minutes
 TELEGRAM_DAILY_SUMMARY_TIME=$tg_summary_time
@@ -3728,6 +3811,7 @@ MONERO_CLEARNET_SYNC=$monero_clearnet
 TARI_CLEARNET_SYNC=$tari_clearnet
 CLEARNET_STATE_DIR=$CLEARNET_STATE_DIR
 MONERO_PREP_THREADS=$prep_threads
+MONERO_OUT_PEERS=$out_peers
 MONERO_RPC_BIND=$rpc_bind
 MONERO_NODE_HOST=$mono_host
 MONERO_RPC_PORT=$rpc_port
@@ -4231,6 +4315,16 @@ describe_change() {
             msg="Stratum port: $old → $new (#172) — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
         fi
         ;;
+    PROXY_STRATUM_TLS)
+        if [ "$new" = "true" ]; then
+            msg="Stratum TLS ENABLED (#261) — the proxy serves TLS and cleartext on the same port; rigs opt in by pinning the cert fingerprint (shown after apply). xmrig-proxy is recreated."
+        else
+            msg="Stratum TLS DISABLED (#261) — rigs with pools[].tls:true will fail to connect until switched back to cleartext. xmrig-proxy is recreated."
+        fi
+        ;;
+    PROXY_TLS_DIR)
+        msg="Stratum TLS keypair directory: $old → $new — the cert (and its pinned fingerprint) does NOT move with it; rigs re-pin if a new cert is generated."
+        ;;
     PROXY_STRATUM_PASSWORD)
         # Secret — never echo the value into the change preview / logs.
         if [ -z "$new" ]; then
@@ -4345,6 +4439,9 @@ describe_change() {
         ;;
     MONERO_PREP_THREADS)
         msg="Monero block-prep threads: $old → $new."
+        ;;
+    MONERO_OUT_PEERS)
+        msg="Monero outbound peer target: $old → $new (#595) — monerod restarts; over Tor each outbound peer is roughly one circuit."
         ;;
     HEALTHCHECKS_PING_URL)
         # The ping URL is both the on/off switch and a capability secret — report the change
@@ -5245,6 +5342,135 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
+    # #629: pick the extraction target. A versioned install (pithead-vX.Y.Z dir) whose data dirs
+    # all resolve OUTSIDE the install dir gets the documented bundle-deploy layout
+    # (docs/operations.md § A recommended layout): extract into a fresh sibling pithead-<tag>/,
+    # seed the operator's config + the install-local state, and run the NEW dir's upgrade — on
+    # success its update_current_symlink repoints `current`, and this dir survives untouched as
+    # the rollback copy. Anything else falls back to the historical in-place extraction: a plain
+    # `pithead/` extract has no versioned layout to maintain, and data living under this dir
+    # (the pre-#455 default) would be stranded by a dir swap — the new render would re-derive
+    # its default paths under the NEW dir and the stack would come up beside its own data.
+    local new_dir="" cwd
+    cwd=$(pwd -P) # physical path: the guard below compares canonicalized values on BOTH sides
+    if [[ "$(basename "$cwd")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        new_dir="$(dirname "$cwd")/pithead-$tag"
+        local dvar dval
+        for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR TOR_DATA_DIR DASHBOARD_DATA_DIR; do
+            dval=$(env_get "$dvar")
+            [ -n "$dval" ] || continue
+            # Canonicalize: the .env value may reach the same place through the `current` symlink.
+            dval=$( (cd "$dval" 2>/dev/null && pwd -P) || printf '%s' "$dval")
+            case "$dval" in
+            "$cwd" | "$cwd"/*)
+                warn "$dvar resolves inside the install dir — upgrading in place; move the data to a shared root outside the version dir to get per-version rollback dirs (#629)."
+                new_dir=""
+                break
+                ;;
+            esac
+        done
+    fi
+    # Atomic create, no -p and no pre-check: root must never extract into (or follow a symlink
+    # planted at) a path some other local account pre-created — mkdir fails on ANY existing
+    # entry, closing the check-to-use race outright (#629 security review). A leftover dir from
+    # an earlier failed attempt therefore also lands here: fall back to in-place and say why.
+    if [ -n "$new_dir" ] && ! mkdir "$new_dir" 2>/dev/null; then
+        warn "$new_dir already exists (a previous attempt, or not ours to create) — upgrading in place. Remove it to get the fresh-dir layout back (#629)."
+        new_dir=""
+    fi
+    if [ -n "$new_dir" ]; then
+        # Fresh-dir deploy (#629). Plain tar throughout: nothing in $new_dir is running.
+        if ! tar -xzf "$bundle" --strip-components=1 -C "$new_dir" 2>"$logf"; then
+            rm -f "$bundle"
+            _upg_fail "could not extract the $tag bundle into $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
+            rm -f "$logf"
+            return 0
+        fi
+        rm -f "$bundle"
+        # Seed what only the running install has: the operator's config, the rendered .env
+        # (preserved secrets — onions, RPC creds; cp -p keeps it 0600), and the install-local
+        # state dirs — the control spool (so the audit trail and results history carry over,
+        # and the result written below is visible to the RECREATED dashboard, which mounts the
+        # new dir's spool), the clearnet sync markers, and the caddy access log. Chain and
+        # dashboard data live outside this dir (guarded above) and carry over by path.
+        local sdir
+        if ! cp -p "$CONFIG_FILE" "$new_dir/config.json" 2>"$logf" ||
+            ! cp -p "$ENV_FILE" "$new_dir/.env" 2>>"$logf" ||
+            ! mkdir -p "$new_dir/data" 2>>"$logf"; then
+            _upg_fail "could not seed config into $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
+            rm -f "$logf"
+            return 0
+        fi
+        for sdir in control clearnet-state caddy-logs; do
+            [ -d "$PWD/data/$sdir" ] || continue
+            if ! cp -a "$PWD/data/$sdir" "$new_dir/data/" 2>"$logf"; then
+                _upg_fail "could not carry data/$sdir over to $new_dir: $(tail -c 500 "$logf") — the running install is untouched; the stack keeps running v$PITHEAD_VERSION."
+                rm -f "$logf"
+                return 0
+            fi
+        done
+        # Run the NEW release's upgrade from the NEW dir: it re-renders the generated config
+        # (recomputing every $PWD-derived path, including CONTROL_DIR), re-provisions the
+        # control-runner units onto the new path, pulls the $tag images, and repoints
+        # `current ->` on success. The outcome goes to BOTH spools: the recreated dashboard
+        # mounts the new one, a failure before the recreate is read from the old one.
+        # #637: this dir — untouched by the whole deploy — is the restore point; name it in the
+        # result so the operator learns it exists without reading docs/operations.md first.
+        local rdir
+        if (cd "$new_dir" && ./pithead upgrade) >"$logf" 2>&1; then
+            for rdir in "$cdir" "$new_dir/data/control"; do
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg r "$cwd" '{status:"upgraded",version:$v,rollback:$r,ts:(now|floor)}')"
+                control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
+            done
+        else
+            for rdir in "$cdir" "$new_dir/data/control"; do
+                control_write_result "$rdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" --arg d "$new_dir" --arg r "$cwd" \
+                    '{status:"failed",version:$v,rollback:$r,error:($e + " — finish the upgrade from the host: cd " + $d + " && ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+                control_audit "$rdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
+            done
+        fi
+        rm -f "$logf"
+        return 0
+    fi
+    # #637: unlike the fresh-dir path, this one has no surviving previous dir — and the new
+    # release's `upgrade` below re-renders .env (and may migrate config.json). Keep a timestamped
+    # pre-upgrade copy of both next to the originals before a byte changes (cp -p keeps .env's
+    # 0600; a fresh stamp per attempt so a failed try never overwrites the good copy) and refuse
+    # to overwrite the install without one. The destination name is predictable, so root must
+    # never write through a symlink a co-tenant planted there (the #629 mkdir guard's attack
+    # class): copy to an unpredictable mktemp name first, then rename onto the final name —
+    # rename(2) replaces a planted entry without following it.
+    _upg_snapshot() { # <src> <dst>
+        local tmp
+        tmp=$(mktemp "$PWD/.bak-upgrade.XXXXXX") || return 1
+        if ! cp -p "$1" "$tmp"; then
+            rm -f "$tmp"
+            return 1
+        fi
+        mv -f "$tmp" "$2"
+    }
+    local bak
+    bak="bak-upgrade-$(date +%Y%m%d-%H%M%S)"
+    if ! _upg_snapshot "$CONFIG_FILE" "$CONFIG_FILE.$bak" 2>"$logf" ||
+        ! _upg_snapshot "$ENV_FILE" "$ENV_FILE.$bak" 2>>"$logf"; then
+        rm -f "$bundle"
+        _upg_fail "could not keep a pre-upgrade copy of config.json/.env: $(tail -c 500 "$logf") — refusing to overwrite the install without a restore point; the stack keeps running v$PITHEAD_VERSION."
+        rm -f "$logf"
+        return 0
+    fi
+    # Older snapshots hold yesterday's secrets: keep the newest three pairs, prune the rest.
+    # Lexical order IS chronological for this stamp format; `|| true` — an empty glob under
+    # pipefail must not kill the runner.
+    ls -1r "$CONFIG_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
+    ls -1r "$ENV_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
+    # The reported paths: CONFIG_FILE is cwd-relative unless the (test-only) override made it
+    # absolute — don't prepend $PWD onto an already-absolute path.
+    local bak_paths
+    case "$CONFIG_FILE" in
+    /*) bak_paths="$CONFIG_FILE.$bak" ;;
+    *) bak_paths="$PWD/$CONFIG_FILE.$bak" ;;
+    esac
+    bak_paths="$bak_paths $PWD/$ENV_FILE.$bak"
     # In-place extraction over the running install, in two passes. Pass 1 lays down everything
     # EXCEPT the running script with plain tar, which MERGES existing directories — a release
     # install already carries the non-empty build/* config-template mounts — and overwrites files.
@@ -5269,7 +5495,8 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
     else
         control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" \
-            '{status:"failed",version:$v,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+            --arg b "$bak_paths" \
+            '{status:"failed",version:$v,backup:$b,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
     fi
     rm -f "$logf"
