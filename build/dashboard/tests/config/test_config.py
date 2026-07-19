@@ -291,7 +291,15 @@ class TestWorkerEndpointsDualRead:
 class TestEnergyConfig:
     """dashboard.energy loader (#260): operator-set electricity + XMR prices, read off the config.json
     mount. Every field optional; an invalid value degrades to its default (feature off) rather than
-    crashing — no price feed ships, so both prices are supplied by the operator."""
+    crashing. Prices are operator-set, or fetched live over Tor when `price_feed` opts in (#520)."""
+
+    DEFAULTS = {
+        "cost_per_kwh": 0.0,
+        "xmr_price": 0.0,
+        "tari_price": 0.0,
+        "currency": "USD",
+        "price_feed": False,
+    }
 
     def _load(self, tmp_path, payload):
         from mining_dashboard.config.config import load_energy_config
@@ -301,12 +309,7 @@ class TestEnergyConfig:
         return load_energy_config(str(p))
 
     def test_defaults_when_absent(self, tmp_path):
-        assert self._load(tmp_path, {"dashboard": {}}) == {
-            "cost_per_kwh": 0.0,
-            "xmr_price": 0.0,
-            "tari_price": 0.0,
-            "currency": "USD",
-        }
+        assert self._load(tmp_path, {"dashboard": {}}) == self.DEFAULTS
 
     def test_valid_values_load(self, tmp_path):
         got = self._load(
@@ -318,6 +321,7 @@ class TestEnergyConfig:
                         "xmr_price": 150,
                         "tari_price": 2.5,
                         "currency": "EUR",
+                        "price_feed": True,
                     }
                 }
             },
@@ -327,6 +331,7 @@ class TestEnergyConfig:
             "xmr_price": 150.0,
             "tari_price": 2.5,
             "currency": "EUR",
+            "price_feed": True,
         }
 
     def test_invalid_values_degrade_to_defaults(self, tmp_path):
@@ -339,23 +344,19 @@ class TestEnergyConfig:
                         "xmr_price": "expensive",
                         "tari_price": -2,
                         "currency": "has space",
+                        "price_feed": "yes",  # only literal true opts in — a truthy string doesn't
                     }
                 }
             },
         )
-        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "tari_price": 0.0, "currency": "USD"}
+        assert got == self.DEFAULTS
 
     def test_non_object_energy_degrades_to_defaults(self, tmp_path):
         # A hand-edited `energy` that isn't an object mustn't crash — fall back to defaults.
         got = self._load(tmp_path, {"dashboard": {"energy": "nope"}})
-        assert got == {"cost_per_kwh": 0.0, "xmr_price": 0.0, "tari_price": 0.0, "currency": "USD"}
+        assert got == self.DEFAULTS
 
     def test_missing_file_reads_defaults(self, tmp_path):
         from mining_dashboard.config.config import load_energy_config
 
-        assert load_energy_config(str(tmp_path / "absent.json")) == {
-            "cost_per_kwh": 0.0,
-            "xmr_price": 0.0,
-            "tari_price": 0.0,
-            "currency": "USD",
-        }
+        assert load_energy_config(str(tmp_path / "absent.json")) == self.DEFAULTS

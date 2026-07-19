@@ -102,6 +102,14 @@ def test_telegram_bot_is_tor_when_enabled_inactive_otherwise():
     assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
 
 
+def test_price_feed_is_tor_when_enabled_inactive_otherwise():
+    # Opting into the price feed adds a dashboard Tor egress (#520); off → inactive, never a leak.
+    assert _conn(_posture(price_feed_enabled=False), "dashboard", "price feed")["route"] == INACTIVE
+    on = _posture(price_feed_enabled=True, firewall=True)
+    assert _conn(on, "dashboard", "price feed")["route"] == TOR
+    assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
+
+
 def test_remote_monerod_rpc_is_clearnet():
     assert _conn(_posture(remote_monero=False), "p2pool", "monerod RPC")["route"] != CLEARNET
     assert _conn(_posture(remote_monero=True), "p2pool", "monerod RPC")["route"] == CLEARNET

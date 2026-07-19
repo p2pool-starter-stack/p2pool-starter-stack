@@ -49,8 +49,10 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   alert channels; timezone, memory limits, and every privacy toggle — around 94 keys across 13
   sections, all in one `config.json` and validated on every `apply`. Most have defaults you'll never
   touch. See [Configuration](docs/configuration.md).
-- 💡 **Energy-aware earnings.** Set your electricity cost and XMR price and add each rig's watts; the
-  Energy tab shows fleet power draw, efficiency in hashes per watt, and estimated profit after power.
+- 💡 **Energy-aware earnings.** Set your electricity cost and coin prices — typed in, or fetched
+  live from CoinGecko over Tor with the opt-in price feed — and add each rig's watts; the earnings
+  card shows fiat estimates per coin, fleet power draw, efficiency in hashes per watt, and estimated
+  profit after power, always stating which price the figures use.
 - 📟 **Telegram operator bot.** Opt-in alerts for a downed node, a worker that dropped off, sync
   finishing, low disk, a clearnet leak, or a sustained hashrate drop — plus a daily digest and
   read-only commands (`/status`, `/hashrate`, `/workers`, `/earnings`). Routed over Tor. The same

@@ -2071,16 +2071,23 @@ class TestBuildEnergy:
             "rigforge": rf,
         }
 
-    def _energy(self, monkeypatch, workers, energy=None, descriptors=None):
+    def _energy(self, monkeypatch, workers, energy=None, descriptors=None, prices=None):
         from mining_dashboard.web import views
 
         monkeypatch.setattr(
             views.config,
             "DASHBOARD_ENERGY",
-            energy or {"cost_per_kwh": 0.0, "xmr_price": 0.0, "tari_price": 0.0, "currency": "USD"},
+            {
+                "cost_per_kwh": 0.0,
+                "xmr_price": 0.0,
+                "tari_price": 0.0,
+                "currency": "USD",
+                "price_feed": False,
+                **(energy or {}),
+            },
         )
         monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
-        return build_energy(workers)
+        return build_energy(workers, prices)
 
     def test_no_power_anywhere_is_unavailable(self, monkeypatch):
         got = self._energy(monkeypatch, [self._worker("r1"), self._worker("r2")])
@@ -2133,6 +2140,45 @@ class TestBuildEnergy:
         assert got["xmr_price"] == 150.0
         assert got["tari_price"] == 2.5
         assert got["currency"] == "EUR"
+        # Static config prices: the calculator says so (#520 — a fiat figure is never unattributed).
+        assert got["price_source"] == {"feed": False, "live": False, "age_sec": None}
+
+    def test_live_feed_prices_replace_static(self, monkeypatch):
+        # Feed on + a fetch landed: live prices stand in for the static numbers, with their age.
+        now = time.time()
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100)],
+            energy={"xmr_price": 150.0, "tari_price": 2.5, "price_feed": True},
+            prices={"xmr": 333.97, "tari": 0.0004, "currency": "USD", "fetched_at": now - 60},
+        )
+        assert got["xmr_price"] == 333.97
+        assert got["tari_price"] == 0.0004
+        assert got["price_source"]["feed"] is True
+        assert got["price_source"]["live"] is True
+        assert 59 <= got["price_source"]["age_sec"] <= 62
+
+    def test_feed_waiting_falls_back_to_static(self, monkeypatch):
+        # Feed on but no fetch yet (Tor down / first minutes): static prices stand, honestly labeled.
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100)],
+            energy={"xmr_price": 150.0, "price_feed": True},
+            prices=None,
+        )
+        assert got["xmr_price"] == 150.0
+        assert got["price_source"] == {"feed": True, "live": False, "age_sec": None}
+
+    def test_feed_off_ignores_stray_prices(self, monkeypatch):
+        # A prices payload with the feed off must not override the operator's static numbers.
+        got = self._energy(
+            monkeypatch,
+            [self._worker("r1", watts=100)],
+            energy={"xmr_price": 150.0},
+            prices={"xmr": 333.97, "tari": 0.0004, "currency": "USD", "fetched_at": time.time()},
+        )
+        assert got["xmr_price"] == 150.0
+        assert got["price_source"]["live"] is False
 
 
 class TestBuildWorkerDetail:

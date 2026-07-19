@@ -2423,15 +2423,15 @@ validate_worker_endpoints() {
 # Validate the dashboard.energy block for the energy/profit calculator (#260). Like the worker
 # descriptors, this renders nothing to .env — the dashboard reads it off the read-only config.json
 # bind mount — so validation exists only to fail an apply loudly on a typo. Prices are operator-set
-# (no price feed ships: fetching one is a clearnet egress this stack avoids), so both must be
-# non-negative numbers and the currency a short label.
+# non-negative numbers and the currency a short label; price_feed (#520) opts into fetching both
+# prices live from CoinGecko over Tor instead (the static numbers stay as the fallback).
 validate_energy_config() {
     local en_err
     en_err=$(jq -r '
         (.dashboard.energy // {}) as $e
-        | if ($e | type) != "object" then "dashboard.energy must be an object {cost_per_kwh, currency?, xmr_price?, tari_price?}."
-          elif (($e | keys) - ["cost_per_kwh", "currency", "xmr_price", "tari_price"]) != []
-            then "dashboard.energy has an unknown key (\(($e | keys) - ["cost_per_kwh", "currency", "xmr_price", "tari_price"] | join(", "))). Only cost_per_kwh, currency, xmr_price and tari_price are allowed."
+        | if ($e | type) != "object" then "dashboard.energy must be an object {cost_per_kwh, currency?, xmr_price?, tari_price?, price_feed?}."
+          elif (($e | keys) - ["cost_per_kwh", "currency", "xmr_price", "tari_price", "price_feed"]) != []
+            then "dashboard.energy has an unknown key (\(($e | keys) - ["cost_per_kwh", "currency", "xmr_price", "tari_price", "price_feed"] | join(", "))). Only cost_per_kwh, currency, xmr_price, tari_price and price_feed are allowed."
           elif ($e | has("cost_per_kwh")) and (($e.cost_per_kwh | type) != "number" or $e.cost_per_kwh < 0)
             then "dashboard.energy.cost_per_kwh must be a non-negative number (your electricity price per kWh; 0 or unset hides the profit math)."
           elif ($e | has("xmr_price")) and (($e.xmr_price | type) != "number" or $e.xmr_price < 0)
@@ -2440,6 +2440,8 @@ validate_energy_config() {
             then "dashboard.energy.tari_price must be a non-negative number (the fiat price of 1 XTM in your currency; 0 or unset excludes Tari from net profit)."
           elif ($e | has("currency")) and (($e.currency | type) != "string" or ($e.currency | test("^[!-~]{1,128}$") | not))
             then "dashboard.energy.currency must be a short currency label (e.g. USD, EUR)."
+          elif ($e | has("price_feed")) and (($e.price_feed | type) != "boolean")
+            then "dashboard.energy.price_feed must be true or false (fetch live XMR/XTM prices from CoinGecko over Tor; default false, no clearnet egress)."
           else empty end' "$CONFIG_FILE" 2>/dev/null)
     [ -z "$en_err" ] || error "$en_err"
 }

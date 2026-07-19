@@ -92,6 +92,7 @@
         "energy": {
             "cost_per_kwh": 0,
             "currency": "USD",
+            "price_feed": false,
             "tari_price": 0,
             "xmr_price": 0
         },

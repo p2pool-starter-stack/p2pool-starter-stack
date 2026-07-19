@@ -170,6 +170,10 @@
           {
             "route": "inactive",
             "to": "Telegram bot"
+          },
+          {
+            "route": "inactive",
+            "to": "price feed (coingecko.com)"
           }
         ],
         "firewalled": false,
@@ -199,8 +203,8 @@
     "available": true,
     "cost_per_kwh": 0.0,
     "currency": "USD",
-    "disclaimer": "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the current draw at a constant rate \u2014 a naive projection, not a metered bill. Net profit is P2Pool XMR earnings valued at your XMR price, plus Tari merge-mining earnings valued at your Tari price once dashboard.energy.tari_price is set (0/unset counts P2Pool XMR only) \u2014 minus power cost. XvB stays excluded: it's raffle status, not a clean per-day income estimate. Estimates, not guarantees.",
-    "hs_per_watt": 35.79,
+    "disclaimer": "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the current draw at a constant rate \u2014 a naive projection, not a metered bill. Net profit is P2Pool XMR earnings valued at the XMR price in use (your configured price, or the live CoinGecko-over-Tor feed when dashboard.energy.price_feed is on), plus Tari merge-mining earnings valued at the Tari price when one is set (0/unset counts P2Pool XMR only) \u2014 minus power cost. XvB stays excluded: it's raffle status, not a clean per-day income estimate. Estimates, not guarantees.",
+    "hs_per_watt": 34.74,
     "incomplete": false,
     "per_worker": [
       {
@@ -212,12 +216,17 @@
       },
       {
         "estimated": false,
-        "hs": 5100,
-        "hs_per_watt": 35.66,
+        "hs": 4800,
+        "hs_per_watt": 33.57,
         "name": "rig-bravo",
         "watts": 143.0
       }
     ],
+    "price_source": {
+      "age_sec": null,
+      "feed": false,
+      "live": false
+    },
     "tari_price": 0.0,
     "total_watts": 285.0,
     "xmr_price": 0.0
@@ -444,6 +453,13 @@
         "to": "tor"
       },
       {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "price feed",
+        "route": "inactive",
+        "to": "tor"
+      },
+      {
         "from": "tor",
         "kind": "p2p",
         "label": "SOCKS + onion circuits",
@@ -605,7 +621,7 @@
       "rigforge": {
         "chips": [
           {
-            "text": "142 W",
+            "text": "142 W \u00b7 35.9 H/s\u00b7W",
             "title": "Power draw / efficiency.",
             "variant": "outline"
           }
@@ -615,7 +631,7 @@
           {
             "label": "Power / efficiency",
             "title": "Power draw / efficiency.",
-            "value": "142 W",
+            "value": "142 W \u00b7 35.9 H/s\u00b7W",
             "variant": "outline"
           }
         ],
@@ -631,8 +647,8 @@
       "api_ok": null,
       "h15": 0,
       "h15_str": "0.00 H/s",
-      "h60": 5100,
-      "h60_str": "5.10 kH/s",
+      "h60": 4800,
+      "h60_str": "4.80 kH/s",
       "invalid": 0,
       "ip": "192.168.1.11",
       "ip_sort": 3232235787,
@@ -644,7 +660,7 @@
       "rigforge": {
         "chips": [
           {
-            "text": "143 W",
+            "text": "143 W \u00b7 33.6 H/s\u00b7W",
             "title": "Power draw / efficiency.",
             "variant": "outline"
           }
@@ -654,7 +670,7 @@
           {
             "label": "Power / efficiency",
             "title": "Power draw / efficiency.",
-            "value": "143 W",
+            "value": "143 W \u00b7 33.6 H/s\u00b7W",
             "variant": "outline"
           }
         ],

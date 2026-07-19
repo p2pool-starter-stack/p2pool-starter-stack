@@ -906,8 +906,9 @@ _ENERGY_DISCLAIMER = (
     "Power draw is measured (RAPL, 15s sample) or your per-worker estimate; a worker reporting "
     "neither is excluded and the fleet total is marked incomplete. kWh and cost extrapolate the "
     "current draw at a constant rate — a naive projection, not a metered bill. Net profit is "
-    "P2Pool XMR earnings valued at your XMR price, plus Tari merge-mining earnings valued at your "
-    "Tari price once dashboard.energy.tari_price is set (0/unset counts P2Pool XMR only) — minus "
+    "P2Pool XMR earnings valued at the XMR price in use (your configured price, or the live "
+    "CoinGecko-over-Tor feed when dashboard.energy.price_feed is on), plus Tari merge-mining "
+    "earnings valued at the Tari price when one is set (0/unset counts P2Pool XMR only) — minus "
     "power cost. XvB stays excluded: it's raffle status, not a clean per-day income estimate. "
     "Estimates, not guarantees."
 )
@@ -921,7 +922,7 @@ def _worker_watts_config(name):
     return None
 
 
-def build_energy(workers):
+def build_energy(workers, prices=None):
     """Fleet energy inputs for the earnings card's Energy tab (Issue #260).
 
     Sums each worker's power draw — measured watts from the RigForge enriched feed (#235) first, else
@@ -932,8 +933,23 @@ def build_energy(workers):
 
     Publishes the summed watts + prices; the client scales to kWh / cost / net per day·month·year
     (``computeEnergy`` in ``logic.mjs``). ``available`` is False only when no worker reports or is
-    configured with any power — the card then shows nothing rather than a zero-watt fleet."""
+    configured with any power — the card then shows nothing rather than a zero-watt fleet.
+
+    ``prices`` is the live feed result (#520, ``state.prices`` — ``{xmr, tari, currency,
+    fetched_at}`` or None). When the feed is enabled and has fetched, the live prices replace the
+    static config numbers and ``price_source`` says so (with their age) — the calculator always
+    states which price it's using. Until the first fetch (or with the feed off) the static config
+    prices stand."""
     cfg = config.DASHBOARD_ENERGY
+    live = prices if cfg["price_feed"] else None
+    price_source = {
+        # feed: the operator turned dashboard.energy.price_feed on; live: a fetch has landed.
+        "feed": cfg["price_feed"],
+        "live": bool(live),
+        "age_sec": round(time.time() - live["fetched_at"]) if live else None,
+    }
+    xmr_price = live["xmr"] if live else cfg["xmr_price"]
+    tari_price = live["tari"] if live else cfg["tari_price"]
     per_worker = []
     total_watts = 0.0
     powered_hs = 0.0
@@ -973,9 +989,10 @@ def build_energy(workers):
         "hs_per_watt": round(powered_hs / total_watts, 2) if have_power else None,
         "incomplete": incomplete,
         "cost_per_kwh": cfg["cost_per_kwh"],
-        "xmr_price": cfg["xmr_price"],
-        "tari_price": cfg["tari_price"],
+        "xmr_price": xmr_price,
+        "tari_price": tari_price,
         "currency": cfg["currency"],
+        "price_source": price_source,
         "per_worker": per_worker,
         "disclaimer": _ENERGY_DISCLAIMER,
     }
@@ -1601,8 +1618,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", [])),
-        # Fleet power draw / efficiency and (once a price is set) net profit after power (#260).
-        "energy": build_energy(data.get("workers", [])),
+        # Fleet power draw / efficiency and (once a price is set) net profit after power (#260),
+        # with live feed prices (#520) when dashboard.energy.price_feed is on.
+        "energy": build_energy(data.get("workers", []), data.get("prices")),
         "proxy_summary": build_proxy_summary(data),
         # Persisted per-poll share-health deltas + trailing 24h reject rate (#116). Kept out of
         # proxy_summary so its (cumulative) shape stays unchanged for existing clients.
