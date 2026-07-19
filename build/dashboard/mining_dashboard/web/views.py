@@ -47,6 +47,7 @@ from mining_dashboard.service.earnings import (
 )
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
+from mining_dashboard.service.update_checker import parse_semver
 from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
@@ -1542,6 +1543,25 @@ def build_worker_detail(name, data, state_mgr):
     }
 
 
+def visible_update(update, running=None):
+    """The new-release badge, only when it is self-consistent (#664).
+
+    A restored snapshot can resurrect a pre-upgrade ``{available, latest, url}`` right after the
+    upgrade it advertised — and "new release X available" while *running* X is contradictory by
+    definition, whatever put it in the state. Suppress the badge whenever ``latest`` is not
+    strictly newer than the running version. A dev build (unparseable running version) keeps the
+    badge, mirroring ``compute_update``'s own semantics. Pure + unit-tested."""
+    if not update:
+        return None
+    if running is None:
+        running = (resolve_version() or {}).get("text")
+    rv = parse_semver(running)
+    lv = parse_semver(update.get("latest"))
+    if rv and lv and lv <= rv:
+        return None
+    return update
+
+
 def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
@@ -1579,7 +1599,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # The operator-facing stratum port (#172) — feeds the "point your rigs at host:PORT" hint.
         "stratum_port": config.STRATUM_PORT,
         "version": resolve_version(),
-        "update": data.get("update"),  # {available, latest, url} | None — new-release badge (#224)
+        # {available, latest, url} | None — new-release badge (#224), self-consistency-guarded:
+        # never advertise the version already running (#664).
+        "update": visible_update(data.get("update")),
         # Whether the control channel is on (#33) — gates the header Upgrade button (#59). The
         # routes 404 when off, so this is display gating only, not a security control. Read at
         # call time (module attribute, not from-import) so tests can flip the flag per-app.
