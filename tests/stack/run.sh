@@ -2699,6 +2699,76 @@ rc=$?
 assert_rc "both workers.list and dashboard.workers set is rejected" "$rc" "1"
 assert_contains "both-set refusal names both keys" "$out" "sets both workers.list[] and dashboard.workers[]"
 
+# The refusal keys on CONTENT, not presence (#679): the dashboard config editor merges
+# config.reference.json (which ships BOTH keys as empty-array schema defaults) under the
+# operator's config before serving the form, and round-trips the merged doc on save — so an
+# empty array beside the populated key must neither refuse nor warn.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[]}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "workers.list beside an empty dashboard.workers applies (#679)" "$?" "0"
+assert_not_contains "empty legacy default does not trip the both-set refusal" "$out" "sets both workers.list[] and dashboard.workers[]"
+assert_not_contains "empty legacy default raises no deprecation warning" "$out" "deprecated"
+
+# Mirror: a populated legacy list beside an empty workers.list (the same reference-merge shape,
+# for an operator still on the deprecated key) selects — and still validates — the legacy entries.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"10.0.0.5"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "populated dashboard.workers beside an empty workers.list applies (#679)" "$?" "0"
+assert_contains "legacy shape beside the empty default still warns as deprecated" "$out" "dashboard.workers[] is deprecated"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "an empty workers.list must not shadow legacy entries from validation (#679)" "$?" "1"
+assert_contains "shadowed legacy entry is flagged under its own path label" "$out" "dashboard.workers[legacy-rig].host"
+
+# The editor contract itself (#679): the shipped config.reference.json deep-merged UNDER a valid
+# operator config — exactly the document read_config serves and the editor POSTs back — must
+# survive the same dry-run the control channel's preview leg runs. Fails on any future schema
+# default that trips validation, whatever the key.
+seed_env
+cp "$ROOT/config.reference.json" "$V/reference.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/operator.json"
+jq -s '(.[0] | del(._docs)) * .[1]' "$V/reference.json" "$V/operator.json" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "reference-merged editor round-trip survives the preview dry-run (#679)" "$?" "0"
+
+# Migration (#679): a validated legacy dashboard.workers[] is moved to workers.list[] in place on
+# apply — old key deleted, sibling workers.* keys and per-worker tokens preserved, pre-migration
+# copy kept beside the file (the .bak-control naming). Dry runs never write.
+rm -f "$V/config.json.bak-workers"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"worker-lan.local","token":"tok_mig456"}]}, "workers":{"api_port":9090} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
+assert_rc "dry run on a legacy config succeeds" "$?" "0"
+if [ -f "$V/config.json.bak-workers" ]; then bad "dry run never migrates (#556)" "backup appeared"; else ok "dry run never migrates (#556)"; fi
+assert_eq "dry run leaves dashboard.workers in place" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "true"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "legacy config applies and migrates" "$?" "0"
+assert_contains "migration is announced with the backup path" "$out" "Migrated dashboard.workers[] to workers.list[]"
+assert_eq "entries moved to workers.list (token intact)" "$(jq -r '.workers.list[0].token' "$V/config.json")" "tok_mig456"
+assert_eq "sibling workers.* keys survive the move" "$(jq -r '.workers.api_port' "$V/config.json")" "9090"
+assert_eq "dashboard.workers is gone after migration" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "false"
+assert_eq "pre-migration copy still holds the legacy key" "$(jq -r '.dashboard.workers[0].name' "$V/config.json.bak-workers")" "legacy-rig"
+case "$(stat -c '%a' "$V/config.json" 2>/dev/null || stat -f '%Lp' "$V/config.json" 2>/dev/null)" in
+600) ok "migrated config.json stays owner-only" ;;
+*) bad "migrated config.json stays owner-only" "mode $(stat -c '%a' "$V/config.json" 2>/dev/null || stat -f '%Lp' "$V/config.json" 2>/dev/null)" ;;
+esac
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "second apply after migration succeeds" "$?" "0"
+assert_not_contains "migration runs once — nothing to move on the next apply" "$out" "Migrated dashboard.workers[]"
+assert_not_contains "no deprecation warning after migration" "$out" "deprecated"
+
+# An INVALID legacy list fails validation before the migration hook — config and backup untouched.
+rm -f "$V/config.json.bak-workers"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "invalid legacy config still fails apply" "$?" "1"
+assert_eq "failed validation leaves the legacy key untouched" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "true"
+if [ -f "$V/config.json.bak-workers" ]; then bad "no backup written for a refused config" "backup appeared"; else ok "no backup written for a refused config"; fi
+
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
     seed_env
@@ -4946,7 +5016,7 @@ for ev in node_down node_recovered worker_offline worker_recovered worker_joined
     roundtrip_key "TELEGRAM_EVENT ${ev}" ".telegram.events.${ev}=false" ".telegram.events.${ev}" "false"
 done
 
-echo "== black-box: per-worker token mask + host-side restore (#172) =="
+echo "== black-box: per-worker token mask + host-side restore, legacy dashboard.workers (#172/#679) =="
 # dashboard.workers[].token is a per-rig credential living in a VARIABLE-LENGTH array — out of the
 # fixed CONTROL_SECRET_PATHS walk. The masked prefill copy must sentinel each set token (extends
 # the #440 property per-rig), and the staging swap must restore each sentinel from the LIVE token
@@ -4954,12 +5024,15 @@ echo "== black-box: per-worker token mask + host-side restore (#172) =="
 # refuses any dashboard.workers change, asserted above) — so this restore is exactly what lets an
 # operator's OTHER edits round-trip: the workers come back as sentinels and must resolve to the
 # live values unchanged, or every dashboard commit on a stack with configured workers would fail.
+# Since #679 `apply` MIGRATES the legacy shape, so a live config carries dashboard.workers only
+# between a hand-edit and the next apply — exactly the state the preview leg (a dry run, never
+# migrates) still serves. Hand-edit to legacy and render the masked copy directly, no apply.
 jq '.dashboard.workers=[
     {name:"rig1",host:"10.0.0.5",token:"tok_rig1secret"},
     {name:"rig2"},
-    {name:"rig3",token:"tok_rig3secret"}]' "$C/config.json" >"$C/config.json.tmp" &&
+    {name:"rig3",token:"tok_rig3secret"}] | del(.workers.list)' "$C/config.json" >"$C/config.json.tmp" &&
     mv "$C/config.json.tmp" "$C/config.json"
-(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+run_sourced "$C" render_masked_config "$C/data/control" >/dev/null 2>&1
 # 1) masked prefill copy: each SET per-worker token is a sentinel, the raw token never appears,
 #    and a token-less worker stays token-less.
 assert_eq "per-worker token masked to the sentinel" "$(jq -c '.dashboard.workers[0].token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
@@ -4982,18 +5055,22 @@ case "$(cat "$RESULTS/$UUID6.json")$(cat "$AUDIT")" in
 *tok_rig1secret* | *tok_rig3secret*) bad "results/audit stay free of the restored per-worker token" "a per-worker token leaked" ;;
 *) ok "results/audit stay free of the restored per-worker token" ;;
 esac
-# 3) commit: workers restored to live == live, so the gate passes on the pool-only change, and the
-#    committed config KEEPS the live per-worker tokens (restored by name, not lost, never a dict).
+# 3) commit: workers restored to live == live, so the gate passes on the pool-only change; the
+#    commit's `apply -y` then MIGRATES (#679) — the committed config keeps the live per-worker
+#    tokens under workers.list[], the legacy key is gone, and the pre-migration copy sits beside.
 printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID6" >"$REQS/$UUID6.json"
 run_pending >/dev/null
 assert_eq "worker-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "applied"
-assert_eq "committed config keeps the live per-worker token" "$(jq -r '.dashboard.workers[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "committed config keeps the live per-worker token (migrated to workers.list, #679)" "$(jq -r '.workers.list[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "commit migrated the legacy key away (#679)" "$(jq -r '.dashboard | has("workers")' "$C/config.json")" "false"
+assert_eq "pre-migration copy kept through the control commit (#679)" "$(jq -r '.dashboard.workers[0].token' "$C/config.json.bak-workers" 2>/dev/null)" "tok_rig1secret"
 assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
 # 4) duplicate names resolve first-declared-wins (staging only — a duplicate can't round-trip a
-#    commit, since the second entry's token would flip and trip the gate).
-jq '.dashboard.workers=[{name:"rig1",host:"10.0.0.5",token:"tok_first"},{name:"rig1",token:"tok_second"}]' "$C/config.json" >"$C/config.json.tmp" &&
+#    commit, since the second entry's token would flip and trip the gate). Same hand-edited
+#    legacy state as above: masked copy rendered directly, no apply, so no migration yet.
+jq 'del(.workers.list) | .dashboard.workers=[{name:"rig1",host:"10.0.0.5",token:"tok_first"},{name:"rig1",token:"tok_second"}]' "$C/config.json" >"$C/config.json.tmp" &&
     mv "$C/config.json.tmp" "$C/config.json"
-(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+run_sourced "$C" render_masked_config "$C/data/control" >/dev/null 2>&1
 UUID7="77777777-7777-4777-8777-777777777777"
 jq --arg id "$UUID7" '{id:$id, action:"preview", actor:"admin", config: .}' "$MASKED" >"$REQS/$UUID7.json"
 run_pending >/dev/null

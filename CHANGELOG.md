@@ -11,6 +11,24 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Config editor saves work again (#679).** Every save through the dashboard's Configuration
+  editor — Form and JSON mode alike — was rejected with the "sets both workers.list[] and
+  dashboard.workers[]" error: the editor merges `config.reference.json` (which ships both worker
+  keys as empty-array defaults) under the operator's config and round-trips the merged document,
+  and validation refused on key presence. The refusal now keys on populated lists; an empty array
+  beside the populated key is the schema default and passes. The editor's own
+  `_core_keys`/`_editable_keys` metadata is likewise stripped from the intent before it reaches
+  the host gate.
+
+### Changed
+
+- **`apply` migrates the deprecated `dashboard.workers[]` to `workers.list[]` (#679).** A
+  validated legacy list is moved in place on the next apply: entries land under `workers.list`,
+  the old key is deleted, and the pre-migration file is kept beside the config as
+  `config.json.bak-workers`. Dry runs (including every dashboard preview) never write.
+
 ## [1.9.2] - 2026-07-19
 
 ### Added

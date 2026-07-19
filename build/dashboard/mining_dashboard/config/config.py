@@ -208,8 +208,9 @@ HOST_CORE_KEYS_PATH = os.environ.get("HOST_CORE_KEYS_PATH", "/host-config/config
 # parse only has to stay safe if the mount is stale or hand-edited.
 #
 # workers.list[] is the current sub-key (#506); dashboard.workers[] (#172) is read as a deprecated
-# fallback when workers.list is unset, logged once, and removed in v1.9 — pithead's apply-time
-# validation refuses a config that sets both, so this loader only needs to pick whichever is present.
+# fallback when workers.list is unset or empty, logged once, and removed in v1.9 — pithead's
+# apply-time validation refuses a config that populates both, so this loader only needs to pick
+# whichever is populated (an empty array is a schema default, never an operator choice, #679).
 #   name  — 1-128 printable non-space ASCII chars (matched against the stratum name, '+' stripped)
 #   host  — hostname or IPv4 literal: letters/digits/dot/dash/underscore only, so a config value
 #           can never smuggle a port, path, or userinfo into the probe URL (no ':/@?#'; IPv6
@@ -231,8 +232,10 @@ def _valid_watts(v):
 def load_worker_endpoints(path=None):
     """The validated workers.list[] entries (#506); invalid entries dropped, first name wins.
 
-    dashboard.workers[] (#172) is read as a deprecated fallback when workers.list is unset
-    (removed in v1.9 — pithead's apply-time validation refuses a config that sets both).
+    dashboard.workers[] (#172) is read as a deprecated fallback when workers.list is unset or an
+    empty array (removed in v1.9 — pithead's apply-time validation refuses a config that
+    populates both, but an empty workers.list may legitimately sit alongside a populated legacy
+    key, #679: empty arrays are schema defaults, not operator choices).
     """
     try:
         with open(path or HOST_CONFIG_PATH) as f:
@@ -241,7 +244,7 @@ def load_worker_endpoints(path=None):
         return []
     workers_block = doc.get("workers") if isinstance(doc, dict) else None
     raw = workers_block.get("list") if isinstance(workers_block, dict) else None
-    if raw is None:
+    if raw is None or raw == []:
         dashboard_block = doc.get("dashboard") if isinstance(doc, dict) else None
         if isinstance(dashboard_block, dict) and "workers" in dashboard_block:
             raw = dashboard_block["workers"]
