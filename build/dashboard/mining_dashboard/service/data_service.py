@@ -41,6 +41,7 @@ from mining_dashboard.config.config import (
     DASHBOARD_ENERGY,
     ENABLE_XVB,
     GITHUB_RELEASES_API,
+    GITHUB_RIGFORGE_RELEASES_API,
     HASHRATE_DROP_MINUTES,
     HASHRATE_DROP_THRESHOLD_PCT,
     HOST_IP,
@@ -416,6 +417,15 @@ class DataService:
         self.update_checker = UpdateChecker(
             GitHubReleaseClient(GITHUB_RELEASES_API, TOR_SOCKS_PROXY),
             (os.environ.get("PITHEAD_VERSION") or "").strip(),
+            enabled=CHECK_FOR_UPDATES,
+            interval=UPDATE_CHECK_INTERVAL,
+        )
+        # RigForge latest-release check (#596): the same flag, throttle and Tor route, pointed at
+        # the RigForge repo. ONE fleet-wide fetch — the per-worker "rig is behind" verdict is
+        # derived at the render seam from each rig's live reported version, never stored (#664).
+        self.rigforge_update_checker = UpdateChecker(
+            GitHubReleaseClient(GITHUB_RIGFORGE_RELEASES_API, TOR_SOCKS_PROXY),
+            None,
             enabled=CHECK_FOR_UPDATES,
             interval=UPDATE_CHECK_INTERVAL,
         )
@@ -1335,6 +1345,13 @@ class DataService:
                         self.latest_data["update"] = await asyncio.to_thread(
                             self.update_checker.maybe_check, time.time()
                         )
+                    # 8b. The RigForge counterpart (#596): cache the latest RigForge release
+                    # (raw {tag, url}); build_workers derives each rig's badge from it. Written
+                    # unconditionally — the accessor returns None without dialing when the check
+                    # is disabled, so a snapshot-restored release can't outlive a flag flip.
+                    self.latest_data["rigforge_release"] = await asyncio.to_thread(
+                        self.rigforge_update_checker.latest_release_cached, time.time()
+                    )
 
                     # 9. Live XMR/XTM prices over Tor (#520) — ONLY when dashboard.energy.price_feed
                     # is set (default off, so the appliance never dials CoinGecko unbidden). The

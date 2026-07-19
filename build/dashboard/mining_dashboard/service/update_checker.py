@@ -85,19 +85,32 @@ class UpdateChecker:
         self.enabled = enabled
         self.interval = interval
         self._last = 0.0
+        self.release = None
         self.result = None
 
-    def maybe_check(self, now):
-        """Return the cached ``{available, ...}`` (or ``None``). Performs the (blocking) fetch only
-        when enabled and the throttle window has elapsed — call via ``asyncio.to_thread``."""
+    def latest_release_cached(self, now):
+        """Return the cached raw ``{tag, url}`` of the latest release (or ``None``). Performs the
+        (blocking) fetch only when enabled and the throttle window has elapsed — call via
+        ``asyncio.to_thread``. This is the many-consumers accessor (#596): one throttled fleet-wide
+        fetch, compared against as many running versions as the caller has."""
         if not self.enabled:
-            self.result = None
             return None
         if self._last and (now - self._last) < self.interval:
-            return self.result
+            return self.release
         self._last = now
         rel = self.client.latest_release()
         if rel:
+            self.release = rel
+        # On a failed fetch keep the previous release — a blip shouldn't drop a real "update available".
+        return self.release
+
+    def maybe_check(self, now):
+        """Return the cached ``{available, ...}`` (or ``None``) for this checker's own running
+        version. Same throttle/cache contract as ``latest_release_cached``."""
+        if not self.enabled:
+            self.result = None
+            return None
+        rel = self.latest_release_cached(now)
+        if rel:
             self.result = compute_update(self.running, rel["tag"], rel["url"])
-        # On a failed fetch keep the previous result — a blip shouldn't drop a real "update available".
         return self.result

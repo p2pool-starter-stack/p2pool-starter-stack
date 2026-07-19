@@ -500,6 +500,17 @@ class TestInit:
         assert svc.latest_data.get("update") in (None, {})  # never the restored dict
         assert svc.latest_data["total_live_h15"] == 5000  # the rest of the snapshot survives
 
+    def test_rigforge_checker_wired_to_the_rigforge_api_under_the_same_flag(self):
+        # #596 wiring: one fleet-wide RigForge release checker, pointed at the RigForge repo,
+        # gated on the SAME dashboard.check_for_updates flag as the stack's own check.
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        svc = DataService(sm, MagicMock(), MagicMock())
+        assert svc.rigforge_update_checker.client.api_url == ds_mod.GITHUB_RIGFORGE_RELEASES_API
+        assert "rigforge" in svc.rigforge_update_checker.client.api_url
+        assert svc.rigforge_update_checker.enabled == svc.update_checker.enabled
+        assert svc.rigforge_update_checker.client.tor_proxy == svc.update_checker.client.tor_proxy
+
     def test_ignores_non_dict_snapshot(self):
         sm = MagicMock()
         sm.load_snapshot.return_value = None

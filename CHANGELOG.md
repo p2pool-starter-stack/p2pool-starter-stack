@@ -11,6 +11,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-worker RigForge "new version available" badge** (#596). A rig whose reported RigForge
+  version is older than the latest published release gets a clickable badge in the Workers Alive
+  table and in Worker Inspect, linking to the release notes — the worker-level twin of the
+  header's stack-release badge. Notify-only; one hourly, Tor-routed, fail-silent fetch covers the
+  whole fleet, gated on the same `dashboard.check_for_updates` flag. Rigs that report no version
+  (plain xmrig, sister API off) show no badge — unknown, not "up to date".
+
 ### Changed
 
 - **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now
