@@ -400,15 +400,28 @@ but leave `xmr_price` unset and you get the energy cost but no net. Net profit s
 what-if hashrate as the other tabs (power draw does not — it is the measured fleet), and it goes red
 when power costs more than it earns.
 
-Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once you also set
-`tari_price` (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already
-shows). Leave `tari_price` at `0`/unset and net profit is P2Pool XMR only — the card's heading and
-the Net/day tooltip say exactly which figure you're looking at, so it's never silently partial.
-**XvB stays excluded** either way: it's raffle status, not a clean per-day income estimate, so
-folding it in would mean guessing. **No price feed ships for either coin:** fetching an exchange
-rate is a clearnet request this privacy-first stack avoids, so you supply both prices yourself (see
-[Privacy › Runtime egress](privacy.md#runtime-egress)). An opt-in, Tor-routed price feed is a
-possible follow-up, not implemented here.
+Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once a Tari price is also
+known (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already shows).
+With no Tari price, net profit is P2Pool XMR only — the card's heading and the Net/day tooltip say
+exactly which figure you're looking at, so it's never silently partial. **XvB stays excluded**
+either way: it's raffle status, not a clean per-day income estimate, so folding it in would mean
+guessing.
+
+Prices come from one of two places, and the card always says which:
+
+- **Static (default):** you type `xmr_price` / `tari_price` into config.json yourself. No network
+  request is made — the default posture stays free of price-feed egress.
+- **Live feed (opt-in):** set `dashboard.energy.price_feed: true` and the dashboard fetches both
+  prices from CoinGecko every 15 minutes, in your `currency` — **over Tor**, like every other
+  dashboard egress, so CoinGecko sees a Tor exit and never your IP (see
+  [Privacy › Runtime egress](privacy.md#runtime-egress)). The static numbers remain the fallback
+  until the first fetch lands; on a failed fetch the last good prices stand and their age is shown.
+
+Once a price is known (either way), the earnings card also grows **≈-fiat rows**: the Monero tab
+shows the fiat value of the XMR/day/month/year estimates, the Tari tab of the per-block reward and
+XTM/day average, and the XvB tab a fiat mirror of the tier comparison. A `Prices:` line at the foot
+of the card states the exact prices in use and their source — live feed (with age) or config.json —
+so no fiat figure is ever unattributed.
 
 ### Payout confirmation
 

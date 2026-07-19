@@ -312,13 +312,16 @@ def load_energy_config(path=None):
     loudly at apply.
 
     ``cost_per_kwh`` — electricity price per kWh (0/unset ⇒ cost + profit hidden, energy view only).
-    ``xmr_price``    — operator-supplied fiat price of 1 XMR (0/unset ⇒ net profit hidden). No price
-                       feed ships: fetching one is a clearnet egress this privacy-first stack avoids,
-                       so the operator supplies it, in the same ``currency`` as ``cost_per_kwh``.
+    ``xmr_price``    — operator-supplied fiat price of 1 XMR (0/unset ⇒ net profit hidden), in the
+                       same ``currency`` as ``cost_per_kwh``. Static by default (no unbidden price
+                       egress); the fallback when ``price_feed`` is on but hasn't fetched yet.
     ``tari_price``   — operator-supplied fiat price of 1 XTM (#520; 0/unset ⇒ net profit counts
-                       P2Pool XMR only). Same no-price-feed reasoning as ``xmr_price``; folds Tari's
-                       merge-mined earnings into net profit once both this and ``xmr_price`` are set.
+                       P2Pool XMR only). Same static-by-default reasoning as ``xmr_price``; folds
+                       Tari's merge-mined earnings into net profit once both prices are known.
     ``currency``     — display label for all figures (e.g. USD, EUR). Label only — no conversion.
+    ``price_feed``   — opt-in (default off): fetch both prices live from CoinGecko over Tor
+                       (``service/price_feed.py``) instead of the static numbers above, which then
+                       serve as the fallback until the first fetch lands.
     """
     try:
         with open(path or HOST_CONFIG_PATH) as f:
@@ -341,6 +344,7 @@ def load_energy_config(path=None):
         "xmr_price": _nonneg(raw.get("xmr_price")),
         "tari_price": _nonneg(raw.get("tari_price")),
         "currency": currency,
+        "price_feed": raw.get("price_feed") is True,
     }
 
 

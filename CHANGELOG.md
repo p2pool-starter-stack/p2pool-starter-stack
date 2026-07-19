@@ -18,6 +18,20 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
   the XvB raffle-win stars (#644) each get a show/hide button, persisted across reloads like
   the rest.
 
+## [1.9.1] - 2026-07-19
+
+### Added
+
+- **Opt-in live XMR/XTM price feed for the energy calculator (#651 — the auto half #520
+  deferred).** `dashboard.energy.price_feed` (default off) fetches both spot prices from
+  CoinGecko in your configured currency — always over Tor, same route as every other stack
+  egress; no clearnet branch exists. The earnings card states which price it is using (live
+  with age, or static from config.json — the static numbers stay the fallback), and the
+  Monero/Tari/XvB tabs gain fiat mirrors of their coin figures. The new egress appears in the
+  egress-posture panel, the Stack Topology, and the privacy table. Hardened against a hostile
+  price response (non-finite values rejected) and a crafted currency label (plainly alphabetic
+  or no request leaves the host).
+
 ## [1.9.0] - 2026-07-18
 
 **Stratum link security.** v1.9 locks the last cleartext link — miner ↔ stack

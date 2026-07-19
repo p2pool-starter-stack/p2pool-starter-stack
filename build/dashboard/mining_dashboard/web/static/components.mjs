@@ -6,18 +6,21 @@
 import { ChartCard } from "./chart.mjs";
 import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
+  coinFiat,
   computeEarnings,
   computeEnergy,
   computeXvbTier,
   egressRoute,
   fmtHashrate,
   formatFiat,
+  formatFiatPrice,
   formatTimeToShare,
   formatUnit,
   formatXmr,
   formatXtm,
   heroKpis,
   parseHashrate,
+  priceSourceLabel,
   raffleCls,
   sortWorkers,
   THEME_LABELS,
@@ -387,7 +390,7 @@ class XvbComparison extends Component {
   }
 
   render() {
-    const { calc, coeffDay, hr } = this.props;
+    const { calc, coeffDay, hr, energy } = this.props;
     const tiers = (calc && calc.tiers) || [];
     if (!tiers.length) return null;
     const { selected } = this.state;
@@ -424,6 +427,17 @@ class XvbComparison extends Component {
 } />
             </div>
             ${
+              // Fiat mirror of the XMR/yr figures (#520): same visibility guards as the cards
+              // above (never a fiat number whose XMR figure is hidden), at the XMR price in use.
+              energy && energy.xmr_price > 0
+                ? html`<p class="text-muted text-xs mt-1" id="xvb-fiat-line">
+                    ≈ ${calc.estimates_available ? formatFiat(coinFiat(cmp.expected, energy.xmr_price), energy.currency) : "—"} expected ·
+                    ${formatFiat(coinFiat(cmp.cost, energy.xmr_price), energy.currency)} cost ·
+                    ${sustainable ? formatFiat(coinFiat(cmp.net, energy.xmr_price), energy.currency) : "—"} net, per year
+                </p>`
+                : null
+            }
+            ${
               !sustainable
                 ? html`<p class="status-warn text-xs mt-1">Not sustainable at your hashrate — holding this tier needs about ${fmtHashrate(sel.threshold)} donated continuously, more than your hashrate can spare.</p>`
                 : null
@@ -445,7 +459,7 @@ class XvbComparison extends Component {
 // raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
 // above the threshold. Hidden entirely while XvB is disabled. `coeffDay` (earnings.coeff_day)
 // feeds the per-tier payout comparison dropdown below.
-function XvbTierBlock({ calc, hr, coeffDay }) {
+function XvbTierBlock({ calc, hr, coeffDay, energy }) {
   if (!calc || !calc.enabled) return null;
   const t = computeXvbTier(hr, calc);
   return html`
@@ -461,7 +475,7 @@ function XvbTierBlock({ calc, hr, coeffDay }) {
             <${StatCard} label="Target Tier" value=${calc.target_tier}
                          title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
         </div>
-        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} hr=${hr} />
+        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} hr=${hr} energy=${energy} />
         <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
     </div>`;
 }
@@ -511,6 +525,11 @@ class EarningsCard extends Component {
     if (xvb && xvb.enabled) tabs.push({ id: "xvb", label: "XvB" });
     if (energy && energy.available) tabs.push({ id: "energy", label: "Energy" });
     const active = tabs.some((t) => t.id === tab) ? tab : "monero";
+    // Fiat estimates (#520): each tab grows ≈-fiat rows once its coin's price is known — static
+    // from config.json or live from the opt-in CoinGecko-over-Tor feed. The footer line below
+    // states which price the figures are valued at, so a fiat number is never unattributed.
+    const priceSrc = priceSourceLabel(energy);
+    const priceTitle = "At the price shown in the Prices line below — an estimate, not a payout.";
     return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
@@ -537,6 +556,14 @@ class EarningsCard extends Component {
                     <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
                     <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
                     <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
+                    ${
+                      energy && energy.xmr_price > 0
+                        ? html`
+                    <${StatCard} label="≈ / day" value=${formatFiat(coinFiat(est.day, energy.xmr_price), energy.currency)} title=${priceTitle} />
+                    <${StatCard} label="≈ / month" value=${formatFiat(coinFiat(est.month, energy.xmr_price), energy.currency)} title=${priceTitle} />
+                    <${StatCard} label="≈ / year" value=${formatFiat(coinFiat(est.year, energy.xmr_price), energy.currency)} title=${priceTitle} />`
+                        : null
+                    }
                     <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                     <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
                 </div>
@@ -550,6 +577,13 @@ class EarningsCard extends Component {
                                  title="The full Tari block reward paid when you solo-find a block — you get all of it at once, not spread over time." />
                     <${StatCard} label="XTM / day (avg)" value=${formatXtm(est.tariDay)}
                                  title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — this per-day figure just spreads that lumpy payout out on paper." />
+                    ${
+                      energy && energy.tari_price > 0
+                        ? html`
+                    <${StatCard} label="≈ per Block" value=${formatFiat(coinFiat(est.tariRewardPerBlock, energy.tari_price), energy.currency)} title=${priceTitle} />
+                    <${StatCard} label="≈ / day (avg)" value=${formatFiat(coinFiat(est.tariDay, energy.tari_price), energy.currency)} title=${priceTitle} />`
+                        : null
+                    }
                 </div>
             </div>
 
@@ -557,7 +591,7 @@ class EarningsCard extends Component {
               xvb && xvb.enabled
                 ? html`
             <div role="tabpanel" id="epanel-xvb" aria-labelledby="etab-xvb" hidden=${active !== "xvb"}>
-                <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} />
+                <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} energy=${energy} />
             </div>`
                 : null
             }
@@ -567,6 +601,13 @@ class EarningsCard extends Component {
             <div role="tabpanel" id="epanel-energy" aria-labelledby="etab-energy" hidden=${active !== "energy"}>
                 <${EnergyPanel} energy=${energy} est=${est} />
             </div>`
+                : null
+            }
+            ${
+              priceSrc
+                ? html`<p class="text-muted text-xs mt-2" id="earnings-price-source">
+                    Prices: XMR ${formatFiatPrice(energy.xmr_price, energy.currency)} · XTM ${formatFiatPrice(energy.tari_price, energy.currency)} — ${priceSrc}
+                </p>`
                 : null
             }
             <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
@@ -626,7 +667,7 @@ function EnergyPanel({ energy, est }) {
         <${StatCard} label="Net / year" value=${formatFiat(en.netYear, cur)}
                      cls=${en.netYear !== null && en.netYear < 0 ? "c-bad" : "text-accent"} />`
             : html`<${StatCard} label="Net Profit" value="set xmr_price"
-                     title="Set dashboard.energy.xmr_price (in your currency) to see net profit after power. No price feed ships — this stack avoids the clearnet egress." />`
+                     title="Set dashboard.energy.xmr_price (in your currency), or dashboard.energy.price_feed: true to fetch live prices from CoinGecko over Tor (opt-in — off by default, no clearnet egress)." />`
         }
     </div>`
         : html`<p class="text-muted text-xs mt-2">Set <code>dashboard.energy.cost_per_kwh</code> to see energy cost and net profit after power.</p>`
