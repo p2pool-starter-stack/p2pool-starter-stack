@@ -11,7 +11,7 @@ Audience: competent, privacy-conscious Monero/Tari miners who run their own node
 - Keep command blocks copy-paste ready, broken out per-OS or per-step, with one line of prose between them or none.
 - State warnings flat. Use `NOTE:` for caveats. At most one `!` per doc, only where a mistake costs money, privacy, or data.
 - Use concrete numbers, ports, and timings instead of vague qualifiers.
-- Link out to deeper docs instead of inlining long explanations. Config keys live in [`configuration.md`](configuration.md) — link there, don't duplicate the table.
+- Link out to deeper docs instead of inlining long explanations. Config keys live in [`configuration.md`](../configuration.md) — link there, don't duplicate the table.
 
 ## Banned words
 

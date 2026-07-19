@@ -2,7 +2,7 @@
 
 How Pithead is versioned and released
 ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)). The pipeline is
-implemented as [`scripts/release.sh`](../scripts/release.sh). Run it from the build/test
+implemented as [`scripts/release.sh`](../../scripts/release.sh). Run it from the build/test
 server with `make release` (preview a run with `make release ARGS="--dry-run"`).
 
 ## One product, one version
@@ -22,7 +22,7 @@ override an ARG or image tag locally, but that combination is not a supported re
 
 ## Single source of truth
 
-The product version lives in a top-level [`VERSION`](../VERSION) file: plain text, one line,
+The product version lives in a top-level [`VERSION`](../../VERSION) file: plain text, one line,
 [SemVer](https://semver.org/spec/v2.0.0.html). Nothing else hardcodes the version:
 
 - `pithead` reads it for tagging and upgrade.
@@ -169,7 +169,7 @@ Two features can't be tested before merge, because both need a *published* relea
 [#376](https://github.com/p2pool-starter-stack/pithead/issues/376) cosign verification and the
 [#59](https://github.com/p2pool-starter-stack/pithead/issues/59) one-click upgrade. The tier-4 matrix
 tests a branch, not a published artifact, so the pre-merge tests only ever see a fake cosign. Right
-after `make release` publishes, run [`scripts/release-smoke.sh`](../scripts/release-smoke.sh) once to
+after `make release` publishes, run [`scripts/release-smoke.sh`](../../scripts/release-smoke.sh) once to
 verify the real thing:
 
 ```bash
@@ -202,7 +202,7 @@ It runs two phases:
   single source of truth in the top-level `VERSION` file. `pithead` reads it for tagging/upgrade;
   the dashboard reads it for display
   ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)).
-- Changelog: hand-curated [`CHANGELOG.md`](../CHANGELOG.md) following
+- Changelog: hand-curated [`CHANGELOG.md`](../../CHANGELOG.md) following
   [Keep a Changelog](https://keepachangelog.com) + SemVer, with GitHub's auto-generated PR list
   as a supplement in the release body. (Chosen over Conventional-Commits / release-please
   automation because the commit style here is human, issue-referencing summaries; curated notes
@@ -233,7 +233,7 @@ What exists today:
 - ✅ The dashboard version badge ([#58](https://github.com/p2pool-starter-stack/pithead/issues/58)):
   `VERSION` + git build-args baked into the dashboard image (env + OCI labels); shows `vX.Y.Z` on
   releases and `dev · branch @ hash` otherwise.
-- ✅ The release pipeline, [`scripts/release.sh`](../scripts/release.sh) (`make release`).
+- ✅ The release pipeline, [`scripts/release.sh`](../../scripts/release.sh) (`make release`).
   Implements the full preflight → test gate (`make test` + the #54 matrix, blocking) → build (OCI
   labels + `PITHEAD_RELEASE=1`) → stage to `:vX.Y.Z-rc.N` → smoke-verify the pushed images →
   promote-by-digest to `:vX.Y.Z` + `:latest` → publish the GitHub Release. It generates the

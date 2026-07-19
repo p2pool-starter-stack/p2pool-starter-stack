@@ -16,7 +16,7 @@ Closes #
 
 - [ ] `make test` passes locally (lint + dashboard pytest ≥ coverage gate + `pithead` shell suite + compose validation)
 - [ ] `pithead` and test scripts are shellcheck-clean (no new warnings)
-- [ ] Docs in `docs/` (and the README, if relevant) are updated for any user-facing change, in the house voice (`docs/STYLE.md`)
-- [ ] New/changed behaviour is tested at the right tier (`docs/testing-strategy.md`); patch coverage clears the gate
+- [ ] Docs in `docs/` (and the README, if relevant) are updated for any user-facing change, in the house voice (`docs/dev/STYLE.md`)
+- [ ] New/changed behaviour is tested at the right tier (`docs/dev/testing-strategy.md`); patch coverage clears the gate
 - [ ] This PR is focused on a single logical change
 - [ ] A linked issue exists for non-trivial changes

@@ -228,7 +228,7 @@ def test_tari_wallet_no_transactions_reads_empty():
 # actually transmitted, a real 401 is handled, and the real enriched /1/summary parses through
 # parse_rigforge. A drift in RigForge's auth handshake or enriched-feed shape (rigforge#99) goes red
 # here, not only on a live rig. The real-rig legs (real mining, real proxy /workers aggregation,
-# stratum --access-password) stay tier-4 — see docs/integration-testing.md.
+# stratum --access-password) stay tier-4 — see docs/dev/integration-testing.md.
 #
 # The client reaches a loopback fake via an operator-set descriptor `host` (the trusted config.json
 # path), NOT the miner-IP path — a worker IP of 127.0.0.1 is correctly refused by the #122 SSRF guard

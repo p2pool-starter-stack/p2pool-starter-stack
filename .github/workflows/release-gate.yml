@@ -10,7 +10,7 @@ name: Release gate (self-hosted)
 #   - workflow_dispatch — a maintainer manually runs it on a ref they've reviewed, OR
 #   - push to main      — post-merge, on trusted code.
 # To end-to-end a specific fork PR, review it first, then dispatch this workflow on that ref.
-# See docs/release-server.md.
+# See docs/dev/release-server.md.
 on:
   workflow_dispatch:
     inputs:

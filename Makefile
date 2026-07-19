@@ -29,13 +29,13 @@ test-fakes: ## Fake-daemon contract test — real dashboard clients vs controlla
 test-mini-stack: ## Fake-daemon docker mini-stack end-to-end (needs docker; CI)
 	bash tests/integration/mini-stack/run-mini-stack.sh
 
-test-inventory: ## Write the test coverage inventory to docs/test-inventory.md (generated, git-ignored)
-	bash tests/inventory.sh > docs/test-inventory.md
+test-inventory: ## Write the test coverage inventory to docs/dev/test-inventory.md (generated, git-ignored)
+	bash tests/inventory.sh > docs/dev/test-inventory.md
 
 # End-to-end matrix against a REAL test server (issue #54). Needs a provisioned box; pass
 # connection + options through ARGS, e.g.:
 #   make test-integration ARGS="--host miner@10.0.0.5 --dir pithead --lifecycle"
-# See docs/integration-testing.md.
+# See docs/dev/integration-testing.md.
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
@@ -59,7 +59,7 @@ lint-yaml: ## yamllint over all tracked YAML (config: .yamllint)
 lint-md: ## markdownlint over all Markdown (config: .markdownlint-cli2.jsonc)
 	npx --yes markdownlint-cli2@0.18.1
 
-lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house voice: docs/STYLE.md)
+lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house voice: docs/dev/STYLE.md)
 	bash scripts/lint-docs-voice.sh
 
 lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
@@ -73,13 +73,13 @@ lint-toml: ## taplo TOML format check (config: .taplo.toml)
 # Cut a release from the private build/test server — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:
 #   make release ARGS="--dry-run"
-# See docs/releasing.md.
+# See docs/dev/releasing.md.
 release: ## Cut a versioned release (build -> stage -> smoke -> promote -> publish). Pass ARGS=...
 	bash scripts/release.sh $(ARGS)
 
 # Post-publish smoke test (#459) — run ONCE, right after `make release` publishes vX.Y.Z. Real
 # cosign verify of the published bundle + images, and (with ARGS="--upgrade DIR") the real #59
-# one-click upgrade against a previous-release install. See docs/releasing.md § Post-publish smoke.
+# one-click upgrade against a previous-release install. See docs/dev/releasing.md § Post-publish smoke.
 #   make release-smoke                         # verify the just-published version's signature/bundle
 #   make release-smoke ARGS="--upgrade /srv/code/previous"   # + drive the real #59 upgrade
 release-smoke: ## Post-publish: real cosign verify + real #59 upgrade against the published bundle. Pass ARGS=...
