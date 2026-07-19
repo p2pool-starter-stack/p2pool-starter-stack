@@ -11,6 +11,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Event and raffle markers join the chart legend (#652).** The hashrate chart's legend now
+  toggles every layer, not just the three series: the degradation/recovery diamonds (#99) and
+  the XvB raffle-win stars (#644) each get a show/hide button, persisted across reloads like
+  the rest.
+
 ## [1.9.0] - 2026-07-18
 
 **Stratum link security.** v1.9 locks the last cleartext link — miner ↔ stack
