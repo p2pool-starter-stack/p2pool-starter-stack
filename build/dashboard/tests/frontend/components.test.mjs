@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { App } from '../../mining_dashboard/web/static/components.mjs';
+import { WORKER_COLUMNS } from '../../mining_dashboard/web/static/logic.mjs';
 import { StatsTable } from '../../mining_dashboard/web/static/workerview.mjs';
 import { render } from './helpers/render.mjs';
 
@@ -492,9 +493,19 @@ test('WorkersTable marks the sorted column, visibly and via aria-sort (#656)', (
     // No sort chosen (server order): no column claims a direction.
     assert.doesNotMatch(renderApp(), /aria-sort/);
     const asc = renderApp({ ui: { ...UI, sortIndex: 0, sortAsc: true } });
-    assert.match(asc, /<th[^>]*class="sorted"[^>]*aria-sort="ascending"[^>]*>Worker<span class="sort-arrow"> ▲<\/span>/);
+    assert.match(asc, /<th[^>]*class="sorted"[^>]*aria-sort="ascending"[^>]*><button[^>]*>Worker<span class="sort-arrow"> ▲<\/span>/);
     const desc = renderApp({ ui: { ...UI, sortIndex: 0, sortAsc: false } });
-    assert.match(desc, /aria-sort="descending"[^>]*>Worker<span class="sort-arrow"> ▼<\/span>/);
+    assert.match(desc, /aria-sort="descending"[^>]*><button[^>]*>Worker<span class="sort-arrow"> ▼<\/span>/);
+});
+
+test('WorkersTable sort headers are real buttons, so keyboard can sort (#671)', () => {
+    // A native <button> is focusable and activates on Enter/Space, firing the same onClick
+    // (onSort) path the mouse takes — keyboard operability rides on the element choice, so
+    // the component-tier assertion is that every header's click target IS a native button.
+    const html = renderApp();
+    const btns = html.match(/<button type="button" class="th-sort-btn" title="Sort by /g) || [];
+    assert.equal(btns.length, WORKER_COLUMNS.length);
+    assert.match(html, /<th><button type="button" class="th-sort-btn" title="Sort by Worker">Worker</);
 });
 
 test('WorkersTable with no workers shows the connect hint instead of a bare table (#385)', () => {

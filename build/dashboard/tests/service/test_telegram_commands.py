@@ -222,6 +222,12 @@ def test_system_reads_snapshot():
     assert "HugePages: Enabled (3072/3072)" in out
 
 
+def test_system_disk_reads_in_tb_on_large_volumes():
+    # Threshold mechanics live in test_utils.py; this proves /system wires the unit through.
+    out = tc.format_system({"disk": {"used_gb": 408.6, "total_gb": 3666.4, "percent_str": "11.1%"}})
+    assert "Disk: 0.4/3.6 TB (11.1%)" in out
+
+
 @pytest.mark.parametrize(
     "n,expected",
     [

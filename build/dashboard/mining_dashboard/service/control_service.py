@@ -223,6 +223,14 @@ def submit(action, cfg=None, actor="", intent_id=None, version=None):
     rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())
     request = {"id": rid, "action": action, "actor": actor}
     if cfg is not None:
+        # read_config's own metadata injections (#529/#613) ride back with the editor's POST —
+        # both modes round-trip the fetched doc wholesale — and the host gate's closed-schema
+        # check would refuse a commit carrying them (#679). Shed them at the one choke point
+        # every config intent passes through; everything else unknown still fails closed host-side.
+        # A non-dict cfg passes through untouched: the host runner already rejects it with its
+        # own "config must be a JSON object" result, which the UI knows how to surface.
+        if isinstance(cfg, dict):
+            cfg = {k: v for k, v in cfg.items() if k not in ("_core_keys", "_editable_keys")}
         request["config"] = cfg
     if version is not None:
         request["version"] = version

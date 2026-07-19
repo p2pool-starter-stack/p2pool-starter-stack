@@ -164,7 +164,7 @@ function Header({ state }) {
                     <span class=${s.hugepages.variant === "ok" ? "status-ok" : "status-bad"}>Huge Pages: ${s.hugepages.status} (${s.hugepages.value})</span>
                 </div>
                 <div class="flex items-center">
-                    <span class=${(s.disk.level === "high" ? "status-bad" : "text-muted") + " mr-2"}>Disk: ${s.disk.used} / ${s.disk.total} GB (${s.disk.percent})</span> <${HighUsage} level=${s.disk.level} />
+                    <span class=${(s.disk.level === "high" ? "status-bad" : "text-muted") + " mr-2"}>Disk: ${s.disk.used} / ${s.disk.total} ${s.disk.unit} (${s.disk.percent})</span> <${HighUsage} level=${s.disk.level} />
                     <div class="disk-bar">
                         <div class="progress-bg">
                             <div class=${"progress-fill " + s.disk.fill} style=${{ width: s.disk.width }}></div>
@@ -786,14 +786,17 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
                     <tr>${WORKER_COLUMNS.map(
                       // Sorted column carries the direction, visibly (arrow) and for AT (aria-sort);
                       // the title makes clickability discoverable without hovering rows (#656).
-                      (c, i) => html`<th onClick=${() => onSort(i)}
+                      // The click target is a real <button> so keyboard users can sort too (#671):
+                      // native buttons are focusable and activate on Enter/Space without extra wiring.
+                      (c, i) => html`<th
                             class=${i === ui.sortIndex ? "sorted" : null}
-                            aria-sort=${i === ui.sortIndex ? (ui.sortAsc ? "ascending" : "descending") : null}
-                            title=${"Sort by " + c.label}>${c.label}${
-                              i === ui.sortIndex
-                                ? html`<span class="sort-arrow">${ui.sortAsc ? " ▲" : " ▼"}</span>`
-                                : ""
-                            }</th>`,
+                            aria-sort=${i === ui.sortIndex ? (ui.sortAsc ? "ascending" : "descending") : null}><button
+                              type="button" class="th-sort-btn" onClick=${() => onSort(i)}
+                              title=${"Sort by " + c.label}>${c.label}${
+                                i === ui.sortIndex
+                                  ? html`<span class="sort-arrow">${ui.sortAsc ? " ▲" : " ▼"}</span>`
+                                  : ""
+                              }</button></th>`,
                     )}</tr>
                 </thead>
                 <tbody id="workers-tbody">

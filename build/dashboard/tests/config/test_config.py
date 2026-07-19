@@ -235,9 +235,10 @@ class TestWorkerEndpoints:
 
 class TestWorkerEndpointsDualRead:
     """workers.list[] (#506) is the current sub-key; dashboard.workers[] (#172) is read as a
-    deprecated fallback only when workers.list is unset. pithead's apply-time validation refuses
-    a config that sets both, so the loader only has to pick whichever is present and prefer the
-    new shape."""
+    deprecated fallback when workers.list is unset or an empty array. pithead's apply-time
+    validation refuses a config that populates both, but an empty array is a schema default
+    (config.reference.json ships both keys as []) and must never shadow the populated shape
+    (#679)."""
 
     def _load(self, tmp_path, payload):
         from mining_dashboard.config.config import load_worker_endpoints
@@ -268,6 +269,30 @@ class TestWorkerEndpointsDualRead:
     def test_legacy_fallback_used_when_new_shape_unset(self, tmp_path):
         got = self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}})
         assert got == [{"name": "legacy-rig"}]
+
+    def test_legacy_fallback_used_when_new_shape_empty(self, tmp_path):
+        # The editor round-trip shape (#679): config.reference.json's workers.list: [] merged
+        # beside a populated legacy key — the empty schema default must not shadow the entries.
+        got = self._load(
+            tmp_path,
+            {
+                "workers": {"list": []},
+                "dashboard": {"workers": [{"name": "legacy-rig"}]},
+            },
+        )
+        assert got == [{"name": "legacy-rig"}]
+
+    def test_empty_legacy_default_beside_populated_new_shape_reads_new(self, tmp_path):
+        # The mirror round-trip shape (#679): dashboard.workers: [] injected by the reference
+        # merge beside a populated workers.list.
+        got = self._load(
+            tmp_path,
+            {
+                "workers": {"list": [{"name": "new-rig"}]},
+                "dashboard": {"workers": []},
+            },
+        )
+        assert got == [{"name": "new-rig"}]
 
     def test_legacy_fallback_logs_a_deprecation_notice(self, tmp_path, caplog):
         import logging
