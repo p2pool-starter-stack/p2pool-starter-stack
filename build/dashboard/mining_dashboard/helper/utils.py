@@ -74,6 +74,26 @@ def format_hashrate(hashrate):
         return "0 H/s"
 
 
+def format_disk_size(used_gb, total_gb):
+    """Format a disk used/total pair, switching from GB to TB once the volume reaches
+    1 TB (1024 GB — the same 1024-based scale as the collector's ``BYTES_IN_GB``).
+
+    Both values switch together so the pair stays comparable; a mixed
+    ``408.6 GB / 3.6 TB`` line would not. Shared by the dashboard system card and the
+    Telegram ``/system`` reply so disk reads the same on every surface (#677).
+
+    Returns:
+        tuple: (used_str, total_str, unit) with one decimal place.
+    """
+    try:
+        used, total = float(used_gb or 0), float(total_gb or 0)
+    except (ValueError, TypeError):
+        used, total = 0.0, 0.0
+    if total >= 1024:
+        return f"{used / 1024:.1f}", f"{total / 1024:.1f}", "TB"
+    return f"{used:.1f}", f"{total:.1f}", "GB"
+
+
 def format_xmr(amount):
     """Format an XMR amount with magnitude-adaptive precision — 4 decimal places at >= 1 XMR,
     6 at >= 0.001, 8 below that — so a small daily estimate isn't truncated to zeros.

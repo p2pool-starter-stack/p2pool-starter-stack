@@ -19,6 +19,7 @@ from mining_dashboard.config.config import (
 )
 from mining_dashboard.helper.utils import (
     effective_hashrate,
+    format_disk_size,
     format_duration,
     format_hashrate,
     format_xmr,
@@ -285,13 +286,15 @@ def format_system(system, host_label=""):
     """Host resource usage — the answer to '/system'. Reads the ``system`` snapshot the dashboard
     already collects (disk / RAM / CPU / load / HugePages)."""
     disk = system.get("disk", {})
+    disk_used, disk_total, disk_unit = format_disk_size(
+        disk.get("used_gb", 0), disk.get("total_gb", 0)
+    )
     mem = system.get("memory", {})
     hp_status, _hp_class, hp_value = system.get("hugepages", ["Unknown", "", "0/0"])
     return "\n".join(
         [
             f"{_prefix(host_label)}\U0001f5a5️ System",
-            f"Disk: {disk.get('used_gb', 0):.1f}/{disk.get('total_gb', 0):.1f} GB "
-            f"({disk.get('percent_str', '0%')})",
+            f"Disk: {disk_used}/{disk_total} {disk_unit} ({disk.get('percent_str', '0%')})",
             f"RAM: {mem.get('used_gb', 0):.1f}/{mem.get('total_gb', 0):.1f} GB "
             f"({mem.get('percent_str', '0%')})",
             f"CPU: {system.get('cpu_percent', '0%')} · load {system.get('load', 'n/a')}",

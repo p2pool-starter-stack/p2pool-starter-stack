@@ -30,6 +30,7 @@ from mining_dashboard.config.config import (
 )
 from mining_dashboard.helper.utils import (
     detect_host_ipv4,
+    format_disk_size,
     format_duration,
     format_hashrate,
     format_time_abs,
@@ -785,6 +786,9 @@ def build_system(data):
     system = data.get("system", {})
 
     disk_usage = system.get("disk", {})
+    disk_used, disk_total, disk_unit = format_disk_size(
+        disk_usage.get("used_gb", 0), disk_usage.get("total_gb", 0)
+    )
     disk_percent = disk_usage.get("percent", 0)
     disk_fill = "critical" if disk_percent > 90 else "warning" if disk_percent > 70 else ""
 
@@ -814,8 +818,9 @@ def build_system(data):
             "level": _usage_level(mem_usage.get("percent", 0)),
         },
         "disk": {
-            "used": f"{disk_usage.get('used_gb', 0):.1f}",
-            "total": f"{disk_usage.get('total_gb', 0):.1f}",
+            "used": disk_used,
+            "total": disk_total,
+            "unit": disk_unit,
             "percent": disk_usage.get("percent_str", "0%"),
             "width": f"{disk_percent}%",
             "fill": disk_fill,
