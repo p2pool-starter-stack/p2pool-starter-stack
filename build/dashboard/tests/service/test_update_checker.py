@@ -59,7 +59,7 @@ class TestGitHubReleaseClient:
     def test_parses_tag_and_url(self):
         c = GitHubReleaseClient("https://api/releases/latest", tor_proxy="socks5h://t:9050")
         with patch(
-            "mining_dashboard.service.update_checker.requests.get",
+            "mining_dashboard.service.update_checker.bounded_get",
             return_value=self._resp(200, {"tag_name": "v1.4.0", "html_url": "https://h/v1.4.0"}),
         ) as g:
             assert c.latest_release() == {"tag": "v1.4.0", "url": "https://h/v1.4.0"}
@@ -72,14 +72,14 @@ class TestGitHubReleaseClient:
     def test_non_200_is_silent_none(self):
         c = GitHubReleaseClient("u")
         with patch(
-            "mining_dashboard.service.update_checker.requests.get", return_value=self._resp(404)
+            "mining_dashboard.service.update_checker.bounded_get", return_value=self._resp(404)
         ):
             assert c.latest_release() is None
 
     def test_network_error_is_silent_none(self):
         c = GitHubReleaseClient("u")
         with patch(
-            "mining_dashboard.service.update_checker.requests.get",
+            "mining_dashboard.service.update_checker.bounded_get",
             side_effect=requests.RequestException("offline"),
         ):
             assert c.latest_release() is None
@@ -87,7 +87,7 @@ class TestGitHubReleaseClient:
     def test_missing_fields_is_none(self):
         c = GitHubReleaseClient("u")
         with patch(
-            "mining_dashboard.service.update_checker.requests.get",
+            "mining_dashboard.service.update_checker.bounded_get",
             return_value=self._resp(200, {"tag_name": "v1.0.0"}),
         ):  # no html_url
             assert c.latest_release() is None
