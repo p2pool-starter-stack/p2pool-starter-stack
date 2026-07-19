@@ -83,7 +83,9 @@ export class StackTopology extends Component {
           <span class="topo-legend"><i class="topo-sw" style="background:var(--ok)"></i>Tor</span>
           <span class="topo-legend"><i class="topo-sw" style="background:var(--bad)"></i>Clearnet</span>
           <span class="topo-legend"><i class="topo-sw" style="background:var(--text-muted)"></i>Local / LAN</span>
-          <button class="topo-toggle" onClick=${() => this.setState({ internal: !internal })}>
+          <button class="topo-toggle" aria-pressed=${internal}
+            title="Container-to-container links inside the stack"
+            onClick=${() => this.setState({ internal: !internal })}>
             ${internal ? "Hide internal mesh" : "Show internal mesh"}
           </button>
         </div>

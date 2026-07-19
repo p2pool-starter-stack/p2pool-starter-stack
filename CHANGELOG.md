@@ -20,6 +20,11 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Every toggle control now announces itself like the theme switcher (#657).** The chart
+  Range row becomes real buttons in a labelled group (it was bare links), and the view
+  toggle, Form/JSON and Table/JSON editors, and the topology mesh button gain
+  `aria-pressed` and hover titles. The button resets move into `.btn-range`, which also
+  gives the Avg buttons the pointer cursor they were missing.
 - **The Workers table shows its sort state (#656).** The sorted column now carries a direction
   arrow and `aria-sort`, and every header names its action on hover — before, clicking sorted
   the rows with no indication of which column or direction was active.

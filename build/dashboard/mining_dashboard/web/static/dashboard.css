@@ -517,6 +517,10 @@ button.upgrade-btn {
   background-color: var(--card);
   color: var(--text-muted);
   transition: all 0.2s;
+  /* All range-look controls are <button>s now (#657) — carry the button resets here. */
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.4;
 }
 .btn-range:hover {
   border-color: var(--text-muted);
@@ -527,11 +531,7 @@ button.upgrade-btn {
   color: #fff;
   border-color: var(--ok);
 }
-/* Reset-zoom button reuses the range-button look but needs the <button> resets (Issue #47). */
 .btn-reset {
-  cursor: pointer;
-  font-family: inherit;
-  line-height: 1.4;
   margin-left: 8px;
 }
 

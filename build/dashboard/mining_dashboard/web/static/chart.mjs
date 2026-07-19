@@ -390,15 +390,16 @@ export class ChartCard extends Component {
     const zoomed = !!props.window;
     return html`
         <div class="card">
-            <div class="chart-controls">
+            <div class="chart-controls" role="group" aria-label="Chart range">
                 <span class="text-muted text-small mr-1">Range:</span>
                 ${RANGES.map(
-                  ([r, label]) => html`<a href=${"?range=" + r}
+                  // Real buttons like the Avg/legend siblings (#657); the ?range= deep link
+                  // survives because setRange writes it via history.replaceState.
+                  ([r, label]) => html`<button type="button"
                     class=${"btn-range" + (!zoomed && props.range === r ? " active" : "")}
-                    onClick=${(e) => {
-                      e.preventDefault();
-                      props.onRange(r);
-                    }}>${label}</a>`,
+                    aria-pressed=${!zoomed && props.range === r}
+                    title=${"Chart range: " + label}
+                    onClick=${() => props.onRange(r)}>${label}</button>`,
                 )}
                 ${
                   zoomed
