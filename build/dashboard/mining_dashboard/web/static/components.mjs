@@ -47,7 +47,7 @@ const StatCard = ({ label, value, cls, span, title }) => html`
         <p class=${cls || ""}>${value}</p>
     </div>`;
 
-const SharesStat = ({ sw, label = "Share In Window" }) => html`
+const SharesStat = ({ sw, label = "Share in Window" }) => html`
     <div class="stat-card">
         <h5>${label}</h5>
         <p><span class=${sw.ok ? "status-ok" : "status-bad"}>${sw.count}</span></p>

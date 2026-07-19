@@ -81,6 +81,9 @@ test('operational App renders the hero band and the headline cards', () => {
     assert.match(html, /My P2Pool Node Stats/);
     assert.match(html, /XvB Donation Stats/);
     assert.match(html, /Stack Topology & Egress/);
+    // One casing everywhere (#659): the Overview card matches the hero KPI's lowercase "in".
+    assert.match(html, /Share in Window/);
+    assert.doesNotMatch(html, /Share In Window/);
 });
 
 test('toggle groups carry the ARIA affordances of the theme-switcher pattern (#657)', () => {

@@ -20,6 +20,10 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ### Fixed
 
+- **Overview docs match the rendered card (#659).** The doc's field table follows the actual
+  #159 stat order, names the two wallet cards (Wallet XMR / Wallet TARI) instead of a single
+  "Wallets" row, and the stat card's label casing unifies on "Share in Window" to match the
+  hero KPI and the doc.
 - **UI preferences now all survive a reload (#658).** The Workers-table sort, earnings tab,
   Form/JSON and Table/JSON editor modes, and the topology mesh toggle join the already-persisted
   theme, view, averaging window and series toggles. A saved choice that becomes invalid (a
