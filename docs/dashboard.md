@@ -68,7 +68,10 @@ Once both nodes are synced, the dashboard shows the operational view.
 </picture>
 
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
-position, the worker-table sort column, and the chart stay put between updates. A poll that fails —
+position, the worker-table sort column, and the chart stay put between updates. View preferences —
+theme, Simple/Advanced view, the chart's averaging window and series toggles, the worker-table
+sort, the earnings tab, the Form/JSON editor modes, and the topology mesh toggle — are also
+remembered across reloads. A poll that fails —
 or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
 timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
 successful refresh.

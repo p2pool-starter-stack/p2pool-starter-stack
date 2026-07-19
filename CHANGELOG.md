@@ -11,6 +11,13 @@ per the process in [`docs/releasing.md`](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **UI preferences now all survive a reload (#658).** The Workers-table sort, earnings tab,
+  Form/JSON and Table/JSON editor modes, and the topology mesh toggle join the already-persisted
+  theme, view, averaging window and series toggles. A saved choice that becomes invalid (a
+  removed column, an unavailable tab) falls back to the default.
+
 ## [1.9.1] - 2026-07-19
 
 ### Added

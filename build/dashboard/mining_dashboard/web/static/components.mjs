@@ -19,9 +19,11 @@ import {
   formatXmr,
   formatXtm,
   heroKpis,
+  loadPref,
   parseHashrate,
   priceSourceLabel,
   raffleCls,
+  savePref,
   sortWorkers,
   THEME_LABELS,
   THEME_ORDER,
@@ -492,10 +494,17 @@ class EarningsCard extends Component {
   constructor(props) {
     super(props);
     // `input` (what-if hashrate) is SHARED across tabs — it lives above the tab strip so switching
-    // tabs keeps the entered value. `tab` is the active earnings tab (Monero / Tari / XvB).
-    this.state = { input: null, tab: "monero" };
+    // tabs keeps the entered value. `tab` is the active earnings tab (Monero / Tari / XvB),
+    // persisted (#658); render() already falls back to monero when the saved tab isn't available.
+    this.state = {
+      input: null,
+      tab: loadPref("dashboardEarningsTab", ["monero", "tari", "xvb", "energy"], "monero"),
+    };
     this.onInput = (e) => this.setState({ input: e.target.value });
-    this.onTab = (tab) => this.setState({ tab });
+    this.onTab = (tab) => {
+      savePref("dashboardEarningsTab", tab);
+      this.setState({ tab });
+    };
   }
 
   render() {

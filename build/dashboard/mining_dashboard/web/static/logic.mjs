@@ -106,6 +106,35 @@ export function normalizeSeries(obj) {
   return out;
 }
 
+// Persisted single-choice UI preferences (#658) — earnings tab, editor modes, topology mesh.
+// normalizeChoice is the pure, unit-tested core; loadPref/savePref wrap localStorage guarded,
+// so components stay importable under node --test (no localStorage → the fallback / a no-op).
+export function normalizeChoice(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+export function loadPref(key, allowed, fallback) {
+  try {
+    return normalizeChoice(localStorage.getItem(key), allowed, fallback);
+  } catch {
+    return fallback;
+  }
+}
+export function savePref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Private mode or no storage: the preference just doesn't stick.
+  }
+}
+
+// Workers-table sort preference (#658), stored as "index:asc|desc". A stale index (column
+// removed) or garbage falls back to the server order.
+export function normalizeSort(raw, colCount) {
+  const m = /^(\d+):(asc|desc)$/.exec(raw || "");
+  if (!m || Number(m[1]) >= colCount) return { sortIndex: null, sortAsc: true };
+  return { sortIndex: Number(m[1]), sortAsc: m[2] === "asc" };
+}
+
 // Human-readable span for the "Zoomed: …" label — the two coarsest units from the first
 // non-zero one (e.g. "3d 4h", "1h 20m", "45s"), trailing zero units dropped. Pure and
 // locale-independent, unlike fmtTimestamp.
