@@ -42,6 +42,7 @@ import time
 import requests
 
 from mining_dashboard.config.config import TOR_AUTO_HEAL, TOR_SOCKS_PROXY
+from mining_dashboard.helper.http import bounded_get
 
 logger = logging.getLogger("TorHeal")
 
@@ -100,7 +101,7 @@ class TorEgressHealer:
     def _probe_egress():
         """One SOCKS request through the tor container; True iff a clearnet exit answered."""
         try:
-            requests.get(
+            bounded_get(
                 PROBE_URL,
                 timeout=PROBE_TIMEOUT_SEC,
                 proxies={"http": TOR_SOCKS_PROXY, "https": TOR_SOCKS_PROXY},

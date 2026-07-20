@@ -634,27 +634,34 @@ def test_get_updates_parses_results_over_tor(monkeypatch):
         seen.update(url=url, params=params, proxies=proxies)
         return _Resp({"ok": True, "result": [{"update_id": 8}]})
 
-    monkeypatch.setattr(tc.requests, "get", fake_get)
+    monkeypatch.setattr(tc, "bounded_get", fake_get)
     assert bot._get_updates(0) == [{"update_id": 8}]
     assert "bottok" in seen["url"] and seen["params"]["offset"] == 7  # token + offset forwarded
     assert seen["proxies"] == {"http": "socks5h://tor:9050", "https": "socks5h://tor:9050"}
+    # Batch cap: without it, an over-cap batch could never be parsed, so the offset could never
+    # advance past it and the poll loop would re-fetch it forever (#660 follow-up).
+    assert seen["params"]["limit"] == tc.GETUPDATES_LIMIT
 
 
 def test_get_updates_not_ok_returns_empty(monkeypatch):
     bot = _make_bot()
-    monkeypatch.setattr(tc.requests, "get", lambda *a, **k: _Resp({"ok": False}))
+    monkeypatch.setattr(tc, "bounded_get", lambda *a, **k: _Resp({"ok": False}))
     assert bot._get_updates(0) == []
 
 
 def test_prime_offset_skips_backlog(monkeypatch):
+    # Backlog spanning two limit-capped batches: prime drains both, then the empty batch stops it.
     bot = _make_bot()
-    monkeypatch.setattr(
-        tc.requests,
-        "get",
-        lambda *a, **k: _Resp({"ok": True, "result": [{"update_id": 3}, {"update_id": 9}]}),
+    batches = iter(
+        [
+            _Resp({"ok": True, "result": [{"update_id": 3}, {"update_id": 9}]}),
+            _Resp({"ok": True, "result": [{"update_id": 12}]}),
+            _Resp({"ok": True, "result": []}),
+        ]
     )
+    monkeypatch.setattr(tc, "bounded_get", lambda *a, **k: next(batches))
     bot._prime_offset()
-    assert bot._offset == 10  # past the last pending update
+    assert bot._offset == 13  # past the last pending update, across batches
 
 
 def test_prime_offset_swallows_error(monkeypatch):
@@ -663,7 +670,7 @@ def test_prime_offset_swallows_error(monkeypatch):
     def boom(*a, **k):
         raise OSError("offline")
 
-    monkeypatch.setattr(tc.requests, "get", boom)
+    monkeypatch.setattr(tc, "bounded_get", boom)
     bot._prime_offset()  # must not raise
     assert bot._offset is None
 
@@ -1093,7 +1100,7 @@ def test_allowed_updates_requests_callbacks_only_when_control_on(monkeypatch):
         seen["allowed"] = params["allowed_updates"]
         return _Resp({"ok": True, "result": []})
 
-    monkeypatch.setattr(tc.requests, "get", fake_get)
+    monkeypatch.setattr(tc, "bounded_get", fake_get)
     on._get_updates(0)
     assert "callback_query" in seen["allowed"]
     off._get_updates(0)
