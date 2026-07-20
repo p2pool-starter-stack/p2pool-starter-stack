@@ -6420,12 +6420,20 @@ assert_eq "foreign owner -> units left alone (no sudo rm)" "$(pcr_run /srv/code/
 assert_contains "own units -> removed" "$(pcr_run "$PCR" "$PCR")" \
     "sudo:rm -f $PCR/units/pithead-control.path $PCR/units/pithead-control.service"
 assert_contains "dangling path unit (no service file) -> still reaped" "$(pcr_run - "$PCR")" "sudo:rm -f"
-# Versioned install dirs carry dots (pithead-v1.9.3). The ownership grep must treat $PWD as a
-# literal (-F): with the dots read as regex "any char", a sibling whose path differs only at
-# those positions would falsely match as our own — and get removed.
+# Versioned install dirs carry dots (pithead-v1.9.3). Ownership must compare the ExecStart path
+# as an exact string, never a regex: with the dots read as "any char", a sibling whose path
+# differs only at those positions would falsely match as our own — and get removed.
 mkdir -p "$PCR/v1.9.3" "$PCR/v1x9y3"
 assert_eq "foreign owner differing only at regex-dot positions -> left alone" \
     "$(pcr_run "$PCR/v1x9y3" "$PCR/v1.9.3")" ""
+# One checkout, two spellings: production units carry the versioned dir in ExecStart, and an
+# operator's disable apply runs through the `current` symlink. Ownership compares physical
+# paths, so the unit is recognized as our own and removed — a literal $PWD compare would call
+# it foreign and the disable would never converge.
+mkdir -p "$PCR/versions/pithead-v1.9.3"
+ln -s "$PCR/versions/pithead-v1.9.3" "$PCR/current"
+assert_contains "own unit under its versioned spelling, run via the current symlink -> removed" \
+    "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,17 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Removing the control runner no longer strands a sibling checkout's stack (#689).** The
+  `pithead-control.{path,service}` unit names are global to the host, but a bench box holds
+  several checkouts at once — and a checkout applying with dashboard control off (or the e2e
+  harness tearing down) removed whatever units were installed, including the live stack's,
+  leaving its config editor stuck at "Previewing…" until the next apply. Both removal paths now
+  check the service unit's `ExecStart` and only touch units owned by the acting checkout,
+  comparing physical paths so the `current` symlink and the versioned directory it targets
+  count as the same checkout.
+
 ### Changed
 
 - **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now

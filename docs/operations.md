@@ -135,9 +135,10 @@ on, and remove them when it is off:
   install directory. Fixed command, no parameters from the container.
 
 The unit names are global to the host, so removal is ownership-checked: a checkout with the flag
-off only removes units whose `ExecStart` points at itself. Another checkout on the same box (an
-e2e harness, a bundle smoke test) therefore cannot delete the live stack's runner and strand its
-queued requests.
+off only removes units whose `ExecStart` points at itself, comparing physical paths so the
+`current` symlink and the versioned directory it targets count as the same checkout. Another
+checkout on the same box (an e2e harness, a bundle smoke test) therefore cannot delete the live
+stack's runner and strand its queued requests.
 
 The runner dispatches exactly three actions: `apply --dry-run --porcelain` (preview), `apply -y`
 (commit), and a release upgrade — the dashboard's
