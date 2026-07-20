@@ -1,12 +1,13 @@
 """New-release check (#224) — notify-only.
 
-When `dashboard.check_for_updates` is enabled (default OFF), the dashboard periodically asks GitHub
+Unless `dashboard.check_for_updates` is disabled (default ON), the dashboard periodically asks GitHub
 for the latest published release and, if it's newer than the running version, surfaces a header badge
 linking to it (`build_state` -> `state.update`). It never updates anything — it's a callout so the
 operator knows to upgrade on their own terms (the one-click upgrade is the separate #59).
 
-Privacy: the check is **opt-in (default off)** and routed over the bridge **Tor SOCKS** (reusing
-`TOR_SOCKS_PROXY`, like the XvB stats fetch #163), so enabling it doesn't reveal the host IP to GitHub.
+Privacy: the check is **on by default** because it's routed over the bridge **Tor SOCKS** (reusing
+`TOR_SOCKS_PROXY`, like the XvB stats fetch #163), so it doesn't reveal the host IP to GitHub;
+set `dashboard.check_for_updates` to false to opt out.
 Every failure path is silent (returns ``None``) so an offline / Tor-only stack just shows no badge.
 """
 

@@ -143,6 +143,7 @@ it — the worker-API **auth model is the #315 none/name/token matrix**, not the
 | Worker Inspect edit lands on the rig: `editable` true, a `max_temp_c` nudge via `/api/control/worker-apply` hits the rig's `/status` + records history, reverted | live rig control API on | 4 ▶ (`run.sh --rigforge-control`, #513) |
 | Rig-side edit reflects: a direct rig control-API change shows in the enriched feed; a `config.json` hand-edit shows in the masked prefill | live rig + direct dial | 4 ▶ (`run.sh --rigforge-control`, #516) |
 | Control-apply auto-rollback (rigforge#236): a hashrate-tanking change is recorded `rolled_back` in the worker-apply result + per-worker history | live rig + fault-injection | 4 ▶ (`run.sh --rigforge-control`, #517; operator supplies `IT_RIG_ROLLBACK_CHANGES`) |
+| Per-worker RigForge new-release badge (#596): one fleet-wide latest-release fetch (hourly throttle, disabled = never dials) compared against each rig's reported `version`, bare-vs-`v`-prefixed SemVer | `dashboard.check_for_updates` + rig-reported version | 1 ✅ (`test_update_checker` comparison/throttle/no-dial; `test_views` + node tests for the per-worker plumbing) · 4 (deferred — live badge on a real rig, owed to the #597 gouda loaner session) |
 | Stratum auth accept/reject: matching `pass` mines, wrong/missing `pass` rejected, rotation | live proxy `--access-password` | 4 (deferred — a headless xmrig login probe, real proxy binary) |
 | Dev-fee independence (#173): proxy `--donate-level` and rig `DONATION` both honored | live proxy + rig | 4 (deferred) |
 

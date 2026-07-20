@@ -553,6 +553,10 @@ class DataService:
             # JUST changed — the very upgrade the restored badge advertised. The checker
             # recomputes it on its own cadence; never resurrect the pre-upgrade banner.
             loaded_snapshot.pop("update", None)
+            # Same rule for the fleet-wide RigForge release (#596): with the flag now off, a
+            # restored `rigforge_release` would keep serving stale per-worker badges until the
+            # first poll cycle. The checker re-fetches on its cadence; drop it on restore.
+            loaded_snapshot.pop("rigforge_release", None)
             self.latest_data.update(loaded_snapshot)
             self.workers_rejected = bool(self.latest_data.get("workers_rejected", False))
             self.miner_released = bool(self.latest_data.get("miner_released", False))
