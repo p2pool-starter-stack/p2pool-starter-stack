@@ -10,8 +10,8 @@ Two backstops matter for whether a clearnet route is actually an IP leak:
   subnet — so a container's clearnet route can't actually leave while it's on.
 * It does **not** cover the **host-networked dashboard** (``network_mode: host``), whose own egress
   (XvB stats fetch, update check, Healthchecks ping, Telegram bot) bypasses ``DOCKER-USER`` entirely.
-  Those rely solely on their SOCKS config — a clearnet route there is a real leak regardless of the
-  firewall. (All four are Tor-routed by default, so none leak.)
+  Those rely solely on their SOCKS config — a clearnet route there would be a real leak regardless
+  of the firewall. (All of them are unconditionally Tor-routed, so none can leak.)
 
 So a connection is a *leak* only when its route is clearnet AND it isn't neutralised by a backstop.
 """
@@ -97,7 +97,9 @@ def compute_egress_posture(
             "name": "dashboard",
             "firewalled": False,  # host-networked — bypasses the #270 DOCKER-USER firewall
             "conns": [
-                {"to": "XvB stats (xmrvsbeast.com)", "route": xvb},  # socks5h when on (#163)
+                # XvB stats fetch — unconditionally socks5h over Tor (#163/#701); xvb.tor only
+                # governs the xmrig-proxy donation dial above, never this fetch.
+                {"to": "XvB stats (xmrvsbeast.com)", "route": TOR if xvb_enabled else INACTIVE},
                 {"to": "update check (github)", "route": TOR},  # socks5h, #224
                 # Healthchecks.io dead-man's-switch ping — always over Tor when a URL is set (#79).
                 {"to": "Healthchecks.io ping", "route": TOR if healthchecks_enabled else INACTIVE},
@@ -249,7 +251,8 @@ def compute_topology(
         # App-level egress.
         _edge("xmrig-proxy", _ext(xvb), xvb, "XvB donation", "egress"),
         _edge("dashboard", "tor", TOR, "update check", "egress"),
-        _edge("dashboard", _ext(xvb), xvb, "XvB stats", "egress"),
+        # XvB stats fetch — unconditionally Tor (#163/#701); xvb.tor only gates the donation dial.
+        _edge("dashboard", "tor", TOR if xvb_enabled else INACTIVE, "XvB stats", "egress"),
         # Healthchecks.io ping — always over Tor when a URL is set (#79).
         _edge(
             "dashboard",

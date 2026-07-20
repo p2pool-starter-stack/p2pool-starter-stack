@@ -1923,10 +1923,18 @@ class TestEgressTopology:
         assert "Tor-only" in badge["text"]
         assert st["egress"]["summary"]["all_tor"] is True
 
-    def test_host_dashboard_clearnet_leak_emits_a_warning_badge(self, monkeypatch):
-        # The host-networked dashboard's XvB stats fetch over clearnet leaks despite the firewall —
-        # the payload must flip the badge to a loud warning and the topology summary to "warn".
+    def test_xvb_tor_off_stays_a_tor_only_badge(self, monkeypatch):
+        # xvb.tor gates only the xmrig-proxy donation dial; the dashboard's stats fetch is
+        # unconditionally Tor (#163/#701), so with the firewall on nothing leaks — badge stays green.
         _set_egress_config(monkeypatch, XVB_TOR_ENABLED=False)
+        st = build_state(_data(), _state_mgr(), "all")
+        assert st["badges"][-1]["variant"] == "ok"
+        assert st["egress"]["summary"]["leaks"] == 0
+
+    def test_clearnet_leak_emits_a_warning_badge(self, monkeypatch):
+        # A real leak (clearnet sidechain peers with the firewall down) must flip the badge to a
+        # loud warning and the topology summary to "warn".
+        _set_egress_config(monkeypatch, P2POOL_CLEARNET=True, TOR_EGRESS_FIREWALL=False)
         st = build_state(_data(), _state_mgr(), "all")
         badge = st["badges"][-1]
         assert badge["variant"] == "bad"
@@ -1947,7 +1955,7 @@ class TestEgressTopology:
         )
 
     def test_payload_stays_json_serializable_with_a_leak(self, monkeypatch):
-        _set_egress_config(monkeypatch, XVB_TOR_ENABLED=False, P2POOL_CLEARNET=True)
+        _set_egress_config(monkeypatch, P2POOL_CLEARNET=True, TOR_EGRESS_FIREWALL=False)
         json.dumps(build_state(_data(), _state_mgr(), "all"))
 
 

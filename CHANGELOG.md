@@ -11,6 +11,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The egress panel no longer reports a phantom clearnet leak for the XvB stats fetch (#701).**
+  With `xvb.tor: false`, the #170 posture panel and topology view showed the dashboard's XvB
+  stats connection as a clearnet leak. That fetch is unconditionally routed over Tor (`socks5h`,
+  #163) — `xvb.tor` gates only the xmrig-proxy donation dial (#166) — so the panel warned about
+  a leak that cannot happen. The dashboard's XvB stats route is now Tor whenever XvB is enabled,
+  matching what the code actually does and what `docs/privacy.md` already documented.
+
 ### Changed
 
 - **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now
