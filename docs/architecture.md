@@ -116,8 +116,9 @@ never leave the machine. The dashboard makes six outbound internet calls — the
 Tor-routed, so enabling any of them never reveals where your stack runs (the webhook/ntfy sinks have
 a `notifications.tor: false` opt-out for LAN endpoints Tor can't reach; see
 [Telegram › Webhook and ntfy sinks](telegram.md#webhook-and-ntfy-sinks)). The dashboard also polls
-each rig's RigForge API over the **LAN** (worker stats, config applies) — that traffic stays on your
-local network and never touches the internet, so it carries no Tor tag. Node
+each rig's RigForge API for worker stats, and config applies travel the same path — dialed by the
+host-side control runner, so the rig tokens never enter the dashboard container (#185). Both are
+direct **LAN** connections to your rigs; they don't route over Tor, so they carry no Tor tag. Node
 colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy and isolation (Tor,
 Docker socket proxies), and 🟩 the mining core. In remote-node mode the bundled 🟠 Monero node isn't
 started, and P2Pool talks to your external node instead.
