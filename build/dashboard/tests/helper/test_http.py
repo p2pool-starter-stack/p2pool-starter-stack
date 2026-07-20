@@ -99,5 +99,7 @@ class TestWiringDriftGuard:
         for mod in external:
             src = mod.read_text()
             hit = direct_call.search(src)
-            assert hit is None, f"{mod.name}: unbounded {hit.group() if hit else ''} slipped back in"
+            assert hit is None, (
+                f"{mod.name}: unbounded {hit.group() if hit else ''} slipped back in"
+            )
             assert "bounded_get(" in src, f"{mod.name}: no bounded_get call found"
