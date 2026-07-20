@@ -5870,8 +5870,9 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     # (sec-review finding) — 90s keeps the stall bound in worker-apply's envelope. There is no
     # in-progress status (rigforge#320): a non-matching change_id just means pending. Terminals
     # are applied / rolled_back / failed; a rig-side throttle refusal arrives as
-    # failed+"throttled" and is surfaced as retry-later, not an error.
-    local sbody scode status reason deadline=$((SECONDS + 90))
+    # failed+"throttled" and is surfaced as retry-later, not an error. The cap is overridable
+    # (CONTROL_WU_POLL_CAP) so the stack tests can prove the timeout→accepted fallback in seconds.
+    local sbody scode status reason deadline=$((SECONDS + ${CONTROL_WU_POLL_CAP:-90}))
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 5
         sbody="$cdir/staged/.$id.status"
