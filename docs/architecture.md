@@ -36,6 +36,7 @@ flowchart TB
     HC(["🩺 Healthchecks.io<br/>dead-man's switch"])
     XvB(["🎲 XMRvsBeast<br/>pool + stats"])
     GitHub(["🐙 GitHub<br/>release check"])
+    Coin(["💱 CoinGecko<br/>price feed"])
 
     subgraph stack ["🐳 Pithead"]
         direction TB
@@ -57,6 +58,7 @@ flowchart TB
     You ==>|HTTPS| Caddy
     Caddy --> Dashboard
     Workers ==>|"Stratum 3333"| Proxy
+    Dashboard ==>|"worker API · LAN"| Workers
 
     %% Dashboard internal control + monitoring (never leaves the box)
     Dashboard -.->|controls| Proxy
@@ -67,8 +69,9 @@ flowchart TB
     Dashboard ==>|"🚨 alerts + commands · 🟢 Tor"| Tor
     Dashboard ==>|"🔔 webhook/ntfy alerts · 🟢 Tor"| Tor
     Dashboard ==>|"🩺 liveness ping · 🟢 Tor"| Tor
-    Dashboard ==>|"📈 XvB stats · 🟢 Tor"| Tor
+    Dashboard ==>|"📈 XvB stats + raffle · 🟢 Tor"| Tor
     Dashboard ==>|"🆕 update check · 🟢 Tor"| Tor
+    Dashboard ==>|"💱 XMR/XTM prices · 🟢 Tor"| Tor
 
     Proxy ==>|hashrate| P2Pool
     Proxy ==>|"hashrate · 🟢 Tor"| Tor
@@ -87,13 +90,14 @@ flowchart TB
     Net -.-> HC
     Net -.-> XvB
     Net -.-> GitHub
+    Net -.-> Coin
 
     classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
     classDef ctrl fill:#1d4ed8,stroke:#93c5fd,color:#eff6ff;
     classDef priv fill:#6d28d9,stroke:#c4b5fd,color:#f5f3ff;
     classDef mine fill:#047857,stroke:#6ee7b7,color:#ecfdf5;
 
-    class You,Workers,Net,Telegram,Hooks,HC,XvB,GitHub ext;
+    class You,Workers,Net,Telegram,Hooks,HC,XvB,GitHub,Coin ext;
     class Caddy,Dashboard ctrl;
     class Tor,DockerProxy priv;
     class Proxy,P2Pool,Monerod,Tari mine;
@@ -105,11 +109,15 @@ flowchart TB
 Reading the diagram: thick arrows carry inbound connections and every path that **leaves the box** —
 each egress edge is tagged with its route, and **🟢 Tor** means it exits through the Tor daemon (a Tor
 exit IP, never your host's). Dotted arrows are the dashboard's internal control and monitoring, which
-never leave the machine. The dashboard makes five outbound calls — the **Telegram** bot (alerts +
-commands), the **webhook/ntfy** alert sinks, the **Healthchecks.io** liveness ping, the **XvB** stats
-fetch, and the **GitHub** release check — and all five are Tor-routed, so enabling any of them never
-reveals where your stack runs (the webhook/ntfy sinks have a `notifications.tor: false` opt-out for
-LAN endpoints Tor can't reach; see [Telegram › Webhook and ntfy sinks](telegram.md#webhook-and-ntfy-sinks)). Node
+never leave the machine. The dashboard makes six outbound internet calls — the **Telegram** bot
+(alerts + commands), the **webhook/ntfy** alert sinks, the **Healthchecks.io** liveness ping, the
+**XvB** calls (stats, raffle registration, winners), the **GitHub** release check, and the opt-in
+**CoinGecko** price feed (`dashboard.energy.price_feed`, XMR + XTM spot prices) — and all six are
+Tor-routed, so enabling any of them never reveals where your stack runs (the webhook/ntfy sinks have
+a `notifications.tor: false` opt-out for LAN endpoints Tor can't reach; see
+[Telegram › Webhook and ntfy sinks](telegram.md#webhook-and-ntfy-sinks)). The dashboard also polls
+each rig's RigForge API over the **LAN** (worker stats, config applies) — that traffic stays on your
+local network and never touches the internet, so it carries no Tor tag. Node
 colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy and isolation (Tor,
 Docker socket proxies), and 🟩 the mining core. In remote-node mode the bundled 🟠 Monero node isn't
 started, and P2Pool talks to your external node instead.
