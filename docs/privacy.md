@@ -88,6 +88,12 @@ What the running stack sends to the internet, connection by connection.
 resolved on the clearnet either. The host-networked dashboard reaches the bridge's Tor SOCKS at
 `172.28.0.25:9050`.
 
+The dashboard's egress panel classifies the alert-sink carve-out by what it can prove from the
+config alone: with `notifications.tor: false`, the sinks show as **local** — not a counted leak —
+only when every configured endpoint is a private or loopback IP literal, since such a POST never
+leaves your network. A hostname can't be proven private without a DNS lookup, so a hostname
+endpoint with Tor off counts as **clearnet**, a real leak.
+
 ---
 
 ## Build / setup-time egress
