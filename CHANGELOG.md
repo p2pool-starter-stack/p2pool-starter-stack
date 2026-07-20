@@ -24,8 +24,8 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   "Energy calculator settings updated" row on any box whose `config.json` never set
   `dashboard.energy`: the editor round-trips the reference-merged form, so the staged copy
   carries the materialized energy defaults, and the preview compared them against the absent
-  block. The comparison now merges the reference defaults into both sides, so only a real value
-  change raises the row.
+  block. The comparison — in the preview row and the commit's audit-key derivation alike — now
+  merges the reference defaults into both sides, so only a real value change raises the row.
 
 ### Changed
 

@@ -4932,6 +4932,13 @@ jq -s --arg id "$UUIDE" '{id:$id, action:"preview", actor:"admin",
 run_pending >/dev/null
 assert_eq "unedited merged round-trip previews" "$(jq -r '.status' "$RESULTS/$UUIDE.json" 2>/dev/null)" "previewed"
 assert_eq "unedited merged round-trip shows zero changes (#696)" "$(jq -r '.changes | length' "$RESULTS/$UUIDE.json" 2>/dev/null)" "0"
+# Audit leg of the same contract: committing that unedited round-trip must not record a phantom
+# DASHBOARD_ENERGY key — the gate's audit comparison merges the reference defaults too (#696).
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUIDE" >"$REQS/$UUIDE.json"
+run_pending >/dev/null
+assert_eq "unedited merged round-trip commits" "$(jq -r '.status' "$RESULTS/$UUIDE.json" 2>/dev/null)" "applied"
+assert_not_contains "unedited commit audits no phantom DASHBOARD_ENERGY key (#696)" \
+    "$(grep '"action":"commit","status":"applied"' "$AUDIT" | tail -n 1)" "DASHBOARD_ENERGY"
 rm -f "$RESULTS/$UUIDE.json" "$STAGED/$UUIDE.json"
 
 # NEGATIVE — the #504 security teeth: an energy edit BUNDLED with a change that is NOT on the env

@@ -5075,9 +5075,13 @@ control_approval_gate() { # <staged-file>
     # (#349) without a third dry-run. Names only, never values. dashboard.energy (#504) is
     # config.json-only, so it never appears in the env porcelain — fold a synthetic DASHBOARD_ENERGY
     # name into the list when that block changed, else an energy-only commit would audit no key.
+    # Reference defaults merged into both sides (#696), same as the preview leg: the editor
+    # round-trips the reference-merged form, and materialized defaults are not a change.
     local keys
     keys=$(porcelain_keys "$porcelain")
-    if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+    if ! jq -e --slurpfile live "$CONFIG_FILE" --slurpfile ref "$REFERENCE_CONFIG" \
+        '(($ref[0].dashboard.energy // {}) + ($live[0].dashboard.energy // {}))
+         == (($ref[0].dashboard.energy // {}) + (.dashboard.energy // {}))' "$staged" >/dev/null 2>&1; then
         keys="${keys:+$keys }DASHBOARD_ENERGY"
     fi
     printf '%s' "$keys"
