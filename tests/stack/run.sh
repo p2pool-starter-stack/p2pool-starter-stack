@@ -6452,6 +6452,17 @@ jq --arg d "$SPD/moved-monero" '.monero.data_dir=$d' "$SP/config.json" >"$SP/con
 out="$(cd "$SP" && DOCKER_LOG=/dev/null PATH="$SP/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
 assert_contains "a real data-dir move still previews as a change" "$out" "MONERO_DATA_DIR"
 assert_contains "a real data-dir move is still flagged DEST" "$out" "$(printf 'DEST\tMONERO_DATA_DIR')"
+# APPLY that move with dashboard data on disk. A zero-change apply never reaches
+# migrate_dashboard_data (#455), so this apply — with a real change — is what drives it here:
+# .env spells the dashboard data dir via `current` while $PWD spells it versioned. The
+# physical-equality guard must read the two spellings as ONE dir (the classic layout), not
+# data at both locations — that check is a hard stop, and the data must not move or vanish.
+mkdir -p "$CUR/data/dashboard"
+echo "live-db" >"$CUR/data/dashboard/mining_data.db"
+out="$(cd "$SP" && DOCKER_LOG=/dev/null PATH="$SP/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply with dashboard data at one dir under two spellings exits 0" "$?" "0"
+assert_eq "the dashboard data stays in place — no migration, no wipe" \
+    "$(cat "$SP/data/dashboard/mining_data.db" 2>/dev/null)" "live-db"
 unset SPD SP CUR
 
 # ---------------------------------------------------------------------------
