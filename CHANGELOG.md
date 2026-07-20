@@ -11,6 +11,16 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The egress panel and network map now list the webhook/ntfy alert sinks (#380).** Both views
+  derived every dashboard egress except the alert sinks, so a `notifications.tor: false` sink
+  POSTing to a public endpoint — a real clearnet leak from the host-networked dashboard, which the
+  egress firewall cannot cover — went uncounted. The new "alert sinks (webhook / ntfy)" entry is
+  Tor when configured (the default), a counted clearnet leak when Tor is off and any endpoint is
+  public, and **local** — the LAN carve-out, not a leak — only when every configured endpoint is a
+  private or loopback IP literal, since a hostname cannot be proven private without a DNS lookup.
+
 ### Changed
 
 - **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now
