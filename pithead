@@ -86,7 +86,11 @@ if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _STACK_SOURCED=1; fi
 if [ "$_STACK_SOURCED" = "0" ]; then
     # Always operate from the directory containing this script, so the stack can be managed from
     # anywhere (./pithead, an absolute path, cron, systemd, ...). All paths below are relative to it.
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # -P (#695): resolve symlinks so every $PWD-derived .env value (CLEARNET_STATE_DIR, CONTROL_DIR,
+    # ...) renders the same physical path however pithead is invoked — an interactive apply through
+    # the `current ->` deploy symlink and the systemd control runner on the real dir used to render
+    # different strings for the same directory, so an unedited preview showed a path "change".
+    SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
     cd "$SCRIPT_DIR" || error "Cannot enter the script directory: $SCRIPT_DIR"
     # Absolute path to this script — run_chain (#94) re-invokes it once per chained step.
     PITHEAD_SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
@@ -4467,8 +4471,8 @@ describe_change() {
             msg="Dashboard configuration editing disabled (#33) — the control runner units are removed; the dashboard container is recreated."
         fi
         ;;
-    CONTROL_DIR | CADDY_LOG_DIR)
-        # Fixed paths under ./data — internal, change only when the checkout moves.
+    CLEARNET_STATE_DIR | CONTROL_DIR | CADDY_LOG_DIR)
+        # Fixed paths under ./data — internal, change only when the checkout moves (#695).
         msg=""
         ;;
     DASHBOARD_ONION_ENABLED)
@@ -5172,7 +5176,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
         # arms Apply and the commit lands it in config.json. The approval gate allowlists exactly
         # this config.json-only block; any OTHER config.json-only delta still refuses (see
         # control_approval_gate). INFO never flips destructive, so the existing verdict stands.
-        if ! jq -e --slurpfile live "$CONFIG_FILE" '(.dashboard.energy // {}) == ($live[0].dashboard.energy // {})' "$staged" >/dev/null 2>&1; then
+        # Compare with the reference defaults merged into BOTH sides (#696): the editor round-trips
+        # the reference-merged form, so on a config.json that never set dashboard.energy the staged
+        # copy carries the materialized defaults — an absent block and explicit defaults are the
+        # same settings, not a change.
+        if ! jq -e --slurpfile live "$CONFIG_FILE" --slurpfile ref "$REFERENCE_CONFIG" \
+            '(($ref[0].dashboard.energy // {}) + ($live[0].dashboard.energy // {}))
+             == (($ref[0].dashboard.energy // {}) + (.dashboard.energy // {}))' "$staged" >/dev/null 2>&1; then
             result=$(printf '%s' "$result" | jq '.changes += [{flag:"INFO",key:"dashboard.energy",msg:"Energy calculator settings (dashboard.energy) — electricity price / currency / XMR price updated."}]')
         fi
         control_write_result "$cdir/results" "$id" "$result"

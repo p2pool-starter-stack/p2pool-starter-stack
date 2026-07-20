@@ -39,8 +39,10 @@ run_sourced() {
     )
 }
 
-# A throwaway sandbox dir, cleaned on exit.
-SANDBOX="$(mktemp -d)"
+# A throwaway sandbox dir, cleaned on exit. Physical path (#695): pithead canonicalizes its
+# own directory with pwd -P, so a sandbox spelled through a symlink (macOS /var -> /private/var)
+# would render .env paths that no longer string-match the $SANDBOX-based assertions.
+SANDBOX="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 # A fake docker that records calls and answers the few queries setup/apply make.
@@ -4424,6 +4426,21 @@ assert_contains "PITHEAD_CONFIG_FILE override is honoured" "$out" "37890" # nano
 out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
 assert_eq "without the override, config.json shows no changes" "$out" ""
 
+echo "== black-box: symlink-invoked stack renders physical paths (#695) =="
+# A stack managed through a deploy symlink (`current -> pithead-vX.Y.Z`) must render the same
+# .env as one managed from the physical dir: SCRIPT_DIR resolves with pwd -P, so an unedited
+# preview through the symlink shows zero changes and an apply never rewrites the $PWD-derived
+# paths (CLEARNET_STATE_DIR & co.) to the symlink spelling.
+ln -sfn "$C" "$SANDBOX/current-link"
+out="$(cd "$SANDBOX/current-link" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>/dev/null)"
+assert_rc "dry-run through the symlink exits 0" "$?" "0"
+assert_eq "unedited preview through the symlink shows zero changes (#695)" "$out" ""
+out="$(cd "$SANDBOX/current-link" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "apply through the symlink succeeds" "$?" "0"
+assert_contains "clearnet state dir keeps the physical path" "$(cat "$C/.env")" "CLEARNET_STATE_DIR=$C/data/clearnet-state"
+assert_not_contains "the symlink spelling never reaches .env" "$(cat "$C/.env")" "current-link"
+rm -f "$SANDBOX/current-link"
+
 echo "== black-box: apply --dry-run is read-only re: node credential generation (#556) =="
 # Direct CLI leg: a fresh/hand-edited local-node config with placeholder/empty creds must not have
 # config.json rewritten by a --dry-run preview — the read-only contract #556 reported broken
@@ -4903,6 +4920,19 @@ assert_eq "energy edit commits" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev
 assert_eq "energy cost landed in config.json" "$(jq -r '.dashboard.energy.cost_per_kwh' "$C/config.json")" "0.18"
 assert_eq "energy currency landed in config.json" "$(jq -r '.dashboard.energy.currency' "$C/config.json")" "EUR"
 assert_contains "energy commit audits the synthetic key name (#504)" "$(grep '"action":"commit","status":"applied"' "$AUDIT" | tail -n 1)" "DASHBOARD_ENERGY"
+
+# Unedited editor round-trip (#696): the form serves the reference-merged config and posts the
+# merged document back, so a save with NO edits must preview as zero changes. The live energy
+# block above is partial — the merge materializes the remaining reference defaults (tari_price,
+# price_feed) into the staged copy, and defaults against an absent value are the same settings,
+# not an "Energy calculator settings updated" row.
+UUIDE="55555555-5555-4555-8555-555555555555"
+jq -s --arg id "$UUIDE" '{id:$id, action:"preview", actor:"admin",
+    config:((.[0] | del(._docs)) * .[1])}' "$ROOT/config.reference.json" "$C/config.json" >"$REQS/$UUIDE.json"
+run_pending >/dev/null
+assert_eq "unedited merged round-trip previews" "$(jq -r '.status' "$RESULTS/$UUIDE.json" 2>/dev/null)" "previewed"
+assert_eq "unedited merged round-trip shows zero changes (#696)" "$(jq -r '.changes | length' "$RESULTS/$UUIDE.json" 2>/dev/null)" "0"
+rm -f "$RESULTS/$UUIDE.json" "$STAGED/$UUIDE.json"
 
 # NEGATIVE — the #504 security teeth: an energy edit BUNDLED with a change that is NOT on the env
 # allowlist (monero.rpc_lan_access -> MONERO_RPC_BIND) must be REFUSED. The energy exemption must
