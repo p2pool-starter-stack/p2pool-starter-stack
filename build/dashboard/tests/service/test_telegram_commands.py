@@ -631,13 +631,17 @@ def test_get_updates_parses_results_over_tor(monkeypatch):
     seen = {}
 
     def fake_get(url, params=None, timeout=None, proxies=None):
-        seen.update(url=url, params=params, proxies=proxies)
+        seen.update(url=url, params=params, proxies=proxies, timeout=timeout)
         return _Resp({"ok": True, "result": [{"update_id": 8}]})
 
     monkeypatch.setattr(tc, "bounded_get", fake_get)
-    assert bot._get_updates(0) == [{"update_id": 8}]
+    assert bot._get_updates(tc.LONG_POLL_SECONDS) == [{"update_id": 8}]
     assert "bottok" in seen["url"] and seen["params"]["offset"] == 7  # token + offset forwarded
     assert seen["proxies"] == {"http": "socks5h://tor:9050", "https": "socks5h://tor:9050"}
+    # (connect, read) tuple with the read timeout outlasting Telegram's long-poll hold — drop the
+    # tuple (or shrink the read side) and every legitimate long poll aborts mid-hold (#698).
+    connect, read = seen["timeout"]
+    assert read > seen["params"]["timeout"] >= 0 and connect > 0
     # Batch cap: without it, an over-cap batch could never be parsed, so the offset could never
     # advance past it and the poll loop would re-fetch it forever (#660 follow-up).
     assert seen["params"]["limit"] == tc.GETUPDATES_LIMIT
