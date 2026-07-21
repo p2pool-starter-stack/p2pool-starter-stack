@@ -54,7 +54,10 @@
         "url": "na.xmrvsbeast.com:4247",
         "donor_id": "auto",
         "donation_level": "auto",
-        "tor": true
+        "tor": true,
+        "standby": {
+            "source": ""
+        }
     },
 
     "xmrig_proxy": {

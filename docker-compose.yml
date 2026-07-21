@@ -625,6 +625,9 @@ services:
       # Route XvB donation mining over Tor by default (#166); xvb.tor:false opts out.
       - XVB_TOR_ENABLED=${XVB_TOR_ENABLED:-true}
       - XVB_DONATION_LEVEL=${XVB_DONATION_LEVEL:-auto}
+      # Backup-stack warm-standby source (#249): the primary dashboard's read-only /api/xvb-standby
+      # URL. Blank (default) = off; only a failover pair's backup sets it.
+      - XVB_STANDBY_SOURCE=${XVB_STANDBY_SOURCE:-}
       # XvB raffle auto-registration endpoint (#263). Defaults to the real endpoint (in the dashboard
       # config) so registration just works. Override here to point at a different/test endpoint, or
       # set a disable sentinel (off/none/false/disabled) to turn auto-registration off while keeping

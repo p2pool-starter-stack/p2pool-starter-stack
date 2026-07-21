@@ -1745,6 +1745,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
             ),
         ),
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
+        # On a backup stack, the XvB controller state last pulled from the primary (#249) — held as
+        # standby, adopted only at failover. None on a single stack (nothing pulls). Inspectable so
+        # an operator can confirm the backup is warm before it takes over.
+        "xvb_standby": state_mgr.get_xvb_standby(),
         "tari": build_tari(data),
         "workers": build_workers(data.get("workers", []), data.get("rigforge_release")),
         # Fleet power draw / efficiency and (once a price is set) net profit after power (#260),

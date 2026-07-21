@@ -13,6 +13,21 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **Warm XvB donation state on a backup stack (#249).** On a two-host failover pair — same wallet,
+  workers listing both hosts in `pools[]` — the backup's XvB donation controller used to cold-start
+  when the fleet failed over to it: the closed-loop split restarted from the feedforward estimate
+  and re-ramped for hours, over- or under-shooting the credited tier until it reconverged. The
+  controller's commanded donation fraction is now persisted, so a plain restart resumes the warmed
+  split instead of re-seeding cold. A backup can also point `xvb.standby.source` at the primary
+  dashboard's new read-only `/api/xvb-standby` endpoint; it periodically pulls the primary's
+  controller state and holds it as standby (inspectable in `/api/state`), then adopts it the first
+  time it actually donates at failover — so the split resumes warm. One-way (backup pulls from
+  primary), inert unless configured, and never acted on while the primary is authoritative (an idle
+  backup has no workers, so its controller stays on P2Pool). The pull follows the dashboard's
+  privacy-safe egress rule: an `.onion` source, a public IP, or any hostname rides the bridge Tor
+  SOCKS (the primary sees a Tor exit, never the backup's IP); only a provably-private/loopback IP
+  literal dials direct as a LAN hop — so the pull never opens a clearnet path, and the Security
+  panel reports its route.
 - **Opt-in fail-closed miner hold on an unrecoverable dashboard health failure** (#490). New
   `dashboard.fail_closed` toggle, default **off**. The dashboard is an observability layer, not the
   mining datapath (`xmrig-proxy` → `p2pool` → `monerod` runs independently of it), so by default an
