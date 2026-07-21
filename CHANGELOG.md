@@ -74,6 +74,19 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   `worker_history` are a separate (Tier-2) slice, not touched here. No chart renders any of these
   series yet — that's a further follow-up.
 
+### Security
+
+- **The out-of-band audit trail is now flood-capped per worker (#724).** The `rig-edit` audit
+  source (#530) reads a worker's reported change id off the unauthenticated LAN worker feed. The
+  #530 deterministic row id collapses *repeats* of one change id to a single row, but not *distinct*
+  ones — so a malicious or compromised device presenting as a worker could report a fresh random
+  change id every poll, writing a new permanent `audit_events` row each ~30s cycle and slowly
+  filling the dashboard database (the table has no pruning). New `rig-edit` rows are now capped per
+  worker per rolling hour; beyond the cap the extra rows are dropped behind a single `rate-limited`
+  marker row and a logged warning, so the flood stays visible instead of growing the table without
+  limit. A genuine occasional rig change still records normally, and the non-attacker-controllable
+  `host-edit` and mirrored `control.log` rows are unaffected.
+
 ## [1.10.2] - 2026-07-21
 
 ### Fixed

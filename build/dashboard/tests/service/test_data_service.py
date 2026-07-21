@@ -2163,6 +2163,74 @@ class TestRigEditDetection:
         finally:
             sm.close()
 
+    def _flood(self, svc, worker, change_ids):
+        for cid in change_ids:
+            wr = [{"rigforge": {"control": {"change_id": cid, "status": "applied"}}}]
+            asyncio.run(svc._reconcile_worker_config([{"name": worker}], wr))
+
+    def test_distinct_change_id_flood_is_bounded_per_worker(self):
+        # #724: a rogue rig on the unauthenticated feed reports a NEW change_id every poll. Each
+        # clears #530's deterministic-id dedup, so without a cap every poll writes a permanent row.
+        # The per-worker hourly cap bounds rig-edit rows to _RIG_EDIT_CAP_PER_HOUR, plus exactly one
+        # rate-limited marker so the flood stays visible — not silently swallowed.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            cap = ds_mod._RIG_EDIT_CAP_PER_HOUR
+            self._flood(svc, "rig1", [f"cid-{i}" for i in range(cap + 8)])
+            events = sm.get_audit_events()
+            rig_edits = [e for e in events if e["action"] == "rig-edit"]
+            markers = [e for e in events if e["action"] == "rate-limited"]
+            assert len(rig_edits) == cap
+            assert len(markers) == 1
+            assert markers[0]["source"] == "rig-edit"
+            assert markers[0]["actor"] == "rig1"
+            assert markers[0]["status"] == "dropped"
+        finally:
+            sm.close()
+
+    def test_normal_cadence_is_never_rate_limited(self):
+        # A real operator edits a rig a handful of times an hour — well under the cap. Every genuine
+        # change_id records and no rate-limited marker is ever written.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            self._flood(svc, "rig1", ["real-0", "real-1", "real-2"])
+            events = sm.get_audit_events()
+            assert len(events) == 3
+            assert all(e["action"] == "rig-edit" for e in events)
+        finally:
+            sm.close()
+
+    def test_cap_is_per_worker_a_flood_does_not_starve_another_rig(self):
+        # The cap is keyed on the worker (not global), so one rogue rig flooding distinct change_ids
+        # never drops a genuine rig-edit — nor any host-edit — from a different, well-behaved source.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            self._flood(
+                svc, "rogue", [f"flood-{i}" for i in range(ds_mod._RIG_EDIT_CAP_PER_HOUR + 5)]
+            )
+            self._flood(svc, "goodrig", ["honest-cid"])
+            goodrig = [e for e in sm.get_audit_events() if e["actor"] == "goodrig"]
+            assert len(goodrig) == 1
+            assert goodrig[0]["action"] == "rig-edit"
+        finally:
+            sm.close()
+
+    def test_cap_resets_after_the_window_elapses(self, monkeypatch):
+        # Fixed in-memory window: once an hour passes the worker's budget refreshes, so a later
+        # genuine change_id records normally again — the cap throttles a flood, it doesn't ban a rig.
+        svc, sm = self._svc_with_real_storage()
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(ds_mod.time, "time", lambda: clock["t"])
+        try:
+            cap = ds_mod._RIG_EDIT_CAP_PER_HOUR
+            self._flood(svc, "rig1", [f"cid-{i}" for i in range(cap + 3)])
+            assert len([e for e in sm.get_audit_events() if e["action"] == "rig-edit"]) == cap
+            clock["t"] += ds_mod._RIG_EDIT_WINDOW_SEC + 1  # next window
+            self._flood(svc, "rig1", ["post-window"])
+            assert [e for e in sm.get_audit_events() if "post-window" in e["keys"]]
+        finally:
+            sm.close()
+
 
 class TestTariPayoutSync:
     """Tari on-chain payout confirmation poll (#462): persist to the shared table with chain="tari",
