@@ -9,6 +9,17 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+### Changed
+
+- **Net profit now includes the XvB raffle's expected reward (#712).** The Energy tab's net figure
+  adds the current XvB tier's published expected reward, valued at your XMR price, on top of P2Pool
+  (and Tari, when priced). The whole net is already probabilistic, so it stays a single number — the
+  XvB slice is labelled `(est.)` in the heading and tooltip because the raffle draw is random among
+  qualifiers. It folds in only while the fetched estimate is fresh (the same staleness rule as the
+  *XvB Donation Stats* card) and you clear a donor tier; otherwise it is left out, never guessed.
+
 ## [1.10.0] - 2026-07-20
 
 ### Added

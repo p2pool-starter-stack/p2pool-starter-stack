@@ -239,6 +239,7 @@ export function computeEarnings(hashrateHs, earnings) {
       tariYear: null,
       tariTimeToBlockSec: null,
       tariRewardPerBlock: null,
+      xvbDay: null,
     };
   }
   const day = hashrateHs * earnings.coeff_day;
@@ -264,6 +265,9 @@ export function computeEarnings(hashrateHs, earnings) {
     tariYear: tariDay === null ? null : tariDay * DAYS_PER_YEAR,
     tariTimeToBlockSec,
     tariRewardPerBlock: earnings.tari_available ? earnings.tari_reward : null,
+    // Current-tier XvB expected reward, XMR/day (#712). A fixed published figure, NOT scaled by the
+    // what-if hashrate (unlike day/tariDay); null unless the server sent a fresh estimate.
+    xvbDay: Number.isFinite(earnings.xvb_day) ? earnings.xvb_day : null,
   };
 }
 
@@ -321,16 +325,20 @@ export function formatXtm(xtm) {
 // prices into kWh / cost / net over day·month·year for a what-if hashrate. Power draw is measured
 // (does NOT scale with the what-if hashrate — it's the real fleet), so only the earnings side
 // scales: net = gross − cost(kWh × cost_per_kwh), where
-//   gross = (what-if XMR/day × xmr_price) + (what-if Tari/day × tari_price, when priced).
+//   gross = (what-if XMR/day × xmr_price) + (what-if Tari/day × tari_price, when priced)
+//           + (current-tier XvB/day × xmr_price, when the server sent a fresh estimate).
 // `est` is the already-computed earnings for this what-if hashrate (computeEarnings; `est.tariDay`
 // is the same Tari/day estimate the Tari tab already shows — no separate estimate invented here).
-// XvB stays excluded from gross: it's a raffle status (xvbTierComparison), not a clean per-day
-// credited estimate — guessing one would fabricate a figure.
+// XvB (#712): `est.xvbDay` is the current tier's published expected reward (XMR/day), folded into
+// the single net — the whole net is already probabilistic, so one number stays coherent, and the
+// UI labels the XvB slice as an estimate (the raffle draw is random among qualifiers). It's a
+// fixed published figure, so it does NOT scale with the what-if hashrate; null (server-gated on a
+// fresh, non-stale estimate for a held donor tier) means it's simply left out — never fabricated.
 // Any figure whose inputs are missing comes back null so the card shows "—" rather than a bogus
 // number: cost needs cost_per_kwh > 0; net additionally needs xmr_price > 0 and a valid XMR
-// estimate — Tari only ever ADDS to that base (mirrors the existing xmr_price-gates-net contract,
-// #520 scope: no tari-price-only net). `includesTari` tells the UI which figure it got, so the
-// net-profit label is never silently partial (#520's honesty requirement).
+// estimate — Tari and XvB only ever ADD to that base (mirrors the existing xmr_price-gates-net
+// contract, #520 scope: no tari-price-only net). `includesTari` / `includesXvb` tell the UI which
+// figure it got, so the net-profit label is never silently partial (#520's honesty requirement).
 export function computeEnergy(energy, est) {
   const blank = {
     kwhDay: null,
@@ -343,6 +351,7 @@ export function computeEnergy(energy, est) {
     netMonth: null,
     netYear: null,
     includesTari: false,
+    includesXvb: false,
   };
   if (!energy || !energy.available || !(energy.total_watts > 0)) return blank;
   const kwhDay = (energy.total_watts / 1000) * 24;
@@ -354,8 +363,13 @@ export function computeEnergy(energy, est) {
   const haveXmr = Number.isFinite(xmrPrice) && xmrPrice > 0 && est && Number.isFinite(est.day);
   const includesTari =
     haveXmr && Number.isFinite(tariPrice) && tariPrice > 0 && Number.isFinite(est.tariDay);
+  // XvB (#712): the current tier's published expected reward (XMR/day), valued at the XMR price —
+  // an estimate blended into the single net, gated on a real XMR price like every other addend.
+  const includesXvb = haveXmr && Number.isFinite(est.xvbDay) && est.xvbDay > 0;
   const grossDay = haveXmr
-    ? est.day * xmrPrice + (includesTari ? est.tariDay * tariPrice : 0)
+    ? est.day * xmrPrice +
+      (includesTari ? est.tariDay * tariPrice : 0) +
+      (includesXvb ? est.xvbDay * xmrPrice : 0)
     : null;
   const netDay = grossDay !== null && costDay !== null ? grossDay - costDay : null;
   const span = (v, mult) => (v === null ? null : v * mult);
@@ -370,6 +384,7 @@ export function computeEnergy(energy, est) {
     netMonth: span(netDay, DAYS_PER_MONTH),
     netYear: span(netDay, DAYS_PER_YEAR),
     includesTari,
+    includesXvb,
   };
 }
 

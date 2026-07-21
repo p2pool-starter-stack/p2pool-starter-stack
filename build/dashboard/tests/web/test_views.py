@@ -53,6 +53,7 @@ from mining_dashboard.web.views import (
     recent_wallet_change,
     rigforge_update_for,
     visible_update,
+    xvb_current_tier_reward_day,
 )
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
@@ -1741,6 +1742,43 @@ class TestXvbCalc:
         assert out["estimates_available"] is False
         assert out["estimates_stale"] is False
         assert all(t["expected_reward_year"] is None for t in out["tiers"])
+
+    # --- current-tier reward folded into net profit (#712) ---------------------------
+
+    def test_reward_day_is_current_tier_estimate_over_365(self):
+        # Base metrics credit min(xvb_1h=2100, xvb_24h=2300)=2100 → the donor tier (>=1000, <10k);
+        # its published 0.06 XMR/year becomes 0.06/365 XMR/day. The estimate feeds est.xvbDay.
+        out = xvb_current_tier_reward_day(_metrics(), self._sm())
+        assert out == pytest.approx(0.06 / 365)
+
+    def test_reward_day_uses_lower_of_1h_24h_not_the_higher(self):
+        # The current tier is the LOWER of the two credited averages (not target): a 1h dip to the
+        # donor tier holds there even while 24h still clears whale — the honest "what you hold now".
+        out = xvb_current_tier_reward_day(_metrics(xvb_1h=2100, xvb_24h=200_000), self._sm())
+        assert out == pytest.approx(0.06 / 365)  # donor, not whale (6.17)
+
+    def test_reward_day_maps_higher_tier_to_its_own_estimate(self):
+        # min(150k, 200k)=150k clears donor_whale (100k) → its 6.17/year, proving the tier→key→
+        # estimate mapping picks the right round-type, not always the lowest.
+        out = xvb_current_tier_reward_day(_metrics(xvb_1h=150_000, xvb_24h=200_000), self._sm())
+        assert out == pytest.approx(6.17 / 365)
+
+    def test_reward_day_none_when_xvb_disabled(self):
+        assert xvb_current_tier_reward_day(_metrics(xvb_enabled=False), self._sm()) is None
+
+    def test_reward_day_none_below_lowest_donor_tier(self):
+        # min(500, 800)=500 < the 1000 donor threshold → "None" tier, nothing published to credit.
+        assert xvb_current_tier_reward_day(_metrics(xvb_1h=500, xvb_24h=800), self._sm()) is None
+
+    def test_reward_day_none_when_estimate_stale(self):
+        # Same staleness gate as the XvB card (#311): never surface a frozen number implied fresh.
+        sm = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        assert xvb_current_tier_reward_day(_metrics(), sm) is None
+
+    def test_reward_day_none_when_estimate_absent(self):
+        # Held a tier, but XvB never published a figure for it → None, never a fabricated 0.
+        sm = self._sm(estimates={"donor_vip": 0.81}, last_update=time.time())
+        assert xvb_current_tier_reward_day(_metrics(), sm) is None
 
 
 # --- build_state integration ----------------------------------------------------------
