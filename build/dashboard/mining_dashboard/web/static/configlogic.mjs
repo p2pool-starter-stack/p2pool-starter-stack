@@ -128,6 +128,7 @@ export const LOGICAL_GROUPS = [
       "proxy",
       "xvb",
       "dashboard.tari_required",
+      "dashboard.fail_closed",
     ],
   },
   { name: "Workers", prefixes: ["workers"] },

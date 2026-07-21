@@ -333,11 +333,35 @@ async def handle_control_result(request):
 # charset) before it reaches the browser — log content is attacker-influenceable input.
 
 
+def _merged_audit_entries(state_mgr):
+    """The Security panel's full audit feed (#530): the #33 log's live tail (read directly, so a
+    commit that landed since the last poll cycle shows immediately — no mirror lag) UNION the
+    durable ``audit_events`` table (the mirrored log history PLUS the out-of-band host-edit/rig-edit
+    detections, which never appear in control.log at all). Deduplicated by ``id`` — a control.log
+    row already mirrored to the DB is identical either way, so the DB copy wins and the direct log
+    read is skipped for it. Entries with no ``id`` (a handful of pre-auth "invalid"/"refused" rows,
+    #33) are never mirrored and so appear only while still in the log's own tail — a disclosed, minor
+    gap, not a bug. Sorted newest first by ``ts`` (both sources share one string format, so this is a
+    plain lexical sort, no parsing)."""
+    merged = {e["id"]: e for e in state_mgr.get_audit_events() if e.get("id")}
+    for e in audit_service.recent_changes():
+        eid = e.get("id")
+        if eid and eid not in merged:
+            merged[eid] = {**e, "source": "control"}
+        elif not eid:
+            # No stable id to dedupe on — always shown live from the log tail (never mirrored).
+            merged[f"log-{id(e)}"] = {**e, "source": "control"}
+    return sorted(merged.values(), key=lambda e: e.get("ts", ""), reverse=True)
+
+
 async def handle_audit_log(request):
-    """Recent config-change audit entries, from the read-only /control/audit mount. Registered
-    only alongside the control channel — the log is a #33 artifact."""
+    """Config-change audit entries — the #33 control-channel log plus the out-of-band host-edit /
+    rig-edit detections (#530), merged and persisted so the Security panel can group by hour/day/
+    month deeper than the log's own trimmed tail. Registered only alongside the control channel —
+    the log is a #33 artifact and the out-of-band watchers only run when it's on."""
     try:
-        return web.json_response({"entries": audit_service.recent_changes()})
+        state_mgr = request.app["state_manager"]
+        return web.json_response({"entries": _merged_audit_entries(state_mgr)})
     except Exception:
         logger.exception("Error reading the control audit log")
         return web.json_response({"error": "Failed to read the audit log."}, status=500)

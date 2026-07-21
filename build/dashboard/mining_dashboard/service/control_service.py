@@ -108,6 +108,7 @@ EDITABLE_ENV_KEY_PATHS = {
     "XVB_ENABLED": ("xvb.enabled",),
     "XVB_DONATION_LEVEL": ("xvb.donation_level",),
     "TARI_REQUIRED": ("dashboard.tari_required",),
+    "DASHBOARD_FAIL_CLOSED": ("dashboard.fail_closed",),
     "DASHBOARD_CHECK_UPDATES": ("dashboard.check_for_updates",),
     "DASHBOARD_TZ": ("dashboard.timezone",),
     "MONERO_MEM_LIMIT": ("monero.mem_limit",),
@@ -172,6 +173,21 @@ def _editable_paths():
     paths = {p for target in EDITABLE_ENV_KEY_PATHS.values() for p in target}
     paths.update(_ENERGY_PATHS)
     return sorted(paths)
+
+
+def env_key_config_paths(env_key):
+    """The config-path prefixes a committed audit ``keys`` env-var name covers (#530).
+
+    The #33 audit log records a commit's WHAT-changed as env-var NAMES (control_approval_gate's
+    ``porcelain_keys``), while the out-of-band host-edit watcher diffs config.json PATHS — so
+    correlating "did a commit explain this changed key" needs this env->path bridge. Mirrors the
+    commit gate's own derivation: an allowlisted var maps through EDITABLE_ENV_KEY_PATHS, and the
+    synthetic ``DASHBOARD_ENERGY`` name (which the gate folds in for a dashboard.energy-only
+    commit, a config.json-only block that never renders to .env, #504) covers the whole energy
+    block by prefix. An unrecognised name maps to nothing, so it can never explain a diffed key."""
+    if env_key == "DASHBOARD_ENERGY":
+        return ("dashboard.energy",)
+    return EDITABLE_ENV_KEY_PATHS.get(env_key, ())
 
 
 def _load_core_keys():

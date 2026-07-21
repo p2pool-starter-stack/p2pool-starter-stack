@@ -154,6 +154,21 @@ a fresh database, and keeps running. A `db_reset` alert (Telegram and the other 
 history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
 only the historical charts reset.
 
+**Fail-closed miner hold.** By default, every health failure above — DB write failing, DB
+corruption, a crash-looping container — only alerts; the dashboard is an observability layer, and
+the mining datapath (`xmrig-proxy` → `p2pool` → `monerod`) runs independently of it. Set
+[`dashboard.fail_closed`](configuration.md#configuration-reference) to `true` to hold the miner
+instead, but only for genuinely **unrecoverable** failures: the DB self-heal above failing on its
+own rebuild attempt (not an ordinary write blip, which stays alert-only), or the `dashboard`
+container itself crash-looping. A red `Miner held (fail-closed)` badge shows while held, next to
+`p2pool` and `xmrig-proxy`, stopped the same way the [Sync Mode hold](#sync-mode) does; unlike that
+one-way sync gate, both containers start again on their own once the condition clears — no restart
+needed.
+The database also keeps three smaller series: pool block-found events, hourly monerod-DB-size and
+host-disk-usage samples, and XvB-credited scalar samples taken roughly every 5 minutes. `/api/state`
+serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the same way as
+`share_stats`. No chart reads them yet — this is persistence and API exposure only.
+
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
@@ -685,6 +700,31 @@ field in them as hostile input — a request path is attacker-chosen bytes — s
 stripped to a safe character set before it is served. See
 [Operations › Watching for intruders](operations.md#watching-for-intruders) for the log paths,
 size bounds, and rotation steps.
+
+### Catching changes made outside the dashboard
+
+The audit trail above only sees requests that went through the control channel. Two things can
+change the stack without it: a hand-edit (or a `pithead apply` run from the host CLI) to
+`config.json`, and a config change applied directly to a rig's own control API instead of through
+Worker Inspect ([#530](https://github.com/p2pool-starter-stack/pithead/issues/530)). The dashboard
+watches for both on its normal poll cycle and appends them to the SAME audit trail:
+
+- **`host-edit`** — `config.json` changed since the last poll and no control-channel commit
+  explains it. The row names the changed setting paths (e.g. `xvb.donation_level`); it never
+  records a value.
+- **`rig-edit`** — a worker's control API reports a config change this dashboard never sent. The
+  row names the worker and the rig's own change id; RigForge's status feed reports only the
+  outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
+  moved — inspect the rig directly to see what changed.
+
+Either kind is worth treating like a rotate-now signal in the same spirit as
+[Operations › Watching for intruders](operations.md#watching-for-intruders): if you didn't make
+the change, someone or something with host or rig access did.
+
+The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
+two out-of-band kinds above — persist to the dashboard's own database, so the card's grouping
+selector (hour/day/month) can drill back further than the log's own trimmed window. Pick "All" for
+the flat newest-first view, or a coarser grouping to scan a longer history at a glance.
 
 ## Upgrading from the dashboard
 

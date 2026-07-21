@@ -41,6 +41,19 @@ class TestConfig:
             with patch.dict(os.environ, {"MONERO_PRUNE": v}):
                 assert _reload_config().MONERO_PRUNE is False, f"{v!r} should be full"
 
+    def test_fail_closed_defaults_off(self):
+        # #490: the dashboard is an observability layer, so a cosmetic fault must never idle the
+        # fleet by default — absent DASHBOARD_FAIL_CLOSED must read False.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DASHBOARD_FAIL_CLOSED", None)
+            assert _reload_config().DASHBOARD_FAIL_CLOSED is False
+
+    def test_fail_closed_env_override(self):
+        with patch.dict(os.environ, {"DASHBOARD_FAIL_CLOSED": "true"}):
+            assert _reload_config().DASHBOARD_FAIL_CLOSED is True
+        with patch.dict(os.environ, {"DASHBOARD_FAIL_CLOSED": "false"}):
+            assert _reload_config().DASHBOARD_FAIL_CLOSED is False
+
     def test_update_interval_tolerates_bad_values(self):
         # A malformed override must fall back to the default, not crash the dashboard at import.
         for v, expected in [("2", 2), ("2.5", 2), ("", 30), ("nonsense", 30)]:

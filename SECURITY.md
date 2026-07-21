@@ -82,6 +82,13 @@ The stack's defaults:
   anonymous prober stored XSS against the operator. Both logs are size-bounded (Caddy's native
   rolling; a trim-before-append cap in the audit writer). Neither ever records a secret: Caddy
   redacts credential headers by default, and the audit writer logs key names only.
+- Out-of-band change detection (#530): the audit trail above only sees requests the dashboard
+  itself handled. Its poll loop separately watches for a `config.json` change with no matching
+  control-channel commit, and a worker control-API report for a change the dashboard never sent,
+  and appends both — `host-edit` / `rig-edit` — to the same trail, keys or worker names only. The
+  persisted trail (mirrored `control.log` rows plus these two out-of-band kinds) lives in the
+  dashboard's own database, not just the log tail, so the Security panel's hour/day/month grouping
+  covers more than `control.log`'s own trimmed window.
 
 ### Telegram control commands (#338)
 
