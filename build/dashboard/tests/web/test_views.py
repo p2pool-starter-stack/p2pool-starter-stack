@@ -51,6 +51,7 @@ from mining_dashboard.web.views import (
     host_display_addr,
     parse_window,
     recent_wallet_change,
+    rigforge_update_for,
     visible_update,
 )
 
@@ -940,6 +941,79 @@ class TestWorkers:
         )[0]
         assert row["reject_flag"] and row["reject_flag"]["text"] == "⚠"
         assert "10.0%" in row["reject_flag"]["title"]
+
+
+class TestRigforgeUpdate:
+    """The per-worker RigForge new-release callout (#596), derived at the render seam."""
+
+    _REL = {"tag": "v1.11.2", "url": "https://h/v1.11.2"}
+    _W = {"name": "r", "ip": "10.0.0.1", "status": "online", "active_pool": "3333"}
+
+    def test_behind_rig_gets_the_callout(self):
+        w = {**self._W, "rigforge": {"version": "1.11.1"}}
+        out = rigforge_update_for(w, self._REL)
+        assert out == {"available": True, "latest": "v1.11.2", "url": "https://h/v1.11.2"}
+
+    def test_current_rig_never_badges_its_own_version(self):
+        # The rig reports bare "1.11.2"; the tag is "v1.11.2" — equality must hold across the
+        # format difference (the #664 self-consistency guard, per-worker edition).
+        w = {**self._W, "rigforge": {"version": "1.11.2"}}
+        assert rigforge_update_for(w, self._REL) is None
+
+    def test_newer_or_unparseable_rig_version_is_none(self):
+        assert rigforge_update_for({**self._W, "rigforge": {"version": "9.0.0"}}, self._REL) is None
+        assert (
+            rigforge_update_for({**self._W, "rigforge": {"version": "nightly"}}, self._REL) is None
+        )
+
+    def test_no_version_or_no_release_is_none(self):
+        # A plain-:8080 rig reports no version: no badge, not a false "up to date". No cached
+        # release (check disabled / offline): same.
+        assert rigforge_update_for(self._W, self._REL) is None
+        assert rigforge_update_for({**self._W, "rigforge": {"version": "1.11.1"}}, None) is None
+
+    def test_build_workers_attaches_per_row(self):
+        rows = build_workers(
+            [
+                {**self._W, "name": "behind", "rigforge": {"version": "1.11.1"}},
+                {**self._W, "name": "current", "rigforge": {"version": "1.11.2"}},
+                {**self._W, "name": "plain"},
+            ],
+            self._REL,
+        )
+        by = {r["name"]: r["rigforge_update"] for r in rows}
+        assert by["behind"]["latest"] == "v1.11.2"
+        assert by["current"] is None
+        assert by["plain"] is None
+
+    def test_build_workers_without_release_attaches_none(self):
+        rows = build_workers([{**self._W, "rigforge": {"version": "1.11.1"}}])
+        assert rows[0]["rigforge_update"] is None
+
+    def test_build_state_feeds_the_cached_release_through(self):
+        data = _data(
+            workers=[{**self._W, "rigforge": {"version": "1.11.1"}}],
+            rigforge_release=self._REL,
+        )
+        st = build_state(data, _state_mgr(), "all")
+        assert st["workers"][0]["rigforge_update"]["latest"] == "v1.11.2"
+
+    def test_worker_detail_attaches_the_callout(self):
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        try:
+            d = build_worker_detail(
+                "r",
+                {
+                    "workers": [{**self._W, "rigforge": {"version": "1.11.1"}}],
+                    "rigforge_release": self._REL,
+                },
+                sm,
+            )
+        finally:
+            sm.close()
+        assert d["rigforge_update"]["latest"] == "v1.11.2"
 
 
 class TestRejectFlag:

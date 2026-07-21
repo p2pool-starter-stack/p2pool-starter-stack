@@ -59,7 +59,7 @@ class TestPingUnconfigured:
         # A blank ping URL is simply "off" — ping() does nothing, opens no socket, logs nothing.
         c = _client(ping_url="")
         with (
-            patch.object(hc_mod.requests, "get") as get,
+            patch.object(hc_mod, "bounded_get") as get,
             caplog.at_level(logging.DEBUG, logger="Healthchecks"),
         ):
             assert c.ping() is False
@@ -79,7 +79,7 @@ class TestPingSuccess:
         # Pure liveness: every ping hits the configured URL (no /fail path — health-aware was
         # dropped; node-health alerting is the Telegram alerter's job, #121).
         c = _client()
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)) as get:
             assert c.ping() is True
         get.assert_called_once()
         assert get.call_args.args[0] == "https://hc-ping.com/abc"
@@ -92,7 +92,7 @@ class TestPingRejected:
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
         with (
-            patch.object(hc_mod.requests, "get", return_value=_resp(404)),
+            patch.object(hc_mod, "bounded_get", return_value=_resp(404)),
             caplog.at_level(logging.WARNING, logger="Healthchecks"),
         ):
             assert c.ping() is False
@@ -104,18 +104,18 @@ class TestPingRejected:
         # Regression guard: the happy path must keep working once status is checked.
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)):
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)):
             assert c.ping() is True
             assert c.ping() is False  # throttled, since the first ping DID advance the clock
         clock.t += 61
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)):
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)):
             assert c.ping() is True
 
     def test_two_consecutive_404s_warn_only_once(self, caplog):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
         with (
-            patch.object(hc_mod.requests, "get", return_value=_resp(404)),
+            patch.object(hc_mod, "bounded_get", return_value=_resp(404)),
             caplog.at_level(logging.WARNING, logger="Healthchecks"),
         ):
             assert c.ping() is False
@@ -127,9 +127,9 @@ class TestPingRejected:
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
         with caplog.at_level(logging.DEBUG, logger="Healthchecks"):
-            with patch.object(hc_mod.requests, "get", return_value=_resp(404)):
+            with patch.object(hc_mod, "bounded_get", return_value=_resp(404)):
                 assert c.ping() is False
-            with patch.object(hc_mod.requests, "get", return_value=_resp(200)):
+            with patch.object(hc_mod, "bounded_get", return_value=_resp(200)):
                 assert c.ping() is True
         recoveries = [r for r in caplog.records if "recovered" in r.message]
         assert len(recoveries) == 1
@@ -137,7 +137,7 @@ class TestPingRejected:
 
     def test_5xx_also_rejected(self):
         c = _client()
-        with patch.object(hc_mod.requests, "get", return_value=_resp(503)):
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(503)):
             assert c.ping() is False
 
 
@@ -146,7 +146,7 @@ class TestTorRouting:
         # tor_proxy set → the ping rides the bridge Tor SOCKS (host IP hidden from the endpoint).
         proxy = "socks5h://172.28.0.25:9050"
         c = _client(tor_proxy=proxy)
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)) as get:
             assert c.ping() is True
         assert get.call_args.kwargs["proxies"] == {"http": proxy, "https": proxy}
 
@@ -157,7 +157,7 @@ class TestTorRouting:
             patch.object(hc_mod, "TOR_SOCKS_PROXY", "socks5h://172.28.0.25:9050"),
         ):
             c = HealthchecksClient.from_config()
-        with patch.object(hc_mod.requests, "get") as get:
+        with patch.object(hc_mod, "bounded_get") as get:
             c.ping()
         assert get.call_args.kwargs["proxies"]["https"] == "socks5h://172.28.0.25:9050"
 
@@ -166,7 +166,7 @@ class TestThrottle:
     def test_second_immediate_ping_is_throttled(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)) as get:
             assert c.ping() is True  # first ping goes out
             assert c.ping() is False  # within the interval → skipped
         get.assert_called_once()
@@ -174,7 +174,7 @@ class TestThrottle:
     def test_ping_again_after_interval_elapses(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)) as get:
             assert c.ping() is True
             clock.t += 61  # interval elapsed
             assert c.ping() is True
@@ -183,7 +183,7 @@ class TestThrottle:
     def test_zero_interval_pings_every_call(self):
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=0)
-        with patch.object(hc_mod.requests, "get", return_value=_resp(200)) as get:
+        with patch.object(hc_mod, "bounded_get", return_value=_resp(200)) as get:
             assert c.ping() is True
             assert c.ping() is True
         assert get.call_count == 2
@@ -195,7 +195,7 @@ class TestPingFailsSilently:
         c = _client(clock=clock, interval_seconds=60)
         with (
             patch.object(
-                hc_mod.requests, "get", side_effect=requests.exceptions.ConnectionError("offline")
+                hc_mod, "bounded_get", side_effect=requests.exceptions.ConnectionError("offline")
             ) as get,
             caplog.at_level(logging.DEBUG, logger="Healthchecks"),
         ):
@@ -210,8 +210,8 @@ class TestPingFailsSilently:
         clock = _Clock(1000.0)
         c = _client(clock=clock, interval_seconds=60)
         with patch.object(
-            hc_mod.requests,
-            "get",
+            hc_mod,
+            "bounded_get",
             side_effect=[requests.exceptions.ConnectionError("x"), _resp(200)],
         ):
             assert c.ping() is False  # failed, no throttle advance
