@@ -34,6 +34,7 @@ from mining_dashboard.config.config import (
     HEALTHCHECKS_PING_URL,
     TOR_SOCKS_PROXY,
 )
+from mining_dashboard.helper.http import bounded_get
 
 logger = logging.getLogger("Healthchecks")
 
@@ -111,7 +112,7 @@ class HealthchecksClient:
             return False
 
         try:
-            resp = requests.get(self.url, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
+            resp = bounded_get(self.url, timeout=_PING_TIMEOUT_SEC, proxies=self._proxies)
             if 200 <= resp.status_code < 300:
                 if self._last_ping_ok is False:
                     logger.info(

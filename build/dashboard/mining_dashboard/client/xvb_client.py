@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import requests
 
 from mining_dashboard.config.config import TOR_SOCKS_PROXY, XVB_SUBMIT_URL
+from mining_dashboard.helper.http import bounded_get
 from mining_dashboard.helper.utils import parse_hashrate
 
 # The four donor tiers XvB publishes an expected per-player reward for. These are exactly the tier
@@ -159,7 +160,7 @@ class XvbClient:
         # the request carries the wallet, so a clearnet fetch would correlate IP <-> wallet (#163).
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            response = requests.get(self.url, params=params, timeout=20, proxies=proxies)
+            response = bounded_get(self.url, params=params, timeout=20, proxies=proxies)
             if response.status_code == 200:
                 return self._parse_html(response.text)
             else:
@@ -184,7 +185,7 @@ class XvbClient:
         """
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            response = requests.get(self.reward_estimate_url, timeout=20, proxies=proxies)
+            response = bounded_get(self.reward_estimate_url, timeout=20, proxies=proxies)
             if response.status_code != 200:
                 self.logger.error(
                     f"XvB reward-estimate fetch failed with status code: {response.status_code}"
@@ -221,7 +222,7 @@ class XvbClient:
 
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            response = requests.get(self.winners_url, timeout=20, proxies=proxies)
+            response = bounded_get(self.winners_url, timeout=20, proxies=proxies)
             if response.status_code != 200:
                 self.logger.error(
                     f"XvB winners fetch failed with status code: {response.status_code}"
@@ -275,7 +276,7 @@ class XvbClient:
         # wallet, so a clearnet call would correlate IP <-> wallet (#163).
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            response = requests.get(self.submit_url, params=params, timeout=20, proxies=proxies)
+            response = bounded_get(self.submit_url, params=params, timeout=20, proxies=proxies)
             body = (response.text or "").strip()
             low = body.lower()
 

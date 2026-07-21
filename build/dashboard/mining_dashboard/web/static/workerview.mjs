@@ -252,6 +252,18 @@ export class WorkerInspect extends Component {
                 <${InfoCard} label="Hashrate (1m)" value=${detail.hashrate || "—"} />
                 <${InfoCard} label="RigForge" value=${detail.rigforge ? detail.rigforge.version || "yes" : "—"} />
             </div>
+            ${
+              // This rig runs an older RigForge (#596) — notify-only, mirrors the header's
+              // stack-level new-release badge. The one-click rig upgrade is the separate #597.
+              detail.rigforge_update &&
+              detail.rigforge_update.available &&
+              detail.rigforge_update.url
+                ? html`<p class="mt-1"><a class="badge badge-accent" href=${detail.rigforge_update.url}
+                        target="_blank" rel="noopener noreferrer"
+                        title=${"A newer RigForge release is available: " + detail.rigforge_update.latest}
+                     >New RigForge release ${detail.rigforge_update.latest} available ↗</a></p>`
+                : null
+            }
             ${detail.rigforge ? html`<${StatsTable} stats=${detail.rigforge.stats} />` : null}
 
             <h4 class="mt-2">Edit config</h4>

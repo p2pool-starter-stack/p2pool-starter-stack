@@ -11,6 +11,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-worker RigForge "new version available" badge** (#596). A rig whose reported RigForge
+  version is older than the latest published release gets a clickable badge in the Workers Alive
+  table and in Worker Inspect, linking to the release notes — the worker-level twin of the
+  header's stack-release badge. Notify-only; one hourly, Tor-routed, fail-silent fetch covers the
+  whole fleet, gated on the same `dashboard.check_for_updates` flag. Rigs that report no version
+  (plain xmrig, sister API off) show no badge — unknown, not "up to date".
+
 ### Fixed
 
 - **Removing the control runner no longer strands a sibling checkout's stack (#689).** The
@@ -30,6 +39,17 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   documents the post-deploy `--check` sweep and its expected parked-bench baseline. Private
   bench hostnames in docs, comments, and one harness message are replaced with generic role
   names; each box's specifics live in its own `~/README.md`, not the repo.
+
+### Security
+
+- **The dashboard's external API fetches are size-capped** (#660). The GitHub release check, the
+  CoinGecko price feed, and the XvB client's calls (stats, reward estimates, winners, register)
+  now stream their responses through a shared `bounded_get` helper that cuts the body at 1 MiB,
+  so a hostile or broken endpoint can no longer make these clients buffer an unbounded payload.
+  Over-cap reads follow each client's existing failure contract (no result / keep the last good
+  one). The remaining external GETs — the Tor egress probe, the Healthchecks ping, and the
+  Telegram `getUpdates` long-poll — ride the same cap; `getUpdates` also caps its batch at 10
+  updates so a capped batch can never wedge the poll loop on an offset it cannot advance.
 
 ## [1.9.3] - 2026-07-19
 

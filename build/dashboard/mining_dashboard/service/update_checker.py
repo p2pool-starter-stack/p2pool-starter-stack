@@ -1,18 +1,21 @@
 """New-release check (#224) — notify-only.
 
-When `dashboard.check_for_updates` is enabled (default OFF), the dashboard periodically asks GitHub
+Unless `dashboard.check_for_updates` is disabled (default ON), the dashboard periodically asks GitHub
 for the latest published release and, if it's newer than the running version, surfaces a header badge
 linking to it (`build_state` -> `state.update`). It never updates anything — it's a callout so the
 operator knows to upgrade on their own terms (the one-click upgrade is the separate #59).
 
-Privacy: the check is **opt-in (default off)** and routed over the bridge **Tor SOCKS** (reusing
-`TOR_SOCKS_PROXY`, like the XvB stats fetch #163), so enabling it doesn't reveal the host IP to GitHub.
+Privacy: the check is **on by default** because it's routed over the bridge **Tor SOCKS** (reusing
+`TOR_SOCKS_PROXY`, like the XvB stats fetch #163), so it doesn't reveal the host IP to GitHub;
+set `dashboard.check_for_updates` to false to opt out.
 Every failure path is silent (returns ``None``) so an offline / Tor-only stack just shows no badge.
 """
 
 import logging
 
 import requests
+
+from mining_dashboard.helper.http import bounded_get
 
 logger = logging.getLogger("UpdateChecker")
 
@@ -53,7 +56,7 @@ class GitHubReleaseClient:
         failure (network, non-200, malformed JSON). Routed through Tor when a proxy is set."""
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            resp = requests.get(
+            resp = bounded_get(
                 self.api_url,
                 timeout=20,
                 proxies=proxies,
@@ -83,19 +86,32 @@ class UpdateChecker:
         self.enabled = enabled
         self.interval = interval
         self._last = 0.0
+        self.release = None
         self.result = None
 
-    def maybe_check(self, now):
-        """Return the cached ``{available, ...}`` (or ``None``). Performs the (blocking) fetch only
-        when enabled and the throttle window has elapsed — call via ``asyncio.to_thread``."""
+    def latest_release_cached(self, now):
+        """Return the cached raw ``{tag, url}`` of the latest release (or ``None``). Performs the
+        (blocking) fetch only when enabled and the throttle window has elapsed — call via
+        ``asyncio.to_thread``. This is the many-consumers accessor (#596): one throttled fleet-wide
+        fetch, compared against as many running versions as the caller has."""
         if not self.enabled:
-            self.result = None
             return None
         if self._last and (now - self._last) < self.interval:
-            return self.result
+            return self.release
         self._last = now
         rel = self.client.latest_release()
         if rel:
+            self.release = rel
+        # On a failed fetch keep the previous release — a blip shouldn't drop a real "update available".
+        return self.release
+
+    def maybe_check(self, now):
+        """Return the cached ``{available, ...}`` (or ``None``) for this checker's own running
+        version. Same throttle/cache contract as ``latest_release_cached``."""
+        if not self.enabled:
+            self.result = None
+            return None
+        rel = self.latest_release_cached(now)
+        if rel:
             self.result = compute_update(self.running, rel["tag"], rel["url"])
-        # On a failed fetch keep the previous result — a blip shouldn't drop a real "update available".
         return self.result

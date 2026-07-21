@@ -495,10 +495,25 @@ class TestInit:
         sm.load_snapshot.return_value = {
             "total_live_h15": 5000,
             "update": {"available": True, "latest": "v1.9.1", "url": "u"},
+            # #596: same rule for the fleet-wide RigForge release — restored with the flag now
+            # off, it would keep serving stale per-worker badges until the first poll cycle.
+            "rigforge_release": {"tag": "v1.11.2", "url": "u"},
         }
         svc = DataService(sm, MagicMock(), MagicMock())
         assert svc.latest_data.get("update") in (None, {})  # never the restored dict
+        assert svc.latest_data.get("rigforge_release") is None  # nor the RigForge one (#596)
         assert svc.latest_data["total_live_h15"] == 5000  # the rest of the snapshot survives
+
+    def test_rigforge_checker_wired_to_the_rigforge_api_under_the_same_flag(self):
+        # #596 wiring: one fleet-wide RigForge release checker, pointed at the RigForge repo,
+        # gated on the SAME dashboard.check_for_updates flag as the stack's own check.
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        svc = DataService(sm, MagicMock(), MagicMock())
+        assert svc.rigforge_update_checker.client.api_url == ds_mod.GITHUB_RIGFORGE_RELEASES_API
+        assert "rigforge" in svc.rigforge_update_checker.client.api_url
+        assert svc.rigforge_update_checker.enabled == svc.update_checker.enabled
+        assert svc.rigforge_update_checker.client.tor_proxy == svc.update_checker.client.tor_proxy
 
     def test_ignores_non_dict_snapshot(self):
         sm = MagicMock()
