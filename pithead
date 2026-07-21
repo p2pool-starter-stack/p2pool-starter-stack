@@ -5075,11 +5075,11 @@ control_approval_gate() { # <staged-file>
     bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
     if [ "${bad:-0}" -gt 0 ]; then
         hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
-        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "${hit:-unparseable change row}" "$0"
+        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "${hit:-unparseable change row}" "$0"
         return 1
     fi
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
-        printf 'this change is destructive and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
+        printf 'this change is destructive and cannot be committed from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
     # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
