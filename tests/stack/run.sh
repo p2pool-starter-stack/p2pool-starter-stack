@@ -1105,6 +1105,34 @@ assert_eq "scan height: auto -> genesis 0 (full payout history)" "$(rsh auto)" "
 assert_eq "scan height: empty -> genesis 0" "$(rsh '')" "0"
 assert_eq "scan height: explicit block kept verbatim" "$(rsh 2500000)" "2500000"
 
+# Wallet healthcheck (#718): during the multi-hour genesis scan monero-wallet-rpc refuses the RPC,
+# so the check must tolerate an unreachable RPC WHILE the initial-scan marker is present, and turn
+# strict once the RPC first answers. Stub `curl` on PATH to be the RPC up/down control.
+HCBIN="$SANDBOX/hc-bin"
+HCDIR="$SANDBOX/hc-wallet"
+mkdir -p "$HCBIN" "$HCDIR"
+mk_curl() {
+    printf '#!/bin/sh\nexit %s\n' "$1" >"$HCBIN/curl"
+    chmod +x "$HCBIN/curl"
+}
+run_hc() { (
+    PATH="$HCBIN:$PATH" WALLET_DIR="$HCDIR" sh "$ROOT/build/monero/wallet-healthcheck.sh" >/dev/null 2>&1
+    echo $?
+); }
+# RPC down + marker present (mid initial scan) -> healthy (the whole point of #718).
+mk_curl 7
+: >"$HCDIR/.payout-scanning"
+assert_eq "healthcheck: RPC down but scanning -> healthy (#718)" "$(run_hc)" "0"
+# RPC up -> healthy AND the marker is retired (scan caught up; strict from now on).
+mk_curl 0
+assert_eq "healthcheck: RPC up -> healthy (#718)" "$(run_hc)" "0"
+if [ -f "$HCDIR/.payout-scanning" ]; then bad "healthcheck: RPC up clears the scan marker (#718)" "marker still present"; else ok "healthcheck: RPC up clears the scan marker (#718)"; fi
+# RPC down + NO marker (scan already finished once) -> unhealthy: a real fault, not scan tolerance.
+mk_curl 7
+assert_eq "healthcheck: RPC down after scan done -> unhealthy (#718)" "$(run_hc)" "1"
+# The entrypoint arms the marker on wallet creation so the grace applies from first boot.
+assert_contains "wallet-entrypoint touches the scan marker on create (#718)" "$(cat "$ROOT/build/monero/wallet-entrypoint.sh")" 'touch "$SCAN_MARKER"'
+
 echo "== unit: clock_sync_status (mining is time-sensitive) =="
 # doctor's NTP check classifies timedatectl's NTPSynchronized: yes→synced, no→unsynced, else unknown.
 CLKBIN="$SANDBOX/clk-bin"
@@ -4814,7 +4842,7 @@ assert_eq "destructive candidate previews destructive:true" "$(jq -r '.destructi
 printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
 run_pending >/dev/null
 assert_eq "destructive commit is refused" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
-assert_contains "destructive refusal points at #338" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "#338"
+assert_contains "destructive refusal names the host apply path, not stale #338 (#713)" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "Edit config.json on the host"
 assert_eq "refused destructive commit did not touch config.json" "$(jq -r '.monero.clearnet_initial_sync // false' "$C/config.json")" "false"
 [ ! -f "$STAGED/$UUID3.json" ] && ok "refused destructive intent cleared from staged" || bad "refused destructive intent cleared from staged" "still staged"
 # A NON-destructive commit still proceeds (pool switch mini -> nano is INFO, not DEST).

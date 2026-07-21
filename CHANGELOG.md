@@ -9,6 +9,22 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **The payout wallet no longer reports the whole stack unhealthy during its first scan (#718).**
+  With the genesis-scan default, `wallet-rpc`'s initial full-chain scan takes hours, and
+  monero-wallet-rpc doesn't answer its RPC while scanning — so the healthcheck flipped `unhealthy`
+  and could fire stack-health alerts for the entire scan, even though the wallet was working. The
+  healthcheck now tolerates an unreachable RPC while a first-scan marker is present (armed on wallet
+  creation, cleared the first time the RPC answers), so it stays healthy through the initial scan
+  and turns strict once caught up.
+- **Control-gate refusal messages no longer cite a closed, unrelated issue (#713).** The
+  "security-sensitive setting" and "destructive change" refusals pointed operators at #338 (a
+  closed Telegram-control issue) for "out-of-band approval"; they now just name the real path —
+  edit `config.json` on the host and run `./pithead apply`.
+
 ## [1.10.1] - 2026-07-21
 
 ### Fixed
