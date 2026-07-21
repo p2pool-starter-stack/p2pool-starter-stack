@@ -65,14 +65,16 @@ The stack's defaults:
   API (over the stack's Tor SOCKS), refuses any mismatch or non-release tag, and limits attempts
   to one per 10 minutes — the container cannot choose an image, tag, or registry. Enabling the
   channel without a dashboard password is a validation error, on a published onion it additionally
-  requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist of
-  operational settings: a commit that changes any env key off that list — in every direction
-  (enabling, changing, or disabling) — is refused, as is anything the change preview flags
-  destructive. Wallets, dashboard auth and onion exposure, the control channel itself, the Tor
-  egress firewall, clearnet toggles, node endpoints, binds, and every credential are off the
-  list, and a key added in the future stays un-committable until deliberately listed. Those
-  edits must be applied from the host CLI; out-of-band approval is tracked in
-  [#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
+  requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist. Low-risk
+  operational settings commit directly; a small set of operationally-disruptive ones — data-directory
+  moves, the stratum port, enabling clearnet initial sync, and enabling pruning — commit only behind
+  a typed confirmation in the dashboard, and only in that direction. Everything else is refused in
+  every direction, as is anything the change preview flags destructive (including the heavy direction
+  of a confirm-gated key, e.g. disabling pruning, which forces a full re-sync). The security
+  perimeter — wallets and view keys, dashboard auth and onion exposure, the control channel itself,
+  the Tor egress firewall, node endpoints, binds, every credential, and the per-rig hosts and tokens —
+  is never dashboard-committable, with or without the typed confirmation. A key added in the
+  future stays un-committable until deliberately listed. Those edits must be applied from the host CLI.
 - Attack visibility (#349): Caddy writes a JSON access log for every dashboard vhost (LAN and
   onion), and the control channel's host-side audit log records who changed what (setting names
   only, never values). The dashboard surfaces both read-only — a burst of 401s is the

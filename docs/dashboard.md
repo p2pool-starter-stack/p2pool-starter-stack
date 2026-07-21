@@ -678,9 +678,7 @@ couldn't make. The **security perimeter stays host-only** in every direction: wa
 keys, the dashboard login and onion settings, the control channel itself, the Tor egress firewall,
 the stratum password, node endpoints and credentials, and the per-rig hosts and tokens. The gate
 also refuses the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync,
-so it stays host-only). Apply those from the host with `./pithead apply`; out-of-band approval from
-the dashboard is tracked in
-[#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
+so it stays host-only). Apply those from the host with `./pithead apply`.
 
 A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new
 sidechain and your PPLNS window (and XvB shares) reset.

@@ -5058,7 +5058,7 @@ assert_eq "config.json keeps healthchecks unset" "$(jq -r '.healthchecks.ping_ur
 jq '.network={tor_egress_firewall:false}' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json" APPLY
 assert_eq "tor-egress-firewall disable commit is refused even with the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
-assert_contains "tor-egress refusal is a host-only gate (the APPLY token did not unlock it)" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "#338"
+assert_contains "tor-egress refusal is a host-only gate (the APPLY token did not unlock it)" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "security-sensitive"
 assert_eq "config.json keeps the tor egress firewall unset (defaults on)" "$(jq -r '.network.tor_egress_firewall // "unset"' "$C/config.json")" "unset"
 # Setting a Monero view key (the #381 payout-confirm secret) reveals every incoming amount — a
 # secret, host-only, never confirm-gated. Commit WITH a valid APPLY token: the perimeter gate must

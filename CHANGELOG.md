@@ -73,6 +73,7 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   at the existing 700-point chart cap for the two higher-cadence series. `network_history` and
   `worker_history` are a separate (Tier-2) slice, not touched here. No chart renders any of these
   series yet — that's a further follow-up.
+
 ## [1.10.2] - 2026-07-21
 
 ### Fixed
