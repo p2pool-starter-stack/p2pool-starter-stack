@@ -29,6 +29,7 @@ from mining_dashboard.service.data_service import (
     _parse_legacy_dict_worker,
     _parse_proxy_list_worker,
     _parse_proxy_summary,
+    _read_host_config,
     _shares_to_record,
     _summary_deltas,
 )
@@ -1987,6 +1988,39 @@ class TestRigEditDetection:
         finally:
             sm.close()
 
+    def test_same_change_id_across_polls_records_exactly_one_row(self):
+        # The flood guard (HIGH #530 review): a rig re-reports its last terminal change_id every
+        # poll. Deterministic row id + in-memory guard must collapse that to ONE audit row, not a
+        # new row per ~30s cycle for a permanent, never-pruned table.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            worker_results = [
+                {"rigforge": {"control": {"change_id": "rig-local-cid", "status": "applied"}}}
+            ]
+            for _ in range(3):  # three consecutive polls, same report
+                asyncio.run(svc._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            assert len(sm.get_audit_events()) == 1
+        finally:
+            sm.close()
+
+    def test_repeat_report_after_a_restart_still_dedups_via_the_deterministic_id(self):
+        # The in-memory guard is empty on a fresh DataService (restart), but the SAME rig report
+        # must still not duplicate the row — the deterministic id + INSERT OR IGNORE is the bound.
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        try:
+            worker_results = [
+                {"rigforge": {"control": {"change_id": "rig-local-cid", "status": "applied"}}}
+            ]
+            svc1 = DataService(sm, MagicMock(), MagicMock())
+            asyncio.run(svc1._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            svc2 = DataService(sm, MagicMock(), MagicMock())  # "restart": fresh empty guard set
+            asyncio.run(svc2._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            assert len(sm.get_audit_events()) == 1
+        finally:
+            sm.close()
+
 
 class TestTariPayoutSync:
     """Tari on-chain payout confirmation poll (#462): persist to the shared table with chain="tari",
@@ -2426,6 +2460,96 @@ class TestWatchHostConfig:
             assert sm.get_audit_events() == []
         finally:
             sm.close()
+
+    async def test_a_raw_secret_value_never_reaches_the_audit_row(self, tmp_path, monkeypatch):
+        # Defense-in-depth (#530 review MEDIUM): even if the host masking regressed and left a RAW
+        # secret in the mounted copy, the re-mask keeps its value out of the persisted snapshot and
+        # out of any audit row. Change a non-secret key alongside the raw secret; the row names the
+        # non-secret key only, and the secret value appears nowhere.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(
+            cfg, {"dashboard": {"auth": {"password": "s3cr3t-raw"}}, "xvb": {"enabled": True}}
+        )
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline (secret already masked in the snapshot)
+            assert svc._last_host_config["dashboard"]["auth"]["password"] == {"__secret__": True}
+            self._write_config(
+                cfg,
+                {"dashboard": {"auth": {"password": "s3cr3t-changed"}}, "xvb": {"enabled": False}},
+            )
+            await svc._watch_host_config()
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["keys"] == "xvb.enabled"  # the secret masks to a sentinel both sides
+            blob = json.dumps(events) + json.dumps(svc._last_host_config)
+            assert "s3cr3t-raw" not in blob and "s3cr3t-changed" not in blob
+        finally:
+            sm.close()
+
+    async def test_explained_window_is_at_most_one_second(self, tmp_path, monkeypatch):
+        # Boundary (#530 review LOW): the "explained by a fresh commit" check floors `since` to
+        # `_last_host_check - 1` to absorb the audit log's whole-second ts truncation. That grace
+        # is exactly 1s wide — a commit 1s before the last check still explains (truncation), one
+        # 2s before does not. Pinned here so the honest ceiling can't silently widen.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        check_epoch = _parse_audit_ts("2026-07-20T12:00:05Z")
+
+        async def _run_with_commit_ts(commit_ts):
+            svc, sm = self._svc()
+            svc._last_host_config = {"xvb": {"enabled": True}}
+            svc._last_host_check = check_epoch
+            self._write_config(cfg, {"xvb": {"enabled": False}})
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": commit_ts,
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "XVB_ENABLED",
+                    }
+                )
+                + "\n"
+            )
+            try:
+                await svc._watch_host_config()
+                return len(sm.get_audit_events())
+            finally:
+                sm.close()
+
+        # 1s before the last check: still explains (truncation grace) -> no host-edit row.
+        assert await _run_with_commit_ts("2026-07-20T12:00:04Z") == 0
+        # 2s before: outside the grace, correctly NOT explained -> host-edit recorded.
+        assert await _run_with_commit_ts("2026-07-20T12:00:03Z") == 1
+
+
+class TestReadHostConfig:
+    """#530 review MEDIUM: the mounted copy is pre-masked host-side, but _read_host_config
+    re-applies the SECRET_PATHS mask (like control_service.read_config) so a host masking
+    regression can't leave a raw secret resident in the long-lived config snapshot."""
+
+    def test_secret_value_is_remasked(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"dashboard": {"auth": {"password": "leaked"}}}))
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        out = _read_host_config()
+        assert out["dashboard"]["auth"]["password"] == {"__secret__": True}
+
+    def test_missing_or_bad_file_is_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
+        assert _read_host_config() is None
+        bad = tmp_path / "config.json"
+        bad.write_text("{not json")
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(bad))
+        assert _read_host_config() is None
 
 
 class TestMirrorControlAudit:

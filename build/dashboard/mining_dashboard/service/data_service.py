@@ -74,7 +74,12 @@ from mining_dashboard.helper.utils import (
 from mining_dashboard.service import audit_service
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
-from mining_dashboard.service.control_service import SECRET_SENTINEL
+from mining_dashboard.service.control_service import (
+    SECRET_PATHS,
+    SECRET_SENTINEL,
+    _get,
+    _set,
+)
 from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
@@ -403,12 +408,24 @@ def _parse_audit_ts(ts):
 def _read_host_config():
     """The masked config.json (``config.HOST_CONFIG_PATH``, #440), or None if the mount isn't
     ready / isn't valid JSON yet. A plain blocking function — ``_watch_host_config`` runs it via
-    ``asyncio.to_thread`` rather than opening the file directly in an ``async def``."""
+    ``asyncio.to_thread`` rather than opening the file directly in an ``async def``.
+
+    The mount is the host's PRE-MASKED copy already (docker-compose bind-mounts
+    ``control/masked/config.json``; the raw config.json never enters the container). We still
+    re-apply the SECRET_PATHS mask here — exactly the defense-in-depth pass ``control_service.
+    read_config`` runs — so a host-side masking regression can never leave a raw secret VALUE
+    resident in ``self._last_host_config`` across polls. The diff only ever compares/names keys,
+    but this keeps the one long-lived config dict secret-free regardless."""
     try:
         with open(config.HOST_CONFIG_PATH) as f:
-            return json.load(f)
+            cfg = json.load(f)
     except (OSError, ValueError):
         return None
+    for path in SECRET_PATHS:
+        found, value = _get(cfg, path)
+        if found and value:
+            _set(cfg, path, dict(SECRET_SENTINEL))
+    return cfg
 
 
 class WorkerLifecycle:
@@ -520,6 +537,12 @@ class DataService:
         # a later change can be checked against control.log entries that landed AFTER it.
         self._last_host_config = None
         self._last_host_check = 0.0
+        # (worker, change_id) pairs already recorded as a rig-edit this run, so a rig that keeps
+        # reporting the same terminal change_id in its /status mirror every poll is flagged ONCE,
+        # not on every ~30s cycle. In-memory only: the deterministic audit-row id below is what
+        # actually bounds the table across restarts (INSERT OR IGNORE); this just skips the
+        # redundant DB work in the steady state. Bounded by the count of distinct real rig edits.
+        self._flagged_rig_changes = set()
         # XvB raffle-winners mirror: wall-clock of the last successful winners-file read. Starts
         # at 0.0 so the first eligible poll reads it; NOT stamped on a failed fetch, so a failure
         # retries on the next 10th poll instead of waiting out the 30-min gate.
@@ -931,15 +954,20 @@ class DataService:
             )
             await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
 
-    async def _record_audit_event(self, source, actor, action, status, keys):
+    async def _record_audit_event(self, source, actor, action, status, keys, event_id=None):
         """Write one out-of-band audit row (#530), through the SAME sanitizer #33's own audit
         trail is served through (``audit_service._clean``) — defense in depth: ``actor``/``keys``
         here are already schema-shaped (a validated worker name, dotted config-key paths), but
         every field the Security panel serves gets the identical whitelist treatment regardless of
-        source, so a future caller can't accidentally skip it."""
+        source, so a future caller can't accidentally skip it.
+
+        ``event_id`` lets a caller supply a DETERMINISTIC row id so ``INSERT OR IGNORE`` collapses
+        repeat reports of the SAME event to one row (rig-edit: a rig re-reports its last change_id
+        every poll). A host-edit passes None — each detection is a genuinely distinct event, so a
+        random id is right there."""
         await asyncio.to_thread(
             self.state_manager.add_audit_event,
-            id=f"{source}-{uuid.uuid4()}",
+            id=event_id or f"{source}-{uuid.uuid4()}",
             ts=_iso_now(),
             source=source,
             actor=audit_service._clean(actor, 64),
@@ -975,8 +1003,12 @@ class DataService:
             # The audit log's ts is whole-second (_iso_now/control_audit both write
             # "%Y-%m-%dT%H:%M:%SZ"), while `_last_host_check` is a sub-second time.time() — a
             # commit landed in the SAME wall-clock second as the baseline poll would otherwise
-            # floor below it and be missed. One second of grace absorbs that truncation without
-            # meaningfully widening the window a genuinely stale commit could "explain" through.
+            # floor below it and be missed. One second of grace absorbs that truncation.
+            # ponytail: ≤1s correlation window — a control-channel commit up to 1s before the last
+            # poll could "explain" (suppress) an unrelated hand-edit detected in this poll. The
+            # honest ceiling of a timestamp correlation; tighten to id-based ("commits seen since
+            # last poll") only if a real false-negative shows up. Pinned by
+            # test_explained_window_is_at_most_one_second.
             since = self._last_host_check - 1
             explained = any(
                 e.get("action") == "commit"
@@ -1032,7 +1064,14 @@ class DataService:
         matches nothing), so instead it's recorded as a ``rig-edit`` audit row naming the worker.
         RigForge's ``/status`` mirror carries only the outcome of a change, not a per-key diff, so
         unlike host-edit's ``keys`` this can only name the change_id — a real limitation, not an
-        oversight; see the #530 PR notes."""
+        oversight; see the #530 PR notes.
+
+        A rig keeps reporting its last terminal change_id every poll, so this fires ONCE per
+        (worker, change_id): an in-memory guard skips the redundant work in the steady state, and
+        the audit row's deterministic id makes the write itself idempotent even across a restart
+        (when the guard is empty but a repeat report must still not duplicate the row). Both matter
+        — the id is the correctness bound (a rogue rig can't flood the permanent table with repeats
+        of one bogus change_id), the guard is the optimisation."""
         for w, extra_stats in zip(workers, worker_results, strict=False):
             ctrl = parse_worker_control_status(extra_stats) if extra_stats else None
             if not ctrl:
@@ -1048,12 +1087,18 @@ class DataService:
                     ctrl["reason"],
                 )
             else:
+                worker = w.get("name", "")
+                guard_key = (worker, ctrl["change_id"])
+                if guard_key in self._flagged_rig_changes:
+                    continue
+                self._flagged_rig_changes.add(guard_key)
                 await self._record_audit_event(
                     "rig-edit",
-                    w.get("name", ""),
+                    worker,
                     "rig-edit",
                     ctrl["status"],
                     f"change_id={ctrl['change_id']}",
+                    event_id=f"rig-edit-{worker}-{ctrl['change_id']}",
                 )
 
     def _on_clearnet_transition(self, name, ok):
