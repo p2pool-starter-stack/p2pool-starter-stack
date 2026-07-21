@@ -14,6 +14,8 @@ import logging
 
 import requests
 
+from mining_dashboard.helper.http import bounded_get
+
 logger = logging.getLogger("UpdateChecker")
 
 
@@ -53,7 +55,7 @@ class GitHubReleaseClient:
         failure (network, non-200, malformed JSON). Routed through Tor when a proxy is set."""
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            resp = requests.get(
+            resp = bounded_get(
                 self.api_url,
                 timeout=20,
                 proxies=proxies,
