@@ -30,6 +30,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   settings, the control channel itself, the Tor egress firewall, the stratum password, node
   endpoints and credentials, and the per-rig hosts and tokens all remain refused from the dashboard,
   as does the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync).
+- **Dashboard-confirmed data-directory moves are allowlisted to the stack's data root** (#728).
+  #719 made the four `*_DATA_DIR` moves confirmable from the dashboard behind a typed `APPLY`, but
+  the destination was still checked only by the host-side blocklist (`assert_safe_dir`), which
+  passes any non-catastrophic absolute path. A confirmed move from the dashboard is now further
+  held to an allowlist: the new location must sit under the stack's own data root (the install
+  dir's `data/`) or a parent the stack already keeps data in, else the move is refused even with
+  the typed confirmation and stays host-CLI only. The host `./pithead apply` path keeps the wider
+  blocklist — a shell operator already has filesystem-wide reach; only the dashboard-reachable move
+  is tightened, closing the destination trust-escalation the confirm-gate opened.
 - **Opt-in local miner** (#593). A box that runs the stack 24/7 can mine with its spare CPU by
   co-locating a RigForge worker on the stack host. `./pithead setup` now asks "Also mine on this
   machine with its spare CPU?" (off by default; also the new `local_miner.enabled` config flag),

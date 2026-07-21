@@ -5200,6 +5200,47 @@ control_approval_gate() { # <staged-file> [confirm-token]
         printf 'this change is destructive and cannot be committed from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
+    # Data-dir destination allowlist (#728). #719 made the four *_DATA_DIR moves confirm-gated, so a
+    # dashboard operator who types APPLY can now RELOCATE a service's data dir. assert_safe_dir — the
+    # host-shell guard — is a BLOCKLIST: it refuses the catastrophic roots (/, $HOME, bare mounts, …)
+    # but passes any OTHER absolute path. At host-shell trust that is proportionate (a shell already
+    # has filesystem-wide reach); at dashboard trust it would let a confirmed move target another
+    # user's home or another service's data volume and have pithead mkdir/chown -R it and bind-mount
+    # it into a recreated container — a destination trust-escalation. This gate runs ONLY for
+    # dashboard commits (the host `apply` path never calls control_approval_gate), so it is exactly
+    # where the tighter, control-only rule belongs: for a control-channel move, narrow the
+    # DESTINATION from a blocklist to an ALLOWLIST — permit only a path under the stack's own data
+    # root ($PWD/data, the install dir's data/) or a parent the stack ALREADY keeps data in (each
+    # live *_DATA_DIR's parent — a root a host operator already opted into, which covers a co-located
+    # shared data root, #455). Anything else is refused EVEN with the APPLY token: that move stays
+    # host-CLI-only. Only EXPLICIT absolute paths are checked — "auto"/empty resolves to a stack
+    # default that is under a data root by construction. assert_safe_dir still runs at apply time.
+    local -a allowed_roots=("$PWD/data")
+    local dvar cur
+    for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR; do
+        cur=$(env_get "$dvar")
+        [ -n "$cur" ] && allowed_roots+=("$(dirname "$cur")")
+    done
+    local ddpath dest root ok_root
+    for ddpath in monero.data_dir tari.data_dir p2pool.data_dir dashboard.data_dir; do
+        dest=$(jq -r --arg p "$ddpath" 'getpath($p/".") // empty' "$staged" 2>/dev/null)
+        # Skip only values resolve_default turns into an in-root stack default — its EXACT set,
+        # not a DYNAMIC_* wildcard (which would also swallow a bogus DYNAMIC_FOO that resolve_default
+        # passes through literally). A non-absolute/traversal dest never reaches here anyway:
+        # assert_safe_dir (called in the dry-run re-derivation at the top of this gate) refuses
+        # `..`/relative paths first — keep that ordering.
+        case "$dest" in "" | auto | DYNAMIC_DATA | DYNAMIC_HOST | DYNAMIC_ID) continue ;; esac
+        ok_root=0
+        # Trailing slash on both sides so a root prefix can't false-match a sibling (/data vs
+        # /database); an exact-root dest matches too (harmless — still the stack's own dir).
+        for root in "${allowed_roots[@]}"; do
+            case "$dest/" in "$root"/*) ok_root=1 && break ;; esac
+        done
+        if [ "$ok_root" -eq 0 ]; then
+            printf 'this move sends %s to %s, which is outside the stack data root(s) — a dashboard-confirmed data-dir move must stay under the stack data directory (%s) or a parent it already uses. Apply it from the host with `%s apply`.' "$ddpath" "$dest" "$PWD/data" "$0"
+            return 1
+        fi
+    done
     # Confirm-gate (#719): an in-scope CONFIRM row PROCEEDS only with the operator's typed
     # confirmation. The token is a fixed literal ("APPLY"), orthogonal to the value being set — it
     # is friction that forces the operator to acknowledge an expensive/disruptive op, NOT a security

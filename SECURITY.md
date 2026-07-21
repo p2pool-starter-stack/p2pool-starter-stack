@@ -68,7 +68,12 @@ The stack's defaults:
   requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist. Low-risk
   operational settings commit directly; a small set of operationally-disruptive ones — data-directory
   moves, the stratum port, enabling clearnet initial sync, and enabling pruning — commit only behind
-  a typed confirmation in the dashboard, and only in that direction. Everything else is refused in
+  a typed confirmation in the dashboard, and only in that direction. A dashboard-confirmed
+  data-directory move is further held to an **allowlist** (#728): the new location must sit under the
+  stack's own data root (the install dir's `data/`) or a parent the stack already keeps data in;
+  a move to any other absolute path is refused even with the typed confirmation and stays host-CLI
+  only. The host CLI keeps its wider blocklist check — a shell operator already has filesystem-wide
+  reach. Everything else is refused in
   every direction, as is anything the change preview flags destructive (including the heavy direction
   of a confirm-gated key, e.g. disabling pruning, which forces a full re-sync). The security
   perimeter — wallets and view keys, dashboard auth and onion exposure, the control channel itself,
