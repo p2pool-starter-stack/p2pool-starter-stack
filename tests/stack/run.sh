@@ -1094,6 +1094,16 @@ assert_eq "wallet gen.json carries the view key (#381)" "$(printf '%s' "$WGEN" |
 assert_eq "wallet gen.json scan_from_height verbatim (#381)" "$(printf '%s' "$WGEN" | jq -r .scan_from_height)" "3000000"
 # THE REGRESSION GUARD: a revert to "spendkey":"" crashes monero-wallet-rpc (#714). Field must be absent.
 assert_eq "wallet gen.json OMITS spendkey — monero rejects an empty one (#714)" "$(printf '%s' "$WGEN" | jq 'has("spendkey")')" "false"
+# Restore height: "auto"/empty means genesis (0) so the wallet scans the FULL payout history; an
+# explicit height is used verbatim to skip the long scan.
+rsh() { (
+    export PITHEAD_TEST_SOURCE=1 PAYOUT_SCAN_HEIGHT="$1"
+    source "$ROOT/build/monero/wallet-entrypoint.sh"
+    resolve_scan_height
+); }
+assert_eq "scan height: auto -> genesis 0 (full payout history)" "$(rsh auto)" "0"
+assert_eq "scan height: empty -> genesis 0" "$(rsh '')" "0"
+assert_eq "scan height: explicit block kept verbatim" "$(rsh 2500000)" "2500000"
 
 echo "== unit: clock_sync_status (mining is time-sensitive) =="
 # doctor's NTP check classifies timedatectl's NTPSynchronized: yes→synced, no→unsynced, else unknown.

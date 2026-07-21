@@ -14,17 +14,16 @@ WALLET_FILE="$WALLET_DIR/payout-wallet"
 GEN_JSON="${GEN_JSON:-/tmp/gen.json}" # tmpfs; holds the view key for the create-from-keys step only
 DAEMON_ADDRESS="${MONERO_NODE_HOST:-127.0.0.1}:${MONERO_RPC_PORT:-18081}"
 
-# Resolve the restore height: an explicit number is used verbatim; "auto"/empty means "start at the
-# daemon's current height" (fetched via get_info) so a fresh wallet doesn't rescan years of chain
-# for payout history that predates the feature. A pruned node scans fine — outputs are never pruned.
+# Resolve the restore height: an explicit number is used verbatim; "auto"/empty means genesis (0),
+# scanning the whole chain so the wallet captures the FULL payout history — every p2pool payout this
+# address ever received, not just those after the wallet was set up. The initial scan is long (years
+# of blocks) but one-time: the wallet file persists its progress, so reopens only scan new blocks. A
+# pruned node scans fine — outputs are never pruned. Set PAYOUT_SCAN_HEIGHT to a block number to
+# start later and skip the long scan.
 resolve_scan_height() {
     local want="${PAYOUT_SCAN_HEIGHT:-auto}"
     case "$want" in
-    '' | auto)
-        curl -fsS --digest -u "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
-            "http://$DAEMON_ADDRESS/get_info" 2>/dev/null |
-            grep -o '"height": *[0-9]*' | grep -o '[0-9]*' | head -1
-        ;;
+    '' | auto) printf '0\n' ;;
     *) printf '%s\n' "$want" ;;
     esac
 }

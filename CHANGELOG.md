@@ -21,6 +21,11 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Changed
 
+- **The payout wallet now scans the full chain by default.** The view-only payout-confirmation
+  wallet's default restore height (`monero.payout_scan_height: auto`) is genesis (0) instead of the
+  chain tip, so it captures **every** p2pool payout this address has ever received, not only those
+  after it was set up. The initial scan is long but one-time — the wallet persists its progress.
+  Set an explicit block number to start later and skip it.
 - **Net profit now includes the XvB raffle's expected reward (#712).** The Energy tab's net figure
   adds the current XvB tier's published expected reward, valued at your XMR price, on top of P2Pool
   (and Tari, when priced). The whole net is already probabilistic, so it stays a single number — the
