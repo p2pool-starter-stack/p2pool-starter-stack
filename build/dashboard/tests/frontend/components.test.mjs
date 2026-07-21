@@ -320,6 +320,40 @@ test('EarningsCard Energy tab keeps the P2Pool-only label when tari_price is set
     assert.doesNotMatch(html, /P2Pool \+ Tari, after power/);
 });
 
+test('EarningsCard Energy tab folds the current-tier XvB estimate into net, labelled an estimate (#712)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8;
+    s.earnings.xvb_day = 0.02; // server-derived current-tier expected reward, XMR/day
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.xmr_price = 150;
+    const html = renderApp({ state: s });
+    assert.match(html, /Net \/ day/);
+    assert.match(html, /P2Pool \+ XvB \(est\.\), after power/);
+    // Tooltip drops the "Excludes XvB" clause and states it's an estimate.
+    assert.match(html, /XvB is an estimate/);
+    assert.doesNotMatch(html, /Excludes XvB/);
+    assert.doesNotMatch(html, /P2Pool XMR only, after power/);
+});
+
+test('EarningsCard Energy tab: net label/tooltip byte-identical to pre-#712 when no XvB estimate', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8;
+    s.earnings.xvb_day = null; // no fresh estimate → XvB not folded in
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.xmr_price = 150;
+    const html = renderApp({ state: s });
+    assert.match(html, /P2Pool XMR only, after power/);
+    // The exact pre-#712 tooltip, XvB still called out as excluded.
+    assert.match(
+        html,
+        /Excludes Tari \(set dashboard\.energy\.tari_price to include it\) and XvB \(raffle status, not a per-day income estimate\)\./,
+    );
+    assert.doesNotMatch(html, /XvB \(est\.\)/);
+    assert.doesNotMatch(html, /XvB is an estimate/);
+});
+
 test('EarningsCard grows fiat rows + a price provenance line once a price is known (#520)', () => {
     const s = clone();
     s.earnings.available = true;

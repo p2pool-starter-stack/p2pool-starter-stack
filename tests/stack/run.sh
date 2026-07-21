@@ -1074,6 +1074,37 @@ assert_contains "tari entrypoint never mutates the canonical config (#234)" "$(c
 assert_contains "compose mounts clearnet-state into monerod (#234)" "$(cat "$ROOT/docker-compose.yml")" ':/clearnet-state:ro'
 assert_contains "compose wires the tari wrapper entrypoint (#234)" "$(cat "$ROOT/docker-compose.yml")" '/var/tari/config/entrypoint.sh'
 
+# --- Wallet entrypoint (#381/#714): the view-only create-from-keys JSON must OMIT the spend key.
+# monero-wallet-rpc v0.18 parses an empty-string "spendkey":"" as a secret key and aborts wallet
+# creation ("failed to parse spend key secret key"), so the field's ABSENCE — not "" — is what
+# lets the payout wallet build. This exercises the REAL entrypoint's write_gen_json.
+echo "== unit: wallet-entrypoint view-only gen.json omits spendkey (#714) =="
+# shellcheck disable=SC1090
+(
+    export PITHEAD_TEST_SOURCE=1
+    source "$ROOT/build/monero/wallet-entrypoint.sh"
+    export GEN_JSON="$SANDBOX/wallet-gen.json" WALLET_FILE="$SANDBOX/payout-wallet"
+    export MONERO_WALLET_ADDRESS="48exampleAddr" MONERO_VIEW_KEY="deadbeefdeadbeef"
+    write_gen_json 3000000
+)
+WGEN="$(cat "$SANDBOX/wallet-gen.json")"
+if printf '%s' "$WGEN" | jq -e . >/dev/null 2>&1; then ok "wallet gen.json is valid JSON (#714)"; else bad "wallet gen.json is valid JSON (#714)" "jq rejected: $WGEN"; fi
+assert_eq "wallet gen.json carries the address (#381)" "$(printf '%s' "$WGEN" | jq -r .address)" "48exampleAddr"
+assert_eq "wallet gen.json carries the view key (#381)" "$(printf '%s' "$WGEN" | jq -r .viewkey)" "deadbeefdeadbeef"
+assert_eq "wallet gen.json scan_from_height verbatim (#381)" "$(printf '%s' "$WGEN" | jq -r .scan_from_height)" "3000000"
+# THE REGRESSION GUARD: a revert to "spendkey":"" crashes monero-wallet-rpc (#714). Field must be absent.
+assert_eq "wallet gen.json OMITS spendkey — monero rejects an empty one (#714)" "$(printf '%s' "$WGEN" | jq 'has("spendkey")')" "false"
+# Restore height: "auto"/empty means genesis (0) so the wallet scans the FULL payout history; an
+# explicit height is used verbatim to skip the long scan.
+rsh() { (
+    export PITHEAD_TEST_SOURCE=1 PAYOUT_SCAN_HEIGHT="$1"
+    source "$ROOT/build/monero/wallet-entrypoint.sh"
+    resolve_scan_height
+); }
+assert_eq "scan height: auto -> genesis 0 (full payout history)" "$(rsh auto)" "0"
+assert_eq "scan height: empty -> genesis 0" "$(rsh '')" "0"
+assert_eq "scan height: explicit block kept verbatim" "$(rsh 2500000)" "2500000"
+
 echo "== unit: clock_sync_status (mining is time-sensitive) =="
 # doctor's NTP check classifies timedatectl's NTPSynchronized: yes→synced, no→unsynced, else unknown.
 CLKBIN="$SANDBOX/clk-bin"
@@ -6187,6 +6218,7 @@ wu_accept_case() { # <uuid> <status-body-json> <label> <expected-status>
     printf '%s' "v9.9.9" >"$dir/staged/.rigforge-latest-tag"
     cat >"$dir/bin/curl" <<EOF
 #!/usr/bin/env bash
+echo "\$*" >>"$dir/dials.log"
 out="" url=""
 while [ \$# -gt 0 ]; do
     case "\$1" in
@@ -6215,6 +6247,11 @@ assert_eq "applied result records the rig's change_id" \
     "$(jq -r '.change_id' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "chg-9"
 assert_eq "applied result records the host-derived version" \
     "$(jq -r '.version' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "v9.9.9"
+# #690: every runner dial (the rig POST + each /status poll) carries a response-size cap so a
+# hostile rig can't stream an unbounded body into disk/memory. Proves the flag is wired, not curl's
+# own enforcement (that needs a real curl against an oversized server — an e2e concern).
+assert_contains "worker-upgrade rig dials carry a --max-filesize cap (#690)" \
+    "$(cat "$WU_LAST_DIR/dials.log" 2>/dev/null)" "--max-filesize"
 assert_contains "upgrade applied is audited" \
     "$(cat "$WU_LAST_DIR/audit/control.log")" '"action":"worker-upgrade","status":"applied"'
 w8="23232323-2323-4232-9232-232323232323"

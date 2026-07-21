@@ -478,6 +478,25 @@ wait_monero_synced() { wait_for "${1:-300}" 10 "Monero sync complete" _pred_mone
 wait_miner_running() { wait_for "${1:-180}" 5 "miner released" _pred_miner_running; }
 wait_tari_synced() { wait_for "${1:-300}" 10 "Tari sync complete" _pred_tari_synced; }
 wait_pool_ready() { wait_for "${1:-180}" 5 "pool type determinate (${2})" _pred_pool_ready "$2"; }
+# Assert a pool switch settled, WITHOUT flaking red on peer luck (#687). p2pool infers its sidechain
+# from connected peers' ports, so a freshly-switched chain (nano over Tor is the slowest to populate)
+# can read "Unknown" past the wait window. A bare assert_eq after `wait_pool_ready … || true` then
+# fires cold and fails on a timing state, not a bug. Three-way verdict, same as assert_scenario's
+# #454 handling: determinate match → pass; still Unknown/empty → peer-timing WARN; a WRONG determinate
+# type (Main when we set Mini) → fail. The 420s window is Tor-realistic; the wait polls, so a fast
+# bench that classifies in seconds pays nothing.
+assert_pool_switched() { # <label> <expected-pool-label>
+    wait_pool_ready 420 "$2" || true
+    local got
+    got="$(jq_get "$(api_state)" '.pool.type')"
+    if [ "$got" = "$2" ]; then
+        it_pass "$1 ($got)"
+    elif [ "$got" = "Unknown" ] || [ -z "$got" ]; then
+        it_warn "$1 — pool still Unknown for [$2] after 420s; peers not classified in time (nano/Tor is slow to populate), not a misclassification (#687)"
+    else
+        it_fail "$1" "got [$got], want [$2] — wrong sidechain, not a timing lag"
+    fi
+}
 wait_hashes_flowing() { wait_for "${1:-300}" 5 "stratum hashes flowing" _pred_hashes_flowing; }
 
 # --- Artifact capture -------------------------------------------------------

@@ -627,21 +627,34 @@ class EarningsCard extends Component {
 // Energy & profit tab body (#260). Fleet power draw + efficiency (always, when any power is known),
 // then energy cost once an electricity price is set, then net profit once an XMR price is also set —
 // each layer appears only when its inputs exist, so the operator never sees a fabricated figure.
-// Setting a Tari price too (#520) folds the Tari merge-mining estimate into gross; the heading and
-// the Net/day tooltip say exactly what's counted so a Tari merge-miner's net is never silently
-// P2Pool-only. `est` is the earnings for the shared what-if hashrate; the client does the
-// kWh/cost/net math.
+// Setting a Tari price too (#520) folds the Tari merge-mining estimate into gross, and the current
+// XvB tier's published expected reward folds in when XvB sends a fresh one (#712); the heading and
+// the Net/day tooltip say exactly what's counted — including that XvB is an estimate — so the net
+// is never silently partial or over-confident. `est` is the earnings for the shared what-if
+// hashrate; the client does the kWh/cost/net math.
 function EnergyPanel({ energy, est }) {
   const en = computeEnergy(energy, est);
   const cur = energy.currency;
   const haveCost = energy.cost_per_kwh > 0;
   const haveNet = haveCost && energy.xmr_price > 0;
-  // Honest label (#520): say exactly what gross counts so the net figure is never silently
-  // partial. XvB never appears here — raffle status, not a clean per-day estimate.
-  const netLabel = en.includesTari ? "P2Pool + Tari, after power" : "P2Pool XMR only, after power";
-  const netTitle = en.includesTari
-    ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, minus power cost. Excludes XvB (raffle status, not a per-day income estimate)."
-    : "P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it) and XvB (raffle status, not a per-day income estimate).";
+  // Honest label (#520, #712): say exactly what gross counts so the net figure is never silently
+  // partial. XvB is tagged "(est.)" — it's the current tier's published expected reward, and the
+  // raffle draw is probabilistic. When XvB isn't folded in, the strings are byte-identical to the
+  // pre-#712 label/tooltip.
+  const netLabel = en.includesXvb
+    ? en.includesTari
+      ? "P2Pool + Tari + XvB (est.), after power"
+      : "P2Pool + XvB (est.), after power"
+    : en.includesTari
+      ? "P2Pool + Tari, after power"
+      : "P2Pool XMR only, after power";
+  const netTitle = en.includesXvb
+    ? en.includesTari
+      ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, plus the current XvB tier's published expected reward valued at your XMR price, minus power cost. XvB is an estimate — the raffle draw is random among qualifiers."
+      : "P2Pool XMR earnings at your XMR price plus the current XvB tier's published expected reward valued at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it). XvB is an estimate — the raffle draw is random among qualifiers."
+    : en.includesTari
+      ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, minus power cost. Excludes XvB (raffle status, not a per-day income estimate)."
+      : "P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it) and XvB (raffle status, not a per-day income estimate).";
   return html`
     <div class="stat-grid">
         <${StatCard} label="Fleet Power" value=${formatUnit(energy.total_watts, "W")}
