@@ -495,9 +495,13 @@ class TestInit:
         sm.load_snapshot.return_value = {
             "total_live_h15": 5000,
             "update": {"available": True, "latest": "v1.9.1", "url": "u"},
+            # #596: same rule for the fleet-wide RigForge release — restored with the flag now
+            # off, it would keep serving stale per-worker badges until the first poll cycle.
+            "rigforge_release": {"tag": "v1.11.2", "url": "u"},
         }
         svc = DataService(sm, MagicMock(), MagicMock())
         assert svc.latest_data.get("update") in (None, {})  # never the restored dict
+        assert svc.latest_data.get("rigforge_release") is None  # nor the RigForge one (#596)
         assert svc.latest_data["total_live_h15"] == 5000  # the rest of the snapshot survives
 
     def test_rigforge_checker_wired_to_the_rigforge_api_under_the_same_flag(self):
