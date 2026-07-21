@@ -4878,10 +4878,16 @@ jq -n --arg w "$WALLET" \
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},
                control:{enabled:true}}}' >"$C/config.json"
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
-gate_try() { # <candidate-json-file> — preview then commit via the spool; result lands in $RESULTS/$UUID5.json
+gate_try() { # <candidate-json-file> [confirm-token] — preview then commit via the spool; result lands in $RESULTS/$UUID5.json
+    # An optional second arg carries a typed confirmation ("APPLY") on the commit, so a PERIMETER case
+    # can prove the change stays refused EVEN WITH a valid token present. Omitted → token-less commit.
     jq --arg id "$UUID5" '{id:$id,action:"preview",actor:"admin",config:.}' "$1" >"$REQS/$UUID5.json"
     run_pending >/dev/null
-    printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+    if [ -n "${2:-}" ]; then
+        printf '{"id":"%s","action":"commit","actor":"admin","confirm":"%s"}\n' "$UUID5" "$2" >"$REQS/$UUID5.json"
+    else
+        printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID5" >"$REQS/$UUID5.json"
+    fi
     run_pending >/dev/null
 }
 
@@ -4943,17 +4949,20 @@ gate_try "$C/cand.json"
 assert_eq "healthchecks ping-url repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_eq "config.json keeps healthchecks unset" "$(jq -r '.healthchecks.ping_url // "unset"' "$C/config.json")" "unset"
 # The #719 perimeter, named explicitly: disabling the Tor egress firewall would let containers dial
-# clearnet — it is NOT in the confirm-gated set and stays host-only.
+# clearnet — it is NOT in the confirm-gated set and stays host-only. Commit WITH a valid APPLY token
+# to prove the typed confirmation does not unlock the perimeter — the refusal fires before the token
+# is ever examined, so it stays refused just as it does token-less (#719).
 jq '.network={tor_egress_firewall:false}' "$C/config.json" >"$C/cand.json"
-gate_try "$C/cand.json"
-assert_eq "tor-egress-firewall disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
-assert_contains "tor-egress refusal is a host-only gate" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "#338"
+gate_try "$C/cand.json" APPLY
+assert_eq "tor-egress-firewall disable commit is refused even with the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "tor-egress refusal is a host-only gate (the APPLY token did not unlock it)" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "#338"
 assert_eq "config.json keeps the tor egress firewall unset (defaults on)" "$(jq -r '.network.tor_egress_firewall // "unset"' "$C/config.json")" "unset"
 # Setting a Monero view key (the #381 payout-confirm secret) reveals every incoming amount — a
-# secret, host-only, never confirm-gated.
+# secret, host-only, never confirm-gated. Commit WITH a valid APPLY token: the perimeter gate must
+# still refuse it, proving the typed confirmation is UX friction, not a security bypass (#719).
 jq '.monero.view_key="deadbeef"' "$C/config.json" >"$C/cand.json"
-gate_try "$C/cand.json"
-assert_eq "monero view-key set commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+gate_try "$C/cand.json" APPLY
+assert_eq "monero view-key set commit is refused even with the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_eq "config.json gains no view key" "$(jq -r '.monero.view_key // "unset"' "$C/config.json")" "unset"
 # XvB pool-URL repoint: redirects donated hashrate to an attacker's pool.
 jq '.xvb.url="attacker.example:4247"' "$C/config.json" >"$C/cand.json"
