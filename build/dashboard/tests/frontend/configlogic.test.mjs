@@ -314,6 +314,25 @@ test("markEditable: host-only fields (e.g. dashboard.auth.password, a security/s
   assert.equal(password.editable, false);
 });
 
+// --- Confirm-gated set (#719) -------------------------------------------------------------------
+
+const fieldsByKey = (sections) =>
+  Object.fromEntries(sections.flatMap((s) => s.fields).map((f) => [f.key, f]));
+
+test("markEditable: a confirm-gated key is editable AND flagged confirm; host-only stays neither", () => {
+  const byKey = fieldsByKey(markEditable(buildSections(CFG), [], ["monero.prune"]));
+  assert.equal(byKey["monero.prune"].editable, true); // editable...
+  assert.equal(byKey["monero.prune"].confirm, true); // ...but confirm-to-proceed
+  assert.equal(byKey["monero.wallet_address"].editable, false); // host-only untouched
+  assert.equal(byKey["monero.wallet_address"].confirm, false);
+});
+
+test("markEditable: editable wins over confirm — a key on both lists is freely editable, not gated", () => {
+  const byKey = fieldsByKey(markEditable(buildSections(CFG), ["monero.prune"], ["monero.prune"]));
+  assert.equal(byKey["monero.prune"].editable, true);
+  assert.equal(byKey["monero.prune"].confirm, false); // no needless friction on a freely-editable key
+});
+
 // --- JSON mode's whole-config parse (#529) ----------------------------------------------------
 
 test("parseConfigJson: valid JSON builds the same staged config shape applyEdits does", () => {

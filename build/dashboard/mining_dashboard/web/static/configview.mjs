@@ -73,6 +73,9 @@ async function pollResult(id, skip, max = POLL_MAX) {
 }
 
 const HOST_ONLY_TITLE = "Host-only — edit config.json and run ./pithead apply";
+// #719: an in-scope confirm-gated field IS editable, but committing it is disruptive — the review
+// modal makes you type APPLY. The tooltip sets that expectation up front.
+const CONFIRM_TITLE = "Editable — this change is disruptive; you'll type APPLY to confirm at Save";
 
 // `full` (#529): the pinned Core card mixes fields from several sections, so its rows need the
 // FULL dotted key ("monero.wallet_address") to stay unambiguous. A natural section keeps the
@@ -90,7 +93,7 @@ const Field = ({ field, edits, onEdit, full }) => {
   const editable = field.editable !== false;
   const value = field.key in edits ? edits[field.key] : field.value;
   const label = full ? field.key : field.path.slice(1).join(".") || field.path[0];
-  const title = editable ? undefined : HOST_ONLY_TITLE;
+  const title = !editable ? HOST_ONLY_TITLE : field.confirm ? CONFIRM_TITLE : undefined;
   const change = editable ? (e) => onEdit(field.key, e.target.value) : undefined;
   let input;
   if (field.type === "boolean") {
@@ -133,10 +136,13 @@ export const PreviewModal = ({
             changes.length === 0
               ? html`<p class="text-muted">No configuration changes detected.</p>`
               : html`<ul class="config-preview-list">
-                  ${changes.map(
-                    (c) => html`<li class=${c.flag === "DEST" ? "config-preview-dest" : ""}>
-                        ${c.flag === "DEST" ? "⚠ " : ""}${c.msg}</li>`,
-                  )}
+                  ${changes.map((c) => {
+                    // #719: CONFIRM rows (in-scope disruptive, confirm-gated) get the same warning
+                    // treatment as DEST — both are "disruptive" and both arm the type-APPLY box.
+                    const disruptive = c.flag === "DEST" || c.flag === "CONFIRM";
+                    return html`<li class=${disruptive ? "config-preview-dest" : ""}>
+                        ${disruptive ? "⚠ " : ""}${c.msg}</li>`;
+                  })}
               </ul>`
           }
           ${
@@ -166,6 +172,7 @@ export class ConfigView extends Component {
       sections: [],
       coreKeys: [],
       editableKeys: [], // #613: config paths the control gate will actually commit
+      confirmKeys: [], // #719: config paths the gate commits behind a type-to-confirm
       edits: {},
       mode: loadPref("dashboardConfigMode", ["form", "json"], "form"), // form | json (#529, persisted #658)
       editText: "",
@@ -201,6 +208,7 @@ export class ConfigView extends Component {
         sections: buildSections(cfg),
         coreKeys: cfg._core_keys || [],
         editableKeys: cfg._editable_keys || [],
+        confirmKeys: cfg._confirm_keys || [],
         edits: {},
         editText: JSON.stringify(cfg, null, 2),
         jsonError: null,
@@ -276,10 +284,15 @@ export class ConfigView extends Component {
     const id = this.state.preview.id;
     this.setState({ phase: "committing" });
     try {
+      // #719: an in-scope disruptive change (preview.destructive) rides its typed confirmation to
+      // the host gate, which requires it before a CONFIRM row proceeds. Friction, not a secret.
+      const body = this.state.preview.destructive
+        ? { id, confirm: this.state.confirmText }
+        : { id };
       const res = await fetch("/api/control/commit", {
         method: "POST",
         headers: CONTROL_HEADERS,
-        body: JSON.stringify({ id }),
+        body: JSON.stringify(body),
       });
       if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
       let out = await res.json();
@@ -351,6 +364,7 @@ export class ConfigView extends Component {
       sections,
       coreKeys,
       editableKeys,
+      confirmKeys,
       edits,
       mode,
       editText,
@@ -394,7 +408,10 @@ export class ConfigView extends Component {
     const busy = phase === "previewing" || phase === "committing";
     const dirty = Object.keys(edits).length > 0;
     const canSave = mode === "json" ? !jsonError : dirty;
-    const { core, sections: groups } = regroupCore(markEditable(sections, editableKeys), coreKeys);
+    const { core, sections: groups } = regroupCore(
+      markEditable(sections, editableKeys, confirmKeys),
+      coreKeys,
+    );
     return html`<div class="config-view">
         ${error ? html`<div class="card"><p class="status-bad">${error}</p></div>` : null}
         <div class="toggle-group mb-1" role="group" aria-label="Config editor mode">

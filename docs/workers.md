@@ -385,6 +385,41 @@ See the [RigForge README](https://github.com/p2pool-starter-stack/rigforge) for 
 including [worker hardware requirements](https://github.com/p2pool-starter-stack/rigforge#-hardware-requirements),
 kernel tuning, and verification.
 
+## Mine on the stack host itself
+
+A box that runs the stack 24/7 has spare CPU between syncs. You can put that CPU to work by
+co-locating a RigForge worker on the stack host, pointed at the stack's own stratum over loopback —
+no LAN exposure, no firewall rule, no Tor hop.
+
+Opt in during `./pithead setup` (the prompt "Also mine on this machine with its spare CPU?", off by
+default), or set it in `config.json`:
+
+```json
+{
+  "local_miner": {
+    "enabled": true
+  }
+}
+```
+
+Run `./pithead apply`. Setup and apply then print the two values a RigForge install needs — the pool
+URL (`127.0.0.1:3333` by default, or your `p2pool.stratum_bind` address and `p2pool.stratum_port`)
+and the stratum password (the `PROXY_STRATUM_PASSWORD` already in `.env`, shown only when
+`p2pool.stratum_password` is set). Install [RigForge](https://github.com/p2pool-starter-stack/rigforge)
+on the same host and enter those two values when it asks; the worker self-registers and appears in
+the dashboard's Workers Alive table like any other rig.
+
+Pithead does not install, run, or tune the miner. RigForge owns all host-level tuning — HugePages,
+GRUB, MSR, the CPU governor, and the miner service. Two things to know before enabling it:
+
+- **RigForge's tuning is host-global.** It sets a `performance` CPU governor and may reserve
+  HugePages box-wide, which affects every workload on the machine, not just the miner. That is fine
+  on a dedicated appliance; weigh it on a shared home server (see [deployment
+  models](getting-started.md)).
+- **The stack always wins.** Cap the miner's thread count in RigForge so mining never starves the
+  node's sync or share submission. The mining path is plain stratum over loopback, so it carries no
+  privacy impact.
+
 ---
 
 ## See also

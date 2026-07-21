@@ -1034,6 +1034,37 @@ announce_dashboard_url() {
     fi
     announce_stratum_auth
     announce_stratum_tls # #261: prints the fingerprint rigs pin; no-op when TLS is off
+    announce_local_miner # #593: hand off the pool URL + secret for a co-located RigForge worker
+}
+
+# Local miner opt-in (#593). When the operator asked to also mine on this host with its spare CPU,
+# hand them the two values a RigForge install on this box would otherwise prompt for — the stack's
+# own stratum URL and the stratum secret — so a co-located worker self-registers with nothing to
+# copy by hand (the dashboard already discovers workers from the proxy). Pithead does NOT install
+# or tune the miner: RigForge owns HugePages/GRUB/MSR and the miner service. Prints nothing unless
+# local_miner.enabled is on.
+announce_local_miner() {
+    [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" = "true" ] || return 0
+    local bind port host secret
+    bind=$(env_get STRATUM_BIND 2>/dev/null || true)
+    [ -n "$bind" ] || bind="0.0.0.0"
+    port=$(stratum_port_effective)
+    # A port published on all interfaces (0.0.0.0) or on loopback is reachable at 127.0.0.1; a
+    # specific LAN bind (#593 edge case) is only reachable at that address, so target it directly
+    # rather than hardcoding loopback.
+    case "$bind" in
+    0.0.0.0 | 127.0.0.1) host="127.0.0.1" ;;
+    *) host="$bind" ;;
+    esac
+    secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
+    log "Local miner opt-in is ON (#593): point a RigForge install on THIS host at the stack's stratum:"
+    log "  • Pool URL:         $host:$port"
+    if [ -n "$secret" ]; then
+        log "  • Stratum password: $secret"
+    else
+        log "  • Stratum password: none set (any password is accepted)"
+    fi
+    log "  RigForge compiles/tunes XMRig and owns all host tuning (HugePages/GRUB/MSR) — Pithead does not. See docs/workers.md#mine-on-the-stack-host-itself."
 }
 
 # Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
@@ -2288,6 +2319,15 @@ wizard_ask_shape() {
         read -r -p "Telegram bot token: " TELEGRAM_BOT_TOKEN || true
         read -r -p "Telegram chat id: " TELEGRAM_CHAT_ID || true
     fi
+
+    # Local miner opt-in (#593). A box that runs the stack 24/7 can mine with its spare CPU by
+    # co-locating a RigForge worker pointed at the stack's own loopback stratum. Off by default —
+    # this only records the intent; setup prints the two values a RigForge install needs (the pool
+    # URL and stratum secret) at the end. Pithead never installs or tunes the miner: RigForge owns
+    # all host tuning (HugePages/GRUB/MSR) and the miner service.
+    read -r -p "Also mine on this machine with its spare CPU (co-locate a RigForge worker)? (y/N): " IN_LOCAL_MINER || true
+    LOCAL_MINER=false
+    [[ "$IN_LOCAL_MINER" =~ ^[Yy] ]] && LOCAL_MINER=true
 }
 
 # Assembles config.json from the globals wizard_ask_core/wizard_ask_shape set, and writes it.
@@ -2326,6 +2366,10 @@ wizard_write_config() {
 
     if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
         cfg=$(jq --arg t "$TELEGRAM_BOT_TOKEN" --arg c "$TELEGRAM_CHAT_ID" '.telegram = {enabled: true, bot_token: $t, chat_id: $c}' <<<"$cfg")
+    fi
+
+    if [ "${LOCAL_MINER:-false}" = true ]; then
+        cfg=$(jq '.local_miner = {enabled: true}' <<<"$cfg")
     fi
 
     # Subshell umask (#368): the file must be owner-only from its FIRST byte — a chmod after the
@@ -2959,7 +3003,8 @@ readonly CONTROL_SECRET_PATHS='[
     ["monero","view_key"],
     ["tari","view_key"],
     ["p2pool","stratum_password"],
-    ["healthchecks","ping_url"]]'
+    ["healthchecks","ping_url"],
+    ["xvb","standby","source"]]'
 
 # #690: bound every host-runner curl so a hostile/MITM'd rig or release response can't stream an
 # unbounded body into memory ($( )) or onto disk (-o) inside the --max-time window. --max-filesize
@@ -3604,11 +3649,28 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Opt-in fail-closed miner hold on an unrecoverable dashboard health failure (#490), default
+    # false. The dashboard is an observability layer, not the mining datapath, so the default is
+    # alert-only (loud Telegram/Healthchecks alert + badge; mining continues). true reuses the #35
+    # sync-gate's own hold to stop p2pool+xmrig-proxy until a DB-recovery failure or a
+    # crash-looping dashboard container clears — see build/dashboard .../service/data_service.py
+    # DataService._apply_fail_closed_gate for the exact "unrecoverable" set.
+    local fail_closed
+    fail_closed=$(normalize_bool "$(config_bool '.dashboard.fail_closed' false)")
+
     # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor: a ping URL is the
     # on/off switch (blank = off), and the ping always rides Tor. The URL is a capability secret, so
     # it lives in the owner-only .env (chmod 600 below), never a world-readable file. docs/monitoring.md.
     local hc_ping_url
     hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
+
+    # XvB warm-standby source (#249). On a backup stack this is the PRIMARY dashboard's read-only
+    # /api/xvb-standby URL; the backup pulls it so a failover resumes the donation split warm.
+    # Blank (default) = off. A capability URL (it can carry the primary's dashboard basic-auth as
+    # userinfo), so like the ping URL above it lives in the owner-only .env, never a world-readable
+    # file. docs/configuration.md.
+    local xvb_standby_source
+    xvb_standby_source=$(jq -r '.xvb.standby.source // empty' "$CONFIG_FILE")
 
     # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
     # a header badge linking to it (notify-only — no upgrade). On by default because the check is
@@ -3820,9 +3882,11 @@ XVB_ENABLED=$xvb_enabled
 XVB_TOR_ENABLED=$xvb_tor
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
+DASHBOARD_FAIL_CLOSED=$fail_closed
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
 HEALTHCHECKS_PING_URL=$hc_ping_url
+XVB_STANDBY_SOURCE=$xvb_standby_source
 TELEGRAM_ENABLED=$tg_enabled
 TELEGRAM_BOT_TOKEN=$tg_token
 TELEGRAM_CHAT_ID=$tg_chat
@@ -4333,8 +4397,19 @@ describe_change() {
     local key="$1" old="$2" new="$3" flag="INFO" msg
     case "$key" in
     MONERO_PRUNE)
-        flag=DEST
-        msg="Monero pruning ($old → $new) — enabling prunes existing blocks; disabling needs a full re-sync (pruned data can't be restored). Wipe the Monero data dir to fully re-sync."
+        # #719: ENABLE (off → on) is confirm-gated — it reclaims disk by pruning blocks, an
+        # operator-intent op with an expensive-but-recoverable cost. DISABLE (on → off) stays a
+        # host-only DEST: pruned data can't be restored, so it needs a full re-sync from a shell.
+        case "$new" in
+        true | 1)
+            flag=CONFIRM
+            msg="Monero pruning ENABLED ($old → $new) — prunes existing blocks to reclaim disk; monerod is recreated. Restoring the full chain later needs a wipe + re-sync."
+            ;;
+        *)
+            flag=DEST
+            msg="Monero pruning DISABLED ($old → $new) — pruned data can't be restored, so the full chain must RE-SYNC from scratch. Apply this from the host."
+            ;;
+        esac
         ;;
     COMPOSE_PROFILES)
         # #552: COMPOSE_PROFILES also carries payout_confirm/tari_payout_confirm (#381/#462), so an
@@ -4382,7 +4457,9 @@ describe_change() {
             # First render of the key (upgrade from a pre-#172 .env) — the port isn't changing.
             msg="Stratum port recorded (:$new) — no rig change needed."
         else
-            flag=DEST
+            # #719: confirm-gated — repointing every rig is disruptive but operator-intent, not a
+            # breach; the typed confirmation makes the operator acknowledge the fleet-wide repoint.
+            flag=CONFIRM
             msg="Stratum port: $old → $new (#172) — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
         fi
         ;;
@@ -4412,10 +4489,18 @@ describe_change() {
         msg="xmrig-proxy dev-fee donation level: ${old:-0}% → ${new}% (#173) — the xmrig-proxy container is recreated (brief restart)."
         ;;
     DASHBOARD_DATA_DIR)
-        flag=DEST
+        # #719: confirm-gated — a data-dir move is operator-intent (an expensive re-home / re-sync),
+        # not a security boundary. Only the four service data dirs below are in scope.
+        flag=CONFIRM
         msg="$key: $old → $new — data at the old DEFAULT location (./data/dashboard) is moved there automatically (#455); any other old path is left in place."
         ;;
+    MONERO_DATA_DIR | TARI_DATA_DIR | P2POOL_DATA_DIR)
+        # #719: confirm-gated data-dir moves — the service re-syncs from the new (empty) dir.
+        flag=CONFIRM
+        msg="$key: $old → $new — the service will use the new (empty) directory and RE-SYNC from scratch; old data is left in place."
+        ;;
     *_DATA_DIR)
+        # Every OTHER data dir (e.g. TOR_DATA_DIR) stays host-only — not in the #719 in-scope set.
         flag=DEST
         msg="$key: $old → $new — the service will use the new (empty) directory and re-sync; old data is left in place."
         ;;
@@ -4436,6 +4521,13 @@ describe_change() {
             msg="Tari → required — a Tari outage rejects workers, the miner waits for Tari's sync, and a Tari-only sync takes over the dashboard."
         else
             msg="Tari → non-blocking — keep mining Monero through a Tari outage, start as soon as Monero is synced, and keep the operational dashboard while Tari syncs."
+        fi
+        ;;
+    DASHBOARD_FAIL_CLOSED)
+        if [ "$new" == "true" ]; then
+            msg="Fail-closed ENABLED (#490) — an unrecoverable dashboard health failure (DB recovery itself failing, or the dashboard container crash-looping) now HOLDS p2pool and xmrig-proxy until it clears, instead of only alerting."
+        else
+            msg="Fail-closed DISABLED (#490) — an unrecoverable dashboard health failure now only alerts (Telegram/Healthchecks + badge); mining is never held for it."
         fi
         ;;
     DASHBOARD_CHECK_UPDATES)
@@ -4595,16 +4687,19 @@ describe_change() {
         fi
         ;;
     MONERO_CLEARNET_SYNC)
-        flag=DEST
+        # #183/#719: ENABLING exposes the host IP during IBD (auto-reverts to Tor) — confirm-gated
+        # (CONFIRM), not host-only. DISABLING returns to Tor, a plain INFO change.
         if [ "$new" == "true" ]; then
+            flag=CONFIRM
             msg="⚠ Monero CLEARNET initial sync ENABLED (#183) — monerod P2P will run over CLEARNET (this host's IP becomes visible to the Monero P2P network) so the chain syncs fast. Transaction broadcast STAYS on Tor; wallets are never exposed. The dashboard switches monerod back to Tor automatically once the chain is synced (#234). monerod is recreated."
         else
             msg="Monero clearnet sync DISABLED (#183) — monerod P2P returns to Tor-only. monerod is recreated."
         fi
         ;;
     TARI_CLEARNET_SYNC)
-        flag=DEST
+        # #183/#719: ENABLING exposes the host IP during IBD (auto-reverts to Tor) — confirm-gated.
         if [ "$new" == "true" ]; then
+            flag=CONFIRM
             msg="⚠ Tari CLEARNET initial sync ENABLED (#183) — the Tari base node will sync over CLEARNET (TCP transport + seeds.tari.com DNS seed; this host's IP becomes visible to the Tari P2P network) so its large chain syncs fast. The dashboard switches Tari back to Tor automatically once the chain is synced (#234). tari is recreated."
         else
             msg="Tari clearnet sync DISABLED (#183) — the Tari base node returns to Tor-only transport. tari is recreated."
@@ -4713,7 +4808,8 @@ apply_dry_run() {
         [ -z "$msg" ] && continue # internal-only keys stay silent, same as apply
         if [ "$porcelain" -eq 1 ]; then
             printf '%s\t%s\t%s\n' "$flag" "$key" "$msg"
-        elif [ "$flag" == "DEST" ]; then
+        elif [ "$flag" == "DEST" ] || [ "$flag" == "CONFIRM" ]; then
+            # #719: CONFIRM is disruptive on the host too — warn, same as DEST.
             echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
         else
             echo "  • ${msg}"
@@ -4786,7 +4882,9 @@ apply() {
             flag=${line%%$'\t'*}
             msg=${line#*$'\t'}
             [ -z "$msg" ] && continue # internal-only keys (e.g. the auth fingerprint) stay silent
-            if [ "$flag" == "DEST" ]; then
+            # CONFIRM (#719) is the dashboard's confirm-gated class, but on the HOST CLI it is just
+            # as disruptive as DEST — warn and fold it into the y/N confirmation, same as before.
+            if [ "$flag" == "DEST" ] || [ "$flag" == "CONFIRM" ]; then
                 echo -e "  ${C_YELLOW}⚠ ${msg}${C_RESET}"
                 destructive=1
             else
@@ -4993,7 +5091,7 @@ run_chain() {
 # the Telegram channel (the future #338 approval channel), so the dashboard must not silence
 # them. Space-separated exact env-key names.
 CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
-    XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED
+    XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED DASHBOARD_FAIL_CLOSED
     DASHBOARD_CHECK_UPDATES DASHBOARD_TZ
     MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS
     HASHRATE_DROP_THRESHOLD_PCT HASHRATE_DROP_MINUTES TELEGRAM_DAILY_SUMMARY_TIME
@@ -5009,8 +5107,22 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_HIGH_REJECT_RATE TELEGRAM_EVENT_BLOCK_FOUND
     TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_PAYOUT_CONFIRMED TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
 
-control_approval_gate() { # <staged-file>
-    local staged="$1" porcelain
+# The confirm-gated editable set (#719): operationally-disruptive env keys the dashboard MAY commit
+# behind a type-to-confirm — NOT the security perimeter (wallets, keys, credentials, onion,
+# tor_egress_firewall, dashboard.control.enabled, stratum password, per-rig hosts/tokens all stay
+# host-only DEST). Type-to-confirm is UX FRICTION, not a security control: a compromised dashboard
+# that can set a field can also fill the confirm box, so this set is strictly the "expensive but
+# recoverable, not a breach" class — a data-dir move (re-sync), a stratum-port repoint (rigs
+# reconnect), a clearnet-sync enable (host IP exposed during IBD, auto-reverts), a prune enable
+# (reclaims disk). describe_change flags each CONFIRM only in its in-scope DIRECTION — the flag
+# carries the direction (prune DISABLE, TOR data-dir move, etc. still emit DEST and stay refused);
+# this list is the static allowlist the gate's default-deny pass consults and the UI mirrors
+# (control_service.CONFIRM_ENV_KEY_PATHS, drift-guarded like CONTROL_DASHBOARD_EDITABLE_KEYS).
+CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR
+    STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE'
+
+control_approval_gate() { # <staged-file> [confirm-token]
+    local staged="$1" confirm="${2:-}" porcelain
     # Fail closed if we cannot re-derive the change set (the staged config was validated at
     # preview, so a dry-run failure here means something changed — refuse).
     if ! porcelain=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>/dev/null); then
@@ -5070,17 +5182,77 @@ control_approval_gate() { # <staged-file>
     # flag says. Refusal keys off a violation COUNT, not the matched text, so a blank or
     # malformed porcelain row (empty KEY column) still refuses instead of slipping past an
     # emptiness test.
+    # The allowlist now spans BOTH the free-to-commit editable set and the confirm-gated set (#719):
+    # a change to any other key still fails closed here. The CONFIRM set only gets PAST this pass —
+    # it still has to clear the DEST perimeter and satisfy the typed-confirmation check below.
     local editable_re bad hit
-    editable_re=$(printf '%s' "$CONTROL_DASHBOARD_EDITABLE_KEYS" | tr -s ' \n' '|')
+    editable_re=$(printf '%s %s' "$CONTROL_DASHBOARD_EDITABLE_KEYS" "$CONTROL_DASHBOARD_CONFIRM_KEYS" | tr -s ' \n' '|')
     bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
     if [ "${bad:-0}" -gt 0 ]; then
         hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
         printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "${hit:-unparseable change row}" "$0"
         return 1
     fi
+    # Perimeter: any DEST row is refused outright — the confirm-gate never covers a destructive
+    # host-only change. A data-dir MOVE is CONFIRM (below); a prune DISABLE or a TOR data-dir move
+    # still emits DEST and is caught here even though its key is on the confirm allowlist.
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
         printf 'this change is destructive and cannot be committed from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
+    fi
+    # Data-dir destination allowlist (#728). #719 made the four *_DATA_DIR moves confirm-gated, so a
+    # dashboard operator who types APPLY can now RELOCATE a service's data dir. assert_safe_dir — the
+    # host-shell guard — is a BLOCKLIST: it refuses the catastrophic roots (/, $HOME, bare mounts, …)
+    # but passes any OTHER absolute path. At host-shell trust that is proportionate (a shell already
+    # has filesystem-wide reach); at dashboard trust it would let a confirmed move target another
+    # user's home or another service's data volume and have pithead mkdir/chown -R it and bind-mount
+    # it into a recreated container — a destination trust-escalation. This gate runs ONLY for
+    # dashboard commits (the host `apply` path never calls control_approval_gate), so it is exactly
+    # where the tighter, control-only rule belongs: for a control-channel move, narrow the
+    # DESTINATION from a blocklist to an ALLOWLIST — permit only a path under the stack's own data
+    # root ($PWD/data, the install dir's data/) or a parent the stack ALREADY keeps data in (each
+    # live *_DATA_DIR's parent — a root a host operator already opted into, which covers a co-located
+    # shared data root, #455). Anything else is refused EVEN with the APPLY token: that move stays
+    # host-CLI-only. Only EXPLICIT absolute paths are checked — "auto"/empty resolves to a stack
+    # default that is under a data root by construction. assert_safe_dir still runs at apply time.
+    local -a allowed_roots=("$PWD/data")
+    local dvar cur
+    for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR; do
+        cur=$(env_get "$dvar")
+        [ -n "$cur" ] && allowed_roots+=("$(dirname "$cur")")
+    done
+    local ddpath dest root ok_root
+    for ddpath in monero.data_dir tari.data_dir p2pool.data_dir dashboard.data_dir; do
+        dest=$(jq -r --arg p "$ddpath" 'getpath($p/".") // empty' "$staged" 2>/dev/null)
+        # Skip only values resolve_default turns into an in-root stack default — its EXACT set,
+        # not a DYNAMIC_* wildcard (which would also swallow a bogus DYNAMIC_FOO that resolve_default
+        # passes through literally). A non-absolute/traversal dest never reaches here anyway:
+        # assert_safe_dir (called in the dry-run re-derivation at the top of this gate) refuses
+        # `..`/relative paths first — keep that ordering.
+        case "$dest" in "" | auto | DYNAMIC_DATA | DYNAMIC_HOST | DYNAMIC_ID) continue ;; esac
+        ok_root=0
+        # Trailing slash on both sides so a root prefix can't false-match a sibling (/data vs
+        # /database); an exact-root dest matches too (harmless — still the stack's own dir).
+        for root in "${allowed_roots[@]}"; do
+            case "$dest/" in "$root"/*) ok_root=1 && break ;; esac
+        done
+        if [ "$ok_root" -eq 0 ]; then
+            printf 'this move sends %s to %s, which is outside the stack data root(s) — a dashboard-confirmed data-dir move must stay under the stack data directory (%s) or a parent it already uses. Apply it from the host with `%s apply`.' "$ddpath" "$dest" "$PWD/data" "$0"
+            return 1
+        fi
+    done
+    # Confirm-gate (#719): an in-scope CONFIRM row PROCEEDS only with the operator's typed
+    # confirmation. The token is a fixed literal ("APPLY"), orthogonal to the value being set — it
+    # is friction that forces the operator to acknowledge an expensive/disruptive op, NOT a security
+    # control (the perimeter above is the boundary). control_commit records a confirmed change
+    # distinctly in the audit log via the marker file touched here.
+    if printf '%s\n' "$porcelain" | grep -qE $'^CONFIRM\t'; then
+        if [ "$confirm" != "APPLY" ]; then
+            hit=$(printf '%s\n' "$porcelain" | grep -m1 -E $'^CONFIRM\t' | cut -f3-)
+            printf 'this change is disruptive (%s) — type APPLY in the dashboard to confirm.' "${hit:-disruptive change}"
+            return 1
+        fi
+        touch "${staged}.confirmed" 2>/dev/null || true
     fi
     # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
     # (#349) without a third dry-run. Names only, never values. dashboard.energy (#504) is
@@ -5185,7 +5357,8 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '
             [split("\n")[] | select(length > 0) | split("\t") | {flag: .[0], key: .[1], msg: (.[2:] | join("\t"))}]
-            | {status: "previewed", changes: ., destructive: (map(.flag == "DEST") | any), ts: (now | floor)}')
+            | {status: "previewed", changes: .,
+               destructive: (map(.flag == "DEST" or .flag == "CONFIRM") | any), ts: (now | floor)}')
         # #504: dashboard.energy is config.json-only (never rendered to .env), so an energy-only
         # edit produces no porcelain row. Surface it as a normal committable INFO change so the UI
         # arms Apply and the commit lands it in config.json. The approval gate allowlists exactly
@@ -5237,8 +5410,8 @@ control_reown_operator_files() {
 
 # Commit: apply the HOST-SIDE staged copy from the matching preview. A tampered second request
 # can't swap the config — commit carries only the id; the config it applies is the one previewed.
-control_commit() { # <id> <actor> <control-dir>
-    local id="$1" actor="$2" cdir="$3"
+control_commit() { # <id> <actor> <control-dir> [confirm-token]
+    local id="$1" actor="$2" cdir="$3" confirm="${4:-}"
     local staged="$cdir/staged/$id.json" logf="$cdir/staged/.$id.log" rc=0
     if [ ! -f "$staged" ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"no staged intent for this id — preview first",ts:(now|floor)}')"
@@ -5254,14 +5427,23 @@ control_commit() { # <id> <actor> <control-dir>
     # On refusal the gate's stdout is the reason; on approval it is the changed key names, which
     # the audit entries below record — WHAT changed, by name only (#349).
     local gate_out keys=""
-    if ! gate_out=$(control_approval_gate "$staged"); then
+    if ! gate_out=$(control_approval_gate "$staged" "$confirm"); then
         [ -n "$gate_out" ] || gate_out="approval denied"
         control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$gate_out" '{status:"rejected",error:$e,ts:(now|floor)}')"
-        rm -f "$staged"
+        rm -f "$staged" "${staged}.confirmed"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "rejected"
         return 0
     fi
     keys="$gate_out"
+    # A confirm-gated destructive change (#719) is logged AS SUCH — the gate touches this marker
+    # when a typed confirmation carried an in-scope CONFIRM row past the perimeter. The distinct
+    # `commit-confirmed` action separates a dashboard-confirmed disruptive apply from an ordinary
+    # (INFO-only) dashboard commit in the tamper-evidence log. Host-CLI applies never reach this log.
+    local audit_action="commit"
+    if [ -f "${staged}.confirmed" ]; then
+        audit_action="commit-confirmed"
+        rm -f "${staged}.confirmed"
+    fi
     # Keep a pre-change backup; on failure it is named in the result and left in place. The
     # `apply -y` below re-renders the pre-masked prefill copy (#440), so the dashboard's editor
     # form reflects the committed config on the next load.
@@ -5271,14 +5453,14 @@ control_commit() { # <id> <actor> <control-dir>
     if [ "$rc" -eq 0 ]; then
         control_reown_operator_files # the root apply wrote .env/Caddyfile as root — give them back (#33)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"applied",ts:(now|floor)}')"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "applied" "$keys"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "$audit_action" "applied" "$keys"
     else
         # apply's own .apply-incomplete marker handles the container-recreate retry; the config
         # backup lets the operator revert by hand if the new config itself is the problem.
         control_write_result "$cdir/results" "$id" "$(jq -n --arg e "$(tail -c 2000 "$logf")" --arg b "${CONFIG_FILE}.bak-control" '{status:"failed",error:$e,backup:$b,ts:(now|floor)}')"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "commit" "failed" "$keys"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "$audit_action" "failed" "$keys"
     fi
-    rm -f "$staged" "$logf"
+    rm -f "$staged" "$logf" "${staged}.confirmed"
 }
 
 # True when SemVer $1 is strictly newer than $2 (either may carry a leading `v`). Both arguments
@@ -5973,7 +6155,7 @@ control_process_request() { # <claimed-file> <control-dir>
         warn "Control request has a malformed id — discarded (no result can be addressed)."
         return 0
     fi
-    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version" and . != "worker" and . != "changes")] | length' "$file")" != "0" ]; then
+    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version" and . != "worker" and . != "changes" and . != "confirm")] | length' "$file")" != "0" ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unexpected keys in request",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "" "invalid" "rejected"
         return 0
@@ -5985,7 +6167,7 @@ control_process_request() { # <claimed-file> <control-dir>
     action=$(jq -r '.action // ""' "$file")
     case "$action" in
     preview) control_preview "$file" "$id" "$actor" "$cdir" ;;
-    commit) control_commit "$id" "$actor" "$cdir" ;;
+    commit) control_commit "$id" "$actor" "$cdir" "$(jq -r '.confirm // ""' "$file")" ;;
     upgrade) control_upgrade "$file" "$id" "$actor" "$cdir" ;;
     worker-apply) control_worker_apply "$file" "$id" "$actor" "$cdir" ;;
     worker-upgrade) control_worker_upgrade "$file" "$id" "$actor" "$cdir" ;;

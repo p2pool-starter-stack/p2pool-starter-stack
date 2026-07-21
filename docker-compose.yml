@@ -627,6 +627,9 @@ services:
       # Route XvB donation mining over Tor by default (#166); xvb.tor:false opts out.
       - XVB_TOR_ENABLED=${XVB_TOR_ENABLED:-true}
       - XVB_DONATION_LEVEL=${XVB_DONATION_LEVEL:-auto}
+      # Backup-stack warm-standby source (#249): the primary dashboard's read-only /api/xvb-standby
+      # URL. Blank (default) = off; only a failover pair's backup sets it.
+      - XVB_STANDBY_SOURCE=${XVB_STANDBY_SOURCE:-}
       # XvB raffle auto-registration endpoint (#263). Defaults to the real endpoint (in the dashboard
       # config) so registration just works. Override here to point at a different/test endpoint, or
       # set a disable sentinel (off/none/false/disabled) to turn auto-registration off while keeping
@@ -671,6 +674,12 @@ services:
       # miner waits for Tari's sync, and whether a Tari-only sync takes over the dashboard
       # (Issue #51). Set dashboard.tari_required:false to make Tari non-blocking.
       - TARI_REQUIRED=${TARI_REQUIRED:-true}
+      # Opt-in fail-closed miner hold on an unrecoverable dashboard health failure (#490,
+      # config.json: dashboard.fail_closed). Default OFF: these failures only alert, mining
+      # continues. ON reuses the #35 sync-gate hold (stop/start p2pool + xmrig-proxy) but only for
+      # a DB auto-heal rebuild that itself failed, or the dashboard container crash-looping —
+      # never a transient blip.
+      - DASHBOARD_FAIL_CLOSED=${DASHBOARD_FAIL_CLOSED:-false}
       # Healthchecks.io dead-man's switch (#79). A ping URL is the on/off switch (blank = off);
       # when set, the dashboard pings it each loop, so if the host dies the pings stop and
       # Healthchecks.io alerts externally — the one failure mode an in-stack notifier can't
