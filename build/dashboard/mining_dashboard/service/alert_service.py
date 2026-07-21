@@ -766,7 +766,7 @@ class AlertService:
             except Exception as exc:  # never let the tripwire break the data loop
                 logger.debug("Wallet baseline update failed (%s)", type(exc).__name__)
             # Keep the container-health debounce state current even with every sink off (#490):
-            # `dashboard.fail_closed` reads `self.containers.is_bad("dashboard")` directly, off
+            # `dashboard.fail_closed` reads `self.containers.is_confirmed_bad("dashboard")` off
             # the same tracker this alerting path would otherwise be the only feeder for. No
             # alert fires here — just the state update the alerting branch below does anyway.
             containers = signals.get("containers")

@@ -666,8 +666,10 @@ class DataService:
 
         "Unrecoverable" is scoped narrowly by the caller to genuine, non-transient failures: a DB
         whose auto-heal rebuild itself failed (``StateManager.is_db_unrecoverable``), or the
-        dashboard container itself crash-looping (``AlertService.containers.is_bad("dashboard")``).
-        A transient write blip, a slow query, or a single failed external fetch is never
+        dashboard container itself crash-looping / stuck unhealthy past the #337 debounce
+        (``AlertService.containers.is_confirmed_bad("dashboard")`` — a debounce-CONFIRMED verdict,
+        never a first-sighting seed). A transient write blip, a slow query, a single failed
+        external fetch, or a container merely reported unhealthy on one poll is never
         "unrecoverable" — those already alert (#131/#337) and must never gate; a false positive
         here idles the fleet and costs revenue.
 
@@ -1236,7 +1238,7 @@ class DataService:
                     # above just fed (see `_apply_fail_closed_gate` for what counts and why).
                     await self._apply_fail_closed_gate(
                         self.state_manager.is_db_unrecoverable()
-                        or self.alert_service.containers.is_bad("dashboard")
+                        or self.alert_service.containers.is_confirmed_bad("dashboard")
                     )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).

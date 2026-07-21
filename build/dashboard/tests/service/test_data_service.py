@@ -813,6 +813,40 @@ class TestFailClosedGate:
         svc.docker_control.start.assert_not_called()
         svc.docker_control.stop.assert_not_called()
 
+    async def test_real_trigger_a_transient_unhealthy_dashboard_does_not_gate(self):
+        # #490 F1/F2: wire the ACTUAL trigger expression the run loop computes
+        # (is_db_unrecoverable OR containers.is_confirmed_bad("dashboard")) from real objects, and
+        # prove a first-sighting-unhealthy dashboard (a seed, unvetted by the 120s debounce) does
+        # NOT hold the fleet. The hardcoded-bool gate tests above cover the mechanism; this covers
+        # the classification that feeds it.
+        from mining_dashboard.service.storage_service import StateManager
+
+        svc = self._svc()
+        sm = StateManager(db_path=":memory:")
+        try:
+            svc.state_manager = sm
+            svc.alert_service.containers.update(
+                {
+                    "dashboard": {
+                        "running": True,
+                        "restarting": False,
+                        "restart_count": 0,
+                        "health": "unhealthy",
+                    }
+                }
+            )
+            assert sm.is_db_unrecoverable() is False  # healthy DB
+            trigger = sm.is_db_unrecoverable() or svc.alert_service.containers.is_confirmed_bad(
+                "dashboard"
+            )
+            assert trigger is False  # seed is not confirmed -> no gate
+            with self._enabled(True), patch.object(ds_mod, "SYNC_GATE_CONTAINERS", ["p2pool"]):
+                await svc._apply_fail_closed_gate(trigger)
+            svc.docker_control.stop.assert_not_called()
+            assert svc.fail_closed_held is False
+        finally:
+            sm.close()
+
 
 class TestRunIteration:
     async def test_single_iteration_aggregates(self):

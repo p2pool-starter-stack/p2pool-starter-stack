@@ -69,14 +69,16 @@ class ContainerHealthMonitor:
         #   ok_since        : when the current continuous-clean streak began
         self._containers = {}
 
-    def is_bad(self, name):
-        """True if `name`'s current debounced state is "bad" (crash-looping or stuck unhealthy).
-
-        Reads the live level rather than an edge, so a caller that needs "is this still broken
-        right now" (e.g. `dashboard.fail_closed`'s miner hold, #490) doesn't have to replay
-        `update`'s one-shot edges itself. Unknown/never-seen container reads as not bad."""
+    def is_confirmed_bad(self, name):
+        """True only if `name`'s bad state was CONFIRMED by the debounce — a crash loop or a
+        continuous-unhealthy streak past ``unhealthy_after`` — i.e. it produced an alert edge
+        (``alerted``). A first-sighting silently-seeded baseline (already unhealthy/restarting at
+        the monitor's first look) is deliberately NOT confirmed: it skipped the debounce a KNOWN
+        container must pass, exactly as it skips the alert. `dashboard.fail_closed`'s miner hold
+        (#490) reads this rather than the raw level, so it holds the fleet only on a confirmed,
+        non-transient failure. Unknown/never-seen container reads as not bad."""
         c = self._containers.get(name)
-        return bool(c and c["state"] == "bad")
+        return bool(c and c["state"] == "bad" and c["alerted"])
 
     def update(self, states, now=None):
         """Feed this cycle's ``{name: state}`` snapshot; return the debounced edges."""

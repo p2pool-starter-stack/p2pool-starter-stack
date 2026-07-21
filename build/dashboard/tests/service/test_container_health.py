@@ -232,22 +232,43 @@ class TestNeverAnEdge:
         assert m.update({"monerod": _s(health="unhealthy")}) == []
 
 
-class TestIsBad:
-    """Live-level read (#490), not an edge — dashboard.fail_closed reads "is it bad right now"
-    off this instead of replaying update()'s one-shot edges itself."""
+class TestIsConfirmedBad:
+    """Confirmed-level read (#490) — dashboard.fail_closed gates on a debounce-CONFIRMED bad
+    verdict, never on a first-sighting seed that skipped the debounce. A false positive here idles
+    the fleet, so the bar is the same 120s / crash-loop debounce a KNOWN container must pass."""
 
-    def test_unknown_container_is_not_bad(self):
+    def test_unknown_container_is_not_confirmed_bad(self):
         m, _clock = _monitor()
-        assert m.is_bad("dashboard") is False
+        assert m.is_confirmed_bad("dashboard") is False
 
-    def test_silently_seeded_bad_reads_bad(self):
-        # First sighting already unhealthy seeds "bad" with no edge (see TestBaseline) — is_bad
-        # must still reflect it live, even though update() returned nothing to alert on.
+    def test_first_sighting_unhealthy_seed_is_not_confirmed(self):
+        # The seed sets state="bad" silently (no alert edge) — it must ALSO not read as confirmed,
+        # or fail_closed would hold the fleet on a container the debounce never vetted (#490 F1).
         m, _clock = _monitor()
         m.update({"dashboard": _s(health="unhealthy")})
-        assert m.is_bad("dashboard") is True
+        assert m.is_confirmed_bad("dashboard") is False
 
-    def test_crash_loop_reads_bad_until_recovered(self):
+    def test_transient_unhealthy_on_known_container_not_confirmed_before_debounce(self):
+        # A KNOWN (healthy-first) container reported unhealthy on a single poll must NOT confirm
+        # until the streak clears unhealthy_after (120s) — the transient-never-gates property.
+        m, clock = _monitor()
+        m.update({"dashboard": _s(health="healthy")})  # known, healthy baseline
+        clock.advance(30)
+        assert m.update({"dashboard": _s(health="unhealthy")}) == []
+        assert m.is_confirmed_bad("dashboard") is False  # streak too young to gate
+        clock.advance(60)  # 90s total < 120s
+        m.update({"dashboard": _s(health="unhealthy")})
+        assert m.is_confirmed_bad("dashboard") is False
+
+    def test_unhealthy_past_debounce_is_confirmed(self):
+        m, clock = _monitor()
+        m.update({"dashboard": _s(health="healthy")})
+        m.update({"dashboard": _s(health="unhealthy")})
+        clock.advance(121)  # past unhealthy_after
+        assert m.update({"dashboard": _s(health="unhealthy")}) == [("dashboard", "unhealthy")]
+        assert m.is_confirmed_bad("dashboard") is True
+
+    def test_crash_loop_is_confirmed_until_recovered(self):
         m, clock = _monitor()
         m.update({"dashboard": _s(restart_count=0)})
         clock.advance(60)
@@ -255,10 +276,9 @@ class TestIsBad:
         clock.advance(60)
         m.update({"dashboard": _s(restart_count=2)})
         clock.advance(60)
-        edges = m.update({"dashboard": _s(restart_count=3)})
-        assert edges == [("dashboard", "crash_loop")]
-        assert m.is_bad("dashboard") is True
+        assert m.update({"dashboard": _s(restart_count=3)}) == [("dashboard", "crash_loop")]
+        assert m.is_confirmed_bad("dashboard") is True
         # Clean streak past recovery_after clears it.
         clock.advance(121)
         m.update({"dashboard": _s(restart_count=3)})
-        assert m.is_bad("dashboard") is False
+        assert m.is_confirmed_bad("dashboard") is False
