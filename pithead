@@ -5224,7 +5224,12 @@ control_approval_gate() { # <staged-file> [confirm-token]
     local ddpath dest root ok_root
     for ddpath in monero.data_dir tari.data_dir p2pool.data_dir dashboard.data_dir; do
         dest=$(jq -r --arg p "$ddpath" 'getpath($p/".") // empty' "$staged" 2>/dev/null)
-        case "$dest" in "" | auto | DYNAMIC_*) continue ;; esac # stack default → under a data root by construction
+        # Skip only values resolve_default turns into an in-root stack default — its EXACT set,
+        # not a DYNAMIC_* wildcard (which would also swallow a bogus DYNAMIC_FOO that resolve_default
+        # passes through literally). A non-absolute/traversal dest never reaches here anyway:
+        # assert_safe_dir (called in the dry-run re-derivation at the top of this gate) refuses
+        # `..`/relative paths first — keep that ordering.
+        case "$dest" in "" | auto | DYNAMIC_DATA | DYNAMIC_HOST | DYNAMIC_ID) continue ;; esac
         ok_root=0
         # Trailing slash on both sides so a root prefix can't false-match a sibling (/data vs
         # /database); an exact-root dest matches too (harmless — still the stack's own dir).
