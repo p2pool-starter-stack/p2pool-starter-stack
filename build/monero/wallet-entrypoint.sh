@@ -2,7 +2,7 @@
 # View-only payout-confirmation wallet (#381).
 #
 # Runs monero-wallet-rpc against the LOCAL monerod, scan-only: the wallet is generated from the
-# operator's PRIVATE VIEW KEY with an empty spend key, so it can see incoming payouts but CANNOT
+# operator's PRIVATE VIEW KEY with NO spend key, so it can see incoming payouts but CANNOT
 # spend. The view key is written to a JSON file on tmpfs and handed to --generate-from-json — it is
 # NEVER put on the command line, where `docker inspect` / `ps` would expose it (#90 discipline,
 # same as monerod's RPC creds). First run creates the wallet from keys at PAYOUT_SCAN_HEIGHT; later
@@ -14,19 +14,40 @@ WALLET_FILE="$WALLET_DIR/payout-wallet"
 GEN_JSON="${GEN_JSON:-/tmp/gen.json}" # tmpfs; holds the view key for the create-from-keys step only
 DAEMON_ADDRESS="${MONERO_NODE_HOST:-127.0.0.1}:${MONERO_RPC_PORT:-18081}"
 
-# Resolve the restore height: an explicit number is used verbatim; "auto"/empty means "start at the
-# daemon's current height" (fetched via get_info) so a fresh wallet doesn't rescan years of chain
-# for payout history that predates the feature. A pruned node scans fine — outputs are never pruned.
+# Resolve the restore height: an explicit number is used verbatim; "auto"/empty means genesis (0),
+# scanning the whole chain so the wallet captures the FULL payout history — every p2pool payout this
+# address ever received, not just those after the wallet was set up. The initial scan is long (years
+# of blocks) but one-time: the wallet file persists its progress, so reopens only scan new blocks. A
+# pruned node scans fine — outputs are never pruned. Set PAYOUT_SCAN_HEIGHT to a block number to
+# start later and skip the long scan.
 resolve_scan_height() {
     local want="${PAYOUT_SCAN_HEIGHT:-auto}"
     case "$want" in
-    '' | auto)
-        curl -fsS --digest -u "${MONERO_NODE_USERNAME:-}:${MONERO_NODE_PASSWORD:-}" \
-            "http://$DAEMON_ADDRESS/get_info" 2>/dev/null |
-            grep -o '"height": *[0-9]*' | grep -o '[0-9]*' | head -1
-        ;;
+    '' | auto) printf '0\n' ;;
     *) printf '%s\n' "$want" ;;
     esac
+}
+
+# Write the create-from-keys JSON for a VIEW-ONLY wallet ($1 = restore height). The spend key is
+# DELIBERATELY OMITTED, never set to "": monero-wallet-rpc (v0.18) parses an empty-string spendkey
+# as a secret key and aborts creation ("failed to parse spend key secret key"), so an empty value
+# breaks the wallet outright. An absent spendkey IS the view-only form — exactly what a payout-
+# confirmation wallet needs (#714). umask 077 so the file (it holds the view key) is owner-only.
+write_gen_json() {
+    local height="$1"
+    (
+        umask 077
+        cat >"$GEN_JSON" <<EOF
+{
+  "version": 1,
+  "filename": "$WALLET_FILE",
+  "scan_from_height": $height,
+  "password": "",
+  "address": "${MONERO_WALLET_ADDRESS:-}",
+  "viewkey": "${MONERO_VIEW_KEY:-}"
+}
+EOF
+    )
 }
 
 # When sourced by the shell test harness, expose the functions and stop — don't render or exec.
@@ -55,21 +76,8 @@ if [ ! -f "$WALLET_FILE" ]; then
     height="$(resolve_scan_height)"
     [ -n "$height" ] || height=0
     echo "Creating view-only payout wallet at restore height $height (#381)..."
-    # The view key lives ONLY in this tmpfs file, never on argv. umask 077 so it's owner-only.
-    (
-        umask 077
-        cat >"$GEN_JSON" <<EOF
-{
-  "version": 1,
-  "filename": "$WALLET_FILE",
-  "scan_from_height": $height,
-  "password": "",
-  "address": "${MONERO_WALLET_ADDRESS:-}",
-  "viewkey": "${MONERO_VIEW_KEY:-}",
-  "spendkey": ""
-}
-EOF
-    )
+    # The view key lives ONLY in this tmpfs file, never on argv.
+    write_gen_json "$height"
     # --generate-from-json creates + opens the wallet, then keeps serving the RPC.
     exec monero-wallet-rpc "$@" --generate-from-json "$GEN_JSON"
 fi

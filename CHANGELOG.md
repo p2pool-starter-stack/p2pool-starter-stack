@@ -9,6 +9,31 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.10.1] - 2026-07-21
+
+### Fixed
+
+- **The view-only payout wallet builds again (#714).** Setting `monero.view_key` starts a
+  view-only `wallet-rpc` that confirms p2pool payouts actually land, but it crash-looped on first
+  run — the create-from-keys JSON set an empty `"spendkey": ""`, which monero-wallet-rpc parses as
+  a secret key and rejects. The field is now omitted (the view-only form), so the wallet creates
+  and scans. A correct view key was never the problem; the entrypoint was.
+
+### Changed
+
+- **The payout wallet now scans the full chain by default.** The view-only payout-confirmation
+  wallet's default restore height (`monero.payout_scan_height: auto`) is genesis (0) instead of the
+  chain tip, so it captures **every** p2pool payout this address has ever received, not only those
+  after it was set up. The initial scan is long but one-time — the wallet persists its progress.
+  Set an explicit block number to start later and skip it. Its memory ceiling is raised to 2 GiB
+  (from 512 MiB) so the one-time full scan, which peaks above 0.5 GiB, doesn't OOM-loop.
+- **Net profit now includes the XvB raffle's expected reward (#712).** The Energy tab's net figure
+  adds the current XvB tier's published expected reward, valued at your XMR price, on top of P2Pool
+  (and Tari, when priced). The whole net is already probabilistic, so it stays a single number — the
+  XvB slice is labelled `(est.)` in the heading and tooltip because the raffle draw is random among
+  qualifiers. It folds in only while the fetched estimate is fresh (the same staleness rule as the
+  *XvB Donation Stats* card) and you clear a donor tier; otherwise it is left out, never guessed.
+
 ## [1.10.0] - 2026-07-20
 
 ### Added

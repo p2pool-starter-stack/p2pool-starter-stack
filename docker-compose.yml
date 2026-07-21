@@ -137,10 +137,12 @@ services:
     image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-monero:${STACK_VERSION:-dev}
     build: ./build/monero
     container_name: wallet-rpc
-    # Memory ceiling (#132 — see monerod). A view-only scanner is light (~0.1 GiB observed); a tight
-    # cap OOM-restarts it on a regression without touching the revenue services.
-    mem_limit: 512m
-    memswap_limit: 512m
+    # Memory ceiling (#132 — see monerod). Steady-state a view-only scanner is light (~0.1 GiB), but
+    # the one-time genesis scan (the payout_scan_height: auto default — full payout history) peaks
+    # well above 0.5 GiB and OOM-loops under a 512m cap. 2 GiB gives that scan headroom; it's a
+    # ceiling not a reservation, so idle use stays low. memswap == mem => zero swap, clean OOM-kill.
+    mem_limit: 2g
+    memswap_limit: 2g
     restart: unless-stopped
     logging: *default-logging
     # Distinct entrypoint on the shared image: creates the view-only wallet from keys on first run,
