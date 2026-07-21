@@ -192,6 +192,7 @@ def build_chart(
     avg_window=DEFAULT_HASHRATE_WINDOW,
     events=None,
     raffle_wins=None,
+    payouts=None,
 ):
     """Build the Chart.js datasets from history. Each point carries its real timestamp as the
     x value (epoch ms) so a linear time axis spaces points to scale; runs of missing samples
@@ -202,8 +203,12 @@ def build_chart(
     duration (Issue #47). ``avg_window`` (#168) selects which hashrate-averaging window's columns
     to plot (1m / 10m / 1h / 12h / 24h); 10m is the default headline series.
 
+    ``payouts`` (#381), when the view-only wallet feature is on, is the stored confirmed-payout
+    list — one gold coin marker per Monero payout, on the same hidden 0–1 axis as the raffle
+    stars; ``None`` (feature off) yields an empty ``payouts`` list.
+
     Returns ``{"p2pool": [{x, y}], "xvb": [{x, y}], "shares": [{x, y, r, c}], "events": [...],
-    "raffle": [...], "tension": float}``
+    "raffle": [...], "payouts": [...], "tension": float}``
     — the P2Pool/XvB series are stacked on the client (they sum to the total hashrate) and may
     contain ``{x, y: None}`` break markers, kept index-aligned across both series so stacking
     stays correct; ``shares`` is a sparse scatter (rendered un-stacked)."""
@@ -233,6 +238,9 @@ def build_chart(
         "events": _event_points(_filter_events(events or [], range_arg, window)),
         # _filter_events bounds any ts-keyed list, so the raffle wins reuse it as-is.
         "raffle": _raffle_points(_filter_events(raffle_wins or [], range_arg, window)),
+        # Confirmed on-chain payout markers (#381); newest-first order is preserved by the filter,
+        # so _payout_points' most-recent cap keeps the newest in range.
+        "payouts": _payout_points(_filter_events(payouts or [], range_arg, window)),
         "tension": _chart_tension(duration_s),
     }
 
@@ -566,6 +574,39 @@ def _raffle_points(filtered_wins):
             "label": f"XvB raffle win — {w['tier']} round at {format_hashrate(w['hashrate'])}",
         }
         for w in filtered_wins
+    ]
+
+
+# Confirmed on-chain payout markers ride the same hidden 0–1 axis as the raffle stars, one step
+# below them (#381), so a payout sits at its real block time without touching the hashrate y-range.
+_PAYOUT_MARKER_Y = 0.58
+
+# A long-lived wallet can accrue many payouts; the chart shows the most-recent-in-range so a busy
+# marker row can't bloat every /api/state payload. The EarningsCard totals still count them all.
+_PAYOUT_MARKER_LIMIT = 200
+
+
+def _payout_points(filtered_payouts, divisor=ATOMIC_PER_XMR):
+    """Sparse confirmed-payout markers (#381): one gold coin per on-chain Monero payout at its
+    block time, the tooltip carrying the whole-XMR amount (atomic→XMR at this edge, ``divisor``)
+    and the payout date. ``filtered_payouts`` is the range-bounded stored-payout list, newest
+    first (``storage.get_payouts``); capped at ``_PAYOUT_MARKER_LIMIT`` most-recent — the overflow
+    is logged, never silently dropped."""
+    if len(filtered_payouts) > _PAYOUT_MARKER_LIMIT:
+        logger.info(
+            "Chart payout markers capped at %d of %d (most recent kept)",
+            _PAYOUT_MARKER_LIMIT,
+            len(filtered_payouts),
+        )
+        filtered_payouts = filtered_payouts[:_PAYOUT_MARKER_LIMIT]
+    return [
+        {
+            "x": int(p["ts"] * 1000),
+            "y": _PAYOUT_MARKER_Y,
+            "label": f"{(p.get('amount_atomic', 0) or 0) / divisor:.6f} XMR — "
+            f"{time.strftime('%Y-%m-%d', time.localtime(p.get('ts', 0)))}",
+        }
+        for p in filtered_payouts
     ]
 
 
@@ -1720,6 +1761,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     history = state_mgr.get_history()
     share_stats = state_mgr.get_share_stats()  # per-poll share-health deltas (#116)
     raffle_wins = state_mgr.get_raffle_wins()  # rounds this wallet won, from XvB's winners file
+    # Confirmed on-chain payouts (#381): fetched once when the view-only wallet feature is on (else
+    # None), fed to both the earnings totals and the chart markers. config read at call time so
+    # tests can flip the flag per-app.
+    monero_payouts = state_mgr.get_payouts("monero") if config.PAYOUT_CONFIRM_ENABLED else None
     metrics = build_metrics(data, state_mgr, history)
     db_healthy = state_mgr.is_db_healthy()
 
@@ -1778,7 +1823,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "earnings": build_earnings(
             data,
             metrics,
-            payouts=state_mgr.get_payouts("monero") if config.PAYOUT_CONFIRM_ENABLED else None,
+            payouts=monero_payouts,
             tari_payouts=(
                 state_mgr.get_payouts("tari") if config.TARI_PAYOUT_CONFIRM_ENABLED else None
             ),
@@ -1815,6 +1860,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
             avg_window,
             events=state_mgr.get_events(),
             raffle_wins=raffle_wins,
+            payouts=monero_payouts,
         ),
     }
 

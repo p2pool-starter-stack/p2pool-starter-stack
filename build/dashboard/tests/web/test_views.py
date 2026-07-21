@@ -271,6 +271,7 @@ class TestChart:
             "shares": [],
             "events": [],
             "raffle": [],
+            "payouts": [],
             "tension": 0.0,
         }
 
@@ -2386,6 +2387,46 @@ class TestChartRaffle:
         wins = [self._win(now - 7200), self._win(now - 60)]
         pts = build_chart(self._hist(now), [], "1h", raffle_wins=wins)["raffle"]
         assert len(pts) == 1  # the 2h-old win is outside the 1h window
+
+
+class TestChartPayouts:
+    """Confirmed on-chain payout markers (#381) flow through build_chart's `payouts` kwarg: gold
+    coins on the hidden 0-1 axis below the raffle stars, tooltip carrying the whole-XMR amount,
+    range-filtered like events, and capped at the most-recent by _payout_points."""
+
+    def _hist(self, now):
+        return [{"timestamp": now, "v": 800, "v_p2pool": 800, "v_xvb": 0, "t": "a"}]
+
+    def _payout(self, ts, atomic=1_500_000_000_000):  # 1.5 XMR in piconero
+        return {"chain": "monero", "txid": "aa", "height": 100, "ts": ts, "amount_atomic": atomic}
+
+    def test_absent_payouts_default_to_empty(self):
+        # Feature off (build_state passes payouts=None) → empty marker list, estimate stands alone.
+        now = time.time()
+        assert build_chart(self._hist(now), [], "all")["payouts"] == []
+        assert build_chart(self._hist(now), [], "all", payouts=None)["payouts"] == []
+
+    def test_payout_point_shape_carries_formatted_amount(self):
+        now = time.time()
+        pt = build_chart(self._hist(now), [], "all", payouts=[self._payout(now)])["payouts"]
+        assert len(pt) == 1
+        assert pt[0]["x"] == int(now * 1000)
+        assert pt[0]["y"] == views._PAYOUT_MARKER_Y
+        # The label carries the whole-XMR amount (atomic→XMR at the edge) — the load-bearing bit.
+        assert pt[0]["label"].startswith("1.500000 XMR — ")
+
+    def test_payouts_filtered_by_range(self):
+        now = time.time()
+        payouts = [self._payout(now - 7200), self._payout(now - 60)]
+        pts = build_chart(self._hist(now), [], "1h", payouts=payouts)["payouts"]
+        assert len(pts) == 1  # the 2h-old payout is outside the 1h window
+
+    def test_markers_capped_at_most_recent(self):
+        # More than the cap → only the newest _PAYOUT_MARKER_LIMIT are kept (never silently all).
+        now = time.time()
+        payouts = [self._payout(now - i) for i in range(views._PAYOUT_MARKER_LIMIT + 5)]
+        pts = build_chart(self._hist(now), [], "all", payouts=payouts)["payouts"]
+        assert len(pts) == views._PAYOUT_MARKER_LIMIT
 
 
 class TestBuildRaffleLog:

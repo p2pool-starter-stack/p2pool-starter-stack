@@ -11,6 +11,16 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Confirmed payouts on the dashboard** (#381). The on-chain payout totals the stack already
+  scans for now surface in the earnings card: a **Confirmed on-chain** block under the Monero
+  estimate shows 24-hour, 7-day, and all-time XMR plus the time since the last payout (and the same
+  in XTM on the Tari tab). Each confirmed Monero payout also drops a gold **Payouts** coin marker
+  onto the hashrate chart at the block time it landed, and — when XvB is on — a dashed **XvB
+  donation %** overlay on a right-side 0–100% axis lets you line payouts up against how much
+  hashrate you were donating. Both are legend-toggleable like the other chart series.
+
 ## [1.11.0] - 2026-07-21
 
 ### Added

@@ -470,9 +470,18 @@ Everything above is a **model**. The earnings card also shows what actually land
 when you give the stack a way to check the chain. Set `monero.view_key` (the private **view** key
 for your payout address) and the stack runs a **view-only** `monero-wallet-rpc` against your local
 node, scanning for confirmed incoming payouts. P2Pool pays each miner's share directly in a Monero
-block's coinbase, so the wallet is the only ground truth that a payout arrived. The card then shows
-**Confirmed** totals — 24 hours, 7 days, and all-time XMR — beside the estimate, and a
-`payout_confirmed` alert fires once per payout (Telegram and the other sinks).
+block's coinbase, so the wallet is the only ground truth that a payout arrived. The Monero tab of
+the earnings card then shows a **Confirmed on-chain** block under the estimate — 24-hour, 7-day, and
+all-time XMR totals plus the time since the **last payout** — and a `payout_confirmed` alert fires
+once per payout (Telegram and the other sinks). The Tari tab carries the same **Confirmed on-chain**
+block in XTM once Tari payout confirmation is on (see the Tari note below).
+
+Each confirmed Monero payout also drops a **Payouts** marker — a gold coin at the block time it
+landed — onto the hashrate chart, on the same marker row as the event diamonds and raffle stars.
+Toggle it from the chart legend like any other series. When XvB is on, a dashed **XvB donation %**
+line overlays the chart on its own right-side 0–100% axis, drawn from the recorded donation history,
+so you can line a payout up against how much hashrate you were donating when it arrived. Tari
+payouts are solo and lumpy, so they stay in the earnings card and off the chart.
 
 The dashboard polls the wallet on a slow cadence (about every 5 minutes) and records each confirmed
 payout to a small local table, so a restart never re-alerts. Coinbase outputs become spendable only
