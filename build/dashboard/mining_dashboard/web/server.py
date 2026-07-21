@@ -148,7 +148,12 @@ async def handle_control_commit(request):
     try:
         body = await request.json()
         rid = control_service.submit(
-            "commit", actor=request.headers.get("X-Auth-User", ""), intent_id=body.get("id")
+            "commit",
+            actor=request.headers.get("X-Auth-User", ""),
+            intent_id=body.get("id"),
+            # #719: the operator's typed confirmation for an in-scope disruptive change. It is
+            # friction, not a secret — the host gate requires it before a CONFIRM row proceeds.
+            confirm=body.get("confirm"),
         )
     except Exception:
         raise web.HTTPBadRequest(text="Body must be JSON with a valid intent 'id'.") from None

@@ -9,6 +9,28 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **Confirm-gated config editing for operationally-disruptive settings** (#719). The dashboard
+  config editor can now commit a small set of disruptive-but-recoverable settings behind a
+  type-to-confirm, instead of refusing them outright: the four service data directories (a move
+  re-syncs), the stratum port (rigs must repoint), the Monero/Tari clearnet initial-sync toggles
+  (the host IP is exposed during IBD, then auto-reverts to Tor), and enabling Monero pruning. Each
+  renders editable with a "you'll type `APPLY` to confirm" affordance; the typed confirmation rides
+  to the host approval gate, which requires it before the change proceeds and records the apply in
+  the control audit log as a distinct `commit-confirmed` action.
+
+### Changed
+
+- **The control-channel security perimeter stays host-only** (#719). Type-to-confirm is UX
+  friction, not a security control — a compromised dashboard that can set a field can also fill the
+  confirm box — so the perimeter is unchanged: wallets and view keys, the dashboard login and onion
+  settings, the control channel itself, the Tor egress firewall, the stratum password, node
+  endpoints and credentials, and the per-rig hosts and tokens all remain refused from the dashboard,
+  as does the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync).
+
 ## [1.10.0] - 2026-07-20
 
 ### Added

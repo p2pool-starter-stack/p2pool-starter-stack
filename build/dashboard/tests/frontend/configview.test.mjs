@@ -192,6 +192,37 @@ test("an empty preview leaves Confirm disabled", () => {
   assert.match(out, /disabled/); // nothing to commit
 });
 
+// --- Confirm-gated disruptive change in the modal (#719) --------------------------------------
+//
+// An in-scope disruptive change previews as destructive (a CONFIRM row). The modal must warn (⚠),
+// show the type-APPLY box, and keep Confirm disabled until the operator types the literal APPLY.
+const CONFIRM_PREVIEW = {
+  changes: [
+    { flag: "CONFIRM", key: "monero.clearnet_initial_sync", msg: "Clearnet initial sync ENABLED — host IP exposed during IBD." },
+  ],
+  destructive: true,
+};
+
+test("a CONFIRM change warns and gates Confirm behind the typed APPLY (#719)", () => {
+  const notYet = renderToString(
+    PreviewModal({ preview: CONFIRM_PREVIEW, confirmText: "", busy: false }),
+  );
+  assert.match(notYet, /⚠/); // the disruptive row is warned
+  assert.match(notYet, /host IP exposed during IBD/);
+  assert.match(notYet, /Type <code>APPLY<\/code> to confirm/); // the type-to-confirm box is shown
+  // Confirm is still disabled — the confirm-apply button carries `disabled` until APPLY is typed.
+  const btnNotYet = notYet.match(/<button class="btn-toggle active"[^>]*>/)[0];
+  assert.match(btnNotYet, /disabled/);
+});
+
+test("a CONFIRM change arms Confirm once APPLY is typed (#719)", () => {
+  const armed = renderToString(
+    PreviewModal({ preview: CONFIRM_PREVIEW, confirmText: "APPLY", busy: false }),
+  );
+  const btnArmed = armed.match(/<button class="btn-toggle active"[^>]*>/)[0];
+  assert.doesNotMatch(btnArmed, /disabled/); // now committable
+});
+
 // --- Core-vs-sections regroup + two edit modes (#529, RATIFIED Wave-0) -----------------------
 //
 // The form/JSON split and the collapse-by-default sections, driven by ConfigView.state directly —
@@ -322,6 +353,18 @@ test("form mode: a field IN the editable set renders enabled, no host-only toolt
   const poolField = out.match(/<label[^>]*>\s*<span class="config-field-name">p2pool\.pool<\/span>.*?<\/label>/s);
   assert.ok(poolField, "expected to find the p2pool.pool field");
   assert.doesNotMatch(poolField[0], /disabled/);
+});
+
+test("form mode: a confirm-gated field renders enabled with the confirm-to-proceed tooltip, not host-only (#719)", () => {
+  const inst = readyView();
+  inst.state.editableKeys = []; // nothing freely editable
+  inst.state.confirmKeys = ["monero.prune"]; // ...but prune is confirm-gated
+  const out = renderToString(inst.render());
+  const pruneField = out.match(/<label[^>]*>\s*<span class="config-field-name">[^<]*prune<\/span>.*?<\/label>/s);
+  assert.ok(pruneField, "expected to find the monero.prune field");
+  assert.doesNotMatch(pruneField[0], /disabled/); // editable, not greyed
+  assert.doesNotMatch(pruneField[0], /Host-only/); // not the host-only tooltip
+  assert.match(pruneField[0], /you'll type APPLY to confirm/); // the confirm affordance
 });
 
 test("form mode: an empty editable set (host not yet reporting _editable_keys) greys out every field", () => {

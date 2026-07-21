@@ -389,13 +389,17 @@ run_sourced "$SANDBOX" is_valid_host "$(printf 'a%.0s' $(seq 1 254))" >/dev/null
 assert_rc "rejects 254 chars, past the bound (#558)" "$?" "1"
 
 echo "== unit: describe_change =="
-assert_contains "prune is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)" "DEST"
+# Monero prune (#719): DISABLE (on → off) forces a full re-sync, host-only DEST; ENABLE (off → on)
+# reclaims disk, an operator-intent op — now confirm-gated (CONFIRM), not a flat host-only refuse.
+assert_contains "prune disable is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)" "DEST"
+assert_contains "prune enable is CONFIRM" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 0 1)" "CONFIRM"
 assert_contains "rpc lan is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum open is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum lan is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 0.0.0.0 127.0.0.1)" "INFO"
-# Stratum port (#172): changing it disconnects every rig until repointed — DEST; the key's first
-# appearance (an upgrade from a pre-#172 .env) is a no-op INFO row, never a scary repoint warning.
-assert_contains "stratum port change is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "DEST"
+# Stratum port (#172/#719): changing it disconnects every rig until repointed — an operator-intent
+# repoint, now confirm-gated (CONFIRM); the key's first appearance (an upgrade from a pre-#172 .env)
+# is a no-op INFO row, never a scary repoint warning.
+assert_contains "stratum port change is CONFIRM" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "CONFIRM"
 assert_contains "stratum port change says repoint" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "repoint"
 assert_contains "stratum port first render is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT '' 3333)" "INFO"
 # Stratum access-password (#152): enabling/changing is DEST (rigs need the new pass), disabling is
@@ -428,7 +432,11 @@ assert_contains "empty to local_node is a LOCAL switch" "$(run_sourced "$SANDBOX
 assert_contains "local_node to empty is a REMOTE switch" "$(run_sourced "$SANDBOX" describe_change COMPOSE_PROFILES local_node "")" "REMOTE Monero node"
 assert_contains "wallet is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_WALLET_ADDRESS a b)" "DEST"
 assert_contains "xvb url is INFO" "$(run_sourced "$SANDBOX" describe_change XVB_POOL_URL a b)" "INFO"
-assert_contains "data_dir is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)" "DEST"
+# Data-dir moves (#719): the four service dirs are confirm-gated (an expensive re-sync, not a
+# breach); every OTHER data dir (e.g. TOR_DATA_DIR) stays host-only DEST.
+assert_contains "monero data_dir is CONFIRM" "$(run_sourced "$SANDBOX" describe_change MONERO_DATA_DIR /a /b)" "CONFIRM"
+assert_contains "dashboard data_dir is CONFIRM" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_DATA_DIR /a /b)" "CONFIRM"
+assert_contains "tor data_dir stays DEST" "$(run_sourced "$SANDBOX" describe_change TOR_DATA_DIR /a /b)" "DEST"
 assert_contains "tari mem is INFO" "$(run_sourced "$SANDBOX" describe_change TARI_MEM_LIMIT 2048m 4g)" "INFO"
 # Healthchecks.io (#79): the ping URL is the on/off switch AND a capability secret. Setting it says
 # ENABLED, clearing it says DISABLED — and the value must NEVER be echoed into the apply preview.
@@ -473,13 +481,14 @@ case "$tg_tok_msg" in
 esac
 assert_contains "monero mem is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "INFO"
 assert_contains "monero mem recreate note" "$(run_sourced "$SANDBOX" describe_change MONERO_MEM_LIMIT 4g 6g)" "monerod container is recreated"
-# Clearnet initial sync (#183): enabling OR disabling is DEST (the daemon is recreated), and enabling
-# must spell out the exposure so the apply confirmation is unambiguous.
-assert_contains "monero clearnet enable is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "DEST"
+# Clearnet initial sync (#183/#719): ENABLING exposes the host IP during IBD — confirm-gated
+# (CONFIRM), and the row must spell out the exposure. DISABLING keeps sync on Tor — a plain INFO
+# change, no confirm friction.
+assert_contains "monero clearnet enable is CONFIRM" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "CONFIRM"
 assert_contains "monero clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "CLEARNET"
 assert_contains "monero clearnet keeps tx on Tor" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC false true)" "Tor"
-assert_contains "monero clearnet disable is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC true false)" "DEST"
-assert_contains "tari clearnet enable is DEST" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "DEST"
+assert_contains "monero clearnet disable is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC true false)" "INFO"
+assert_contains "tari clearnet enable is CONFIRM" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CONFIRM"
 assert_contains "tari clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CLEARNET"
 
 echo "== unit: p2pool_outbound_flags — Tor-by-default for outbound P2P (#165) =="
@@ -3455,7 +3464,7 @@ assert_contains "tari default: DNS seeds empty" "$(cat "$V/build/tari/config.tom
 assert_contains "tari default: advertises onion" "$(cat "$V/build/tari/config.toml")" "/onion3/"
 
 # Monero clearnet ON (Tari left off): only the Monero flag flips; Tari stays Tor. The apply preview
-# must spell out the clearnet exposure (it's a DEST change).
+# must spell out the clearnet exposure (a CONFIRM change — disruptive, warned ⚠ on the host CLI).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":true}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -4768,25 +4777,83 @@ assert_not_contains "fully-configured control raises no telegram.control error" 
 control_config main
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
 
-echo "== black-box: approval gate fails closed on a destructive commit (#33 / #338) =="
+echo "== black-box: confirm-gate — an in-scope disruptive change needs a typed APPLY (#719) =="
 UUID3="33333333-3333-4333-8333-333333333333"
 # Clean baseline: pool mini, clearnet off, applied.
 control_config mini
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
-# Candidate turns on Monero clearnet initial sync — describe_change flags this DEST (destructive).
+# Candidate turns on Monero clearnet initial sync — describe_change flags this CONFIRM (#719): an
+# in-scope disruptive change (host IP exposed during IBD), confirm-gated rather than host-only DEST.
+preview_clearnet() {
+    jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
+        monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",clearnet_initial_sync:true},
+        tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+        dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
+    run_pending >/dev/null
+}
+preview_clearnet
+assert_eq "confirm-gated candidate previews destructive:true" "$(jq -r '.destructive' "$RESULTS/$UUID3.json" 2>/dev/null)" "true"
+assert_contains "confirm-gated preview carries a CONFIRM row" "$(jq -r '.changes[].flag' "$RESULTS/$UUID3.json" 2>/dev/null)" "CONFIRM"
+# Commit WITHOUT the typed confirmation is refused — and points at the confirm step, NOT a flat
+# host-only #338 refusal. The in-scope change is NOT hard-refused; it just needs the acknowledgement.
+printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "confirm-gated commit without a token is refused" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
+assert_contains "refusal asks for the typed APPLY" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "type APPLY"
+assert_eq "unconfirmed commit did not touch config.json" "$(jq -r '.monero.clearnet_initial_sync // false' "$C/config.json")" "false"
+# A WRONG token is refused too — only the exact literal proceeds.
+preview_clearnet
+printf '{"id":"%s","action":"commit","actor":"admin","confirm":"apply"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "confirm-gated commit with the wrong token is refused" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
+assert_eq "wrong-token commit did not touch config.json" "$(jq -r '.monero.clearnet_initial_sync // false' "$C/config.json")" "false"
+# Commit WITH the exact typed APPLY proceeds and lands the change.
+preview_clearnet
+printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "confirm-gated commit with APPLY applies" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "applied"
+assert_eq "confirmed change landed in config.json" "$(jq -r '.monero.clearnet_initial_sync' "$C/config.json")" "true"
+# The audit log records it AS a dashboard-confirmed destructive change (#719): the distinct
+# commit-confirmed action, carrying the changed key NAME (never a value).
+assert_contains "confirmed commit audits as commit-confirmed with the key name" \
+    "$(grep '"action":"commit-confirmed","status":"applied"' "$AUDIT" | tail -n 1)" "MONERO_CLEARNET_SYNC"
+
+echo "== black-box: the typed APPLY does NOT unlock the perimeter — DEST stays host-only (#719) =="
+# Type-to-confirm is UX friction, not a security control: it must never carry a PERIMETER change.
+# (a) A perimeter key that never touches an allowlist (monero.rpc_lan_access -> MONERO_RPC_BIND,
+# DEST) is refused even WITH the token, on the security-sensitive gate.
 jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
-    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",clearnet_initial_sync:true},
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",rpc_lan_access:true},
     tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
 run_pending >/dev/null
-assert_eq "destructive candidate previews destructive:true" "$(jq -r '.destructive' "$RESULTS/$UUID3.json" 2>/dev/null)" "true"
-printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
+printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID3" >"$REQS/$UUID3.json"
 run_pending >/dev/null
-assert_eq "destructive commit is refused" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
-assert_contains "destructive refusal points at #338" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "#338"
-assert_eq "refused destructive commit did not touch config.json" "$(jq -r '.monero.clearnet_initial_sync // false' "$C/config.json")" "false"
-[ ! -f "$STAGED/$UUID3.json" ] && ok "refused destructive intent cleared from staged" || bad "refused destructive intent cleared from staged" "still staged"
-# A NON-destructive commit still proceeds (pool switch mini -> nano is INFO, not DEST).
+assert_eq "perimeter RPC-LAN change is refused despite the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
+assert_contains "perimeter refusal is the security-sensitive gate, not the confirm step" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "security-sensitive"
+assert_eq "perimeter change did not touch config.json" "$(jq -r '.monero.rpc_lan_access // false' "$C/config.json")" "false"
+# (b) A confirm-KEY in its HEAVY direction (monero.prune DISABLE → full re-sync) still emits DEST
+# and is refused even WITH the token — the confirm allowlist is not a blanket unlock for the key.
+jq -n --arg w "$WALLET" '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",prune:true},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
+    monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",prune:false},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
+run_pending >/dev/null
+printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID3" >"$REQS/$UUID3.json"
+run_pending >/dev/null
+assert_eq "prune DISABLE is refused despite the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
+assert_contains "prune-disable refusal is the destructive host-only gate" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "#338"
+assert_eq "prune stays enabled after the refusal" "$(jq -r '.monero.prune' "$C/config.json")" "true"
+
+echo "== black-box: a NON-destructive commit still proceeds with no token (#33) =="
+# Restore a clean baseline (prune off, clearnet off) then a pool switch mini -> nano is INFO, not
+# DEST/CONFIRM — it commits with no confirmation at all.
+control_config mini
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
 jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
     tari:{wallet_address:"T"}, p2pool:{pool:"nano"},
@@ -4875,6 +4942,19 @@ jq '.healthchecks={ping_url:"https://attacker.example/ping"}' "$C/config.json" >
 gate_try "$C/cand.json"
 assert_eq "healthchecks ping-url repoint commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_eq "config.json keeps healthchecks unset" "$(jq -r '.healthchecks.ping_url // "unset"' "$C/config.json")" "unset"
+# The #719 perimeter, named explicitly: disabling the Tor egress firewall would let containers dial
+# clearnet — it is NOT in the confirm-gated set and stays host-only.
+jq '.network={tor_egress_firewall:false}' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "tor-egress-firewall disable commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "tor-egress refusal is a host-only gate" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "#338"
+assert_eq "config.json keeps the tor egress firewall unset (defaults on)" "$(jq -r '.network.tor_egress_firewall // "unset"' "$C/config.json")" "unset"
+# Setting a Monero view key (the #381 payout-confirm secret) reveals every incoming amount — a
+# secret, host-only, never confirm-gated.
+jq '.monero.view_key="deadbeef"' "$C/config.json" >"$C/cand.json"
+gate_try "$C/cand.json"
+assert_eq "monero view-key set commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_eq "config.json gains no view key" "$(jq -r '.monero.view_key // "unset"' "$C/config.json")" "unset"
 # XvB pool-URL repoint: redirects donated hashrate to an attacker's pool.
 jq '.xvb.url="attacker.example:4247"' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
