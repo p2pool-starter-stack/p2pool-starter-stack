@@ -9,7 +9,7 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
-## [Unreleased]
+## [1.10.0] - 2026-07-20
 
 ### Added
 
