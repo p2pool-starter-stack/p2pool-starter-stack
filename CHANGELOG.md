@@ -13,6 +13,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **One-click remote worker upgrade** (#597). Where the per-worker badge shows and the rig is
+  editable, Worker Inspect gains an Upgrade rig… button: arm, confirm, and the rig installs the
+  latest RigForge release itself (rig ≥ v1.11.2 with its default-off `control_upgrade` flag chain
+  enabled). The intent carries the worker name and confirmed version only; the host runner
+  re-derives the real target from the RigForge release API over Tor (throttled, cached), resolves
+  the rig's address and bearer from `config.json`, dials over the LAN, and polls the rig to a
+  terminal applied / rolled-back / failed with a hard cap. Already-current rigs no-op without
+  dialing; a rig-side throttle refusal reads as retry-later. Per-rig only — no "upgrade all".
+
 - **Per-worker RigForge "new version available" badge** (#596). A rig whose reported RigForge
   version is older than the latest published release gets a clickable badge in the Workers Alive
   table and in Worker Inspect, linking to the release notes — the worker-level twin of the
@@ -30,6 +39,20 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   check the service unit's `ExecStart` and only touch units owned by the acting checkout,
   comparing physical paths so the `current` symlink and the versioned directory it targets
   count as the same checkout.
+
+- **An unedited Save & preview shows zero changes (#695, #696).** On a bundle-deployed box the
+  Review changes modal reported two changes with nothing edited. First, a path "change" such as
+  `CLEARNET_STATE_DIR: /srv/code/current/... → /srv/code/pithead-vX.Y.Z/...`: pithead resolved
+  its own directory with a logical `pwd`, so `.env` paths derived from the checkout dir took the
+  spelling of whoever invoked it — the deploy symlink interactively, the physical dir under the
+  control runner's systemd unit — and the same directory diffed against itself. The script now
+  canonicalizes with `pwd -P`, and `CLEARNET_STATE_DIR` joins its siblings (`CONTROL_DIR`,
+  `CADDY_LOG_DIR`) as a silent internal path in the change preview. Second, a permanent
+  "Energy calculator settings updated" row on any box whose `config.json` never set
+  `dashboard.energy`: the editor round-trips the reference-merged form, so the staged copy
+  carries the materialized energy defaults, and the preview compared them against the absent
+  block. The comparison — in the preview row and the commit's audit-key derivation alike — now
+  merges the reference defaults into both sides, so only a real value change raises the row.
 
 - **The egress panel no longer reports a phantom clearnet leak for the XvB stats fetch (#701).**
   With `xvb.tor: false`, the #170 posture panel and topology view showed the dashboard's XvB
