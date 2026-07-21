@@ -602,6 +602,19 @@ class DataService:
             if await self.docker_control.start(REJECT_WORKERS_CONTAINER):
                 self.workers_rejected = False
 
+    async def _stop_gate_containers(self, quiet):
+        """Stop every ``SYNC_GATE_CONTAINERS`` container; shared by the #35 sync gate and the
+        #490 fail-closed gate, the two holds that stop the same container set."""
+        for container in SYNC_GATE_CONTAINERS:
+            await self.docker_control.stop(container, quiet=quiet)
+
+    async def _start_gate_containers(self):
+        """Start every ``SYNC_GATE_CONTAINERS`` container; True only if every start succeeded."""
+        ok = True
+        for container in SYNC_GATE_CONTAINERS:
+            ok = (await self.docker_control.start(container)) and ok
+        return ok
+
     async def _apply_sync_gate(self, gate_satisfied):
         """
         Hold p2pool + xmrig-proxy stopped until the required chain(s) have fully synced once,
@@ -626,10 +639,7 @@ class DataService:
             return
 
         if gate_satisfied:
-            ok = True
-            for container in SYNC_GATE_CONTAINERS:
-                ok = (await self.docker_control.start(container)) and ok
-            if ok:
+            if await self._start_gate_containers():
                 self.miner_released = True
                 self.miner_held = False
                 logger.info(
@@ -640,8 +650,7 @@ class DataService:
 
         # Still syncing: keep the miner held. Log the human-facing notice only on the first
         # cycle of a hold; the per-cycle re-assert stops are quiet to avoid flooding the log.
-        for container in SYNC_GATE_CONTAINERS:
-            await self.docker_control.stop(container, quiet=self.miner_held)
+        await self._stop_gate_containers(quiet=self.miner_held)
         if not self.miner_held:
             self.miner_held = True
             logger.info(
@@ -677,8 +686,7 @@ class DataService:
             return
 
         if unrecoverable:
-            for container in SYNC_GATE_CONTAINERS:
-                await self.docker_control.stop(container, quiet=self.fail_closed_held)
+            await self._stop_gate_containers(quiet=self.fail_closed_held)
             if not self.fail_closed_held:
                 self.fail_closed_held = True
                 logger.error(
@@ -687,17 +695,13 @@ class DataService:
                 )
             return
 
-        if self.fail_closed_held:
-            ok = True
-            for container in SYNC_GATE_CONTAINERS:
-                ok = (await self.docker_control.start(container)) and ok
-            if ok:
-                self.fail_closed_held = False
-                logger.info(
-                    f"Unrecoverable health failure cleared — starting "
-                    f"{', '.join(SYNC_GATE_CONTAINERS)}; mining can resume."
-                )
-            # On a partial-start failure stay held so the next cycle retries.
+        if self.fail_closed_held and await self._start_gate_containers():
+            self.fail_closed_held = False
+            logger.info(
+                f"Unrecoverable health failure cleared — starting "
+                f"{', '.join(SYNC_GATE_CONTAINERS)}; mining can resume."
+            )
+        # On a partial-start failure stay held so the next cycle retries.
 
     async def _sync_xvb_stats(self):
         """
