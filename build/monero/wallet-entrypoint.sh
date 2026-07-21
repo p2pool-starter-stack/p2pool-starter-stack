@@ -2,7 +2,7 @@
 # View-only payout-confirmation wallet (#381).
 #
 # Runs monero-wallet-rpc against the LOCAL monerod, scan-only: the wallet is generated from the
-# operator's PRIVATE VIEW KEY with an empty spend key, so it can see incoming payouts but CANNOT
+# operator's PRIVATE VIEW KEY with NO spend key, so it can see incoming payouts but CANNOT
 # spend. The view key is written to a JSON file on tmpfs and handed to --generate-from-json — it is
 # NEVER put on the command line, where `docker inspect` / `ps` would expose it (#90 discipline,
 # same as monerod's RPC creds). First run creates the wallet from keys at PAYOUT_SCAN_HEIGHT; later
@@ -27,6 +27,28 @@ resolve_scan_height() {
         ;;
     *) printf '%s\n' "$want" ;;
     esac
+}
+
+# Write the create-from-keys JSON for a VIEW-ONLY wallet ($1 = restore height). The spend key is
+# DELIBERATELY OMITTED, never set to "": monero-wallet-rpc (v0.18) parses an empty-string spendkey
+# as a secret key and aborts creation ("failed to parse spend key secret key"), so an empty value
+# breaks the wallet outright. An absent spendkey IS the view-only form — exactly what a payout-
+# confirmation wallet needs (#714). umask 077 so the file (it holds the view key) is owner-only.
+write_gen_json() {
+    local height="$1"
+    (
+        umask 077
+        cat >"$GEN_JSON" <<EOF
+{
+  "version": 1,
+  "filename": "$WALLET_FILE",
+  "scan_from_height": $height,
+  "password": "",
+  "address": "${MONERO_WALLET_ADDRESS:-}",
+  "viewkey": "${MONERO_VIEW_KEY:-}"
+}
+EOF
+    )
 }
 
 # When sourced by the shell test harness, expose the functions and stop — don't render or exec.
@@ -55,21 +77,8 @@ if [ ! -f "$WALLET_FILE" ]; then
     height="$(resolve_scan_height)"
     [ -n "$height" ] || height=0
     echo "Creating view-only payout wallet at restore height $height (#381)..."
-    # The view key lives ONLY in this tmpfs file, never on argv. umask 077 so it's owner-only.
-    (
-        umask 077
-        cat >"$GEN_JSON" <<EOF
-{
-  "version": 1,
-  "filename": "$WALLET_FILE",
-  "scan_from_height": $height,
-  "password": "",
-  "address": "${MONERO_WALLET_ADDRESS:-}",
-  "viewkey": "${MONERO_VIEW_KEY:-}",
-  "spendkey": ""
-}
-EOF
-    )
+    # The view key lives ONLY in this tmpfs file, never on argv.
+    write_gen_json "$height"
     # --generate-from-json creates + opens the wallet, then keeps serving the RPC.
     exec monero-wallet-rpc "$@" --generate-from-json "$GEN_JSON"
 fi

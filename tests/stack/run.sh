@@ -1074,6 +1074,27 @@ assert_contains "tari entrypoint never mutates the canonical config (#234)" "$(c
 assert_contains "compose mounts clearnet-state into monerod (#234)" "$(cat "$ROOT/docker-compose.yml")" ':/clearnet-state:ro'
 assert_contains "compose wires the tari wrapper entrypoint (#234)" "$(cat "$ROOT/docker-compose.yml")" '/var/tari/config/entrypoint.sh'
 
+# --- Wallet entrypoint (#381/#714): the view-only create-from-keys JSON must OMIT the spend key.
+# monero-wallet-rpc v0.18 parses an empty-string "spendkey":"" as a secret key and aborts wallet
+# creation ("failed to parse spend key secret key"), so the field's ABSENCE — not "" — is what
+# lets the payout wallet build. This exercises the REAL entrypoint's write_gen_json.
+echo "== unit: wallet-entrypoint view-only gen.json omits spendkey (#714) =="
+# shellcheck disable=SC1090
+(
+    export PITHEAD_TEST_SOURCE=1
+    source "$ROOT/build/monero/wallet-entrypoint.sh"
+    export GEN_JSON="$SANDBOX/wallet-gen.json" WALLET_FILE="$SANDBOX/payout-wallet"
+    export MONERO_WALLET_ADDRESS="48exampleAddr" MONERO_VIEW_KEY="deadbeefdeadbeef"
+    write_gen_json 3000000
+)
+WGEN="$(cat "$SANDBOX/wallet-gen.json")"
+if printf '%s' "$WGEN" | jq -e . >/dev/null 2>&1; then ok "wallet gen.json is valid JSON (#714)"; else bad "wallet gen.json is valid JSON (#714)" "jq rejected: $WGEN"; fi
+assert_eq "wallet gen.json carries the address (#381)" "$(printf '%s' "$WGEN" | jq -r .address)" "48exampleAddr"
+assert_eq "wallet gen.json carries the view key (#381)" "$(printf '%s' "$WGEN" | jq -r .viewkey)" "deadbeefdeadbeef"
+assert_eq "wallet gen.json scan_from_height verbatim (#381)" "$(printf '%s' "$WGEN" | jq -r .scan_from_height)" "3000000"
+# THE REGRESSION GUARD: a revert to "spendkey":"" crashes monero-wallet-rpc (#714). Field must be absent.
+assert_eq "wallet gen.json OMITS spendkey — monero rejects an empty one (#714)" "$(printf '%s' "$WGEN" | jq 'has("spendkey")')" "false"
+
 echo "== unit: clock_sync_status (mining is time-sensitive) =="
 # doctor's NTP check classifies timedatectl's NTPSynchronized: yes→synced, no→unsynced, else unknown.
 CLKBIN="$SANDBOX/clk-bin"

@@ -11,6 +11,14 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The view-only payout wallet builds again (#714).** Setting `monero.view_key` starts a
+  view-only `wallet-rpc` that confirms p2pool payouts actually land, but it crash-looped on first
+  run — the create-from-keys JSON set an empty `"spendkey": ""`, which monero-wallet-rpc parses as
+  a secret key and rejects. The field is now omitted (the view-only form), so the wallet creates
+  and scans. A correct view key was never the problem; the entrypoint was.
+
 ### Changed
 
 - **Net profit now includes the XvB raffle's expected reward (#712).** The Energy tab's net figure
