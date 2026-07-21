@@ -38,6 +38,9 @@ SECRET_PATHS = [
     # A capability secret: pithead's describe_change already refuses to echo it, but read_config
     # was serving it in cleartext to the browser. Mask it too (#33 hardening).
     ("healthchecks", "ping_url"),
+    # The backup's primary-dashboard URL (#249) can carry the primary's dashboard basic-auth as
+    # userinfo — a capability secret, masked like the ping URL above.
+    ("xvb", "standby", "source"),
 ]
 SECRET_SENTINEL = {"__secret__": True}
 
@@ -105,6 +108,7 @@ EDITABLE_ENV_KEY_PATHS = {
     "XVB_ENABLED": ("xvb.enabled",),
     "XVB_DONATION_LEVEL": ("xvb.donation_level",),
     "TARI_REQUIRED": ("dashboard.tari_required",),
+    "DASHBOARD_FAIL_CLOSED": ("dashboard.fail_closed",),
     "DASHBOARD_CHECK_UPDATES": ("dashboard.check_for_updates",),
     "DASHBOARD_TZ": ("dashboard.timezone",),
     "MONERO_MEM_LIMIT": ("monero.mem_limit",),
@@ -196,6 +200,21 @@ CONFIRM_ENV_KEY_PATHS = {
 def _confirm_paths():
     """Every config path the control gate will commit behind a type-to-confirm (#719)."""
     return sorted({p for target in CONFIRM_ENV_KEY_PATHS.values() for p in target})
+
+
+def env_key_config_paths(env_key):
+    """The config-path prefixes a committed audit ``keys`` env-var name covers (#530).
+
+    The #33 audit log records a commit's WHAT-changed as env-var NAMES (control_approval_gate's
+    ``porcelain_keys``), while the out-of-band host-edit watcher diffs config.json PATHS — so
+    correlating "did a commit explain this changed key" needs this env->path bridge. Mirrors the
+    commit gate's own derivation: an allowlisted var maps through EDITABLE_ENV_KEY_PATHS, and the
+    synthetic ``DASHBOARD_ENERGY`` name (which the gate folds in for a dashboard.energy-only
+    commit, a config.json-only block that never renders to .env, #504) covers the whole energy
+    block by prefix. An unrecognised name maps to nothing, so it can never explain a diffed key."""
+    if env_key == "DASHBOARD_ENERGY":
+        return ("dashboard.energy",)
+    return EDITABLE_ENV_KEY_PATHS.get(env_key, ())
 
 
 def _load_core_keys():

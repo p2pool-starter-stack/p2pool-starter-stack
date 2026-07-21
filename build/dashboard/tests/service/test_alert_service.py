@@ -672,6 +672,44 @@ class TestProcess:
         assert store["payout_wallet_prev8"] == _W_A[:8]
         assert float(store["payout_wallet_changed_ts"]) > 0
 
+    async def test_disabled_notifier_still_updates_container_health_tracker(self):
+        # #490: dashboard.fail_closed reads svc.containers.is_confirmed_bad("dashboard") off the
+        # SAME tracker this alerting path would otherwise be the only feeder for — it must stay fed
+        # every cycle even with every sink off (the default stack), or a fail_closed operator with
+        # Telegram off would never see the dashboard crash/unhealthy signal used to gate the hold.
+        # `now` rides the signals through to containers.update, so a healthy→unhealthy streak past
+        # the 120s debounce confirms through the disabled path — proving it's genuinely fed (a
+        # never-fed tracker would stay not-confirmed).
+        svc = _svc(notifier=_FakeNotifier(enabled=False))
+        base = dict(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+        )
+
+        def snap(health, now):
+            return dict(
+                base,
+                now=now,
+                containers={
+                    "dashboard": {
+                        "running": True,
+                        "restarting": False,
+                        "restart_count": 0,
+                        "health": health,
+                    }
+                },
+            )
+
+        await svc.process(**snap("healthy", 1000))  # known, healthy baseline
+        await svc.process(**snap("unhealthy", 1000))  # streak starts
+        assert svc.containers.is_confirmed_bad("dashboard") is False  # too young to gate
+        await svc.process(**snap("unhealthy", 1130))  # past 120s -> confirmed
+        assert svc.containers.is_confirmed_bad("dashboard") is True
+
     async def test_disabled_path_swallows_wallet_baseline_error(self):
         # A broken kv store must not break the data loop, Telegram on or off.
         def boom(_k, _v=None):
@@ -686,6 +724,29 @@ class TestProcess:
             workers=[],
             workers_expected=False,
             observed_wallet=_W_A,
+        )
+        assert out == []
+
+    async def test_disabled_path_swallows_container_health_update_error(self):
+        # Same "never break the data loop" contract as the wallet baseline above, for the #490
+        # container-health feed.
+        svc = _svc(notifier=_FakeNotifier(enabled=False))
+        svc.containers.update = lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        out = await svc.process(
+            monero_down=False,
+            tari_down=False,
+            tari_required=True,
+            miner_released=True,
+            workers=[],
+            workers_expected=False,
+            containers={
+                "dashboard": {
+                    "running": True,
+                    "restarting": False,
+                    "restart_count": 0,
+                    "health": None,
+                }
+            },
         )
         assert out == []
 

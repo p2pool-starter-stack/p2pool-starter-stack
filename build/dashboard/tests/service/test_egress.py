@@ -164,6 +164,39 @@ def test_sinks_all_private_requires_ip_literal_proof():
     assert _sinks_all_private(["not a url"]) is False
 
 
+def test_xvb_standby_route_classification():
+    # The #249 backup→primary pull: onion or any non-private source → Tor (socks5h, no IP leak);
+    # a private-IP-literal primary → local (LAN hop); unset → inactive. Never clearnet.
+    def route(src):
+        return _conn(_posture(xvb_standby_source=src), "dashboard", "XvB standby pull")["route"]
+
+    assert route("") == INACTIVE
+    assert route("http://abc.onion/api/xvb-standby") == TOR
+    assert route("http://192.168.1.5:8000/api/xvb-standby") == LOCAL
+    assert route("http://10.0.0.2/api/xvb-standby") == LOCAL
+    assert route("http://127.0.0.1:8000/api/xvb-standby") == LOCAL
+    assert route("http://[::1]/api/xvb-standby") == LOCAL
+    assert route("http://8.8.8.8:8000/api/xvb-standby") == TOR  # public IP — never direct (#160)
+    assert route("http://primary.example.com/api/xvb-standby") == TOR  # hostname — unprovable
+    # No source classification ever routes clearnet, so it can never count as a leak.
+    for src in ("", "http://abc.onion/x", "http://192.168.1.5/x", "http://8.8.8.8/x"):
+        assert _posture(xvb_standby_source=src)["summary"]["leaks"] == 0
+
+
+def test_xvb_standby_topology_edge_tracks_route():
+    # onion/public source → an edge into the tor hub (never the internet node); a private-IP
+    # primary is a LAN hop with no placeable node, so it draws no edge (like the alert-sink case).
+    def standby_edges(topo):
+        return [e for e in topo["edges"] if e["label"] == "XvB standby"]
+
+    tor = _topo(xvb_standby_source="http://8.8.8.8/api/xvb-standby")
+    assert standby_edges(tor)[0]["to"] == "tor" and standby_edges(tor)[0]["route"] == TOR
+    assert not any(e.get("leak") for e in tor["edges"])
+    assert standby_edges(_topo(xvb_standby_source="http://abc.onion/x"))[0]["route"] == TOR
+    assert standby_edges(_topo(xvb_standby_source=""))[0]["route"] == INACTIVE
+    assert standby_edges(_topo(xvb_standby_source="http://192.168.1.5/x")) == []  # LAN, no node
+
+
 def test_remote_monerod_rpc_is_clearnet():
     assert _conn(_posture(remote_monero=False), "p2pool", "monerod RPC")["route"] != CLEARNET
     assert _conn(_posture(remote_monero=True), "p2pool", "monerod RPC")["route"] == CLEARNET

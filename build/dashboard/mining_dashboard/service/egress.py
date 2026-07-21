@@ -10,7 +10,7 @@ Two backstops matter for whether a clearnet route is actually an IP leak:
   subnet — so a container's clearnet route can't actually leave while it's on.
 * It does **not** cover the **host-networked dashboard** (``network_mode: host``), whose own egress
   (XvB stats fetch, update check, Healthchecks ping, Telegram bot, price feed, webhook/ntfy alert
-  sinks) bypasses ``DOCKER-USER`` entirely. Those rely solely on their SOCKS config — a clearnet
+  sinks, #249 XvB standby pull) bypasses ``DOCKER-USER`` entirely. Those rely solely on their SOCKS config — a clearnet
   route there is a real leak regardless of the firewall. (All are Tor-routed by default, so none
   leak.)
 
@@ -48,6 +48,28 @@ def _notify_route(enabled, tor, private):
     return LOCAL if private else CLEARNET
 
 
+def _xvb_standby_route(source):
+    """Route of the #249 backup→primary standby pull, derived from ``xvb.standby.source`` alone.
+
+    Same #160 reasoning as ``_sinks_all_private``: only an IP literal can be *proven* to stay on your
+    network without a DNS lookup. So an ``.onion`` or any public/non-private source rides Tor (the
+    puller's ``_proxies`` sends it socks5h, like every other dashboard read); a private/loopback IP
+    literal is a LAN hop (``local``); an unset source is ``inactive``. A hostname can't be proven
+    private, so it routes over Tor — never a silent clearnet beacon. The puller reads this exact
+    route (``XvbStandbyPuller._proxies``), so the panel can't disagree with where the pull goes."""
+    source = (source or "").strip()
+    if not source:
+        return INACTIVE
+    host = (urlsplit(source).hostname or "").lower()
+    if host.endswith(".onion"):
+        return TOR
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:  # not an IP literal (a hostname) — unprovable, route over Tor
+        return TOR
+    return LOCAL if (ip.is_private or ip.is_loopback or ip.is_link_local) else TOR
+
+
 def _sinks_all_private(urls):
     """True when every configured sink URL targets a private/loopback IP literal — the LAN
     carve-out proof. A hostname can't be verified without a DNS lookup (which a pure config
@@ -81,10 +103,12 @@ def compute_egress_posture(
     notify_sinks_enabled=False,
     notify_tor=True,
     notify_sinks_private=False,
+    xvb_standby_source="",
 ):
     """Pure derivation of the egress posture from config knobs. Returns ``{components, summary}``."""
     xvb = _xvb_route(xvb_enabled, xvb_tor)
     sinks = _notify_route(notify_sinks_enabled, notify_tor, notify_sinks_private)
+    standby = _xvb_standby_route(xvb_standby_source)
 
     # ``firewalled``: is this component's egress on the container subnet the #270 firewall guards?
     # The dashboard is host-networked, so its own outbound traffic is NOT covered.
@@ -153,6 +177,10 @@ def compute_egress_posture(
                 # Webhook/ntfy alert sinks (#380) — Tor by default; ``notifications.tor: false``
                 # to an all-private-IP endpoint set is the LAN carve-out (local, not a leak).
                 {"to": "alert sinks (webhook / ntfy)", "route": sinks},
+                # XvB standby pull (#249) — a backup pulls the primary's controller state. onion or
+                # any non-private source rides Tor (like every read above); only a private-IP-literal
+                # primary is a LAN hop (local). Never clearnet, so it can't leak the backup's IP.
+                {"to": "XvB standby pull (backup ← primary)", "route": standby},
             ],
         },
         {
@@ -207,6 +235,7 @@ def egress_posture_from_config():
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
+        xvb_standby_source=config.XVB_STANDBY_SOURCE,
         **_notify_knobs(),
     )
 
@@ -274,6 +303,7 @@ def compute_topology(
     notify_sinks_enabled=False,
     notify_tor=True,
     notify_sinks_private=False,
+    xvb_standby_source="",
 ):
     """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
 
@@ -295,9 +325,11 @@ def compute_topology(
         notify_sinks_enabled=notify_sinks_enabled,
         notify_tor=notify_tor,
         notify_sinks_private=notify_sinks_private,
+        xvb_standby_source=xvb_standby_source,
     )
     xvb = _xvb_route(xvb_enabled, xvb_tor)
     sinks = _notify_route(notify_sinks_enabled, notify_tor, notify_sinks_private)
+    standby = _xvb_standby_route(xvb_standby_source)
     sidechain = CLEARNET if p2pool_clearnet else TOR
     rpc = CLEARNET if remote_monero else LOCAL
 
@@ -346,6 +378,14 @@ def compute_topology(
             if sinks != LOCAL
             else []
         ),
+        # XvB standby pull (#249) — onion/public source rides the tor hub; a private-IP primary is a
+        # LAN hop with no placeable node (like the alert-sink LAN carve-out), so it draws no edge.
+        # The route is never clearnet, so it can never bypass the hub to the internet node.
+        *(
+            [_edge("dashboard", _ext(standby), standby, "XvB standby", "egress")]
+            if standby != LOCAL
+            else []
+        ),
         # The Tor hub to the network: SOCKS egress for every daemon + onion-service ingress.
         _edge("tor", "internet", TOR, "SOCKS + onion circuits", "p2p"),
         # Internal mesh (hidden until expanded).
@@ -390,5 +430,6 @@ def topology_from_config():
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
+        xvb_standby_source=config.XVB_STANDBY_SOURCE,
         **_notify_knobs(),
     )

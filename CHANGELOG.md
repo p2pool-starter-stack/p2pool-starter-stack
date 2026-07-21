@@ -30,6 +30,49 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   settings, the control channel itself, the Tor egress firewall, the stratum password, node
   endpoints and credentials, and the per-rig hosts and tokens all remain refused from the dashboard,
   as does the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync).
+- **Opt-in local miner** (#593). A box that runs the stack 24/7 can mine with its spare CPU by
+  co-locating a RigForge worker on the stack host. `./pithead setup` now asks "Also mine on this
+  machine with its spare CPU?" (off by default; also the new `local_miner.enabled` config flag),
+  and setup/apply print the two values a RigForge install needs — the stack's own stratum URL
+  (loopback `127.0.0.1:3333`, or the configured `p2pool.stratum_bind`/`stratum_port`) and the
+  stratum secret already in `.env`. The co-located worker self-registers through the proxy like any
+  other rig. Pithead only declares the intent and hands off those values; RigForge owns all
+  host-level tuning (HugePages, GRUB, MSR, governor) and the miner service. See
+  [docs/workers.md](docs/workers.md#mine-on-the-stack-host-itself).
+- **Warm XvB donation state on a backup stack (#249).** On a two-host failover pair — same wallet,
+  workers listing both hosts in `pools[]` — the backup's XvB donation controller used to cold-start
+  when the fleet failed over to it: the closed-loop split restarted from the feedforward estimate
+  and re-ramped for hours, over- or under-shooting the credited tier until it reconverged. The
+  controller's commanded donation fraction is now persisted, so a plain restart resumes the warmed
+  split instead of re-seeding cold. A backup can also point `xvb.standby.source` at the primary
+  dashboard's new read-only `/api/xvb-standby` endpoint; it periodically pulls the primary's
+  controller state and holds it as standby (inspectable in `/api/state`), then adopts it the first
+  time it actually donates at failover — so the split resumes warm. One-way (backup pulls from
+  primary), inert unless configured, and never acted on while the primary is authoritative (an idle
+  backup has no workers, so its controller stays on P2Pool). The pull follows the dashboard's
+  privacy-safe egress rule: an `.onion` source, a public IP, or any hostname rides the bridge Tor
+  SOCKS (the primary sees a Tor exit, never the backup's IP); only a provably-private/loopback IP
+  literal dials direct as a LAN hop — so the pull never opens a clearnet path, and the Security
+  panel reports its route.
+- **Opt-in fail-closed miner hold on an unrecoverable dashboard health failure** (#490). New
+  `dashboard.fail_closed` toggle, default **off**. The dashboard is an observability layer, not the
+  mining datapath (`xmrig-proxy` → `p2pool` → `monerod` runs independently of it), so by default an
+  unhealthy condition only alerts (Telegram/Healthchecks/webhook) and shows a badge while mining
+  continues. Set it `true` and a genuinely unrecoverable failure — the SQLite database failing to
+  rebuild after its own auto-heal attempt (disk full, permissions), or the `dashboard` container
+  itself crash-looping past the #337 debounce — holds `p2pool` and `xmrig-proxy` using the same
+  #35 sync-gate stop/start mechanism, with a `Miner held (fail-closed)` badge. Unlike the sync
+  gate's one-way latch it re-checks every cycle and releases on its own once the condition clears.
+  A transient write blip, a slow query, or a single failed external fetch never trips it — those
+  still only alert. Gated by the #33 control-approval path like other `dashboard.*` toggles.
+- **`/api/state` exposure for three of the #196 telemetry-backbone series (Tier-1).** The backbone
+  PR (#600) added five persisted SQLite tables with capture, storage, and retention, but shipped
+  without surfacing them to the client. This slice exposes three — `blocks` (pool block-found
+  events), `disk_growth` (hourly monerod-DB-size + host-disk-usage samples), and `xvb_history`
+  (~5-min XvB-credited scalar samples) — as range-filtered arrays under those same keys, bounded
+  at the existing 700-point chart cap for the two higher-cadence series. `network_history` and
+  `worker_history` are a separate (Tier-2) slice, not touched here. No chart renders any of these
+  series yet — that's a further follow-up.
 
 ## [1.10.0] - 2026-07-20
 

@@ -415,6 +415,13 @@ esac
 assert_contains "tor auto-heal enable is INFO" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "INFO"
 assert_contains "tor auto-heal enable names the cost" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "drops ALL Tor circuits"
 assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" "restart tor"
+# Fail-closed miner hold (#490): INFO either way (like TARI_REQUIRED) — it's on the dashboard
+# control-channel allowlist, so a DEST flag here would make control_approval_gate refuse every
+# commit that touches it, defeating the allowlisting.
+assert_contains "fail_closed enable is INFO" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_FAIL_CLOSED false true)" "INFO"
+assert_contains "fail_closed enable names the hold" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_FAIL_CLOSED false true)" "HOLDS p2pool and xmrig-proxy"
+assert_contains "fail_closed disable is INFO" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_FAIL_CLOSED true false)" "INFO"
+assert_contains "fail_closed disable names alert-only" "$(run_sourced "$SANDBOX" describe_change DASHBOARD_FAIL_CLOSED true false)" "only alerts"
 # Dev-fee donate-level (#173): a brief restart (INFO), shown as a percentage.
 assert_contains "donate-level is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "INFO"
 assert_contains "donate-level shows pct" "$(run_sourced "$SANDBOX" describe_change PROXY_DONATE_LEVEL 0 1)" "0% → 1%"
@@ -3164,6 +3171,7 @@ assert_eq "P2POOL_URL keeps the internal :3333" "$(run_sourced "$V" env_get_file
 assert_eq "token preserved" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_AUTH_TOKEN)" "ORIGINALTOKEN"
 assert_eq "onion preserved" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_ONION_ADDRESS)" "p2pa.onion"
 assert_eq "tari_required default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
+assert_eq "fail_closed default off (#490)" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_FAIL_CLOSED)" "false"
 # The new-release check (#224) defaults ON when absent from config — it's Tor-routed, so it leaks
 # nothing, and an operator who wants zero GitHub contact sets check_for_updates:false to opt out.
 assert_eq "check_for_updates default on" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_CHECK_UPDATES)" "true"
@@ -3213,6 +3221,12 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari_required propagated false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
+
+# Opt-in fail-closed (dashboard.fail_closed:true) propagates as DASHBOARD_FAIL_CLOSED=true (#490).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","fail_closed":true} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "fail_closed propagated true" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_FAIL_CLOSED)" "true"
 
 # Opting out (dashboard.check_for_updates:false) propagates as DASHBOARD_CHECK_UPDATES=false (#224) —
 # only an explicit false disables it (anything else, incl. absent, stays the default-on true).
@@ -3419,6 +3433,34 @@ sp1="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
 case "$sp1" in ?*) ok "stratum_password auto generated a secret" ;; *) bad "stratum_password auto generated a secret" "got empty" ;; esac
 assert_eq "donate-level explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_DONATE_LEVEL)" "1"
 assert_contains "stratum auth surfaced for rigs" "$(run_sourced "$V" announce_stratum_auth 2>&1)" "Stratum authentication is ON"
+
+echo "== unit: announce_local_miner hands off the stratum URL + secret only when opted in (#593) =="
+# The local-miner opt-in surfaces the two values a co-located RigForge install needs (pool URL +
+# stratum secret) and NOTHING else — off by default, loopback when the bind allows it, the bound
+# LAN address when it doesn't (the #593 stratum_bind edge case), and RigForge-owns-tuning stated.
+LM="$SANDBOX/lm"
+mkdir -p "$LM"
+printf 'STRATUM_BIND=0.0.0.0\nSTRATUM_PORT=3333\nPROXY_STRATUM_PASSWORD=s3cr3t\n' >"$LM/.env"
+# Opt-out (default): prints nothing at all.
+printf '{"local_miner":{"enabled":false}}' >"$LM/config.json"
+assert_eq "opt-out prints nothing" "$(run_sourced "$LM" announce_local_miner 2>&1)" ""
+# Absent block also prints nothing (default false).
+printf '{}' >"$LM/config.json"
+assert_eq "absent local_miner prints nothing" "$(run_sourced "$LM" announce_local_miner 2>&1)" ""
+# Opt-in, 0.0.0.0 bind: loopback URL + the secret + the RigForge-owns-tuning note.
+printf '{"local_miner":{"enabled":true}}' >"$LM/config.json"
+lm_out="$(run_sourced "$LM" announce_local_miner 2>&1)"
+assert_contains "opt-in surfaces loopback pool URL" "$lm_out" "127.0.0.1:3333"
+assert_contains "opt-in surfaces the stratum secret" "$lm_out" "s3cr3t"
+assert_contains "opt-in states RigForge owns host tuning" "$lm_out" "RigForge"
+# Custom port + specific LAN bind: target the bound address, not hardcoded loopback (#593 edge case).
+printf 'STRATUM_BIND=192.168.1.9\nSTRATUM_PORT=4444\nPROXY_STRATUM_PASSWORD=s3cr3t\n' >"$LM/.env"
+lm_out="$(run_sourced "$LM" announce_local_miner 2>&1)"
+assert_contains "LAN bind targets the bound address:port" "$lm_out" "192.168.1.9:4444"
+# No stratum password set: say so rather than printing a blank pass.
+printf 'STRATUM_BIND=0.0.0.0\nSTRATUM_PORT=3333\nPROXY_STRATUM_PASSWORD=\n' >"$LM/.env"
+assert_contains "no-password case is stated explicitly" "$(run_sourced "$LM" announce_local_miner 2>&1)" "none set"
+
 # Re-apply: an "auto" password must be STABLE (reused, not rotated) — like the proxy token.
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum_password auto stable across apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "$sp1"
@@ -5123,6 +5165,7 @@ roundtrip_key() { # <label> <jq-set> <jq-read> <expected>
 roundtrip_key "XVB_ENABLED" '.xvb.enabled=false' '.xvb.enabled' "false"
 roundtrip_key "XVB_DONATION_LEVEL" '.xvb.donation_level="whale"' '.xvb.donation_level' "whale"
 roundtrip_key "TARI_REQUIRED" '.dashboard.tari_required=false' '.dashboard.tari_required' "false"
+roundtrip_key "DASHBOARD_FAIL_CLOSED" '.dashboard.fail_closed=true' '.dashboard.fail_closed' "true"
 roundtrip_key "DASHBOARD_CHECK_UPDATES" '.dashboard.check_for_updates=false' '.dashboard.check_for_updates' "false"
 roundtrip_key "DASHBOARD_TZ" '.dashboard.timezone="Europe/Paris"' '.dashboard.timezone' "Europe/Paris"
 roundtrip_key "MONERO_MEM_LIMIT" '.monero.mem_limit="5g"' '.monero.mem_limit' "5g"
@@ -6668,7 +6711,7 @@ echo "== unit: wizard prompt count is pinned (#502 — a silently-added prompt f
 core_reads=$(awk '/^wizard_ask_core\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
 shape_reads=$(awk '/^wizard_ask_shape\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
 assert_eq "wizard_ask_core has exactly 12 read prompts (wallets, node config, pool tier, dashboard login)" "$core_reads" "12"
-assert_eq "wizard_ask_shape has exactly 5 read prompts (clearnet-sync, remote-access, alerts cluster)" "$shape_reads" "5"
+assert_eq "wizard_ask_shape has exactly 6 read prompts (clearnet-sync, remote-access, alerts cluster, local-miner opt-in)" "$shape_reads" "6"
 
 # A small helper so tests can drive the whole Q&A -> write in one sourced call, sharing the globals
 # wizard_ask_core/wizard_ask_shape set with wizard_write_config (each function's locals don't
@@ -6710,6 +6753,17 @@ assert_eq "defaults path: dashboard has only 'secure' — no auth/onion written"
 assert_eq "defaults path: no telegram block written" "$(jq -r 'has("telegram")' <<<"$w1_cfg")" "false"
 assert_eq "defaults path: no clearnet_initial_sync written (stays the reference default)" \
     "$(jq -r '.monero | has("clearnet_initial_sync")' <<<"$w1_cfg")" "false"
+assert_eq "defaults path: no local_miner block written (opt-in off, #593)" \
+    "$(jq -r 'has("local_miner")' <<<"$w1_cfg")" "false"
+
+# Opt-in to the local miner (#593): answering 'y' to the final shape prompt writes
+# local_miner.enabled=true; every other answer left blank so only that key appears.
+WLM="$SANDBOX/wizard-local-miner"
+mkdir -p "$WLM"
+printf '%s\n%s\n\n\n\n\n\n\n\ny\n' "$WALLET" "TARIWALLETLM" | run_sourced "$WLM" run_wizard >/dev/null 2>&1
+wlm_cfg="$(cat "$WLM/config.json" 2>/dev/null)"
+assert_eq "opt-in path: local_miner.enabled written true (#593)" "$(jq -r '.local_miner.enabled' <<<"$wlm_cfg")" "true"
+unset wlm_cfg
 
 echo "== unit: wizard — remote node branch is unchanged by the ask/write split (#502) =="
 # The remote-node prompts (host/RPC/ZMQ/auth) were only moved into wizard_ask_core, not touched —
