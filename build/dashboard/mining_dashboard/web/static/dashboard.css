@@ -419,8 +419,7 @@ tr:last-child td {
   white-space: nowrap;
 }
 
-/* Card title + a right-aligned control, e.g. the audit trail's hour/day/month grouping select
- * (#530). Generic — reuse wherever a card needs one control next to its heading. */
+/* The audit trail's title + its hour/day/month grouping select (#530), side by side. */
 .card-header-row {
   display: flex;
   justify-content: space-between;
