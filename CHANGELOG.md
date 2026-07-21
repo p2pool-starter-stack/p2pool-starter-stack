@@ -9,6 +9,95 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+## [1.11.0] - 2026-07-21
+
+### Added
+
+- **Confirm-gated config editing for operationally-disruptive settings** (#719). The dashboard
+  config editor can now commit a small set of disruptive-but-recoverable settings behind a
+  type-to-confirm, instead of refusing them outright: the four service data directories (a move
+  re-syncs), the stratum port (rigs must repoint), the Monero/Tari clearnet initial-sync toggles
+  (the host IP is exposed during IBD, then auto-reverts to Tor), and enabling Monero pruning. Each
+  renders editable with a "you'll type `APPLY` to confirm" affordance; the typed confirmation rides
+  to the host approval gate, which requires it before the change proceeds and records the apply in
+  the control audit log as a distinct `commit-confirmed` action.
+
+### Changed
+
+- **The control-channel security perimeter stays host-only** (#719). Type-to-confirm is UX
+  friction, not a security control — a compromised dashboard that can set a field can also fill the
+  confirm box — so the perimeter is unchanged: wallets and view keys, the dashboard login and onion
+  settings, the control channel itself, the Tor egress firewall, the stratum password, node
+  endpoints and credentials, and the per-rig hosts and tokens all remain refused from the dashboard,
+  as does the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync).
+- **Dashboard-confirmed data-directory moves are allowlisted to the stack's data root** (#728).
+  #719 made the four `*_DATA_DIR` moves confirmable from the dashboard behind a typed `APPLY`, but
+  the destination was still checked only by the host-side blocklist (`assert_safe_dir`), which
+  passes any non-catastrophic absolute path. A confirmed move from the dashboard is now further
+  held to an allowlist: the new location must sit under the stack's own data root (the install
+  dir's `data/`) or a parent the stack already keeps data in, else the move is refused even with
+  the typed confirmation and stays host-CLI only. The host `./pithead apply` path keeps the wider
+  blocklist — a shell operator already has filesystem-wide reach; only the dashboard-reachable move
+  is tightened, closing the destination trust-escalation the confirm-gate opened.
+- **Opt-in local miner** (#593). A box that runs the stack 24/7 can mine with its spare CPU by
+  co-locating a RigForge worker on the stack host. `./pithead setup` now asks "Also mine on this
+  machine with its spare CPU?" (off by default; also the new `local_miner.enabled` config flag),
+  and setup/apply print the two values a RigForge install needs — the stack's own stratum URL
+  (loopback `127.0.0.1:3333`, or the configured `p2pool.stratum_bind`/`stratum_port`) and the
+  stratum secret already in `.env`. The co-located worker self-registers through the proxy like any
+  other rig. Pithead only declares the intent and hands off those values; RigForge owns all
+  host-level tuning (HugePages, GRUB, MSR, governor) and the miner service. See
+  [docs/workers.md](docs/workers.md#mine-on-the-stack-host-itself).
+- **Warm XvB donation state on a backup stack (#249).** On a two-host failover pair — same wallet,
+  workers listing both hosts in `pools[]` — the backup's XvB donation controller used to cold-start
+  when the fleet failed over to it: the closed-loop split restarted from the feedforward estimate
+  and re-ramped for hours, over- or under-shooting the credited tier until it reconverged. The
+  controller's commanded donation fraction is now persisted, so a plain restart resumes the warmed
+  split instead of re-seeding cold. A backup can also point `xvb.standby.source` at the primary
+  dashboard's new read-only `/api/xvb-standby` endpoint; it periodically pulls the primary's
+  controller state and holds it as standby (inspectable in `/api/state`), then adopts it the first
+  time it actually donates at failover — so the split resumes warm. One-way (backup pulls from
+  primary), inert unless configured, and never acted on while the primary is authoritative (an idle
+  backup has no workers, so its controller stays on P2Pool). The pull follows the dashboard's
+  privacy-safe egress rule: an `.onion` source, a public IP, or any hostname rides the bridge Tor
+  SOCKS (the primary sees a Tor exit, never the backup's IP); only a provably-private/loopback IP
+  literal dials direct as a LAN hop — so the pull never opens a clearnet path, and the Security
+  panel reports its route.
+- **Opt-in fail-closed miner hold on an unrecoverable dashboard health failure** (#490). New
+  `dashboard.fail_closed` toggle, default **off**. The dashboard is an observability layer, not the
+  mining datapath (`xmrig-proxy` → `p2pool` → `monerod` runs independently of it), so by default an
+  unhealthy condition only alerts (Telegram/Healthchecks/webhook) and shows a badge while mining
+  continues. Set it `true` and a genuinely unrecoverable failure — the SQLite database failing to
+  rebuild after its own auto-heal attempt (disk full, permissions), or the `dashboard` container
+  itself crash-looping past the #337 debounce — holds `p2pool` and `xmrig-proxy` using the same
+  #35 sync-gate stop/start mechanism, with a `Miner held (fail-closed)` badge. Unlike the sync
+  gate's one-way latch it re-checks every cycle and releases on its own once the condition clears.
+  A transient write blip, a slow query, or a single failed external fetch never trips it — those
+  still only alert. Gated by the #33 control-approval path like other `dashboard.*` toggles.
+- **`/api/state` exposure for three of the #196 telemetry-backbone series (Tier-1).** The backbone
+  PR (#600) added five persisted SQLite tables with capture, storage, and retention, but shipped
+  without surfacing them to the client. This slice exposes three — `blocks` (pool block-found
+  events), `disk_growth` (hourly monerod-DB-size + host-disk-usage samples), and `xvb_history`
+  (~5-min XvB-credited scalar samples) — as range-filtered arrays under those same keys, bounded
+  at the existing 700-point chart cap for the two higher-cadence series. `network_history` and
+  `worker_history` are a separate (Tier-2) slice, not touched here. No chart renders any of these
+  series yet — that's a further follow-up.
+
+### Security
+
+- **The out-of-band audit trail is now flood-capped per worker (#724).** The `rig-edit` audit
+  source (#530) reads a worker's reported change id off the unauthenticated LAN worker feed. The
+  #530 deterministic row id collapses *repeats* of one change id to a single row, but not *distinct*
+  ones — so a malicious or compromised device presenting as a worker could report a fresh random
+  change id every poll, writing a new permanent `audit_events` row each ~30s cycle and slowly
+  filling the dashboard database (the table has no pruning). New `rig-edit` rows are now capped per
+  worker per rolling hour; beyond the cap the extra rows are dropped behind a single `rate-limited`
+  marker row and a logged warning, so the flood stays visible instead of growing the table without
+  limit. A genuine occasional rig change still records normally, and the non-attacker-controllable
+  `host-edit` and mirrored `control.log` rows are unaffected.
+
 ## [1.10.2] - 2026-07-21
 
 ### Fixed

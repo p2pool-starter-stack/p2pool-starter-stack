@@ -49,12 +49,19 @@
         "donate_level": 0
     },
 
+    "local_miner": {
+        "enabled": false
+    },
+
     "xvb": {
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",
         "donor_id": "auto",
         "donation_level": "auto",
-        "tor": true
+        "tor": true,
+        "standby": {
+            "source": ""
+        }
     },
 
     "xmrig_proxy": {
@@ -75,6 +82,7 @@
         "timezone": "auto",
         "data_dir": "auto",
         "tari_required": true,
+        "fail_closed": false,
         "check_for_updates": true,
         "hashrate_drop_threshold": 50,
         "hashrate_drop_minutes": 10,

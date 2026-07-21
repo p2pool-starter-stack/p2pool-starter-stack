@@ -121,15 +121,31 @@ class TestSubmit:
 
     def test_read_config_metadata_stripped_from_the_intent(self, spool):
         # The editor round-trips the fetched doc wholesale, so read_config's own metadata
-        # injections (_core_keys/_editable_keys) ride back with the POST; the host gate's
-        # closed-schema check refuses a commit carrying them (#679). submit is the choke point.
+        # injections (_core_keys/_editable_keys/_confirm_keys) ride back with the POST; the host
+        # gate's closed-schema check refuses a commit carrying them (#679). submit is the choke point.
         rid = control_service.submit(
             "preview",
-            {"p2pool": {"pool": "main"}, "_core_keys": ["a"], "_editable_keys": ["b"]},
+            {
+                "p2pool": {"pool": "main"},
+                "_core_keys": ["a"],
+                "_editable_keys": ["b"],
+                "_confirm_keys": ["c"],
+            },
             actor="admin",
         )
         req = json.loads((spool / "requests" / f"{rid}.json").read_text())
         assert req["config"] == {"p2pool": {"pool": "main"}}
+
+    def test_commit_carries_the_typed_confirmation(self, spool):
+        # #719: an in-scope disruptive commit rides its typed confirmation; the host gate requires
+        # the exact literal before a CONFIRM row proceeds. A commit without it omits the field.
+        intent = str(uuid.uuid4())
+        rid = control_service.submit("commit", actor="admin", intent_id=intent, confirm="APPLY")
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req["confirm"] == "APPLY"
+        rid2 = control_service.submit("commit", actor="admin", intent_id=str(uuid.uuid4()))
+        req2 = json.loads((spool / "requests" / f"{rid2}.json").read_text())
+        assert "confirm" not in req2
 
     def test_non_dict_config_passes_through_for_the_host_to_reject(self, spool):
         # Malformed client payloads keep their host-side rejection ("config must be a JSON
@@ -307,6 +323,68 @@ def test_editable_keys_have_no_intra_repo_drift():
     pithead_keys = set(m.group(1).split())
     assert pithead_keys, "extracted an empty allowlist — the regex likely stopped matching"
     assert set(control_service.EDITABLE_ENV_KEY_PATHS.keys()) == pithead_keys
+
+
+class TestConfirmKeys:
+    """read_config's ``_confirm_keys`` field (#719): the operationally-disruptive config paths the
+    control gate commits behind a type-to-confirm, mirroring pithead's CONTROL_DASHBOARD_CONFIRM_KEYS
+    the same underscore-metadata way ``_editable_keys`` mirrors the editable allowlist. The UI marks
+    these editable-with-confirm instead of greying them host-only."""
+
+    def test_confirm_keys_served_on_read_config(self, spool):
+        cfg = control_service.read_config()
+        for path in (
+            "monero.data_dir",
+            "tari.data_dir",
+            "p2pool.data_dir",
+            "dashboard.data_dir",
+            "p2pool.stratum_port",
+            "monero.clearnet_initial_sync",
+            "tari.clearnet_initial_sync",
+            "monero.prune",
+        ):
+            assert path in cfg["_confirm_keys"], path
+        assert cfg["_confirm_keys"] == sorted(cfg["_confirm_keys"])  # stable, deterministic order
+
+    def test_perimeter_stays_out_of_the_confirm_set(self, spool):
+        # The confirm-gated set is strictly the "expensive but recoverable" class — never the
+        # security perimeter, and never a plain editable key (that would demand needless friction).
+        cfg = control_service.read_config()
+        for path in (
+            "monero.wallet_address",
+            "monero.view_key",
+            "dashboard.auth.password",
+            "network.tor_egress_firewall",
+            "dashboard.control.enabled",
+            "tor.data_dir",  # only the four SERVICE data dirs are in scope, not tor's
+            "p2pool.pool",  # a freely-editable key, not confirm-gated
+        ):
+            assert path not in cfg["_confirm_keys"], path
+
+    def test_confirm_and_editable_sets_are_disjoint(self, spool):
+        # A key is either free-to-commit or confirm-gated, never both — the UI picks one affordance.
+        cfg = control_service.read_config()
+        assert not (set(cfg["_confirm_keys"]) & set(cfg["_editable_keys"]))
+
+
+def test_confirm_keys_have_no_intra_repo_drift():
+    """#719 (mirrors the #613 EDITABLE_ENV_KEY_PATHS check): CONFIRM_ENV_KEY_PATHS is a second copy
+    of pithead's CONTROL_DASHBOARD_CONFIRM_KEYS, kept in sync only by this test. Drift means the
+    dashboard either greys out a field the gate would confirm-commit, or shows one editable-with-
+    confirm that the gate silently refuses at Save."""
+    import re
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    pithead_path = next((p / "pithead" for p in here.parents if (p / "pithead").is_file()), None)
+    if pithead_path is None:
+        pytest.skip("pithead CLI not present in this test context (dashboard-only image)")
+    pithead = pithead_path.read_text()
+    m = re.search(r"CONTROL_DASHBOARD_CONFIRM_KEYS='([^']*)'", pithead)
+    assert m, "could not find CONTROL_DASHBOARD_CONFIRM_KEYS in pithead"
+    pithead_keys = set(m.group(1).split())
+    assert pithead_keys, "extracted an empty confirm allowlist — the regex likely stopped matching"
+    assert set(control_service.CONFIRM_ENV_KEY_PATHS.keys()) == pithead_keys
 
 
 class TestWorkerApply:

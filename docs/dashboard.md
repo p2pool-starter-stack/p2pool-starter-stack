@@ -154,6 +154,21 @@ a fresh database, and keeps running. A `db_reset` alert (Telegram and the other 
 history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
 only the historical charts reset.
 
+**Fail-closed miner hold.** By default, every health failure above — DB write failing, DB
+corruption, a crash-looping container — only alerts; the dashboard is an observability layer, and
+the mining datapath (`xmrig-proxy` → `p2pool` → `monerod`) runs independently of it. Set
+[`dashboard.fail_closed`](configuration.md#configuration-reference) to `true` to hold the miner
+instead, but only for genuinely **unrecoverable** failures: the DB self-heal above failing on its
+own rebuild attempt (not an ordinary write blip, which stays alert-only), or the `dashboard`
+container itself crash-looping. A red `Miner held (fail-closed)` badge shows while held, next to
+`p2pool` and `xmrig-proxy`, stopped the same way the [Sync Mode hold](#sync-mode) does; unlike that
+one-way sync gate, both containers start again on their own once the condition clears — no restart
+needed.
+The database also keeps three smaller series: pool block-found events, hourly monerod-DB-size and
+host-disk-usage samples, and XvB-credited scalar samples taken roughly every 5 minutes. `/api/state`
+serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the same way as
+`share_stats`. No chart reads them yet — this is persistence and API exposure only.
+
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
@@ -612,10 +627,14 @@ Two edit modes build the same candidate config and submit it through the same pi
   A field the control gate wouldn't actually commit renders **greyed out**
   ([#613](https://github.com/p2pool-starter-stack/pithead/issues/613)): disabled, its value shown
   read-only, with a tooltip ("Host-only — edit `config.json` and run `./pithead apply`") instead of
-  letting you edit it and finding out only at Save. The editable set is derived from the same
-  allowlist the gate enforces (see below) and surfaced on `GET /api/config` as `_editable_keys`, so
-  it can't drift from what the gate actually accepts; a greyed field never enters the staged edit
-  set at all.
+  letting you edit it and finding out only at Save. A smaller set of operationally-disruptive
+  fields — the four service data directories, the stratum port, the clearnet initial-sync toggles,
+  and enabling Monero pruning — render **editable but confirm-gated**
+  ([#719](https://github.com/p2pool-starter-stack/pithead/issues/719)): editable, tooltipped
+  "you'll type `APPLY` to confirm at Save". Both sets are derived from the same allowlists the gate
+  enforces (see below) and surfaced on `GET /api/config` as `_editable_keys` and `_confirm_keys`,
+  so neither can drift from what the gate actually accepts; a greyed field never enters the staged
+  edit set at all.
 - **JSON** edits the whole fetched config as one text block, for operators who'd rather paste than
   click through fields. A **Load from file** control (`FileReader`, no upload) fills it from a
   saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect) uses. A
@@ -637,21 +656,41 @@ The flow mirrors the CLI's `apply` either way:
    error message; nothing is applied.
 3. Confirm. If the preview flags any change disruptive (⚠), you must type `APPLY` first. The
    commit runs `pithead apply -y` on the host and recreates only the containers whose config
-   changed.
+   changed. Your typed confirmation rides to the host gate, which requires it before a
+   confirm-gated change proceeds — a change confirmed this way is recorded in the audit log as a
+   `commit-confirmed` action, distinct from an ordinary commit.
 
 Most settings cannot be committed from the dashboard — the host-side runner holds an explicit
 allowlist of operational settings (pool tier, XvB enable and donation level, alert toggles,
 memory limits, time zone, the energy-calculator prices, …) and default-denies a change, in any
-direction, to anything else. Form mode's grey-out (above) is that SAME allowlist surfaced to the
-browser up front, not a separate approximation of it — so what renders editable is exactly what
-the gate will commit. The allowlist gates BOTH edit modes identically regardless — JSON mode is a
-different way to assemble the candidate config, not a different validation path, so it can't
-smuggle a change the form couldn't make:
-wallets, the dashboard login and onion settings, the control channel itself, the Tor egress
-firewall, clearnet toggles, node endpoints, and every credential. It likewise refuses anything
-the preview flags disruptive (⚠). Apply those from the host with `./pithead apply`; out-of-band
-approval from the dashboard is tracked in
-[#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
+direction, to anything else. A second, confirm-gated allowlist
+([#719](https://github.com/p2pool-starter-stack/pithead/issues/719)) adds the
+operationally-disruptive-but-recoverable settings — a data-directory move (re-sync), a stratum-port
+change (rigs repoint), a clearnet initial-sync enable (host IP exposed during IBD, auto-reverts),
+enabling Monero pruning — which commit only behind the typed `APPLY`. Type-to-confirm here is
+friction, not a security control: a compromised dashboard that can set a field can also fill the
+confirm box, so the boundary stays where a breach would happen. Form mode's grey-out and
+confirm-gating (above) are those SAME allowlists surfaced to the browser up front, not a separate
+approximation of them — so what renders editable is exactly what the gate will commit. The
+allowlists gate BOTH edit modes identically regardless — JSON mode is a different way to assemble
+the candidate config, not a different validation path, so it can't smuggle a change the form
+couldn't make. The **security perimeter stays host-only** in every direction: wallets and view
+keys, the dashboard login and onion settings, the control channel itself, the Tor egress firewall,
+the stratum password, node endpoints and credentials, and the per-rig hosts and tokens. The gate
+also refuses the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync,
+so it stays host-only). Apply those from the host with `./pithead apply`.
+
+A dashboard-confirmed data-directory move
+([#728](https://github.com/p2pool-starter-stack/pithead/issues/728)) is held to a tighter rule than
+the same move from the host CLI. The host guard is a blocklist — it refuses the catastrophic roots
+(`/`, `$HOME`, bare mounts) but lets a shell operator relocate data anywhere else, which is
+proportionate to shell trust. A confirmed move from the dashboard is instead held to an
+**allowlist**: the new location must sit under the stack's own data root (the install dir's
+`data/`) or a parent the stack already keeps its data in (a co-located data root, #455). A move to
+any other absolute path — another user's home, another service's volume — is refused even with the
+typed `APPLY` and stays host-CLI only. This is the one place a confirmed data-dir move differs from
+`./pithead apply`: the destination path is narrowed, because the move is now reachable at dashboard
+trust rather than shell trust.
 
 A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new
 sidechain and your PPLNS window (and XvB shares) reset.
@@ -661,7 +700,9 @@ drops a typed JSON change request into `./data/control/requests/` — its only w
 spool — and a root systemd path unit (`pithead-control`) runs `pithead control-run-pending`, which
 validates the request, dry-runs or applies the staged copy, and writes the outcome to the
 read-only `results/` mount plus an audit line (timestamp, logged-in user, action, outcome, and
-the names of the changed settings) to `audit/control.log`. The container cannot forge results,
+the names of the changed settings) to `audit/control.log`. A dashboard-confirmed disruptive change
+records its action as `commit-confirmed`, so a confirm-gated apply reads distinctly from an
+ordinary commit in the log. The container cannot forge results,
 alter a staged config between preview and commit, or rewrite the audit log. A failed apply keeps
 the previous config at `config.json.bak-control` and surfaces pithead's error in the view.
 Operational details:
@@ -689,6 +730,36 @@ field in them as hostile input — a request path is attacker-chosen bytes — s
 stripped to a safe character set before it is served. See
 [Operations › Watching for intruders](operations.md#watching-for-intruders) for the log paths,
 size bounds, and rotation steps.
+
+### Catching changes made outside the dashboard
+
+The audit trail above only sees requests that went through the control channel. Two things can
+change the stack without it: a hand-edit (or a `pithead apply` run from the host CLI) to
+`config.json`, and a config change applied directly to a rig's own control API instead of through
+Worker Inspect ([#530](https://github.com/p2pool-starter-stack/pithead/issues/530)). The dashboard
+watches for both on its normal poll cycle and appends them to the SAME audit trail:
+
+- **`host-edit`** — `config.json` changed since the last poll and no control-channel commit
+  explains it. The row names the changed setting paths (e.g. `xvb.donation_level`); it never
+  records a value.
+- **`rig-edit`** — a worker's control API reports a config change this dashboard never sent. The
+  row names the worker and the rig's own change id; RigForge's status feed reports only the
+  outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
+  moved — inspect the rig directly to see what changed. This one source reads off the
+  unauthenticated worker feed, so it is rate-capped per worker
+  ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
+  change id every poll can add only a bounded number of `rig-edit` rows per hour before the rest
+  are dropped behind a single `rate-limited` row. A real occasional rig change still records; only
+  a flood is capped.
+
+Either kind is worth treating like a rotate-now signal in the same spirit as
+[Operations › Watching for intruders](operations.md#watching-for-intruders): if you didn't make
+the change, someone or something with host or rig access did.
+
+The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
+two out-of-band kinds above — persist to the dashboard's own database, so the card's grouping
+selector (hour/day/month) can drill back further than the log's own trimmed window. Pick "All" for
+the flat newest-first view, or a coarser grouping to scan a longer history at a glance.
 
 ## Upgrading from the dashboard
 

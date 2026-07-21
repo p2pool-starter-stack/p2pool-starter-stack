@@ -65,14 +65,21 @@ The stack's defaults:
   API (over the stack's Tor SOCKS), refuses any mismatch or non-release tag, and limits attempts
   to one per 10 minutes — the container cannot choose an image, tag, or registry. Enabling the
   channel without a dashboard password is a validation error, on a published onion it additionally
-  requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist of
-  operational settings: a commit that changes any env key off that list — in every direction
-  (enabling, changing, or disabling) — is refused, as is anything the change preview flags
-  destructive. Wallets, dashboard auth and onion exposure, the control channel itself, the Tor
-  egress firewall, clearnet toggles, node endpoints, binds, and every credential are off the
-  list, and a key added in the future stays un-committable until deliberately listed. Those
-  edits must be applied from the host CLI; out-of-band approval is tracked in
-  [#338](https://github.com/p2pool-starter-stack/pithead/issues/338).
+  requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist. Low-risk
+  operational settings commit directly; a small set of operationally-disruptive ones — data-directory
+  moves, the stratum port, enabling clearnet initial sync, and enabling pruning — commit only behind
+  a typed confirmation in the dashboard, and only in that direction. A dashboard-confirmed
+  data-directory move is further held to an **allowlist** (#728): the new location must sit under the
+  stack's own data root (the install dir's `data/`) or a parent the stack already keeps data in;
+  a move to any other absolute path is refused even with the typed confirmation and stays host-CLI
+  only. The host CLI keeps its wider blocklist check — a shell operator already has filesystem-wide
+  reach. Everything else is refused in
+  every direction, as is anything the change preview flags destructive (including the heavy direction
+  of a confirm-gated key, e.g. disabling pruning, which forces a full re-sync). The security
+  perimeter — wallets and view keys, dashboard auth and onion exposure, the control channel itself,
+  the Tor egress firewall, node endpoints, binds, every credential, and the per-rig hosts and tokens —
+  is never dashboard-committable, with or without the typed confirmation. A key added in the
+  future stays un-committable until deliberately listed. Those edits must be applied from the host CLI.
 - Attack visibility (#349): Caddy writes a JSON access log for every dashboard vhost (LAN and
   onion), and the control channel's host-side audit log records who changed what (setting names
   only, never values). The dashboard surfaces both read-only — a burst of 401s is the
@@ -82,6 +89,18 @@ The stack's defaults:
   anonymous prober stored XSS against the operator. Both logs are size-bounded (Caddy's native
   rolling; a trim-before-append cap in the audit writer). Neither ever records a secret: Caddy
   redacts credential headers by default, and the audit writer logs key names only.
+- Out-of-band change detection (#530): the audit trail above only sees requests the dashboard
+  itself handled. Its poll loop separately watches for a `config.json` change with no matching
+  control-channel commit, and a worker control-API report for a change the dashboard never sent,
+  and appends both — `host-edit` / `rig-edit` — to the same trail, keys or worker names only. The
+  persisted trail (mirrored `control.log` rows plus these two out-of-band kinds) lives in the
+  dashboard's own database, not just the log tail, so the Security panel's hour/day/month grouping
+  covers more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
+  unauthenticated worker feed, so it is rate-capped per worker (#724): a rig reporting distinct
+  change_ids on every poll can add at most a bounded number of rows per hour before the rest are
+  dropped behind a single `rate-limited` marker — one LAN device can't grow the database without
+  limit. The `host-edit` and mirrored `control.log` rows are not attacker-controllable and are not
+  capped.
 
 ### Telegram control commands (#338)
 

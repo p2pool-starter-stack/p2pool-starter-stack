@@ -54,13 +54,21 @@ Controller = Callable[[float, float, float, float], float]
 
 
 class _FixedTiers:
-    """Minimal StateManager stand-in: the controller only needs `get_tiers()`."""
+    """Minimal StateManager stand-in for the closed-loop sim: `get_tiers()`, plus the cold
+    warm-resume reads (#249) so the controller seeds from feedforward — the simulator models a
+    fresh cold start, never a restart or failover, so both return the "no warm state" values."""
 
     def __init__(self, tiers=None):
         self._tiers = dict(tiers or TIER_DEFAULTS)
 
     def get_tiers(self):
         return dict(self._tiers)
+
+    def get_xvb_stats(self):
+        return {"commanded_fraction": 0.0}
+
+    def get_xvb_standby(self):
+        return None
 
 
 def make_algo_controller(algo, p2pool_difficulty=0) -> Controller:

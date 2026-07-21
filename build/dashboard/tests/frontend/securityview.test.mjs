@@ -11,14 +11,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { fmtEpoch, SecurityPanel } from "../../mining_dashboard/web/static/securityview.mjs";
+import {
+  bucketKey,
+  fmtEpoch,
+  groupAuditEntries,
+  SecurityPanel,
+} from "../../mining_dashboard/web/static/securityview.mjs";
 import { renderToString } from "./helpers/render.mjs";
 
 // Render the panel with its state pre-set (the render probe runs no effects, so the fetches in
 // componentDidMount never fire — state is injected directly, like the configview tests).
 function renderPanel(state) {
   const panel = new SecurityPanel({});
-  panel.state = { access: null, audit: null, error: null, ...state };
+  panel.state = { access: null, audit: null, auditGroup: "flat", error: null, ...state };
   return renderToString(panel.render());
 }
 
@@ -99,4 +104,93 @@ test("audit: empty list says so instead of an empty table", () => {
 test("fetch error surfaces as a message, not a blank panel", () => {
   const out = renderPanel({ error: "TypeError: fetch failed" });
   assert.match(out, /fetch failed/);
+});
+
+// #530: hour/day/month grouping for the audit trail.
+
+test("bucketKey: hour/day/month slice the shared ts format; unknown granularity ignored by the caller", () => {
+  const ts = "2026-07-20T14:35:00Z";
+  assert.equal(bucketKey(ts, "hour"), "2026-07-20T14");
+  assert.equal(bucketKey(ts, "day"), "2026-07-20");
+  assert.equal(bucketKey(ts, "month"), "2026-07");
+  assert.equal(bucketKey(42, "day"), ""); // non-string ts never throws
+});
+
+test("groupAuditEntries: flat/unknown granularity returns one ungrouped run", () => {
+  const entries = [{ ts: "2026-07-20T00:00:00Z" }, { ts: "2026-07-19T00:00:00Z" }];
+  assert.deepEqual(groupAuditEntries(entries, "flat"), [{ bucket: null, entries }]);
+  assert.deepEqual(groupAuditEntries(entries, undefined), [{ bucket: null, entries }]);
+});
+
+test("groupAuditEntries: contiguous same-day entries collapse into one bucket", () => {
+  const entries = [
+    { ts: "2026-07-20T14:00:00Z", actor: "a" },
+    { ts: "2026-07-20T09:00:00Z", actor: "b" },
+    { ts: "2026-07-19T23:00:00Z", actor: "c" },
+  ];
+  const groups = groupAuditEntries(entries, "day");
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].bucket, "2026-07-20");
+  assert.equal(groups[0].entries.length, 2);
+  assert.equal(groups[1].bucket, "2026-07-19");
+  assert.equal(groups[1].entries.length, 1);
+});
+
+test("groupAuditEntries: month grouping spans multiple days in one bucket", () => {
+  const entries = [
+    { ts: "2026-07-20T00:00:00Z" },
+    { ts: "2026-07-01T00:00:00Z" },
+    { ts: "2026-06-30T00:00:00Z" },
+  ];
+  const groups = groupAuditEntries(entries, "month");
+  assert.deepEqual(
+    groups.map((g) => [g.bucket, g.entries.length]),
+    [
+      ["2026-07", 2],
+      ["2026-06", 1],
+    ],
+  );
+});
+
+test("audit card: default flat grouping shows no group-header row (unchanged row output)", () => {
+  const out = renderPanel({
+    access: { available: true, entries: [] },
+    audit: [{ ts: "2026-07-20T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "XVB_ENABLED" }],
+  });
+  assert.doesNotMatch(out, /audit-group-header/);
+  assert.match(out, /XVB_ENABLED/);
+});
+
+test("audit card: grouping select appears once there are entries, with the current group selected", () => {
+  const out = renderPanel({
+    access: { available: true, entries: [] },
+    audit: [{ ts: "2026-07-20T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "XVB_ENABLED" }],
+    auditGroup: "day",
+  });
+  assert.match(out, /<select/);
+  assert.match(out, /Group by day/);
+  // Accessibility parity (#530 review): a bare <select> with no associated <label> has no
+  // accessible name for a screen reader — every other select/group control in this codebase
+  // carries one (role=group aria-label, or a <label for>, see xvb-tier-select).
+  assert.match(out, /aria-label="Group audit trail by"/);
+});
+
+test("audit card: day grouping renders one header row per distinct day, spanning the table", () => {
+  const out = renderPanel({
+    access: { available: true, entries: [] },
+    auditGroup: "day",
+    audit: [
+      { ts: "2026-07-20T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "A" },
+      { ts: "2026-07-19T08:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "B" },
+    ],
+  });
+  assert.match(out, /class="audit-group-header"/);
+  assert.match(out, /colspan="5"/);
+  assert.match(out, /2026-07-20 \(1\)/);
+  assert.match(out, /2026-07-19 \(1\)/);
+});
+
+test("audit card: empty list shows no grouping select (nothing to group)", () => {
+  const out = renderPanel({ access: { available: true, entries: [] }, audit: [] });
+  assert.doesNotMatch(out, /<select/);
 });
