@@ -379,44 +379,31 @@ def build_blocks(blocks, range_arg, window=None):
     ]
 
 
+def _gauge_series(rows, range_arg, window, value_cols):
+    """Shared shape for a persisted gauge series (#196): filter to the selected range/window,
+    bucket-average past ``_MAX_CHART_POINTS`` like ``share_stats``, and key each row's own
+    ``value_cols`` under ``x`` (ms epoch). ``build_disk_growth``/``build_xvb_history`` are this
+    with their own column set — the only thing that differs between them."""
+    filtered = _downsample_gauge_rows(_filter_events(rows, range_arg, window), value_cols)
+    return [{"x": int(r["ts"] * 1000), **{c: r.get(c, 0) for c in value_cols}} for r in filtered]
+
+
 def build_disk_growth(rows, range_arg, window=None):
-    """Persisted hourly monerod-DB-size + host-disk-usage samples (#196) as chart-ready points,
-    restricted to the selected range/window and bounded at ``_MAX_CHART_POINTS`` like
-    ``share_stats`` — the table keeps every row (no retention prune), so a long-lived install can
-    otherwise pass the cap."""
-    filtered = _downsample_gauge_rows(
-        _filter_events(rows, range_arg, window),
-        ("monero_db_bytes", "disk_used_gb", "disk_total_gb"),
+    """Persisted hourly monerod-DB-size + host-disk-usage samples (#196) as chart-ready points —
+    the table keeps every row (no retention prune), so a long-lived install can otherwise pass
+    the chart-point cap ``_gauge_series`` bounds it at."""
+    return _gauge_series(
+        rows, range_arg, window, ("monero_db_bytes", "disk_used_gb", "disk_total_gb")
     )
-    return [
-        {
-            "x": int(r["ts"] * 1000),
-            "monero_db_bytes": r.get("monero_db_bytes", 0),
-            "disk_used_gb": r.get("disk_used_gb", 0),
-            "disk_total_gb": r.get("disk_total_gb", 0),
-        }
-        for r in filtered
-    ]
 
 
 def build_xvb_history(rows, range_arg, window=None):
-    """Persisted ~5-minute XvB-credited scalar samples (#196) as chart-ready points, restricted
-    to the selected range/window and bounded at ``_MAX_CHART_POINTS`` like ``share_stats`` — the
-    30-day retention at this cadence is ~8.6k rows, well past the cap."""
-    filtered = _downsample_gauge_rows(
-        _filter_events(rows, range_arg, window),
-        ("avg_1h", "avg_24h", "fail_count", "donation_fraction"),
+    """Persisted ~5-minute XvB-credited scalar samples (#196) as chart-ready points — the 30-day
+    retention at this cadence is ~8.6k rows, well past the chart-point cap ``_gauge_series``
+    bounds it at."""
+    return _gauge_series(
+        rows, range_arg, window, ("avg_1h", "avg_24h", "fail_count", "donation_fraction")
     )
-    return [
-        {
-            "x": int(r["ts"] * 1000),
-            "avg_1h": r.get("avg_1h", 0),
-            "avg_24h": r.get("avg_24h", 0),
-            "fail_count": r.get("fail_count", 0),
-            "donation_fraction": r.get("donation_fraction", 0),
-        }
-        for r in filtered
-    ]
 
 
 def _window_duration(filtered_history, range_arg, window):
