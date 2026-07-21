@@ -36,7 +36,9 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   now stream their responses through a shared `bounded_get` helper that cuts the body at 1 MiB,
   so a hostile or broken endpoint can no longer make these clients buffer an unbounded payload.
   Over-cap reads follow each client's existing failure contract (no result / keep the last good
-  one).
+  one). The remaining external GETs — the Tor egress probe, the Healthchecks ping, and the
+  Telegram `getUpdates` long-poll — ride the same cap; `getUpdates` also caps its batch at 10
+  updates so a capped batch can never wedge the poll loop on an offset it cannot advance.
 
 ## [1.9.3] - 2026-07-19
 

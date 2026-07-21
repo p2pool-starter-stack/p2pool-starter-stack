@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from mining_dashboard.helper.http import ResponseTooLarge, bounded_get
+from mining_dashboard.helper.http import BoundedResponse, ResponseTooLarge, bounded_get
 
 
 def _streaming_resp(chunks, status_code=200, encoding="utf-8"):
@@ -85,6 +85,13 @@ class TestBoundedGet:
             resp = bounded_get("https://example.test/x")
         assert isinstance(resp.text, str)  # errors="replace", never a decode crash
 
+    def test_raise_for_status_matches_requests_contract(self):
+        # The Telegram long-poll calls raise_for_status(); an HTTP error must surface as a
+        # RequestException so the caller's existing catch-and-backoff applies unchanged.
+        BoundedResponse(200, b"", "utf-8").raise_for_status()  # 2xx: no raise
+        with pytest.raises(requests.RequestException):
+            BoundedResponse(502, b"", "utf-8").raise_for_status()
+
 
 class TestWiringDriftGuard:
     def test_external_clients_route_through_bounded_get(self):
@@ -94,6 +101,8 @@ class TestWiringDriftGuard:
             pkg / "service" / "update_checker.py",
             pkg / "service" / "price_feed.py",
             pkg / "client" / "xvb_client.py",
+            pkg / "service" / "tor_heal.py",
+            pkg / "service" / "healthchecks.py",
         ]
         direct_call = re.compile(r"requests\.(get|post|put|delete|head|request)\(")
         for mod in external:
@@ -103,3 +112,13 @@ class TestWiringDriftGuard:
                 f"{mod.name}: unbounded {hit.group() if hit else ''} slipped back in"
             )
             assert "bounded_get(" in src, f"{mod.name}: no bounded_get call found"
+
+    def test_telegram_get_updates_routes_through_bounded_get(self):
+        """The getUpdates long-poll is bounded. The module's requests.post( sends (sendMessage,
+        answerCallbackQuery) keep their own contract — tiny echo bodies of caller-authored
+        payloads — so only GETs are drift here."""
+        pkg = Path(__file__).resolve().parents[2] / "mining_dashboard"
+        src = (pkg / "service" / "telegram_commands.py").read_text()
+        hit = re.search(r"requests\.(get|head|request)\(", src)
+        assert hit is None, f"telegram_commands.py: unbounded {hit.group() if hit else ''}"
+        assert "bounded_get(" in src

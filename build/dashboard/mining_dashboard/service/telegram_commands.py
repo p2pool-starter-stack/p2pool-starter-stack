@@ -17,6 +17,7 @@ from mining_dashboard.config.config import (
     TELEGRAM_ENABLED,
     TOR_SOCKS_PROXY,
 )
+from mining_dashboard.helper.http import bounded_get
 from mining_dashboard.helper.utils import (
     effective_hashrate,
     format_disk_size,
@@ -40,6 +41,10 @@ LONG_POLL_SECONDS = 25
 # Quiet retry after a failed poll — a Tor-only / offline host can't reach api.telegram.org, so a
 # persistently-blocked bot backs off instead of hot-looping (and never spams ERROR; #59 discipline).
 POLL_ERROR_BACKOFF_SECONDS = 15
+# getUpdates batch cap. The offset can only advance after a batch is *parsed*, so a batch that
+# trips bounded_get's size cap would be re-fetched forever — bounding the batch keeps the worst
+# case (10 updates at Telegram's own per-message field limits) far under the cap instead.
+GETUPDATES_LIMIT = 10
 
 # The commands the bot answers. All are read-only status queries — the bot can never change the
 # stack (start/stop/apply live on the CLI), so a leaked chat can at worst read status, not act.
@@ -733,10 +738,11 @@ class TelegramCommandBot:
 
     def _prime_offset(self):
         """Advance the offset past any pending backlog without acting on it, so a command queued
-        while the dashboard was down isn't run on startup."""
+        while the dashboard was down isn't run on startup. Drains batch by batch: getUpdates
+        returns at most GETUPDATES_LIMIT updates per call, and returns immediately (timeout 0)
+        while a backlog remains."""
         try:
-            updates = self._get_updates(0)
-            if updates:
+            while updates := self._get_updates(0):
                 self._offset = updates[-1].get("update_id", 0) + 1
         except Exception as exc:
             logger.debug("Telegram offset prime skipped (%s)", type(exc).__name__)
@@ -746,13 +752,14 @@ class TelegramCommandBot:
         # Ask Telegram for callback_query updates too when control commands are on — that is how a
         # tapped inline confirm button arrives (#338); the read-only bot stays messages-only.
         allowed = '["message","callback_query"]' if self.control_enabled else '["message"]'
-        params = {"timeout": poll_timeout, "allowed_updates": allowed}
+        params = {"timeout": poll_timeout, "allowed_updates": allowed, "limit": GETUPDATES_LIMIT}
         if self._offset is not None:
             params["offset"] = self._offset
         url = f"{self._api_base}/bot{self._token}/getUpdates"
         # The read timeout must outlast Telegram's long-poll hold, or requests aborts the request
-        # the server is legitimately keeping open; (connect, read) tuple.
-        resp = requests.get(
+        # the server is legitimately keeping open; (connect, read) tuple. bounded_get streams, but
+        # the read timeout still covers the hold: headers only arrive once the hold ends.
+        resp = bounded_get(
             url, params=params, timeout=(10, poll_timeout + 10), proxies=self._proxies
         )
         resp.raise_for_status()

@@ -1,8 +1,9 @@
 """Bounded reads for every external HTTP fetch (#660).
 
 Each external client (GitHub release checks #224, the three XvB reads, the CoinGecko price feed
-#651) is individually tolerant of a bad *parse*, but nothing bounded what got *read*: a hostile or
-broken endpoint could hand any of them a multi-GB body and the process would buffer it all before
+#651, the Tor egress probe, the Healthchecks ping, the Telegram getUpdates long-poll) is
+individually tolerant of a bad *parse*, but nothing bounded what got *read*: a hostile or broken
+endpoint could hand any of them a multi-GB body and the process would buffer it all before
 parsing. ``bounded_get`` streams the body and cuts it at a cap far above any legitimate payload;
 over-cap raises a ``requests.RequestException`` subclass, so every caller's existing failure
 contract (return ``None`` / keep the last good result) applies unchanged.
@@ -24,7 +25,7 @@ class ResponseTooLarge(requests.RequestException):
 
 class BoundedResponse:
     """The slice of ``requests.Response`` the clients actually use: ``status_code``, ``text``,
-    ``json()`` — backed by the capped body."""
+    ``json()``, ``raise_for_status()`` — backed by the capped body."""
 
     def __init__(self, status_code, content, encoding):
         self.status_code = status_code
@@ -37,6 +38,11 @@ class BoundedResponse:
 
     def json(self):
         return json.loads(self.text)
+
+    def raise_for_status(self):
+        # HTTPError subclasses RequestException, matching requests' own contract.
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"HTTP {self.status_code}")
 
 
 def bounded_get(url, max_bytes=MAX_RESPONSE_BYTES, timeout=20, **kwargs):
