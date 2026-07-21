@@ -105,6 +105,7 @@ EDITABLE_ENV_KEY_PATHS = {
     "XVB_ENABLED": ("xvb.enabled",),
     "XVB_DONATION_LEVEL": ("xvb.donation_level",),
     "TARI_REQUIRED": ("dashboard.tari_required",),
+    "DASHBOARD_FAIL_CLOSED": ("dashboard.fail_closed",),
     "DASHBOARD_CHECK_UPDATES": ("dashboard.check_for_updates",),
     "DASHBOARD_TZ": ("dashboard.timezone",),
     "MONERO_MEM_LIMIT": ("monero.mem_limit",),

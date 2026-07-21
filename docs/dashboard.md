@@ -154,6 +154,16 @@ a fresh database, and keeps running. A `db_reset` alert (Telegram and the other 
 history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
 only the historical charts reset.
 
+**Fail-closed miner hold.** By default, every health failure above — DB write failing, DB
+corruption, a crash-looping container — only alerts; the dashboard is an observability layer, and
+the mining datapath (`xmrig-proxy` → `p2pool` → `monerod`) runs independently of it. Set
+[`dashboard.fail_closed`](configuration.md#configuration-reference) to `true` to hold the miner
+instead, but only for genuinely **unrecoverable** failures: the DB self-heal above failing on its
+own rebuild attempt (not an ordinary write blip, which stays alert-only), or the `dashboard`
+container itself crash-looping. A red `Miner held (fail-closed)` badge shows while held, next to
+`p2pool` and `xmrig-proxy`, stopped the same way the [Sync Mode hold](#sync-mode) does; unlike that
+one-way sync gate, both containers start again on their own once the condition clears — no restart
+needed.
 The database also keeps three smaller series: pool block-found events, hourly monerod-DB-size and
 host-disk-usage samples, and XvB-credited scalar samples taken roughly every 5 minutes. `/api/state`
 serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the same way as

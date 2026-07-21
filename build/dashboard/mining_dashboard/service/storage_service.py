@@ -117,6 +117,14 @@ class StateManager:
             None  # {"ts", "reason", "quarantine"} of the most recent reset, for the alert
         )
 
+        # True only when the auto-heal RECOVERY ITSELF just failed (disk full, permissions) —
+        # distinct from ``db_healthy``, which also flips false on an ordinary transient write
+        # error (a locked DB, a momentary I/O hiccup) that must never be treated as unrecoverable.
+        # This is the narrow signal `dashboard.fail_closed` (#490) gates on: a DB that a corruption
+        # was DETECTED for and whose rebuild then failed, not merely "a write failed once". Cleared
+        # on the next recovery attempt that succeeds.
+        self.db_unrecoverable = False
+
         # Per-table "last successful write" health signal for the v1.7 telemetry backbone (#196
         # Wave-0), mirroring db_healthy above but per table: DataService's whole poll loop is one
         # big try/except, so a capture hook that starts silently raising would otherwise stop
@@ -219,6 +227,7 @@ class StateManager:
                 self._conn.row_factory = sqlite3.Row
                 self._apply_schema()
             self.db_healthy = True
+            self.db_unrecoverable = False  # a later successful attempt clears an earlier failure
             self.db_reset_count += 1
             self.last_db_reset = {"ts": time.time(), "reason": reason, "quarantine": quarantine}
             self.logger.error(
@@ -228,7 +237,9 @@ class StateManager:
                 quarantine or "(in-memory, nothing to quarantine)",
             )
         except (sqlite3.Error, OSError) as e:
-            # Recovery itself failed (disk full, permissions) — leave persistence flagged unhealthy.
+            # Recovery itself failed (disk full, permissions) — this is the unrecoverable case
+            # #490's fail-closed gate watches for, distinct from an ordinary transient write error.
+            self.db_unrecoverable = True
             self._db_error("DB Recovery Error", e)
 
     def _prune_quarantined(self):
@@ -259,6 +270,12 @@ class StateManager:
     def is_db_healthy(self) -> bool:
         """True unless a DB init or write has failed — drives the dashboard persistence badge (#131)."""
         return self.db_healthy
+
+    def is_db_unrecoverable(self) -> bool:
+        """True only when the auto-heal rebuild itself just failed (#489/#490) — narrower than
+        ``is_db_healthy() is False``, which also covers an ordinary transient write error. Feeds
+        `dashboard.fail_closed`'s miner hold; a transient blip must never trip it."""
+        return self.db_unrecoverable
 
     def _create_tables(self):
         """Creates necessary tables if they don't exist."""

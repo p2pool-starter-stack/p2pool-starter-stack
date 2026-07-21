@@ -620,6 +620,16 @@ class TestBadges:
         out = build_badges({"miner_held": True}, _metrics(global_syncing=True), "ok")
         assert "Miner held (sync)" in self._texts(out)
 
+    def test_fail_closed_held(self):
+        # #490: distinct badge from the sync-gate hold above — fires post-sync, only with
+        # dashboard.fail_closed on.
+        out = build_badges({"fail_closed_held": True}, _metrics(), "ok")
+        assert any(b["variant"] == "bad" and "Miner held (fail-closed)" in b["text"] for b in out)
+
+    def test_no_fail_closed_badge_by_default(self):
+        out = build_badges({}, _metrics(), "ok")
+        assert not any("fail-closed" in b["text"] for b in out)
+
     def test_passive_tari_with_and_without_percent(self):
         with_pct = build_badges(
             {"tari_syncing_passive": True}, _metrics(tari=_sync(percent=42)), "ok"

@@ -43,6 +43,7 @@ from mining_dashboard.config.config import (
     CHECK_FOR_UPDATES,
     CLEARNET_STATE_DIR,
     DASHBOARD_ENERGY,
+    DASHBOARD_FAIL_CLOSED,
     ENABLE_XVB,
     GITHUB_RELEASES_API,
     GITHUB_RIGFORGE_RELEASES_API,
@@ -574,6 +575,7 @@ class DataService:
             "workers_rejected": False,
             "miner_released": False,
             "miner_held": False,
+            "fail_closed_held": False,
             "timestamp": 0,
         }
 
@@ -642,6 +644,11 @@ class DataService:
         self.miner_released = False
         self.miner_held = False
 
+        # Opt-in fail-closed miner hold on an UNRECOVERABLE health failure (#490), dashboard.
+        # fail_closed, default false — see `_apply_fail_closed_gate`. Transient like `miner_held`,
+        # not persisted: a restart re-derives it from the current health signals.
+        self.fail_closed_held = False
+
         # Restore persistent state from DB to prevent empty dashboard on service restart
         loaded_snapshot = self.state_manager.load_snapshot()
         if loaded_snapshot and isinstance(loaded_snapshot, dict):
@@ -692,6 +699,19 @@ class DataService:
             if await self.docker_control.start(REJECT_WORKERS_CONTAINER):
                 self.workers_rejected = False
 
+    async def _stop_gate_containers(self, quiet):
+        """Stop every ``SYNC_GATE_CONTAINERS`` container; shared by the #35 sync gate and the
+        #490 fail-closed gate, the two holds that stop the same container set."""
+        for container in SYNC_GATE_CONTAINERS:
+            await self.docker_control.stop(container, quiet=quiet)
+
+    async def _start_gate_containers(self):
+        """Start every ``SYNC_GATE_CONTAINERS`` container; True only if every start succeeded."""
+        ok = True
+        for container in SYNC_GATE_CONTAINERS:
+            ok = (await self.docker_control.start(container)) and ok
+        return ok
+
     async def _apply_sync_gate(self, gate_satisfied):
         """
         Hold p2pool + xmrig-proxy stopped until the required chain(s) have fully synced once,
@@ -716,10 +736,7 @@ class DataService:
             return
 
         if gate_satisfied:
-            ok = True
-            for container in SYNC_GATE_CONTAINERS:
-                ok = (await self.docker_control.start(container)) and ok
-            if ok:
+            if await self._start_gate_containers():
                 self.miner_released = True
                 self.miner_held = False
                 logger.info(
@@ -730,14 +747,60 @@ class DataService:
 
         # Still syncing: keep the miner held. Log the human-facing notice only on the first
         # cycle of a hold; the per-cycle re-assert stops are quiet to avoid flooding the log.
-        for container in SYNC_GATE_CONTAINERS:
-            await self.docker_control.stop(container, quiet=self.miner_held)
+        await self._stop_gate_containers(quiet=self.miner_held)
         if not self.miner_held:
             self.miner_held = True
             logger.info(
                 f"Required chain(s) still syncing — holding {', '.join(SYNC_GATE_CONTAINERS)} "
                 f"until synced."
             )
+
+    async def _apply_fail_closed_gate(self, unrecoverable):
+        """
+        Opt-in (`dashboard.fail_closed`, default False) miner hold on an UNRECOVERABLE health
+        failure (#490) — reuses the #35 sync gate's own mechanism (stop/start
+        ``SYNC_GATE_CONTAINERS`` through ``docker_control``) rather than a new hold path.
+
+        "Unrecoverable" is scoped narrowly by the caller to genuine, non-transient failures: a DB
+        whose auto-heal rebuild itself failed (``StateManager.is_db_unrecoverable``), or the
+        dashboard container itself crash-looping / stuck unhealthy past the #337 debounce
+        (``AlertService.containers.is_confirmed_bad("dashboard")`` — a debounce-CONFIRMED verdict,
+        never a first-sighting seed). A transient write blip, a slow query, a single failed
+        external fetch, or a container merely reported unhealthy on one poll is never
+        "unrecoverable" — those already alert (#131/#337) and must never gate; a false positive
+        here idles the fleet and costs revenue.
+
+        Unlike the sync gate's one-way latch, this re-checks every cycle and releases once
+        ``unrecoverable`` clears — the failures it watches (disk full, a crash-looping container)
+        are the kind an operator fixes without a full stack restart, and the miner should resume
+        on its own once they do. Only engages once the sync gate has actually released the miner;
+        holding before that is already #35's job.
+
+        Default False is alert-only: `dashboard.fail_closed` off means these same signals keep
+        alerting (unchanged) but this method is a no-op, so a cosmetic dashboard fault never idles
+        the fleet — the mining datapath (xmrig-proxy -> p2pool -> monerod) is independent of the
+        dashboard by design.
+        """
+        if not DASHBOARD_FAIL_CLOSED or not self.miner_released:
+            return
+
+        if unrecoverable:
+            await self._stop_gate_containers(quiet=self.fail_closed_held)
+            if not self.fail_closed_held:
+                self.fail_closed_held = True
+                logger.error(
+                    f"Unrecoverable health failure with dashboard.fail_closed enabled — holding "
+                    f"{', '.join(SYNC_GATE_CONTAINERS)} until it clears."
+                )
+            return
+
+        if self.fail_closed_held and await self._start_gate_containers():
+            self.fail_closed_held = False
+            logger.info(
+                f"Unrecoverable health failure cleared — starting "
+                f"{', '.join(SYNC_GATE_CONTAINERS)}; mining can resume."
+            )
+        # On a partial-start failure stay held so the next cycle retries.
 
     async def _sync_xvb_stats(self):
         """
@@ -1365,9 +1428,14 @@ class DataService:
                     )
                     # Per-container restart/health snapshot for the crash-loop/unhealthy alert
                     # (#337) — 9 inspect calls against the read-only docker-proxy, skipped
-                    # entirely while Telegram is off (same cost discipline as alert_metrics).
+                    # entirely while Telegram is off AND dashboard.fail_closed is off (same cost
+                    # discipline as alert_metrics). fail_closed needs it even with Telegram off:
+                    # it's the only source for "is the dashboard container itself crash-looping"
+                    # (#490).
                     container_states = (
-                        await get_container_health() if self.alert_service.enabled else {}
+                        await get_container_health()
+                        if (self.alert_service.enabled or DASHBOARD_FAIL_CLOSED)
+                        else {}
                     )
                     await self.alert_service.process(
                         monero_down=monero_down,
@@ -1418,6 +1486,14 @@ class DataService:
                         # the read-only docker-proxy.
                         containers=container_states,
                     )
+                    # 5b. Fail-closed miner hold (#490), opt-in via dashboard.fail_closed. Reads
+                    # the DB auto-heal outcome and the dashboard's OWN crash-loop state — both
+                    # narrow, non-transient "unrecoverable" signals — off the trackers `process`
+                    # above just fed (see `_apply_fail_closed_gate` for what counts and why).
+                    await self._apply_fail_closed_gate(
+                        self.state_manager.is_db_unrecoverable()
+                        or self.alert_service.containers.is_confirmed_bad("dashboard")
+                    )
                     # Once-daily status digest, reusing the metrics built above (only when the bot
                     # is on, which is also the only time maybe_daily_summary would send).
                     await self.alert_service.maybe_daily_summary(
@@ -1466,6 +1542,7 @@ class DataService:
                             "workers_rejected": self.workers_rejected,
                             "miner_released": self.miner_released,
                             "miner_held": self.miner_held,
+                            "fail_closed_held": self.fail_closed_held,
                             "clearnet_sync": self.clearnet_sync_state,
                             "system": {
                                 "disk": disk_usage,

@@ -13,6 +13,17 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **Opt-in fail-closed miner hold on an unrecoverable dashboard health failure** (#490). New
+  `dashboard.fail_closed` toggle, default **off**. The dashboard is an observability layer, not the
+  mining datapath (`xmrig-proxy` → `p2pool` → `monerod` runs independently of it), so by default an
+  unhealthy condition only alerts (Telegram/Healthchecks/webhook) and shows a badge while mining
+  continues. Set it `true` and a genuinely unrecoverable failure — the SQLite database failing to
+  rebuild after its own auto-heal attempt (disk full, permissions), or the `dashboard` container
+  itself crash-looping past the #337 debounce — holds `p2pool` and `xmrig-proxy` using the same
+  #35 sync-gate stop/start mechanism, with a `Miner held (fail-closed)` badge. Unlike the sync
+  gate's one-way latch it re-checks every cycle and releases on its own once the condition clears.
+  A transient write blip, a slow query, or a single failed external fetch never trips it — those
+  still only alert. Gated by the #33 control-approval path like other `dashboard.*` toggles.
 - **`/api/state` exposure for three of the #196 telemetry-backbone series (Tier-1).** The backbone
   PR (#600) added five persisted SQLite tables with capture, storage, and retention, but shipped
   without surfacing them to the client. This slice exposes three — `blocks` (pool block-found
