@@ -31,11 +31,12 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Security
 
-- **Every external dashboard fetch is size-capped** (#660). The GitHub release check, the three
-  XvB reads, and the CoinGecko price feed now stream their responses through a shared
-  `bounded_get` helper that cuts the body at 1 MiB, so a hostile or broken endpoint can no
-  longer make the dashboard buffer an unbounded payload. Over-cap reads follow each client's
-  existing failure contract (no result / keep the last good one).
+- **The dashboard's external API fetches are size-capped** (#660). The GitHub release check, the
+  CoinGecko price feed, and the XvB client's calls (stats, reward estimates, winners, register)
+  now stream their responses through a shared `bounded_get` helper that cuts the body at 1 MiB,
+  so a hostile or broken endpoint can no longer make these clients buffer an unbounded payload.
+  Over-cap reads follow each client's existing failure contract (no result / keep the last good
+  one).
 
 ## [1.9.3] - 2026-07-19
 

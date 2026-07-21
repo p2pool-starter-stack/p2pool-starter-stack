@@ -1,5 +1,6 @@
 """Tier 1 — bounded_get (#660): the shared response-size cap for external HTTP fetches."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,6 +30,15 @@ class TestBoundedGet:
         assert resp.json() == {"tag_name": "v1.2.3"}
         # The read is streamed, never buffered whole by requests itself.
         assert g.call_args.kwargs["stream"] is True
+
+    def test_exactly_at_cap_returns_body(self):
+        # The cap is strictly greater-than: a body of exactly max_bytes succeeds.
+        with patch(
+            "mining_dashboard.helper.http.requests.get",
+            return_value=_streaming_resp([b"x" * 1024, b"x" * 1024]),
+        ):
+            resp = bounded_get("https://example.test/x", max_bytes=2048)
+        assert resp.content == b"x" * 2048
 
     def test_over_cap_raises_request_exception(self):
         # ResponseTooLarge subclasses RequestException, so every caller's existing
@@ -78,16 +88,18 @@ class TestBoundedGet:
 
 class TestWiringDriftGuard:
     def test_external_clients_route_through_bounded_get(self):
-        """Every external fetch module GETs via bounded_get — a bare requests.get( here is drift."""
+        """Every external fetch module goes via bounded_get — any direct requests.<verb>( is drift."""
         pkg = Path(__file__).resolve().parents[2] / "mining_dashboard"
         external = [
             pkg / "service" / "update_checker.py",
             pkg / "service" / "price_feed.py",
             pkg / "client" / "xvb_client.py",
         ]
+        direct_call = re.compile(r"requests\.(get|post|put|delete|head|request)\(")
         for mod in external:
             src = mod.read_text()
-            assert "requests.get(" not in src, (
-                f"{mod.name}: unbounded requests.get( slipped back in"
+            hit = direct_call.search(src)
+            assert hit is None, (
+                f"{mod.name}: unbounded {hit.group() if hit else ''} slipped back in"
             )
             assert "bounded_get(" in src, f"{mod.name}: no bounded_get call found"
