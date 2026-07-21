@@ -130,6 +130,16 @@ _WORKER_HISTORY_CAPTURE_SEC = 300  # ~5 min
 # like the capture cadences above.
 _XVB_WINNERS_SYNC_SEC = 1800
 
+# Per-worker flood cap on NEW rig-edit audit rows (#724). The enriched worker feed is
+# unauthenticated LAN input, so a rogue device presenting as a worker can report a fresh random
+# change_id every poll — each a distinct, permanent audit_events row (#530's deterministic id only
+# collapses REPEATS of one change_id, never distinct ones). At most _RIG_EDIT_CAP_PER_HOUR genuine
+# rig-edit rows per worker per rolling hour; beyond that, rows are dropped and a single
+# rate-limited marker is recorded + logged. A real fleet edits a rig a handful of times an hour at
+# most, so a legitimate cadence never trips it — only a flood does.
+_RIG_EDIT_CAP_PER_HOUR = 12
+_RIG_EDIT_WINDOW_SEC = 3600
+
 
 def _parse_proxy_list_worker(w):
     """Parse one xmrig-proxy 6.x positional row into a worker dict.
@@ -545,6 +555,15 @@ class DataService:
         # actually bounds the table across restarts (INSERT OR IGNORE); this just skips the
         # redundant DB work in the steady state. Bounded by the count of distinct real rig edits.
         self._flagged_rig_changes = set()
+        # Per-worker fixed-window flood cap on NEW rig-edit rows (#724): {worker: (window_start,
+        # count)}. Distinct change_ids clear #530's deterministic-id dedup, so a rogue rig can
+        # spam a permanent audit row every poll; this bounds them to _RIG_EDIT_CAP_PER_HOUR per
+        # worker per hour. In-memory like _flagged_rig_changes — a restart resets the window, which
+        # at worst grants one extra window's budget, still bounded per wall-hour.
+        # ponytail: a rogue device rotating the worker NAME each poll sidesteps a per-worker cap;
+        # that's the broader unauth-feed vector (#235), out of scope here — cap keyed on worker per
+        # the issue, so one rogue rig can't crowd genuine rig-edit history out.
+        self._rig_edit_window = {}
         # XvB raffle-winners mirror: wall-clock of the last successful winners-file read. Starts
         # at 0.0 so the first eligible poll reads it; NOT stamped on a failed fetch, so a failure
         # retries on the next 10th poll instead of waiting out the 30-min gate.
@@ -1133,6 +1152,19 @@ class DataService:
                 keys=e.get("keys", ""),
             )
 
+    def _rig_edit_within_cap(self, worker, now):
+        """Per-worker fixed-window cap on NEW rig-edit audit rows (#724). Counts this rig-edit
+        against the worker's current hour window and returns ``(allowed, first_over)``: ``allowed``
+        is True while the worker is under ``_RIG_EDIT_CAP_PER_HOUR`` this window; ``first_over`` is
+        True only on the single call that tips it over, so the caller logs + records the
+        rate-limited marker exactly once per window rather than every poll. A handful of real edits
+        an hour never trips it; a rig spamming distinct change_ids does."""
+        start, count = self._rig_edit_window.get(worker, (now, 0))
+        if now - start >= _RIG_EDIT_WINDOW_SEC:
+            start, count = now, 0
+        self._rig_edit_window[worker] = (start, count + 1)
+        return count < _RIG_EDIT_CAP_PER_HOUR, count == _RIG_EDIT_CAP_PER_HOUR
+
     async def _reconcile_worker_config(self, workers, worker_results):
         """Catch up any still-``accepted`` #185 worker-config history row whose change_id the rig
         now reports terminal (#579), and flag an out-of-band RIG-EDIT (#530).
@@ -1157,7 +1189,14 @@ class DataService:
         the audit row's deterministic id makes the write itself idempotent even across a restart
         (when the guard is empty but a repeat report must still not duplicate the row). Both matter
         — the id is the correctness bound (a rogue rig can't flood the permanent table with repeats
-        of one bogus change_id), the guard is the optimisation."""
+        of one bogus change_id), the guard is the optimisation.
+
+        DISTINCT change_ids each clear that dedup, though, so a rogue rig on the unauthenticated
+        feed can still write one permanent row per poll (#724). ``_rig_edit_within_cap`` bounds NEW
+        rig-edit rows to ``_RIG_EDIT_CAP_PER_HOUR`` per worker per hour; beyond that the row is
+        dropped, but never silently — a single ``rate-limited`` marker is logged and recorded so the
+        flood stays visible in the Security panel. host-edit rows are unaffected (a different,
+        non-attacker-controlled path)."""
         for w, extra_stats in zip(workers, worker_results, strict=False):
             ctrl = parse_worker_control_status(extra_stats) if extra_stats else None
             if not ctrl:
@@ -1176,6 +1215,31 @@ class DataService:
                 worker = w.get("name", "")
                 guard_key = (worker, ctrl["change_id"])
                 if guard_key in self._flagged_rig_changes:
+                    continue
+                allowed, first_over = self._rig_edit_within_cap(worker, time.time())
+                if not allowed:
+                    # Over cap this window — drop the row (don't add to the guard set, so its size
+                    # stays bounded by what we actually record, not by the flood). Surface the cap
+                    # once per window: a warning plus one marker row, its deterministic id keyed to
+                    # this worker's window start so it's idempotent even if a restart re-trips
+                    # `first_over`, and a fresh window later gets its own distinct marker.
+                    if first_over:
+                        window_start = self._rig_edit_window[worker][0]
+                        logger.warning(
+                            "Worker %s exceeded %d rig-edit audit rows this hour (#724) — a rig "
+                            "reporting distinct change_ids on the unauthenticated feed; further "
+                            "rig-edit rows are dropped until the window resets.",
+                            worker,
+                            _RIG_EDIT_CAP_PER_HOUR,
+                        )
+                        await self._record_audit_event(
+                            "rig-edit",
+                            worker,
+                            "rate-limited",
+                            "dropped",
+                            f"rig-edit rows capped at {_RIG_EDIT_CAP_PER_HOUR}/hour",
+                            event_id=f"rig-edit-ratelimited-{worker}-{int(window_start)}",
+                        )
                     continue
                 self._flagged_rig_changes.add(guard_key)
                 await self._record_audit_event(

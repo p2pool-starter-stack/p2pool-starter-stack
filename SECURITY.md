@@ -90,7 +90,12 @@ The stack's defaults:
   and appends both — `host-edit` / `rig-edit` — to the same trail, keys or worker names only. The
   persisted trail (mirrored `control.log` rows plus these two out-of-band kinds) lives in the
   dashboard's own database, not just the log tail, so the Security panel's hour/day/month grouping
-  covers more than `control.log`'s own trimmed window.
+  covers more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
+  unauthenticated worker feed, so it is rate-capped per worker (#724): a rig reporting distinct
+  change_ids on every poll can add at most a bounded number of rows per hour before the rest are
+  dropped behind a single `rate-limited` marker — one LAN device can't grow the database without
+  limit. The `host-edit` and mirrored `control.log` rows are not attacker-controllable and are not
+  capped.
 
 ### Telegram control commands (#338)
 

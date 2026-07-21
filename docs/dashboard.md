@@ -733,7 +733,12 @@ watches for both on its normal poll cycle and appends them to the SAME audit tra
 - **`rig-edit`** — a worker's control API reports a config change this dashboard never sent. The
   row names the worker and the rig's own change id; RigForge's status feed reports only the
   outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
-  moved — inspect the rig directly to see what changed.
+  moved — inspect the rig directly to see what changed. This one source reads off the
+  unauthenticated worker feed, so it is rate-capped per worker
+  ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
+  change id every poll can add only a bounded number of `rig-edit` rows per hour before the rest
+  are dropped behind a single `rate-limited` row. A real occasional rig change still records; only
+  a flood is capped.
 
 Either kind is worth treating like a rotate-now signal in the same spirit as
 [Operations › Watching for intruders](operations.md#watching-for-intruders): if you didn't make
