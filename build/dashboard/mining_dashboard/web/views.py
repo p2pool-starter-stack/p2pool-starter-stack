@@ -1224,6 +1224,17 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
                 "title": "p2pool and xmrig-proxy are held until the required chains finish syncing",
             }
         )
+    # Fail-closed miner hold on an unrecoverable health failure (Issue #490), opt-in via
+    # dashboard.fail_closed. Distinct from the sync-gate badge above — this fires post-sync.
+    if data.get("fail_closed_held"):
+        badges.append(
+            {
+                "text": "Miner held (fail-closed)",
+                "variant": "bad",
+                "title": "dashboard.fail_closed is on and an unrecoverable health failure is "
+                "holding p2pool and xmrig-proxy until it clears",
+            }
+        )
     # Non-blocking Tari (Issue #51): stay operational, surface a top-bar badge with the live
     # percentage once known (omitted early so it isn't a stale "0%").
     if data.get("tari_syncing_passive"):

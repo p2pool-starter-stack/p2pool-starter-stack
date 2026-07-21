@@ -429,6 +429,15 @@ SYNC_GATE_CONTAINERS = [
     if c.strip()
 ]
 
+# Opt-in fail-closed miner hold on an UNRECOVERABLE health failure (#490), `dashboard.fail_closed`,
+# default false. The dashboard is an observability layer, not the mining datapath (xmrig-proxy ->
+# p2pool -> monerod is independent of it), so the default posture is alert-only: a cosmetic
+# dashboard fault must never idle the fleet. `true` reuses the #35 sync-gate's own mechanism
+# (stop/start SYNC_GATE_CONTAINERS) to hold the miner until the failure clears — see
+# DataService._apply_fail_closed_gate for what counts as "unrecoverable" (narrowly: DB recovery
+# itself failing, or the dashboard container crash-looping — never a transient blip).
+DASHBOARD_FAIL_CLOSED = os.environ.get("DASHBOARD_FAIL_CLOSED", "false").strip().lower() == "true"
+
 # Debounce: a node must be unreachable this long before it's declared DOWN, and reachable
 # this long before recovery — so a single transient timeout or a brief restart doesn't
 # kick every miner to their backups (and back) on a blip.

@@ -69,6 +69,15 @@ class ContainerHealthMonitor:
         #   ok_since        : when the current continuous-clean streak began
         self._containers = {}
 
+    def is_bad(self, name):
+        """True if `name`'s current debounced state is "bad" (crash-looping or stuck unhealthy).
+
+        Reads the live level rather than an edge, so a caller that needs "is this still broken
+        right now" (e.g. `dashboard.fail_closed`'s miner hold, #490) doesn't have to replay
+        `update`'s one-shot edges itself. Unknown/never-seen container reads as not bad."""
+        c = self._containers.get(name)
+        return bool(c and c["state"] == "bad")
+
     def update(self, states, now=None):
         """Feed this cycle's ``{name: state}`` snapshot; return the debounced edges."""
         now = self._clock() if now is None else now

@@ -230,3 +230,35 @@ class TestNeverAnEdge:
         clock.advance(120)
         # Back up and unhealthy again: the streak starts fresh, so no immediate edge.
         assert m.update({"monerod": _s(health="unhealthy")}) == []
+
+
+class TestIsBad:
+    """Live-level read (#490), not an edge — dashboard.fail_closed reads "is it bad right now"
+    off this instead of replaying update()'s one-shot edges itself."""
+
+    def test_unknown_container_is_not_bad(self):
+        m, _clock = _monitor()
+        assert m.is_bad("dashboard") is False
+
+    def test_silently_seeded_bad_reads_bad(self):
+        # First sighting already unhealthy seeds "bad" with no edge (see TestBaseline) — is_bad
+        # must still reflect it live, even though update() returned nothing to alert on.
+        m, _clock = _monitor()
+        m.update({"dashboard": _s(health="unhealthy")})
+        assert m.is_bad("dashboard") is True
+
+    def test_crash_loop_reads_bad_until_recovered(self):
+        m, clock = _monitor()
+        m.update({"dashboard": _s(restart_count=0)})
+        clock.advance(60)
+        m.update({"dashboard": _s(restart_count=1)})
+        clock.advance(60)
+        m.update({"dashboard": _s(restart_count=2)})
+        clock.advance(60)
+        edges = m.update({"dashboard": _s(restart_count=3)})
+        assert edges == [("dashboard", "crash_loop")]
+        assert m.is_bad("dashboard") is True
+        # Clean streak past recovery_after clears it.
+        clock.advance(121)
+        m.update({"dashboard": _s(restart_count=3)})
+        assert m.is_bad("dashboard") is False

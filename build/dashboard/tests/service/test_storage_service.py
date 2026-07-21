@@ -220,6 +220,37 @@ class TestDbRecovery:
         state_manager._db_error("History Update Error", sqlite3.OperationalError("disk I/O error"))
         assert state_manager.is_db_healthy() is False
         assert state_manager.db_reset_count == 0  # no reset for a transient error
+        # #490: a transient blip must never read as "unrecoverable" — that's the narrow signal
+        # dashboard.fail_closed gates the miner hold on, and this is exactly the false positive
+        # it must not trip on.
+        assert state_manager.is_db_unrecoverable() is False
+
+    def test_recovery_failure_marks_unrecoverable(self, monkeypatch):
+        # #490: the auto-heal REBUILD itself failing (disk full, permissions) is the narrow
+        # "unrecoverable" signal — distinct from db_healthy, which also flips false on an
+        # ordinary transient write error that must never gate the miner.
+        sm = StateManager(db_path=":memory:")
+        try:
+            monkeypatch.setattr(
+                sm, "_apply_schema", MagicMock(side_effect=sqlite3.OperationalError("disk full"))
+            )
+            sm._recover_corrupt_db("test: forced recovery failure")
+            assert sm.is_db_unrecoverable() is True
+            assert sm.is_db_healthy() is False
+        finally:
+            sm.close()
+
+    def test_successful_recovery_clears_unrecoverable_flag(self):
+        # A later recovery attempt that succeeds (e.g. the disk freed up) clears an earlier
+        # failure — fail_closed's hold must release once the DB is actually healthy again.
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.db_unrecoverable = True  # simulate a prior failed attempt
+            sm._recover_corrupt_db("test: retry succeeds")
+            assert sm.is_db_unrecoverable() is False
+            assert sm.is_db_healthy() is True
+        finally:
+            sm.close()
 
     def test_prune_keeps_only_recent_quarantines(self, tmp_path):
         import os

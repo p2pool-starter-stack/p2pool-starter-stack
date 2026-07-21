@@ -154,6 +154,17 @@ a fresh database, and keeps running. A `db_reset` alert (Telegram and the other 
 history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
 only the historical charts reset.
 
+**Fail-closed miner hold.** By default, every health failure above — DB write failing, DB
+corruption, a crash-looping container — only alerts; the dashboard is an observability layer, and
+the mining datapath (`xmrig-proxy` → `p2pool` → `monerod`) runs independently of it. Set
+[`dashboard.fail_closed`](configuration.md#configuration-reference) to `true` to hold the miner
+instead, but only for genuinely **unrecoverable** failures: the DB self-heal above failing on its
+own rebuild attempt (not an ordinary write blip, which stays alert-only), or the `dashboard`
+container itself crash-looping. A red `Miner held (fail-closed)` badge shows while held, next to
+`p2pool` and `xmrig-proxy`, stopped the same way the [Sync Mode hold](#sync-mode) does; unlike that
+one-way sync gate, both containers start again on their own once the condition clears — no restart
+needed.
+
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
