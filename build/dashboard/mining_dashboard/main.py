@@ -15,6 +15,7 @@ from mining_dashboard.service.algo_service import AlgoService
 from mining_dashboard.service.data_service import DataService
 from mining_dashboard.service.storage_service import StateManager
 from mining_dashboard.service.telegram_commands import TelegramCommandBot
+from mining_dashboard.service.xvb_standby import XvbStandbyPuller
 from mining_dashboard.web.server import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -37,20 +38,29 @@ def build_app() -> web.Application:
     # On-demand Telegram command interface (#45). Reads the snapshot data_service already collects;
     # a no-op unless telegram.enabled + telegram.commands.enabled + bot_token + chat_id are set.
     telegram_bot = TelegramCommandBot(data_service)
+    # Backup-stack warm-standby puller (#249): pulls the primary's XvB controller state so a
+    # failover resumes warm. Inert unless xvb.standby.source is configured.
+    xvb_standby = XvbStandbyPuller(state_manager)
 
     async def start_background_tasks(app):
         """Initializes background services upon web application startup."""
         app["data_task"] = asyncio.create_task(data_service.run())
         app["algo_task"] = asyncio.create_task(algo_service.run())
         app["telegram_task"] = asyncio.create_task(telegram_bot.run())
+        app["xvb_standby_task"] = asyncio.create_task(xvb_standby.run())
 
     async def cleanup_background_tasks(app):
         """Stops background tasks and closes resources on shutdown."""
         app["data_task"].cancel()
         app["algo_task"].cancel()
         app["telegram_task"].cancel()
+        app["xvb_standby_task"].cancel()
         await asyncio.gather(
-            app["data_task"], app["algo_task"], app["telegram_task"], return_exceptions=True
+            app["data_task"],
+            app["algo_task"],
+            app["telegram_task"],
+            app["xvb_standby_task"],
+            return_exceptions=True,
         )
         if "state_manager" in app:
             app["state_manager"].close()

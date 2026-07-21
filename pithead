@@ -3003,7 +3003,8 @@ readonly CONTROL_SECRET_PATHS='[
     ["monero","view_key"],
     ["tari","view_key"],
     ["p2pool","stratum_password"],
-    ["healthchecks","ping_url"]]'
+    ["healthchecks","ping_url"],
+    ["xvb","standby","source"]]'
 
 # Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
 # by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
@@ -3652,6 +3653,14 @@ render_env() {
     local hc_ping_url
     hc_ping_url=$(jq -r '.healthchecks.ping_url // empty' "$CONFIG_FILE")
 
+    # XvB warm-standby source (#249). On a backup stack this is the PRIMARY dashboard's read-only
+    # /api/xvb-standby URL; the backup pulls it so a failover resumes the donation split warm.
+    # Blank (default) = off. A capability URL (it can carry the primary's dashboard basic-auth as
+    # userinfo), so like the ping URL above it lives in the owner-only .env, never a world-readable
+    # file. docs/configuration.md.
+    local xvb_standby_source
+    xvb_standby_source=$(jq -r '.xvb.standby.source // empty' "$CONFIG_FILE")
+
     # check_for_updates (#224, default TRUE): the dashboard checks GitHub for a newer release and shows
     # a header badge linking to it (notify-only — no upgrade). On by default because the check is
     # Tor-routed (socks5h), so it leaks neither the host IP nor a DNS lookup to GitHub; set false to opt
@@ -3866,6 +3875,7 @@ DASHBOARD_FAIL_CLOSED=$fail_closed
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
 HEALTHCHECKS_PING_URL=$hc_ping_url
+XVB_STANDBY_SOURCE=$xvb_standby_source
 TELEGRAM_ENABLED=$tg_enabled
 TELEGRAM_BOT_TOKEN=$tg_token
 TELEGRAM_CHAT_ID=$tg_chat

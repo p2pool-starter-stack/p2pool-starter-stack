@@ -55,6 +55,31 @@ async def handle_state(request):
         return web.json_response({"error": "Failed to build dashboard state."}, status=500)
 
 
+async def handle_xvb_standby(request):
+    """The XvB controller state a BACKUP stack pulls to warm its donation split (#249).
+
+    Read-only, behind the same Caddy auth + loopback bind as ``/api/state`` — no new trust boundary
+    or egress class. The payload is the minimal warm state: the controller's commanded donation
+    fraction, XvB's credited 1h/24h averages (already public per-wallet), the target tier, and the
+    current mode. Always registered; on a stack with no backup nothing ever pulls it."""
+    state_mgr = request.app["state_manager"]
+    try:
+        xvb = state_mgr.get_xvb_stats()
+        return web.json_response(
+            {
+                "commanded_fraction": xvb.get("commanded_fraction", 0.0),
+                "avg_1h": xvb.get("avg_1h", 0.0),
+                "avg_24h": xvb.get("avg_24h", 0.0),
+                "mode": xvb.get("current_mode", ""),
+                "donation_level": config.XVB_DONATION_LEVEL,
+                "ts": xvb.get("last_update", 0.0),
+            }
+        )
+    except Exception:
+        logger.exception("Error building XvB standby state")
+        return web.json_response({"error": "Failed to build XvB standby state."}, status=500)
+
+
 async def handle_metrics(request):
     """Prometheus text exposition (#379), rendered from the same ``build_metrics`` snapshot
     ``/api/state`` uses — live gauges only, no history. Same trust boundary as the state API:
@@ -395,6 +420,9 @@ def create_app(state_manager, latest_data_ref):
         [
             web.get("/", handle_index),
             web.get("/api/state", handle_state),
+            # Warm-standby state a backup stack pulls on failover (#249). Read-only, same auth as
+            # /api/state; harmless (and unread) on a stack with no backup.
+            web.get("/api/xvb-standby", handle_xvb_standby),
             web.get("/metrics", handle_metrics),
             web.get("/api/access", handle_access_log),
         ]

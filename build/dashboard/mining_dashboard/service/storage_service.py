@@ -89,6 +89,12 @@ class StateManager:
                 # (routed) next to what XvB *credits* (avg_1h/24h) — the live
                 # credit-factor signal (Issue #70).
                 "donation_fraction": 0.0,
+                # The controller's own last-COMMANDED donation fraction — the closed-loop
+                # integrator state (AlgoService.donation_fraction), distinct from the routed
+                # fraction above. Persisted so a restart resumes the warmed-up split instead of
+                # re-seeding cold from the feedforward estimate, and so a backup stack can hand it
+                # off on failover (#249). 0.0 until the controller first steers.
+                "commanded_fraction": 0.0,
             },
             # Initialize state with default values from configuration
             "tiers": TIER_DEFAULTS.copy(),
@@ -1330,6 +1336,30 @@ class StateManager:
         """Returns the current XvB mining statistics dictionary."""
         with self._lock:
             return self.state["xvb"].copy()
+
+    def set_xvb_standby(self, standby: dict[str, Any]):
+        """Store the XvB controller state last pulled from the PRIMARY stack (#249). Held as
+        standby only — never folded into the live controller until this host takes over on
+        failover, and never acted on while the primary is authoritative (this host has no workers
+        then, so the controller stays on P2Pool regardless). Persisted (kv_store) so the standby
+        survives a backup restart. A JSON blob, mirroring ``save_snapshot``."""
+        try:
+            self.set_kv("xvb_standby", json.dumps(standby))
+        except (TypeError, ValueError) as e:
+            self._db_error("XvB Standby Serialization Error", e)
+
+    def get_xvb_standby(self) -> dict[str, Any] | None:
+        """The last-pulled primary XvB controller state (#249), or None if a backup source was
+        never configured / has not fetched yet. Inspectable via ``/api/state`` so an operator can
+        confirm the backup is warm before a failover."""
+        raw = self.get_kv("xvb_standby")
+        if not raw:
+            return None
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
 
     def get_xvb_reward_estimates(self) -> dict[str, Any]:
         """The cached XvB per-tier reward estimates (#118): ``{"estimates": {...}, "last_update": ts}``."""

@@ -38,6 +38,9 @@ SECRET_PATHS = [
     # A capability secret: pithead's describe_change already refuses to echo it, but read_config
     # was serving it in cleartext to the browser. Mask it too (#33 hardening).
     ("healthchecks", "ping_url"),
+    # The backup's primary-dashboard URL (#249) can carry the primary's dashboard basic-auth as
+    # userinfo — a capability secret, masked like the ping URL above.
+    ("xvb", "standby", "source"),
 ]
 SECRET_SENTINEL = {"__secret__": True}
 

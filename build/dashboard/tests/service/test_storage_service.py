@@ -22,6 +22,59 @@ class TestDefaults:
         assert state_manager.get_xvb_stats()["fail_count"] == 0
 
 
+class TestXvbWarmStandby:
+    """Warm-resume persistence for the failover pair (#249)."""
+
+    def test_commanded_fraction_defaults_zero(self, state_manager):
+        assert state_manager.get_xvb_stats()["commanded_fraction"] == 0.0
+
+    def test_commanded_fraction_persists_across_restart(self, tmp_path):
+        # The controller's commanded fraction must outlive a dashboard recreate so a restart
+        # resumes the warmed split instead of re-seeding cold from feedforward.
+        db = str(tmp_path / "xvb.db")
+        sm = StateManager(db_path=db)
+        sm.update_xvb_stats(commanded_fraction=0.42)
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            assert sm2.get_xvb_stats()["commanded_fraction"] == 0.42
+        finally:
+            sm2.close()
+
+    def test_standby_roundtrip(self, state_manager):
+        blob = {"commanded_fraction": 0.3, "avg_1h": 1200.0, "mode": "SPLIT"}
+        state_manager.set_xvb_standby(blob)
+        assert state_manager.get_xvb_standby() == blob
+
+    def test_standby_persists_across_restart(self, tmp_path):
+        db = str(tmp_path / "standby.db")
+        sm = StateManager(db_path=db)
+        sm.set_xvb_standby({"commanded_fraction": 0.25, "avg_1h": 900.0})
+        sm.close()
+        sm2 = StateManager(db_path=db)
+        try:
+            assert sm2.get_xvb_standby()["commanded_fraction"] == 0.25
+        finally:
+            sm2.close()
+
+    def test_standby_none_when_unset(self, state_manager):
+        assert state_manager.get_xvb_standby() is None
+
+    def test_standby_unserializable_flags_unhealthy(self, state_manager):
+        # A blob json.dumps can't serialize is a persistent write failure — flag it like every
+        # other write path (#131) rather than raising into the puller.
+        assert state_manager.is_db_healthy() is True
+        state_manager.set_xvb_standby({"bad": {1, 2, 3}})  # set -> TypeError in json.dumps
+        assert state_manager.is_db_healthy() is False
+
+    def test_standby_bad_payload_reads_none(self, state_manager):
+        # A corrupt/non-dict blob degrades to "no standby" rather than raising into the seed path.
+        state_manager.set_kv("xvb_standby", "not-json{")
+        assert state_manager.get_xvb_standby() is None
+        state_manager.set_kv("xvb_standby", "[1, 2, 3]")  # valid JSON, wrong shape
+        assert state_manager.get_xvb_standby() is None
+
+
 class TestXvbStats:
     def test_partial_updates(self, state_manager):
         state_manager.update_xvb_stats(mode="XVB", avg_24h=1234.0, fail_count=2)

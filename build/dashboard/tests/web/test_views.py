@@ -1908,6 +1908,7 @@ def _state_mgr(
     sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
     sm.get_share_stats.return_value = share_stats or []
     sm.get_raffle_wins.return_value = []
+    sm.get_xvb_standby.return_value = None  # no backup standby held (#249)
     sm.is_db_healthy.return_value = True
     # #196 Tier-1 telemetry backbone exposure.
     sm.get_blocks.return_value = blocks or []

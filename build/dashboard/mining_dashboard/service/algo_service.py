@@ -297,14 +297,52 @@ class AlgoService:
         if current_hr <= 0:
             return
 
-        # Seed from the feedforward estimate so we converge from a sane point.
+        # Seed the closed-loop state on the first real cycle — warm if we can, cold otherwise.
         if self.donation_fraction is None:
-            self.donation_fraction = min(self._reference_hr(target_hr) / current_hr, max_fraction)
+            self.donation_fraction = self._seed_donation_fraction(
+                target_hr, current_hr, max_fraction
+            )
             return
 
         error = self._reference_hr(target_hr) - avg_1h
         self.donation_fraction += self.control_gain * error / current_hr
         self.donation_fraction = max(0.0, min(self.donation_fraction, max_fraction))
+
+    def _seed_donation_fraction(self, target_hr, current_hr, max_fraction):
+        """The starting donated fraction for the closed loop, warm when we can prove it (#249).
+
+        Precedence, highest first — each clamped to the VIP reserve (``max_fraction``):
+
+        1. **This host's own persisted commanded fraction.** Once the controller has steered and
+           persisted a non-zero fraction, a plain process restart resumes from it rather than
+           re-ramping cold. It also wins over standby: a stack that has been authoritative owns its
+           state, so a stale standby from a since-departed primary can't override it.
+        2. **Standby state pulled from the primary** (backup failover). The first time a backup
+           actually donates — its workers just failed over — it adopts the primary's last-known
+           commanded fraction so the split resumes warm instead of restarting from zero (the whole
+           point of #249). While idle the backup never steers, so its own persisted fraction stays
+           0.0 and this branch is what fires at handover.
+        3. **Feedforward estimate** (cold start). A fresh install with no history and no standby —
+           the original behaviour, converging from a sane point via the closed loop.
+        """
+        feedforward = min(self._reference_hr(target_hr) / current_hr, max_fraction)
+
+        own = (self.state_manager.get_xvb_stats() or {}).get("commanded_fraction", 0.0) or 0.0
+        if own > 0:
+            return min(own, max_fraction)
+
+        standby = self.state_manager.get_xvb_standby() or {}
+        standby_fraction = standby.get("commanded_fraction", 0.0) or 0.0
+        if standby_fraction > 0:
+            logger.info(
+                "Warm-resume: adopting primary's standby donation fraction %.3f on failover "
+                "(#249) instead of cold-seeding %.3f",
+                standby_fraction,
+                feedforward,
+            )
+            return min(standby_fraction, max_fraction)
+
+        return feedforward
 
     def _fraction_to_ms(self, fraction):
         """Convert a donated fraction of the cycle to a slice length (ms), adding
@@ -447,10 +485,13 @@ class AlgoService:
                 )
 
                 # Record the fraction of this cycle actually routed to XvB so the
-                # dashboard can show routed-vs-credited (the live credit factor).
+                # dashboard can show routed-vs-credited (the live credit factor), and persist
+                # the controller's own commanded fraction so a restart / backup failover resumes
+                # warm rather than re-seeding cold (#249).
                 await asyncio.to_thread(
                     self.state_manager.update_xvb_stats,
                     donation_fraction=self._routed_fraction(decision, xvb_duration),
+                    commanded_fraction=self.donation_fraction or 0.0,
                 )
 
                 if decision == "P2POOL":
