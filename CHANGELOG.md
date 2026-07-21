@@ -11,6 +11,8 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-07-21
+
 ### Added
 
 - **Confirm-gated config editing for operationally-disruptive settings** (#719). The dashboard
