@@ -24,6 +24,14 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   gate's one-way latch it re-checks every cycle and releases on its own once the condition clears.
   A transient write blip, a slow query, or a single failed external fetch never trips it — those
   still only alert. Gated by the #33 control-approval path like other `dashboard.*` toggles.
+- **`/api/state` exposure for three of the #196 telemetry-backbone series (Tier-1).** The backbone
+  PR (#600) added five persisted SQLite tables with capture, storage, and retention, but shipped
+  without surfacing them to the client. This slice exposes three — `blocks` (pool block-found
+  events), `disk_growth` (hourly monerod-DB-size + host-disk-usage samples), and `xvb_history`
+  (~5-min XvB-credited scalar samples) — as range-filtered arrays under those same keys, bounded
+  at the existing 700-point chart cap for the two higher-cadence series. `network_history` and
+  `worker_history` are a separate (Tier-2) slice, not touched here. No chart renders any of these
+  series yet — that's a further follow-up.
 
 ## [1.10.0] - 2026-07-20
 

@@ -335,6 +335,77 @@ def _window_reject_pct(rows, seconds):
     return "—" if pct is None else f"{pct:.2f}%"
 
 
+# --------------------------------------------------------------------------------------
+# #196 Tier-1 telemetry backbone: blocks / disk_growth / xvb_history surfaced on /api/state.
+# The backbone (capture + storage + retention, PR #600) shipped without this exposure step —
+# these three formatters are it. network_history and worker_history are Tier-2 (a separate
+# slice of the epic) and are not exposed here.
+# --------------------------------------------------------------------------------------
+
+
+def _downsample_gauge_rows(rows, value_cols, target=_MAX_CHART_POINTS):
+    """Bucket-average arbitrary point-in-time (gauge) columns down to ``target`` points.
+
+    Mirrors ``_downsample_share_stats``, but averages instead of summing: these rows are
+    periodic READINGS (disk size, XvB credited averages), not per-interval deltas, so summing
+    them would inflate the series instead of thinning it. A no-op when already at/under target."""
+    if len(rows) <= target:
+        return rows
+    chunk_size = len(rows) / target
+    out = []
+    for i in range(target):
+        chunk = rows[int(i * chunk_size) : int((i + 1) * chunk_size)]
+        if not chunk:
+            continue
+        bucket = {"ts": chunk[len(chunk) // 2]["ts"]}
+        for col in value_cols:
+            vals = [r.get(col, 0) or 0 for r in chunk]
+            bucket[col] = round(sum(vals) / len(vals), 2)
+        out.append(bucket)
+    return out
+
+
+def build_blocks(blocks, range_arg, window=None):
+    """Persisted P2Pool block-found events (#196) as chart-ready points, restricted to the
+    selected range/window (``_filter_events`` bounds any ts-keyed list, so this table reuses
+    it as-is). A handful of rows a week — no downsampling needed."""
+    return [
+        {
+            "x": int(b["ts"] * 1000),
+            "height": b.get("height", 0),
+            "difficulty": b.get("difficulty", 0),
+        }
+        for b in _filter_events(blocks, range_arg, window)
+    ]
+
+
+def _gauge_series(rows, range_arg, window, value_cols):
+    """Shared shape for a persisted gauge series (#196): filter to the selected range/window,
+    bucket-average past ``_MAX_CHART_POINTS`` like ``share_stats``, and key each row's own
+    ``value_cols`` under ``x`` (ms epoch). ``build_disk_growth``/``build_xvb_history`` are this
+    with their own column set — the only thing that differs between them."""
+    filtered = _downsample_gauge_rows(_filter_events(rows, range_arg, window), value_cols)
+    return [{"x": int(r["ts"] * 1000), **{c: r.get(c, 0) for c in value_cols}} for r in filtered]
+
+
+def build_disk_growth(rows, range_arg, window=None):
+    """Persisted hourly monerod-DB-size + host-disk-usage samples (#196) as chart-ready points —
+    the table keeps every row (no retention prune), so a long-lived install can otherwise pass
+    the chart-point cap ``_gauge_series`` bounds it at."""
+    return _gauge_series(
+        rows, range_arg, window, ("monero_db_bytes", "disk_used_gb", "disk_total_gb")
+    )
+
+
+def build_xvb_history(rows, range_arg, window=None):
+    """Persisted ~5-minute XvB-credited scalar samples (#196) as chart-ready points — the 30-day
+    retention at this cadence is ~8.6k rows, well past the chart-point cap ``_gauge_series``
+    bounds it at."""
+    return _gauge_series(
+        rows, range_arg, window, ("avg_1h", "avg_24h", "fail_count", "donation_fraction")
+    )
+
+
 def _window_duration(filtered_history, range_arg, window):
     """Seconds the chart currently spans — drives adaptive resolution/smoothing. From the
     window if zoomed, else the preset length, else (``all``/unknown) the actual data extent."""
@@ -1684,6 +1755,12 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # proxy_summary so its (cumulative) shape stays unchanged for existing clients.
         "share_stats": build_share_stats(share_stats, range_arg, window),
         "reject_pct_24h": _window_reject_pct(share_stats, 24 * 3600),
+        # #196 Tier-1 telemetry backbone exposure: block-found events, hourly disk-growth
+        # samples, and ~5-min XvB-credited samples. No chart renders these yet — that's the
+        # deliberate next slice — the payload just carries the persisted series.
+        "blocks": build_blocks(state_mgr.get_blocks(), range_arg, window),
+        "disk_growth": build_disk_growth(state_mgr.get_disk_growth(), range_arg, window),
+        "xvb_history": build_xvb_history(state_mgr.get_xvb_history(), range_arg, window),
         "egress": egress,
         "topology": topology,
         "chart": build_chart(

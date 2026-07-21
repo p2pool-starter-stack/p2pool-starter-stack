@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,12 +20,16 @@ from mining_dashboard.service.data_service import (
     WorkerLifecycle,
     _aggregate_hashrate,
     _aggregate_window_hashrates,
+    _diff_config_keys,
+    _iso_now,
     _merge_direct_stats,
     _merge_proxy_summary,
     _normalize_proxy_workers,
+    _parse_audit_ts,
     _parse_legacy_dict_worker,
     _parse_proxy_list_worker,
     _parse_proxy_summary,
+    _read_host_config,
     _shares_to_record,
     _summary_deltas,
 )
@@ -1935,7 +1940,11 @@ class TestReconcileWorkerConfig:
     rollback left stuck 'accepted', once the rig's enriched feed mirrors a terminal outcome for
     that change_id (rigforge.control). Real StateManager (not a mock) throughout — every assertion
     reads back the actual stored row, so a reverted WHERE-clause guard or a dropped reconcile call
-    fails these tests, not just a mock's call count."""
+    fails these tests, not just a mock's call count.
+
+    #530 extends the same poll: a TERMINAL report for a change_id this dashboard never spooled is
+    a rig-side out-of-band edit, recorded to ``audit_events`` instead of silently reconciling
+    nothing."""
 
     def _svc_with_real_storage(self):
         from mining_dashboard.service.storage_service import StateManager
@@ -1951,6 +1960,9 @@ class TestReconcileWorkerConfig:
         rows = [r for r in sm.get_worker_config_history(worker) if r["change_id"] == change_id]
         assert len(rows) == 1
         return rows[0]
+
+    def _workers(self, *names):
+        return [{"name": n} for n in names]
 
     def test_terminal_report_reconciles_accepted_row(self):
         # The main revert-proof case: a real 'accepted' row becomes 'rolled_back' once the rig's
@@ -1969,10 +1981,12 @@ class TestReconcileWorkerConfig:
                     }
                 }
             ]
-            asyncio.run(svc._reconcile_worker_config(worker_results))
+            asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), worker_results))
             row = self._status_of(sm)
             assert row["status"] == "rolled_back"
             assert row["reason"] == "miner did not return to a live hashrate"
+            # A known change_id reconciles quietly — no audit row for the dashboard's own change.
+            assert sm.get_audit_events() == []
         finally:
             sm.close()
 
@@ -1983,7 +1997,7 @@ class TestReconcileWorkerConfig:
             worker_results = [
                 {"rigforge": {"control": {"change_id": "cid-1", "status": "rolled_back"}}}
             ]
-            asyncio.run(svc._reconcile_worker_config(worker_results))
+            asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), worker_results))
             assert self._status_of(sm)["status"] == "applied"
         finally:
             sm.close()
@@ -1994,7 +2008,7 @@ class TestReconcileWorkerConfig:
         svc, sm = self._svc_with_real_storage()
         try:
             self._seed(sm, "accepted")
-            asyncio.run(svc._reconcile_worker_config([{}]))
+            asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), [{}]))
             assert self._status_of(sm)["status"] == "accepted"
         finally:
             sm.close()
@@ -2004,7 +2018,7 @@ class TestReconcileWorkerConfig:
         try:
             self._seed(sm, "accepted")
             worker_results = [{"rigforge": {"control": {"status": "rolled_back"}}}]
-            asyncio.run(svc._reconcile_worker_config(worker_results))
+            asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), worker_results))
             assert self._status_of(sm)["status"] == "accepted"
         finally:
             sm.close()
@@ -2016,7 +2030,7 @@ class TestReconcileWorkerConfig:
             worker_results = [
                 {"rigforge": {"control": {"change_id": "cid-1", "status": "accepted"}}}
             ]
-            asyncio.run(svc._reconcile_worker_config(worker_results))
+            asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), worker_results))
             assert self._status_of(sm)["status"] == "accepted"
         finally:
             sm.close()
@@ -2038,11 +2052,114 @@ class TestReconcileWorkerConfig:
                     }
                 },
             ]
-            asyncio.run(svc._reconcile_worker_config(worker_results))
+            asyncio.run(svc._reconcile_worker_config(self._workers("rig1", "rig2"), worker_results))
             assert self._status_of(sm, worker="rig1", change_id="cid-1")["status"] == "applied"
             row2 = self._status_of(sm, worker="rig2", change_id="cid-2")
             assert row2["status"] == "rejected"
             assert row2["reason"] == "bad pool url"
+        finally:
+            sm.close()
+
+
+class TestRigEditDetection:
+    """#530: a rig's control-status mirror reports a TERMINAL outcome for a change_id this
+    dashboard never spooled into ``worker_config`` — the rig applied it on its own. That gets
+    recorded as a ``rig-edit`` audit row naming the worker, instead of the silent no-op a
+    ``reconcile_worker_config_status`` UPDATE would be against a change_id with no matching row."""
+
+    def _svc_with_real_storage(self):
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        svc = DataService(sm, MagicMock(), MagicMock())
+        return svc, sm
+
+    def test_unknown_change_id_records_rig_edit(self):
+        svc, sm = self._svc_with_real_storage()
+        try:
+            worker_results = [
+                {
+                    "rigforge": {
+                        "control": {
+                            "change_id": "rig-local-cid",
+                            "status": "applied",
+                            "reason": None,
+                        }
+                    }
+                }
+            ]
+            asyncio.run(svc._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["source"] == "rig-edit"
+            assert events[0]["actor"] == "rig1"
+            assert events[0]["status"] == "applied"
+            assert "rig-local-cid" in events[0]["keys"]
+            # Nothing to reconcile — no #185 row existed for this change_id.
+            assert sm.get_worker_config_history("rig1") == []
+        finally:
+            sm.close()
+
+    def test_known_change_id_never_flagged(self):
+        svc, sm = self._svc_with_real_storage()
+        try:
+            sm.add_worker_config_version("rig1", "cid-1", "accepted", {"max_temp_c": 80}, None)
+            worker_results = [
+                {"rigforge": {"control": {"change_id": "cid-1", "status": "applied"}}}
+            ]
+            asyncio.run(svc._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
+    def test_multiple_workers_only_the_unknown_one_flagged(self):
+        svc, sm = self._svc_with_real_storage()
+        try:
+            sm.add_worker_config_version("rig1", "cid-known", "accepted", {}, None)
+            worker_results = [
+                {"rigforge": {"control": {"change_id": "cid-known", "status": "applied"}}},
+                {"rigforge": {"control": {"change_id": "cid-unknown", "status": "rejected"}}},
+            ]
+            asyncio.run(
+                svc._reconcile_worker_config([{"name": "rig1"}, {"name": "rig2"}], worker_results)
+            )
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["actor"] == "rig2"
+            assert events[0]["status"] == "rejected"
+        finally:
+            sm.close()
+
+    def test_same_change_id_across_polls_records_exactly_one_row(self):
+        # The flood guard (HIGH #530 review): a rig re-reports its last terminal change_id every
+        # poll. Deterministic row id + in-memory guard must collapse that to ONE audit row, not a
+        # new row per ~30s cycle for a permanent, never-pruned table.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            worker_results = [
+                {"rigforge": {"control": {"change_id": "rig-local-cid", "status": "applied"}}}
+            ]
+            for _ in range(3):  # three consecutive polls, same report
+                asyncio.run(svc._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            assert len(sm.get_audit_events()) == 1
+        finally:
+            sm.close()
+
+    def test_repeat_report_after_a_restart_still_dedups_via_the_deterministic_id(self):
+        # The in-memory guard is empty on a fresh DataService (restart), but the SAME rig report
+        # must still not duplicate the row — the deterministic id + INSERT OR IGNORE is the bound.
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        try:
+            worker_results = [
+                {"rigforge": {"control": {"change_id": "rig-local-cid", "status": "applied"}}}
+            ]
+            svc1 = DataService(sm, MagicMock(), MagicMock())
+            asyncio.run(svc1._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            svc2 = DataService(sm, MagicMock(), MagicMock())  # "restart": fresh empty guard set
+            asyncio.run(svc2._reconcile_worker_config([{"name": "rig1"}], worker_results))
+            assert len(sm.get_audit_events()) == 1
         finally:
             sm.close()
 
@@ -2302,3 +2419,427 @@ class TestSyncPrices:
         svc.price_feed.maybe_fetch.return_value = prices
         await svc._sync_prices()
         assert svc.latest_data["prices"] == prices
+
+
+class TestDiffConfigKeys:
+    """#530: dotted-path config diff — names only, the out-of-band host-edit detector's sole
+    correctness surface. A value is compared for equality but never returned."""
+
+    def test_no_change_is_empty(self):
+        cfg = {"xvb": {"enabled": True}}
+        assert _diff_config_keys(cfg, dict(cfg)) == []
+
+    def test_changed_leaf_named(self):
+        old = {"xvb": {"donation_level": "auto"}}
+        new = {"xvb": {"donation_level": "vip"}}
+        assert _diff_config_keys(old, new) == ["xvb.donation_level"]
+
+    def test_added_and_removed_keys_named(self):
+        assert _diff_config_keys({"a": 1}, {"b": 2}) == ["a", "b"]
+
+    def test_nested_paths_use_dotted_names(self):
+        old = {"telegram": {"events": {"node_down": True}}}
+        new = {"telegram": {"events": {"node_down": False}}}
+        assert _diff_config_keys(old, new) == ["telegram.events.node_down"]
+
+    def test_secret_sentinel_change_detected_without_a_value(self):
+        # The masked config's secret leaves are {"__secret__": True} sentinels (#440) — clearing or
+        # setting one changes dict-presence, detectable by equality alone; no real secret is ever
+        # compared or returned by this function.
+        old = {"dashboard": {"auth": {"password": {"__secret__": True}}}}
+        new = {"dashboard": {"auth": {}}}
+        assert _diff_config_keys(old, new) == ["dashboard.auth.password"]
+
+    def test_unrelated_keys_untouched(self):
+        assert _diff_config_keys({"a": 1, "b": 2}, {"a": 1, "b": 3}) == ["b"]
+
+    def test_non_dict_input_is_treated_as_empty(self):
+        # A malformed config.json (top-level not an object) must never crash the watcher — every
+        # key on the OTHER side just reads as added/removed.
+        assert _diff_config_keys("not-a-dict", {"a": 1}) == ["a"]
+        assert _diff_config_keys(None, None) == []
+
+
+class TestAuditTsHelpers:
+    """#530: the shared ts format between control.log's own writer and this dashboard's
+    detections — a plain string round-trips through both directions."""
+
+    def test_iso_now_round_trips_through_parse_audit_ts(self):
+        parsed = _parse_audit_ts(_iso_now())
+        assert parsed is not None
+        assert abs(parsed - time.time()) < 5
+
+    def test_parse_audit_ts_rejects_garbage(self):
+        assert _parse_audit_ts("not-a-timestamp") is None
+        assert _parse_audit_ts(None) is None
+        assert _parse_audit_ts(123) is None
+
+
+class TestWatchHostConfig:
+    """#530: config.json changed without a matching control-channel commit -> a ``host-edit``
+    audit row. Real StateManager throughout, like TestReconcileWorkerConfig — every assertion
+    reads back the persisted row."""
+
+    def _svc(self):
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        svc = DataService(sm, MagicMock(), MagicMock())
+        return svc, sm
+
+    def _write_config(self, path, doc):
+        path.write_text(json.dumps(doc))
+
+    async def test_control_disabled_is_a_noop(self, monkeypatch):
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", False)
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()
+            assert sm.get_audit_events() == []
+            assert svc._last_host_config is None
+        finally:
+            sm.close()
+
+    async def test_first_poll_only_baselines(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        self._write_config(cfg, {"xvb": {"enabled": True}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()
+            assert sm.get_audit_events() == []
+            assert svc._last_host_config == {"xvb": {"enabled": True}}
+        finally:
+            sm.close()
+
+    async def test_unexplained_change_is_recorded_host_edit(self, tmp_path, monkeypatch):
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(cfg, {"xvb": {"enabled": True}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline
+            self._write_config(cfg, {"xvb": {"enabled": False}})  # changed out of band
+            await svc._watch_host_config()
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["source"] == "host-edit"
+            assert events[0]["keys"] == "xvb.enabled"
+            assert events[0]["status"] == "detected"
+        finally:
+            sm.close()
+
+    async def test_change_explained_by_a_fresh_commit_is_quiet(self, tmp_path, monkeypatch):
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(cfg, {"xvb": {"enabled": True}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline
+            self._write_config(cfg, {"xvb": {"enabled": False}})
+            # A commit landed AFTER the baseline check — it explains the change.
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": _iso_now(),
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "XVB_ENABLED",
+                    }
+                )
+                + "\n"
+            )
+            await svc._watch_host_config()
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
+    async def test_commit_of_one_key_does_not_swallow_a_concurrent_host_edit(
+        self, tmp_path, monkeypatch
+    ):
+        # #530 review MEDIUM: correlate BY KEY, not just by time. A fresh dashboard commit of key A
+        # landing in the same window as a host-side hand-edit of key B must NOT suppress B — the
+        # out-of-band change the feature exists to catch. Fails on the old time-only `explained =
+        # any(...)` logic, which swallowed the whole diff on ANY fresh commit.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        # A: xvb.enabled (committable, maps to XVB_ENABLED). B: dashboard.tari_required (maps to
+        # TARI_REQUIRED) — hand-edited on the host, NOT named by the commit below.
+        self._write_config(cfg, {"xvb": {"enabled": True}, "dashboard": {"tari_required": True}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline
+            # Both keys change; only A was actually committed through the dashboard.
+            self._write_config(
+                cfg, {"xvb": {"enabled": False}, "dashboard": {"tari_required": False}}
+            )
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": _iso_now(),
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "XVB_ENABLED",
+                    }
+                )
+                + "\n"
+            )
+            await svc._watch_host_config()
+            events = sm.get_audit_events()
+            # B is recorded out-of-band; A (explained by the commit) is NOT double-recorded.
+            assert len(events) == 1
+            assert events[0]["source"] == "host-edit"
+            assert events[0]["keys"] == "dashboard.tari_required"
+        finally:
+            sm.close()
+
+    async def test_energy_commit_explains_an_energy_subkey_by_prefix(self, tmp_path, monkeypatch):
+        # #530: dashboard.energy.* is config.json-only and audits under the synthetic
+        # DASHBOARD_ENERGY name, which env_key_config_paths maps to the whole `dashboard.energy`
+        # block by prefix — so a committed energy sub-key change stays quiet even though its dotted
+        # diff path (dashboard.energy.cost_per_kwh) isn't the literal committed name.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(cfg, {"dashboard": {"energy": {"cost_per_kwh": 0.10}}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline
+            self._write_config(cfg, {"dashboard": {"energy": {"cost_per_kwh": 0.20}}})
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": _iso_now(),
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "DASHBOARD_ENERGY",
+                    }
+                )
+                + "\n"
+            )
+            await svc._watch_host_config()
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
+    async def test_stale_commit_before_the_last_check_does_not_explain(self, tmp_path, monkeypatch):
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(cfg, {"xvb": {"enabled": True}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            # An old commit, already accounted for before this watcher ever ran, then a NEW
+            # out-of-band change — the stale commit must not explain it away.
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": "2020-01-01T00:00:00Z",
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "XVB_ENABLED",
+                    }
+                )
+                + "\n"
+            )
+            await svc._watch_host_config()  # baseline
+            self._write_config(cfg, {"xvb": {"enabled": False}})
+            await svc._watch_host_config()
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["source"] == "host-edit"
+        finally:
+            sm.close()
+
+    async def test_missing_mount_is_a_quiet_noop(self, monkeypatch):
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
+    async def test_a_raw_secret_value_never_reaches_the_audit_row(self, tmp_path, monkeypatch):
+        # Defense-in-depth (#530 review MEDIUM): even if the host masking regressed and left a RAW
+        # secret in the mounted copy, the re-mask keeps its value out of the persisted snapshot and
+        # out of any audit row. Change a non-secret key alongside the raw secret; the row names the
+        # non-secret key only, and the secret value appears nowhere.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(
+            cfg, {"dashboard": {"auth": {"password": "s3cr3t-raw"}}, "xvb": {"enabled": True}}
+        )
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline (secret already masked in the snapshot)
+            assert svc._last_host_config["dashboard"]["auth"]["password"] == {"__secret__": True}
+            self._write_config(
+                cfg,
+                {"dashboard": {"auth": {"password": "s3cr3t-changed"}}, "xvb": {"enabled": False}},
+            )
+            await svc._watch_host_config()
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["keys"] == "xvb.enabled"  # the secret masks to a sentinel both sides
+            blob = json.dumps(events) + json.dumps(svc._last_host_config)
+            assert "s3cr3t-raw" not in blob and "s3cr3t-changed" not in blob
+        finally:
+            sm.close()
+
+    async def test_explained_window_is_at_most_one_second(self, tmp_path, monkeypatch):
+        # Boundary (#530 review LOW): the "explained by a fresh commit" check floors `since` to
+        # `_last_host_check - 1` to absorb the audit log's whole-second ts truncation. That grace
+        # is exactly 1s wide — a commit 1s before the last check still explains (truncation), one
+        # 2s before does not. Pinned here so the honest ceiling can't silently widen.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        check_epoch = _parse_audit_ts("2026-07-20T12:00:05Z")
+
+        async def _run_with_commit_ts(commit_ts):
+            svc, sm = self._svc()
+            svc._last_host_config = {"xvb": {"enabled": True}}
+            svc._last_host_check = check_epoch
+            self._write_config(cfg, {"xvb": {"enabled": False}})
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": commit_ts,
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "XVB_ENABLED",
+                    }
+                )
+                + "\n"
+            )
+            try:
+                await svc._watch_host_config()
+                return len(sm.get_audit_events())
+            finally:
+                sm.close()
+
+        # 1s before the last check: still explains (truncation grace) -> no host-edit row.
+        assert await _run_with_commit_ts("2026-07-20T12:00:04Z") == 0
+        # 2s before: outside the grace, correctly NOT explained -> host-edit recorded.
+        assert await _run_with_commit_ts("2026-07-20T12:00:03Z") == 1
+
+
+class TestReadHostConfig:
+    """#530 review MEDIUM: the mounted copy is pre-masked host-side, but _read_host_config
+    re-applies the SECRET_PATHS mask (like control_service.read_config) so a host masking
+    regression can't leave a raw secret resident in the long-lived config snapshot."""
+
+    def test_secret_value_is_remasked(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"dashboard": {"auth": {"password": "leaked"}}}))
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        out = _read_host_config()
+        assert out["dashboard"]["auth"]["password"] == {"__secret__": True}
+
+    def test_missing_or_bad_file_is_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
+        assert _read_host_config() is None
+        bad = tmp_path / "config.json"
+        bad.write_text("{not json")
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(bad))
+        assert _read_host_config() is None
+
+
+class TestMirrorControlAudit:
+    """#530: opportunistically copies the #33 log's recent entries into the durable
+    ``audit_events`` table so the Security panel can group deeper than the log's own trimmed
+    tail. ``audit_service.recent_changes()`` output is already sanitized — nothing new to clean
+    here, only to persist."""
+
+    def _svc(self):
+        from mining_dashboard.service.storage_service import StateManager
+
+        sm = StateManager(db_path=":memory:")
+        svc = DataService(sm, MagicMock(), MagicMock())
+        return svc, sm
+
+    def _log_line(self, **over):
+        entry = {
+            "ts": "2026-07-10T12:00:00Z",
+            "id": "11111111-1111-4111-8111-111111111111",
+            "actor": "admin",
+            "action": "commit",
+            "status": "applied",
+            "keys": "XVB_ENABLED",
+        }
+        entry.update(over)
+        return json.dumps(entry)
+
+    async def test_disabled_is_a_noop(self, monkeypatch):
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", False)
+        svc, sm = self._svc()
+        try:
+            await svc._mirror_control_audit()
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
+    async def test_mirrors_log_entries(self, tmp_path, monkeypatch):
+        log = tmp_path / "control.log"
+        log.write_text(self._log_line() + "\n")
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._mirror_control_audit()
+            events = sm.get_audit_events()
+            assert len(events) == 1
+            assert events[0]["source"] == "control"
+            assert events[0]["actor"] == "admin"
+            assert events[0]["keys"] == "XVB_ENABLED"
+        finally:
+            sm.close()
+
+    async def test_re_mirroring_is_idempotent(self, tmp_path, monkeypatch):
+        log = tmp_path / "control.log"
+        log.write_text(self._log_line() + "\n")
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._mirror_control_audit()
+            await svc._mirror_control_audit()
+            assert len(sm.get_audit_events()) == 1
+        finally:
+            sm.close()
+
+    async def test_entries_without_an_id_are_skipped(self, tmp_path, monkeypatch):
+        log = tmp_path / "control.log"
+        log.write_text(self._log_line(id="") + "\n")
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._mirror_control_audit()
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()

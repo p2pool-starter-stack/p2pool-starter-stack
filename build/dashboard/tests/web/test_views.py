@@ -30,8 +30,10 @@ from mining_dashboard.web.views import (
     _target_points,
     _window_reject_pct,
     build_badges,
+    build_blocks,
     build_cadence,
     build_chart,
+    build_disk_growth,
     build_earnings,
     build_energy,
     build_hashrate,
@@ -46,6 +48,7 @@ from mining_dashboard.web.views import (
     build_worker_detail,
     build_workers,
     build_xvb_calc,
+    build_xvb_history,
     canonical_window,
     get_shell_html,
     host_display_addr,
@@ -1403,6 +1406,137 @@ class TestShareStatsSeries:
         assert len(pts) == 3  # under the cap -> native resolution, no bucketing
 
 
+class TestBlocksDiskGrowthXvbHistorySeries:
+    """#196 Tier-1: the persisted blocks/disk_growth/xvb_history backbone surfaced on
+    /api/state. network_history and worker_history are Tier-2 and out of scope here."""
+
+    def test_build_blocks_shape_and_ms_epoch(self):
+        now = time.time()
+        rows = [{"ts": now - 60, "height": 42, "difficulty": 123.0}]
+        pts = build_blocks(rows, "all")
+        assert pts == [{"x": int((now - 60) * 1000), "height": 42, "difficulty": 123.0}]
+
+    def test_build_blocks_range_filters_old_rows(self):
+        now = time.time()
+        rows = [
+            {"ts": now - 8 * 24 * 3600, "height": 1, "difficulty": 1.0},
+            {"ts": now - 60, "height": 2, "difficulty": 2.0},
+        ]
+        assert len(build_blocks(rows, "1w")) == 1
+
+    def test_build_blocks_empty(self):
+        assert build_blocks([], "all") == []
+
+    def test_build_disk_growth_shape_and_ms_epoch(self):
+        now = time.time()
+        rows = [
+            {
+                "ts": now - 3600,
+                "monero_db_bytes": 85_000_000_000,
+                "disk_used_gb": 120.5,
+                "disk_total_gb": 500.0,
+            }
+        ]
+        pts = build_disk_growth(rows, "all")
+        assert pts == [
+            {
+                "x": int((now - 3600) * 1000),
+                "monero_db_bytes": 85_000_000_000,
+                "disk_used_gb": 120.5,
+                "disk_total_gb": 500.0,
+            }
+        ]
+
+    def test_build_disk_growth_range_filters_old_rows(self):
+        now = time.time()
+        rows = [
+            {
+                "ts": now - 8 * 24 * 3600,
+                "monero_db_bytes": 1,
+                "disk_used_gb": 1,
+                "disk_total_gb": 1,
+            },
+            {"ts": now - 60, "monero_db_bytes": 2, "disk_used_gb": 2, "disk_total_gb": 2},
+        ]
+        assert len(build_disk_growth(rows, "1w")) == 1
+
+    def test_build_disk_growth_long_series_is_bounded_and_bucket_averaged(self):
+        # Hourly, permanent (no retention prune) -> a long-lived install can pass the cap.
+        now = time.time()
+        rows = [
+            {
+                "ts": now - i * 3600,
+                "monero_db_bytes": 100,
+                "disk_used_gb": 10.0,
+                "disk_total_gb": 500.0,
+            }
+            for i in range(10_000, 0, -1)  # ascending ts, like the DB returns them
+        ]
+        pts = build_disk_growth(rows, "all")
+        assert len(pts) <= _MAX_CHART_POINTS
+        # Every source row carries the same constant values, so the bucket average is exact.
+        assert all(p["monero_db_bytes"] == 100 and p["disk_used_gb"] == 10.0 for p in pts)
+
+    def test_build_xvb_history_shape_and_ms_epoch(self):
+        now = time.time()
+        rows = [
+            {
+                "ts": now - 300,
+                "avg_1h": 1000.0,
+                "avg_24h": 900.0,
+                "fail_count": 0,
+                "donation_fraction": 0.5,
+            }
+        ]
+        pts = build_xvb_history(rows, "all")
+        assert pts == [
+            {
+                "x": int((now - 300) * 1000),
+                "avg_1h": 1000.0,
+                "avg_24h": 900.0,
+                "fail_count": 0,
+                "donation_fraction": 0.5,
+            }
+        ]
+
+    def test_build_xvb_history_range_filters_old_rows(self):
+        now = time.time()
+        rows = [
+            {
+                "ts": now - 40 * 24 * 3600,
+                "avg_1h": 1,
+                "avg_24h": 1,
+                "fail_count": 0,
+                "donation_fraction": 0,
+            },
+            {
+                "ts": now - 300,
+                "avg_1h": 2,
+                "avg_24h": 2,
+                "fail_count": 0,
+                "donation_fraction": 0,
+            },
+        ]
+        assert len(build_xvb_history(rows, "1m")) == 1
+
+    def test_build_xvb_history_long_series_is_bounded_and_bucket_averaged(self):
+        # 30 days at ~5-min cadence is ~8.6k rows, well past the chart cap.
+        now = time.time()
+        rows = [
+            {
+                "ts": now - i * 300,
+                "avg_1h": 1000.0,
+                "avg_24h": 900.0,
+                "fail_count": 0,
+                "donation_fraction": 0.5,
+            }
+            for i in range(8_640, 0, -1)  # ascending ts, like the DB returns them
+        ]
+        pts = build_xvb_history(rows, "all")
+        assert len(pts) <= _MAX_CHART_POINTS
+        assert all(p["avg_1h"] == 1000.0 for p in pts)
+
+
 # --- pool/network passthrough ---------------------------------------------------------
 
 
@@ -1759,7 +1893,14 @@ class TestXvbCalc:
 # ponytail: this _state_mgr()/_data() pair looks near-duplicated with the ones in test_metrics.py,
 # but the per-module defaults differ on purpose (e.g. tari_sync, the get_tiers/xvb shapes). A shared
 # builder would need enough params that it reads worse than the local copy — left duplicated.
-def _state_mgr(history=None, mode="P2POOL", share_stats=None):
+def _state_mgr(
+    history=None,
+    mode="P2POOL",
+    share_stats=None,
+    blocks=None,
+    disk_growth=None,
+    xvb_history=None,
+):
     sm = MagicMock()
     sm.get_history.return_value = history or []
     sm.get_xvb_stats.return_value = {"current_mode": mode}
@@ -1768,6 +1909,10 @@ def _state_mgr(history=None, mode="P2POOL", share_stats=None):
     sm.get_share_stats.return_value = share_stats or []
     sm.get_raffle_wins.return_value = []
     sm.is_db_healthy.return_value = True
+    # #196 Tier-1 telemetry backbone exposure.
+    sm.get_blocks.return_value = blocks or []
+    sm.get_disk_growth.return_value = disk_growth or []
+    sm.get_xvb_history.return_value = xvb_history or []
     return sm
 
 
@@ -1814,6 +1959,9 @@ class TestBuildState:
             "proxy_summary",
             "share_stats",
             "reject_pct_24h",
+            "blocks",
+            "disk_growth",
+            "xvb_history",
             "egress",
             "topology",
             "chart",
@@ -1890,6 +2038,33 @@ class TestVisibleUpdate:
         # No rows (fresh install / proxy idle) -> empty series and an honest dash.
         empty = build_state(_data(), _state_mgr(), "all")
         assert empty["share_stats"] == [] and empty["reject_pct_24h"] == "—"
+
+    def test_blocks_disk_growth_xvb_history_surfaced(self):
+        # #196 Tier-1: the three backbone series ride on /api/state, each sourced from its own
+        # StateManager getter.
+        now = time.time()
+        sm = _state_mgr(
+            blocks=[{"ts": now - 60, "height": 5, "difficulty": 10.0}],
+            disk_growth=[
+                {"ts": now - 60, "monero_db_bytes": 1, "disk_used_gb": 2.0, "disk_total_gb": 3.0}
+            ],
+            xvb_history=[
+                {
+                    "ts": now - 60,
+                    "avg_1h": 1,
+                    "avg_24h": 2,
+                    "fail_count": 0,
+                    "donation_fraction": 0.1,
+                }
+            ],
+        )
+        st = build_state(_data(), sm, "all")
+        assert st["blocks"][0]["height"] == 5
+        assert st["disk_growth"][0]["monero_db_bytes"] == 1
+        assert st["xvb_history"][0]["avg_1h"] == 1
+        # Fresh install -> empty series, not a crash.
+        empty = build_state(_data(), _state_mgr(), "all")
+        assert empty["blocks"] == [] and empty["disk_growth"] == [] and empty["xvb_history"] == []
 
     def test_db_unhealthy_surfaces_field_and_badge(self):
         # When persistence is broken, /api/state must carry db_healthy=False and a loud badge (#131).

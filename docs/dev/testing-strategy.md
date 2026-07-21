@@ -117,6 +117,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `doctor` runtime verdicts (#383): egress firewall, stratum listening, dashboard answers | real box | 1 ✅ (stubbed toolchain) · 4 ▶ (`--check`) |
 | Control channel (#33): `apply --dry-run` preview, runner claim/validate/commit, fail-closed flag, rw/ro spool mounts | spool files / sourced fns | 1 ✅ (shell + pytest + compose) · 4 (systemd path unit on a real box — not yet a matrix row) |
 | Audit + access logs (#349): key-names-not-values audit entries, bounded log growth, Caddyfile log block, hostile log content served inert | spool/log fixtures | 1 ✅ (shell + pytest + node) · 4 (real Caddy writes over Tor — covered by the same onion matrix row) |
+| Out-of-band audit detection + persistence (#530): a `config.json` change with no matching commit (`host-edit`) or a rig reporting a change_id the dashboard never spooled (`rig-edit`) both append to the durable `audit_events` table (mirrored `control.log` rows + these two kinds); Security panel hour/day/month grouping | poll-loop diff / real StateManager | 1 ✅ (`test_data_service.py::TestWatchHostConfig`/`TestRigEditDetection`/`TestMirrorControlAudit`, `test_storage_service.py::TestAuditEvents`, `securityview.test.mjs` grouping) · 4 (deferred — the underlying rig-side-edit-visible-in-the-enriched-feed mechanism is already proven live by the #516 row below; a real box producing a `host-edit`/`rig-edit` audit row end-to-end is not yet its own matrix leg) |
 
 ### H. Host / infrastructure (real-only)
 
