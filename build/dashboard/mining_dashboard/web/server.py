@@ -8,6 +8,7 @@ from aiohttp import web
 from mining_dashboard.config import config
 from mining_dashboard.service import audit_service, control_service
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
+from mining_dashboard.service.update_checker import parse_semver
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
 from mining_dashboard.web.views import (
@@ -252,6 +253,45 @@ async def handle_worker_apply(request):
     return web.json_response({"id": rid, **res})
 
 
+async def handle_worker_upgrade(request):
+    """One-click RigForge upgrade for a single rig (#597), via the HOST-side control runner.
+
+    Mirrors the stack's own upgrade (#59) at the per-worker level: the body's version is only what
+    the operator confirmed seeing (the badge's latest, #596); the host re-derives the real target
+    from the RigForge release API over Tor and refuses a mismatch, then resolves the rig's address
+    + bearer from config.json — this container never holds the token and cannot choose what gets
+    installed. Returns 202 + the request id immediately (a rig build can take minutes); the client
+    polls /api/control/result. A rig already reporting the requested version short-circuits to a
+    no-op without spooling — a dial would just burn the rig's own 6h upgrade throttle."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    worker = body.get("worker")
+    version = body.get("version")
+    if not isinstance(worker, str) or not worker:
+        raise web.HTTPBadRequest(text="'worker' must be a non-empty string.")
+    if not isinstance(version, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        raise web.HTTPBadRequest(text="'version' must look like vX.Y.Z.")
+    data = request.app["latest_data"] or {}
+    live = next((w for w in data.get("workers", []) if w.get("name") == worker), None)
+    running = ((live or {}).get("rigforge") or {}).get("version")
+    # The rig reports bare "1.11.2", the badge proposes tag "v1.11.2" — compare parsed (#596).
+    if running and parse_semver(running) and parse_semver(running) == parse_semver(version):
+        return web.json_response(
+            {"status": "noop", "worker": worker, "note": f"already on {version}"}
+        )
+    try:
+        rid = control_service.submit_worker_upgrade(
+            worker, version, request.headers.get("X-Auth-User", "")
+        )
+    except Exception:
+        logger.exception("Error submitting worker-upgrade")
+        return web.json_response({"error": "Failed to submit the worker upgrade."}, status=500)
+    return web.json_response({"id": rid, "status": "pending"}, status=202)
+
+
 async def handle_control_result(request):
     """Client-side polling endpoint for a 202'd preview/commit."""
     try:
@@ -351,6 +391,9 @@ def create_app(state_manager, latest_data_ref):
                 # writable-key change to its rig. Gated with the rest of the control channel.
                 web.get("/api/worker", handle_worker_detail),
                 web.post("/api/control/worker-apply", handle_worker_apply),
+                # One-click rig upgrade (#597): spools name + confirmed version only; the host
+                # re-derives the real target and dials the rig. Same gate as the rest.
+                web.post("/api/control/worker-upgrade", handle_worker_upgrade),
             ]
         )
 

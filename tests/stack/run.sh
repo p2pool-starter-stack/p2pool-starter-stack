@@ -6112,6 +6112,317 @@ assert_contains "worker-apply accept is audited as applied" \
     "$(cat "$WA3/audit/control.log")" '"action":"worker-apply","status":"applied"'
 
 # ---------------------------------------------------------------------------
+echo "== control channel: worker upgrade fails closed (#597) =="
+# control_worker_upgrade fuses the worker-apply template (rig resolved from the HOST config, never
+# the intent) with the stack-upgrade template (host-side target re-derivation, throttled). These are
+# the pre-dial fail-closed guards.
+WU="$SANDBOX/ctrl597"
+mkdir -p "$WU/staged" "$WU/results" "$WU/audit"
+cat >"$WU/config.json" <<'EOF'
+{ "workers": { "list": [
+    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" },
+    { "name": "rig2", "host": "10.0.0.8" }
+] } }
+EOF
+wu_case() { # <uuid> <intent-json> <label> <expected-error-substring>
+    printf '%s\n' "$2" >"$WU/req.json"
+    PITHEAD_CONFIG_FILE="$WU/config.json" run_sourced "$SANDBOX" control_process_request "$WU/req.json" "$WU" >/dev/null 2>&1
+    local out
+    out=$(jq -r '.status + "|" + (.error // "")' "$WU/results/$1.json" 2>/dev/null)
+    case "$out" in
+    rejected\|*"$4"*) ok "$3" ;;
+    *) bad "$3" "got: $out" ;;
+    esac
+}
+w1="aaaaaaaa-1111-4111-9111-111111111111"
+w2="bbbbbbbb-2222-4222-9222-222222222222"
+w3="cccccccc-3333-4333-9333-333333333333"
+w4="dddddddd-4444-4444-9444-444444444444"
+w5="eeeeeeee-5555-4555-9555-555555555555"
+wu_case "$w1" "{\"id\":\"$w1\",\"action\":\"worker-upgrade\",\"actor\":\"admin\",\"worker\":\"\",\"version\":\"v1.11.2\"}" "upgrade: empty worker name rejected" "worker"
+wu_case "$w2" "{\"id\":\"$w2\",\"action\":\"worker-upgrade\",\"actor\":\"admin\",\"worker\":\"rig1\",\"version\":\"1.11.2\"}" "upgrade: bare (non-tag) version rejected" "version"
+wu_case "$w3" "{\"id\":\"$w3\",\"action\":\"worker-upgrade\",\"actor\":\"admin\",\"worker\":\"ghost\",\"version\":\"v1.11.2\"}" "upgrade: unknown/hostless worker rejected" "no configured host"
+wu_case "$w4" "{\"id\":\"$w4\",\"action\":\"worker-upgrade\",\"actor\":\"admin\",\"worker\":\"rig2\",\"version\":\"v1.11.2\"}" "upgrade: worker without a token rejected (bearer-mandatory)" "no token"
+# Per-drain budget: exactly one upgrade dials per drain; over-budget rejects BEFORE the tag lookup
+# (a "already in this cycle" rejection also proves rig resolution succeeded pre-dial).
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v1.11.2"}\n' "$w5" >"$WU/req.json"
+CONTROL_WU_BUDGET=0 PITHEAD_CONFIG_FILE="$WU/config.json" run_sourced "$SANDBOX" control_process_request "$WU/req.json" "$WU" >/dev/null 2>&1
+assert_contains "upgrade over the per-drain budget is rejected (no dial)" \
+    "$(jq -r '.error // ""' "$WU/results/$w5.json")" "already in this cycle"
+if grep -q 'tok-rig1' "$WU/audit/control.log" "$WU"/results/*.json 2>/dev/null; then
+    bad "worker-upgrade never leaks a token to results/audit" "token found"
+else
+    ok "worker-upgrade never leaks a token to results/audit"
+fi
+# Anti-beacon throttle (#597, control_upgrade's lesson): a fresh lookup stamp with no cached tag
+# means a recent derive attempt failed — refuse WITHOUT another GitHub/Tor dial. The curl stub
+# records every invocation; it must stay unused.
+WUT="$SANDBOX/ctrl597-throttle"
+mkdir -p "$WUT/staged" "$WUT/results" "$WUT/audit" "$WUT/bin"
+cp "$WU/config.json" "$WUT/config.json"
+cat >"$WUT/bin/curl" <<EOF
+#!/usr/bin/env bash
+echo "dialed \$*" >>"$WUT/dials.log"
+exit 7
+EOF
+chmod +x "$WUT/bin/curl"
+touch "$WUT/staged/.rigforge-latest-stamp"
+w6="ffffffff-6666-4666-9666-666666666666"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v1.11.2"}\n' "$w6" >"$WUT/req.json"
+PATH="$WUT/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$WUT/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$WUT/req.json" "$WUT" >/dev/null 2>&1
+assert_contains "upgrade inside the 10-min lookup window (no cached tag) is rejected" \
+    "$(jq -r '.error // ""' "$WUT/results/$w6.json")" "retry in a few minutes"
+assert_eq "the throttled upgrade made NO network dial" "$(cat "$WUT/dials.log" 2>/dev/null)" ""
+
+echo "== control channel: worker upgrade drives the rig to each terminal (#597) =="
+# A stub curl stands in for the rig's control API (and would catch any unexpected GitHub dial: the
+# tag is pre-cached, so the only allowed URLs are the rig's /upgrade and /status). One sandbox per
+# scenario; the stub's /status behaviour is parameterized via WU_STATUS_BODY, and the stale-terminal
+# case serves a PREVIOUS change's terminal first to prove change_id matching.
+wu_accept_case() { # <uuid> <status-body-json> <label> <expected-status>
+    local dir="$SANDBOX/ctrl597-$1"
+    mkdir -p "$dir/staged" "$dir/results" "$dir/audit" "$dir/bin"
+    cp "$WU/config.json" "$dir/config.json"
+    printf '%s' "v9.9.9" >"$dir/staged/.rigforge-latest-tag"
+    cat >"$dir/bin/curl" <<EOF
+#!/usr/bin/env bash
+out="" url=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+    -o) out="\$2"; shift 2 ;;
+    *) url="\$1"; shift ;;
+    esac
+done
+case "\$url" in
+*/upgrade) printf '{"change_id":"chg-9"}' >"\$out"; printf '202' ;;
+*/status) printf '%s' '$2' >"\$out"; printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+    chmod +x "$dir/bin/curl"
+    printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$1" >"$dir/req.json"
+    PATH="$dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$dir/config.json" \
+        run_sourced "$SANDBOX" control_process_request "$dir/req.json" "$dir" >/dev/null 2>&1
+    assert_eq "$3" "$(jq -r '.status' "$dir/results/$1.json" 2>/dev/null)" "$4"
+    WU_LAST_DIR="$dir"
+}
+w7="12121212-1212-4212-9212-121212121212"
+wu_accept_case "$w7" '{"change_id":"chg-9","status":"applied"}' \
+    "upgrade accept path reaches a terminal 'applied'" "applied"
+assert_eq "applied result records the rig's change_id" \
+    "$(jq -r '.change_id' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "chg-9"
+assert_eq "applied result records the host-derived version" \
+    "$(jq -r '.version' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "v9.9.9"
+assert_contains "upgrade applied is audited" \
+    "$(cat "$WU_LAST_DIR/audit/control.log")" '"action":"worker-upgrade","status":"applied"'
+w8="23232323-2323-4232-9232-232323232323"
+wu_accept_case "$w8" '{"change_id":"chg-9","status":"rolled_back","reason":"miner did not return live"}' \
+    "upgrade rollback surfaces as rolled_back" "rolled_back"
+assert_eq "rolled_back result carries the rig's reason" \
+    "$(jq -r '.reason' "$WU_LAST_DIR/results/$w8.json" 2>/dev/null)" "miner did not return live"
+w9="34343434-3434-4234-9234-343434343434"
+wu_accept_case "$w9" '{"change_id":"chg-9","status":"failed","reason":"throttled: retry after the window"}' \
+    "rig-side throttle refusal is mapped to retry-later, not a fault" "throttled"
+# An unreachable rig fails cleanly (nothing changed, rig keeps its version).
+unreach_dir="$SANDBOX/ctrl597-unreach"
+mkdir -p "$unreach_dir/staged" "$unreach_dir/results" "$unreach_dir/audit" "$unreach_dir/bin"
+cp "$WU/config.json" "$unreach_dir/config.json"
+printf '%s' "v9.9.9" >"$unreach_dir/staged/.rigforge-latest-tag"
+printf '#!/usr/bin/env bash\nexit 7\n' >"$unreach_dir/bin/curl"
+chmod +x "$unreach_dir/bin/curl"
+w12="67676767-6767-4267-9267-676767676767"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w12" >"$unreach_dir/req.json"
+PATH="$unreach_dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$unreach_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$unreach_dir/req.json" "$unreach_dir" >/dev/null 2>&1
+assert_contains "an unreachable rig fails cleanly (nothing changed)" \
+    "$(jq -r '.status + "|" + (.error // "")' "$unreach_dir/results/$w12.json")" "failed|could not reach worker"
+
+# A non-latest proposal is refused against the CACHED tag — before any rig dial.
+wa_dir="$SANDBOX/ctrl597-notlatest"
+mkdir -p "$wa_dir/staged" "$wa_dir/results" "$wa_dir/audit"
+cp "$WU/config.json" "$wa_dir/config.json"
+printf '%s' "v9.9.9" >"$wa_dir/staged/.rigforge-latest-tag"
+w10="45454545-4545-4245-9245-454545454545"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v1.0.0"}\n' "$w10" >"$wa_dir/req.json"
+CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$wa_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$wa_dir/req.json" "$wa_dir" >/dev/null 2>&1
+assert_contains "a non-latest proposal is refused against the host-derived tag" \
+    "$(jq -r '.error // ""' "$wa_dir/results/$w10.json")" "not the latest published RigForge release"
+# Stale-terminal guard: the rig's /status first shows a PREVIOUS change's applied (no in-progress
+# state, rigforge#320) — it must be ignored until OUR change_id appears.
+stale_dir="$SANDBOX/ctrl597-stale"
+mkdir -p "$stale_dir/staged" "$stale_dir/results" "$stale_dir/audit" "$stale_dir/bin"
+cp "$WU/config.json" "$stale_dir/config.json"
+printf '%s' "v9.9.9" >"$stale_dir/staged/.rigforge-latest-tag"
+cat >"$stale_dir/bin/curl" <<EOF
+#!/usr/bin/env bash
+out="" url=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+    -o) out="\$2"; shift 2 ;;
+    *) url="\$1"; shift ;;
+    esac
+done
+case "\$url" in
+*/upgrade) printf '{"change_id":"chg-9"}' >"\$out"; printf '202' ;;
+*/status)
+    if [ -f "$stale_dir/.polled" ]; then
+        printf '{"change_id":"chg-9","status":"applied"}' >"\$out"
+    else
+        touch "$stale_dir/.polled"
+        printf '{"change_id":"chg-OLD","status":"applied"}' >"\$out"
+    fi
+    printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$stale_dir/bin/curl"
+w11="56565656-5656-4256-9256-565656565656"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w11" >"$stale_dir/req.json"
+PATH="$stale_dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$stale_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$stale_dir/req.json" "$stale_dir" >/dev/null 2>&1
+assert_eq "a stale terminal for a PREVIOUS change_id is ignored; ours lands" \
+    "$(jq -r '.status + "|" + .change_id' "$stale_dir/results/$w11.json" 2>/dev/null)" "applied|chg-9"
+# Poll-cap timeout (the sec-review headline fix): the cap bounds a hostile/hung rig's hold on the
+# single-threaded root drain, and hitting it must land "accepted" (queued on the rig; the #596
+# badge clears on its own), never a failure. CONTROL_WU_POLL_CAP shrinks the 90s cap so this
+# proves the fallback in seconds — the rig accepts (202) but its /status only ever shows a
+# PREVIOUS change's terminal, so no terminal for OUR change_id arrives inside the cap.
+to_dir="$SANDBOX/ctrl597-timeout"
+mkdir -p "$to_dir/staged" "$to_dir/results" "$to_dir/audit" "$to_dir/bin"
+cp "$WU/config.json" "$to_dir/config.json"
+printf '%s' "v9.9.9" >"$to_dir/staged/.rigforge-latest-tag"
+cat >"$to_dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+*/upgrade) printf '{"change_id":"chg-9"}' >"$out"; printf '202' ;;
+*/status) printf '{"change_id":"chg-OLD","status":"applied"}' >"$out"; printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$to_dir/bin/curl"
+w13="78787878-7878-4278-9278-787878787878"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w13" >"$to_dir/req.json"
+PATH="$to_dir/bin:$PATH" CONTROL_WU_BUDGET=1 CONTROL_WU_POLL_CAP=1 PITHEAD_CONFIG_FILE="$to_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$to_dir/req.json" "$to_dir" >/dev/null 2>&1
+assert_eq "hitting the poll cap lands 'accepted' (queued on the rig), not a failure" \
+    "$(jq -r '.status + "|" + .change_id' "$to_dir/results/$w13.json" 2>/dev/null)" "accepted|chg-9"
+assert_contains "the timed-out result says the upgrade is still running" \
+    "$(jq -r '.note // ""' "$to_dir/results/$w13.json" 2>/dev/null)" "still running on the rig"
+assert_contains "the poll-cap timeout is audited as accepted" \
+    "$(cat "$to_dir/audit/control.log")" '"action":"worker-upgrade","status":"accepted"'
+
+echo "== control channel: worker upgrade derives the target tag from GitHub (#597) =="
+# Every accept case above pre-caches .rigforge-latest-tag; these prove the derive itself. The
+# GitHub call captures curl's STDOUT (no -o), so the stub answers the release API on stdout and
+# keeps the -o/-w shape for the rig's /upgrade + /status.
+gh_dir="$SANDBOX/ctrl597-derive"
+mkdir -p "$gh_dir/staged" "$gh_dir/results" "$gh_dir/audit" "$gh_dir/bin"
+cp "$WU/config.json" "$gh_dir/config.json"
+cat >"$gh_dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+*/releases/latest) printf '{"tag_name":"v9.9.9"}' ;;
+*/upgrade) printf '{"change_id":"chg-9"}' >"$out"; printf '202' ;;
+*/status) printf '{"change_id":"chg-9","status":"applied"}' >"$out"; printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$gh_dir/bin/curl"
+w14="89898989-8989-4289-9289-898989898989"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w14" >"$gh_dir/req.json"
+PATH="$gh_dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$gh_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$gh_dir/req.json" "$gh_dir" >/dev/null 2>&1
+assert_eq "a fresh derive parses tag_name and drives the upgrade to applied" \
+    "$(jq -r '.status + "|" + .version' "$gh_dir/results/$w14.json" 2>/dev/null)" "applied|v9.9.9"
+assert_eq "the derived tag is cached for the next intent" \
+    "$(cat "$gh_dir/staged/.rigforge-latest-tag" 2>/dev/null)" "v9.9.9"
+# GitHub unreachable over Tor: refused fail-closed, nothing dialed toward the rig.
+ghfail_dir="$SANDBOX/ctrl597-ghdown"
+mkdir -p "$ghfail_dir/staged" "$ghfail_dir/results" "$ghfail_dir/audit" "$ghfail_dir/bin"
+cp "$WU/config.json" "$ghfail_dir/config.json"
+printf '#!/usr/bin/env bash\nexit 7\n' >"$ghfail_dir/bin/curl"
+chmod +x "$ghfail_dir/bin/curl"
+w15="9a9a9a9a-9a9a-429a-929a-9a9a9a9a9a9a"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w15" >"$ghfail_dir/req.json"
+PATH="$ghfail_dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$ghfail_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$ghfail_dir/req.json" "$ghfail_dir" >/dev/null 2>&1
+assert_contains "an unreachable GitHub release API refuses fail-closed" \
+    "$(jq -r '.status + "|" + (.error // "")' "$ghfail_dir/results/$w15.json")" \
+    "rejected|could not reach the GitHub release API over Tor"
+# GitHub reachable but the response carries no usable tag: refused fail-closed.
+ghjunk_dir="$SANDBOX/ctrl597-ghjunk"
+mkdir -p "$ghjunk_dir/staged" "$ghjunk_dir/results" "$ghjunk_dir/audit" "$ghjunk_dir/bin"
+cp "$WU/config.json" "$ghjunk_dir/config.json"
+cat >"$ghjunk_dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '{"message":"Not Found"}'
+exit 0
+EOF
+chmod +x "$ghjunk_dir/bin/curl"
+w16="abababab-abab-42ab-92ab-abababababab"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w16" >"$ghjunk_dir/req.json"
+PATH="$ghjunk_dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$ghjunk_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$ghjunk_dir/req.json" "$ghjunk_dir" >/dev/null 2>&1
+assert_contains "a release API response with no usable tag refuses fail-closed" \
+    "$(jq -r '.status + "|" + (.error // "")' "$ghjunk_dir/results/$w16.json")" \
+    "rejected|the GitHub release API returned no usable RigForge release tag"
+
+# Rig refusal (non-202) — this branch is also where an old rig (< v1.11.2: no /upgrade endpoint,
+# or its own version gate) surfaces its refusal. The rig's error text is attacker-influenceable
+# (a compromised rig / LAN MITM), so it must be capped at 500 chars before it lands in a result.
+refuse_dir="$SANDBOX/ctrl597-refuse"
+mkdir -p "$refuse_dir/staged" "$refuse_dir/results" "$refuse_dir/audit" "$refuse_dir/bin"
+cp "$WU/config.json" "$refuse_dir/config.json"
+printf '%s' "v9.9.9" >"$refuse_dir/staged/.rigforge-latest-tag"
+# 500 filler chars then a marker: the cap keeps the filler and must drop the marker.
+wu_long_err="$(printf 'A%.0s' $(seq 1 500))OVERFLOW-TAIL"
+cat >"$refuse_dir/bin/curl" <<EOF
+#!/usr/bin/env bash
+out="" url=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+    -o) out="\$2"; shift 2 ;;
+    *) url="\$1"; shift ;;
+    esac
+done
+case "\$url" in
+*/upgrade) printf '{"error":"$wu_long_err"}' >"\$out"; printf '403' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$refuse_dir/bin/curl"
+w17="bcbcbcbc-bcbc-42bc-92bc-bcbcbcbcbcbc"
+printf '{"id":"%s","action":"worker-upgrade","actor":"admin","worker":"rig1","version":"v9.9.9"}\n' "$w17" >"$refuse_dir/req.json"
+PATH="$refuse_dir/bin:$PATH" CONTROL_WU_BUDGET=1 PITHEAD_CONFIG_FILE="$refuse_dir/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$refuse_dir/req.json" "$refuse_dir" >/dev/null 2>&1
+assert_contains "a rig non-202 (incl. an old-rig < v1.11.2 refusal) is surfaced as rejected" \
+    "$(jq -r '.status + "|" + (.error // "")' "$refuse_dir/results/$w17.json")" \
+    "rejected|worker 'rig1' refused the upgrade (HTTP 403): AAAA"
+assert_not_contains "the rig's error text is truncated at 500 chars" \
+    "$(jq -r '.error // ""' "$refuse_dir/results/$w17.json")" "OVERFLOW-TAIL"
+
+# ---------------------------------------------------------------------------
 echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
 # The closed-schema control gate (#537, pithead ~L4706) relies on this invariant: every config.json
 # path pithead reads must exist in config.reference.json, or a legitimate config carrying that path

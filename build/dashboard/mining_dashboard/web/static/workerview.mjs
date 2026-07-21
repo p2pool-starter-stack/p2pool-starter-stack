@@ -26,11 +26,15 @@ import {
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
 const POLL_MS = 2000;
 const POLL_MAX = 40; // ~80s — the host dials the rig then polls its /status
+// ~5 min — covers spool latency + the host runner's own 90s rig-poll cap (#597). A rebuild that
+// outlives the cap lands as "accepted"; the badge clears on its own once the rig reports the
+// new version, so polling longer here buys nothing.
+const UPGRADE_POLL_MAX = 150;
 
 // Poll the shared control-result endpoint until a terminal outcome lands, skipping the interim
 // "running". The apply can briefly out-run the dashboard, so tolerate a transient fetch failure.
-async function pollWorkerResult(id) {
-  for (let i = 0; i < POLL_MAX; i++) {
+async function pollWorkerResult(id, max = POLL_MAX) {
+  for (let i = 0; i < max; i++) {
     await new Promise((r) => setTimeout(r, POLL_MS));
     let res;
     try {
@@ -56,6 +60,10 @@ const STATUS_META = {
   rolled_back: { cls: "status-bad", label: "Rolled back" },
   failed: { cls: "status-bad", label: "Failed" },
   error: { cls: "status-bad", label: "Error" },
+  // Worker-upgrade extras (#597): a rig already on the target is a calm no-op, and the rig's own
+  // 6h anti-beacon throttle is retry-later, not a fault (the host runner maps it server-side).
+  noop: { cls: "status-ok", label: "Already up to date" },
+  throttled: { cls: "status-warn", label: "Throttled by the rig — retry later" },
 };
 
 function StatusLine({ result }) {
@@ -142,6 +150,11 @@ export class WorkerInspect extends Component {
       jsonError: null,
       busy: false,
       result: null,
+      // One-click rig upgrade (#597): a two-step arm → confirm, its own in-flight flag (a build
+      // can run minutes) and its own result line, independent of the config editor's.
+      upgArmed: false,
+      upgBusy: false,
+      upgResult: null,
     };
     this.dialogRef = createRef();
   }
@@ -225,6 +238,27 @@ export class WorkerInspect extends Component {
     }
   }
 
+  // One-click rig upgrade (#597). POSTs {worker, version} only — the version is the badge's
+  // latest, a proposal the HOST re-derives and the rig bounds; this client never picks a target.
+  // 202 means spooled: poll with the long budget (the rig may rebuild its miner, ~10 min).
+  async upgrade() {
+    const version = this.state.detail.rigforge_update.latest;
+    this.setState({ upgArmed: false, upgBusy: true, upgResult: { status: "running" } });
+    try {
+      const res = await fetch("/api/control/worker-upgrade", {
+        method: "POST",
+        headers: CONTROL_HEADERS,
+        body: JSON.stringify({ worker: this.props.name, version }),
+      });
+      let out = await res.json();
+      if (res.status === 202 && out.id) out = await pollWorkerResult(out.id, UPGRADE_POLL_MAX);
+      this.setState({ upgBusy: false, upgResult: out });
+      this.load(); // an applied upgrade clears the badge once the rig reports the new version
+    } catch (e) {
+      this.setState({ upgBusy: false, upgResult: { status: "error", error: String(e) } });
+    }
+  }
+
   render() {
     const { phase, detail, error } = this.state;
     const { name, onClose } = this.props;
@@ -243,7 +277,8 @@ export class WorkerInspect extends Component {
   }
 
   renderBody(detail) {
-    const { mode, tableEdits, editText, jsonError, busy, result } = this.state;
+    const { mode, tableEdits, editText, jsonError, busy, result, upgArmed, upgBusy, upgResult } =
+      this.state;
     const canEdit = detail.control_enabled && detail.editable;
     return html`
         <div class="worker-inspect-body">
@@ -253,17 +288,35 @@ export class WorkerInspect extends Component {
                 <${InfoCard} label="RigForge" value=${detail.rigforge ? detail.rigforge.version || "yes" : "—"} />
             </div>
             ${
-              // This rig runs an older RigForge (#596) — notify-only, mirrors the header's
-              // stack-level new-release badge. The one-click rig upgrade is the separate #597.
+              // This rig runs an older RigForge (#596) — the badge links to the release notes;
+              // with the control channel on and an operator-set host, the one-click upgrade
+              // button (#597) appears beside it: arm → confirm → POST → poll (a rig rebuild can
+              // take ~10 min; the rig rolls back on a build that doesn't come back live).
               detail.rigforge_update &&
               detail.rigforge_update.available &&
               detail.rigforge_update.url
                 ? html`<p class="mt-1"><a class="badge badge-accent" href=${detail.rigforge_update.url}
                         target="_blank" rel="noopener noreferrer"
                         title=${"A newer RigForge release is available: " + detail.rigforge_update.latest}
-                     >New RigForge release ${detail.rigforge_update.latest} available ↗</a></p>`
+                     >New RigForge release ${detail.rigforge_update.latest} available ↗</a>${
+                       canEdit && !upgBusy
+                         ? upgArmed
+                           ? html` <button class="btn-toggle" disabled=${busy}
+                                 title=${"Ask the rig to upgrade itself to " + detail.rigforge_update.latest + " now"}
+                                 onClick=${() => this.upgrade()}>Confirm upgrade</button>
+                               <button class="btn-toggle" onClick=${() => this.setState({ upgArmed: false })}>Cancel</button>`
+                           : html` <button class="btn-toggle" disabled=${busy}
+                                 title="Upgrade this rig's RigForge to the latest release (its miner may rebuild, ~10 min)"
+                                 onClick=${() => this.setState({ upgArmed: true, upgResult: null })}>Upgrade rig…</button>`
+                         : null
+}${
+                       upgBusy
+                         ? html` <span class="text-muted text-small">upgrading — a rebuild can take minutes…</span>`
+                         : null
+}</p>`
                 : null
             }
+            <${StatusLine} result=${upgResult} />
             ${detail.rigforge ? html`<${StatsTable} stats=${detail.rigforge.stats} />` : null}
 
             <h4 class="mt-2">Edit config</h4>

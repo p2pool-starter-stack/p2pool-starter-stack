@@ -262,6 +262,27 @@ def submit_worker_apply(worker, changes, actor="", intent_id=None):
     return rid
 
 
+def submit_worker_upgrade(worker, version, actor="", intent_id=None):
+    """Spool a worker RigForge-upgrade intent (#597). Carries ONLY the worker NAME and the version
+    the operator confirmed seeing — never a host, port, or token (the host runner resolves the
+    rig's real address and bearer from workers.list[], exactly like worker-apply), and the version
+    is a proposal, never a target: the host re-derives the real latest RigForge release over Tor
+    and refuses a mismatch. Returns the request id (always a UUID)."""
+    rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())
+    request = {
+        "id": rid,
+        "action": "worker-upgrade",
+        "actor": actor,
+        "worker": worker,
+        "version": version,
+    }
+    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
+    with open(tmp, "w") as f:
+        json.dump(request, f)
+    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
+    return rid
+
+
 # The config keys the Worker Inspect editor may change — the exact writable allowlist the rig's
 # control API enforces (rigforge WRITABLE, #236). Validated here (fail-closed, defence in depth), on
 # the host runner, and finally by the rig itself. NOT writable: identity, filesystem paths, the API

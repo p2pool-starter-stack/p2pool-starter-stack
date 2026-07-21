@@ -5756,6 +5756,184 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     control_audit "$auditf" "$id" "$actor" "worker-apply" "accepted"
 }
 
+control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
+    # One-click RigForge upgrade for a single rig (#597) — fuses the two existing templates:
+    # control_worker_apply's rig resolution/guards/dial (address + bearer from the HOST config,
+    # never the intent) and control_upgrade's throttled host-side target re-derivation over Tor
+    # (the container proposes a version; GitHub decides the real target; a mismatch is refused).
+    # The rig bounds whatever tag we send with its own monotonic + ancestry guards and rolls back
+    # a build that doesn't come back live — rollback coverage is rig-side (rigforge#322).
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    local results="$cdir/results" auditf="$cdir/audit/control.log"
+    control_audit "$auditf" "$id" "$actor" "worker-upgrade" "started"
+    _wu_reject() { # <reason> — refused before dialing the rig; nothing changed
+        control_write_result "$results" "$id" "$(jq -n --arg e "$1" '{status:"rejected",error:$e,ts:(now|floor)}')"
+        control_audit "$auditf" "$id" "$actor" "worker-upgrade" "rejected"
+    }
+    _wu_fail() { # <reason> — the dial started and did not complete
+        control_write_result "$results" "$id" "$(jq -n --arg e "$1" '{status:"failed",error:$e,ts:(now|floor)}')"
+        control_audit "$auditf" "$id" "$actor" "worker-upgrade" "failed"
+    }
+    local worker proposed
+    worker=$(jq -r '.worker // ""' "$file")
+    # Same charset pin as worker-apply: the name is a config.json lookup key. LC_ALL=C so [!-~]
+    # is the printable-ASCII BYTE range regardless of the host locale (#185's UTF-8 lesson).
+    if ! printf '%s' "$worker" | LC_ALL=C grep -qE '^[!-~]{1,128}$'; then
+        _wu_reject "malformed or missing 'worker' name in the request."
+        return 0
+    fi
+    proposed=$(jq -r '.version // ""' "$file")
+    if ! printf '%s' "$proposed" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        _wu_reject "malformed or missing 'version' in the upgrade request."
+        return 0
+    fi
+    # Resolve the rig's ADDRESS + BEARER from the HOST's config.json — never the intent (same
+    # fail-closed contract as worker-apply: only an operator-set host can be a target).
+    local host cport token
+    host=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    cport=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
+    token=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    if [ -z "$host" ]; then
+        _wu_reject "worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to upgrade it."
+        return 0
+    fi
+    if ! printf '%s' "$host" | grep -qE '^[A-Za-z0-9._-]{1,253}$'; then
+        _wu_reject "worker '$worker' has an invalid host."
+        return 0
+    fi
+    if ! printf '%s' "$cport" | grep -qE '^[0-9]{1,5}$' || [ "$cport" -lt 1 ] || [ "$cport" -gt 65535 ]; then
+        _wu_reject "worker '$worker' has an invalid control_port."
+        return 0
+    fi
+    if [ -z "$token" ]; then
+        _wu_reject "worker '$worker' has no token in workers.list[] (or the deprecated dashboard.workers[]) — the rig's control API is bearer-mandatory."
+        return 0
+    fi
+    # Per-drain budget: an upgrade blocks the single-threaded root runner on the rig's build
+    # (minutes, vs seconds for worker-apply), so exactly ONE dials per drain. v1 is per-worker
+    # only — no "upgrade all" — and a real fleet upgrade is one rig at a time by design.
+    if [ "${CONTROL_WU_BUDGET:-0}" -le 0 ]; then
+        _wu_reject "another worker upgrade is already in this cycle — retry in a moment."
+        return 0
+    fi
+    CONTROL_WU_BUDGET=$((CONTROL_WU_BUDGET - 1))
+    # Host-side re-derivation of the target from the RigForge release API over Tor — load-bearing:
+    # the rig deliberately computes no "latest" itself (ADR 0002 D4), it bounds the tag we send.
+    # The derived tag is cached for 10 minutes and the dial itself is stamp-throttled to one per
+    # 10 minutes (claimed BEFORE the dial, control_upgrade's anti-beacon lesson): a compromised
+    # container flooding well-formed intents costs at most one GitHub/Tor egress per window,
+    # while a legitimate rig-after-rig fleet upgrade reuses the cached tag.
+    local tagf="$cdir/staged/.rigforge-latest-tag" stampf="$cdir/staged/.rigforge-latest-stamp" tag=""
+    if [ -n "$(find "$tagf" -mmin -10 2>/dev/null)" ]; then
+        tag=$(cat "$tagf" 2>/dev/null)
+    fi
+    if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if [ -n "$(find "$stampf" -mmin -10 2>/dev/null)" ]; then
+            _wu_reject "a RigForge release lookup was attempted less than 10 minutes ago and no usable tag is cached — retry in a few minutes."
+            return 0
+        fi
+        touch "$stampf"
+        local prefix socks rel
+        prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
+        [ -n "$prefix" ] || prefix="172.28.0"
+        socks="${prefix}.25:9050"
+        if ! rel=$(curl -fsS --max-time 60 --socks5-hostname "$socks" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/p2pool-starter-stack/rigforge/releases/latest" 2>/dev/null); then
+            _wu_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+            return 0
+        fi
+        tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
+        if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            _wu_reject "the GitHub release API returned no usable RigForge release tag — nothing was changed."
+            return 0
+        fi
+        printf '%s' "$tag" >"$tagf"
+    fi
+    if [ "$proposed" != "$tag" ]; then
+        _wu_reject "requested version $proposed is not the latest published RigForge release ($tag) — reload the dashboard and retry."
+        return 0
+    fi
+    control_write_result "$results" "$id" "$(jq -n --arg w "$worker" --arg v "$tag" '{status:"running",worker:$w,version:$v,ts:(now|floor)}')"
+    # POST the upgrade to the rig's control API — direct LAN dial like worker-apply, NOT Tor. The
+    # body carries the HOST-derived tag only; the token rides one header, never the URL or result.
+    local url="http://$host:$cport/upgrade" bodyf="$cdir/staged/.$id.body" code
+    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 \
+        -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+        --data "$(jq -n --arg v "$tag" '{version:$v}')" "$url" 2>/dev/null); then
+        rm -f "$bodyf"
+        _wu_fail "could not reach worker '$worker' control API at $host:$cport — nothing was changed."
+        return 0
+    fi
+    if [ "$code" != "202" ]; then
+        local rig_err
+        # Rig-supplied text is attacker-influenceable (a compromised rig / LAN MITM); cap it.
+        rig_err=$(jq -r '.error // ""' "$bodyf" 2>/dev/null | head -c 500)
+        rm -f "$bodyf"
+        _wu_reject "worker '$worker' refused the upgrade (HTTP $code): ${rig_err:-no detail}."
+        return 0
+    fi
+    local change_id
+    change_id=$(jq -r '.change_id // ""' "$bodyf" 2>/dev/null | head -c 64)
+    rm -f "$bodyf"
+    # Poll the rig's /status for THIS change_id's terminal outcome. The cap is a deliberate
+    # trade: a no-rebuild upgrade (the common case — git checkout + restart) reaches terminal in
+    # well under 90s, while a pin-change rebuild (~10 min) times out to "accepted" below and the
+    # badge (#596) clears on its own when the rig reports the new version. Polling the full build
+    # would hand a hostile/hung rig 12 minutes of the single-threaded root drain per intent
+    # (sec-review finding) — 90s keeps the stall bound in worker-apply's envelope. There is no
+    # in-progress status (rigforge#320): a non-matching change_id just means pending. Terminals
+    # are applied / rolled_back / failed; a rig-side throttle refusal arrives as
+    # failed+"throttled" and is surfaced as retry-later, not an error. The cap is overridable
+    # (CONTROL_WU_POLL_CAP) so the stack tests can prove the timeout→accepted fallback in seconds.
+    local sbody scode status reason deadline=$((SECONDS + ${CONTROL_WU_POLL_CAP:-90}))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 5
+        sbody="$cdir/staged/.$id.status"
+        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 \
+            -H "Authorization: Bearer $token" "http://$host:$cport/status" 2>/dev/null); then
+            rm -f "$sbody"
+            continue
+        fi
+        [ "$scode" = "200" ] || {
+            rm -f "$sbody"
+            continue
+        }
+        # Only trust a status whose change_id matches ours — the rig may still be showing a
+        # PREVIOUS change's terminal state (no in-progress status, rigforge#320).
+        if [ "$(jq -r '.change_id // ""' "$sbody" 2>/dev/null)" != "$change_id" ]; then
+            rm -f "$sbody"
+            continue
+        fi
+        status=$(jq -r '.status // ""' "$sbody")
+        case "$status" in
+        applied | rolled_back | failed)
+            # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
+            reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
+            rm -f "$sbody"
+            # The rig collapses its refusals into failed+free-text (rigforge#320); its 6h
+            # anti-beacon throttle is retry-later, not a fault — give it its own status so the
+            # dashboard renders it calm instead of red.
+            if [ "$status" = "failed" ] && printf '%s' "$reason" | grep -qi "throttl"; then
+                status="throttled"
+            fi
+            control_write_result "$results" "$id" "$(jq -n --arg s "$status" --arg c "$change_id" --arg w "$worker" --arg v "$tag" --arg r "$reason" \
+                '{status:$s,change_id:$c,worker:$w,version:$v,reason:(if $r=="" then null else $r end),ts:(now|floor)}')"
+            control_audit "$auditf" "$id" "$actor" "worker-upgrade" "$status"
+            return 0
+            ;;
+        esac
+        rm -f "$sbody"
+    done
+    # Accepted but no terminal status inside the cap — the upgrade is running on the rig. Record
+    # accepted, not failure: the badge (#596) clears on its own when the rig's next summary poll
+    # reports the new version ('applied' echoes no version, rigforge#320 — the summary is the
+    # confirmation of record either way).
+    control_write_result "$results" "$id" "$(jq -n --arg c "$change_id" --arg w "$worker" --arg v "$tag" \
+        '{status:"accepted",change_id:$c,worker:$w,version:$v,note:"upgrade still running on the rig — check the rig if the badge has not cleared in a while",ts:(now|floor)}')"
+    control_audit "$auditf" "$id" "$actor" "worker-upgrade" "accepted"
+}
+
 control_process_request() { # <claimed-file> <control-dir>
     local file="$1" cdir="$2" id action actor size
     # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
@@ -5799,6 +5977,7 @@ control_process_request() { # <claimed-file> <control-dir>
     commit) control_commit "$id" "$actor" "$cdir" ;;
     upgrade) control_upgrade "$file" "$id" "$actor" "$cdir" ;;
     worker-apply) control_worker_apply "$file" "$id" "$actor" "$cdir" ;;
+    worker-upgrade) control_worker_upgrade "$file" "$id" "$actor" "$cdir" ;;
     restart | apply) control_lifecycle "$action" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
@@ -5837,6 +6016,9 @@ control_run_pending() {
     # the runner on a network round-trip, so cap how many dial per drain (the rest reject with a retry
     # hint). control_worker_apply reads + decrements this in the same shell.
     CONTROL_WA_BUDGET=5
+    # Worker-upgrade budget (#597): an upgrade blocks the runner on a rig build (minutes), so
+    # exactly one runs per drain; the rest reject with a retry hint.
+    CONTROL_WU_BUDGET=1
     names=$(cd "$cdir/requests" 2>/dev/null && ls -1tr -- *.json 2>/dev/null) || true
     if [ -z "$names" ]; then
         log "No pending control requests."
