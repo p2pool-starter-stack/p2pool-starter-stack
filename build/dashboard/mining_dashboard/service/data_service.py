@@ -969,10 +969,10 @@ class DataService:
             self.state_manager.add_audit_event,
             id=event_id or f"{source}-{uuid.uuid4()}",
             ts=_iso_now(),
-            source=source,
+            source=audit_service._clean(source, 16),
             actor=audit_service._clean(actor, 64),
-            action=action,
-            status=status,
+            action=audit_service._clean(action, 16),
+            status=audit_service._clean(status, 32),
             keys=audit_service._clean(keys, 400),
         )
 

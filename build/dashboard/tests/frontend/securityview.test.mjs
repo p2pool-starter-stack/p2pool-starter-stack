@@ -169,6 +169,10 @@ test("audit card: grouping select appears once there are entries, with the curre
   });
   assert.match(out, /<select/);
   assert.match(out, /Group by day/);
+  // Accessibility parity (#530 review): a bare <select> with no associated <label> has no
+  // accessible name for a screen reader — every other select/group control in this codebase
+  // carries one (role=group aria-label, or a <label for>, see xvb-tier-select).
+  assert.match(out, /aria-label="Group audit trail by"/);
 });
 
 test("audit card: day grouping renders one header row per distinct day, spanning the table", () => {

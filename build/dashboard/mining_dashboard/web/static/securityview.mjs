@@ -112,7 +112,7 @@ const AuditCard = ({ audit, group, onGroupChange }) => {
           <h3>Recent config changes</h3>
           ${
             audit.length > 0
-              ? html`<select value=${group} onChange=${(e) => onGroupChange(e.target.value)}>
+              ? html`<select aria-label="Group audit trail by" value=${group} onChange=${(e) => onGroupChange(e.target.value)}>
                   <option value="flat">All (newest first)</option>
                   <option value="hour">Group by hour</option>
                   <option value="day">Group by day</option>
