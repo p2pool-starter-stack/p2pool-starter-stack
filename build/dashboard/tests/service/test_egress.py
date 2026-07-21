@@ -8,12 +8,13 @@ from mining_dashboard.service.egress import (
     LOCAL,
     TOPOLOGY_NODES,
     TOR,
+    _sinks_all_private,
     compute_egress_posture,
     compute_topology,
 )
 
 # The privacy-safe resting config: firewall on, p2pool over Tor, XvB over Tor, local node, no sync,
-# healthchecks off (no ping URL configured).
+# healthchecks off (no ping URL configured), no alert sinks configured.
 SAFE = {
     "firewall": True,
     "p2pool_clearnet": False,
@@ -24,6 +25,9 @@ SAFE = {
     "remote_monero": False,
     "healthchecks_enabled": False,
     "telegram_enabled": False,
+    "notify_sinks_enabled": False,
+    "notify_tor": True,
+    "notify_sinks_private": False,
 }
 
 
@@ -108,6 +112,56 @@ def test_price_feed_is_tor_when_enabled_inactive_otherwise():
     on = _posture(price_feed_enabled=True, firewall=True)
     assert _conn(on, "dashboard", "price feed")["route"] == TOR
     assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
+
+
+def test_alert_sinks_tor_when_configured_inactive_otherwise():
+    # Configuring a webhook/ntfy sink adds a dashboard Tor egress (#380); off → inactive.
+    assert _conn(_posture(), "dashboard", "alert sinks")["route"] == INACTIVE
+    on = _posture(notify_sinks_enabled=True)
+    assert _conn(on, "dashboard", "alert sinks")["route"] == TOR
+    assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
+
+
+def test_alert_sinks_clearnet_public_endpoint_leaks_despite_firewall():
+    # notifications.tor=false with a public endpoint: the dashboard is host-networked, so the #270
+    # firewall can't cover it — every alert POST exposes the host IP.
+    p = _posture(notify_sinks_enabled=True, notify_tor=False, firewall=True)
+    conn = _conn(p, "dashboard", "alert sinks")
+    assert conn["route"] == CLEARNET
+    assert conn.get("blocked_by_firewall") is None
+    assert p["summary"]["leaks"] == 1
+    assert p["summary"]["all_tor"] is False
+
+
+def test_alert_sinks_lan_carveout_is_local_not_a_leak():
+    # The LAN carve-out: notifications.tor=false with every sink on a private IP. The POST never
+    # leaves your network — route is local, and it must NOT count toward the leak total.
+    p = _posture(notify_sinks_enabled=True, notify_tor=False, notify_sinks_private=True)
+    assert _conn(p, "dashboard", "alert sinks")["route"] == LOCAL
+    assert p["summary"]["leaks"] == 0
+    assert p["summary"]["all_tor"] is True
+
+
+def test_sinks_all_private_requires_ip_literal_proof():
+    # Private/loopback IP literals prove the LAN carve-out; hostnames can't (no DNS in a pure
+    # derivation), so they classify as public — as does an empty or malformed sink set.
+    assert _sinks_all_private(["http://192.168.1.5/hook"]) is True
+    assert _sinks_all_private(["http://127.0.0.1:8080/hook", "http://[::1]/ntfy/alerts"]) is True
+    assert _sinks_all_private(["http://[fc00::1]/hook"]) is True  # IPv6 ULA — the v6 LAN case
+    # The real _notify_knobs shape: webhook configured, NTFY_URL unset ("" must not veto).
+    assert _sinks_all_private(["http://192.168.1.5/hook", ""]) is True
+    assert _sinks_all_private(["http://192.168.1.5/hook", "https://ntfy.sh/mytopic"]) is False
+    assert _sinks_all_private(["http://nas.local/hook"]) is False  # hostname — unknowable
+    assert _sinks_all_private(["http://localhost/hook"]) is False  # still a hostname, same rule
+    assert _sinks_all_private(["http://8.8.8.8/hook"]) is False
+    assert _sinks_all_private(["http://user@8.8.8.8/hook"]) is False  # userinfo can't hide the host
+    # IPv4-mapped IPv6 targets a public v4 address — must NOT classify private (needs the
+    # CPython >= 3.11.10 mapped-address rules; pinned here so a runtime downgrade can't unlock it).
+    assert _sinks_all_private(["http://[::ffff:8.8.8.8]/hook"]) is False
+    assert _sinks_all_private(["http://100.64.0.1/hook"]) is False  # CGNAT/Tailscale — documented
+    assert _sinks_all_private([]) is False
+    assert _sinks_all_private(["", "  "]) is False
+    assert _sinks_all_private(["not a url"]) is False
 
 
 def test_remote_monerod_rpc_is_clearnet():
@@ -216,6 +270,24 @@ def test_topology_internal_mesh_is_flagged_and_includes_merge_mining():
     assert docker.get("internal") is True
 
 
+def test_topology_alert_sinks_edge_tracks_the_route():
+    # Tor (or unconfigured) → an edge into the tor hub, same as healthchecks.
+    def sink_edges(topo):
+        return [e for e in topo["edges"] if e["label"] == "alert sinks"]
+
+    assert sink_edges(_topo(notify_sinks_enabled=True))[0]["route"] == TOR
+    assert sink_edges(_topo())[0]["route"] == INACTIVE
+    # Public clearnet endpoint → straight to the internet node, tagged as a real leak.
+    clearnet = _topo(notify_sinks_enabled=True, notify_tor=False, firewall=True)
+    (edge,) = sink_edges(clearnet)
+    assert edge["to"] == "internet" and edge["route"] == CLEARNET and edge["leak"] is True
+    # LAN carve-out: no placeable node for a LAN appliance, so no edge — but the shared summary
+    # still reports no leak, so the badge and the egress list stay honest.
+    local = _topo(notify_sinks_enabled=True, notify_tor=False, notify_sinks_private=True)
+    assert sink_edges(local) == []
+    assert local["summary"]["leaks"] == 0 and local["summary"]["all_tor"] is True
+
+
 def test_topology_clearnet_sync_adds_bypass_edge():
     topo = _topo(monero_clearnet_sync=True, firewall=False)
     edge = _edge(topo, "monerod", "internet")
@@ -249,6 +321,9 @@ _KNOBS = (
     "remote_monero",
     "healthchecks_enabled",
     "telegram_enabled",
+    "notify_sinks_enabled",
+    "notify_tor",
+    "notify_sinks_private",
 )
 
 
