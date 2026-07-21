@@ -31,6 +31,20 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   comparing physical paths so the `current` symlink and the versioned directory it targets
   count as the same checkout.
 
+- **An unedited Save & preview shows zero changes (#695, #696).** On a bundle-deployed box the
+  Review changes modal reported two changes with nothing edited. First, a path "change" such as
+  `CLEARNET_STATE_DIR: /srv/code/current/... → /srv/code/pithead-vX.Y.Z/...`: pithead resolved
+  its own directory with a logical `pwd`, so `.env` paths derived from the checkout dir took the
+  spelling of whoever invoked it — the deploy symlink interactively, the physical dir under the
+  control runner's systemd unit — and the same directory diffed against itself. The script now
+  canonicalizes with `pwd -P`, and `CLEARNET_STATE_DIR` joins its siblings (`CONTROL_DIR`,
+  `CADDY_LOG_DIR`) as a silent internal path in the change preview. Second, a permanent
+  "Energy calculator settings updated" row on any box whose `config.json` never set
+  `dashboard.energy`: the editor round-trips the reference-merged form, so the staged copy
+  carries the materialized energy defaults, and the preview compared them against the absent
+  block. The comparison — in the preview row and the commit's audit-key derivation alike — now
+  merges the reference defaults into both sides, so only a real value change raises the row.
+
 ### Changed
 
 - **The release process requires the targeted end-to-end run.** `docs/dev/releasing.md` now
