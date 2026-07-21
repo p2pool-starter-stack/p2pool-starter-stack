@@ -322,6 +322,20 @@ control port.
 [TODO: verify upstream — confirm the `rigforge.control` mirror ships in RigForge; until then this
 parses to nothing and the row stays `accepted`.]
 
+#### RigForge new-release badge
+
+When `dashboard.check_for_updates` is on, the dashboard also compares each rig's reported RigForge
+version against the latest published RigForge release and badges the rigs that are behind — in the
+Workers Alive table and in Worker Inspect, next to the version. The badge is notify-only and links
+to the release notes; upgrading the rig is still done on the rig.
+
+One fetch covers the whole fleet: the release check is hourly, rides the same Tor route as the
+stack's own new-release check, and fails silent offline (no badge, no error). The same
+`dashboard.check_for_updates` flag gates both checks — off means neither dials GitHub.
+
+Only rigs on the enriched `8081` feed report a version. A plain-xmrig rig on `8080` has no version
+to compare, so it shows no badge — that reads as "unknown", not "up to date".
+
 ---
 
 ## New to mining? Start with RigForge

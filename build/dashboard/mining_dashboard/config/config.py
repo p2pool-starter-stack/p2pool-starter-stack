@@ -359,6 +359,12 @@ GITHUB_RELEASES_API = os.environ.get(
     "GITHUB_RELEASES_API",
     "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest",
 )
+# Latest RigForge release, for the per-worker "new version available" badge (#596). Same check,
+# same Tor route, same dashboard.check_for_updates gate as the stack's own release check above.
+GITHUB_RIGFORGE_RELEASES_API = os.environ.get(
+    "GITHUB_RIGFORGE_RELEASES_API",
+    "https://api.github.com/repos/p2pool-starter-stack/rigforge/releases/latest",
+)
 UPDATE_CHECK_INTERVAL = int(float(os.environ.get("UPDATE_CHECK_INTERVAL", "3600")))
 
 # Donation tier to target (config.json: xvb.donation_level). The XvB raffle picks

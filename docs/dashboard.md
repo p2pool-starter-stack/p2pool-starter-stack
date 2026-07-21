@@ -240,6 +240,11 @@ but its miner isn't, the rig stays in the table with a **miner down** chip rathe
 offline. Point the rig's descriptor at the enriched feed to turn this on — see
 [Connecting Miners › RigForge enriched feed](workers.md#rigforge-enriched-feed).
 
+With `dashboard.check_for_updates` on, a rig reporting a RigForge version older than the latest
+published release also gets a clickable `rf vX.Y.Z available ↗` badge — the per-worker twin of the
+header's new-release badge, notify-only, linking to the RigForge release notes. See
+[Connecting Miners › RigForge new-release badge](workers.md#rigforge-new-release-badge).
+
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
 rejected count — a rig submitting stale or bad shares (bad overclock, flaky network, clock drift)

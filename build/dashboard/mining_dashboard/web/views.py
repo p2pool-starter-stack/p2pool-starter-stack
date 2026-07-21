@@ -48,7 +48,7 @@ from mining_dashboard.service.earnings import (
 )
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
-from mining_dashboard.service.update_checker import parse_semver
+from mining_dashboard.service.update_checker import compute_update, parse_semver
 from mining_dashboard.version import resolve_version
 
 logger = logging.getLogger("WebViews")
@@ -834,7 +834,23 @@ def build_system(data):
     }
 
 
-def build_workers(workers):
+def rigforge_update_for(worker, release):
+    """The per-worker RigForge new-release callout (#596): ``{available, latest, url}`` or ``None``.
+
+    Derived at the render seam from the rig's live reported version and the fleet-wide cached
+    latest release — never stored, so it can't outlive its inputs (the #664 lesson: a rig running
+    X must never badge "X available"). ``compute_update`` normalizes the rig's bare ``1.11.2``
+    against the release tag's ``v1.11.2``. No reported version (plain xmrig, sister API off) or no
+    cached release → ``None``, an honest "unknown", not a false "up to date"."""
+    if not worker or not release:
+        return None
+    version = (worker.get("rigforge") or {}).get("version")
+    if not version:
+        return None
+    return compute_update(version, release.get("tag"), release.get("url"))
+
+
+def build_workers(workers, rigforge_release=None):
     """Worker rows as data: raw numeric fields (for client-side sorting) alongside their
     formatted display strings, plus a pool token for the badge. Online first, then by name."""
     rows = []
@@ -888,6 +904,8 @@ def build_workers(workers):
                     # RigForge enriched feed (#235): version badge + health/power/tune/watchdog
                     # chips, or None for a plain-xmrig worker (renders nothing extra).
                     "rigforge": _rigforge_display(worker.get("rigforge")),
+                    # {available, latest, url} | None — this rig runs an older RigForge (#596).
+                    "rigforge_update": rigforge_update_for(worker, rigforge_release),
                 }
             )
         except Exception as e:
@@ -1541,6 +1559,8 @@ def build_worker_detail(name, data, state_mgr):
         "status": worker.get("status") if worker else None,
         "hashrate": format_hashrate(worker.get("h60", 0)) if worker else None,
         "rigforge": _rigforge_display(worker.get("rigforge")) if worker else None,
+        # {available, latest, url} | None — this rig runs an older RigForge (#596).
+        "rigforge_update": rigforge_update_for(worker, (data or {}).get("rigforge_release")),
         "writable_keys": sorted(WORKER_WRITABLE_KEYS),
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
@@ -1644,7 +1664,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         ),
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         "tari": build_tari(data),
-        "workers": build_workers(data.get("workers", [])),
+        "workers": build_workers(data.get("workers", []), data.get("rigforge_release")),
         # Fleet power draw / efficiency and (once a price is set) net profit after power (#260),
         # with live feed prices (#520) when dashboard.energy.price_feed is on.
         "energy": build_energy(data.get("workers", []), data.get("prices")),

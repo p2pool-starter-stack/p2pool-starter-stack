@@ -50,7 +50,7 @@ class TestCoinGeckoClient:
         c = CoinGeckoClient("USD", tor_proxy="socks5h://t:9050")
         payload = {"monero": {"usd": 333.97}, "minotari": {"usd": 0.0004}}
         with patch(
-            "mining_dashboard.service.price_feed.requests.get",
+            "mining_dashboard.service.price_feed.bounded_get",
             return_value=self._resp(200, payload),
         ) as g:
             assert c.fetch() == {"xmr": 333.97, "tari": 0.0004}
@@ -66,15 +66,13 @@ class TestCoinGeckoClient:
 
     def test_non_200_is_silent_none(self):
         c = CoinGeckoClient("USD")
-        with patch(
-            "mining_dashboard.service.price_feed.requests.get", return_value=self._resp(429)
-        ):
+        with patch("mining_dashboard.service.price_feed.bounded_get", return_value=self._resp(429)):
             assert c.fetch() is None
 
     def test_network_error_is_silent_none(self):
         c = CoinGeckoClient("USD")
         with patch(
-            "mining_dashboard.service.price_feed.requests.get",
+            "mining_dashboard.service.price_feed.bounded_get",
             side_effect=requests.RequestException("offline"),
         ):
             assert c.fetch() is None
@@ -85,7 +83,7 @@ class TestCoinGeckoClient:
         # must mean NO request at all, not a sanitized one.
         for label in ("US Dollar$", "usd&x=exfil", "a" * 6, ""):
             c = CoinGeckoClient(label, tor_proxy="socks5h://t:9050")
-            with patch("mining_dashboard.service.price_feed.requests.get") as g:
+            with patch("mining_dashboard.service.price_feed.bounded_get") as g:
                 assert c.fetch() is None
                 g.assert_not_called()
 
