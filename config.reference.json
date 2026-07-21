@@ -79,6 +79,7 @@
         "timezone": "auto",
         "data_dir": "auto",
         "tari_required": true,
+        "fail_closed": false,
         "check_for_updates": true,
         "hashrate_drop_threshold": 50,
         "hashrate_drop_minutes": 10,

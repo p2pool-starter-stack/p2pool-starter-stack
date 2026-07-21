@@ -3637,6 +3637,15 @@ render_env() {
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
+    # Opt-in fail-closed miner hold on an unrecoverable dashboard health failure (#490), default
+    # false. The dashboard is an observability layer, not the mining datapath, so the default is
+    # alert-only (loud Telegram/Healthchecks alert + badge; mining continues). true reuses the #35
+    # sync-gate's own hold to stop p2pool+xmrig-proxy until a DB-recovery failure or a
+    # crash-looping dashboard container clears — see build/dashboard .../service/data_service.py
+    # DataService._apply_fail_closed_gate for the exact "unrecoverable" set.
+    local fail_closed
+    fail_closed=$(normalize_bool "$(config_bool '.dashboard.fail_closed' false)")
+
     # Healthchecks.io dead-man's switch (#79). Optional external liveness monitor: a ping URL is the
     # on/off switch (blank = off), and the ping always rides Tor. The URL is a capability secret, so
     # it lives in the owner-only .env (chmod 600 below), never a world-readable file. docs/monitoring.md.
@@ -3853,6 +3862,7 @@ XVB_ENABLED=$xvb_enabled
 XVB_TOR_ENABLED=$xvb_tor
 XVB_DONATION_LEVEL=$xvb_donation_level
 TARI_REQUIRED=$tari_required
+DASHBOARD_FAIL_CLOSED=$fail_closed
 DASHBOARD_CHECK_UPDATES=$check_for_updates
 TARI_MEM_LIMIT=$tari_mem_limit
 HEALTHCHECKS_PING_URL=$hc_ping_url
@@ -4471,6 +4481,13 @@ describe_change() {
             msg="Tari → non-blocking — keep mining Monero through a Tari outage, start as soon as Monero is synced, and keep the operational dashboard while Tari syncs."
         fi
         ;;
+    DASHBOARD_FAIL_CLOSED)
+        if [ "$new" == "true" ]; then
+            msg="Fail-closed ENABLED (#490) — an unrecoverable dashboard health failure (DB recovery itself failing, or the dashboard container crash-looping) now HOLDS p2pool and xmrig-proxy until it clears, instead of only alerting."
+        else
+            msg="Fail-closed DISABLED (#490) — an unrecoverable dashboard health failure now only alerts (Telegram/Healthchecks + badge); mining is never held for it."
+        fi
+        ;;
     DASHBOARD_CHECK_UPDATES)
         if [ "$new" == "true" ]; then
             msg="Dashboard update check ENABLED (#224) — the dashboard will check GitHub (over Tor) for a newer release and show a link badge; the dashboard container is recreated."
@@ -5026,7 +5043,7 @@ run_chain() {
 # the Telegram channel (the future #338 approval channel), so the dashboard must not silence
 # them. Space-separated exact env-key names.
 CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
-    XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED
+    XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED DASHBOARD_FAIL_CLOSED
     DASHBOARD_CHECK_UPDATES DASHBOARD_TZ
     MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS
     HASHRATE_DROP_THRESHOLD_PCT HASHRATE_DROP_MINUTES TELEGRAM_DAILY_SUMMARY_TIME

@@ -496,6 +496,143 @@ class TestSecurityLogRoutes:
         assert resp.status == 500
         assert "secret" not in json.dumps(await resp.json())
 
+    async def test_audit_route_merges_db_only_entries(self, control_client, monkeypatch):
+        # #530: an out-of-band host-edit/rig-edit row lives only in audit_events, never in
+        # control.log — it must still appear in the served feed.
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", "/nonexistent/control.log")
+        state_mgr = control_client.app["state_manager"]
+        state_mgr.add_audit_event(
+            id="hostedit-1",
+            ts="2026-07-20T12:00:00Z",
+            source="host-edit",
+            actor="",
+            action="host-edit",
+            status="detected",
+            keys="xvb.enabled",
+        )
+        resp = await control_client.get("/api/audit")
+        assert resp.status == 200
+        entries = (await resp.json())["entries"]
+        assert len(entries) == 1
+        assert entries[0]["source"] == "host-edit"
+        assert entries[0]["keys"] == "xvb.enabled"
+
+    async def test_audit_route_shows_a_fresh_commit_before_it_is_mirrored(
+        self, control_client, tmp_path, monkeypatch
+    ):
+        # A commit that just landed in control.log, before the next poll cycle mirrors it to the
+        # DB, must still show up immediately — no regression from #530's DB merge.
+        log = tmp_path / "control.log"
+        log.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-07-20T12:00:00Z",
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "actor": "admin",
+                    "action": "commit",
+                    "status": "applied",
+                    "keys": "XVB_ENABLED",
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        resp = await control_client.get("/api/audit")
+        entries = (await resp.json())["entries"]
+        assert len(entries) == 1
+        assert entries[0]["keys"] == "XVB_ENABLED"
+
+    async def test_audit_route_deduplicates_a_mirrored_row(
+        self, control_client, tmp_path, monkeypatch
+    ):
+        # The same control.log row, present both live (log tail) and mirrored (DB) — one row out,
+        # not two.
+        log = tmp_path / "control.log"
+        log.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-07-20T12:00:00Z",
+                    "id": "22222222-2222-4222-8222-222222222222",
+                    "actor": "admin",
+                    "action": "commit",
+                    "status": "applied",
+                    "keys": "XVB_ENABLED",
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        state_mgr = control_client.app["state_manager"]
+        state_mgr.add_audit_event(
+            id="22222222-2222-4222-8222-222222222222",
+            ts="2026-07-20T12:00:00Z",
+            source="control",
+            actor="admin",
+            action="commit",
+            status="applied",
+            keys="XVB_ENABLED",
+        )
+        resp = await control_client.get("/api/audit")
+        entries = (await resp.json())["entries"]
+        assert len(entries) == 1
+
+    async def test_audit_route_sorts_newest_first_across_sources(
+        self, control_client, tmp_path, monkeypatch
+    ):
+        log = tmp_path / "control.log"
+        log.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-07-01T00:00:00Z",
+                    "id": "33333333-3333-4333-8333-333333333333",
+                    "actor": "admin",
+                    "action": "commit",
+                    "status": "applied",
+                    "keys": "XVB_ENABLED",
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        state_mgr = control_client.app["state_manager"]
+        state_mgr.add_audit_event(
+            id="hostedit-2",
+            ts="2026-07-20T00:00:00Z",
+            source="host-edit",
+            actor="",
+            action="host-edit",
+            status="detected",
+            keys="xvb.enabled",
+        )
+        resp = await control_client.get("/api/audit")
+        entries = (await resp.json())["entries"]
+        assert [e["id"] for e in entries] == ["hostedit-2", "33333333-3333-4333-8333-333333333333"]
+
+    async def test_audit_route_shows_a_no_id_log_row_live(
+        self, control_client, tmp_path, monkeypatch
+    ):
+        # A pre-auth "invalid"/"refused" control.log row (#33) has no id — never mirrored to the
+        # DB, but still shown live from the log tail.
+        log = tmp_path / "control.log"
+        log.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-07-20T12:00:00Z",
+                    "id": "",
+                    "actor": "",
+                    "action": "invalid",
+                    "status": "refused-oversize",
+                    "keys": "",
+                }
+            )
+            + "\n"
+        )
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        resp = await control_client.get("/api/audit")
+        entries = (await resp.json())["entries"]
+        assert len(entries) == 1
+        assert entries[0]["status"] == "refused-oversize"
+
 
 class TestSecurityHeaders:
     async def test_security_headers_present(self, client):

@@ -18,7 +18,7 @@ port forwarding is required.
 | 5 | **Tor** | Provides SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
 | 6 | **Dashboard** | The web monitoring UI and the algorithmic switching engine. |
 | 7 | **Docker Proxy** | A **read-only** proxy onto the Docker socket so the dashboard can read container stats/logs — no write access. |
-| 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31), hold p2pool + xmrig-proxy until the chains finish syncing (Issue #35), and switch a clearnet-syncing node back to Tor once it's synced (Issue #234). Kept separate so its write grant can't widen the read-only proxy. |
+| 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31), hold p2pool + xmrig-proxy until the chains finish syncing (Issue #35), switch a clearnet-syncing node back to Tor once it's synced (Issue #234), and, opt-in via `dashboard.fail_closed`, hold p2pool + xmrig-proxy again on an unrecoverable dashboard health failure (Issue #490). Kept separate so its write grant can't widen the read-only proxy. |
 | 9 | **Caddy** | A reverse proxy that serves the dashboard over HTTPS (automatic local TLS) on the LAN. |
 
 ## High-level diagram
