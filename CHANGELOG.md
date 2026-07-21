@@ -9,6 +9,19 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **`/api/state` exposure for three of the #196 telemetry-backbone series (Tier-1).** The backbone
+  PR (#600) added five persisted SQLite tables with capture, storage, and retention, but shipped
+  without surfacing them to the client. This slice exposes three — `blocks` (pool block-found
+  events), `disk_growth` (hourly monerod-DB-size + host-disk-usage samples), and `xvb_history`
+  (~5-min XvB-credited scalar samples) — as range-filtered arrays under those same keys, bounded
+  at the existing 700-point chart cap for the two higher-cadence series. `network_history` and
+  `worker_history` are a separate (Tier-2) slice, not touched here. No chart renders any of these
+  series yet — that's a further follow-up.
+
 ## [1.10.0] - 2026-07-20
 
 ### Added

@@ -154,6 +154,11 @@ a fresh database, and keeps running. A `db_reset` alert (Telegram and the other 
 history before that point was cleared. Payout and XvB state rebuild from the chain and the live feed;
 only the historical charts reset.
 
+The database also keeps three smaller series: pool block-found events, hourly monerod-DB-size and
+host-disk-usage samples, and XvB-credited scalar samples taken roughly every 5 minutes. `/api/state`
+serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the same way as
+`share_stats`. No chart reads them yet — this is persistence and API exposure only.
+
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
