@@ -203,6 +203,7 @@ def test_topology_dashboard_xvb_stats_stays_on_the_tor_hub_when_xvb_tor_is_off()
 def test_topology_xvb_disabled_is_inactive_not_a_leak():
     topo = _topo(xvb_enabled=False)
     assert _edge(topo, "xmrig-proxy", "tor")["route"] == INACTIVE
+    assert next(e for e in topo["edges"] if e["label"] == "XvB stats")["route"] == INACTIVE
     assert _edge(topo, "dashboard", "tor")  # update check still present
     assert not any(e.get("leak") for e in topo["edges"])
 
@@ -350,15 +351,22 @@ def test_firewall_on_blocks_every_clearnet_path():
     assert p["summary"]["all_tor"] is True
 
 
-def test_dashboard_never_has_clearnet_egress_for_any_config():
-    # The panel's own #160 lesson: the dashboard bypasses the #270 firewall, and every one of its
-    # outbound clients is hard-wired through Tor SOCKS — so no knob combination may ever derive a
-    # clearnet route (i.e. a reported leak) for a dashboard connection or edge (#701).
+# The dashboard clients hard-wired through Tor SOCKS — no knob points any of them at clearnet
+# (#163 XvB stats, #224 update check, #79 Healthchecks, #121/#340 Telegram, #520 price feed).
+# Scoped by name, not "all dashboard conns", so a future dashboard egress with a legitimate
+# clearnet mode (e.g. the #380 alert-sink LAN carve-out) doesn't silently widen this invariant.
+_TOR_HARDWIRED = ("XvB stats", "update check", "Healthchecks", "Telegram", "price feed")
+
+
+def test_tor_hardwired_dashboard_clients_never_clearnet_for_any_config():
+    # The panel's own #160 lesson: the dashboard bypasses the #270 firewall, so a clearnet route
+    # here would be a real leak — no knob combination may ever derive one for these clients (#701).
+    # next()/_conn raise StopIteration if a name drifts, so a rename can't hollow out the sweep.
     for cfg in _all_configs():
-        dash = next(
-            c for c in compute_egress_posture(**cfg)["components"] if c["name"] == "dashboard"
-        )
-        assert all(c["route"] != CLEARNET for c in dash["conns"]), cfg
-        for e in compute_topology(**cfg)["edges"]:
-            if e["from"] == "dashboard":
-                assert e["route"] != CLEARNET, (cfg, e)
+        p = compute_egress_posture(**cfg)
+        for name in _TOR_HARDWIRED:
+            assert _conn(p, "dashboard", name)["route"] != CLEARNET, (cfg, name)
+        dash_edges = [e for e in compute_topology(**cfg)["edges"] if e["from"] == "dashboard"]
+        for name in _TOR_HARDWIRED:
+            edge = next(e for e in dash_edges if name in e["label"])
+            assert edge["route"] != CLEARNET, (cfg, name)
