@@ -1401,19 +1401,38 @@ _onion_reachable_external() {
     rx "$snippet" | grep -q "PROBE-OK"
 }
 
-# Reap the root pithead-control systemd units on the box, unconditionally and idempotently (#477).
+# Reap the root pithead-control systemd units THIS checkout installed, idempotently (#477).
 # The hardening phase installs pithead-control.{path,service} to exercise the #33 spool; the restore
 # apply is supposed to remove them, but that removal runs EARLY in apply (provision_control_runner) —
 # before container recreation + the tor restart — so a restore apply that dies partway (render/preflight
 # failure, or wait_status_ok timing out mid-apply) leaves the ROOT path unit watching the control spool
 # past the phase and beyond. A later apply is convergent and would clean it, but only if it runs. This
-# teardown mirrors provision_control_runner's removal branch (pithead:5242) and runs regardless of the
-# restore apply's exit code. No-ops where there's no systemd (macOS/dev). Returns non-zero ONLY if a
-# unit survives (e.g. sudo unavailable) so the caller can warn loudly instead of silently passing.
+# teardown mirrors provision_control_runner's removal branch and runs regardless of the restore
+# apply's exit code. Units owned by ANOTHER checkout are left in place and count as success: the
+# unit names are box-global, and on a shared bench the live stack's runner uses them too — reaping
+# it strands that dashboard's control requests (config editor stuck at "Previewing…"). rx runs in
+# $IT_REMOTE_DIR, so the snippet's working dir is this run's checkout on the box. Ownership
+# compares PHYSICAL paths, mirroring the provision_control_runner branch: one checkout has two
+# spellings (the `current` symlink vs the versioned dir production units carry). No-ops where
+# there's no systemd (macOS/dev). Returns non-zero ONLY if a unit WE own survives (e.g. sudo
+# unavailable) so the caller can warn loudly instead of silently passing.
 _remove_control_units() {
     rx '
         command -v systemctl >/dev/null 2>&1 || exit 0
         ud=/etc/systemd/system
+        if [ -e "$ud/pithead-control.service" ]; then
+            owner_dir=$(sed -n "s|^ExecStart=\(/.*\)/pithead control-run-pending\$|\1|p" \
+                "$ud/pithead-control.service" | head -n 1)
+            dir=$owner_dir tail=""
+            while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+                tail="/$(basename "$dir")$tail"
+                dir=$(dirname "$dir")
+            done
+            if [ -z "$owner_dir" ] ||
+                [ "$(cd "$dir" 2>/dev/null && pwd -P)$tail" != "$(pwd -P)" ]; then
+                exit 0
+            fi
+        fi
         if [ -e "$ud/pithead-control.path" ] || [ -e "$ud/pithead-control.service" ]; then
             sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
             sudo rm -f "$ud/pithead-control.path" "$ud/pithead-control.service"

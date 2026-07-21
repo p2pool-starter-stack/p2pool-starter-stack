@@ -22,6 +22,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Fixed
 
+- **Removing the control runner no longer strands a sibling checkout's stack (#689).** The
+  `pithead-control.{path,service}` unit names are global to the host, but a bench box holds
+  several checkouts at once — and a checkout applying with dashboard control off (or the e2e
+  harness tearing down) removed whatever units were installed, including the live stack's,
+  leaving its config editor stuck at "Previewing…" until the next apply. Both removal paths now
+  check the service unit's `ExecStart` and only touch units owned by the acting checkout,
+  comparing physical paths so the `current` symlink and the versioned directory it targets
+  count as the same checkout.
+
 - **An unedited Save & preview shows zero changes (#695, #696).** On a bundle-deployed box the
   Review changes modal reported two changes with nothing edited. First, a path "change" such as
   `CLEARNET_STATE_DIR: /srv/code/current/... → /srv/code/pithead-vX.Y.Z/...`: pithead resolved
