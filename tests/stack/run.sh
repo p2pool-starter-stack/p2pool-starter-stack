@@ -4952,6 +4952,48 @@ assert_contains "prune-disable refusal names the host apply path, not stale #338
 assert_eq "prune stays enabled after the refusal" "$(jq -r '.monero.prune' "$C/config.json")" "true"
 [ ! -f "$STAGED/$UUID3.json" ] && ok "refused destructive intent cleared from staged" || bad "refused destructive intent cleared from staged" "still staged"
 
+echo "== black-box: a dashboard-confirmed data-dir move is allowlisted to the stack data root (#728) =="
+# #719 made the four *_DATA_DIR moves confirm-gated. assert_safe_dir is a BLOCKLIST, so a
+# confirmed move could target any non-blocklisted absolute path (another user's home, another
+# service's volume). control_approval_gate now narrows the DESTINATION to an allowlist for
+# control-channel moves: only under the stack data root ($C/data) or a parent it already uses.
+# The host `apply` path keeps the blocklist — a shell operator is already trusted.
+UUID7="77777777-7777-4777-8777-777777777777"
+control_config mini
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+EVIL_DIR="$SANDBOX/other-service-vol/monero" # absolute, NOT blocklisted, NOT under $C/data
+preview_move() {                             # <monero.data_dir>
+    jq -n --arg w "$WALLET" --arg id "$UUID7" --arg dd "$1" '{id:$id,action:"preview",actor:"admin",config:{
+        monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",data_dir:$dd},
+        tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+        dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID7.json"
+    run_pending >/dev/null
+}
+# (1) A move UNDER the stack data root, confirmed with APPLY, is allowed and lands.
+preview_move "$C/data/monero-v2"
+assert_contains "in-root data-dir move previews a CONFIRM row" "$(jq -r '.changes[].flag' "$RESULTS/$UUID7.json" 2>/dev/null)" "CONFIRM"
+printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID7" >"$REQS/$UUID7.json"
+run_pending >/dev/null
+assert_eq "in-root data-dir move with APPLY applies" "$(jq -r '.status' "$RESULTS/$UUID7.json" 2>/dev/null)" "applied"
+assert_eq "in-root move landed in .env" "$(run_sourced "$C" env_get_file "$C/.env" MONERO_DATA_DIR)" "$C/data/monero-v2"
+# (2) A move to an arbitrary non-blocklisted, non-allowed path is refused EVEN with APPLY.
+preview_move "$EVIL_DIR"
+printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID7" >"$REQS/$UUID7.json"
+run_pending >/dev/null
+assert_eq "out-of-root data-dir move is refused despite the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID7.json" 2>/dev/null)" "rejected"
+assert_contains "refusal names the data-root allowlist" "$(jq -r '.error' "$RESULTS/$UUID7.json" 2>/dev/null)" "outside the stack data root"
+# The refusal left config.json untouched — it still carries the previously-committed in-root value
+# (test 1), never the refused out-of-root path.
+assert_eq "refused move did not touch config.json" "$(jq -r '.monero.data_dir // empty' "$C/config.json")" "$C/data/monero-v2"
+[ ! -f "$STAGED/$UUID7.json" ] && ok "refused out-of-root move cleared from staged" || bad "refused out-of-root move cleared from staged" "still staged"
+# (3) The SAME path from the HOST shell still applies — the tighter rule is control-only.
+jq -n --arg w "$WALLET" --arg dd "$EVIL_DIR" '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",data_dir:$dd},
+    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
+(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
+assert_rc "host-shell apply to the same out-of-root path succeeds" "$?" "0"
+assert_eq "host-shell apply rendered the out-of-root path (blocklist, not allowlist)" "$(run_sourced "$C" env_get_file "$C/.env" MONERO_DATA_DIR)" "$EVIL_DIR"
+
 echo "== black-box: a NON-destructive commit still proceeds with no token (#33) =="
 # Restore a clean baseline (prune off, clearnet off) then a pool switch mini -> nano is INFO, not
 # DEST/CONFIRM — it commits with no confirmation at all.

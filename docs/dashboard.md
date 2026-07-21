@@ -680,6 +680,18 @@ the stratum password, node endpoints and credentials, and the per-rig hosts and 
 also refuses the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync,
 so it stays host-only). Apply those from the host with `./pithead apply`.
 
+A dashboard-confirmed data-directory move
+([#728](https://github.com/p2pool-starter-stack/pithead/issues/728)) is held to a tighter rule than
+the same move from the host CLI. The host guard is a blocklist — it refuses the catastrophic roots
+(`/`, `$HOME`, bare mounts) but lets a shell operator relocate data anywhere else, which is
+proportionate to shell trust. A confirmed move from the dashboard is instead held to an
+**allowlist**: the new location must sit under the stack's own data root (the install dir's
+`data/`) or a parent the stack already keeps its data in (a co-located data root, #455). A move to
+any other absolute path — another user's home, another service's volume — is refused even with the
+typed `APPLY` and stays host-CLI only. This is the one place a confirmed data-dir move differs from
+`./pithead apply`: the destination path is narrowed, because the move is now reachable at dashboard
+trust rather than shell trust.
+
 A pool switch (`p2pool.pool` main/mini/nano) carries its standing warning: p2pool re-syncs the new
 sidechain and your PPLNS window (and XvB shares) reset.
 
