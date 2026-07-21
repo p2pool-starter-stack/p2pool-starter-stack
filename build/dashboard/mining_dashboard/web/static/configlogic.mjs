@@ -288,11 +288,20 @@ export function nestSection(section) {
 // CONTROL_DASHBOARD_EDITABLE_KEYS). A missing/empty set fails CLOSED — nothing is marked
 // editable — rather than defaulting to "everything editable" and silently reintroducing the
 // edit-then-reject problem this feature exists to remove.
-export function markEditable(sections, editableKeys) {
+//
+// `confirmKeys` is `_confirm_keys` (#719): the operationally-disruptive paths the gate WILL commit,
+// but only behind a type-to-confirm. They render editable (not greyed) and carry `confirm: true` so
+// the field can show a "confirm to proceed" affordance instead of the "host-only" one. A key on
+// both lists is treated as freely editable (editable wins); the gate is still the authority.
+export function markEditable(sections, editableKeys, confirmKeys) {
   const editable = new Set(editableKeys || []);
+  const confirm = new Set(confirmKeys || []);
   return sections.map((s) => ({
     name: s.name,
-    fields: s.fields.map((f) => ({ ...f, editable: editable.has(f.key) })),
+    fields: s.fields.map((f) => {
+      const isConfirm = !editable.has(f.key) && confirm.has(f.key);
+      return { ...f, editable: editable.has(f.key) || isConfirm, confirm: isConfirm };
+    }),
   }));
 }
 

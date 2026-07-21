@@ -175,6 +175,33 @@ def _editable_paths():
     return sorted(paths)
 
 
+# Env-var -> config-path map for the CONFIRM-gated set (#719), mirroring pithead's
+# CONTROL_DASHBOARD_CONFIRM_KEYS the same way EDITABLE_ENV_KEY_PATHS mirrors the editable allowlist
+# (drift-guarded by test_confirm_keys_have_no_intra_repo_drift). These are operationally-disruptive
+# but NOT the security perimeter: the dashboard MAY commit them, but only behind a type-to-confirm.
+# Surfaced to the browser as ``_confirm_keys`` so the Configuration view renders them editable with
+# a "confirm to proceed" affordance instead of greying them out as host-only. The gate is still the
+# authority: describe_change decides per-DIRECTION whether a change is CONFIRM (a data-dir move, a
+# stratum-port repoint, a clearnet-sync ENABLE, a prune ENABLE) or stays a host-only DEST (prune
+# DISABLE, a TOR data-dir move), so a field here can still be refused at commit in its heavy
+# direction — the same edit-then-maybe-refuse tradeoff the issue accepts for MONERO_PRUNE.
+CONFIRM_ENV_KEY_PATHS = {
+    "MONERO_DATA_DIR": ("monero.data_dir",),
+    "TARI_DATA_DIR": ("tari.data_dir",),
+    "P2POOL_DATA_DIR": ("p2pool.data_dir",),
+    "DASHBOARD_DATA_DIR": ("dashboard.data_dir",),
+    "STRATUM_PORT": ("p2pool.stratum_port",),
+    "MONERO_CLEARNET_SYNC": ("monero.clearnet_initial_sync",),
+    "TARI_CLEARNET_SYNC": ("tari.clearnet_initial_sync",),
+    "MONERO_PRUNE": ("monero.prune",),
+}
+
+
+def _confirm_paths():
+    """Every config path the control gate will commit behind a type-to-confirm (#719)."""
+    return sorted({p for target in CONFIRM_ENV_KEY_PATHS.values() for p in target})
+
+
 def env_key_config_paths(env_key):
     """The config-path prefixes a committed audit ``keys`` env-var name covers (#530).
 
@@ -230,29 +257,38 @@ def read_config():
             _set(cfg, path, dict(SECRET_SENTINEL))
     cfg["_core_keys"] = _load_core_keys()
     cfg["_editable_keys"] = _editable_paths()
+    cfg["_confirm_keys"] = _confirm_paths()
     return cfg
 
 
-def submit(action, cfg=None, actor="", intent_id=None, version=None):
+def submit(action, cfg=None, actor="", intent_id=None, version=None, confirm=None):
     """Write one intent into the requests spool (atomic: temp + rename, so the runner never
     reads a half-written file). Returns the request id — always a UUID, because the id becomes
     a host-side filename and the runner rejects anything else. ``version`` rides only on the
     upgrade intent (#59): the version the operator confirmed, which the host re-verifies
-    against the GitHub release API — a proposal, never a target the container picks."""
+    against the GitHub release API — a proposal, never a target the container picks. ``confirm``
+    rides only on a commit intent (#719): the operator's typed confirmation for an in-scope
+    disruptive change, which the host gate requires before it lets a CONFIRM row proceed."""
     rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())
     request = {"id": rid, "action": action, "actor": actor}
     if cfg is not None:
-        # read_config's own metadata injections (#529/#613) ride back with the editor's POST —
+        # read_config's own metadata injections (#529/#613/#719) ride back with the editor's POST —
         # both modes round-trip the fetched doc wholesale — and the host gate's closed-schema
         # check would refuse a commit carrying them (#679). Shed them at the one choke point
         # every config intent passes through; everything else unknown still fails closed host-side.
         # A non-dict cfg passes through untouched: the host runner already rejects it with its
         # own "config must be a JSON object" result, which the UI knows how to surface.
         if isinstance(cfg, dict):
-            cfg = {k: v for k, v in cfg.items() if k not in ("_core_keys", "_editable_keys")}
+            cfg = {
+                k: v
+                for k, v in cfg.items()
+                if k not in ("_core_keys", "_editable_keys", "_confirm_keys")
+            }
         request["config"] = cfg
     if version is not None:
         request["version"] = version
+    if confirm is not None:
+        request["confirm"] = confirm
     tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
     with open(tmp, "w") as f:
         json.dump(request, f)
