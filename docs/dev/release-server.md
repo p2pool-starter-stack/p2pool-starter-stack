@@ -217,20 +217,21 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 
 ## Bench allocation and the rig lock
 
-Ten boxes are shared between this repo's tier-4 harness, RigForge's release gates, and
+The bench boxes are shared between this repo's tier-4 harness, RigForge's release gates, and
 production mining. Two automations cycling the same rig's services corrupt each other's results
-(the 2026-07-10 miner-0 incident: an operator "fixed" a service an e2e run had deliberately
-stopped), so ownership is static and every run takes a kernel lock.
+(a real 2026-07 incident: an operator "fixed" a service an e2e run had deliberately stopped),
+so ownership is static and every run takes a kernel lock.
 
-Static allocation — each box states its owner in `/etc/bench-role`:
+Static allocation — each box states its owner in `/etc/bench-role`, and each box's own
+`~/README.md` carries its specifics (hostname, role, data roots):
 
-| Box | Owner | Use |
+| Box role | Owner | Use |
 |---|---|---|
-| miner-0 | RigForge | `e2e-real` / tune gates. Pithead never touches its services. |
-| miner-1, miner-2 | Pithead | Tier-4 loaner rigs: `e2e.sh` repoints one at the test bench for a run, then reverts it. Verify `systemctl is-active xmrig` after any remote restart. |
-| miner-3 … miner-7 | Production | Mining only. No test traffic. |
-| gouda | Pithead | Test bench + release box (the tier-4 target). |
-| pithead-prod | Production | Production stack; deploys only. |
+| RigForge bench rig | RigForge | `e2e-real` / tune gates. Pithead never touches its services. |
+| Loaner rigs (two) | Pithead | Tier-4: `e2e.sh` repoints one at the test bench for a run, then reverts it. Verify `systemctl is-active xmrig` after any remote restart. |
+| Fleet rigs | Production | Mining only. No test traffic. |
+| Test bench | Pithead | Test bench + release box (the tier-4 target). |
+| Production host | Production | Production stack; deploys only. |
 
 The run lock. Both harnesses take a `flock` on `/var/lock/rig-e2e.lock` before the first
 service-touching action and hold it on an inherited FD for the whole run, so the kernel releases

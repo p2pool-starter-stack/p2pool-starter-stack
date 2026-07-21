@@ -9,12 +9,22 @@ Two backstops matter for whether a clearnet route is actually an IP leak:
 * The **#270 egress firewall** (``DOCKER-USER``, fail-closed) DROPs non-Tor egress from the *container*
   subnet — so a container's clearnet route can't actually leave while it's on.
 * It does **not** cover the **host-networked dashboard** (``network_mode: host``), whose own egress
-  (XvB stats fetch, update check, Healthchecks ping, Telegram bot) bypasses ``DOCKER-USER`` entirely.
-  Those rely solely on their SOCKS config — a clearnet route there is a real leak regardless of the
-  firewall. (All four are Tor-routed by default, so none leak.)
+  (XvB stats fetch, update check, Healthchecks ping, Telegram bot, price feed, webhook/ntfy alert
+  sinks) bypasses ``DOCKER-USER`` entirely. Those rely solely on their SOCKS config — a clearnet
+  route there is a real leak regardless of the firewall. (All are Tor-routed by default, so none
+  leak.)
+
+The alert sinks (#380) have one more wrinkle: ``notifications.tor: false`` is a LAN carve-out for
+self-hosted endpoints Tor exits can't reach. A POST to a private/loopback IP never leaves your
+network, so it routes as *local*, not a clearnet leak. Only IP literals can prove that without a
+DNS lookup — a hostname endpoint with Tor off counts as clearnet, honestly, since we can't know
+where it resolves.
 
 So a connection is a *leak* only when its route is clearnet AND it isn't neutralised by a backstop.
 """
+
+import ipaddress
+from urllib.parse import urlsplit
 
 from mining_dashboard.config import config
 
@@ -30,6 +40,32 @@ def _xvb_route(xvb_enabled, xvb_tor):
     return TOR if xvb_tor else CLEARNET
 
 
+def _notify_route(enabled, tor, private):
+    if not enabled:
+        return INACTIVE
+    if tor:
+        return TOR
+    return LOCAL if private else CLEARNET
+
+
+def _sinks_all_private(urls):
+    """True when every configured sink URL targets a private/loopback IP literal — the LAN
+    carve-out proof. A hostname can't be verified without a DNS lookup (which a pure config
+    derivation must never do), so any hostname makes this False."""
+    hosts = [urlsplit(u).hostname for u in urls if u and u.strip()]
+    if not hosts:
+        return False
+    for host in hosts:
+        if not host:  # malformed URL (no scheme) — unknowable, assume public
+            return False
+        try:
+            if not ipaddress.ip_address(host).is_private:
+                return False
+        except ValueError:  # not an IP literal — unknowable, assume public
+            return False
+    return True
+
+
 def compute_egress_posture(
     *,
     firewall,
@@ -42,9 +78,13 @@ def compute_egress_posture(
     healthchecks_enabled,
     telegram_enabled,
     price_feed_enabled=False,
+    notify_sinks_enabled=False,
+    notify_tor=True,
+    notify_sinks_private=False,
 ):
     """Pure derivation of the egress posture from config knobs. Returns ``{components, summary}``."""
     xvb = _xvb_route(xvb_enabled, xvb_tor)
+    sinks = _notify_route(notify_sinks_enabled, notify_tor, notify_sinks_private)
 
     # ``firewalled``: is this component's egress on the container subnet the #270 firewall guards?
     # The dashboard is host-networked, so its own outbound traffic is NOT covered.
@@ -97,7 +137,9 @@ def compute_egress_posture(
             "name": "dashboard",
             "firewalled": False,  # host-networked — bypasses the #270 DOCKER-USER firewall
             "conns": [
-                {"to": "XvB stats (xmrvsbeast.com)", "route": xvb},  # socks5h when on (#163)
+                # XvB stats fetch — unconditionally socks5h over Tor (#163/#701); xvb.tor only
+                # governs the xmrig-proxy donation dial above, never this fetch.
+                {"to": "XvB stats (xmrvsbeast.com)", "route": TOR if xvb_enabled else INACTIVE},
                 {"to": "update check (github)", "route": TOR},  # socks5h, #224
                 # Healthchecks.io dead-man's-switch ping — always over Tor when a URL is set (#79).
                 {"to": "Healthchecks.io ping", "route": TOR if healthchecks_enabled else INACTIVE},
@@ -108,6 +150,9 @@ def compute_egress_posture(
                     "to": "price feed (coingecko.com)",
                     "route": TOR if price_feed_enabled else INACTIVE,
                 },
+                # Webhook/ntfy alert sinks (#380) — Tor by default; ``notifications.tor: false``
+                # to an all-private-IP endpoint set is the LAN carve-out (local, not a leak).
+                {"to": "alert sinks (webhook / ntfy)", "route": sinks},
             ],
         },
         {
@@ -162,7 +207,18 @@ def egress_posture_from_config():
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
+        **_notify_knobs(),
     )
+
+
+def _notify_knobs():
+    """The #380 alert-sink knobs, shared by both from-config builders."""
+    urls = [*config.NOTIFY_WEBHOOK_URLS, config.NTFY_URL]
+    return {
+        "notify_sinks_enabled": any(u.strip() for u in urls if u),
+        "notify_tor": config.NOTIFY_TOR,
+        "notify_sinks_private": _sinks_all_private(urls),
+    }
 
 
 # --- Stack topology (#170, trust-boundary view) ----------------------------------------
@@ -215,6 +271,9 @@ def compute_topology(
     healthchecks_enabled,
     telegram_enabled,
     price_feed_enabled=False,
+    notify_sinks_enabled=False,
+    notify_tor=True,
+    notify_sinks_private=False,
 ):
     """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
 
@@ -233,8 +292,12 @@ def compute_topology(
         healthchecks_enabled=healthchecks_enabled,
         telegram_enabled=telegram_enabled,
         price_feed_enabled=price_feed_enabled,
+        notify_sinks_enabled=notify_sinks_enabled,
+        notify_tor=notify_tor,
+        notify_sinks_private=notify_sinks_private,
     )
     xvb = _xvb_route(xvb_enabled, xvb_tor)
+    sinks = _notify_route(notify_sinks_enabled, notify_tor, notify_sinks_private)
     sidechain = CLEARNET if p2pool_clearnet else TOR
     rpc = CLEARNET if remote_monero else LOCAL
 
@@ -249,7 +312,8 @@ def compute_topology(
         # App-level egress.
         _edge("xmrig-proxy", _ext(xvb), xvb, "XvB donation", "egress"),
         _edge("dashboard", "tor", TOR, "update check", "egress"),
-        _edge("dashboard", _ext(xvb), xvb, "XvB stats", "egress"),
+        # XvB stats fetch — unconditionally Tor (#163/#701); xvb.tor only gates the donation dial.
+        _edge("dashboard", "tor", TOR if xvb_enabled else INACTIVE, "XvB stats", "egress"),
         # Healthchecks.io ping — always over Tor when a URL is set (#79).
         _edge(
             "dashboard",
@@ -273,6 +337,14 @@ def compute_topology(
             TOR if price_feed_enabled else INACTIVE,
             "price feed",
             "egress",
+        ),
+        # Webhook/ntfy alert sinks (#380). The LAN carve-out (route ``local``) has no placeable
+        # node — a LAN appliance isn't in the diagram — so it draws no edge; the shared summary
+        # still reflects it (as no leak), and the egress list shows the ``local`` route.
+        *(
+            [_edge("dashboard", _ext(sinks), sinks, "alert sinks", "egress")]
+            if sinks != LOCAL
+            else []
         ),
         # The Tor hub to the network: SOCKS egress for every daemon + onion-service ingress.
         _edge("tor", "internet", TOR, "SOCKS + onion circuits", "p2p"),
@@ -318,4 +390,5 @@ def topology_from_config():
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
+        **_notify_knobs(),
     )

@@ -77,7 +77,7 @@ What the running stack sends to the internet, connection by connection.
 | Dashboard **XvB raffle registration** (#263) | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, same path as the stats fetch) | on, only if XvB enabled; fires once you have a PPLNS share | `XVB_ENABLED=false`, or set `XVB_SUBMIT_URL` to a disable sentinel (`off`), to stop it |
 | Dashboard **XvB winners fetch** (raffle-wins display) | `xmrvsbeast.com` | nothing — the winners file is public and the request carries no wallet | ✅ Tor (`socks5h`, same path as the stats fetch) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
 | **XvB donation mining** (only while donating) | `na.xmrvsbeast.com:4247` via Tor | — | ✅ **Tor** (per-pool `socks5`, DNS proxy-side) by default (#166) | on while donating | opt out with `xvb.tor: false` (exposes IP for max yield); `xvb.enabled: false` stops it entirely |
-| Dashboard **update check** (#224) | `api.github.com` | nothing about you — GitHub sees a **Tor exit**, not your IP | ✅ Tor (`socks5h`) | **on** | `dashboard.check_for_updates: false` to opt out; cached, fails silently offline |
+| Dashboard **update check** (#224, plus the per-worker RigForge badge #596) | `api.github.com` | nothing about you — GitHub sees a **Tor exit**, not your IP; the RigForge check sends no rig versions, it only reads the latest release | ✅ Tor (`socks5h`) | **on** | `dashboard.check_for_updates: false` opts out of both; cached, fails silently offline |
 | **Caddy** TLS (dashboard HTTPS) | local only | — | n/a — `tls internal`, **no ACME / no external CA** | on | clean (no egress) |
 | **Telegram** bot (#121) | `api.telegram.org` | nothing about you — Telegram sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`, #340) | **off** | opt-in; both the alert sends and the command poll ride Tor |
 | Dashboard **Healthchecks** ping (#79) | `hc-ping.com` (or self-hosted) | nothing about you — the endpoint sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`) | opt-in (set `healthchecks.ping_url`; off until set) | the ping URL must be Tor-reachable (hosted, public, or an onion self-hosted instance) — there is no clearnet mode |
@@ -87,6 +87,12 @@ What the running stack sends to the internet, connection by connection.
 `socks5h` (used for the XvB stats fetch) routes DNS resolution through Tor too, so the hostname isn't
 resolved on the clearnet either. The host-networked dashboard reaches the bridge's Tor SOCKS at
 `172.28.0.25:9050`.
+
+The dashboard's egress panel classifies the alert-sink carve-out by what it can prove from the
+config alone: with `notifications.tor: false`, the sinks show as **local** — not a counted leak —
+only when every configured endpoint is a private or loopback IP literal, since such a POST never
+leaves your network. A hostname can't be proven private without a DNS lookup, so a hostname
+endpoint with Tor off counts as **clearnet**, a real leak.
 
 ---
 

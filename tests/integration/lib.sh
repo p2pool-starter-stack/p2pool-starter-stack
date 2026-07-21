@@ -304,7 +304,7 @@ rig_lock() { # rig_lock <project> <suite> [shared]
             echo "rig busy ($(cat "$hf" 2>/dev/null || echo unknown)) — waiting..." >&2
             flock $mode 9
         else
-            echo "miner-0 busy: $(cat "$hf" 2>/dev/null || echo unknown). Retry with RIG_LOCK_WAIT=1 to queue." >&2
+            echo "rig busy: $(cat "$hf" 2>/dev/null || echo unknown). Retry with RIG_LOCK_WAIT=1 to queue." >&2
             exit 75 # EX_TEMPFAIL — callers can tell "busy, retry later" from a real failure
         fi
     fi

@@ -3,7 +3,7 @@
 The decision core is what must be right: the healer restarts tor ONLY when egress is broken
 past the sustained threshold AND the cooldown has elapsed AND the per-outage restart budget
 isn't spent. Each guard is pinned separately, so inverting or deleting any of them fails a
-test. The actual container restart against a real stuck guard is tier 4 (gouda).
+test. The actual container restart against a real stuck guard is tier 4 (the live bench).
 """
 
 from unittest.mock import patch
@@ -282,13 +282,13 @@ class TestCheck:
 
 class TestProbe:
     def test_any_http_response_counts_as_egress(self):
-        with patch("mining_dashboard.service.tor_heal.requests.get") as get:
+        with patch("mining_dashboard.service.tor_heal.bounded_get") as get:
             assert TorEgressHealer._probe_egress() is True
             assert get.call_args.kwargs["proxies"]["https"].startswith("socks5h://")
 
     def test_network_failure_is_broken_egress(self):
         with patch(
-            "mining_dashboard.service.tor_heal.requests.get",
+            "mining_dashboard.service.tor_heal.bounded_get",
             side_effect=requests.ConnectionError("circuit timeout"),
         ):
             assert TorEgressHealer._probe_egress() is False

@@ -338,6 +338,21 @@ class TestWorkerApply:
         # No secret / addressing leaks into the container-writable spool.
         assert "host" not in req and "port" not in req and "token" not in req
 
+    def test_submit_worker_upgrade_spools_name_and_version_only(self, spool):
+        # #597: same tokenless contract as worker-apply — the version is a proposal the host
+        # re-derives; the rig's address + bearer never enter the container-writable spool.
+        rid = control_service.submit_worker_upgrade("rig1", "v1.11.2", actor="admin")
+        uuid.UUID(rid)
+        req = json.loads((spool / "requests" / f"{rid}.json").read_text())
+        assert req == {
+            "id": rid,
+            "action": "worker-upgrade",
+            "actor": "admin",
+            "worker": "rig1",
+            "version": "v1.11.2",
+        }
+        assert "host" not in req and "port" not in req and "token" not in req
+
 
 def test_writable_key_allowlist_has_no_intra_repo_drift():
     """#515: the worker writable-key allowlist is hardcoded in THREE places kept in sync only by
