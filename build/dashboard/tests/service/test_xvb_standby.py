@@ -122,6 +122,38 @@ class TestPuller:
         puller = XvbStandbyPuller(MagicMock(), source="http://abc.onion/api/xvb-standby")
         assert puller._proxies() == {"http": TOR_SOCKS_PROXY, "https": TOR_SOCKS_PROXY}
 
-    def test_lan_source_dials_direct(self):
-        puller = XvbStandbyPuller(MagicMock(), source="http://192.168.1.5:8000/api/xvb-standby")
+    @pytest.mark.parametrize(
+        "host",
+        ["192.168.1.5:8000", "10.0.0.2:8000", "127.0.0.1:8000", "[::1]:8000", "[fc00::1]"],
+    )
+    def test_private_ip_source_dials_direct(self, host):
+        # Only a provably-private/loopback/link-local IP *literal* is a LAN hop — dial direct.
+        puller = XvbStandbyPuller(MagicMock(), source=f"http://{host}/api/xvb-standby")
         assert puller._proxies() is None
+
+    def test_public_ip_source_routes_over_tor(self):
+        # A public IP literal is NOT provably private — it must ride Tor, not leak the backup's IP
+        # by dialing direct (#160). This is the clearnet-egress leak the review flagged.
+        puller = XvbStandbyPuller(MagicMock(), source="http://8.8.8.8:8000/api/xvb-standby")
+        assert puller._proxies() == {"http": TOR_SOCKS_PROXY, "https": TOR_SOCKS_PROXY}
+
+    def test_hostname_source_routes_over_tor(self):
+        # A hostname can't be proven private without a DNS lookup, so it rides Tor — never direct.
+        puller = XvbStandbyPuller(MagicMock(), source="http://primary.example.com/api/xvb-standby")
+        assert puller._proxies() == {"http": TOR_SOCKS_PROXY, "https": TOR_SOCKS_PROXY}
+
+    def test_startup_log_does_not_leak_source_url(self, caplog):
+        # The source URL can embed basic-auth userinfo (a capability secret) — the startup log must
+        # only announce enabled-state, never the URL/userinfo (mirrors healthchecks.py).
+        secret = "http://user:s3cr3t@primary.example.com/api/xvb-standby"
+        puller = XvbStandbyPuller(MagicMock(), source=secret, interval=0)
+        puller.fetch_once = MagicMock(return_value=None)  # no network in this test
+        with caplog.at_level("INFO", logger="XvbStandby"):
+            with patch("asyncio.sleep", side_effect=Exception("stop")):
+                with pytest.raises(Exception, match="stop"):
+                    asyncio.run(puller.run())
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "s3cr3t" not in joined
+        assert "user:" not in joined
+        assert secret not in joined
+        assert "primary.example.com" not in joined  # not even the bare host

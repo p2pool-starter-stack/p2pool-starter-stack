@@ -23,8 +23,11 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   controller state and holds it as standby (inspectable in `/api/state`), then adopts it the first
   time it actually donates at failover — so the split resumes warm. One-way (backup pulls from
   primary), inert unless configured, and never acted on while the primary is authoritative (an idle
-  backup has no workers, so its controller stays on P2Pool). An `.onion` source rides the bridge Tor
-  SOCKS and a LAN source is a private-network hop — no new clearnet egress either way.
+  backup has no workers, so its controller stays on P2Pool). The pull follows the dashboard's
+  privacy-safe egress rule: an `.onion` source, a public IP, or any hostname rides the bridge Tor
+  SOCKS (the primary sees a Tor exit, never the backup's IP); only a provably-private/loopback IP
+  literal dials direct as a LAN hop — so the pull never opens a clearnet path, and the Security
+  panel reports its route.
 
 ## [1.10.0] - 2026-07-20
 
