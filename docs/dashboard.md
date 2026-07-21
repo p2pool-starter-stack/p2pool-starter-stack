@@ -240,6 +240,11 @@ but its miner isn't, the rig stays in the table with a **miner down** chip rathe
 offline. Point the rig's descriptor at the enriched feed to turn this on — see
 [Connecting Miners › RigForge enriched feed](workers.md#rigforge-enriched-feed).
 
+With `dashboard.check_for_updates` on, a rig reporting a RigForge version older than the latest
+published release also gets a clickable `rf vX.Y.Z available ↗` badge — the per-worker twin of the
+header's new-release badge, notify-only, linking to the RigForge release notes. See
+[Connecting Miners › RigForge new-release badge](workers.md#rigforge-new-release-badge).
+
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
 `3 (+2 inv)` when present). A rig whose reject rate climbs past ~5% gets a red **⚠** flag next to its
 rejected count — a rig submitting stale or bad shares (bad overclock, flaky network, clock drift)
@@ -285,6 +290,15 @@ doesn't come back to a live hashrate — rolls it back on its own. The panel sho
 To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
 in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
 without a token, the rig isn't a write target and the panel says so.
+
+When the rig's [new-release badge](#workers-alive) shows and the rig is editable, an **Upgrade
+rig…** button appears beside it: arm it, confirm, and the rig upgrades its own RigForge to the
+latest release — the per-worker twin of the stack's one-click upgrade. The rig may rebuild its
+miner (about ten minutes when the XMRig pin changed) and rolls itself back if the miner doesn't
+come back live. The panel shows the outcome (applied / rolled back / failed); a repeat click inside
+the rig's own six-hour upgrade window reads as "throttled — retry later", not an error. See
+[Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
+must enable and how the target is derived.
 
 How it stays safe:
 

@@ -11,7 +11,55 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- **One-click remote worker upgrade** (#597). Where the per-worker badge shows and the rig is
+  editable, Worker Inspect gains an Upgrade rig… button: arm, confirm, and the rig installs the
+  latest RigForge release itself (rig ≥ v1.11.2 with its default-off `control_upgrade` flag chain
+  enabled). The intent carries the worker name and confirmed version only; the host runner
+  re-derives the real target from the RigForge release API over Tor (throttled, cached), resolves
+  the rig's address and bearer from `config.json`, dials over the LAN, and polls the rig to a
+  terminal applied / rolled-back / failed with a hard cap. Already-current rigs no-op without
+  dialing; a rig-side throttle refusal reads as retry-later. Per-rig only — no "upgrade all".
+
+- **Per-worker RigForge "new version available" badge** (#596). A rig whose reported RigForge
+  version is older than the latest published release gets a clickable badge in the Workers Alive
+  table and in Worker Inspect, linking to the release notes — the worker-level twin of the
+  header's stack-release badge. Notify-only; one hourly, Tor-routed, fail-silent fetch covers the
+  whole fleet, gated on the same `dashboard.check_for_updates` flag. Rigs that report no version
+  (plain xmrig, sister API off) show no badge — unknown, not "up to date".
+
 ### Fixed
+
+- **Removing the control runner no longer strands a sibling checkout's stack (#689).** The
+  `pithead-control.{path,service}` unit names are global to the host, but a bench box holds
+  several checkouts at once — and a checkout applying with dashboard control off (or the e2e
+  harness tearing down) removed whatever units were installed, including the live stack's,
+  leaving its config editor stuck at "Previewing…" until the next apply. Both removal paths now
+  check the service unit's `ExecStart` and only touch units owned by the acting checkout,
+  comparing physical paths so the `current` symlink and the versioned directory it targets
+  count as the same checkout.
+
+- **An unedited Save & preview shows zero changes (#695, #696).** On a bundle-deployed box the
+  Review changes modal reported two changes with nothing edited. First, a path "change" such as
+  `CLEARNET_STATE_DIR: /srv/code/current/... → /srv/code/pithead-vX.Y.Z/...`: pithead resolved
+  its own directory with a logical `pwd`, so `.env` paths derived from the checkout dir took the
+  spelling of whoever invoked it — the deploy symlink interactively, the physical dir under the
+  control runner's systemd unit — and the same directory diffed against itself. The script now
+  canonicalizes with `pwd -P`, and `CLEARNET_STATE_DIR` joins its siblings (`CONTROL_DIR`,
+  `CADDY_LOG_DIR`) as a silent internal path in the change preview. Second, a permanent
+  "Energy calculator settings updated" row on any box whose `config.json` never set
+  `dashboard.energy`: the editor round-trips the reference-merged form, so the staged copy
+  carries the materialized energy defaults, and the preview compared them against the absent
+  block. The comparison — in the preview row and the commit's audit-key derivation alike — now
+  merges the reference defaults into both sides, so only a real value change raises the row.
+
+- **The egress panel no longer reports a phantom clearnet leak for the XvB stats fetch (#701).**
+  With `xvb.tor: false`, the #170 posture panel and topology view showed the dashboard's XvB
+  stats connection as a clearnet leak. That fetch is unconditionally routed over Tor (`socks5h`,
+  #163) — `xvb.tor` gates only the xmrig-proxy donation dial (#166) — so the panel warned about
+  a leak that cannot happen. The dashboard's XvB stats route is now Tor whenever XvB is enabled,
+  matching what the code actually does and what `docs/privacy.md` already documented.
 
 - **The egress panel and network map now list the webhook/ntfy alert sinks (#380).** Both views
   derived every dashboard egress except the alert sinks, so a `notifications.tor: false` sink
@@ -29,6 +77,17 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   documents the post-deploy `--check` sweep and its expected parked-bench baseline. Private
   bench hostnames in docs, comments, and one harness message are replaced with generic role
   names; each box's specifics live in its own `~/README.md`, not the repo.
+
+### Security
+
+- **The dashboard's external API fetches are size-capped** (#660). The GitHub release check, the
+  CoinGecko price feed, and the XvB client's calls (stats, reward estimates, winners, register)
+  now stream their responses through a shared `bounded_get` helper that cuts the body at 1 MiB,
+  so a hostile or broken endpoint can no longer make these clients buffer an unbounded payload.
+  Over-cap reads follow each client's existing failure contract (no result / keep the last good
+  one). The remaining external GETs — the Tor egress probe, the Healthchecks ping, and the
+  Telegram `getUpdates` long-poll — ride the same cap; `getUpdates` also caps its batch at 10
+  updates so a capped batch can never wedge the poll loop on an offset it cannot advance.
 
 ## [1.9.3] - 2026-07-19
 

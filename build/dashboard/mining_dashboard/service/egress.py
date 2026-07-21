@@ -137,7 +137,9 @@ def compute_egress_posture(
             "name": "dashboard",
             "firewalled": False,  # host-networked — bypasses the #270 DOCKER-USER firewall
             "conns": [
-                {"to": "XvB stats (xmrvsbeast.com)", "route": xvb},  # socks5h when on (#163)
+                # XvB stats fetch — unconditionally socks5h over Tor (#163/#701); xvb.tor only
+                # governs the xmrig-proxy donation dial above, never this fetch.
+                {"to": "XvB stats (xmrvsbeast.com)", "route": TOR if xvb_enabled else INACTIVE},
                 {"to": "update check (github)", "route": TOR},  # socks5h, #224
                 # Healthchecks.io dead-man's-switch ping — always over Tor when a URL is set (#79).
                 {"to": "Healthchecks.io ping", "route": TOR if healthchecks_enabled else INACTIVE},
@@ -310,7 +312,8 @@ def compute_topology(
         # App-level egress.
         _edge("xmrig-proxy", _ext(xvb), xvb, "XvB donation", "egress"),
         _edge("dashboard", "tor", TOR, "update check", "egress"),
-        _edge("dashboard", _ext(xvb), xvb, "XvB stats", "egress"),
+        # XvB stats fetch — unconditionally Tor (#163/#701); xvb.tor only gates the donation dial.
+        _edge("dashboard", "tor", TOR if xvb_enabled else INACTIVE, "XvB stats", "egress"),
         # Healthchecks.io ping — always over Tor when a URL is set (#79).
         _edge(
             "dashboard",

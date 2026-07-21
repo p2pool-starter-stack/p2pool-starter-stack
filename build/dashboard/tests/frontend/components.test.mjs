@@ -603,6 +603,20 @@ test('WorkersTable renders the RigForge version badge + chips when present, noth
     assert.match(html, /142 W · 86.9 H\/s·W/);
 });
 
+test('WorkersTable badges a rig running an older RigForge — and only that rig (#596)', () => {
+    const s = clone();
+    s.workers[0].rigforge_update = { available: true, latest: 'v1.11.2', url: 'https://h/v1.11.2' };
+    s.workers[1].rigforge_update = null; // current / plain-xmrig rig -> no badge
+    const html = renderApp({ state: s });
+    assert.match(html, /rf v1\.11\.2 available/); // the accent callout renders
+    assert.match(html, /A newer RigForge release is available: v1\.11\.2/); // tooltip
+    assert.equal(html.match(/rf v1\.11\.2 available/g).length, 1); // exactly one rig badged
+
+    const none = clone();
+    none.workers.forEach((w) => (w.rigforge_update = null));
+    assert.doesNotMatch(renderApp({ state: none }), /RigForge release is available/);
+});
+
 test('Tari status gates the ✔ on a live gRPC channel, never on active-but-dead (#278/#313)', () => {
     // The ✔ must mean the merge-mine channel is actually up. A dead channel that still reads "active"
     // must show status-warn and NO check — otherwise a TRANSIENT_FAILURE reads as healthy (#278/#313).

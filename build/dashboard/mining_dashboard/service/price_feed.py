@@ -19,6 +19,8 @@ import re
 
 import requests
 
+from mining_dashboard.helper.http import bounded_get
+
 logger = logging.getLogger("PriceFeed")
 
 COINGECKO_SIMPLE_PRICE = "https://api.coingecko.com/api/v3/simple/price"
@@ -62,7 +64,7 @@ class CoinGeckoClient:
             return None
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
         try:
-            resp = requests.get(
+            resp = bounded_get(
                 COINGECKO_SIMPLE_PRICE,
                 params={
                     "ids": ",".join(COINGECKO_IDS.values()),
