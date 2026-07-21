@@ -79,6 +79,7 @@ from mining_dashboard.service.control_service import (
     SECRET_SENTINEL,
     _get,
     _set,
+    env_key_config_paths,
 )
 from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
@@ -982,10 +983,14 @@ class DataService:
 
         Reads the same pre-masked copy the control channel itself prefills from
         (``config.HOST_CONFIG_PATH``, #440 — already secret-free) each poll and diffs it against
-        the previous poll's snapshot. A change is "explained" — and stays quiet — only when the #33
-        audit trail shows a ``commit``/``applied`` entry stamped AFTER the last time this watcher
-        looked; anything else (a hand-edit, a `pithead apply` run outside the dashboard) is recorded
-        as a ``host-edit`` audit row naming the changed keys. First poll only baselines (no control
+        the previous poll's snapshot. A changed key is "explained" — and stays quiet — only when
+        the #33 audit trail shows a ``commit``/``applied`` entry that both landed AFTER the last
+        time this watcher looked AND actually touched that key (the entry's env-var names are
+        bridged to config paths via ``env_key_config_paths``). Correlating by key, not merely by
+        time, is what stops a legit dashboard commit of key A from swallowing a concurrent
+        host-side hand-edit of key B. Any changed key no fresh commit covers (a hand-edit, a
+        `pithead apply` run outside the dashboard) is recorded as a ``host-edit`` audit row naming
+        the unexplained keys. First poll only baselines (no control
         log exists yet to compare against, and every other watcher in this loop shares that
         never-backfill contract). No-op with the control channel off — there is neither a masked
         config mount nor an audit trail to compare against."""
@@ -1010,16 +1015,34 @@ class DataService:
             # last poll") only if a real false-negative shows up. Pinned by
             # test_explained_window_is_at_most_one_second.
             since = self._last_host_check - 1
-            explained = any(
-                e.get("action") == "commit"
-                and e.get("status") == "applied"
-                and (ts := _parse_audit_ts(e.get("ts"))) is not None
-                and ts >= since
-                for e in audit_service.recent_changes()
-            )
-            if not explained:
+            # Correlate BY KEY, not just by time: a commit only "explains" the keys it actually
+            # touched. Fold every fresh commit's env-var names into the config paths they cover
+            # (env_key_config_paths bridges the audit log's env names to config.json paths), then
+            # record only the changed keys NO recent commit covers — the genuine out-of-band edits
+            # this watcher exists to catch. A concurrent dashboard commit of key A + a host
+            # hand-edit of key B no longer swallows B.
+            explained_paths = set()
+            for e in audit_service.recent_changes():
+                if (
+                    e.get("action") == "commit"
+                    and e.get("status") == "applied"
+                    and (ts := _parse_audit_ts(e.get("ts"))) is not None
+                    and ts >= since
+                ):
+                    for env_key in (e.get("keys") or "").split():
+                        explained_paths.update(env_key_config_paths(env_key))
+            # ponytail: env-var granularity — a var fed by >1 config path (e.g. P2POOL_FLAGS <-
+            # p2pool.pool + p2pool.clearnet) explains ALL its paths, so a commit touching one could
+            # still suppress a concurrent hand-edit of its sibling. Inherent to a name-only audit
+            # log; fix only if per-path audit keys ever land.
+            unexplained = [
+                k
+                for k in changed_keys
+                if not any(k == p or k.startswith(p + ".") for p in explained_paths)
+            ]
+            if unexplained:
                 await self._record_audit_event(
-                    "host-edit", "", "host-edit", "detected", " ".join(changed_keys)
+                    "host-edit", "", "host-edit", "detected", " ".join(unexplained)
                 )
         self._last_host_config, self._last_host_check = current, now
 

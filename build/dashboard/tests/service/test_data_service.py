@@ -2419,6 +2419,81 @@ class TestWatchHostConfig:
         finally:
             sm.close()
 
+    async def test_commit_of_one_key_does_not_swallow_a_concurrent_host_edit(
+        self, tmp_path, monkeypatch
+    ):
+        # #530 review MEDIUM: correlate BY KEY, not just by time. A fresh dashboard commit of key A
+        # landing in the same window as a host-side hand-edit of key B must NOT suppress B — the
+        # out-of-band change the feature exists to catch. Fails on the old time-only `explained =
+        # any(...)` logic, which swallowed the whole diff on ANY fresh commit.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        # A: xvb.enabled (committable, maps to XVB_ENABLED). B: dashboard.tari_required (maps to
+        # TARI_REQUIRED) — hand-edited on the host, NOT named by the commit below.
+        self._write_config(cfg, {"xvb": {"enabled": True}, "dashboard": {"tari_required": True}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline
+            # Both keys change; only A was actually committed through the dashboard.
+            self._write_config(
+                cfg, {"xvb": {"enabled": False}, "dashboard": {"tari_required": False}}
+            )
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": _iso_now(),
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "XVB_ENABLED",
+                    }
+                )
+                + "\n"
+            )
+            await svc._watch_host_config()
+            events = sm.get_audit_events()
+            # B is recorded out-of-band; A (explained by the commit) is NOT double-recorded.
+            assert len(events) == 1
+            assert events[0]["source"] == "host-edit"
+            assert events[0]["keys"] == "dashboard.tari_required"
+        finally:
+            sm.close()
+
+    async def test_energy_commit_explains_an_energy_subkey_by_prefix(self, tmp_path, monkeypatch):
+        # #530: dashboard.energy.* is config.json-only and audits under the synthetic
+        # DASHBOARD_ENERGY name, which env_key_config_paths maps to the whole `dashboard.energy`
+        # block by prefix — so a committed energy sub-key change stays quiet even though its dotted
+        # diff path (dashboard.energy.cost_per_kwh) isn't the literal committed name.
+        cfg, log = tmp_path / "config.json", tmp_path / "control.log"
+        self._write_config(cfg, {"dashboard": {"energy": {"cost_per_kwh": 0.10}}})
+        monkeypatch.setattr(ds_mod.config, "DASHBOARD_CONTROL_ENABLED", True)
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        monkeypatch.setattr(ds_mod.audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        svc, sm = self._svc()
+        try:
+            await svc._watch_host_config()  # baseline
+            self._write_config(cfg, {"dashboard": {"energy": {"cost_per_kwh": 0.20}}})
+            log.write_text(
+                json.dumps(
+                    {
+                        "ts": _iso_now(),
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "actor": "admin",
+                        "action": "commit",
+                        "status": "applied",
+                        "keys": "DASHBOARD_ENERGY",
+                    }
+                )
+                + "\n"
+            )
+            await svc._watch_host_config()
+            assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
     async def test_stale_commit_before_the_last_check_does_not_explain(self, tmp_path, monkeypatch):
         cfg, log = tmp_path / "config.json", tmp_path / "control.log"
         self._write_config(cfg, {"xvb": {"enabled": True}})
