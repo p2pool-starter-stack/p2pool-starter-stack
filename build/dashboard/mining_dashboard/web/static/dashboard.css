@@ -419,6 +419,27 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+/* Card title + a right-aligned control, e.g. the audit trail's hour/day/month grouping select
+ * (#530). Generic — reuse wherever a card needs one control next to its heading. */
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.card-header-row h3 {
+  margin: 0;
+}
+
+/* Audit-trail time-bucket header row (#530), between groups when the operator picks
+ * hour/day/month grouping. A raised, muted divider — readable, not another data row. */
+.audit-group-header td {
+  background: var(--elevated);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 /* Components */
 .status-ok {
   color: var(--ok);

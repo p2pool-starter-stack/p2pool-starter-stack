@@ -1,7 +1,10 @@
 import asyncio
+import json
 import logging
 import os
 import time
+import uuid
+from datetime import UTC, datetime
 
 from aiohttp import ClientSession
 
@@ -35,6 +38,7 @@ from mining_dashboard.collector.system import (
     get_load_average,
     get_memory_usage,
 )
+from mining_dashboard.config import config
 from mining_dashboard.config.config import (
     CHECK_FOR_UPDATES,
     CLEARNET_STATE_DIR,
@@ -67,8 +71,10 @@ from mining_dashboard.helper.utils import (
     pplns_block_time,
     shares_in_pplns_window,
 )
+from mining_dashboard.service import audit_service
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
+from mining_dashboard.service.control_service import SECRET_SENTINEL
 from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
@@ -344,6 +350,67 @@ def _shares_to_record(last_known_total, current_total):
     return 0, last_known_total
 
 
+def _iso_now():
+    """UTC now, formatted to match the #33 audit writer's own ``ts`` (``control_audit`` in
+    ``pithead``) — same string shape both sources write, so the audit_events table sorts and
+    groups by hour/day/month with a plain string-prefix slice, no parsing needed at read time."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _flatten_config_keys(cfg, out, prefix=""):
+    """Fill ``out`` with ``{dotted.path: leaf_value}`` for every leaf in nested dict ``cfg``. Only
+    ever used to compare/NAME keys (see ``_diff_config_keys``) — a leaf value is compared for
+    equality, never rendered; the source, ``config.HOST_CONFIG_PATH``, is already the host's
+    pre-masked copy (#440), so no secret is present to leak even here.
+
+    The masked secret sentinel (``control_service.SECRET_SENTINEL``, ``{"__secret__": True}``) is
+    treated as an opaque LEAF, not descended into — otherwise a secret being set/cleared would
+    name a synthetic ``...password.__secret__`` path instead of the real setting."""
+    if not isinstance(cfg, dict):
+        return
+    for k, v in cfg.items():
+        path = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict) and v != SECRET_SENTINEL:
+            _flatten_config_keys(v, out, path)
+        else:
+            out[path] = v
+
+
+def _diff_config_keys(old, new):
+    """Dotted config-key paths added, removed, or changed between two config snapshots (#530),
+    sorted. Names only — the values feed only an equality check and are never returned, matching
+    the #33 audit contract (key names, never values)."""
+    old_flat, new_flat = {}, {}
+    _flatten_config_keys(old, old_flat)
+    _flatten_config_keys(new, new_flat)
+    changed = set(old_flat) ^ set(new_flat)  # added or removed entirely
+    changed |= {k for k in old_flat.keys() & new_flat.keys() if old_flat[k] != new_flat[k]}
+    return sorted(changed)
+
+
+def _parse_audit_ts(ts):
+    """Parse a #33 audit-log ``ts`` string (``%Y-%m-%dT%H:%M:%SZ``) to epoch seconds, or None for
+    anything else — a malformed/garbage ts (already length-capped and charset-stripped by
+    ``audit_service._clean``) must never crash the out-of-band watcher, just fail to "explain" a
+    change (the safe direction: an unparsable commit ts causes a spurious host-edit row, not a
+    swallowed one)."""
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_host_config():
+    """The masked config.json (``config.HOST_CONFIG_PATH``, #440), or None if the mount isn't
+    ready / isn't valid JSON yet. A plain blocking function — ``_watch_host_config`` runs it via
+    ``asyncio.to_thread`` rather than opening the file directly in an ``async def``."""
+    try:
+        with open(config.HOST_CONFIG_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 class WorkerLifecycle:
     """Dashboard-side per-worker connection tracking for the "Workers Alive" table (#169 / #182).
 
@@ -447,6 +514,12 @@ class DataService:
         self._last_xvb_history_write = 0.0
         self._last_hourly_capture = 0.0
         self._last_worker_capture = 0.0
+        # Out-of-band audit watcher (#530): the last config.json snapshot this poll loop read
+        # (None until the first poll baselines it — never diff against nothing, same "re-baseline,
+        # never backfill" contract as every other watcher here) and the wall-clock of that read, so
+        # a later change can be checked against control.log entries that landed AFTER it.
+        self._last_host_config = None
+        self._last_host_check = 0.0
         # XvB raffle-winners mirror: wall-clock of the last successful winners-file read. Starts
         # at 0.0 so the first eligible poll reads it; NOT stamped on a failed fetch, so a failure
         # retries on the next 10th poll instead of waiting out the 30-min gate.
@@ -858,24 +931,129 @@ class DataService:
             )
             await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
 
-    async def _reconcile_worker_config(self, worker_results):
+    async def _record_audit_event(self, source, actor, action, status, keys):
+        """Write one out-of-band audit row (#530), through the SAME sanitizer #33's own audit
+        trail is served through (``audit_service._clean``) — defense in depth: ``actor``/``keys``
+        here are already schema-shaped (a validated worker name, dotted config-key paths), but
+        every field the Security panel serves gets the identical whitelist treatment regardless of
+        source, so a future caller can't accidentally skip it."""
+        await asyncio.to_thread(
+            self.state_manager.add_audit_event,
+            id=f"{source}-{uuid.uuid4()}",
+            ts=_iso_now(),
+            source=source,
+            actor=audit_service._clean(actor, 64),
+            action=action,
+            status=status,
+            keys=audit_service._clean(keys, 400),
+        )
+
+    async def _watch_host_config(self):
+        """Out-of-band HOST-EDIT detection (#530): config.json changed without a matching
+        control-channel commit.
+
+        Reads the same pre-masked copy the control channel itself prefills from
+        (``config.HOST_CONFIG_PATH``, #440 — already secret-free) each poll and diffs it against
+        the previous poll's snapshot. A change is "explained" — and stays quiet — only when the #33
+        audit trail shows a ``commit``/``applied`` entry stamped AFTER the last time this watcher
+        looked; anything else (a hand-edit, a `pithead apply` run outside the dashboard) is recorded
+        as a ``host-edit`` audit row naming the changed keys. First poll only baselines (no control
+        log exists yet to compare against, and every other watcher in this loop shares that
+        never-backfill contract). No-op with the control channel off — there is neither a masked
+        config mount nor an audit trail to compare against."""
+        if not config.DASHBOARD_CONTROL_ENABLED:
+            return
+        current = await asyncio.to_thread(_read_host_config)
+        if current is None:
+            return  # mount not ready yet — quiet no-op, the next poll retries
+        now = time.time()
+        if self._last_host_config is None:
+            self._last_host_config, self._last_host_check = current, now
+            return
+        changed_keys = _diff_config_keys(self._last_host_config, current)
+        if changed_keys:
+            # The audit log's ts is whole-second (_iso_now/control_audit both write
+            # "%Y-%m-%dT%H:%M:%SZ"), while `_last_host_check` is a sub-second time.time() — a
+            # commit landed in the SAME wall-clock second as the baseline poll would otherwise
+            # floor below it and be missed. One second of grace absorbs that truncation without
+            # meaningfully widening the window a genuinely stale commit could "explain" through.
+            since = self._last_host_check - 1
+            explained = any(
+                e.get("action") == "commit"
+                and e.get("status") == "applied"
+                and (ts := _parse_audit_ts(e.get("ts"))) is not None
+                and ts >= since
+                for e in audit_service.recent_changes()
+            )
+            if not explained:
+                await self._record_audit_event(
+                    "host-edit", "", "host-edit", "detected", " ".join(changed_keys)
+                )
+        self._last_host_config, self._last_host_check = current, now
+
+    async def _mirror_control_audit(self):
+        """Copy the #33 control.log's recent entries into the durable ``audit_events`` table
+        (#530), so the Security panel's time-grouped view can drill deeper than the log's own
+        trimmed tail. ``audit_service.recent_changes()`` output is already sanitized (it's the SAME
+        read the panel used before this table existed); ``add_audit_event``'s ``INSERT OR IGNORE``
+        on the log's own ``id`` makes re-mirroring the same tail every poll a no-op. Entries with no
+        id (a handful of pre-auth "invalid"/"refused" rows, #33) are skipped — they're visible only
+        while still in the log tail, same as before this feature."""
+        if not config.DASHBOARD_CONTROL_ENABLED:
+            return
+        for e in audit_service.recent_changes():
+            if not e.get("id"):
+                continue
+            await asyncio.to_thread(
+                self.state_manager.add_audit_event,
+                id=e["id"],
+                ts=e.get("ts", ""),
+                source="control",
+                actor=e.get("actor", ""),
+                action=e.get("action", ""),
+                status=e.get("status", ""),
+                keys=e.get("keys", ""),
+            )
+
+    async def _reconcile_worker_config(self, workers, worker_results):
         """Catch up any still-``accepted`` #185 worker-config history row whose change_id the rig
-        now reports terminal (#579).
+        now reports terminal (#579), and flag an out-of-band RIG-EDIT (#530).
 
         A rollback slower than the host runner's 20s status-poll deadline (#517/#543) is honestly
         recorded ``accepted`` and never revisited — this rides THIS poll's already-fetched enriched
-        bodies (``worker_results``, positionally aligned with the worker probes in ``run()``), so
-        there's no new dial and no host-runner change. A plain-xmrig rig, a rig still mid-change, or
-        an unreachable/offline rig (``{}``) all parse to ``None`` via ``parse_worker_control_status``
-        and are a quiet no-op — the row simply stays ``accepted`` until a later poll catches it."""
-        for extra_stats in worker_results:
+        bodies (``worker_results``, positionally aligned with ``workers`` and with the worker probes
+        in ``run()``), so there's no new dial and no host-runner change. A plain-xmrig rig, a rig
+        still mid-change, or an unreachable/offline rig (``{}``) all parse to ``None`` via
+        ``parse_worker_control_status`` and are a quiet no-op.
+
+        A TERMINAL report whose ``change_id`` this dashboard never spooled (``worker_config`` has no
+        row for it — checked via ``worker_config_change_known``) is a change the RIG applied on its
+        own: reconciling it would be a silent no-op anyway (the ``WHERE status='accepted'`` UPDATE
+        matches nothing), so instead it's recorded as a ``rig-edit`` audit row naming the worker.
+        RigForge's ``/status`` mirror carries only the outcome of a change, not a per-key diff, so
+        unlike host-edit's ``keys`` this can only name the change_id — a real limitation, not an
+        oversight; see the #530 PR notes."""
+        for w, extra_stats in zip(workers, worker_results, strict=False):
             ctrl = parse_worker_control_status(extra_stats) if extra_stats else None
-            if ctrl:
+            if not ctrl:
+                continue
+            known = await asyncio.to_thread(
+                self.state_manager.worker_config_change_known, ctrl["change_id"]
+            )
+            if known:
                 await asyncio.to_thread(
                     self.state_manager.reconcile_worker_config_status,
                     ctrl["change_id"],
                     ctrl["status"],
                     ctrl["reason"],
+                )
+            else:
+                await self._record_audit_event(
+                    "rig-edit",
+                    w.get("name", ""),
+                    "rig-edit",
+                    ctrl["status"],
+                    f"change_id={ctrl['change_id']}",
                 )
 
     def _on_clearnet_transition(self, name, ok):
@@ -947,8 +1125,16 @@ class DataService:
                     worker_results = await asyncio.gather(*tasks)
 
                     # 3a. Reconcile any #185 history row a slow rig rollback left stuck 'accepted'
-                    # (#579) — rides this same poll's results, no new dial.
-                    await self._reconcile_worker_config(worker_results)
+                    # (#579), and flag a rig-side out-of-band edit (#530) — rides this same poll's
+                    # results, no new dial.
+                    await self._reconcile_worker_config(proxy_workers, worker_results)
+
+                    # 3a-2. Out-of-band audit (#530): a config.json change not made through the
+                    # control channel, plus mirroring the #33 log into the durable audit_events
+                    # table so the Security panel can group by hour/day/month. Both are no-ops with
+                    # the control channel off.
+                    await self._watch_host_config()
+                    await self._mirror_control_audit()
 
                     current_mode = self.state_manager.get_xvb_stats().get("current_mode", "P2POOL")
                     # Determine active pool port for UI badges based on current Algo mode
