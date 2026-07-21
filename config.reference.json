@@ -49,6 +49,10 @@
         "donate_level": 0
     },
 
+    "local_miner": {
+        "enabled": false
+    },
+
     "xvb": {
         "enabled": true,
         "url": "na.xmrvsbeast.com:4247",

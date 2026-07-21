@@ -3410,6 +3410,34 @@ sp1="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
 case "$sp1" in ?*) ok "stratum_password auto generated a secret" ;; *) bad "stratum_password auto generated a secret" "got empty" ;; esac
 assert_eq "donate-level explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_DONATE_LEVEL)" "1"
 assert_contains "stratum auth surfaced for rigs" "$(run_sourced "$V" announce_stratum_auth 2>&1)" "Stratum authentication is ON"
+
+echo "== unit: announce_local_miner hands off the stratum URL + secret only when opted in (#593) =="
+# The local-miner opt-in surfaces the two values a co-located RigForge install needs (pool URL +
+# stratum secret) and NOTHING else — off by default, loopback when the bind allows it, the bound
+# LAN address when it doesn't (the #593 stratum_bind edge case), and RigForge-owns-tuning stated.
+LM="$SANDBOX/lm"
+mkdir -p "$LM"
+printf 'STRATUM_BIND=0.0.0.0\nSTRATUM_PORT=3333\nPROXY_STRATUM_PASSWORD=s3cr3t\n' >"$LM/.env"
+# Opt-out (default): prints nothing at all.
+printf '{"local_miner":{"enabled":false}}' >"$LM/config.json"
+assert_eq "opt-out prints nothing" "$(run_sourced "$LM" announce_local_miner 2>&1)" ""
+# Absent block also prints nothing (default false).
+printf '{}' >"$LM/config.json"
+assert_eq "absent local_miner prints nothing" "$(run_sourced "$LM" announce_local_miner 2>&1)" ""
+# Opt-in, 0.0.0.0 bind: loopback URL + the secret + the RigForge-owns-tuning note.
+printf '{"local_miner":{"enabled":true}}' >"$LM/config.json"
+lm_out="$(run_sourced "$LM" announce_local_miner 2>&1)"
+assert_contains "opt-in surfaces loopback pool URL" "$lm_out" "127.0.0.1:3333"
+assert_contains "opt-in surfaces the stratum secret" "$lm_out" "s3cr3t"
+assert_contains "opt-in states RigForge owns host tuning" "$lm_out" "RigForge"
+# Custom port + specific LAN bind: target the bound address, not hardcoded loopback (#593 edge case).
+printf 'STRATUM_BIND=192.168.1.9\nSTRATUM_PORT=4444\nPROXY_STRATUM_PASSWORD=s3cr3t\n' >"$LM/.env"
+lm_out="$(run_sourced "$LM" announce_local_miner 2>&1)"
+assert_contains "LAN bind targets the bound address:port" "$lm_out" "192.168.1.9:4444"
+# No stratum password set: say so rather than printing a blank pass.
+printf 'STRATUM_BIND=0.0.0.0\nSTRATUM_PORT=3333\nPROXY_STRATUM_PASSWORD=\n' >"$LM/.env"
+assert_contains "no-password case is stated explicitly" "$(run_sourced "$LM" announce_local_miner 2>&1)" "none set"
+
 # Re-apply: an "auto" password must be STABLE (reused, not rotated) — like the proxy token.
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum_password auto stable across apply" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "$sp1"
@@ -6579,7 +6607,7 @@ echo "== unit: wizard prompt count is pinned (#502 — a silently-added prompt f
 core_reads=$(awk '/^wizard_ask_core\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
 shape_reads=$(awk '/^wizard_ask_shape\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
 assert_eq "wizard_ask_core has exactly 12 read prompts (wallets, node config, pool tier, dashboard login)" "$core_reads" "12"
-assert_eq "wizard_ask_shape has exactly 5 read prompts (clearnet-sync, remote-access, alerts cluster)" "$shape_reads" "5"
+assert_eq "wizard_ask_shape has exactly 6 read prompts (clearnet-sync, remote-access, alerts cluster, local-miner opt-in)" "$shape_reads" "6"
 
 # A small helper so tests can drive the whole Q&A -> write in one sourced call, sharing the globals
 # wizard_ask_core/wizard_ask_shape set with wizard_write_config (each function's locals don't
@@ -6621,6 +6649,17 @@ assert_eq "defaults path: dashboard has only 'secure' — no auth/onion written"
 assert_eq "defaults path: no telegram block written" "$(jq -r 'has("telegram")' <<<"$w1_cfg")" "false"
 assert_eq "defaults path: no clearnet_initial_sync written (stays the reference default)" \
     "$(jq -r '.monero | has("clearnet_initial_sync")' <<<"$w1_cfg")" "false"
+assert_eq "defaults path: no local_miner block written (opt-in off, #593)" \
+    "$(jq -r 'has("local_miner")' <<<"$w1_cfg")" "false"
+
+# Opt-in to the local miner (#593): answering 'y' to the final shape prompt writes
+# local_miner.enabled=true; every other answer left blank so only that key appears.
+WLM="$SANDBOX/wizard-local-miner"
+mkdir -p "$WLM"
+printf '%s\n%s\n\n\n\n\n\n\n\ny\n' "$WALLET" "TARIWALLETLM" | run_sourced "$WLM" run_wizard >/dev/null 2>&1
+wlm_cfg="$(cat "$WLM/config.json" 2>/dev/null)"
+assert_eq "opt-in path: local_miner.enabled written true (#593)" "$(jq -r '.local_miner.enabled' <<<"$wlm_cfg")" "true"
+unset wlm_cfg
 
 echo "== unit: wizard — remote node branch is unchanged by the ask/write split (#502) =="
 # The remote-node prompts (host/RPC/ZMQ/auth) were only moved into wizard_ask_core, not touched —

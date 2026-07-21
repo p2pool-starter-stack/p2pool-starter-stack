@@ -1034,6 +1034,37 @@ announce_dashboard_url() {
     fi
     announce_stratum_auth
     announce_stratum_tls # #261: prints the fingerprint rigs pin; no-op when TLS is off
+    announce_local_miner # #593: hand off the pool URL + secret for a co-located RigForge worker
+}
+
+# Local miner opt-in (#593). When the operator asked to also mine on this host with its spare CPU,
+# hand them the two values a RigForge install on this box would otherwise prompt for — the stack's
+# own stratum URL and the stratum secret — so a co-located worker self-registers with nothing to
+# copy by hand (the dashboard already discovers workers from the proxy). Pithead does NOT install
+# or tune the miner: RigForge owns HugePages/GRUB/MSR and the miner service. Prints nothing unless
+# local_miner.enabled is on.
+announce_local_miner() {
+    [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" = "true" ] || return 0
+    local bind port host secret
+    bind=$(env_get STRATUM_BIND 2>/dev/null || true)
+    [ -n "$bind" ] || bind="0.0.0.0"
+    port=$(stratum_port_effective)
+    # A port published on all interfaces (0.0.0.0) or on loopback is reachable at 127.0.0.1; a
+    # specific LAN bind (#593 edge case) is only reachable at that address, so target it directly
+    # rather than hardcoding loopback.
+    case "$bind" in
+    0.0.0.0 | 127.0.0.1) host="127.0.0.1" ;;
+    *) host="$bind" ;;
+    esac
+    secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
+    log "Local miner opt-in is ON (#593): point a RigForge install on THIS host at the stack's stratum:"
+    log "  • Pool URL:         $host:$port"
+    if [ -n "$secret" ]; then
+        log "  • Stratum password: $secret"
+    else
+        log "  • Stratum password: none set (any password is accepted)"
+    fi
+    log "  RigForge compiles/tunes XMRig and owns all host tuning (HugePages/GRUB/MSR) — Pithead does not. See docs/workers.md#mine-on-the-stack-host-itself."
 }
 
 # Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
@@ -2288,6 +2319,15 @@ wizard_ask_shape() {
         read -r -p "Telegram bot token: " TELEGRAM_BOT_TOKEN || true
         read -r -p "Telegram chat id: " TELEGRAM_CHAT_ID || true
     fi
+
+    # Local miner opt-in (#593). A box that runs the stack 24/7 can mine with its spare CPU by
+    # co-locating a RigForge worker pointed at the stack's own loopback stratum. Off by default —
+    # this only records the intent; setup prints the two values a RigForge install needs (the pool
+    # URL and stratum secret) at the end. Pithead never installs or tunes the miner: RigForge owns
+    # all host tuning (HugePages/GRUB/MSR) and the miner service.
+    read -r -p "Also mine on this machine with its spare CPU (co-locate a RigForge worker)? (y/N): " IN_LOCAL_MINER || true
+    LOCAL_MINER=false
+    [[ "$IN_LOCAL_MINER" =~ ^[Yy] ]] && LOCAL_MINER=true
 }
 
 # Assembles config.json from the globals wizard_ask_core/wizard_ask_shape set, and writes it.
@@ -2326,6 +2366,10 @@ wizard_write_config() {
 
     if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
         cfg=$(jq --arg t "$TELEGRAM_BOT_TOKEN" --arg c "$TELEGRAM_CHAT_ID" '.telegram = {enabled: true, bot_token: $t, chat_id: $c}' <<<"$cfg")
+    fi
+
+    if [ "${LOCAL_MINER:-false}" = true ]; then
+        cfg=$(jq '.local_miner = {enabled: true}' <<<"$cfg")
     fi
 
     # Subshell umask (#368): the file must be owner-only from its FIRST byte — a chmod after the
