@@ -64,16 +64,16 @@ def test_p2pool_clearnet_without_firewall_is_a_leak():
     assert "exposing your IP" in p["summary"]["label"]
 
 
-def test_host_networked_dashboard_leaks_despite_firewall():
-    # The dashboard's XvB stats fetch is host-networked, so the #270 container firewall can't cover
-    # it — disabling XvB-over-Tor leaks the host IP even with the firewall on. This is the key nuance.
+def test_dashboard_xvb_stats_stays_tor_when_xvb_tor_is_off():
+    # xvb.tor gates only the xmrig-proxy donation dial (#166); the dashboard's stats fetch is
+    # unconditionally socks5h over Tor (#163/#701), so turning xvb.tor off must not show a leak.
     p = _posture(xvb_tor=False, firewall=True)
-    assert _conn(p, "dashboard", "XvB stats")["route"] == CLEARNET
-    assert _conn(p, "dashboard", "XvB stats").get("blocked_by_firewall") is None
-    # The xmrig-proxy donation dial (a container) IS blocked by the firewall, but the dashboard isn't.
+    assert _conn(p, "dashboard", "XvB stats")["route"] == TOR
+    # The donation dial (a container) goes clearnet — but the #270 firewall blocks it.
+    assert _conn(p, "xmrig-proxy", "XvB donation")["route"] == CLEARNET
     assert _conn(p, "xmrig-proxy", "XvB donation")["blocked_by_firewall"] is True
-    assert p["summary"]["leaks"] >= 1
-    assert p["summary"]["all_tor"] is False
+    assert p["summary"]["leaks"] == 0
+    assert p["summary"]["all_tor"] is True
 
 
 def test_xvb_disabled_routes_are_inactive():
@@ -188,17 +188,22 @@ def test_topology_clearnet_blocked_by_firewall_is_not_a_leak():
     assert topo["summary"]["all_tor"] is True
 
 
-def test_topology_host_networked_dashboard_xvb_leaks_but_proxy_is_blocked():
+def test_topology_dashboard_xvb_stats_stays_on_the_tor_hub_when_xvb_tor_is_off():
     topo = _topo(xvb_tor=False, firewall=True)
-    # The dashboard's XvB stats fetch is host-networked → the #270 firewall can't cover it.
-    assert _edge(topo, "dashboard", "internet")["leak"] is True
-    # The xmrig-proxy XvB dial IS a container → the firewall blocks its clearnet route.
+    # The dashboard's stats fetch is unconditionally Tor (#163/#701) — it must terminate at the
+    # tor hub, never bypass to the internet node.
+    xvb_stats = next(e for e in topo["edges"] if e["label"] == "XvB stats")
+    assert xvb_stats["to"] == "tor" and xvb_stats["route"] == TOR
+    assert not any(e["from"] == "dashboard" and e["to"] == "internet" for e in topo["edges"])
+    # The xmrig-proxy XvB dial IS clearnet here — a container, so the firewall blocks it.
     assert _edge(topo, "xmrig-proxy", "internet").get("blocked_by_firewall") is True
+    assert not any(e.get("leak") for e in topo["edges"])
 
 
 def test_topology_xvb_disabled_is_inactive_not_a_leak():
     topo = _topo(xvb_enabled=False)
     assert _edge(topo, "xmrig-proxy", "tor")["route"] == INACTIVE
+    assert next(e for e in topo["edges"] if e["label"] == "XvB stats")["route"] == INACTIVE
     assert _edge(topo, "dashboard", "tor")  # update check still present
     assert not any(e.get("leak") for e in topo["edges"])
 
@@ -321,16 +326,17 @@ def test_firewall_off_counts_every_clearnet_path_as_a_leak():
         remote_monero=True,
     )
     clearnet = sum(1 for comp in p["components"] for c in comp["conns"] if c["route"] == CLEARNET)
-    assert clearnet >= 5  # sidechain, RPC, monero IBD, tari IBD, XvB donation, XvB stats...
+    assert clearnet >= 5  # sidechain, RPC, monero IBD, tari IBD, XvB donation
     assert p["summary"]["leaks"] == clearnet
     assert p["summary"]["blocked_by_firewall"] == 0
     assert p["summary"]["all_tor"] is False
     assert "exposing your IP" in p["summary"]["label"]
 
 
-def test_firewall_on_blocks_containers_but_not_the_host_dashboard():
-    # Same clearnet-everywhere config with the firewall ON: every container path is blocked, leaving
-    # exactly the host-networked dashboard's XvB stats fetch as the sole real leak (the #270 nuance).
+def test_firewall_on_blocks_every_clearnet_path():
+    # Same clearnet-everywhere config with the firewall ON: every clearnet path belongs to a
+    # container, so all are blocked and nothing leaks — the dashboard's own egress is Tor-only
+    # (#163/#701), so the host-networked firewall bypass has nothing clearnet to expose.
     p = _posture(
         firewall=True,
         p2pool_clearnet=True,
@@ -339,8 +345,28 @@ def test_firewall_on_blocks_containers_but_not_the_host_dashboard():
         tari_clearnet_sync=True,
         remote_monero=True,
     )
-    assert p["summary"]["leaks"] == 1
-    assert _conn(p, "dashboard", "XvB stats")["route"] == CLEARNET
-    assert _conn(p, "dashboard", "XvB stats").get("blocked_by_firewall") is None
-    assert p["summary"]["blocked_by_firewall"] >= 4
-    assert p["summary"]["all_tor"] is False
+    assert p["summary"]["leaks"] == 0
+    assert _conn(p, "dashboard", "XvB stats")["route"] == TOR
+    assert p["summary"]["blocked_by_firewall"] >= 5
+    assert p["summary"]["all_tor"] is True
+
+
+# The dashboard clients hard-wired through Tor SOCKS — no knob points any of them at clearnet
+# (#163 XvB stats, #224 update check, #79 Healthchecks, #121/#340 Telegram, #520 price feed).
+# Scoped by name, not "all dashboard conns", so a future dashboard egress with a legitimate
+# clearnet mode (e.g. the #380 alert-sink LAN carve-out) doesn't silently widen this invariant.
+_TOR_HARDWIRED = ("XvB stats", "update check", "Healthchecks", "Telegram", "price feed")
+
+
+def test_tor_hardwired_dashboard_clients_never_clearnet_for_any_config():
+    # The panel's own #160 lesson: the dashboard bypasses the #270 firewall, so a clearnet route
+    # here would be a real leak — no knob combination may ever derive one for these clients (#701).
+    # next()/_conn raise StopIteration if a name drifts, so a rename can't hollow out the sweep.
+    for cfg in _all_configs():
+        p = compute_egress_posture(**cfg)
+        for name in _TOR_HARDWIRED:
+            assert _conn(p, "dashboard", name)["route"] != CLEARNET, (cfg, name)
+        dash_edges = [e for e in compute_topology(**cfg)["edges"] if e["from"] == "dashboard"]
+        for name in _TOR_HARDWIRED:
+            edge = next(e for e in dash_edges if name in e["label"])
+            assert edge["route"] != CLEARNET, (cfg, name)
