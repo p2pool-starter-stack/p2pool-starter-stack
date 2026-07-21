@@ -13,7 +13,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-  "aiohttp>=3.10.11",
+  "aiohttp>=3.14.2",
   # [socks] pulls in PySocks so the XvB stats fetch can route over the Tor SOCKS proxy (#163).
   "requests[socks]>=2.34.2",
   # grpcio/protobuf floors are dictated by the checked-in Tari gRPC stubs
@@ -34,11 +34,11 @@ test = [
   # diff-cover (#286): patch-coverage gate — new/changed lines must be >=90% covered.
   "diff-cover>=9",
   # hypothesis (#284): property-based tests asserting invariants on the money/numeric logic.
-  "hypothesis>=6.156.6",
+  "hypothesis>=6.158.0",
 ]
 # Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
 # — lint output is version-sensitive, so a floor would let CI and a contributor disagree.
-dev = ["ruff==0.15.21", "pre-commit>=4"]
+dev = ["ruff==0.15.22", "pre-commit>=4"]
 
 [tool.setuptools.packages.find]
 include = ["mining_dashboard*"]
