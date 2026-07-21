@@ -353,6 +353,21 @@ class StateManager:
             "CREATE TABLE IF NOT EXISTS worker_history "
             "(ts REAL, name TEXT, h15 REAL, accepted INTEGER, rejected INTEGER)"
         )
+        # audit_events (#530): the durable backing store for the Security panel's audit trail. The
+        # #33 control.log is host-owned, read-only from this container, and the writers already trim
+        # it — so it can't back a month-level drill-down on its own. This table mirrors each
+        # control.log row (source="control", `id` reused as the primary key — INSERT OR IGNORE makes
+        # the mirror idempotent) AND records the two kinds this dashboard detects itself:
+        # source="host-edit" (config.json changed without a matching control-channel commit) and
+        # source="rig-edit" (a rig's control-apply outcome carries a change_id this dashboard never
+        # issued). `keys` is names only — never a value — the same contract as control.log itself.
+        # Permanent, no pruning, like blocks/payouts/disk_growth: these are human-paced admin events,
+        # not a hot metrics series.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS audit_events "
+            "(id TEXT PRIMARY KEY, ts TEXT, source TEXT, actor TEXT, action TEXT, status TEXT, "
+            "keys TEXT)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -370,6 +385,7 @@ class StateManager:
         )
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_disk_growth_ts ON disk_growth(ts)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_worker_history_ts ON worker_history(ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_ts ON audit_events(ts)")
 
     def _migrate_db(self):
         """Handles schema migrations for existing databases."""
@@ -863,6 +879,65 @@ class StateManager:
                 self._conn.commit()
         except sqlite3.Error as e:
             self._db_error("Worker Config Reconcile Error", e)
+
+    def worker_config_change_known(self, change_id: str) -> bool:
+        """Whether ``change_id`` was ever spooled by THIS dashboard (#530): a row exists in
+        ``worker_config`` — the table only ``add_worker_config_version`` writes to, one row per
+        change the dashboard itself sent. A rig reporting a terminal outcome for a change_id NOT
+        found here is reporting something it applied on its own — an out-of-band rig edit."""
+        if not change_id:
+            return False
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return False
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT 1 FROM worker_config WHERE change_id = ? LIMIT 1", (change_id,)
+                )
+                return cursor.fetchone() is not None
+        except sqlite3.Error as e:
+            self.logger.error(f"Worker Config Lookup Error: {e}")
+            return True  # fail toward NOT flagging a false rig-edit on a DB read hiccup
+
+    def add_audit_event(
+        self, id: str, ts: str, source: str, actor: str, action: str, status: str, keys: str
+    ) -> None:
+        """Record one audit-trail row (#530) — mirrored from the #33 control.log (``source`` =
+        "control", the log's own ``id`` reused as the primary key) or detected out-of-band
+        ("host-edit" / "rig-edit"). ``INSERT OR IGNORE`` makes both idempotent: a re-mirrored
+        control.log row and a re-detected out-of-band event are no-ops. ``keys`` is names only —
+        the caller is responsible for the same no-values contract the log itself holds to."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO audit_events "
+                    "(id, ts, source, actor, action, status, keys) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (id, ts, source, actor, action, status, keys),
+                )
+                self._conn.commit()
+        except sqlite3.Error as e:
+            self._db_error("Audit Event Write Error", e)
+
+    def get_audit_events(self, limit: int = 1000) -> list[dict[str, Any]]:
+        """Every persisted audit row (#530), newest first by ``ts`` — the merged, durable
+        backing store for the Security panel's time-grouped view."""
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return []
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT id, ts, source, actor, action, status, keys FROM audit_events "
+                    "ORDER BY ts DESC LIMIT ?",
+                    (limit,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"Audit Event Read Error: {e}")
+            return []
 
     def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
         """The merged writable config the dashboard last successfully applied to ``worker`` — the

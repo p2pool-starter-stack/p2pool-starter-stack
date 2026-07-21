@@ -691,6 +691,31 @@ stripped to a safe character set before it is served. See
 [Operations › Watching for intruders](operations.md#watching-for-intruders) for the log paths,
 size bounds, and rotation steps.
 
+### Catching changes made outside the dashboard
+
+The audit trail above only sees requests that went through the control channel. Two things can
+change the stack without it: a hand-edit (or a `pithead apply` run from the host CLI) to
+`config.json`, and a config change applied directly to a rig's own control API instead of through
+Worker Inspect ([#530](https://github.com/p2pool-starter-stack/pithead/issues/530)). The dashboard
+watches for both on its normal poll cycle and appends them to the SAME audit trail:
+
+- **`host-edit`** — `config.json` changed since the last poll and no control-channel commit
+  explains it. The row names the changed setting paths (e.g. `xvb.donation_level`); it never
+  records a value.
+- **`rig-edit`** — a worker's control API reports a config change this dashboard never sent. The
+  row names the worker and the rig's own change id; RigForge's status feed reports only the
+  outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
+  moved — inspect the rig directly to see what changed.
+
+Either kind is worth treating like a rotate-now signal in the same spirit as
+[Operations › Watching for intruders](operations.md#watching-for-intruders): if you didn't make
+the change, someone or something with host or rig access did.
+
+The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
+two out-of-band kinds above — persist to the dashboard's own database, so the card's grouping
+selector (hour/day/month) can drill back further than the log's own trimmed window. Pick "All" for
+the flat newest-first view, or a coarser grouping to scan a longer history at a glance.
+
 ## Upgrading from the dashboard
 
 With `dashboard.control.enabled: true` (the same flag as the Configuration view) and a newer

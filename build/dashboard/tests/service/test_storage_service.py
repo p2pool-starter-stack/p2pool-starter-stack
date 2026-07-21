@@ -1315,3 +1315,134 @@ class TestWorkerConfigReconcile:
     def test_reads_and_writes_after_close_are_safe(self, state_manager):
         state_manager.close()
         state_manager.reconcile_worker_config_status("cid-1", "rolled_back")  # must not raise
+
+
+class TestWorkerConfigChangeKnown:
+    """#530: whether a change_id was ever spooled by THIS dashboard — the rig-edit detector's
+    only question. Only ``add_worker_config_version`` (the dashboard's own worker-apply write)
+    ever populates ``worker_config``, so an unknown change_id means the RIG applied it."""
+
+    def test_known_change_id_is_true(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid-1", "accepted", {}, None)
+        assert state_manager.worker_config_change_known("cid-1") is True
+
+    def test_unknown_change_id_is_false(self, state_manager):
+        assert state_manager.worker_config_change_known("no-such-id") is False
+
+    def test_empty_change_id_is_false(self, state_manager):
+        assert state_manager.worker_config_change_known("") is False
+        assert state_manager.worker_config_change_known(None) is False
+
+    def test_after_close_is_false(self, state_manager):
+        state_manager.close()
+        assert state_manager.worker_config_change_known("cid-1") is False
+
+    def test_lookup_error_fails_open_true(self, state_manager):
+        # A DB hiccup during the lookup must not manufacture a false rig-edit report — fail toward
+        # treating the change_id as known (quiet), not toward flagging it.
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_config")
+        assert state_manager.worker_config_change_known("cid-1") is True
+
+
+class TestAuditEvents:
+    """#530: the durable audit_events table backing the Security panel — mirrored control.log
+    rows plus the out-of-band host-edit/rig-edit detections."""
+
+    def test_add_and_get_round_trips(self, state_manager):
+        state_manager.add_audit_event(
+            id="ev-1",
+            ts="2026-07-20T12:00:00Z",
+            source="host-edit",
+            actor="",
+            action="host-edit",
+            status="detected",
+            keys="xvb.enabled",
+        )
+        events = state_manager.get_audit_events()
+        assert len(events) == 1
+        assert events[0]["id"] == "ev-1"
+        assert events[0]["source"] == "host-edit"
+        assert events[0]["keys"] == "xvb.enabled"
+
+    def test_insert_or_ignore_is_idempotent_on_id(self, state_manager):
+        # Re-mirroring the same control.log row (or re-detecting the same out-of-band event)
+        # must not duplicate it.
+        for _ in range(3):
+            state_manager.add_audit_event(
+                id="dup-1",
+                ts="2026-07-20T12:00:00Z",
+                source="control",
+                actor="admin",
+                action="commit",
+                status="applied",
+                keys="XVB_ENABLED",
+            )
+        assert len(state_manager.get_audit_events()) == 1
+
+    def test_newest_first_by_ts(self, state_manager):
+        state_manager.add_audit_event(
+            id="a",
+            ts="2026-07-01T00:00:00Z",
+            source="control",
+            actor="",
+            action="commit",
+            status="applied",
+            keys="",
+        )
+        state_manager.add_audit_event(
+            id="b",
+            ts="2026-07-20T00:00:00Z",
+            source="host-edit",
+            actor="",
+            action="host-edit",
+            status="detected",
+            keys="",
+        )
+        events = state_manager.get_audit_events()
+        assert [e["id"] for e in events] == ["b", "a"]
+
+    def test_limit_applies(self, state_manager):
+        for i in range(5):
+            state_manager.add_audit_event(
+                id=f"ev-{i}",
+                ts=f"2026-07-{i + 1:02d}T00:00:00Z",
+                source="control",
+                actor="",
+                action="commit",
+                status="applied",
+                keys="",
+            )
+        assert len(state_manager.get_audit_events(limit=2)) == 2
+
+    def test_write_error_flags_db_unhealthy(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE audit_events")
+        state_manager.add_audit_event(
+            id="x",
+            ts="2026-07-20T00:00:00Z",
+            source="control",
+            actor="",
+            action="commit",
+            status="applied",
+            keys="",
+        )
+        assert state_manager.is_db_healthy() is False
+
+    def test_reads_and_writes_after_close_are_safe(self, state_manager):
+        state_manager.close()
+        state_manager.add_audit_event(
+            id="x",
+            ts="2026-07-20T00:00:00Z",
+            source="control",
+            actor="",
+            action="commit",
+            status="applied",
+            keys="",
+        )  # must not raise
+        assert state_manager.get_audit_events() == []
+
+    def test_read_error_returns_empty_list(self, state_manager):
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE audit_events")
+        assert state_manager.get_audit_events() == []
