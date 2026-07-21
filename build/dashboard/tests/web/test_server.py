@@ -755,6 +755,27 @@ class TestWorkerUpgrade:
         assert "host" not in req and "port" not in req and "token" not in req
         assert "changes" not in req
 
+    async def test_non_json_body_is_a_400(self, worker_client):
+        resp = await worker_client.post(
+            "/api/control/worker-upgrade", data=b"not json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+        assert "must be JSON" in await resp.text()
+
+    async def test_submit_failure_is_a_500_without_detail(self, worker_client, monkeypatch):
+        def boom(*a, **k):
+            raise OSError("spool dir gone")
+
+        monkeypatch.setattr(control_service, "submit_worker_upgrade", boom)
+        resp = await worker_client.post(
+            "/api/control/worker-upgrade",
+            json={"worker": "rig1", "version": "v1.11.2"},
+            headers=CONTROL_HEADERS,
+        )
+        assert resp.status == 500
+        # The body carries a generic message, never the exception text.
+        assert "spool dir gone" not in await resp.text()
+
     async def test_noop_when_rig_already_reports_the_version(self, worker_client, control_spool):
         # The fixture rig reports bare "1.11.0"; proposing tag v1.11.0 must short-circuit —
         # no spool, no host dial, no burn of the rig's own 6h upgrade throttle.
