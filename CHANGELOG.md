@@ -13,6 +13,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **Opt-in local miner** (#593). A box that runs the stack 24/7 can mine with its spare CPU by
+  co-locating a RigForge worker on the stack host. `./pithead setup` now asks "Also mine on this
+  machine with its spare CPU?" (off by default; also the new `local_miner.enabled` config flag),
+  and setup/apply print the two values a RigForge install needs — the stack's own stratum URL
+  (loopback `127.0.0.1:3333`, or the configured `p2pool.stratum_bind`/`stratum_port`) and the
+  stratum secret already in `.env`. The co-located worker self-registers through the proxy like any
+  other rig. Pithead only declares the intent and hands off those values; RigForge owns all
+  host-level tuning (HugePages, GRUB, MSR, governor) and the miner service. See
+  [docs/workers.md](docs/workers.md#mine-on-the-stack-host-itself).
 - **Warm XvB donation state on a backup stack (#249).** On a two-host failover pair — same wallet,
   workers listing both hosts in `pools[]` — the backup's XvB donation controller used to cold-start
   when the fleet failed over to it: the closed-loop split restarted from the feedforward estimate
