@@ -3006,6 +3006,17 @@ readonly CONTROL_SECRET_PATHS='[
     ["healthchecks","ping_url"],
     ["xvb","standby","source"]]'
 
+# #690: bound every host-runner curl so a hostile/MITM'd rig or release response can't stream an
+# unbounded body into memory ($( )) or onto disk (-o) inside the --max-time window. --max-filesize
+# aborts BOTH before the transfer (when Content-Length is honest) AND mid-stream once received
+# bytes cross the cap (verified curl 8.7 → exit 63), so a lying or absent Content-Length is covered
+# too — every runner curl already treats a non-zero exit as failure and cleans its partial file.
+# Two envelopes: JSON dials + the cosign sig are tiny; the release BUNDLE is a whole-stack tarball.
+readonly CURL_CAP_SMALL=1048576 # 1 MiB — GitHub release JSON, rig control responses, cosign sig
+# ponytail: 16 MiB, ~128× today's ~126 KB bundle; bump if a real bundle ever approaches it (a
+# cap-hit surfaces as _upg_fail's "could not download over Tor", loud but network-flavoured).
+readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle (code + configs)
+
 # Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
 # by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
 # The dashboard serves the Configuration form from THIS file (mounted read-only) — the raw
@@ -5179,14 +5190,14 @@ control_approval_gate() { # <staged-file> [confirm-token]
     bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
     if [ "${bad:-0}" -gt 0 ]; then
         hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
-        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "${hit:-unparseable change row}" "$0"
+        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "${hit:-unparseable change row}" "$0"
         return 1
     fi
     # Perimeter: any DEST row is refused outright — the confirm-gate never covers a destructive
     # host-only change. A data-dir MOVE is CONFIRM (below); a prune DISABLE or a TOR data-dir move
     # still emits DEST and is caught here even though its key is on the confirm allowlist.
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
-        printf 'this change is destructive and cannot be committed from the dashboard — out-of-band approval is tracked in #338. Apply it from the host with `%s apply`.' "$0"
+        printf 'this change is destructive and cannot be committed from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
     # Confirm-gate (#719): an in-scope CONFIRM row PROCEEDS only with the operator's typed
@@ -5474,7 +5485,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
     [ -n "$prefix" ] || prefix="172.28.0"
     socks="${prefix}.25:9050"
-    if ! rel=$(curl -fsS --max-time 60 --socks5-hostname "$socks" \
+    if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
         -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null); then
         _upg_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
@@ -5503,7 +5514,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
     # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.
     local bundle="$cdir/staged/.$id.tar.gz" logf="$cdir/staged/.$id.log"
-    if ! curl -fsSL --max-time 900 --socks5-hostname "$socks" -o "$bundle" \
+    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$socks" -o "$bundle" \
         "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz" 2>/dev/null; then
         rm -f "$bundle"
         _upg_fail "could not download the $tag release bundle over Tor — the stack keeps running v$PITHEAD_VERSION."
@@ -5516,7 +5527,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # TLS to GitHub plus tag pinning — with one loud line in the journal.
     if [ -f cosign.pub ]; then
         local sig="$cdir/staged/.$id.tar.gz.sig"
-        if ! curl -fsSL --max-time 120 --socks5-hostname "$socks" -o "$sig" \
+        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" -o "$sig" \
             "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz.sig" 2>/dev/null; then
             rm -f "$bundle" "$sig"
             _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
@@ -5834,7 +5845,7 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     # is an operator-set host on the mining LAN, not clearnet. The token rides one header, never the
     # URL, the result, or the audit log.
     local url="http://$host:$cport/apply" bodyf="$cdir/staged/.$id.body" code
-    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 \
+    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 --max-filesize "$CURL_CAP_SMALL" \
         -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
         --data "$changes" "$url" 2>/dev/null); then
         rm -f "$bodyf"
@@ -5861,7 +5872,7 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 2
         sbody="$cdir/staged/.$id.status"
-        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 \
+        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 --max-filesize "$CURL_CAP_SMALL" \
             -H "Authorization: Bearer $token" "http://$host:$cport/status" 2>/dev/null); then
             rm -f "$sbody"
             continue
@@ -5978,7 +5989,7 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
         prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
         [ -n "$prefix" ] || prefix="172.28.0"
         socks="${prefix}.25:9050"
-        if ! rel=$(curl -fsS --max-time 60 --socks5-hostname "$socks" \
+        if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
             -H 'Accept: application/vnd.github+json' \
             "https://api.github.com/repos/p2pool-starter-stack/rigforge/releases/latest" 2>/dev/null); then
             _wu_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
@@ -5999,7 +6010,7 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     # POST the upgrade to the rig's control API — direct LAN dial like worker-apply, NOT Tor. The
     # body carries the HOST-derived tag only; the token rides one header, never the URL or result.
     local url="http://$host:$cport/upgrade" bodyf="$cdir/staged/.$id.body" code
-    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 \
+    if ! code=$(curl -sS -o "$bodyf" -w '%{http_code}' --max-time 15 --max-filesize "$CURL_CAP_SMALL" \
         -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
         --data "$(jq -n --arg v "$tag" '{version:$v}')" "$url" 2>/dev/null); then
         rm -f "$bodyf"
@@ -6031,7 +6042,7 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 5
         sbody="$cdir/staged/.$id.status"
-        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 \
+        if ! scode=$(curl -sS -o "$sbody" -w '%{http_code}' --max-time 10 --max-filesize "$CURL_CAP_SMALL" \
             -H "Authorization: Bearer $token" "http://$host:$cport/status" 2>/dev/null); then
             rm -f "$sbody"
             continue

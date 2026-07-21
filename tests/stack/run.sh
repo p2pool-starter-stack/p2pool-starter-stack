@@ -1090,6 +1090,65 @@ assert_contains "tari entrypoint never mutates the canonical config (#234)" "$(c
 assert_contains "compose mounts clearnet-state into monerod (#234)" "$(cat "$ROOT/docker-compose.yml")" ':/clearnet-state:ro'
 assert_contains "compose wires the tari wrapper entrypoint (#234)" "$(cat "$ROOT/docker-compose.yml")" '/var/tari/config/entrypoint.sh'
 
+# --- Wallet entrypoint (#381/#714): the view-only create-from-keys JSON must OMIT the spend key.
+# monero-wallet-rpc v0.18 parses an empty-string "spendkey":"" as a secret key and aborts wallet
+# creation ("failed to parse spend key secret key"), so the field's ABSENCE — not "" — is what
+# lets the payout wallet build. This exercises the REAL entrypoint's write_gen_json.
+echo "== unit: wallet-entrypoint view-only gen.json omits spendkey (#714) =="
+# shellcheck disable=SC1090
+(
+    export PITHEAD_TEST_SOURCE=1
+    source "$ROOT/build/monero/wallet-entrypoint.sh"
+    export GEN_JSON="$SANDBOX/wallet-gen.json" WALLET_FILE="$SANDBOX/payout-wallet"
+    export MONERO_WALLET_ADDRESS="48exampleAddr" MONERO_VIEW_KEY="deadbeefdeadbeef"
+    write_gen_json 3000000
+)
+WGEN="$(cat "$SANDBOX/wallet-gen.json")"
+if printf '%s' "$WGEN" | jq -e . >/dev/null 2>&1; then ok "wallet gen.json is valid JSON (#714)"; else bad "wallet gen.json is valid JSON (#714)" "jq rejected: $WGEN"; fi
+assert_eq "wallet gen.json carries the address (#381)" "$(printf '%s' "$WGEN" | jq -r .address)" "48exampleAddr"
+assert_eq "wallet gen.json carries the view key (#381)" "$(printf '%s' "$WGEN" | jq -r .viewkey)" "deadbeefdeadbeef"
+assert_eq "wallet gen.json scan_from_height verbatim (#381)" "$(printf '%s' "$WGEN" | jq -r .scan_from_height)" "3000000"
+# THE REGRESSION GUARD: a revert to "spendkey":"" crashes monero-wallet-rpc (#714). Field must be absent.
+assert_eq "wallet gen.json OMITS spendkey — monero rejects an empty one (#714)" "$(printf '%s' "$WGEN" | jq 'has("spendkey")')" "false"
+# Restore height: "auto"/empty means genesis (0) so the wallet scans the FULL payout history; an
+# explicit height is used verbatim to skip the long scan.
+rsh() { (
+    export PITHEAD_TEST_SOURCE=1 PAYOUT_SCAN_HEIGHT="$1"
+    source "$ROOT/build/monero/wallet-entrypoint.sh"
+    resolve_scan_height
+); }
+assert_eq "scan height: auto -> genesis 0 (full payout history)" "$(rsh auto)" "0"
+assert_eq "scan height: empty -> genesis 0" "$(rsh '')" "0"
+assert_eq "scan height: explicit block kept verbatim" "$(rsh 2500000)" "2500000"
+
+# Wallet healthcheck (#718): during the multi-hour genesis scan monero-wallet-rpc refuses the RPC,
+# so the check must tolerate an unreachable RPC WHILE the initial-scan marker is present, and turn
+# strict once the RPC first answers. Stub `curl` on PATH to be the RPC up/down control.
+HCBIN="$SANDBOX/hc-bin"
+HCDIR="$SANDBOX/hc-wallet"
+mkdir -p "$HCBIN" "$HCDIR"
+mk_curl() {
+    printf '#!/bin/sh\nexit %s\n' "$1" >"$HCBIN/curl"
+    chmod +x "$HCBIN/curl"
+}
+run_hc() { (
+    PATH="$HCBIN:$PATH" WALLET_DIR="$HCDIR" sh "$ROOT/build/monero/wallet-healthcheck.sh" >/dev/null 2>&1
+    echo $?
+); }
+# RPC down + marker present (mid initial scan) -> healthy (the whole point of #718).
+mk_curl 7
+: >"$HCDIR/.payout-scanning"
+assert_eq "healthcheck: RPC down but scanning -> healthy (#718)" "$(run_hc)" "0"
+# RPC up -> healthy AND the marker is retired (scan caught up; strict from now on).
+mk_curl 0
+assert_eq "healthcheck: RPC up -> healthy (#718)" "$(run_hc)" "0"
+if [ -f "$HCDIR/.payout-scanning" ]; then bad "healthcheck: RPC up clears the scan marker (#718)" "marker still present"; else ok "healthcheck: RPC up clears the scan marker (#718)"; fi
+# RPC down + NO marker (scan already finished once) -> unhealthy: a real fault, not scan tolerance.
+mk_curl 7
+assert_eq "healthcheck: RPC down after scan done -> unhealthy (#718)" "$(run_hc)" "1"
+# The entrypoint arms the marker on wallet creation so the grace applies from first boot.
+assert_contains "wallet-entrypoint touches the scan marker on create (#718)" "$(cat "$ROOT/build/monero/wallet-entrypoint.sh")" 'touch "$SCAN_MARKER"'
+
 echo "== unit: clock_sync_status (mining is time-sensitive) =="
 # doctor's NTP check classifies timedatectl's NTPSynchronized: yes→synced, no→unsynced, else unknown.
 CLKBIN="$SANDBOX/clk-bin"
@@ -4888,8 +4947,10 @@ run_pending >/dev/null
 printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID3" >"$REQS/$UUID3.json"
 run_pending >/dev/null
 assert_eq "prune DISABLE is refused despite the APPLY token" "$(jq -r '.status' "$RESULTS/$UUID3.json" 2>/dev/null)" "rejected"
-assert_contains "prune-disable refusal is the destructive host-only gate" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "#338"
+# #713 removed the stale #338 reference from the destructive refusal; it now names the host path.
+assert_contains "prune-disable refusal names the host apply path, not stale #338 (#713)" "$(jq -r '.error' "$RESULTS/$UUID3.json" 2>/dev/null)" "Edit config.json on the host"
 assert_eq "prune stays enabled after the refusal" "$(jq -r '.monero.prune' "$C/config.json")" "true"
+[ ! -f "$STAGED/$UUID3.json" ] && ok "refused destructive intent cleared from staged" || bad "refused destructive intent cleared from staged" "still staged"
 
 echo "== black-box: a NON-destructive commit still proceeds with no token (#33) =="
 # Restore a clean baseline (prune off, clearnet off) then a pool switch mini -> nano is INFO, not
@@ -6319,6 +6380,7 @@ wu_accept_case() { # <uuid> <status-body-json> <label> <expected-status>
     printf '%s' "v9.9.9" >"$dir/staged/.rigforge-latest-tag"
     cat >"$dir/bin/curl" <<EOF
 #!/usr/bin/env bash
+echo "\$*" >>"$dir/dials.log"
 out="" url=""
 while [ \$# -gt 0 ]; do
     case "\$1" in
@@ -6347,6 +6409,11 @@ assert_eq "applied result records the rig's change_id" \
     "$(jq -r '.change_id' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "chg-9"
 assert_eq "applied result records the host-derived version" \
     "$(jq -r '.version' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "v9.9.9"
+# #690: every runner dial (the rig POST + each /status poll) carries a response-size cap so a
+# hostile rig can't stream an unbounded body into disk/memory. Proves the flag is wired, not curl's
+# own enforcement (that needs a real curl against an oversized server — an e2e concern).
+assert_contains "worker-upgrade rig dials carry a --max-filesize cap (#690)" \
+    "$(cat "$WU_LAST_DIR/dials.log" 2>/dev/null)" "--max-filesize"
 assert_contains "upgrade applied is audited" \
     "$(cat "$WU_LAST_DIR/audit/control.log")" '"action":"worker-upgrade","status":"applied"'
 w8="23232323-2323-4232-9232-232323232323"

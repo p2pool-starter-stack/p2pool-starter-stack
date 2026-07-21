@@ -1433,7 +1433,43 @@ def _confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="
     }
 
 
-def build_earnings(data, metrics, payouts=None, tari_payouts=None):
+def xvb_current_tier_reward_day(metrics, state_mgr):
+    """XvB's published expected reward for the tier the fleet is CURRENTLY holding, as XMR/day (#712).
+
+    Feeds the net-profit calculator (``est.xvbDay``): the whole net is already probabilistic, so
+    blending the raffle's expected reward into the single figure is coherent — but it's an
+    *estimate* (the draw is random among qualifiers), so the UI labels it as one.
+
+    Uses the **current** tier (``min(xvb_1h, xvb_24h)`` — the same lower-of-two rule as
+    ``metrics.current_tier``), not the target: what the fleet is actually credited now. Returns
+    ``None`` — never a fabricated figure — unless XvB is on AND the fleet clears a donor tier AND
+    that tier has a fresh, published ``expected_reward_year`` (same staleness gate as the XvB card,
+    #311, so the two never disagree). ``expected_reward_year`` is keyed by round-type
+    (``donor``/``donor_vip``/…), exactly the ``get_tiers()`` keys."""
+    if not metrics.xvb_enabled:
+        return None
+    tiers = state_mgr.get_tiers()
+    # Round-type key of the current tier: the highest-threshold key the credited average clears —
+    # the same selection get_tier_info makes, but we need the key (not the display name) to look up
+    # the estimate. None => below the lowest donor tier (nothing published to credit).
+    hr = min(metrics.xvb_1h, metrics.xvb_24h)
+    key, best = None, 0.0
+    for k, threshold in tiers.items():
+        if threshold > 0 and hr >= threshold and threshold > best:
+            key, best = k, threshold
+    if key is None:
+        return None
+    est_state = state_mgr.get_xvb_reward_estimates()
+    estimates = (est_state or {}).get("estimates") or {}
+    if xvb_stats_are_stale(est_state) or key not in estimates:
+        return None
+    reward_year = estimates[key]
+    # 365-day year, matching logic.mjs DAYS_PER_YEAR. Guard non-positive so a zero/garbage estimate
+    # degrades to None rather than folding a bogus 0 into gross.
+    return float(reward_year) / 365 if reward_year and reward_year > 0 else None
+
+
+def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None):
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
     ``payouts`` (#381), when the view-only wallet feature is on, is the stored confirmed-payout
@@ -1485,6 +1521,9 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None):
         "tari_coeff_day": tari_coeff_day,  # XTM per H/s per day (long-run AVERAGE, not steady income)
         "tari_difficulty": tari_seconds_per_hs,  # seconds-to-block per H/s (client: diff / hashrate)
         "tari_reward": metrics.tari_reward,  # full XTM paid per Tari block (solo, lumpy)
+        # Current-tier XvB expected reward, XMR/day, folded into the net-profit estimate (#712).
+        # None unless XvB is on with a fresh published estimate for the tier the fleet holds now.
+        "xvb_day": xvb_day,
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
         "disclaimer": _EARNINGS_DISCLAIMER,
@@ -1743,6 +1782,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
             tari_payouts=(
                 state_mgr.get_payouts("tari") if config.TARI_PAYOUT_CONFIRM_ENABLED else None
             ),
+            xvb_day=xvb_current_tier_reward_day(metrics, state_mgr),
         ),
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         # On a backup stack, the XvB controller state last pulled from the primary (#249) — held as

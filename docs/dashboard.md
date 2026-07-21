@@ -428,7 +428,7 @@ extrapolation of the current draw). Three prices add the rest, and each is optio
 | Config | Adds |
 |---|---|
 | `dashboard.energy.cost_per_kwh` | **Power cost** per day/month/year (`kWh × price`). |
-| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year, P2Pool XMR earnings × your XMR price, minus power cost. |
+| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year, P2Pool XMR earnings × your XMR price, minus power cost. Also values the current-tier XvB expected reward (an estimate) into that net when XvB has a fresh figure. |
 | `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same net profit, at your Tari price. Requires `xmr_price` to be set too. |
 
 All three are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no
@@ -438,11 +438,15 @@ what-if hashrate as the other tabs (power draw does not — it is the measured f
 when power costs more than it earns.
 
 Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once a Tari price is also
-known (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already shows).
-With no Tari price, net profit is P2Pool XMR only — the card's heading and the Net/day tooltip say
-exactly which figure you're looking at, so it's never silently partial. **XvB stays excluded**
-either way: it's raffle status, not a clean per-day income estimate, so folding it in would mean
-guessing.
+known (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already shows), plus
+the **XvB** raffle's expected reward for the tier you currently hold, valued at your XMR price. The
+whole net is already probabilistic, so it stays one figure — but the XvB slice is an **estimate**:
+it is XvB's published expected reward for your current tier (the lower of your credited 1h and 24h
+averages), and the raffle draw is random among qualifiers, so it is not a payout you are owed. The
+card's heading and the Net/day tooltip label it `XvB (est.)` and say exactly what the figure counts,
+so it is never silently partial. XvB folds in only while its published estimate is fresh (the same
+staleness rule as the *XvB Donation Stats* card) and you clear a donor tier; otherwise it is left
+out rather than guessed, and the label reverts to P2Pool (and Tari, if priced) alone.
 
 Prices come from one of two places, and the card always says which:
 

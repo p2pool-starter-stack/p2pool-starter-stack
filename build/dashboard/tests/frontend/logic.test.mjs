@@ -239,7 +239,7 @@ test('computeEarnings: returns nulls when unavailable or hashrate is non-positiv
     const ok = { available: true, coeff_day: 1e-7, pool_difficulty: 1 };
     const allNull = { day: null, month: null, year: null, timeToShareSec: null,
                       tariDay: null, tariMonth: null, tariYear: null,
-                      tariTimeToBlockSec: null, tariRewardPerBlock: null };
+                      tariTimeToBlockSec: null, tariRewardPerBlock: null, xvbDay: null };
     assert.deepEqual(computeEarnings(0, ok), allNull);
     assert.deepEqual(computeEarnings(null, ok), allNull);
     // available:false (network stats missing) -> graceful "—" path even with a valid hashrate.
@@ -624,6 +624,47 @@ test('computeEnergy: tari_price set but Tari not merge-mining (tariDay null) -> 
     );
     assert.ok(Math.abs(en.netDay - 10.2) < 1e-9); // same as P2Pool-only case above
     assert.equal(en.includesTari, false);
+});
+
+// --- XvB folded into net profit (#712) ---------------------------------------------------
+
+test('computeEnergy: xvbDay grows net by xvbDay*xmr_price and sets includesXvb', () => {
+    const base = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150 },
+        { day: 0.1 },
+    );
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150 },
+        { day: 0.1, xvbDay: 0.02 }, // current-tier XvB expected reward, XMR/day
+    );
+    // gross adds 0.02*150 = 3 on top of the P2Pool-only net.
+    assert.ok(Math.abs(en.netDay - (base.netDay + 3)) < 1e-9);
+    assert.equal(en.includesXvb, true);
+    assert.equal(en.includesTari, false);
+});
+
+test('computeEnergy: null/zero xvbDay leaves net + includesXvb untouched (no fabrication)', () => {
+    const base = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150 },
+        { day: 0.1 },
+    );
+    for (const xvbDay of [null, undefined, 0]) {
+        const en = computeEnergy(
+            { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150 },
+            { day: 0.1, xvbDay },
+        );
+        assert.ok(Math.abs(en.netDay - base.netDay) < 1e-9);
+        assert.equal(en.includesXvb, false);
+    }
+});
+
+test('computeEnergy: xvbDay set but xmr_price 0 -> not included (XvB valued at XMR price)', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 0 },
+        { day: 0.1, xvbDay: 0.02 },
+    );
+    assert.equal(en.netDay, null);        // no xmr_price -> no net at all
+    assert.equal(en.includesXvb, false);  // never fabricate a figure without a price
 });
 
 test('formatFiat: currency label, two decimals, keeps the sign', () => {
