@@ -9,6 +9,23 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [Unreleased]
+
+### Added
+
+- **Warm XvB donation state on a backup stack (#249).** On a two-host failover pair — same wallet,
+  workers listing both hosts in `pools[]` — the backup's XvB donation controller used to cold-start
+  when the fleet failed over to it: the closed-loop split restarted from the feedforward estimate
+  and re-ramped for hours, over- or under-shooting the credited tier until it reconverged. The
+  controller's commanded donation fraction is now persisted, so a plain restart resumes the warmed
+  split instead of re-seeding cold. A backup can also point `xvb.standby.source` at the primary
+  dashboard's new read-only `/api/xvb-standby` endpoint; it periodically pulls the primary's
+  controller state and holds it as standby (inspectable in `/api/state`), then adopts it the first
+  time it actually donates at failover — so the split resumes warm. One-way (backup pulls from
+  primary), inert unless configured, and never acted on while the primary is authoritative (an idle
+  backup has no workers, so its controller stays on P2Pool). An `.onion` source rides the bridge Tor
+  SOCKS and a LAN source is a private-network hop — no new clearnet egress either way.
+
 ## [1.10.0] - 2026-07-20
 
 ### Added

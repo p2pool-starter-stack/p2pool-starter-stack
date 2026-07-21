@@ -1757,6 +1757,7 @@ def _state_mgr(history=None, mode="P2POOL", share_stats=None):
     sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
     sm.get_share_stats.return_value = share_stats or []
     sm.get_raffle_wins.return_value = []
+    sm.get_xvb_standby.return_value = None  # no backup standby held (#249)
     sm.is_db_healthy.return_value = True
     return sm
 

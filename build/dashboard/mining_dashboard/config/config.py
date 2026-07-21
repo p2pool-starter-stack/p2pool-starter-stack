@@ -689,6 +689,21 @@ XVB_P2POOL_RESERVE_FACTOR = float(os.environ.get("XVB_P2POOL_RESERVE_FACTOR", 2.
 # Switching overhead (ms) to account for connection ramp-up time
 XVB_SWITCH_OVERHEAD_MS = 5000
 
+# --- XvB warm-standby, backup stack (#249, config.json: xvb.standby.source) ---
+# On a two-host failover pair (same wallet, workers list both in pools[]), the BACKUP points this at
+# the PRIMARY's dashboard so it can pull the primary's XvB controller state and hold it as standby —
+# so when workers fail over, the backup resumes the donation split warm instead of cold-ramping for
+# hours. Blank (the default) = off: an ordinary single stack never pulls. The value is the full URL
+# of the primary's read-only endpoint (e.g. https://<primary-onion>/api/xvb-standby, or a LAN
+# http://host:port/api/xvb-standby); an .onion source rides the bridge Tor SOCKS, a LAN source dials
+# direct — no new clearnet egress either way. It is a capability URL (it can carry the primary's
+# dashboard basic-auth as userinfo), so pithead renders it into the owner-only .env and masks it in
+# the control-channel config, exactly like the Healthchecks ping URL.
+XVB_STANDBY_SOURCE = os.environ.get("XVB_STANDBY_SOURCE", "").strip()
+# How often the backup re-pulls the primary's state (seconds). A code-level constant, not a knob:
+# the state moves slowly (the closed loop steps once per 10-min cycle), so a minute is ample.
+XVB_STANDBY_INTERVAL_S = 60
+
 # --- Data Retention Policies ---
 HISTORY_RETENTION_SEC = 30 * 24 * 3600  # 30 Days
 # How long an offline worker lingers in the live "Workers Alive" table before it falls off (#182).
