@@ -22,6 +22,15 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Fixed
 
+- **Removing the control runner no longer strands a sibling checkout's stack (#689).** The
+  `pithead-control.{path,service}` unit names are global to the host, but a bench box holds
+  several checkouts at once — and a checkout applying with dashboard control off (or the e2e
+  harness tearing down) removed whatever units were installed, including the live stack's,
+  leaving its config editor stuck at "Previewing…" until the next apply. Both removal paths now
+  check the service unit's `ExecStart` and only touch units owned by the acting checkout,
+  comparing physical paths so the `current` symlink and the versioned directory it targets
+  count as the same checkout.
+
 - **The egress panel no longer reports a phantom clearnet leak for the XvB stats fetch (#701).**
   With `xvb.tor: false`, the #170 posture panel and topology view showed the dashboard's XvB
   stats connection as a clearnet leak. That fetch is unconditionally routed over Tor (`socks5h`,

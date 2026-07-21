@@ -6385,6 +6385,57 @@ unset SUT sut_out
 
 unset run_wizard w1_cfg w2_cfg pointer_out core_reads shape_reads
 
+echo "== unit: provision_control_runner only removes units this checkout owns (#33) =="
+# The pithead-control.{path,service} names are box-global, but a release bench holds several
+# checkouts at once (live stack + e2e harness + bundle-smoke tmp dirs). A checkout with control
+# disabled used to remove whatever units were installed — including the LIVE stack's runner,
+# stranding its dashboard control requests (config editor stuck at "Previewing…"). The removal
+# branch keys on the service unit's ExecStart: foreign owner → leave alone; own units → remove;
+# a dangling path unit with no service file → still reaped.
+PCR="$SANDBOX/pcr"
+mkdir -p "$PCR/units" "$PCR/bin"
+# uname stub: the OS gate reads `uname -s` at source time; report Linux so the branch runs on dev
+# Macs too. systemctl stub satisfies the command -v gate.
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCR/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PCR/bin/systemctl"
+chmod +x "$PCR/bin/uname" "$PCR/bin/systemctl"
+
+pcr_run() { # <owner-dir|-> <run-dir> — seed units owned by owner-dir ('-' = no service file), run the removal branch from run-dir, echo sudo calls
+    rm -f "$PCR/units/pithead-control.service" "$PCR/units/pithead-control.path"
+    [ "$1" != "-" ] && printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$PCR/units/pithead-control.service"
+    printf '[Path]\nPathExistsGlob=/x/requests/*.json\n' >"$PCR/units/pithead-control.path"
+    (
+        cd "$2" || exit
+        PATH="$PCR/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        sudo() { echo "sudo:$*"; } # record instead of executing; the disable call's output is redirected in-function
+        PITHEAD_UNIT_DIR="$PCR/units" DASHBOARD_CONTROL_ENABLED=false provision_control_runner
+    )
+}
+
+assert_eq "foreign owner -> units left alone (no sudo rm)" "$(pcr_run /srv/code/other-checkout "$PCR")" ""
+assert_contains "own units -> removed" "$(pcr_run "$PCR" "$PCR")" \
+    "sudo:rm -f $PCR/units/pithead-control.path $PCR/units/pithead-control.service"
+assert_contains "dangling path unit (no service file) -> still reaped" "$(pcr_run - "$PCR")" "sudo:rm -f"
+# Versioned install dirs carry dots (pithead-v1.9.3). Ownership must compare the ExecStart path
+# as an exact string, never a regex: with the dots read as "any char", a sibling whose path
+# differs only at those positions would falsely match as our own — and get removed.
+mkdir -p "$PCR/v1.9.3" "$PCR/v1x9y3"
+assert_eq "foreign owner differing only at regex-dot positions -> left alone" \
+    "$(pcr_run "$PCR/v1x9y3" "$PCR/v1.9.3")" ""
+# One checkout, two spellings: production units carry the versioned dir in ExecStart, and an
+# operator's disable apply runs through the `current` symlink. Ownership compares physical
+# paths, so the unit is recognized as our own and removed — a literal $PWD compare would call
+# it foreign and the disable would never converge.
+mkdir -p "$PCR/versions/pithead-v1.9.3"
+ln -s "$PCR/versions/pithead-v1.9.3" "$PCR/current"
+assert_contains "own unit under its versioned spelling, run via the current symlink -> removed" \
+    "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
+unset PCR pcr_run
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
