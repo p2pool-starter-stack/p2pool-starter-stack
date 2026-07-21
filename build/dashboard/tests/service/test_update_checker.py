@@ -48,6 +48,12 @@ class TestComputeUpdate:
         assert compute_update("1.9.9", "v2.0.0", "u")["latest"] == "v2.0.0"
         assert compute_update("1.2.0", "v1.10.0", "u")["latest"] == "v1.10.0"  # 10 > 2, not lexical
 
+    def test_bare_rig_version_vs_v_prefixed_tag(self):
+        # The rig reports bare "1.11.2"; RigForge release tags are "v1.11.2" (#596). Equality
+        # must hold across the format difference — a current rig never badges its own version.
+        assert compute_update("1.11.2", "v1.11.2", "u") is None
+        assert compute_update("1.11.1", "v1.11.2", "u")["latest"] == "v1.11.2"
+
 
 class TestGitHubReleaseClient:
     def _resp(self, status=200, payload=None):
@@ -133,3 +139,30 @@ class TestUpdateChecker:
     def test_up_to_date_yields_none(self):
         uc = UpdateChecker(_FakeClient({"tag": "v0.1.0", "url": "u"}), "0.1.0", enabled=True)
         assert uc.maybe_check(1000) is None
+
+
+class TestLatestReleaseCached:
+    """The raw-release accessor (#596): one throttled fleet-wide fetch, many consumers."""
+
+    def test_disabled_never_calls_and_returns_none(self):
+        c = _FakeClient({"tag": "v1.11.2", "url": "u"})
+        uc = UpdateChecker(c, None, enabled=False)
+        assert uc.latest_release_cached(1000) is None
+        assert c.calls == 0
+
+    def test_returns_raw_release_and_throttles(self):
+        c = _FakeClient({"tag": "v1.11.2", "url": "https://h/v1.11.2"})
+        uc = UpdateChecker(c, None, enabled=True, interval=3600)
+        assert uc.latest_release_cached(1000) == {"tag": "v1.11.2", "url": "https://h/v1.11.2"}
+        assert uc.latest_release_cached(1000 + 1800) == {
+            "tag": "v1.11.2",
+            "url": "https://h/v1.11.2",
+        }
+        assert c.calls == 1  # within the window: cached, no network
+        uc.latest_release_cached(1000 + 3601)
+        assert c.calls == 2
+
+    def test_failed_fetch_keeps_previous_release(self):
+        uc = UpdateChecker(_FakeClient(None), None, enabled=True, interval=0)
+        uc.release = {"tag": "v1.11.2", "url": "u"}
+        assert uc.latest_release_cached(2000)["tag"] == "v1.11.2"  # a blip keeps the cache

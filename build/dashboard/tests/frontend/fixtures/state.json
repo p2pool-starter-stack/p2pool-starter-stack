@@ -355,6 +355,7 @@
       "level": "ok",
       "percent": "0%",
       "total": "0.0",
+      "unit": "GB",
       "used": "0.0",
       "width": "0%"
     },
@@ -637,6 +638,7 @@
         ],
         "version": null
       },
+      "rigforge_update": null,
       "status": "online",
       "uptime": 0,
       "uptime_str": "0m 0s"
@@ -676,6 +678,7 @@
         ],
         "version": null
       },
+      "rigforge_update": null,
       "status": "offline",
       "uptime": 0,
       "uptime_str": "0m 0s"

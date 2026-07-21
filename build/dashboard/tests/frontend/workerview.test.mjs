@@ -233,3 +233,20 @@ test("no applied config versions yet falls back to an explanatory message", () =
   const out = renderToString(readyInstance({ ...DETAIL, hashrate_by_config: [] }).render());
   assert.match(out, /No applied config changes to correlate hashrate against yet/);
 });
+
+// --- RigForge new-release callout (#596) ----------------------------------------------------
+
+test("Inspect surfaces the RigForge new-release callout only when the server derived one (#596)", () => {
+  const behind = {
+    ...DETAIL,
+    rigforge: { version: "1.11.1", stats: [] },
+    rigforge_update: { available: true, latest: "v1.11.2", url: "https://h/v1.11.2" },
+  };
+  const out = renderToString(readyInstance(behind).render());
+  assert.match(out, /New RigForge release v1\.11\.2 available/);
+  assert.match(out, /href="https:\/\/h\/v1\.11\.2"/);
+
+  // Current rig / plain xmrig: the server sends null -> no callout, no error.
+  const current = { ...DETAIL, rigforge_update: null };
+  assert.doesNotMatch(renderToString(readyInstance(current).render()), /New RigForge release/);
+});
