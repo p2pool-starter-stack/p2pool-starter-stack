@@ -6187,6 +6187,7 @@ wu_accept_case() { # <uuid> <status-body-json> <label> <expected-status>
     printf '%s' "v9.9.9" >"$dir/staged/.rigforge-latest-tag"
     cat >"$dir/bin/curl" <<EOF
 #!/usr/bin/env bash
+echo "\$*" >>"$dir/dials.log"
 out="" url=""
 while [ \$# -gt 0 ]; do
     case "\$1" in
@@ -6215,6 +6216,11 @@ assert_eq "applied result records the rig's change_id" \
     "$(jq -r '.change_id' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "chg-9"
 assert_eq "applied result records the host-derived version" \
     "$(jq -r '.version' "$WU_LAST_DIR/results/$w7.json" 2>/dev/null)" "v9.9.9"
+# #690: every runner dial (the rig POST + each /status poll) carries a response-size cap so a
+# hostile rig can't stream an unbounded body into disk/memory. Proves the flag is wired, not curl's
+# own enforcement (that needs a real curl against an oversized server — an e2e concern).
+assert_contains "worker-upgrade rig dials carry a --max-filesize cap (#690)" \
+    "$(cat "$WU_LAST_DIR/dials.log" 2>/dev/null)" "--max-filesize"
 assert_contains "upgrade applied is audited" \
     "$(cat "$WU_LAST_DIR/audit/control.log")" '"action":"worker-upgrade","status":"applied"'
 w8="23232323-2323-4232-9232-232323232323"
