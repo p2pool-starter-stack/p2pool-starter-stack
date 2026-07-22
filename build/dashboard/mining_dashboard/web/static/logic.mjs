@@ -98,7 +98,15 @@ export function clampZoomWindow(aMs, bMs, minSpanMs = 60000) {
 // Chart series the user can show/hide, and a normalizer for the persisted state (Issue #47).
 // Kept pure so the default-visible logic is unit-tested; dashboard.js persists it in localStorage
 // and chart.mjs applies it. Anything not explicitly false defaults to visible.
-export const SERIES_KEYS = ["p2pool", "xvb", "shares", "events", "raffle"];
+export const SERIES_KEYS = [
+  "p2pool",
+  "xvb",
+  "shares",
+  "events",
+  "raffle",
+  "payouts",
+  "xvb_donation",
+];
 export function normalizeSeries(obj) {
   const o = obj && typeof obj === "object" ? obj : {};
   const out = {};
@@ -314,6 +322,16 @@ function formatCoin(value, unit) {
 
 export function formatXmr(xmr) {
   return formatCoin(xmr, "XMR");
+}
+
+// Relative "N ago" for a unix-seconds timestamp — the confirmed-payout "Last payout" cell (#381).
+// "Never" when unset/zero (mirrors the server's format_time_abs); reuses fmtWindowDuration for the
+// span so the wording matches the "Zoomed: …" label. nowMs is injectable so it's unit-testable.
+export function formatAgo(unixSec, nowMs = Date.now()) {
+  if (!unixSec || !Number.isFinite(unixSec)) return "Never";
+  const ms = nowMs - unixSec * 1000;
+  if (ms < 0) return "just now"; // a future timestamp (clock skew) reads oddly as "N ago"
+  return fmtWindowDuration(ms) + " ago";
 }
 
 // Merge-mined Tari (#117); the collector already delivers the reward in XTM (not µT).

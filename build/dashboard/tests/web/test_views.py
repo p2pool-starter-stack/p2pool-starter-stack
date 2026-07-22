@@ -24,6 +24,7 @@ from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
     _MAX_CHART_POINTS,
     _chart_tension,
+    _confirmed_payouts_summary,
     _mode_palette,
     _reject_flag,
     _rigforge_display,
@@ -271,6 +272,7 @@ class TestChart:
             "shares": [],
             "events": [],
             "raffle": [],
+            "payouts": [],
             "tension": 0.0,
         }
 
@@ -1237,6 +1239,61 @@ class TestRigForgeDisplay:
         texts = self._chip_texts(disp)
         assert "thermal hold" in texts
         assert not any("°C" in t for t in texts)  # the hold chip replaces the temp chip
+
+
+# --- Confirmed payouts summary (#381) -------------------------------------------------
+
+
+class TestConfirmedPayoutsSummary:
+    # A fixed "now" so the 24h/7d window boundaries are deterministic.
+    NOW = 1_000_000_000
+
+    def test_disabled_when_payouts_none(self):
+        # Feature off (storage returns None) -> only the enabled flag, no totals.
+        assert _confirmed_payouts_summary(None) == {"enabled": False}
+
+    def test_empty_list_is_on_with_zeros(self):
+        # On, nothing confirmed yet: enabled, count 0, all windows 0.0, no last payout.
+        s = _confirmed_payouts_summary([], now=self.NOW)
+        assert s == {
+            "enabled": True,
+            "count": 0,
+            "xmr_24h": 0.0,
+            "xmr_7d": 0.0,
+            "xmr_all": 0.0,
+            "last_ts": 0,
+        }
+
+    def test_windows_bucket_by_age(self):
+        # One payout in each band; 1 XMR = 1e12 piconero. 24h ⊆ 7d ⊆ all-time.
+        one_xmr = 1_000_000_000_000
+        payouts = [
+            {"ts": self.NOW - 3_600, "amount_atomic": one_xmr},  # 1h ago -> in 24h, 7d, all
+            {"ts": self.NOW - 3 * 86_400, "amount_atomic": 2 * one_xmr},  # 3d -> 7d, all
+            {"ts": self.NOW - 10 * 86_400, "amount_atomic": 4 * one_xmr},  # 10d -> all only
+        ]
+        s = _confirmed_payouts_summary(payouts, now=self.NOW)
+        assert s["count"] == 3
+        assert s["xmr_24h"] == 1.0
+        assert s["xmr_7d"] == 3.0
+        assert s["xmr_all"] == 7.0
+        assert s["last_ts"] == self.NOW - 3_600
+
+    def test_all_older_than_windows(self):
+        # Every payout predates both windows: 24h and 7d are 0, all-time still sums.
+        one_xmr = 1_000_000_000_000
+        payouts = [{"ts": self.NOW - 30 * 86_400, "amount_atomic": 5 * one_xmr}]
+        s = _confirmed_payouts_summary(payouts, now=self.NOW)
+        assert s["xmr_24h"] == 0.0
+        assert s["xmr_7d"] == 0.0
+        assert s["xmr_all"] == 5.0
+
+    def test_tari_unit_and_divisor(self):
+        # Tari reuses the helper with the microTari divisor (1e6) and xtm_* keys.
+        payouts = [{"ts": self.NOW, "amount_atomic": 2_500_000}]
+        s = _confirmed_payouts_summary(payouts, now=self.NOW, divisor=1_000_000, unit="xtm")
+        assert s["xtm_all"] == 2.5
+        assert "xtm_24h" in s and "xmr_all" not in s
 
 
 # --- Tari -----------------------------------------------------------------------------
@@ -2386,6 +2443,54 @@ class TestChartRaffle:
         wins = [self._win(now - 7200), self._win(now - 60)]
         pts = build_chart(self._hist(now), [], "1h", raffle_wins=wins)["raffle"]
         assert len(pts) == 1  # the 2h-old win is outside the 1h window
+
+
+class TestChartPayouts:
+    """Confirmed on-chain payout markers (#381) flow through build_chart's `payouts` kwarg: gold
+    coins on the hidden 0-1 axis below the raffle stars, tooltip carrying the whole-XMR amount,
+    range-filtered like events, and capped at the most-recent by _payout_points."""
+
+    def _hist(self, now):
+        return [{"timestamp": now, "v": 800, "v_p2pool": 800, "v_xvb": 0, "t": "a"}]
+
+    def _payout(self, ts, atomic=1_500_000_000_000):  # 1.5 XMR in piconero
+        return {"chain": "monero", "txid": "aa", "height": 100, "ts": ts, "amount_atomic": atomic}
+
+    def test_absent_payouts_default_to_empty(self):
+        # Feature off (build_state passes payouts=None) → empty marker list, estimate stands alone.
+        now = time.time()
+        assert build_chart(self._hist(now), [], "all")["payouts"] == []
+        assert build_chart(self._hist(now), [], "all", payouts=None)["payouts"] == []
+
+    def test_payout_point_shape_carries_formatted_amount(self):
+        now = time.time()
+        pt = build_chart(self._hist(now), [], "all", payouts=[self._payout(now)])["payouts"]
+        assert len(pt) == 1
+        assert pt[0]["x"] == int(now * 1000)
+        assert pt[0]["y"] == views._PAYOUT_MARKER_Y
+        # The label carries the whole-XMR amount (atomic→XMR at the edge) — the load-bearing bit.
+        assert pt[0]["label"].startswith("1.500000 XMR — ")
+
+    def test_payouts_filtered_by_range(self):
+        now = time.time()
+        payouts = [self._payout(now - 7200), self._payout(now - 60)]
+        pts = build_chart(self._hist(now), [], "1h", payouts=payouts)["payouts"]
+        assert len(pts) == 1  # the 2h-old payout is outside the 1h window
+
+    def test_markers_capped_at_most_recent(self):
+        # More than the cap → only the newest _PAYOUT_MARKER_LIMIT are kept (never silently all,
+        # and the NEWEST — not the oldest — survive). Input is newest-first (storage.get_payouts).
+        now = time.time()
+        limit = views._PAYOUT_MARKER_LIMIT
+        payouts = [self._payout(now - i) for i in range(limit + 5)]  # [0]=newest … [-1]=oldest
+        pts = build_chart(self._hist(now), [], "all", payouts=payouts)["payouts"]
+        assert len(pts) == limit
+        kept_x = {p["x"] for p in pts}
+        # The newest survives and the oldest 5 (beyond the cap) are the ones dropped.
+        assert pts[0]["x"] == int(now * 1000)  # newest kept, first
+        assert pts[-1]["x"] == int((now - (limit - 1)) * 1000)  # limit-th newest kept, last
+        assert int((now - limit) * 1000) not in kept_x  # first over the cap → dropped
+        assert int((now - (limit + 4)) * 1000) not in kept_x  # oldest → dropped
 
 
 class TestBuildRaffleLog:

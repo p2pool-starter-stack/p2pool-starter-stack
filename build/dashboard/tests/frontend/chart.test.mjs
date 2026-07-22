@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { withAlpha, padYAxis, eventColors } from '../../mining_dashboard/web/static/chart.mjs';
+import { withAlpha, padYAxis, eventColors, donationSeries } from '../../mining_dashboard/web/static/chart.mjs';
 
 test('withAlpha: appends an 8-bit alpha to a #rrggbb hex', () => {
     assert.equal(withAlpha('#58a6ff', '26'), '#58a6ff26');
@@ -65,4 +65,22 @@ test('eventColors: maps recovery to ok, everything else to loss (#99)', () => {
 
 test('eventColors: tolerates a missing events list', () => {
     assert.deepEqual(eventColors(undefined, { evtOk: 'g', evtLoss: 'r' }), []);
+});
+
+test('donationSeries: maps xvb_history donation_fraction (0..1) to a 0..100 percent line (#381)', () => {
+    const hist = [
+        { x: 1000, donation_fraction: 0.25 },
+        { x: 2000, donation_fraction: 1 },
+        { x: 3000 }, // missing fraction → 0, never NaN
+    ];
+    assert.deepEqual(donationSeries(hist), [
+        { x: 1000, y: 25 },
+        { x: 2000, y: 100 },
+        { x: 3000, y: 0 },
+    ]);
+});
+
+test('donationSeries: tolerates a missing history (XvB off / no samples yet)', () => {
+    assert.deepEqual(donationSeries(undefined), []);
+    assert.deepEqual(donationSeries([]), []);
 });

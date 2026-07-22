@@ -51,6 +51,9 @@ const SERIES = [
   { key: "shares", label: "Shares", idx: 2, dot: "dot-shares" },
   { key: "events", label: "Events", idx: 3, dot: "dot-events" },
   { key: "raffle", label: "Raffle wins", idx: 4, dot: "dot-raffle" },
+  { key: "payouts", label: "Payouts", idx: 5, dot: "dot-payouts" },
+  // Only offered when there's XvB donation history to draw (see the legend filter in render).
+  { key: "xvb_donation", label: "XvB donation %", idx: 6, dot: "dot-xvb-donation" },
 ];
 
 // Smallest zoom window (ms) — guards against requesting a sub-sample slice (30s native cadence).
@@ -82,6 +85,8 @@ function paletteColors() {
     evtLoss: v("--warn", "#d29922"), // degradation event marker (#99)
     evtOk: v("--ok", "#3fb950"), // recovery event marker
     raffleWin: v("--warn", "#d29922"), // XvB raffle-win star — the warn gold reads as gold here
+    payout: v("--ok", "#3fb950"), // confirmed-payout coin — green "money landed", distinct from the gold star
+    donation: v("--purple", "#a371f7"), // XvB donation-% line — ties visually to the XvB area
     grid: v("--border", "#30363d"),
     ticks: v("--text-muted", "#8b949e"),
     band: withAlpha(accent, "26"), // drag-to-zoom selection band (≈ 0.15 alpha)
@@ -92,6 +97,13 @@ function paletteColors() {
 // loss. Returns one colour per point so a single dataset can show both.
 export function eventColors(events, c) {
   return (events || []).map((e) => (e.kind === "hashrate_recovered" ? c.evtOk : c.evtLoss));
+}
+
+// XvB donation overlay (#381): the persisted xvb_history rows carry a 0..1 donation_fraction; the
+// line rides a 0–100 right-side axis, so scale to percent here. Kept pure (no Chart/DOM) so the
+// mapping is unit-tested; the x values are already the chart's ms-epoch axis.
+export function donationSeries(xvbHistory) {
+  return (xvbHistory || []).map((h) => ({ x: h.x, y: (h.donation_fraction || 0) * 100 }));
 }
 
 // Area-fill gradient stops (Issue #145): strong near the line, fading toward the axis, so a flat
@@ -257,6 +269,38 @@ export class ChartCard extends Component {
             pointBackgroundColor: c.raffleWin,
             pointBorderColor: c.raffleWin,
           },
+          // Confirmed on-chain payouts (#381): a filled coin per payout, on the same hidden 0–1
+          // axis one step below the raffle stars; tooltip carries the amount + date (server label).
+          {
+            label: "Payouts",
+            data: d.payouts || [],
+            yAxisID: "events",
+            hidden: vis.payouts === false,
+            pointStyle: "circle",
+            pointRadius: 6,
+            pointBorderWidth: 2,
+            pointHoverRadius: 9,
+            pointHitRadius: 100,
+            showLine: false,
+            pointBackgroundColor: c.payout,
+            pointBorderColor: c.payout,
+          },
+          // XvB donation-fraction overlay (#381): a dashed line on its own right-side 0–100% axis,
+          // so you can line payouts up against how much hashrate was being donated. Fed from
+          // state.xvb_history (separate from the chart payload); empty when XvB has no history.
+          {
+            label: "XvB donation %",
+            data: donationSeries(this.props.xvbHistory),
+            yAxisID: "donation",
+            hidden: vis.xvb_donation === false,
+            borderColor: c.donation,
+            borderWidth: 2,
+            borderDash: [6, 4],
+            tension: 0.2,
+            fill: false,
+            pointRadius: 0,
+            pointHitRadius: 20,
+          },
         ],
       },
       options: {
@@ -275,8 +319,14 @@ export class ChartCard extends Component {
               label(context) {
                 if (context.dataset.label === "Shares")
                   return self.shareCounts[context.dataIndex] + " Shares";
-                if (context.dataset.label === "Events" || context.dataset.label === "Raffle")
+                if (
+                  context.dataset.label === "Events" ||
+                  context.dataset.label === "Raffle" ||
+                  context.dataset.label === "Payouts"
+                )
                   return context.raw.label;
+                if (context.dataset.label === "XvB donation %")
+                  return "XvB donation: " + (context.parsed.y ?? 0).toFixed(1) + "%";
                 let label = context.dataset.label || "";
                 if (label) label += ": ";
                 // Same abbreviated style as the cards/Telegram (#387), e.g. "12.35 kH/s".
@@ -327,6 +377,18 @@ export class ChartCard extends Component {
           shares: { type: "linear", display: false, min: 0, max: 1 },
           // Hidden 0–1 axis the degradation event markers ride on (#99), pinned near the top.
           events: { type: "linear", display: false, min: 0, max: 1 },
+          // Right-side 0–100% axis for the XvB donation-fraction overlay (#381). Shown only when
+          // that series is visible (applyVisibility toggles it) so it doesn't clutter otherwise.
+          donation: {
+            type: "linear",
+            position: "right",
+            display: false,
+            min: 0,
+            max: 100,
+            grid: { drawOnChartArea: false },
+            ticks: { color: c.ticks, callback: (v) => v + "%" },
+            title: { display: true, text: "XvB donation %", color: c.ticks },
+          },
         },
       },
     });
@@ -337,6 +399,10 @@ export class ChartCard extends Component {
   applyVisibility() {
     const vis = this.props.series || {};
     for (const s of SERIES) this.chart.setDatasetVisibility(s.idx, vis[s.key] !== false);
+    // The right-side donation axis only shows when its line does, so it doesn't clutter the
+    // chart when the overlay is toggled off (or there's no XvB history to plot).
+    const showDonation = vis.xvb_donation !== false && (this.props.xvbHistory || []).length > 0;
+    this.chart.options.scales.donation.display = showDonation;
   }
 
   sync() {
@@ -367,8 +433,15 @@ export class ChartCard extends Component {
     ds[4].data = d.raffle || [];
     ds[4].pointBackgroundColor = c.raffleWin;
     ds[4].pointBorderColor = c.raffleWin;
+    ds[5].data = d.payouts || [];
+    ds[5].pointBackgroundColor = c.payout;
+    ds[5].pointBorderColor = c.payout;
+    ds[6].data = donationSeries(this.props.xvbHistory);
+    ds[6].borderColor = c.donation;
     this.chart.options.scales.y.grid.color = c.grid;
     this.chart.options.scales.y.ticks.color = c.ticks;
+    this.chart.options.scales.donation.ticks.color = c.ticks;
+    this.chart.options.scales.donation.title.color = c.ticks;
     this.applyVisibility();
 
     // On the zoomed -> preset transition (Reset or picking a preset clears the window), drop
@@ -418,7 +491,10 @@ export class ChartCard extends Component {
                 )}
             </div>
             <div class="chart-legend" role="group" aria-label="Toggle series">
-                ${SERIES.map((s) => {
+                ${SERIES.filter(
+                  // The XvB donation overlay is only offered when there's history to draw.
+                  (s) => s.key !== "xvb_donation" || (props.xvbHistory || []).length > 0,
+                ).map((s) => {
                   const on = (props.series || {})[s.key] !== false;
                   return html`<button type="button" class=${"legend-item" + (on ? "" : " off")}
                         aria-pressed=${on} title=${(on ? "Hide " : "Show ") + s.label}

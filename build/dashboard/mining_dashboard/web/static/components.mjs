@@ -12,6 +12,7 @@ import {
   computeXvbTier,
   egressRoute,
   fmtHashrate,
+  formatAgo,
   formatFiat,
   formatFiatPrice,
   formatTimeToShare,
@@ -490,6 +491,28 @@ function XvbTierBlock({ calc, hr, coeffDay, energy }) {
 // the field tracks the live P2Pool 1h-average hashrate (the same `p2pool_hr` figure the header /
 // Overview show, which already excludes the XvB-donated slice) until they take control, then
 // holds their raw text.
+// Confirmed on-chain payouts (#381), shown beside the estimate when the view-only wallet feature
+// is on (`c.enabled`). Reads the unit-prefixed totals the server rolls up in
+// _confirmed_payouts_summary (`xmr_*` for Monero, `xtm_*` for Tari); `fmt` is the matching coin
+// formatter and `unit` (XMR / XTM) picks the key prefix. Renders nothing when the feature is off,
+// so the estimate stands alone.
+function confirmedBlock(c, fmt, unit) {
+  if (!c || !c.enabled) return null;
+  const k = unit.toLowerCase();
+  const n = c.count || 0;
+  return html`
+    <div class="confirmed-block">
+      <h4 class="confirmed-subhead">Confirmed on-chain</h4>
+      <div class="stat-grid">
+        <${StatCard} label="Confirmed 24h" value=${fmt(c[`${k}_24h`])} />
+        <${StatCard} label="Confirmed 7d" value=${fmt(c[`${k}_7d`])} />
+        <${StatCard} label="Confirmed all-time" value=${fmt(c[`${k}_all`])} />
+        <${StatCard} label="Last payout" value=${formatAgo(c.last_ts)}
+                     title=${"Across " + n + " confirmed payout" + (n === 1 ? "" : "s")} />
+      </div>
+    </div>`;
+}
+
 class EarningsCard extends Component {
   constructor(props) {
     super(props);
@@ -576,6 +599,7 @@ class EarningsCard extends Component {
                     <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                     <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
                 </div>
+                ${confirmedBlock(e.confirmed, formatXmr, "XMR")}
             </div>
 
             <div role="tabpanel" id="epanel-tari" aria-labelledby="etab-tari" hidden=${active !== "tari"}>
@@ -594,6 +618,7 @@ class EarningsCard extends Component {
                         : null
                     }
                 </div>
+                ${confirmedBlock(e.tari_confirmed, formatXtm, "XTM")}
             </div>
 
             ${
@@ -964,7 +989,7 @@ function DashboardView({
             : html`
         <div class="grid">
             <${ChartCard} chart=${state.chart} range=${ui.range} window=${ui.window} series=${ui.series}
-                          avgWindow=${ui.avg}
+                          xvbHistory=${state.xvb_history} avgWindow=${ui.avg}
                           onRange=${onRange} onZoom=${onZoom} onResetZoom=${onResetZoom}
                           onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow} />
         </div>
