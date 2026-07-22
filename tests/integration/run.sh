@@ -600,6 +600,9 @@ assert_running_state() {
     [ "$rpc_lan" = "true" ] && want_bind="0.0.0.0" || want_bind="127.0.0.1"
     assert_eq "MONERO_RPC_BIND matches rpc_lan_access" "$(env_on_box MONERO_RPC_BIND)" "$want_bind"
     assert_eq "DASHBOARD_SECURE matches config" "$(env_on_box DASHBOARD_SECURE)" "${secure:-true}"
+    # #740: dashboard.port flows config -> .env. Unset in every scenario, so HOST_PORT must render
+    # empty (the scheme-default path); a scenario that sets dash_port would assert the custom value.
+    assert_eq "HOST_PORT matches config (empty = scheme default)" "$(env_on_box HOST_PORT)" "${dash_port:-}"
     assert_eq "XVB_ENABLED matches config" "$(env_on_box XVB_ENABLED)" "${xvb:-true}"
 
     # 8b. Resource + privacy posture (LOCAL only). These regress silently and would otherwise only
@@ -759,10 +762,15 @@ assert_metrics_via_caddy() {
         return 0
     fi
     secure="$(env_on_box DASHBOARD_SECURE)"
+    # #740: Caddy binds HOST_PORT when set, else the scheme default (80/443). Read it so the operator
+    # path is curled on the port Caddy actually listens on, not a hardcoded 80/443.
+    port="$(env_on_box HOST_PORT)"
     if [ "$secure" = "false" ]; then
-        scheme="http" port=80
+        scheme="http"
+        [ -n "$port" ] || port=80
     else
-        scheme="https" port=443
+        scheme="https"
+        [ -n "$port" ] || port=443
     fi
     if [ -n "$(env_on_box DASHBOARD_AUTH_HASH_B64)" ]; then
         if [ -z "${IT_DASHBOARD_PASSWORD:-}" ]; then

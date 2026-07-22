@@ -1949,11 +1949,13 @@ is_valid_host() {
     [[ "$1" =~ ^[A-Za-z0-9.:_-]{1,253}$ ]]
 }
 
-# A bare TCP port, 1–65535. Used to validate dashboard.port (#740) before it is rendered into the
-# Caddyfile site address — the digits-only shape also guarantees no space/newline/`{` can slip in
-# and break the Caddyfile or inject a directive, the same threat is_valid_host guards for the host.
+# A bare TCP port, 1–65535, no leading zero. Used to validate dashboard.port (#740) before it is
+# rendered into the Caddyfile site address — the digits-only shape also guarantees no space/newline/`{`
+# can slip in and break the Caddyfile or inject a directive, the same threat is_valid_host guards for
+# the host. The `[1-9]` lead rejects a leading zero (e.g. `0899`), which would otherwise reach `-le`
+# as an invalid octal literal and error instead of cleanly failing.
 is_valid_port() {
-    [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+    [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
 }
 
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
