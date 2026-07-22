@@ -276,6 +276,21 @@ h3 {
 .earnings-disclaimer {
   line-height: 1.4;
 }
+/* Confirmed on-chain payouts (#381): a subtle divider + subhead separating the ground-truth
+ * totals from the estimate above. Reuses the existing tokens — no new palette. */
+.confirmed-block {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.confirmed-subhead {
+  margin: 0 0 8px 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 /* Earnings tab strip (#118): switches the card body between Monero / Tari / XvB. Reuses the
  * existing border/accent tokens — no new palette. The active tab carries an accent underline. */
 .earnings-tabs {
@@ -626,6 +641,15 @@ button.upgrade-btn {
 }
 .dot-raffle {
   background: var(--warn);
+}
+.dot-payouts {
+  /* A round gold-green coin — confirmed on-chain payout, distinct from the square/star markers. */
+  background: var(--ok);
+  border-radius: 50%;
+}
+.dot-xvb-donation {
+  /* Dashed purple, matching the XvB donation-% overlay line. */
+  background: repeating-linear-gradient(90deg, var(--purple) 0 3px, transparent 3px 6px);
 }
 
 /* View Toggle */

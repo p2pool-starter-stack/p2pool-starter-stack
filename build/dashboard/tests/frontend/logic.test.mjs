@@ -17,7 +17,7 @@ import {
     normalizeChoice, normalizeSort, loadPref, savePref,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare,
+    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare, formatAgo,
     computeEnergy, formatFiat, formatUnit,
     coinFiat, formatFiatPrice, priceSourceLabel,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
@@ -159,7 +159,7 @@ test('fmtWindowDuration: two coarsest units, trailing zeros dropped', () => {
 });
 
 test('normalizeSeries: defaults every series to visible, only explicit false hides', () => {
-    const allOn = { p2pool: true, xvb: true, shares: true, events: true, raffle: true };
+    const allOn = { p2pool: true, xvb: true, shares: true, events: true, raffle: true, payouts: true, xvb_donation: true };
     assert.deepEqual(normalizeSeries(null), allOn);
     assert.deepEqual(normalizeSeries({}), allOn);
     assert.deepEqual(normalizeSeries({ xvb: false }), { ...allOn, xvb: false });
@@ -168,6 +168,15 @@ test('normalizeSeries: defaults every series to visible, only explicit false hid
     // Garbage / stray keys are ignored; output is always the full key set.
     assert.deepEqual(Object.keys(normalizeSeries({ junk: 1 })).sort(), [...SERIES_KEYS].sort());
     assert.deepEqual(normalizeSeries('nope'), allOn);
+});
+
+test('formatAgo: relative "N ago" for a unix-seconds timestamp, "Never" when unset (#381)', () => {
+    const now = 1_000_000_000_000; // fixed nowMs
+    assert.equal(formatAgo(0, now), 'Never');            // no payout yet
+    assert.equal(formatAgo(null, now), 'Never');
+    assert.equal(formatAgo(now / 1000 - 3600, now), '1h ago');   // 1h before now
+    assert.equal(formatAgo(now / 1000 - 90, now), '1m 30s ago');
+    assert.equal(formatAgo(now / 1000 + 60, now), 'just now');   // future ts (clock skew)
 });
 
 // --- Issue #658: persisted single-choice UI preferences --------------------------------

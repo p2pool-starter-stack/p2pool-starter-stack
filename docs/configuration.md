@@ -133,6 +133,7 @@ control channel will commit, are unaffected either way.
 | `tor.auto_heal` | `false` _(off)_ | Privacy-relevant, default off. Tor can bootstrap fully and then sit on a **failing guard**: circuits time out, so everything that exits Tor to the clearnet (Healthchecks pings, the Telegram bot, XvB stats) breaks at once while mining keeps working (#424). `true` lets the dashboard probe Tor clearnet egress every 5 minutes and restart the tor container once egress has been broken for 15 minutes, so Tor reselects guards — bounded to 3 restarts per outage, 30 minutes apart, each logged; if egress stays broken (Tor network overload) it stops restarting and keeps warning. Off by default because each restart drops **every** Tor circuit, mining onions included (they rebuild in minutes). The manual equivalent is `./pithead restart tor`. See [Operations › Troubleshooting](operations.md#troubleshooting). |
 | `dashboard.secure` | `true` | `true` serves the dashboard over HTTPS (Caddy `tls internal`); `false` uses plain HTTP. |
 | `dashboard.host` | `auto` | Hostname you use to reach the dashboard. `auto` = this machine's hostname. |
+| `dashboard.port` | `auto` | Host port Caddy binds the dashboard on. `auto` = the scheme default (443 with `dashboard.secure: true`, 80 without). Set a number (e.g. `8443`) to move it — for a host already running another reverse proxy on 80/443, so that proxy can front the stack. In HTTPS mode a custom port also drops Caddy's automatic HTTP→HTTPS redirect (which would otherwise hold port 80), so the fronting proxy owns any redirect. See [Co-hosting on a shared server](#co-hosting-on-a-shared-server). |
 | `dashboard.auth.username` | `admin` | Login name for the dashboard when a password is set (see below). Letters, digits, and `. _ @ -`, 1–64 chars. Ignored while `dashboard.auth.password` is empty. |
 | `dashboard.auth.password` | `""` _(off)_ | Optional password to open the dashboard. Turns on a Caddy [HTTP basic-auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth) prompt in front of every page. `""` (default) = no login, anyone who can reach the dashboard sees it (fine for a private LAN appliance). Any 8–128-character string (no double-quotes) turns the prompt on. The plaintext lives only in your owner-only `config.json`; pithead bcrypt-hashes it with the pinned Caddy image and stores only the hash in `.env`, so the password itself is never persisted in rendered state. Basic-auth credentials travel in cleartext over HTTP, so keep `dashboard.secure: true` (the default); pithead warns if you set a password with `secure: false`. See [Exposing the dashboard safely](#exposing-the-dashboard-safely). |
 | `dashboard.onion.enabled` | `false` _(off)_ | Privacy-relevant, default off. `true` publishes the dashboard as a Tor v3 onion service so you can reach it remotely over Tor — no port-forward, no VPN, no public IP. It fronts the authenticated Caddy login on the internal bridge, never the LAN. pithead **fails closed**: if no `dashboard.auth.password` is set it generates a strong one (saved to `config.json`, login `admin`); a password you set yourself must be at least 16 characters. See [Remote access over Tor](#remote-access-over-tor-onion-service). |
@@ -271,6 +272,34 @@ How it works and what to keep in mind:
 To remove the login again, clear the password (`"password": ""`) and `apply`. pithead drops the
 `basic_auth` block and the dashboard is open on the LAN as before.
 
+### Co-hosting on a shared server
+
+By default Caddy binds the host's ports 80 and 443. On a machine that already runs another reverse
+proxy (Nginx Proxy Manager, Traefik, a separate Caddy) those ports are taken, and the stack fails to
+start. Move Caddy off them with `dashboard.port`:
+
+```json
+"dashboard": {
+    "secure": true,
+    "port": 8443,
+    "auth": { "username": "admin", "password": "a-long-passphrase" }
+}
+```
+
+Caddy now serves the dashboard on `:8443` and leaves 80/443 for your existing proxy, which you point
+at `https://<host>:8443` as its upstream. With `dashboard.secure: false` the same knob sets the plain
+HTTP port instead (e.g. `"port": 8080`) — use that when your proxy terminates TLS and wants an HTTP
+upstream.
+
+A couple of things to know:
+
+- **No built-in redirect on a custom port.** In HTTPS mode the default setup also answers on port 80
+  and redirects to HTTPS. On a custom port that redirect is switched off (it would otherwise keep
+  holding port 80, defeating the point). Your fronting proxy owns the http→https bounce.
+- **This does not remove Caddy or its login.** `dashboard.port` only moves the port. The dashboard
+  itself still binds `127.0.0.1:8000` with no authentication of its own — the `dashboard.auth` login
+  lives in Caddy — so keep Caddy in the path and set a password before your proxy exposes it.
+
 ### Remote access over Tor (onion service)
 
 Set `dashboard.onion.enabled: true` to publish the dashboard as a Tor v3 hidden service. You then
@@ -378,8 +407,10 @@ A few things to keep in mind:
 
 ### Option B — Connect to a remote node
 
-If your existing Monero node runs on another machine, or you want to use a node you don't host,
-switch to remote mode and the stack won't run its own `monerod` at all. See
+If your existing Monero node runs on another machine, switch to remote mode and the stack won't run
+its own `monerod` at all. The node must be one you run yourself with **ZMQ publishing enabled** and
+its RPC reachable by P2Pool — a general-purpose public "open node" won't work, because P2Pool needs
+the ZMQ feed that those don't expose. See
 [Connecting to a remote Monero node](#connecting-to-a-remote-monero-node) below.
 
 > Tari uses the same mechanism: point `tari.data_dir` at an existing Minotari node directory

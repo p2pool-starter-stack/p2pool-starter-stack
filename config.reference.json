@@ -79,6 +79,7 @@
     "dashboard": {
         "secure": true,
         "host": "auto",
+        "port": "auto",
         "timezone": "auto",
         "data_dir": "auto",
         "tari_required": true,
