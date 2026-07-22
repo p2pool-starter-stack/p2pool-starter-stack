@@ -310,6 +310,26 @@ assert_rc "rejects hostname" "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
 
+echo "== unit: is_valid_port (#740 — dashboard.port / Caddyfile injection guard) =="
+run_sourced "$SANDBOX" is_valid_port "8443" >/dev/null 2>&1
+assert_rc "accepts 8443" "$?" "0"
+run_sourced "$SANDBOX" is_valid_port "1" >/dev/null 2>&1
+assert_rc "accepts 1 (low bound)" "$?" "0"
+run_sourced "$SANDBOX" is_valid_port "65535" >/dev/null 2>&1
+assert_rc "accepts 65535 (high bound)" "$?" "0"
+run_sourced "$SANDBOX" is_valid_port "0" >/dev/null 2>&1
+assert_rc "rejects 0" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "65536" >/dev/null 2>&1
+assert_rc "rejects 65536 (over range)" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "80x" >/dev/null 2>&1
+assert_rc "rejects non-numeric" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "8080 {" >/dev/null 2>&1
+assert_rc "rejects a Caddyfile-injection attempt" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "" >/dev/null 2>&1
+assert_rc "rejects empty" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "0899" >/dev/null 2>&1
+assert_rc "rejects a leading zero (no octal-parse error)" "$?" "1"
+
 echo "== unit: semver_newer (#59 — the upgrade downgrade guard) =="
 # The comparison gates the upgrade button: a lexical bug would let 1.9.0 look "newer" than 1.10.0
 # and could be leveraged to force an older, vulnerable release.
@@ -402,6 +422,14 @@ assert_contains "stratum lan is INFO" "$(run_sourced "$SANDBOX" describe_change 
 assert_contains "stratum port change is CONFIRM" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "CONFIRM"
 assert_contains "stratum port change says repoint" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT 3333 4444)" "repoint"
 assert_contains "stratum port first render is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_PORT '' 3333)" "INFO"
+# Caddy LAN port (#740): a real change previews the port; the default->default no-op (the key is
+# added empty on the first apply after an upgrade) stays silent so it isn't a scary row.
+assert_contains "caddy port change previews the port" "$(run_sourced "$SANDBOX" describe_change HOST_PORT '' 8443)" "Caddy port"
+hp_silent="$(run_sourced "$SANDBOX" describe_change HOST_PORT '' '')"
+case "$hp_silent" in
+*"Caddy port"*) bad "caddy port default->default stays silent" "empty-both HOST_PORT emitted a preview line" ;;
+*) ok "caddy port default->default stays silent" ;;
+esac
 # Stratum access-password (#152): enabling/changing is DEST (rigs need the new pass), disabling is
 # INFO — and the secret value must NEVER appear in the change preview.
 assert_contains "stratum pw enable is DEST" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "DEST"
@@ -1256,6 +1284,65 @@ assert_contains "caddyfile insecure uses http" "$caddy_http" "http://box.lan"
 case "$caddy_http" in
 *"tls internal"*) bad "caddyfile insecure has no TLS" "'tls internal' present on a plain-HTTP site" ;;
 *) ok "caddyfile insecure has no TLS" ;;
+esac
+
+echo "== unit: generate_caddyfile custom port (#740) =="
+# A custom HOST_PORT moves the LAN vhost off the scheme default so a co-hosted reverse proxy keeps
+# 80/443. In HTTPS mode it also emits the global `auto_https disable_redirects` so nothing holds :80.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_https="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan HOST_PORT=8443 DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "custom https port binds the site" "$caddy_port_https" "https://box.lan:8443 {"
+assert_contains "custom https port disables the :80 redirect" "$caddy_port_https" "auto_https disable_redirects"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_http="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=false HOST_IP=box.lan HOST_PORT=8080 DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "custom http port binds the site" "$caddy_port_http" "http://box.lan:8080 {"
+case "$caddy_port_http" in
+*"disable_redirects"*) bad "plain-HTTP custom port has no redirect global" "'disable_redirects' present on a plain-HTTP site" ;;
+*) ok "plain-HTTP custom port has no redirect global" ;;
+esac
+# A port that equals the scheme default (443 secure / unset) renders today's Caddyfile verbatim —
+# no port suffix, no redirect global. Guards the byte-identical default path.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_default="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan HOST_PORT=443 DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "explicit default port keeps the bare site address" "$caddy_port_default" "https://box.lan {"
+case "$caddy_port_default" in
+*"disable_redirects"*) bad "default port emits no redirect global" "'disable_redirects' present at the scheme default" ;;
+*":443"*) bad "default port emits no explicit suffix" "':443' suffix present at the scheme default" ;;
+*) ok "default port renders the bare site address" ;;
+esac
+# Onion + custom LAN port together (#740 × #343): the LAN vhost moves to the custom port and the
+# `disable_redirects` global is emitted, but the onion vhost MUST stay on the bridge gateway's bare
+# :80 — Tor's HiddenServicePort maps 80 -> NETWORK_PREFIX.1:80, so a custom LAN port must not leak
+# onto it. Also confirms the global-options block is still valid Caddyfile with onion vhosts appended.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_onion="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan HOST_PORT=8443 DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
+        DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "onion+custom-port: LAN vhost moves to the custom port" "$caddy_port_onion" "https://box.lan:8443 {"
+assert_contains "onion+custom-port: redirect global still emitted" "$caddy_port_onion" "auto_https disable_redirects"
+assert_contains "onion+custom-port: onion vhost stays on the bridge's bare :80" "$caddy_port_onion" "http://172.28.0.1 {"
+case "$caddy_port_onion" in
+*"172.28.0.1:8443"* | *"172.28.0.1:80 "*) bad "onion vhost keeps its bare bridge port" "custom LAN port leaked onto the onion vhost" ;;
+*) ok "onion vhost keeps its bare bridge port (no custom-port leak)" ;;
 esac
 
 echo "== unit: generate_caddyfile onion vhost (#343) =="
