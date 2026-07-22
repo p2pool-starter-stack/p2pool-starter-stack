@@ -11,15 +11,33 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-07-22
+
 ### Added
 
+- **Configurable Caddy host port (#740).** Caddy binds the host's 80/443 by default; on a machine
+  already running another reverse proxy (Nginx Proxy Manager, Traefik, a separate Caddy) those
+  ports are taken and the stack fails to start. `dashboard.port` moves the LAN vhost off them —
+  `"auto"` (default) keeps the scheme's standard port (443 with `dashboard.secure`, 80 without);
+  a number (e.g. `8443`) binds that instead, so an existing proxy keeps 80/443 and fronts the
+  stack. In HTTPS mode a custom port also drops Caddy's automatic HTTP→HTTPS redirect (which would
+  otherwise hold port 80), leaving that to the fronting proxy. Caddy stays in the path, so the
+  `dashboard.auth` login is unaffected. Split from the co-hosting umbrella (#181). See
+  [Configuration › Co-hosting on a shared server](docs/configuration.md#co-hosting-on-a-shared-server).
 - **Confirmed payouts on the dashboard** (#381). The on-chain payout totals the stack already
   scans for now surface in the earnings card: a **Confirmed on-chain** block under the Monero
   estimate shows 24-hour, 7-day, and all-time XMR plus the time since the last payout (and the same
-  in XTM on the Tari tab). Each confirmed Monero payout also drops a gold **Payouts** coin marker
+  in XTM on the Tari tab). Each confirmed Monero payout also drops a green **Payouts** coin marker
   onto the hashrate chart at the block time it landed, and — when XvB is on — a dashed **XvB
   donation %** overlay on a right-side 0–100% axis lets you line payouts up against how much
   hashrate you were donating. Both are legend-toggleable like the other chart series.
+
+### Changed
+
+- **Docs: the remote-node ZMQ requirement is called out at the migration decision point** (#181).
+  "Reusing an existing node → Option B — Connect to a remote node" now states up front that a
+  remote node must expose ZMQ (and have its RPC reachable), so a general-purpose public "open node"
+  won't work — the constraint that was previously only documented one section further down.
 
 ## [1.11.0] - 2026-07-21
 
