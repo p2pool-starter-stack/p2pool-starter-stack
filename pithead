@@ -1949,6 +1949,13 @@ is_valid_host() {
     [[ "$1" =~ ^[A-Za-z0-9.:_-]{1,253}$ ]]
 }
 
+# A bare TCP port, 1–65535. Used to validate dashboard.port (#740) before it is rendered into the
+# Caddyfile site address — the digits-only shape also guarantees no space/newline/`{` can slip in
+# and break the Caddyfile or inject a directive, the same threat is_valid_host guards for the host.
+is_valid_port() {
+    [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
 # Best-effort detection of the host's IANA timezone (Linux + macOS), used as the dashboard
 # default when dashboard.timezone is "auto"/unset. Falls back to Etc/UTC if it can't tell.
 detect_host_timezone() {
@@ -2822,6 +2829,14 @@ parse_and_validate_config() {
     # the Caddyfile (or inject directives). Mirrors the stratum_bind validation above (#130).
     if [ -n "$DASHBOARD_HOST" ] && ! is_valid_host "$DASHBOARD_HOST"; then
         error "dashboard.host must be a hostname or IP address — only letters, digits, dots, hyphens, and colons (got \"$DASHBOARD_HOST\")."
+    fi
+    # Caddy LAN listen port (#740). "auto"/empty keeps the scheme default (443 secure / 80 plain) —
+    # today's behavior. An explicit port moves the LAN vhost so an existing reverse proxy on the host
+    # can keep 80/443 (co-hosting, #181). Rendered into the Caddyfile site address (generate_caddyfile),
+    # so validate it is a bare 1–65535 port before it lands there.
+    HOST_PORT=$(resolve_default "$(jq -r '.dashboard.port // empty' "$CONFIG_FILE")" "")
+    if [ -n "$HOST_PORT" ] && ! is_valid_port "$HOST_PORT"; then
+        error "dashboard.port must be a whole number between 1 and 65535, or \"auto\" (got \"$HOST_PORT\")."
     fi
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
@@ -3963,6 +3978,7 @@ DASHBOARD_CONTROL_ENABLED=$DASHBOARD_CONTROL_ENABLED
 CONTROL_DIR=$CONTROL_DIR
 CADDY_LOG_DIR=$CADDY_LOG_DIR
 HOST_IP=$HOST_IP
+HOST_PORT=$HOST_PORT
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
     )
@@ -4046,10 +4062,34 @@ generate_caddyfile() {
         }
         format json
     }'
+    # Caddy LAN listen port (#740). An empty HOST_PORT — or a value that equals the scheme's own
+    # default (443 for HTTPS, 80 for HTTP) — keeps the standard port and renders today's Caddyfile
+    # verbatim. A custom port is appended to the site address so an existing reverse proxy on the
+    # host can keep 80/443 (co-hosting, #181). In HTTPS mode a custom port also disables Caddy's
+    # automatic :80 -> HTTPS redirect (a global option emitted once at the top of the file) so port
+    # 80 is left free for that proxy; the fronting proxy owns any http->https bounce instead.
+    local dport="${HOST_PORT:-}" port_suffix="" global_block=""
     if [ "$DASHBOARD_SECURE" == "true" ]; then
-        log "Generating Caddyfile for automatic HTTPS ($HOST_IP)$([ -n "$auth" ] && echo ' with login')..."
-        cat <<EOF >"Caddyfile"
-https://$HOST_IP {
+        [ "$dport" == "443" ] && dport=""
+        if [ -n "$dport" ]; then
+            port_suffix=":$dport"
+            global_block='{
+    auto_https disable_redirects
+}
+
+'
+        fi
+    else
+        [ "$dport" == "80" ] && dport=""
+        [ -n "$dport" ] && port_suffix=":$dport"
+    fi
+
+    : >"Caddyfile"
+    [ -n "$global_block" ] && printf '%s' "$global_block" >>"Caddyfile"
+    if [ "$DASHBOARD_SECURE" == "true" ]; then
+        log "Generating Caddyfile for automatic HTTPS ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
+        cat <<EOF >>"Caddyfile"
+https://$HOST_IP$port_suffix {
     tls internal
 $auth
 $logblk
@@ -4059,9 +4099,9 @@ $logblk
 }
 EOF
     else
-        log "Generating Caddyfile for HTTP ($HOST_IP)$([ -n "$auth" ] && echo ' with login')..."
-        cat <<EOF >"Caddyfile"
-http://$HOST_IP {
+        log "Generating Caddyfile for HTTP ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
+        cat <<EOF >>"Caddyfile"
+http://$HOST_IP$port_suffix {
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -4600,6 +4640,16 @@ describe_change() {
     HOST_IP)
         msg="Dashboard hostname: $old → $new."
         ;;
+    HOST_PORT)
+        # #740: Caddy's LAN listen port. Empty means the scheme default (443/80). Stay silent when
+        # both sides are empty — a fresh binary just adds the key with no value on the first apply
+        # (comm flags the added line); that is not a real change worth previewing.
+        if [ -z "$old" ] && [ -z "$new" ]; then
+            msg=""
+        else
+            msg="Dashboard Caddy port: ${old:-default (443/80)} → ${new:-default (443/80)} — the caddy container is recreated."
+        fi
+        ;;
     MONERO_PREP_THREADS)
         msg="Monero block-prep threads: $old → $new."
         ;;
@@ -4873,7 +4923,7 @@ apply() {
             # DASHBOARD_CONTROL_ENABLED rides along (#33): the Caddyfile always renders the
             # X-Auth-User header_up now, but a pre-upgrade caddy may still run without it —
             # restart caddy at the moment the audit actor starts to matter.
-            case "$key" in HOST_IP | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED | DASHBOARD_CONTROL_ENABLED) caddy_changed=1 ;; esac
+            case "$key" in HOST_IP | HOST_PORT | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED | DASHBOARD_CONTROL_ENABLED) caddy_changed=1 ;; esac
             # Payout-wallet change (#375): remember WHICH wallet keys change for the typed
             # confirmation below — one prompt per key, so a Monero+Tari double change can't
             # ride through on a single typed prefix.

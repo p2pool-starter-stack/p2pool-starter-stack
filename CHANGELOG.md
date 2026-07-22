@@ -1025,6 +1025,15 @@ its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the 
 
 ### Added
 
+- **Configurable Caddy host port (#740).** Caddy binds the host's 80/443 by default; on a machine
+  already running another reverse proxy (Nginx Proxy Manager, Traefik, a separate Caddy) those
+  ports are taken and the stack fails to start. `dashboard.port` moves the LAN vhost off them —
+  `"auto"` (default) keeps the scheme's standard port (443 with `dashboard.secure`, 80 without);
+  a number (e.g. `8443`) binds that instead, so an existing proxy keeps 80/443 and fronts the
+  stack. In HTTPS mode a custom port also drops Caddy's automatic HTTP→HTTPS redirect (which would
+  otherwise hold port 80), leaving that to the fronting proxy. Caddy stays in the path, so the
+  `dashboard.auth` login is unaffected. Split from the co-hosting umbrella (#181). See
+  [Configuration › Co-hosting on a shared server](docs/configuration.md#co-hosting-on-a-shared-server).
 - **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
   circuits time out, so every Tor-clearnet feature — Healthchecks pings, the Telegram bot, XvB
   stats — breaks at once while mining (established onion circuits) keeps working. v1.3.1 added

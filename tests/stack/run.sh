@@ -310,6 +310,24 @@ assert_rc "rejects hostname" "$?" "1"
 run_sourced "$SANDBOX" is_ipv4 "" >/dev/null 2>&1
 assert_rc "rejects empty" "$?" "1"
 
+echo "== unit: is_valid_port (#740 — dashboard.port / Caddyfile injection guard) =="
+run_sourced "$SANDBOX" is_valid_port "8443" >/dev/null 2>&1
+assert_rc "accepts 8443" "$?" "0"
+run_sourced "$SANDBOX" is_valid_port "1" >/dev/null 2>&1
+assert_rc "accepts 1 (low bound)" "$?" "0"
+run_sourced "$SANDBOX" is_valid_port "65535" >/dev/null 2>&1
+assert_rc "accepts 65535 (high bound)" "$?" "0"
+run_sourced "$SANDBOX" is_valid_port "0" >/dev/null 2>&1
+assert_rc "rejects 0" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "65536" >/dev/null 2>&1
+assert_rc "rejects 65536 (over range)" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "80x" >/dev/null 2>&1
+assert_rc "rejects non-numeric" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "8080 {" >/dev/null 2>&1
+assert_rc "rejects a Caddyfile-injection attempt" "$?" "1"
+run_sourced "$SANDBOX" is_valid_port "" >/dev/null 2>&1
+assert_rc "rejects empty" "$?" "1"
+
 echo "== unit: semver_newer (#59 — the upgrade downgrade guard) =="
 # The comparison gates the upgrade button: a lexical bug would let 1.9.0 look "newer" than 1.10.0
 # and could be leveraged to force an older, vulnerable release.
@@ -1256,6 +1274,46 @@ assert_contains "caddyfile insecure uses http" "$caddy_http" "http://box.lan"
 case "$caddy_http" in
 *"tls internal"*) bad "caddyfile insecure has no TLS" "'tls internal' present on a plain-HTTP site" ;;
 *) ok "caddyfile insecure has no TLS" ;;
+esac
+
+echo "== unit: generate_caddyfile custom port (#740) =="
+# A custom HOST_PORT moves the LAN vhost off the scheme default so a co-hosted reverse proxy keeps
+# 80/443. In HTTPS mode it also emits the global `auto_https disable_redirects` so nothing holds :80.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_https="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan HOST_PORT=8443 DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "custom https port binds the site" "$caddy_port_https" "https://box.lan:8443 {"
+assert_contains "custom https port disables the :80 redirect" "$caddy_port_https" "auto_https disable_redirects"
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_http="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=false HOST_IP=box.lan HOST_PORT=8080 DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "custom http port binds the site" "$caddy_port_http" "http://box.lan:8080 {"
+case "$caddy_port_http" in
+*"disable_redirects"*) bad "plain-HTTP custom port has no redirect global" "'disable_redirects' present on a plain-HTTP site" ;;
+*) ok "plain-HTTP custom port has no redirect global" ;;
+esac
+# A port that equals the scheme default (443 secure / unset) renders today's Caddyfile verbatim —
+# no port suffix, no redirect global. Guards the byte-identical default path.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_port_default="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan HOST_PORT=443 DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "explicit default port keeps the bare site address" "$caddy_port_default" "https://box.lan {"
+case "$caddy_port_default" in
+*"disable_redirects"*) bad "default port emits no redirect global" "'disable_redirects' present at the scheme default" ;;
+*":443"*) bad "default port emits no explicit suffix" "':443' suffix present at the scheme default" ;;
+*) ok "default port renders the bare site address" ;;
 esac
 
 echo "== unit: generate_caddyfile onion vhost (#343) =="
