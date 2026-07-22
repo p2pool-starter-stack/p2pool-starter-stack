@@ -476,7 +476,7 @@ all-time XMR totals plus the time since the **last payout** — and a `payout_co
 once per payout (Telegram and the other sinks). The Tari tab carries the same **Confirmed on-chain**
 block in XTM once Tari payout confirmation is on (see the Tari note below).
 
-Each confirmed Monero payout also drops a **Payouts** marker — a gold coin at the block time it
+Each confirmed Monero payout also drops a **Payouts** marker — a green coin at the block time it
 landed — onto the hashrate chart, on the same marker row as the event diamonds and raffle stars.
 Toggle it from the chart legend like any other series. When XvB is on, a dashed **XvB donation %**
 line overlays the chart on its own right-side 0–100% axis, drawn from the recorded donation history,
