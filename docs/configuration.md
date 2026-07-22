@@ -378,8 +378,10 @@ A few things to keep in mind:
 
 ### Option B — Connect to a remote node
 
-If your existing Monero node runs on another machine, or you want to use a node you don't host,
-switch to remote mode and the stack won't run its own `monerod` at all. See
+If your existing Monero node runs on another machine, switch to remote mode and the stack won't run
+its own `monerod` at all. The node must be one you run yourself with **ZMQ publishing enabled** and
+its RPC reachable by P2Pool — a general-purpose public "open node" won't work, because P2Pool needs
+the ZMQ feed that those don't expose. See
 [Connecting to a remote Monero node](#connecting-to-a-remote-monero-node) below.
 
 > Tari uses the same mechanism: point `tari.data_dir` at an existing Minotari node directory
