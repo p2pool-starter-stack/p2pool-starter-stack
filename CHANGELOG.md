@@ -11,6 +11,27 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-07-22
+
+### Added
+
+- **Configurable Caddy host port (#740).** Caddy binds the host's 80/443 by default; on a machine
+  already running another reverse proxy (Nginx Proxy Manager, Traefik, a separate Caddy) those
+  ports are taken and the stack fails to start. `dashboard.port` moves the LAN vhost off them —
+  `"auto"` (default) keeps the scheme's standard port (443 with `dashboard.secure`, 80 without);
+  a number (e.g. `8443`) binds that instead, so an existing proxy keeps 80/443 and fronts the
+  stack. In HTTPS mode a custom port also drops Caddy's automatic HTTP→HTTPS redirect (which would
+  otherwise hold port 80), leaving that to the fronting proxy. Caddy stays in the path, so the
+  `dashboard.auth` login is unaffected. Split from the co-hosting umbrella (#181). See
+  [Configuration › Co-hosting on a shared server](docs/configuration.md#co-hosting-on-a-shared-server).
+
+### Changed
+
+- **Docs: the remote-node ZMQ requirement is called out at the migration decision point** (#181).
+  "Reusing an existing node → Option B — Connect to a remote node" now states up front that a
+  remote node must expose ZMQ (and have its RPC reachable), so a general-purpose public "open node"
+  won't work — the constraint that was previously only documented one section further down.
+
 ## [1.11.0] - 2026-07-21
 
 ### Added
@@ -1025,15 +1046,6 @@ its published artifacts were removed. 1.6.1 carries every 1.6.0 change plus the 
 
 ### Added
 
-- **Configurable Caddy host port (#740).** Caddy binds the host's 80/443 by default; on a machine
-  already running another reverse proxy (Nginx Proxy Manager, Traefik, a separate Caddy) those
-  ports are taken and the stack fails to start. `dashboard.port` moves the LAN vhost off them —
-  `"auto"` (default) keeps the scheme's standard port (443 with `dashboard.secure`, 80 without);
-  a number (e.g. `8443`) binds that instead, so an existing proxy keeps 80/443 and fronts the
-  stack. In HTTPS mode a custom port also drops Caddy's automatic HTTP→HTTPS redirect (which would
-  otherwise hold port 80), leaving that to the fronting proxy. Caddy stays in the path, so the
-  `dashboard.auth` login is unaffected. Split from the co-hosting umbrella (#181). See
-  [Configuration › Co-hosting on a shared server](docs/configuration.md#co-hosting-on-a-shared-server).
 - **Tor guard self-heal (#424).** Tor can bootstrap to 100% and then sit on a failing guard:
   circuits time out, so every Tor-clearnet feature — Healthchecks pings, the Telegram bot, XvB
   stats — breaks at once while mining (established onion circuits) keeps working. v1.3.1 added
