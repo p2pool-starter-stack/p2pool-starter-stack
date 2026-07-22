@@ -548,22 +548,12 @@ assert_running_state() {
         *) it_fail "monero display mode determinate" "got [$dmode], want Pruned|Full" ;; esac
     fi
 
-    # 5. Sidechain selection matches the pool axis. p2pool classifies the pool by counting peer
-    #    ports, so a freshly-(re)started stack reads "Unknown" until peers connect — and nano (a tiny
-    #    sidechain, slowest to find peers over Tor) can stay Unknown past wait_pool_ready's window.
-    #    "Unknown" is a peer-discovery-timing state, NOT a misclassification: warn on it (don't fail
-    #    the gate on peer luck), but a WRONG determinate type (Main when we set Mini) is a real
-    #    config/render bug — fail that (#454).
-    local got_pool want_pool
-    got_pool="$(jq_get "$st" '.pool.type')"
-    want_pool="$(pool_label "$pool")"
-    if [ "$got_pool" = "$want_pool" ]; then
-        it_pass "pool type ($got_pool)"
-    elif [ "$got_pool" = "Unknown" ] || [ -z "$got_pool" ]; then
-        it_warn "pool type still Unknown for $want_pool — peers not classified in time (nano/Tor is slow to populate); not a misclassification (#454)"
-    else
-        it_fail "pool type" "got [$got_pool], want [$want_pool] — wrong sidechain, not a timing lag"
-    fi
+    # 5. Sidechain selection matches the pool axis. Four-way verdict (assert_pool_type,
+    #    #454/#687/#746): match passes; "Unknown" is peer-discovery timing (warn); a determinate
+    #    mismatch is checked against the rendered P2POOL_FLAGS ground truth — correct flags mean
+    #    the classifier is still on the pre-switch sidechain (warn, #746), wrong flags mean a real
+    #    config/render bug (fail).
+    assert_pool_type "pool type" "$(jq_get "$st" '.pool.type')" "$(pool_label "$pool")"
 
     # 6. End-to-end mining: workers online + hashes accumulating (#28). proxy_workers is the
     #    reliable liveness signal; stratum.conns is reported but informational (can be 0).
@@ -575,10 +565,11 @@ assert_running_state() {
     assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
     it_step "stratum conns=${conns:-?} (informational)"
 
-    # 7. Tari sync-gate posture matches tari_required.
+    # 7. Tari sync-gate posture matches tari_required. The sync verdict tolerates post-restart
+    #    target re-discovery ONLY once Tari has proved "done" earlier this run (#746).
     assert_eq "TARI_REQUIRED env matches config" "$(env_on_box TARI_REQUIRED)" "${tari_req:-true}"
     if [ "$tari_req" = "true" ]; then
-        assert_eq "tari synced (required)" "$(jq_get "$st" '.sync.tari.state')" "done"
+        assert_tari_synced_required "$(jq_get "$st" '.sync.tari.state')"
     fi
 
     # 7b. The #170 Stack Topology & Egress panel rides on /api/state, derived live from config.
