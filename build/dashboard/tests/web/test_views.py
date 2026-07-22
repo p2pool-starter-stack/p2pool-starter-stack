@@ -2422,11 +2422,19 @@ class TestChartPayouts:
         assert len(pts) == 1  # the 2h-old payout is outside the 1h window
 
     def test_markers_capped_at_most_recent(self):
-        # More than the cap → only the newest _PAYOUT_MARKER_LIMIT are kept (never silently all).
+        # More than the cap → only the newest _PAYOUT_MARKER_LIMIT are kept (never silently all,
+        # and the NEWEST — not the oldest — survive). Input is newest-first (storage.get_payouts).
         now = time.time()
-        payouts = [self._payout(now - i) for i in range(views._PAYOUT_MARKER_LIMIT + 5)]
+        limit = views._PAYOUT_MARKER_LIMIT
+        payouts = [self._payout(now - i) for i in range(limit + 5)]  # [0]=newest … [-1]=oldest
         pts = build_chart(self._hist(now), [], "all", payouts=payouts)["payouts"]
-        assert len(pts) == views._PAYOUT_MARKER_LIMIT
+        assert len(pts) == limit
+        kept_x = {p["x"] for p in pts}
+        # The newest survives and the oldest 5 (beyond the cap) are the ones dropped.
+        assert pts[0]["x"] == int(now * 1000)  # newest kept, first
+        assert pts[-1]["x"] == int((now - (limit - 1)) * 1000)  # limit-th newest kept, last
+        assert int((now - limit) * 1000) not in kept_x  # first over the cap → dropped
+        assert int((now - (limit + 4)) * 1000) not in kept_x  # oldest → dropped
 
 
 class TestBuildRaffleLog:
