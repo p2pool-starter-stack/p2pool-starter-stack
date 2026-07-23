@@ -223,7 +223,7 @@ print_first_run_epilogue() {
     [ -f "$FIRST_RUN_MARKER" ] && return 0
     : >"$FIRST_RUN_MARKER" 2>/dev/null || true
     log "What happens next:"
-    log "  The miner is held until Monero and Tari finish their first sync, then starts automatically (#35)."
+    log "  The miner is held until Monero and Tari finish their first sync, then starts automatically."
     log "  Watch progress with '$0 status' or live on the dashboard."
     log "  First-time sync of both chains can take several hours to a few days, depending on disk and network."
 }
@@ -248,11 +248,11 @@ stack_restart() { # [tor]
         # Only tor is accepted here — other containers must go through apply/upgrade, whose
         # recreate applies current args (a bare restart would reuse stale ones, #273); tor
         # takes no args from .env, so a plain restart is safe and is exactly the fix.
-        log "Restarting the tor container to pick fresh guards (#424) — ALL Tor circuits drop and rebuild (mining onions included; p2pool/monerod re-peer on their own)..."
+        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool/monerod re-peer on their own)..."
         docker compose restart tor
         log "tor restarted. Verify egress recovered: './pithead doctor' (Tor clearnet-egress check)."
         ;;
-    *) error "restart takes no argument, or 'tor' (fresh Tor guards when clearnet egress is stuck, #424). Got: '$1'." ;;
+    *) error "restart takes no argument, or 'tor' (fresh Tor guards when clearnet egress is stuck). Got: '$1'." ;;
     esac
 }
 
@@ -307,11 +307,11 @@ apply_tor_egress_firewall() {
     [ -n "$enabled" ] || enabled=true
     remove_tor_egress_firewall # clear stale rules so a re-apply is idempotent
     if [ "$(normalize_bool "$enabled")" != "true" ]; then
-        warn "Tor-only egress firewall is OFF (network.tor_egress_firewall=false) — a misconfigured app could reach clearnet (#270)."
+        warn "Tor-only egress firewall is OFF (network.tor_egress_firewall=false) — a misconfigured app could reach clearnet."
         return 0
     fi
     if ! command -v iptables >/dev/null 2>&1; then
-        warn "iptables not found — cannot enforce Tor-only egress (#270). The stack runs, but clearnet egress is NOT fail-closed."
+        warn "iptables not found — cannot enforce Tor-only egress. The stack runs, but clearnet egress is NOT fail-closed."
         return 0
     fi
     subnet=$(env_get NETWORK_SUBNET 2>/dev/null)
@@ -326,13 +326,13 @@ apply_tor_egress_firewall() {
     while IFS= read -r rule; do
         # shellcheck disable=SC2086  # intentional word-splitting of the rule body
         if ! sudo iptables -I DOCKER-USER "$pos" -m comment --comment "$TOR_EGRESS_TAG" $rule 2>/dev/null; then
-            warn "Could not install the Tor-egress firewall (needs root + iptables). Stack runs, but clearnet egress is NOT fail-closed (#270)."
+            warn "Could not install the Tor-egress firewall (needs root + iptables). Stack runs, but clearnet egress is NOT fail-closed."
             remove_tor_egress_firewall
             return 0
         fi
         pos=$((pos + 1))
     done < <(tor_egress_rules "$subnet" "$tor_ip")
-    log "Tor-only egress enforced (#270): clearnet dials from $subnet dropped except via Tor ($tor_ip)."
+    log "Tor-only egress enforced: clearnet dials from $subnet dropped except via Tor ($tor_ip)."
 }
 
 # The @sha256 digest the bundled compose pins pithead-<suffix> to (#461 writes these into the
@@ -368,11 +368,11 @@ compose_pinned_digest() {
 verify_release_images() {
     is_source_checkout && return 0
     if [ ! -f cosign.pub ]; then
-        warn "No cosign.pub next to pithead — the release images will NOT be signature-verified (#376). Releases up to v1.3.x shipped no key; the first signed bundle brings it."
+        warn "No cosign.pub next to pithead — the release images will NOT be signature-verified. Releases up to v1.3.x shipped no key; the first signed bundle brings it."
         return 0
     fi
     command -v cosign >/dev/null 2>&1 ||
-        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull (#376). Install cosign (docs/dev/releasing.md § Verifying a release) and re-run '$0'."
+        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull. Install cosign (docs/dev/releasing.md § Verifying a release) and re-run '$0'."
     # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
@@ -380,17 +380,17 @@ verify_release_images() {
         # #557: plain `sha="$(...)"` aborts under errexit on a no-match grep BEFORE this error()
         # fires — `if !` suspends errexit for the assignment so the crafted diagnostic is reachable.
         if ! sha="$(compose_pinned_digest "$suffix")" || [ -z "$sha" ]; then
-            error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing (#451). A signed release bundle pins every first-party image by @sha256 (#461)."
+            error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing. A signed release bundle pins every first-party image by @sha256."
         fi
         image="${repo}@${sha}"
         if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
             # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
             # prints via `echo -e`, so an attacker-controlled registry response could otherwise
             # inject ANSI escapes into the operator's terminal (#376 review).
-            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to pull or restart, nothing was changed (#376). cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
+            error "Signature verification FAILED for $image — the published image does not match the release key; refusing to pull or restart, nothing was changed. cosign said: $(printf '%s' "$out" | tr -d '[:cntrl:]' | tail -c 300)"
         fi
     done
-    log "All 5 release images verify against their pinned digest (cosign.pub, #451/#376)."
+    log "All 5 release images verify against their pinned digest (cosign.pub)."
 }
 
 stack_upgrade() {
@@ -486,11 +486,11 @@ print_clearnet_banner() {
     tari_clearnet_exposed && who="${who:+$who + }Tari"
     [ -n "$who" ] || return 0
     echo -e "${C_YELLOW}========================================================================${C_RESET}" >&2
-    echo -e "${C_YELLOW}[!] CLEARNET INITIAL SYNC ACTIVE — node IP exposed (#183)${C_RESET}" >&2
+    echo -e "${C_YELLOW}[!] CLEARNET INITIAL SYNC ACTIVE — node IP exposed${C_RESET}" >&2
     echo "    $who P2P is running over CLEARNET to sync faster, so this host's IP is" >&2
     echo "    visible to that P2P network. Monero tx-broadcast stays on Tor; wallets are" >&2
     echo "    never exposed. The dashboard switches each node back to Tor automatically" >&2
-    echo "    once it finishes syncing (#234) — no action needed." >&2
+    echo "    once it finishes syncing — no action needed." >&2
     echo -e "${C_YELLOW}========================================================================${C_RESET}" >&2
 }
 
@@ -531,7 +531,7 @@ dashboard_sync_progress() {
            (.value.remaining // 0)]
         | @tsv' 2>/dev/null) || return 1
     [ -n "$rows" ] || return 1
-    log "Chain sync in progress — the miner is held until it completes (#35):"
+    log "Chain sync in progress — the miner is held until it completes:"
     local chain state percent current target remaining
     while IFS=$'\t' read -r chain state percent current target remaining; do
         [ -z "$chain" ] && continue
@@ -1057,7 +1057,7 @@ announce_local_miner() {
     *) host="$bind" ;;
     esac
     secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
-    log "Local miner opt-in is ON (#593): point a RigForge install on THIS host at the stack's stratum:"
+    log "Local miner opt-in is ON: point a RigForge install on THIS host at the stack's stratum:"
     log "  • Pool URL:         $host:$port"
     if [ -n "$secret" ]; then
         log "  • Stratum password: $secret"
@@ -1074,7 +1074,7 @@ announce_stratum_auth() {
     local sp
     sp=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
     [ -n "$sp" ] || return 0
-    log "Stratum authentication is ON (#152): every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See docs/workers.md#authentication."
+    log "Stratum authentication is ON: every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See docs/workers.md#authentication."
 }
 
 reset_dashboard() {
@@ -1451,13 +1451,13 @@ Setup & configuration:
                                                written or recreated.
                               --porcelain      with --dry-run: machine-readable preview lines
                                                (FLAG<TAB>KEY<TAB>MESSAGE), used by the
-                                               dashboard control runner (#33).
+                                               dashboard control runner.
 
 Lifecycle:
   up                        Start the stack.
   down                      Stop the stack.
   restart [tor]             Restart the stack — or only the tor container, which picks
-                            fresh guards when Tor clearnet egress is stuck (#424; drops
+                            fresh guards when Tor clearnet egress is stuck (drops
                             and rebuilds all Tor circuits).
   upgrade                   Rebuild and restart the stack (after a 'git pull').
 
@@ -1497,23 +1497,23 @@ Maintenance:
                             fails before touching anything if it's wrong.
                               -y, --yes        restore without the confirmation prompt.
 
-  onion-client-key          Print the Tor client-auth line for the dashboard onion (#343) —
+  onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
                             client's ClientOnionAuthDir to reach a client-auth'd onion.
 
   rotate-dashboard-onion [-y|--yes]
-                            Mint a fresh dashboard .onion address and client-auth key (#343);
+                            Mint a fresh dashboard .onion address and client-auth key;
                             the old address and any client keys you handed out stop working.
                               -y, --yes        skip the confirmation prompt.
 
-  control-run-pending       Process queued dashboard control requests (#33): validate each
+  control-run-pending       Process queued dashboard control requests: validate each
                             intent and run 'apply --dry-run' (preview), 'apply -y' (commit),
-                            or a release upgrade (#59, target verified against the GitHub
+                            or a release upgrade (target verified against the GitHub
                             release API host-side). Normally fired by the pithead-control
                             systemd path unit when dashboard.control.enabled is true.
 
   rotate-secrets [-y|--yes]
-                            Regenerate the stack's internal credentials (#378): the local Monero
+                            Regenerate the stack's internal credentials: the local Monero
                             RPC password, the stratum access-password (only when
                             p2pool.stratum_password is "auto" — every rig must then update its
                             'pass'), and the xmrig-proxy control-API token. Recreates the
@@ -2206,7 +2206,7 @@ ensure_config_exists() {
     # scope is defined by it (#502/#529), so a missing/corrupt file means the wizard itself is
     # incomplete, not something to silently ignore.
     jq -e . "$CORE_KEYS_CONFIG" >/dev/null 2>&1 ||
-        error "$CORE_KEYS_CONFIG is missing or not valid JSON (the wizard's core-key shortlist, #502/#529). Reinstall or redownload the release bundle."
+        error "$CORE_KEYS_CONFIG is missing or not valid JSON (the wizard's core-key shortlist). Reinstall or redownload the release bundle."
     echo "Please provide the following details to generate a minimal configuration:"
 
     wizard_ask_core
@@ -2460,10 +2460,10 @@ validate_worker_endpoints() {
     new_n=$(jq -r '(.workers // {}) | (.list // []) | if type == "array" then length else -1 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
     legacy_n=$(jq -r '(.dashboard // {}) | (.workers // []) | if type == "array" then length else -1 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
     if [ "${new_n:-0}" != "0" ] && [ "${legacy_n:-0}" != "0" ]; then
-        error "config.json sets both workers.list[] and dashboard.workers[] — pick one. dashboard.workers[] is a deprecated alias for workers.list[] (#506, removed in v1.9); move its entries to workers.list[] and delete dashboard.workers."
+        error "config.json sets both workers.list[] and dashboard.workers[] — pick one. dashboard.workers[] is a deprecated alias for workers.list[] (removed in v1.9); move its entries to workers.list[] and delete dashboard.workers."
     fi
     if [ "${legacy_n:-0}" != "0" ] && [ -z "${PITHEAD_WORKERS_LEGACY_WARNED:-}" ]; then
-        warn "dashboard.workers[] is deprecated — move its entries to workers.list[] (#506, removed in v1.9)."
+        warn "dashboard.workers[] is deprecated — move its entries to workers.list[] (removed in v1.9)."
         PITHEAD_WORKERS_LEGACY_WARNED=1
     fi
     dw_path="workers.list"
@@ -2522,7 +2522,7 @@ migrate_legacy_workers() {
         mv "$tmp" "$CONFIG_FILE"
         chmod 600 "$CONFIG_FILE"
         if [ -n "$owner" ]; then chown "$owner" "$CONFIG_FILE" 2>/dev/null || true; fi
-        log "Migrated dashboard.workers[] to workers.list[] (#506) — the old copy is at ${CONFIG_FILE}.bak-workers."
+        log "Migrated dashboard.workers[] to workers.list[] — the old copy is at ${CONFIG_FILE}.bak-workers."
     else
         rm -f "$tmp"
         warn "Could not migrate dashboard.workers[] to workers.list[] — continuing on the deprecated key (backup left at ${CONFIG_FILE}.bak-workers)."
@@ -2611,7 +2611,7 @@ parse_and_validate_config() {
     PAYOUT_CONFIRM_ENABLED=false
     if [ -n "$MONERO_VIEW_KEY" ]; then
         if [ "$MONERO_MODE" != "local" ]; then
-            error "monero.view_key is set but monero.mode is \"$MONERO_MODE\". On-chain payout confirmation (#381) scans against the LOCAL node only — a remote/third-party daemon changes the trust story. Unset monero.view_key, or switch to a local node."
+            error "monero.view_key is set but monero.mode is \"$MONERO_MODE\". On-chain payout confirmation scans against the LOCAL node only — a remote/third-party daemon changes the trust story. Unset monero.view_key, or switch to a local node."
         fi
         # A view key is 64 lowercase hex chars. Reject a malformed value before it reaches the wallet.
         if ! printf '%s' "$MONERO_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
@@ -2640,7 +2640,7 @@ parse_and_validate_config() {
     TARI_PAYOUT_CONFIRM_ENABLED=false
     if [ -n "$TARI_VIEW_KEY" ]; then
         if [ "$TARI_MODE" != "local" ]; then
-            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Tari payout confirmation (#462) scans against the LOCAL Tari node only — remote Tari (#103) is v1.6 and changes the trust story. Unset tari.view_key, or use a local Tari node."
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Tari payout confirmation scans against the LOCAL Tari node only — a remote/third-party Tari node changes the trust story. Unset tari.view_key, or use a local Tari node."
         fi
         # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
         if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
@@ -2946,7 +2946,7 @@ parse_and_validate_config() {
     #     feature would be inert — better to say so at apply time than to fail silently at runtime.
     if [ "$(normalize_bool "$(config_bool '.telegram.control.enabled' false)")" == "true" ]; then
         [ "$DASHBOARD_CONTROL_ENABLED" == "true" ] ||
-            error "telegram.control.enabled is true but dashboard.control.enabled is false. The Telegram /restart and /apply commands ride the #33 host-control spool, which only exists when the dashboard control channel is on. Enable dashboard.control (and its login) first, or turn telegram.control off."
+            error "telegram.control.enabled is true but dashboard.control.enabled is false. The Telegram /restart and /apply commands ride the host-control spool, which only exists when the dashboard control channel is on. Enable dashboard.control (and its login) first, or turn telegram.control off."
         [ "$(normalize_bool "$(config_bool '.telegram.commands.enabled' false)")" == "true" ] ||
             error "telegram.control.enabled is true but telegram.commands.enabled is false. The control commands are handled by the same bot that answers the read-only commands — enable telegram.commands (and telegram itself) first."
         [ "$(jq -r '(.telegram.control.allowed_ids // []) | length' "$CONFIG_FILE")" -gt 0 ] ||
@@ -3127,7 +3127,7 @@ ensure_owner() {
     local d="$1" want_u="$2" want_g="$3"
     [ -d "$d" ] || return 0
     [ -z "$(find "$d" ! -uid "$want_u" -print -quit 2>/dev/null)" ] && return 0
-    log "Setting ownership of $d to $want_u:$want_g (non-root containers, #255)..."
+    log "Setting ownership of $d to $want_u:$want_g (non-root containers)..."
     sudo chown -R "$want_u":"$want_g" "$d"
 }
 
@@ -3162,7 +3162,7 @@ ensure_stratum_tls_cert() {
     [ -f "$PROXY_TLS_DIR/cert.pem" ] && [ -f "$PROXY_TLS_DIR/key.pem" ] && return 0
     command -v openssl >/dev/null 2>&1 ||
         error "p2pool.stratum_tls is true but openssl is not installed — it is needed once, to generate the stratum certificate."
-    log "Generating the stratum TLS certificate (#261) — self-signed; rigs pin its fingerprint..."
+    log "Generating the stratum TLS certificate — self-signed; rigs pin its fingerprint..."
     (
         umask 077
         openssl req -x509 -newkey rsa:2048 -keyout "$PROXY_TLS_DIR/key.pem" \
@@ -3190,7 +3190,7 @@ announce_stratum_tls() {
     fp=$(openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha256 2>/dev/null |
         cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
     [ -n "$fp" ] || return 0
-    log "Stratum TLS is ON (#261): rigs may connect with TLS on the same stratum port (cleartext still accepted). Pin this fingerprint on each rig (pools[].tls-fingerprint): $fp"
+    log "Stratum TLS is ON: rigs may connect with TLS on the same stratum port (cleartext still accepted). Pin this fingerprint on each rig (pools[].tls-fingerprint): $fp"
 }
 
 # One-time dashboard-data migration (#455): the dashboard DB used to default INSIDE the install
@@ -3212,7 +3212,7 @@ migrate_dashboard_data() {
     if [ -n "$(ls -A "$new" 2>/dev/null)" ]; then
         error "Dashboard data exists at BOTH the old default ($old) and the new one ($new) — refusing to guess which is live. Keep one, delete the other, then re-run."
     fi
-    log "Moving the dashboard data to the shared data root: $old → $new (#455)..."
+    log "Moving the dashboard data to the shared data root: $old → $new..."
     # The dashboard writes its SQLite DB continuously — stop it for the move; the compose up that
     # follows every apply/upgrade brings it back on the new mount. Best-effort: already stopped is fine.
     docker compose stop dashboard >/dev/null 2>&1 || true
@@ -3312,7 +3312,7 @@ provision_onion_client_auth() {
     [ -w "$TOR_DATA_DIR" ] || run="sudo"
     if [ "${DASHBOARD_ONION_CLIENT_AUTH:-false}" != "true" ]; then
         if $run test -d "$hs_dir/authorized_clients"; then
-            log "Disabling Tor onion client-auth for the dashboard — the onion becomes password-only (#343)."
+            log "Disabling Tor onion client-auth for the dashboard — the onion becomes password-only."
             $run rm -rf "$hs_dir/authorized_clients"
         fi
         return 0
@@ -3323,7 +3323,7 @@ provision_onion_client_auth() {
             error "Could not generate the Tor onion client-auth keypair (need openssl built with x25519, plus od + awk)."
         DASHBOARD_ONION_CLIENT_PUBKEY="${kp%% *}"
         DASHBOARD_ONION_CLIENT_PRIVKEY="${kp##* }"
-        log "Generated a Tor onion client-auth key for the dashboard (#343)."
+        log "Generated a Tor onion client-auth key for the dashboard."
     fi
     $run mkdir -p "$hs_dir/authorized_clients"
     printf 'descriptor:x25519:%s\n' "$DASHBOARD_ONION_CLIENT_PUBKEY" | $run tee "$hs_dir/authorized_clients/dashboard.auth" >/dev/null
@@ -3374,7 +3374,7 @@ onion_client_key() {
     { [ -n "$onion" ] && [ "$onion" != "placeholder" ] && [ -n "$privkey" ] && [ "$privkey" != "placeholder" ]; } ||
         error "The dashboard onion isn't fully provisioned yet — run '$0 apply' first."
     cat <<EOF
-Tor onion client-auth for the dashboard (#343) — KEEP THIS PRIVATE, it is a secret key.
+Tor onion client-auth for the dashboard — KEEP THIS PRIVATE, it is a secret key.
 Dashboard onion address:  http://$onion
 
 Pick whichever Tor client you use to reach it:
@@ -3477,11 +3477,11 @@ rotate_secrets() {
         log "  • Monero RPC password: skipped — monero.mode is \"remote\", so the credential belongs to the remote node, not this stack."
     fi
     if [ "$stratum_mode" == "auto" ]; then
-        warn "  • Stratum access-password (#152) — EVERY RIG must update its stratum 'pass' to the new value or it is rejected."
+        warn "  • Stratum access-password — EVERY RIG must update its stratum 'pass' to the new value or it is rejected."
     elif [ -n "$stratum_mode" ]; then
         log "  • Stratum access-password: skipped — p2pool.stratum_password is set explicitly in config.json; change it there and run '$0 apply'."
     fi
-    log "  • xmrig-proxy control-API token (#153) — internal to the stack; no follow-up needed."
+    log "  • xmrig-proxy control-API token — internal to the stack; no follow-up needed."
     log "The containers that consume them are recreated (brief restart; chain data and dashboard history are untouched)."
     if [ "$assume_yes" -eq 0 ]; then
         read -r -p "Rotate these secrets now? (y/N): " CONFIRM || true
@@ -4502,14 +4502,14 @@ describe_change() {
             # #719: confirm-gated — repointing every rig is disruptive but operator-intent, not a
             # breach; the typed confirmation makes the operator acknowledge the fleet-wide repoint.
             flag=CONFIRM
-            msg="Stratum port: $old → $new (#172) — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
+            msg="Stratum port: $old → $new — EVERY RIG must repoint at the new port (RigForge: pool.port) or it can't connect; the xmrig-proxy container is recreated."
         fi
         ;;
     PROXY_STRATUM_TLS)
         if [ "$new" = "true" ]; then
-            msg="Stratum TLS ENABLED (#261) — the proxy serves TLS and cleartext on the same port; rigs opt in by pinning the cert fingerprint (shown after apply). xmrig-proxy is recreated."
+            msg="Stratum TLS ENABLED — the proxy serves TLS and cleartext on the same port; rigs opt in by pinning the cert fingerprint (shown after apply). xmrig-proxy is recreated."
         else
-            msg="Stratum TLS DISABLED (#261) — rigs with pools[].tls:true will fail to connect until switched back to cleartext. xmrig-proxy is recreated."
+            msg="Stratum TLS DISABLED — rigs with pools[].tls:true will fail to connect until switched back to cleartext. xmrig-proxy is recreated."
         fi
         ;;
     PROXY_TLS_DIR)
@@ -4518,23 +4518,23 @@ describe_change() {
     PROXY_STRATUM_PASSWORD)
         # Secret — never echo the value into the change preview / logs.
         if [ -z "$new" ]; then
-            msg="Stratum access-password DISABLED (#152) — any rig that can reach :3333 may mine again."
+            msg="Stratum access-password DISABLED — any rig that can reach :3333 may mine again."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Stratum access-password ENABLED (#152) — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
         else
             flag=DEST
-            msg="Stratum access-password CHANGED (#152) — update every rig's 'pass' to match or they're rejected; the xmrig-proxy container is recreated."
+            msg="Stratum access-password CHANGED — update every rig's 'pass' to match or they're rejected; the xmrig-proxy container is recreated."
         fi
         ;;
     PROXY_DONATE_LEVEL)
-        msg="xmrig-proxy dev-fee donation level: ${old:-0}% → ${new}% (#173) — the xmrig-proxy container is recreated (brief restart)."
+        msg="xmrig-proxy dev-fee donation level: ${old:-0}% → ${new}% — the xmrig-proxy container is recreated (brief restart)."
         ;;
     DASHBOARD_DATA_DIR)
         # #719: confirm-gated — a data-dir move is operator-intent (an expensive re-home / re-sync),
         # not a security boundary. Only the four service data dirs below are in scope.
         flag=CONFIRM
-        msg="$key: $old → $new — data at the old DEFAULT location (./data/dashboard) is moved there automatically (#455); any other old path is left in place."
+        msg="$key: $old → $new — data at the old DEFAULT location (./data/dashboard) is moved there automatically; any other old path is left in place."
         ;;
     MONERO_DATA_DIR | TARI_DATA_DIR | P2POOL_DATA_DIR)
         # #719: confirm-gated data-dir moves — the service re-syncs from the new (empty) dir.
@@ -4567,16 +4567,16 @@ describe_change() {
         ;;
     DASHBOARD_FAIL_CLOSED)
         if [ "$new" == "true" ]; then
-            msg="Fail-closed ENABLED (#490) — an unrecoverable dashboard health failure (DB recovery itself failing, or the dashboard container crash-looping) now HOLDS p2pool and xmrig-proxy until it clears, instead of only alerting."
+            msg="Fail-closed ENABLED — an unrecoverable dashboard health failure (DB recovery itself failing, or the dashboard container crash-looping) now HOLDS p2pool and xmrig-proxy until it clears, instead of only alerting."
         else
-            msg="Fail-closed DISABLED (#490) — an unrecoverable dashboard health failure now only alerts (Telegram/Healthchecks + badge); mining is never held for it."
+            msg="Fail-closed DISABLED — an unrecoverable dashboard health failure now only alerts (Telegram/Healthchecks + badge); mining is never held for it."
         fi
         ;;
     DASHBOARD_CHECK_UPDATES)
         if [ "$new" == "true" ]; then
-            msg="Dashboard update check ENABLED (#224) — the dashboard will check GitHub (over Tor) for a newer release and show a link badge; the dashboard container is recreated."
+            msg="Dashboard update check ENABLED — the dashboard will check GitHub (over Tor) for a newer release and show a link badge; the dashboard container is recreated."
         else
-            msg="Dashboard update check DISABLED (#224) — the dashboard no longer contacts GitHub; the dashboard container is recreated."
+            msg="Dashboard update check DISABLED — the dashboard no longer contacts GitHub; the dashboard container is recreated."
         fi
         ;;
     TARI_MEM_LIMIT)
@@ -4591,17 +4591,17 @@ describe_change() {
     DASHBOARD_AUTH_HASH_B64)
         # Secret — never echo the hash into the change preview / logs.
         if [ -z "$new" ]; then
-            msg="Dashboard login DISABLED (#8) — the dashboard is reachable without a password again."
+            msg="Dashboard login DISABLED — the dashboard is reachable without a password again."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Dashboard login ENABLED (#8) — Caddy now requires the configured username/password; the caddy container is recreated."
+            msg="Dashboard login ENABLED — Caddy now requires the configured username/password; the caddy container is recreated."
         else
             flag=DEST
-            msg="Dashboard login password CHANGED (#8) — use the new credentials; the caddy container is recreated."
+            msg="Dashboard login password CHANGED — use the new credentials; the caddy container is recreated."
         fi
         ;;
     DASHBOARD_AUTH_USER)
-        msg="Dashboard login username: $old → $new (#8)."
+        msg="Dashboard login username: $old → $new."
         ;;
     DASHBOARD_AUTH_PW_FP)
         # Internal fingerprint — always co-changes with DASHBOARD_AUTH_HASH_B64, which already
@@ -4611,9 +4611,9 @@ describe_change() {
     DASHBOARD_CONTROL_ENABLED)
         if [ "$new" == "true" ]; then
             flag=DEST
-            msg="Dashboard configuration editing ENABLED (#33) — the dashboard can stage config changes that a host-side runner validates and applies; the dashboard container is recreated."
+            msg="Dashboard configuration editing ENABLED — the dashboard can stage config changes that a host-side runner validates and applies; the dashboard container is recreated."
         else
-            msg="Dashboard configuration editing disabled (#33) — the control runner units are removed; the dashboard container is recreated."
+            msg="Dashboard configuration editing disabled — the control runner units are removed; the dashboard container is recreated."
         fi
         ;;
     CLEARNET_STATE_DIR | CONTROL_DIR | CADDY_LOG_DIR)
@@ -4623,13 +4623,13 @@ describe_change() {
     DASHBOARD_ONION_ENABLED)
         flag=DEST
         if [ "$new" == "true" ]; then
-            msg="Dashboard Tor onion ENABLED (#343) — the dashboard is published as a hidden service reachable over Tor; tor and caddy are recreated."
+            msg="Dashboard Tor onion ENABLED — the dashboard is published as a hidden service reachable over Tor; tor and caddy are recreated."
         else
-            msg="Dashboard Tor onion DISABLED (#343) — the onion is withdrawn; tor and caddy are recreated."
+            msg="Dashboard Tor onion DISABLED — the onion is withdrawn; tor and caddy are recreated."
         fi
         ;;
     DASHBOARD_ONION_CLIENT_AUTH)
-        msg="Dashboard onion client-auth → $([ "$new" == "true" ] && echo ON || echo OFF) (#343)$([ "$new" == "true" ] && echo " — the onion won't respond without your client key" || echo " — the onion is password-only")."
+        msg="Dashboard onion client-auth → $([ "$new" == "true" ] && echo ON || echo OFF)$([ "$new" == "true" ] && echo " — the onion won't respond without your client key" || echo " — the onion is password-only")."
         ;;
     DASHBOARD_ONION_ADDRESS | DASHBOARD_ONION_CLIENT_PUBKEY)
         # Provisioned values that co-change with the toggle above; keep the preview to one line.
@@ -4656,86 +4656,86 @@ describe_change() {
         msg="Monero block-prep threads: $old → $new."
         ;;
     MONERO_OUT_PEERS)
-        msg="Monero outbound peer target: $old → $new (#595) — monerod restarts; over Tor each outbound peer is roughly one circuit."
+        msg="Monero outbound peer target: $old → $new — monerod restarts; over Tor each outbound peer is roughly one circuit."
         ;;
     HEALTHCHECKS_PING_URL)
         # The ping URL is both the on/off switch and a capability secret — report the change
         # (enable/disable/update) WITHOUT printing the value.
         if [ -z "$new" ]; then
-            msg="Healthchecks.io dead-man's switch DISABLED (#79) — ping URL cleared; the dashboard container is recreated."
+            msg="Healthchecks.io dead-man's switch DISABLED — ping URL cleared; the dashboard container is recreated."
         elif [ -z "$old" ]; then
-            msg="Healthchecks.io dead-man's switch ENABLED (#79) — ping URL set (pings over Tor); the dashboard container is recreated."
+            msg="Healthchecks.io dead-man's switch ENABLED — ping URL set (pings over Tor); the dashboard container is recreated."
         else
-            msg="Healthchecks.io ping URL updated (#79) — the dashboard container is recreated."
+            msg="Healthchecks.io ping URL updated — the dashboard container is recreated."
         fi
         ;;
     TOR_AUTO_HEAL)
         if [ "$new" == "true" ]; then
-            msg="Tor guard self-heal ENABLED (#424) — when clearnet egress through Tor stays broken for 15 min (a failing guard), the dashboard restarts the tor container to pick fresh guards (max 3 restarts per outage, 30-min cooldown; each restart drops ALL Tor circuits, mining onions included, which then rebuild); the dashboard container is recreated."
+            msg="Tor guard self-heal ENABLED — when clearnet egress through Tor stays broken for 15 min (a failing guard), the dashboard restarts the tor container to pick fresh guards (max 3 restarts per outage, 30-min cooldown; each restart drops ALL Tor circuits, mining onions included, which then rebuild); the dashboard container is recreated."
         else
-            msg="Tor guard self-heal DISABLED (#424) — a stuck guard is back to WARN-only ('./pithead doctor', fix with './pithead restart tor'); the dashboard container is recreated."
+            msg="Tor guard self-heal DISABLED — a stuck guard is back to WARN-only ('./pithead doctor', fix with './pithead restart tor'); the dashboard container is recreated."
         fi
         ;;
     TELEGRAM_ENABLED)
-        msg="Telegram operator bot → $([ "$new" == "true" ] && echo on || echo off) (#121) — the dashboard container is recreated."
+        msg="Telegram operator bot → $([ "$new" == "true" ] && echo on || echo off) — the dashboard container is recreated."
         ;;
     TELEGRAM_BOT_TOKEN)
         # Secret — never echo the token value into the change preview / logs.
-        msg="Telegram bot token updated (#121) — the dashboard container is recreated."
+        msg="Telegram bot token updated — the dashboard container is recreated."
         ;;
     TELEGRAM_CHAT_ID)
-        msg="Telegram chat id: $old → $new (#121)."
+        msg="Telegram chat id: $old → $new."
         ;;
     TELEGRAM_COMMANDS_ENABLED)
-        msg="Telegram command interface → $([ "$new" == "true" ] && echo on || echo off) (#45) — the bot $([ "$new" == "true" ] && echo "now answers" || echo "no longer answers") /status, /hashrate, /workers, /sync from the configured chat; the dashboard container is recreated."
+        msg="Telegram command interface → $([ "$new" == "true" ] && echo on || echo off) — the bot $([ "$new" == "true" ] && echo "now answers" || echo "no longer answers") /status, /hashrate, /workers, /sync from the configured chat; the dashboard container is recreated."
         ;;
     TELEGRAM_CONTROL_ENABLED)
-        msg="Telegram control commands → $([ "$new" == "true" ] && echo on || echo off) (#338) — the bot $([ "$new" == "true" ] && echo "now accepts" || echo "no longer accepts") /restart and /apply from allow-listed operator ids, each with an in-chat confirmation; the dashboard container is recreated."
+        msg="Telegram control commands → $([ "$new" == "true" ] && echo on || echo off) — the bot $([ "$new" == "true" ] && echo "now accepts" || echo "no longer accepts") /restart and /apply from allow-listed operator ids, each with an in-chat confirmation; the dashboard container is recreated."
         ;;
     TELEGRAM_CONTROL_ALLOWED_IDS)
         # Telegram user ids are not secret, but they are the control-command allow-list — report the change.
-        msg="Telegram control allow-list: [$old] → [$new] (#338) — only these operator user ids may run /restart or /apply."
+        msg="Telegram control allow-list: [$old] → [$new] — only these operator user ids may run /restart or /apply."
         ;;
     TELEGRAM_CONTROL_CONFIRM_S)
-        msg="Telegram control confirmation timeout: ${old}s → ${new}s (#338) — an unconfirmed control command is denied after this."
+        msg="Telegram control confirmation timeout: ${old}s → ${new}s — an unconfirmed control command is denied after this."
         ;;
     TELEGRAM_EVENT_*)
-        msg="Telegram alert toggle ($key): $old → $new (#121)."
+        msg="Telegram alert toggle ($key): $old → $new."
         ;;
     TELEGRAM_DAILY_SUMMARY_TIME)
-        msg="Telegram daily summary time: $old → $new (local time; #121)."
+        msg="Telegram daily summary time: $old → $new (local time)."
         ;;
     NOTIFY_WEBHOOK_URLS)
         # Webhook URLs often carry tokens in the query string — report the change WITHOUT
         # printing the values (same rule as HEALTHCHECKS_PING_URL).
         if [ -z "$new" ]; then
-            msg="Webhook alert sink(s) DISABLED (#380) — URL list cleared; the dashboard container is recreated."
+            msg="Webhook alert sink(s) DISABLED — URL list cleared; the dashboard container is recreated."
         elif [ -z "$old" ]; then
-            msg="Webhook alert sink(s) ENABLED (#380) — every alert now also POSTs as JSON to the configured URL(s), over Tor by default; the dashboard container is recreated."
+            msg="Webhook alert sink(s) ENABLED — every alert now also POSTs as JSON to the configured URL(s), over Tor by default; the dashboard container is recreated."
         else
-            msg="Webhook alert URL(s) updated (#380) — the dashboard container is recreated."
+            msg="Webhook alert URL(s) updated — the dashboard container is recreated."
         fi
         ;;
     NTFY_URL)
         # The topic URL is a capability secret (whoever knows it can read/post the topic) —
         # never print it.
         if [ -z "$new" ]; then
-            msg="ntfy alert sink DISABLED (#380) — topic URL cleared; the dashboard container is recreated."
+            msg="ntfy alert sink DISABLED — topic URL cleared; the dashboard container is recreated."
         elif [ -z "$old" ]; then
-            msg="ntfy alert sink ENABLED (#380) — every alert now also POSTs to the configured ntfy topic, over Tor by default; the dashboard container is recreated."
+            msg="ntfy alert sink ENABLED — every alert now also POSTs to the configured ntfy topic, over Tor by default; the dashboard container is recreated."
         else
-            msg="ntfy topic URL updated (#380) — the dashboard container is recreated."
+            msg="ntfy topic URL updated — the dashboard container is recreated."
         fi
         ;;
     NTFY_TOKEN)
         # Secret — never echo the token value into the change preview / logs.
-        msg="ntfy access token updated (#380) — the dashboard container is recreated."
+        msg="ntfy access token updated — the dashboard container is recreated."
         ;;
     NOTIFY_TOR)
         if [ "$new" == "true" ]; then
-            msg="Webhook/ntfy alerts back on Tor (#380) — endpoints see a Tor exit, not this host's IP; the dashboard container is recreated."
+            msg="Webhook/ntfy alerts back on Tor — endpoints see a Tor exit, not this host's IP; the dashboard container is recreated."
         else
-            msg="⚠ Webhook/ntfy alerts OFF Tor (#380) — POSTs go out directly, so clearnet endpoints see this host's IP (the LAN/self-hosted carve-out; Tor exits can't reach private addresses); the dashboard container is recreated."
+            msg="⚠ Webhook/ntfy alerts OFF Tor — POSTs go out directly, so clearnet endpoints see this host's IP (the LAN/self-hosted carve-out; Tor exits can't reach private addresses); the dashboard container is recreated."
         fi
         ;;
     MONERO_CLEARNET_SYNC)
@@ -4743,42 +4743,42 @@ describe_change() {
         # (CONFIRM), not host-only. DISABLING returns to Tor, a plain INFO change.
         if [ "$new" == "true" ]; then
             flag=CONFIRM
-            msg="⚠ Monero CLEARNET initial sync ENABLED (#183) — monerod P2P will run over CLEARNET (this host's IP becomes visible to the Monero P2P network) so the chain syncs fast. Transaction broadcast STAYS on Tor; wallets are never exposed. The dashboard switches monerod back to Tor automatically once the chain is synced (#234). monerod is recreated."
+            msg="⚠ Monero CLEARNET initial sync ENABLED — monerod P2P will run over CLEARNET (this host's IP becomes visible to the Monero P2P network) so the chain syncs fast. Transaction broadcast STAYS on Tor; wallets are never exposed. The dashboard switches monerod back to Tor automatically once the chain is synced. monerod is recreated."
         else
-            msg="Monero clearnet sync DISABLED (#183) — monerod P2P returns to Tor-only. monerod is recreated."
+            msg="Monero clearnet sync DISABLED — monerod P2P returns to Tor-only. monerod is recreated."
         fi
         ;;
     TARI_CLEARNET_SYNC)
         # #183/#719: ENABLING exposes the host IP during IBD (auto-reverts to Tor) — confirm-gated.
         if [ "$new" == "true" ]; then
             flag=CONFIRM
-            msg="⚠ Tari CLEARNET initial sync ENABLED (#183) — the Tari base node will sync over CLEARNET (TCP transport + seeds.tari.com DNS seed; this host's IP becomes visible to the Tari P2P network) so its large chain syncs fast. The dashboard switches Tari back to Tor automatically once the chain is synced (#234). tari is recreated."
+            msg="⚠ Tari CLEARNET initial sync ENABLED — the Tari base node will sync over CLEARNET (TCP transport + seeds.tari.com DNS seed; this host's IP becomes visible to the Tari P2P network) so its large chain syncs fast. The dashboard switches Tari back to Tor automatically once the chain is synced. tari is recreated."
         else
-            msg="Tari clearnet sync DISABLED (#183) — the Tari base node returns to Tor-only transport. tari is recreated."
+            msg="Tari clearnet sync DISABLED — the Tari base node returns to Tor-only transport. tari is recreated."
         fi
         ;;
     MONERO_VIEW_KEY)
         # Secret (#381): the private view key reveals every incoming payout amount/time — never
         # echo its value into the change preview / logs.
         if [ -z "$new" ]; then
-            msg="Payout confirmation view key CLEARED (#381) — the view-only wallet-rpc is removed."
+            msg="Payout confirmation view key CLEARED — the view-only wallet-rpc is removed."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Payout confirmation view key SET (#381) — a view-only monero-wallet-rpc starts and scans the local node for confirmed payouts (it can see incoming amounts, never spend)."
+            msg="Payout confirmation view key SET — a view-only monero-wallet-rpc starts and scans the local node for confirmed payouts (it can see incoming amounts, never spend)."
         else
             flag=DEST
-            msg="Payout confirmation view key CHANGED (#381) — the view-only wallet-rpc is recreated and rescans."
+            msg="Payout confirmation view key CHANGED — the view-only wallet-rpc is recreated and rescans."
         fi
         ;;
     WALLET_RPC_PASSWORD)
         # Secret (#381): auto-generated wallet-rpc login — never echo the value.
-        msg="Payout wallet-rpc credential updated (#381)."
+        msg="Payout wallet-rpc credential updated."
         ;;
     PAYOUT_CONFIRM_ENABLED)
-        msg="On-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off) (#381)."
+        msg="On-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off)."
         ;;
     PAYOUT_SCAN_HEIGHT)
-        msg="Payout wallet restore height: $old → $new (#381) — only affects a first-time wallet creation."
+        msg="Payout wallet restore height: $old → $new — only affects a first-time wallet creation."
         ;;
     WALLET_RPC_USERNAME | MONERO_WALLET_RPC_URL)
         # Fixed internal values that co-change with the view key toggle; keep the preview to one line.
@@ -4788,24 +4788,24 @@ describe_change() {
         # Secret (#462): the Tari private view key reveals every incoming payout amount/time — never
         # echo its value into the change preview / logs.
         if [ -z "$new" ]; then
-            msg="Tari payout confirmation view key CLEARED (#462) — the view-only tari-wallet is removed."
+            msg="Tari payout confirmation view key CLEARED — the view-only tari-wallet is removed."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Tari payout confirmation view key SET (#462) — a view-only minotari_console_wallet starts and scans the local Tari node for confirmed payouts (it can see incoming amounts, never spend)."
+            msg="Tari payout confirmation view key SET — a view-only minotari_console_wallet starts and scans the local Tari node for confirmed payouts (it can see incoming amounts, never spend)."
         else
             flag=DEST
-            msg="Tari payout confirmation view key CHANGED (#462) — the view-only tari-wallet is recreated and rescans."
+            msg="Tari payout confirmation view key CHANGED — the view-only tari-wallet is recreated and rescans."
         fi
         ;;
     TARI_WALLET_PASSWORD)
         # Secret (#462): auto-generated wallet-DB password — never echo the value.
-        msg="Tari payout wallet credential updated (#462)."
+        msg="Tari payout wallet credential updated."
         ;;
     TARI_PAYOUT_CONFIRM_ENABLED)
-        msg="Tari on-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off) (#462)."
+        msg="Tari on-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off)."
         ;;
     TARI_WALLET_BIRTHDAY)
-        msg="Tari payout wallet birthday: $old → $new (#462, days since the Unix epoch) — only affects a first-time wallet creation."
+        msg="Tari payout wallet birthday: $old → $new (days since the Unix epoch) — only affects a first-time wallet creation."
         ;;
     TARI_SPEND_PUBLIC_KEY | TARI_WALLET_GRPC_ADDRESS | TARI_WALLET_SECRET_FILE)
         # Public/fixed internal values that co-change with the Tari view key toggle; keep to one line.
@@ -5456,7 +5456,7 @@ control_reown_operator_files() {
         [ -e "$f" ] || continue
         # Fail safe: a chown that can't complete leaves the pre-existing bug, never corrupts state.
         chown "$owner" "$f" 2>/dev/null ||
-            warn "Could not re-own $f to $owner after the control apply — the operator may need to chown it by hand (#33)."
+            warn "Could not re-own $f to $owner after the control apply — the operator may need to chown it by hand."
     done
 }
 
@@ -5633,7 +5633,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         fi
         rm -f "$sig"
     else
-        warn "No cosign.pub next to pithead — bundle authenticity rests on TLS to GitHub plus tag pinning only (#376)."
+        warn "No cosign.pub next to pithead — bundle authenticity rests on TLS to GitHub plus tag pinning only."
     fi
     # Rollback guard (#376): a cosign signature binds BYTES, not a version — an attacker who
     # controls the release response could serve an OLDER genuinely-signed bundle at the $tag URL
@@ -5678,7 +5678,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
             dval=$( (cd "$dval" 2>/dev/null && pwd -P) || printf '%s' "$dval")
             case "$dval" in
             "$cwd" | "$cwd"/*)
-                warn "$dvar resolves inside the install dir — upgrading in place; move the data to a shared root outside the version dir to get per-version rollback dirs (#629)."
+                warn "$dvar resolves inside the install dir — upgrading in place; move the data to a shared root outside the version dir to get per-version rollback dirs."
                 new_dir=""
                 break
                 ;;
@@ -5690,7 +5690,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # entry, closing the check-to-use race outright (#629 security review). A leftover dir from
     # an earlier failed attempt therefore also lands here: fall back to in-place and say why.
     if [ -n "$new_dir" ] && ! mkdir "$new_dir" 2>/dev/null; then
-        warn "$new_dir already exists (a previous attempt, or not ours to create) — upgrading in place. Remove it to get the fresh-dir layout back (#629)."
+        warn "$new_dir already exists (a previous attempt, or not ours to create) — upgrading in place. Remove it to get the fresh-dir layout back."
         new_dir=""
     fi
     if [ -n "$new_dir" ]; then
@@ -6317,11 +6317,11 @@ provision_control_runner() {
                 done
                 if [ -z "$owner_dir" ] ||
                     [ "$(cd "$dir" 2>/dev/null && pwd -P)$tail" != "$(pwd -P)" ]; then
-                    log "Leaving the dashboard control runner units alone (#33) — they belong to another checkout."
+                    log "Leaving the dashboard control runner units alone — they belong to another checkout."
                     return 0
                 fi
             fi
-            log "Removing the dashboard control runner units (#33)..."
+            log "Removing the dashboard control runner units..."
             sudo systemctl disable --now pithead-control.path >/dev/null 2>&1 || true
             sudo rm -f "$unit_dir/pithead-control.path" "$unit_dir/pithead-control.service"
             sudo systemctl daemon-reload
@@ -6335,7 +6335,7 @@ provision_control_runner() {
         grep -qsF "ExecStart=$PWD/pithead control-run-pending" "$unit_dir/pithead-control.service"; then
         return 0
     fi
-    log "Installing the dashboard control runner (systemd path unit, #33)..."
+    log "Installing the dashboard control runner (systemd path unit)..."
     sudo tee "$unit_dir/pithead-control.service" >/dev/null <<EOF
 [Unit]
 Description=pithead dashboard control runner (#33)
