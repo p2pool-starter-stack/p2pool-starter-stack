@@ -1691,6 +1691,13 @@ assert_safe_dir() {
     case "$d" in
     *..*) error "Refusing data directory '$d' — '..' path traversal is not allowed." ;;
     esac
+    # 3) A ':' would split the compose bind-mount short syntax it renders into
+    #    (`${MONERO_DATA_DIR}:/dest`) — e.g. a dir ending ':ro' forges a third MODE field, turning a
+    #    read-write data mount read-only or breaking `compose up`. It's operator-set but, since #728,
+    #    also dashboard-committable, so charset-guard it here. No legitimate data-dir path needs a colon.
+    case "$d" in
+    *:*) error "Refusing data directory '$d' — ':' is not allowed (it would corrupt the container's volume mount)." ;;
+    esac
 }
 
 safe_sed() {
@@ -2599,6 +2606,20 @@ parse_and_validate_config() {
     if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
         error "Missing required wallet addresses in $CONFIG_FILE."
     fi
+    # tari.wallet_address gets no exact-format gate like monero's below: Tari addresses come in
+    # base58 AND emoji forms, single/dual, with optional payment IDs — length and charset both vary
+    # (RFC-0155), and p2pool passes the string straight to the Tari node, which accepts either form,
+    # so a strict regex would false-reject valid addresses. But two mistakes are unambiguous and cause
+    # the same silent mining-to-nowhere monero guards against (#250): the untouched placeholder, and
+    # embedded whitespace (no Tari address of either form contains an ASCII space, and a space isn't a
+    # control char so the central guard above doesn't catch it). Reject both; a subtler typo is the
+    # node's to reject at merge-mine time. [TODO: verify upstream — exact accepted form, to gate fully.]
+    if [ "$TARI_WALLET" = "your_tari_wallet_address" ]; then
+        error "tari.wallet_address is still the placeholder in $CONFIG_FILE — set your real Tari (Minotari) payout address, or mining earns Tari that goes nowhere."
+    fi
+    case "$TARI_WALLET" in
+    *[[:space:]]*) error "tari.wallet_address contains whitespace — a Tari address (base58 or emoji) has none. Check for a stray space or line break in $CONFIG_FILE." ;;
+    esac
     if [ "$MONERO_WALLET" == "your_monero_wallet_address" ] || [ "$TARI_WALLET" == "your_tari_wallet_address" ]; then
         error "Wallet addresses in $CONFIG_FILE are still the template placeholders. Set your real addresses."
     fi
@@ -2716,26 +2737,26 @@ parse_and_validate_config() {
     # bridge command `TCP:$_mmhost:$_mmport` (build/p2pool/entrypoint.sh), where a comma is read as a
     # socat address-option separator (`TCP:host,fork,…`). So charset-guard both with the same
     # is_valid_host/is_valid_port used for dashboard.host/.port — no comma/space/`{` reaches a sink.
+    # These resolve once here and are reused verbatim by render_env (globals, like MONERO_MODE above),
+    # so the value that passes validation is exactly the value rendered — no second jq read, no drift.
     if [ "$MONERO_MODE" == "remote" ]; then
-        local remote_host remote_rpc_port remote_zmq_port
-        remote_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
-        [ -n "$remote_host" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
-        is_valid_host "$remote_host" || error "monero.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$remote_host\"."
-        remote_rpc_port=$(jq -r '.monero.remote.rpc_port // 18081' "$CONFIG_FILE")
-        is_valid_port "$remote_rpc_port" || error "monero.remote.rpc_port must be a TCP port 1–65535. Got \"$remote_rpc_port\"."
-        remote_zmq_port=$(jq -r '.monero.remote.zmq_port // 18083' "$CONFIG_FILE")
-        is_valid_port "$remote_zmq_port" || error "monero.remote.zmq_port must be a TCP port 1–65535. Got \"$remote_zmq_port\"."
+        MONERO_REMOTE_HOST=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
+        [ -n "$MONERO_REMOTE_HOST" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
+        is_valid_host "$MONERO_REMOTE_HOST" || error "monero.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$MONERO_REMOTE_HOST\"."
+        MONERO_REMOTE_RPC_PORT=$(jq -r '.monero.remote.rpc_port // 18081' "$CONFIG_FILE")
+        is_valid_port "$MONERO_REMOTE_RPC_PORT" || error "monero.remote.rpc_port must be a TCP port 1–65535. Got \"$MONERO_REMOTE_RPC_PORT\"."
+        MONERO_REMOTE_ZMQ_PORT=$(jq -r '.monero.remote.zmq_port // 18083' "$CONFIG_FILE")
+        is_valid_port "$MONERO_REMOTE_ZMQ_PORT" || error "monero.remote.zmq_port must be a TCP port 1–65535. Got \"$MONERO_REMOTE_ZMQ_PORT\"."
     fi
     # tari.mode remote (#103), mirroring monero.mode above: a third-party (or fleet-shared) Tari
     # base node needs a host — an empty one would render an empty TARI_GRPC_ADDRESS and mining can't
     # merge-mine, so abort at validation rather than let that reach the containers silently.
     if [ "$TARI_MODE" == "remote" ]; then
-        local tari_remote_host tari_remote_port
-        tari_remote_host=$(jq -r '.tari.remote.host // empty' "$CONFIG_FILE")
-        [ -n "$tari_remote_host" ] || error "tari.mode is \"remote\" but tari.remote.host is not set in $CONFIG_FILE."
-        is_valid_host "$tari_remote_host" || error "tari.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$tari_remote_host\"."
-        tari_remote_port=$(jq -r '.tari.remote.grpc_port // 18142' "$CONFIG_FILE")
-        is_valid_port "$tari_remote_port" || error "tari.remote.grpc_port must be a TCP port 1–65535. Got \"$tari_remote_port\"."
+        TARI_REMOTE_HOST=$(jq -r '.tari.remote.host // empty' "$CONFIG_FILE")
+        [ -n "$TARI_REMOTE_HOST" ] || error "tari.mode is \"remote\" but tari.remote.host is not set in $CONFIG_FILE."
+        is_valid_host "$TARI_REMOTE_HOST" || error "tari.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$TARI_REMOTE_HOST\"."
+        TARI_REMOTE_PORT=$(jq -r '.tari.remote.grpc_port // 18142' "$CONFIG_FILE")
+        is_valid_port "$TARI_REMOTE_PORT" || error "tari.remote.grpc_port must be a TCP port 1–65535. Got \"$TARI_REMOTE_PORT\"."
     fi
 
     POOL_TYPE=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
@@ -3608,9 +3629,10 @@ render_env() {
         zmq_port="18083"
         profiles="local_node"
     else
-        mono_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
-        rpc_port=$(jq -r '.monero.remote.rpc_port // 18081' "$CONFIG_FILE")
-        zmq_port=$(jq -r '.monero.remote.zmq_port // 18083' "$CONFIG_FILE")
+        # Reuse the parse-time validated globals — the validated value IS the rendered value.
+        mono_host="$MONERO_REMOTE_HOST"
+        rpc_port="$MONERO_REMOTE_RPC_PORT"
+        zmq_port="$MONERO_REMOTE_ZMQ_PORT"
         profiles="" # Empty profile disables local monerod
     fi
 
@@ -3624,10 +3646,8 @@ render_env() {
         tari_grpc_addr="${NETWORK_PREFIX}.27:18142"
         profiles="${profiles:+$profiles,}local_tari"
     else
-        local tari_remote_host tari_remote_port
-        tari_remote_host=$(jq -r '.tari.remote.host // empty' "$CONFIG_FILE")
-        tari_remote_port=$(jq -r '.tari.remote.grpc_port // 18142' "$CONFIG_FILE")
-        tari_grpc_addr="${tari_remote_host}:${tari_remote_port}"
+        # Reuse the parse-time validated globals (see Monero above) — single source of truth.
+        tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_PORT}"
     fi
 
     # On-chain payout confirmation (#381): the view-only wallet-rpc service only starts when its
