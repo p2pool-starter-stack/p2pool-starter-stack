@@ -2472,6 +2472,14 @@ assert_eq "two fs -> two lines" "$(printf '%s\n' "$out" | grep -c 'Data on')" "2
 assert_contains "/big groups monero+tari (~290 GB)" "$out" "/big (monero, tari): 600G free — needs ~290 GB"
 assert_contains "/small groups the small three (~8 GB)" "$out" "/small (p2pool, dashboard, tor): 600G free — needs ~8 GB"
 
+# Remote node modes (#103): doctor/preflight blank the remote component's dir (its chain lives on
+# the OTHER host), and an empty dir arg must drop that component from the budget entirely — here
+# tari remote drops the ~170 GB Tari share, leaving monero+the small three (120+5+2+1 = 128 GB).
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
+    run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "" "$pd" "$dd" "$rd" 2>&1)"
+assert_contains "remote tari drops tari from the budget" "$out" "(monero, p2pool, dashboard, tor)"
+assert_contains "remote tari budget excludes the 170 GB" "$out" "needs ~128 GB"
+
 # Preflight mode is WARN-only and silent when there's enough room.
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
     run_sourced "$SANDBOX" check_disk_grouped preflight 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
@@ -3050,6 +3058,15 @@ rc=$?
 assert_rc "remote mode without a host rejected" "$rc" "1"
 assert_contains "remote-host message" "$out" "monero.remote.host"
 
+# monero.remote.host with a comma is rejected by is_valid_host (#103): monero's remote host renders
+# into the p2pool `--host` arg the same way tari's does, and the comma vector slips past the central
+# control-char guard, so the field-specific guard must catch it here too.
+seed_env
+printf '{ "monero": {"mode":"remote","remote":{"host":"1.2.3.4,fork"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "monero.remote.host with a comma rejected" "$?" "1"
+assert_contains "monero comma-host message names the field" "$out" "monero.remote.host"
+
 # A malformed network.subnet (#180): anything but an X.Y.Z.0/24 block renders a broken NETWORK_PREFIX
 # into every service IP and the #270 firewall rules — reject before it can.
 seed_env
@@ -3248,6 +3265,94 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid birthday accepted" "$?" "0"
 assert_eq "valid birthday reflected into .env" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_BIRTHDAY)" "1000"
+
+echo "== black-box: tari.mode remote (#103) =="
+# The Tari sibling of monero.mode remote: mirrors the Monero pattern above (host:port render,
+# missing-host error, mode/view-key gating), so a third-party or fleet-shared Tari base node works
+# the same way an operator already expects from Monero.
+
+# (1) local (default): TARI_GRPC_ADDRESS renders the bundled node's fixed bridge IP, and local_tari
+# is added to COMPOSE_PROFILES so compose actually starts it.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "local tari mode applies cleanly" "$?" "0"
+assert_eq "local tari renders the bundled node's gRPC address" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "172.28.0.27:18142"
+assert_contains "local_tari profile added" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "local_tari"
+
+# (2) remote: TARI_GRPC_ADDRESS renders host:port from tari.remote, and local_tari is OMITTED from
+# COMPOSE_PROFILES so the bundled node stays off. Port defaults to 18142 when unset.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "remote tari mode applies cleanly" "$?" "0"
+assert_eq "remote tari renders host:port with the default gRPC port" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "tari.example.com:18142"
+case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
+*local_tari*) bad "no local_tari profile in remote tari mode" "local_tari leaked into COMPOSE_PROFILES" ;;
+*) ok "no local_tari profile in remote tari mode" ;;
+esac
+# A remote node still renders SOME TARI_MEM_LIMIT placeholder (compose interpolation must resolve
+# even though the profiled-off tari service never uses it) rather than an empty value.
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" ] && ok "remote tari still renders a TARI_MEM_LIMIT placeholder" || bad "remote tari still renders a TARI_MEM_LIMIT placeholder" "empty"
+
+# (3) remote with a custom grpc_port reflects verbatim.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com","grpc_port":28142}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "remote tari custom grpc_port reflected" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "tari.example.com:28142"
+
+# (4) remote mode with no host: renders an empty TARI_GRPC_ADDRESS -> p2pool/dashboard dial nothing,
+# merge-mining can't start. Must abort at validation, not silently proceed.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "remote tari mode without a host rejected" "$rc" "1"
+assert_contains "tari remote-host message" "$out" "tari.remote.host"
+
+# (5) remote Tari node + tari.view_key -> refused loudly (Phase 1 is local-only for the same reason
+# as Monero's #381 gate: scanning through a third-party node changes the trust story).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"},"view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari view key on a remote node rejected" "$?" "1"
+assert_contains "remote tari view-key message names the field" "$out" "tari.view_key"
+
+# (6a) tari.remote.host carrying a newline is rejected. Defence-in-depth: the central control-char
+# guard catches it first (a newline in ANY value would forge a second .env line), before the
+# per-field is_valid_host check below even runs — so assert rejection + no forged line, not a
+# field-specific message.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"1.2.3.4\\nEVIL=pwned"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari.remote.host with a newline rejected" "$?" "1"
+case "$(cat "$V/.env" 2>/dev/null)" in
+*EVIL=pwned*) bad "no forged .env line from a crafted host" "EVIL=pwned leaked into .env" ;;
+*) ok "no forged .env line from a crafted host" ;;
+esac
+
+# (6b) A comma in tari.remote.host is rejected by is_valid_host — a comma is NOT a control char, so
+# it slips past the central guard above, but it would inject socat address options in the p2pool
+# entrypoint's bridge command (TCP:$_mmhost:$_mmport). This is the field-specific guard's own case.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"1.2.3.4,fork,reuseaddr"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari.remote.host with a comma rejected" "$?" "1"
+assert_contains "comma-host message names the field" "$out" "tari.remote.host"
+
+# (6c) A non-numeric tari.remote.grpc_port is rejected.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com","grpc_port":"18142; rm -rf"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "non-numeric tari.remote.grpc_port rejected" "$?" "1"
+assert_contains "bad grpc_port message names the field" "$out" "tari.remote.grpc_port"
+
+# (7) An invalid tari.mode value is rejected before it ever reaches render_env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"bogus"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "invalid tari.mode rejected" "$?" "1"
+assert_contains "invalid tari.mode message" "$out" "tari.mode must be"
 
 echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
 # The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
@@ -3892,7 +3997,7 @@ ST="$SANDBOX/status"
 mkdir -p "$ST/bin"
 cp "$STACK" "$ST/pithead"
 make_status_stub "$ST/bin"
-printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' >"$ST/.env"
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node,local_tari\nHOST_IP=box.lan\n' >"$ST/.env"
 ALL_UP="tor=running:healthy monerod=running:healthy p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
 
 # All services up -> success, friendly summary.
@@ -3930,6 +4035,14 @@ REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:hea
 out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"
 rc=$?
 assert_rc "status: remote mode ignores monerod" "$rc" "0"
+
+# Remote Tari mode (#103): the bundled tari container is not expected even if absent, mirroring
+# monerod above — COMPOSE_PROFILES carries local_node (Monero local) but no local_tari.
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' >"$ST/.env"
+REMOTE_TARI="tor=running:healthy monerod=running:healthy p2pool=running:none tari=missing xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
+out="$(cd "$ST" && FAKE_STATES="$REMOTE_TARI" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"
+rc=$?
+assert_rc "status: remote tari mode ignores tari" "$rc" "0"
 
 echo "== black-box: doctor exit code (#127) =="
 # doctor must EXIT NON-ZERO when a critical check fails, so it's usable as a cron/CI health gate

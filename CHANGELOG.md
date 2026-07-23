@@ -13,6 +13,16 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **Remote Tari node (#103).** `tari.mode: remote` merge-mines against a Tari base node running
+  elsewhere instead of the bundled one: set `tari.remote.host` (required) and
+  `tari.remote.grpc_port` (default `18142`). Remote mode skips the bundled `tari` container, its
+  memory cap, and payout confirmation. The remote node's mining-template
+  RPC is request-scoped, so one node can serve several pithead stacks at once, each with its own
+  wallet — a shared node for a fleet or household is the intended pattern. The gRPC link stays
+  plaintext and unauthenticated (p2pool has no way to speak TLS or auth to it), so use a node you
+  trust: its operator, or anyone on the network path, can silently redirect Tari rewards. Monero
+  mining is unaffected either way. LAN/trusted-network only for now — a `.onion` remote is a
+  follow-up. See [Configuration › Remote Tari node](docs/configuration.md#remote-tari-node).
 - Dual-distribution plan (#77/#78): the architecture decision record for shipping Pithead as a
   curl-installed Compose stack, a flashable immutable appliance (Debian 13 + Rugix A/B, Podman
   Quadlet), and a git clone — one release manifest across all three. Dev doc only, no behaviour

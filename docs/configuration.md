@@ -108,11 +108,13 @@ control channel will commit, are unaffected either way.
 | `monero.remote.host` / `rpc_port` / `zmq_port` | — / `18081` / `18083` | Remote node connection details (used when `mode` is `remote`). |
 | `monero.data_dir` | `auto` | Where the Monero blockchain lives on the host. `auto` = `./data/monero`. Point this at an existing `.bitmonero` directory to reuse a synced node. See [Reusing an existing node](#reusing-an-existing-node). |
 | `monero.mem_limit` | `auto` | Upper limit on the monerod container's memory, so a leak/runaway OOM-restarts monerod alone instead of the host's OOM-killer picking a victim. `auto` is a generous ceiling (6 GB) that won't trip during normal operation or initial sync. monerod's OOM-triggering memory is small (~0.1 GiB at rest, ~1–3 GiB during sync) while its multi-GB blockchain DB is reclaimable, memory-mapped page cache that the kernel evicts under pressure rather than OOM-killing. Lower it only to free RAM. Raise it for a full (unpruned) node doing a heavy initial sync on a fast disk, or if a low-RAM host ever OOMs monerod during IBD (it restarts and resumes; the on-disk chain is transactional, no data loss). Accepts any Docker memory value, e.g. `"8g"`. (Tari has its own `tari.mem_limit`; the dashboard, P2Pool, Tor, and the proxies are small and carry fixed conservative ceilings in `docker-compose.yml`.) |
+| `tari.mode` | `local` | `local` runs the bundled Tari base node; `remote` merge-mines against an external one (see `tari.remote` and [Remote Tari node](#remote-tari-node)). |
 | `tari.wallet_address` | _required_ | Your Tari (Minotari) payout address. |
 | `tari.view_key` | _empty_ | The private **view** key for the Tari payout address, to confirm merge-mine payouts on-chain (#462, the Tari sibling of `monero.view_key`). When set, the stack runs a view-only `minotari_console_wallet` against your local Tari node and the dashboard shows confirmed Tari payouts beside the time-to-block estimate (see [Dashboard › Payout confirmation](dashboard.md#payout-confirmation)). Requires `tari.spend_public_key` too. **Security:** a view key can scan but never spend — yet it reveals every incoming amount and its timing to anyone who can read `config.json`/`.env`, so it is handled like `node_password` (never logged or echoed, kept in the owner-only `.env`, and delivered to the container via a tmpfs secret, never `docker inspect`). Local Tari node only. Empty (the default) leaves the feature off. |
 | `tari.spend_public_key` | _empty_ | The **public** spend key for the Tari payout address, exported alongside the view key (`minotari_console_wallet ... export-view-key-and-spend-key`; see [Dashboard › Exporting your keys](dashboard.md#exporting-your-keys)). Required whenever `tari.view_key` is set — a view-only Tari wallet is built from the private view key plus this public spend key. Public, not a secret. |
 | `tari.payout_scan_birthday` | `auto` | Where the view-only Tari wallet starts scanning on first creation (#462). Unlike Monero's block-height restore point, a Tari birthday is **days since the Unix epoch** (a u16, 0–65535). `auto` = today when the wallet is first made, so it tracks payouts forward without rescanning from genesis. Set an earlier day to backfill older payouts (slower first scan). Only affects the first wallet creation; ignored once the wallet exists. |
 | `tari.clearnet_initial_sync` | `false` | Privacy-relevant, default off. `true` makes the Tari base node sync over clearnet instead of Tor: it switches the P2P transport to TCP, re-enables the `seeds.tari.com` DNS seed (the bundled onion `peer_seeds` are unreachable without Tor), and stops advertising its onion. Your node's IP becomes visible to the Tari P2P network while it's on, plus one DNS lookup of `seeds.tari.com`. `pithead` warns loudly (apply/status/doctor/up). The dashboard switches Tari back to Tor automatically once it's synced (#234), so you can leave this `true`. Full threat model: [Privacy › Optional clearnet initial sync](privacy.md#optional-clearnet-initial-sync-off-by-default). |
+| `tari.remote.host` / `grpc_port` | — / `18142` | Remote Tari base node connection details (used when `tari.mode` is `remote`). See [Remote Tari node](#remote-tari-node). |
 | `tari.data_dir` | `auto` | Where the Tari node data lives on the host. `auto` = `./data/tari`. |
 | `tari.mem_limit` | `auto` | Upper limit on the Tari container's memory, so a runaway Tari restarts cleanly on its own instead of dragging down the whole host. `auto` picks a safe size for your machine. Leave it unless you want to give Tari less RAM (to free it for other apps) or more (if it ever restarts too often). Accepts any Docker memory value, e.g. `"8g"`. |
 | `p2pool.pool` | `mini` | Which P2Pool sidechain to mine: `main`, `mini`, or `nano`. `mini` (the default) has a lower share difficulty than `main`, so a typical home rig finds shares far more often: smoother, more frequent PPLNS payouts instead of long dry spells. Raise to `main` for high hashrate (large farms); drop to `nano` for a single low-power rig. |
@@ -446,6 +448,68 @@ To connect to an external Monero node instead of running one locally, set `moner
 
 Switching between `local` and `remote` is a disruptive change, so `apply` will confirm before
 applying it.
+
+---
+
+## Remote Tari node
+
+To merge-mine against a Tari base node running elsewhere instead of the bundled one, set
+`tari.mode` to `remote` and fill in `tari.remote`:
+
+```json
+{
+    "tari": {
+        "mode": "remote",
+        "wallet_address": "...",
+        "remote": {
+            "host": "tari-node.lan",
+            "grpc_port": 18142
+        }
+    }
+}
+```
+
+- The bundled `tari` container does not start in remote mode, and neither does `tari-wallet`
+  (payout confirmation is unsupported in remote mode — see below).
+- `tari.remote.host` is required; `grpc_port` defaults to `18142`, the base node's standard gRPC
+  port.
+- The remote node must rebind its gRPC listener off the stock `grpc_address` (`127.0.0.1`), so it
+  accepts connections from off-box, and enable the mining allowlist preset upstream ships for
+  exactly this
+  (`c_base_node_b_mining_allow_methods.toml`) so `get_new_block_template_with_coinbases` and
+  `submit_block` are reachable.
+- Leave `grpc_authentication` and `grpc_tls_enabled` off on the remote node. p2pool's Tari
+  merge-mine client dials plaintext, unauthenticated gRPC and has no way to speak either — turning
+  them on there just breaks the connection.
+- Remote mode turns off: the bundled `tari` container, the Tari container memory cap
+  (`tari.mem_limit` — nothing local left to cap), and payout confirmation (`tari.view_key` is
+  rejected with `tari.mode: remote`, same as `monero.view_key` with `monero.mode: remote`). Tor
+  still publishes the Tari inbound onion address, but with no local node behind it, connections to
+  it go nowhere — the same inert leftover a remote Monero node leaves.
+- The base node's mining-template RPC is request-scoped: every `get_new_block_template_with_coinbases`
+  call carries its own caller's coinbase address, and the node holds no per-caller state between
+  calls. One Tari node can serve several pithead stacks this way, each with its own
+  `tari.wallet_address` — pointing a fleet's or household's stacks at one shared node is the
+  intended pattern, not a workaround.
+
+Switching between `local` and `remote` is a disruptive change, so `apply` will confirm before
+applying it.
+
+### Trust boundary
+
+The gRPC link to a remote Tari node is plaintext and unauthenticated end to end. p2pool cannot
+verify that the block template it gets back actually pays `tari.wallet_address` — the node
+operator, or anyone else on the network path, can substitute a different payout and there is
+nothing in pithead that would catch it; the dashboard has no way to distinguish a redirected
+reward from one that never arrived. Only Tari yield is exposed this way: Monero mining runs on a
+separate path and is unaffected even if the Tari leg is compromised or down.
+
+Use a node you run yourself, or one run by someone you trust, on your LAN or reachable over
+WireGuard. A `.onion` remote isn't supported yet: the Tor default bridges this gRPC leg onto a
+direct connection before it would reach Tor (see [Privacy › Runtime egress](privacy.md#runtime-egress)),
+so an onion host doesn't resolve — tracked as a follow-up. Upstream Tari guidance is not to expose
+base-node gRPC to the public internet; an open third-party node still works, but its operator (or
+anyone on-path) holds your Tari rewards.
 
 ---
 

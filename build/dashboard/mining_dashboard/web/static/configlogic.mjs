@@ -23,6 +23,7 @@ export function isSecretSentinel(v) {
 // Fixed-choice fields; everything else renders from its JSON type.
 const FIELD_OPTIONS = {
   "monero.mode": ["local", "remote"],
+  "tari.mode": ["local", "remote"],
   "p2pool.pool": ["main", "mini", "nano"],
   "workers.api_auth": ["none", "name", "token"],
   "xvb.donation_level": ["auto", "donor", "vip", "whale", "mega"],
@@ -113,6 +114,7 @@ export const LOGICAL_GROUPS = [
       "monero.rpc_lan_access",
       "monero.clearnet_initial_sync",
       "tari.mode",
+      "tari.remote",
       "tari.clearnet_initial_sync",
     ],
   },

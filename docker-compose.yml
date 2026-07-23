@@ -195,7 +195,9 @@ services:
       start_period: 120s
 
   # --- Tari Base Node ---
+  # Only starts if "local_tari" profile is active (#103, mirrors monerod's "local_node" above).
   tari:
+    profiles: ["local_tari"]
     # Pinned by digest (#135) so the v5.3.1-mainnet tag can't be silently re-pointed.
     image: quay.io/tarilabs/minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0
     container_name: tari
@@ -309,7 +311,11 @@ services:
     environment:
       # NON-SECRET config only — the three MINOTARI_WALLET_* secrets are delivered via `secrets:`
       # below, NOT here (an `environment:` value shows in `docker inspect`, the acceptance criterion).
-      - TARI_BASE_NODE_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
+      # Tari base-node gRPC endpoint (#103): pithead renders TARI_GRPC_ADDRESS for both local (the
+      # bundled node's fixed bridge IP) and remote (a third-party/fleet-shared node's host:port);
+      # the fallback here is the stock local default for a bare `docker compose up` bypassing
+      # pithead. Harmless either way — this service never runs in remote mode (the gate above).
+      - TARI_BASE_NODE_GRPC_ADDRESS=${TARI_GRPC_ADDRESS:-172.28.0.27:18142}
       - TARI_WALLET_BIRTHDAY=${TARI_WALLET_BIRTHDAY:-auto}
       - TARI_WALLET_GRPC_BIND=/ip4/0.0.0.0/tcp/18143
       - WALLET_DIR=/home/ubuntu/wallet
@@ -384,7 +390,9 @@ services:
       - --wallet
       - ${MONERO_WALLET_ADDRESS}
       - --merge-mine
-      - tari://${NETWORK_PREFIX:-172.28.0}.27:18142
+      # Tari base-node gRPC endpoint (#103): local or remote, driven by pithead's rendered
+      # TARI_GRPC_ADDRESS (the fallback is the stock local default, for a bare `docker compose up`).
+      - tari://${TARI_GRPC_ADDRESS:-172.28.0.27:18142}
       - ${TARI_WALLET_ADDRESS}
       - --onion-address
       - ${P2POOL_ONION_ADDRESS}
@@ -403,10 +411,10 @@ services:
     networks:
       mining_net:
         ipv4_address: ${NETWORK_PREFIX:-172.28.0}.28
-    depends_on:
-      # monerod dependency removed to allow remote node operation
-      tari:
-        condition: service_healthy
+    # No depends_on: both monerod (local_node) and tari (local_tari, #103) are profile-gated and
+    # OFF in remote mode — a depends_on edge to a service that profiles have excluded fails
+    # `compose up` outright, not just at startup. p2pool retries its own RPC/gRPC dials, so it
+    # comes up fine without a startup-order guarantee against either node.
     healthcheck:
       # Liveness for the core revenue service (#90). Probe the stratum listener directly: a TCP
       # connect to :3333 proves p2pool is up and accepting miners, which is the failure miners
@@ -653,7 +661,9 @@ services:
       # the host-networked dashboard reaches them here — mining containers cannot.
       - DOCKER_PROXY_URL=tcp://127.0.0.1:12375
       - DOCKER_CONTROL_URL=tcp://127.0.0.1:12376
-      - TARI_GRPC_ADDRESS=${NETWORK_PREFIX:-172.28.0}.27:18142
+      # Tari base-node gRPC endpoint (#103): local or remote, driven by pithead's rendered
+      # TARI_GRPC_ADDRESS (the fallback is the stock local default).
+      - TARI_GRPC_ADDRESS=${TARI_GRPC_ADDRESS:-172.28.0.27:18142}
       # Local monerod bridge IP (local-vs-remote detection), the internal SSRF-guard CIDR, and the
       # Tor SOCKS endpoint all track the configured subnet prefix (#180).
       - LOCAL_MONERO_HOST=${NETWORK_PREFIX:-172.28.0}.26
