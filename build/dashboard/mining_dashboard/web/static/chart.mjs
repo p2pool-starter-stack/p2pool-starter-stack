@@ -464,7 +464,7 @@ export class ChartCard extends Component {
     return html`
         <div class="card">
             <div class="chart-controls" role="group" aria-label="Chart range">
-                <span class="text-muted text-small mr-1">Range:</span>
+                <span class="chart-control-label text-small mr-1">Range:</span>
                 ${RANGES.map(
                   // Real buttons like the Avg/legend siblings (#657); the ?range= deep link
                   // survives because setRange writes it via history.replaceState.
@@ -481,7 +481,7 @@ export class ChartCard extends Component {
                 }
             </div>
             <div class="chart-controls" role="group" aria-label="Hashrate averaging window">
-                <span class="text-muted text-small mr-1" title="Which hashrate-averaging window the chart plots (#168)">Avg:</span>
+                <span class="chart-control-label text-small mr-1" title="Which hashrate-averaging window the chart plots (#168)">Avg:</span>
                 ${WINDOWS.map(
                   ([w, label]) => html`<button type="button"
                     class=${"btn-range" + (props.avgWindow === w ? " active" : "")}

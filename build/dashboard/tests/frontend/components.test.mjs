@@ -130,6 +130,91 @@ test('operational App renders the remaining advanced cards', () => {
     assert.match(html, /P2Pool Earnings \(estimated\)/);
 });
 
+// --- Progressive disclosure ("show more") on stat-grid cards ---------------------------
+//
+// Global P2Pool Stats, My P2Pool Node Stats and XMR Network share the MoreStats pattern
+// (components.mjs): headline stats always show, the rest sits collapsed behind a real <button>
+// until toggled. Several sibling cards reuse the same labels (Overview and My P2Pool Node Stats
+// both have a "Mining Mode" stat, for instance), so `cardSlice` scopes assertions to one card's
+// own markup — from its id up to the next card's id — rather than matching against the whole page.
+function cardSlice(html, id) {
+    const marker = `id="${id}"`;
+    const start = html.indexOf(marker);
+    assert.notEqual(start, -1, `missing ${id}`);
+    const next = html.indexOf('id="card-', start + marker.length);
+    return next === -1 ? html.slice(start) : html.slice(start, next);
+}
+
+test('Global P2Pool Stats collapses to the headline stats by default (progressive disclosure)', () => {
+    const card = cardSlice(renderApp(), 'card-global');
+    // Headline: the pool's own money/health figures.
+    assert.match(card, /Pool Hashrate/);
+    assert.match(card, /Blocks Found/);
+    assert.match(card, /<h5>Last Block<\/h5>/);
+    // Detail (sidechain internals, peers, uptime, ...) stays out of the DOM until expanded.
+    assert.doesNotMatch(card, /Sidechain Height/);
+    assert.doesNotMatch(card, /PPLNS Window/);
+    assert.doesNotMatch(card, /PPLNS Weight/);
+    assert.doesNotMatch(card, /<h5>Uptime<\/h5>/);
+    assert.match(card, /class="more-stats-toggle" aria-expanded="false"/);
+    assert.match(card, /Show all \(12\)/);
+});
+
+test('My P2Pool Node Stats collapses to the headline stats by default', () => {
+    const card = cardSlice(renderApp(), 'card-mynode');
+    assert.match(card, /Total Hashrate/);
+    assert.match(card, /P2Pool 1h Avg/);
+    assert.match(card, /P2Pool 24h Avg/);
+    assert.match(card, /Shares \(OK\/Err\)/);
+    assert.doesNotMatch(card, /Stratum \(15m/);
+    assert.doesNotMatch(card, /Connections/);
+    assert.doesNotMatch(card, /Effort/);
+    assert.doesNotMatch(card, /Reward Share/);
+    assert.doesNotMatch(card, /Total Shares/);
+    assert.match(card, /class="more-stats-toggle" aria-expanded="false"/);
+    assert.match(card, /Show all \(12\)/);
+});
+
+test('XMR Network collapses to the headline stats by default', () => {
+    const card = cardSlice(renderApp(), 'card-network');
+    assert.match(card, /Block Height/);
+    assert.match(card, /Difficulty/);
+    assert.match(card, /Reward/);
+    assert.doesNotMatch(card, /Node Mode/);
+    assert.doesNotMatch(card, /DB Size/);
+    assert.doesNotMatch(card, /Current Block Hash/);
+    assert.doesNotMatch(card, /Network Time/);
+    assert.match(card, /class="more-stats-toggle" aria-expanded="false"/);
+    assert.match(card, /Show all \(7\)/);
+});
+
+test('MoreStats expands to show every stat when toggled, and persists the choice per card, independently of siblings', () => {
+    // There is no localStorage under node --test (see logic.test.mjs's loadPref/savePref test) —
+    // stub a minimal one so MoreStats's loadPref/savePref calls (the same helpers
+    // dashboardEarningsTab already uses) have somewhere to read from, exactly as a real browser
+    // would provide. Only dashboardCardNetwork is pre-seeded "expanded"; dashboardCardGlobal is
+    // absent, so it must still fall back to collapsed — expansion is per-card, not global.
+    const store = new Map([['dashboardCardNetwork', 'expanded']]);
+    globalThis.localStorage = {
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => store.set(k, String(v)),
+    };
+    try {
+        const html = renderApp();
+        const network = cardSlice(html, 'card-network');
+        assert.match(network, /Node Mode/); // detail now visible
+        assert.match(network, /Current Block Hash/);
+        assert.match(network, /class="more-stats-toggle" aria-expanded="true"/);
+        assert.match(network, /Show less/);
+        const global = cardSlice(html, 'card-global');
+        assert.doesNotMatch(global, /Sidechain Height/);
+        assert.match(global, /class="more-stats-toggle" aria-expanded="false"/);
+        assert.match(global, /Show all \(12\)/);
+    } finally {
+        delete globalThis.localStorage;
+    }
+});
+
 test('Simple view shows the calculators hint until dismissed, never elsewhere (#425)', () => {
     // Fresh browser on the default Simple view: the pointer to the Advanced-only calculators shows.
     const simple = renderApp({ ui: { ...UI, view: 'simple', hintDismissed: false } });
@@ -171,8 +256,11 @@ test('EarningsCard leads with solo time-to-block + per-block reward, day as avg 
     assert.match(up, /Est\. Time to Tari Block/);
     assert.match(up, /XTM per Block/);
     assert.match(up, /10709\.0000 XTM/);   // the full block reward
-    assert.match(up, /XTM \/ day \(avg\)/); // per-day kept, but labelled an average
-    assert.match(up, /16\.1000 XTM/);       // the long-run average figure still shown
+    // Per-day/month/year kept, in the standardized table under a not-steady-income heading.
+    assert.match(up, /Long-run Average — not steady income/);
+    assert.match(up, /16\.1000 XTM/);       // the long-run daily average figure still shown
+    assert.match(up, /483\.0000 XTM/);      // ... spanned to month
+    assert.match(up, /5876\.5000 XTM/);     // ... and year, same shared precision
     // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
     const off = clone();
     off.earnings.available = true;
@@ -233,9 +321,12 @@ test('EarningsCard splits into Monero / Tari / XvB tabs, Monero active by defaul
     assert.match(html, /id="epanel-xvb"[^>]*hidden>/);
     // The shared what-if input sits above the tab strip, so it drives all three tabs.
     assert.match(html, /id="whatif-hr"/);
-    // The Monero panel carries the XMR figures, the Tari panel the solo time-to-block, the XvB
-    // panel the tier block — all present in the DOM (inactive ones just hidden).
-    assert.match(html, /XMR \/ day/);
+    // The Monero panel carries the XMR estimate table, the Tari panel the solo time-to-block,
+    // the XvB panel the tier block — all present in the DOM (inactive ones just hidden).
+    assert.match(html, /class="est-table"/);
+    assert.match(html, /scope="row">Day</);
+    assert.match(html, /scope="row">Month</);
+    assert.match(html, /scope="row">Year</);
     assert.match(html, /Est\. Time to Tari Block/);
     assert.match(html, /XvB Tier \(raffle\)/);
 });
@@ -277,16 +368,19 @@ test('EarningsCard Energy tab shows cost then net as prices are set (#260)', () 
     s.earnings.coeff_day = 1e-8; // small XMR/H/s/day so gross stays sane
     s.energy.cost_per_kwh = 0.2;
     s.energy.currency = 'EUR';
-    // Only the electricity price set → power cost shows, net profit still gated on xmr_price.
+    // Only the electricity price set → the Power Cost column shows, revenue/net still gated on
+    // xmr_price (with the hint naming the config key to set).
     let html = renderApp({ state: s });
-    assert.match(html, /Power cost \/ day/);
-    assert.match(html, /set xmr_price/);
-    assert.doesNotMatch(html, /Net \/ day/);
-    // Both prices set → net profit appears, labelled P2Pool-only since tari_price is still unset.
+    assert.match(html, /Power Cost/);
+    assert.match(html, /dashboard\.energy\.xmr_price/);
+    assert.doesNotMatch(html, /scope="col"[^>]*>Net</);
+    assert.doesNotMatch(html, /Revenue \(est\.\)/);
+    // Both prices set → the Revenue and Net columns appear, labelled P2Pool-only since
+    // tari_price is still unset.
     s.energy.xmr_price = 150;
     html = renderApp({ state: s });
-    assert.match(html, /Net \/ day/);
-    assert.match(html, /Net \/ year/);
+    assert.match(html, /Revenue \(est\.\)/);
+    assert.match(html, /scope="col"[^>]*>Net</);
     assert.match(html, /P2Pool XMR only, after power/);
     assert.doesNotMatch(html, /P2Pool \+ Tari, after power/);
 });
@@ -301,7 +395,7 @@ test('EarningsCard Energy tab folds Tari into net profit once tari_price is set 
     s.energy.xmr_price = 150;
     s.energy.tari_price = 2;
     const html = renderApp({ state: s });
-    assert.match(html, /Net \/ day/);
+    assert.match(html, /scope="col"[^>]*>Net</);
     assert.match(html, /P2Pool \+ Tari, after power/);
     assert.doesNotMatch(html, /P2Pool XMR only, after power/);
 });
@@ -315,7 +409,7 @@ test('EarningsCard Energy tab keeps the P2Pool-only label when tari_price is set
     s.energy.xmr_price = 150;
     s.energy.tari_price = 2;
     const html = renderApp({ state: s });
-    assert.match(html, /Net \/ day/);
+    assert.match(html, /scope="col"[^>]*>Net</);
     assert.match(html, /P2Pool XMR only, after power/);
     assert.doesNotMatch(html, /P2Pool \+ Tari, after power/);
 });
@@ -328,7 +422,7 @@ test('EarningsCard Energy tab folds the current-tier XvB estimate into net, labe
     s.energy.cost_per_kwh = 0.2;
     s.energy.xmr_price = 150;
     const html = renderApp({ state: s });
-    assert.match(html, /Net \/ day/);
+    assert.match(html, /scope="col"[^>]*>Net</);
     assert.match(html, /P2Pool \+ XvB \(est\.\), after power/);
     // Tooltip drops the "Excludes XvB" clause and states it's an estimate.
     assert.match(html, /XvB is an estimate/);
@@ -360,21 +454,52 @@ test('EarningsCard grows fiat rows + a price provenance line once a price is kno
     s.earnings.coeff_day = 1e-8;
     s.earnings.tari_available = true;
     s.earnings.tari_coeff_day = 1e-6;
-    // No price anywhere → no fiat rows, no provenance line (nothing to attribute).
+    // No price anywhere → no fiat columns, no provenance line (nothing to attribute).
     let html = renderApp({ state: s });
-    assert.doesNotMatch(html, /≈ \/ day/);
+    assert.doesNotMatch(html, /≈ USD/);
     assert.doesNotMatch(html, /id="earnings-price-source"/);
-    // Static prices set → Monero + Tari tabs grow ≈-fiat rows, XvB gets its fiat mirror line,
-    // and the footer attributes the prices to config.json.
+    // Static prices set → the Monero + Tari estimate tables grow a ≈-fiat column, XvB gets its
+    // fiat mirror line, and the footer attributes the prices to config.json.
     s.energy.xmr_price = 150;
     s.energy.tari_price = 2;
     html = renderApp({ state: s });
-    assert.match(html, /≈ \/ day/); // Monero tab fiat rows
-    assert.match(html, /≈ per Block/); // Tari tab fiat rows
+    assert.match(html, /≈ USD/); // fiat column header in the estimate tables
+    assert.match(html, /≈ per Block/); // Tari tab per-block fiat card
     assert.match(html, /id="xvb-fiat-line"/); // XvB tab fiat mirror
     assert.match(html, /id="earnings-price-source"/);
     assert.match(html, /USD 150\.00/); // the XMR price in use, stated
     assert.match(html, /static, set in config\.json/);
+});
+
+test('EarningsCard XvB tab shows the published current-tier reward as a day/month/year table', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.xvb_day = 0.002; // fresh published estimate → the standardized table appears
+    let html = renderApp({ state: s });
+    assert.match(html, /Current Tier Expected Reward — published by XvB/);
+    assert.match(html, /0\.002000 XMR/);  // day
+    assert.match(html, /0\.060000 XMR/);  // month, same shared precision
+    assert.match(html, /0\.730000 XMR/);  // year
+    // No fresh estimate → no table, nothing fabricated.
+    s.earnings.xvb_day = null;
+    html = renderApp({ state: s });
+    assert.doesNotMatch(html, /Current Tier Expected Reward/);
+});
+
+test('EarningsCard Energy tab: revenue in accent, net carries the green/red sign colour', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-8;
+    s.energy.cost_per_kwh = 0.2;
+    s.energy.xmr_price = 150;
+    // Fixture fleet earns less than power costs at these figures → net is negative → c-bad.
+    let html = renderApp({ state: s });
+    assert.match(html, /class="c-bad"[^>]*>-/);
+    // A richer rate flips the net positive → c-ok, revenue stays accent either way.
+    s.earnings.coeff_day = 1e-5;
+    html = renderApp({ state: s });
+    assert.match(html, /class="c-ok"/);
+    assert.match(html, /class="c-accent"/);
 });
 
 test('EarningsCard provenance line reflects the live price feed (#520)', () => {
@@ -690,6 +815,15 @@ test('ComponentHealth shows a Tor-only summary, the topology nodes, and the egre
     // ...and the per-component egress drawer lists each component.
     assert.match(html, /All connections \(per component\)/);
     assert.match(html, /xmrig-proxy/);
+});
+
+test('StackTopology marks live routes with marching ants, never a dashed edge', () => {
+    const html = renderApp();
+    // The fixture carries tor-routed edges -> at least one ants-marked path...
+    assert.match(html, /class="topo-edge-ants"/);
+    // ...but never on an edge whose dash pattern is already spoken for (internal mesh /
+    // firewall-blocked), where the animation would fight the static dashes.
+    assert.doesNotMatch(html, /class="topo-edge-ants"[^>]*stroke-dasharray="[^"]/);
 });
 
 test('ComponentHealth flips to a warning summary when the posture leaks', () => {

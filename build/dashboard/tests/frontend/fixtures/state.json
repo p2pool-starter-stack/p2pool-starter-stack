@@ -27,6 +27,7 @@
       "variant": "ok"
     }
   ],
+  "blocks": [],
   "cadence": {
     "available": false,
     "last_block": "Never",
@@ -47,6 +48,7 @@
         "y": 8100
       }
     ],
+    "payouts": [],
     "raffle": [
       {
         "label": "XvB raffle win \u2014 donor_whale round at 4.20 MH/s",
@@ -76,6 +78,7 @@
   },
   "control_enabled": false,
   "db_healthy": true,
+  "disk_growth": [],
   "earnings": {
     "available": false,
     "block_reward": "0.0000 XMR",
@@ -93,7 +96,8 @@
       "enabled": false
     },
     "tari_difficulty": 0.0,
-    "tari_reward": 0
+    "tari_reward": 0,
+    "xvb_day": null
   },
   "egress": {
     "components": [
@@ -174,6 +178,14 @@
           {
             "route": "inactive",
             "to": "price feed (coingecko.com)"
+          },
+          {
+            "route": "inactive",
+            "to": "alert sinks (webhook / ntfy)"
+          },
+          {
+            "route": "inactive",
+            "to": "XvB standby pull (backup \u2190 primary)"
           }
         ],
         "firewalled": false,
@@ -265,6 +277,10 @@
     "ts": "Never"
   },
   "page_title": "Pithead Dashboard",
+  "payouts": {
+    "monero": [],
+    "tari": []
+  },
   "pool": {
     "blocks": 0,
     "diff": "0.00 M",
@@ -457,6 +473,20 @@
         "from": "dashboard",
         "kind": "egress",
         "label": "price feed",
+        "route": "inactive",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "alert sinks",
+        "route": "inactive",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "XvB standby",
         "route": "inactive",
         "to": "tor"
       },
@@ -717,5 +747,7 @@
         "threshold": 1000000.0
       }
     ]
-  }
+  },
+  "xvb_history": [],
+  "xvb_standby": null
 }

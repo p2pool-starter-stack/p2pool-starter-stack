@@ -248,6 +248,8 @@ export function computeEarnings(hashrateHs, earnings) {
       tariTimeToBlockSec: null,
       tariRewardPerBlock: null,
       xvbDay: null,
+      xvbMonth: null,
+      xvbYear: null,
     };
   }
   const day = hashrateHs * earnings.coeff_day;
@@ -274,8 +276,12 @@ export function computeEarnings(hashrateHs, earnings) {
     tariTimeToBlockSec,
     tariRewardPerBlock: earnings.tari_available ? earnings.tari_reward : null,
     // Current-tier XvB expected reward, XMR/day (#712). A fixed published figure, NOT scaled by the
-    // what-if hashrate (unlike day/tariDay); null unless the server sent a fresh estimate.
+    // what-if hashrate (unlike day/tariDay); null unless the server sent a fresh estimate. Month/
+    // year are the same day/month/year spans every other estimate gets, so the XvB tab can show
+    // the standardized table.
     xvbDay: Number.isFinite(earnings.xvb_day) ? earnings.xvb_day : null,
+    xvbMonth: Number.isFinite(earnings.xvb_day) ? earnings.xvb_day * DAYS_PER_MONTH : null,
+    xvbYear: Number.isFinite(earnings.xvb_day) ? earnings.xvb_day * DAYS_PER_YEAR : null,
   };
 }
 
@@ -311,13 +317,31 @@ export function xvbTierComparison(tier, coeffDay) {
   return { expected, cost, net };
 }
 
-// Format a client-computed coin amount. More decimal places for small amounts (a day's earnings can
-// be a tiny fraction) so the figure isn't rounded to "0.0000"; "—" for the null/invalid case.
+// Decimal places for a coin amount: more for small amounts (a day's earnings can be a tiny
+// fraction) so the figure isn't rounded to "0.0000".
+function coinDp(value) {
+  return value >= 1 ? 4 : value >= 0.001 ? 6 : 8;
+}
+
+// Format a client-computed coin amount; "—" for the null/invalid case.
 function formatCoin(value, unit) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   if (value === 0) return "0 " + unit;
-  const dp = value >= 1 ? 4 : value >= 0.001 ? 6 : 8;
-  return value.toFixed(dp) + " " + unit;
+  return value.toFixed(coinDp(value)) + " " + unit;
+}
+
+// Format a Day/Month/Year coin triplet with ONE shared precision, picked from the smallest
+// positive value (the day figure). Per-value precision made the column ragged — "0.00092945"
+// above "0.027884" above "0.339250" — so the standardized estimate tables share the dp and the
+// rows align. Nulls still render "—" (the table can hold a computable day beside a null month).
+export function coinTriplet(values, unit) {
+  const positive = values.filter((v) => Number.isFinite(v) && v > 0);
+  const dp = positive.length ? coinDp(Math.min(...positive)) : 4;
+  return values.map((v) => {
+    if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+    if (v === 0) return "0 " + unit;
+    return v.toFixed(dp) + " " + unit;
+  });
 }
 
 export function formatXmr(xmr) {
@@ -365,6 +389,9 @@ export function computeEnergy(energy, est) {
     costDay: null,
     costMonth: null,
     costYear: null,
+    grossDay: null,
+    grossMonth: null,
+    grossYear: null,
     netDay: null,
     netMonth: null,
     netYear: null,
@@ -398,6 +425,11 @@ export function computeEnergy(energy, est) {
     costDay,
     costMonth: span(costDay, DAYS_PER_MONTH),
     costYear: span(costDay, DAYS_PER_YEAR),
+    // Gross revenue (the sum the net starts from), surfaced so the Energy tab can show
+    // Revenue → Cost → Net instead of leaving the revenue side implicit.
+    grossDay,
+    grossMonth: span(grossDay, DAYS_PER_MONTH),
+    grossYear: span(grossDay, DAYS_PER_YEAR),
     netDay,
     netMonth: span(netDay, DAYS_PER_MONTH),
     netYear: span(netDay, DAYS_PER_YEAR),
@@ -412,6 +444,14 @@ export function formatFiat(value, currency) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   const sign = value < 0 ? "-" : "";
   return sign + (currency || "USD") + " " + Math.abs(value).toFixed(2);
+}
+
+// Bare fiat amount for estimate-table cells, where the column header already names the
+// currency — repeating "USD" in every cell is noise. Same 2-dp + sign rules as formatFiat.
+export function formatFiatAmount(value) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  const sign = value < 0 ? "-" : "";
+  return sign + Math.abs(value).toFixed(2);
 }
 
 // Fiat value of a coin estimate (#520 price feed): null unless both the estimate and a positive
@@ -447,9 +487,10 @@ export function priceSourceLabel(energy) {
 }
 
 // Format a power draw / energy figure with its unit (W, kWh); "—" for the null/invalid case.
+// An empty unit gives the bare number — for table cells whose column header names the unit.
 export function formatUnit(value, unit, dp = 1) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return value.toFixed(dp) + " " + unit;
+  return value.toFixed(dp) + (unit ? " " + unit : "");
 }
 
 // Format the expected time-to-share (seconds) for display; "—" when not computable. Reuses the
