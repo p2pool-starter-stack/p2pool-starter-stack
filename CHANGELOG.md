@@ -11,6 +11,8 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-07-22
+
 ### Added
 
 - Mine cart train (#748): a pixel-art strip under the hero band retelling the chart window as
