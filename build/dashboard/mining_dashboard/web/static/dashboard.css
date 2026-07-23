@@ -96,6 +96,18 @@ body {
   gap: 20px;
   margin-bottom: 20px;
 }
+/* Section label inside the Advanced card grid (#159): the grid itself has no visual grouping, so
+ * these mark the "mine" -> "the world" transition the layout comment describes. Spans the full
+ * grid row; typography matches .est-heading (the other muted section marker in this stylesheet). */
+.grid-section-label {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 .card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -164,6 +176,11 @@ body {
   padding: 16px 18px;
   text-align: center;
 }
+/* Total Hashrate (always first — heroKpis, logic.mjs) gets an accent cue so the strip reads with
+ * a clear headline instead of six equally-weighted numbers. */
+.hero-band .hero-kpi:first-child {
+  border-top: 2px solid var(--accent);
+}
 .hero-value {
   font-size: 1.6rem;
   font-weight: 700;
@@ -176,6 +193,18 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
+}
+
+/* Mine cart train (pixel art) under the hero band: purely decorative — the chart above shows
+ * the same data — so it stays short and quiet. The canvas draws at a 2× logical scale; height
+ * matches the renderer's 44-logical-px strip. */
+.minecart-strip {
+  margin: -4px 0 16px 0;
+}
+.minecart-strip canvas {
+  display: block;
+  width: 100%;
+  height: 88px;
 }
 
 /* Typography */
@@ -240,6 +269,26 @@ h3 {
 }
 .col-span-2 {
   grid-column: span 2;
+}
+/* Progressive disclosure ("show more") toggle for a stat-grid card: a real <button>, muted like
+ * the other secondary controls (.egress-details summary) so it doesn't compete with the stats
+ * themselves, but left-aligned under the grid rather than centred like a primary action. */
+.more-stats-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 8px 0 0 0;
+  text-align: left;
+}
+.more-stats-toggle:hover {
+  color: var(--text);
+}
+.more-stats-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Earnings calculator what-if input (Issue #12) */
@@ -406,6 +455,47 @@ td {
 tr:last-child td {
   border-bottom: none;
 }
+
+/* Standardized estimate tables: the one Day/Month/Year shape every earnings tab uses.
+ * Builds on the generic table/th/td rules above (borders, muted uppercase headers) and only
+ * overrides typography and alignment: numeric columns right-aligned with tabular figures so
+ * the shared-precision rows line up, label column flush left, digits never break mid-number
+ * (the .est-scroll wrapper pans instead on narrow screens). */
+.est-table {
+  margin-bottom: 12px;
+}
+.est-table th {
+  font-size: 0.7rem;
+  text-align: right;
+  padding: 4px 0 4px 12px;
+}
+.est-table tbody th,
+.est-table thead th:first-child {
+  text-align: left;
+  padding-left: 0;
+}
+.est-table td {
+  text-align: right;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 5px 0 5px 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.est-table tr:last-child th {
+  border-bottom: none; /* match the generic tr:last-child td rule for the row-label column */
+}
+.est-scroll {
+  overflow-x: auto;
+}
+.est-heading {
+  margin: 14px 0 6px 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
 /* Pool-wide proxy share totals under the Workers table (Issue #82). */
 .proxy-totals {
   margin-top: 12px;
@@ -432,6 +522,42 @@ tr:last-child td {
 .table-scroll th,
 .table-scroll td {
   white-space: nowrap;
+}
+/* Numeric columns (1m / 10m / Accepted / Rejected — WORKER_COLUMNS indices 3-6, logic.mjs)
+ * right-align with tabular figures, the same treatment as .est-table td, so the digits line up
+ * instead of ragging left like the text columns beside them. */
+.table-scroll th:nth-child(4),
+.table-scroll th:nth-child(5),
+.table-scroll th:nth-child(6),
+.table-scroll th:nth-child(7),
+.table-scroll td:nth-child(4),
+.table-scroll td:nth-child(5),
+.table-scroll td:nth-child(6),
+.table-scroll td:nth-child(7) {
+  text-align: right;
+}
+.table-scroll td:nth-child(4),
+.table-scroll td:nth-child(5),
+.table-scroll td:nth-child(6),
+.table-scroll td:nth-child(7) {
+  font-variant-numeric: tabular-nums;
+}
+/* Row hover (Workers Alive): a quiet raised-surface cue that a row is under the pointer. */
+.table-scroll tbody tr:hover td {
+  background: var(--elevated);
+}
+/* An offline row's status-bad class colours the whole <tr> (color is inherited down every td) —
+ * that read as eight cells of red text. Reset the row to normal text colour and let only the name
+ * cell (which already carries the worker name + status context) carry the ok/bad tint. */
+.table-scroll tbody tr.status-ok > td,
+.table-scroll tbody tr.status-bad > td {
+  color: var(--text);
+}
+.table-scroll tbody tr.status-ok > td:first-child {
+  color: var(--ok);
+}
+.table-scroll tbody tr.status-bad > td:first-child {
+  color: var(--bad);
 }
 
 /* The audit trail's title + its hour/day/month grouping select (#530), side by side. */
@@ -577,13 +703,21 @@ button.upgrade-btn {
   border-color: var(--text-muted);
   color: var(--text);
 }
+/* Accent, not --ok: --ok is the app-wide "healthy" signal (status-ok, badge-ok, the sync
+ * gauge) — reusing it for "this range/window is selected" collided with that meaning. Accent
+ * matches .btn-toggle.active, the sibling Simple/Advanced control. */
 .btn-range.active {
-  background-color: var(--ok);
+  background-color: var(--accent);
   color: #fff;
-  border-color: var(--ok);
+  border-color: var(--accent);
 }
 .btn-reset {
   margin-left: 8px;
+}
+/* "Range:" / "Avg:" prefixes (chart.mjs): full text colour, not text-muted, so the two control
+ * rows read as separate labelled groups instead of blurring into one muted line. */
+.chart-control-label {
+  color: var(--text);
 }
 
 /* Series show/hide toggles (Issue #47): a quiet legend; click a chip to toggle that series.
@@ -846,6 +980,7 @@ button.upgrade-btn {
   gap: 12px;
   background: var(--card);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
   border-radius: 6px;
   padding: 8px 12px;
   margin-bottom: 15px;
@@ -1066,9 +1201,20 @@ button.upgrade-btn {
   fill: var(--text);
   font-size: 11px;
 }
+/* Tor hub: tint the fill with the same green as its stroke (instead of the flat --bg every other
+ * node uses) so the trust anchor reads as a distinct zone at a glance, not just a thicker border. */
 .topo-hub rect {
+  fill: var(--ok);
+  fill-opacity: 0.12;
   stroke: var(--ok);
   stroke-width: 1.5;
+}
+/* Host-zone nodes (xmrig-proxy/caddy/dashboard/p2pool/monerod/tari/docker): a faint accent tint —
+ * "this stack" — same zone-tint treatment as the Tor hub above. Excludes .topo-hub (tor) and
+ * .topo-ext (lan/internet, which stay the deliberately hollow/dashed "external" look below). */
+.topo-node:not(.topo-hub):not(.topo-ext) rect {
+  fill: var(--accent);
+  fill-opacity: 0.06;
 }
 .topo-ext rect {
   fill: transparent;
@@ -1076,6 +1222,22 @@ button.upgrade-btn {
 }
 .topo-ext text {
   fill: var(--text-muted);
+}
+/* Marching ants on active, non-muted edges (Tor/clearnet — never the grey local/inactive routes):
+ * a moving dash pattern reads as "live traffic" versus the static routes. Dashes alone (no motion)
+ * render for prefers-reduced-motion, so the distinction still exists without the animation. */
+.topo-edge-ants {
+  stroke-dasharray: 6 4;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .topo-edge-ants {
+    animation: topo-ants-dash 0.8s linear infinite;
+  }
+}
+@keyframes topo-ants-dash {
+  to {
+    stroke-dashoffset: -10;
+  }
 }
 /* The per-component egress list, demoted to an expandable drawer under the topology map. */
 .egress-details {

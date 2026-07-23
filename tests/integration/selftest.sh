@@ -201,6 +201,60 @@ FIXTURE='{"pool":{"type":"Unknown"}}'
 if _pred_pool_ready "Main"; then it_fail "_pred_pool_ready false when pool Unknown" "passed on Unknown"; else it_pass "_pred_pool_ready false when pool Unknown"; fi
 FIXTURE='{"sync":{"monero":{"state":"done"},"tari":{"state":"done"}},"monero":{"mode":"Pruned"},"pool":{"type":"Main"},"proxy_workers":2,"stratum":{"conns":2,"total_hashes":12345}}'
 
+echo "== pool_flags_correct: P2POOL_FLAGS ground truth (#746) =="
+# rx here serves the .env grep, not /api/state — return a P2POOL_FLAGS value directly.
+rx() { printf '%s' "$FLAGS"; }
+FLAGS='--mini --socks5 172.28.0.25:9050'
+if pool_flags_correct "Mini"; then it_pass "flags --mini match Mini"; else it_fail "flags --mini match Mini" "returned non-zero"; fi
+if pool_flags_correct "Main"; then it_fail "flags --mini reject Main" "passed"; else it_pass "flags --mini reject Main"; fi
+FLAGS='--nano --socks5 172.28.0.25:9050'
+if pool_flags_correct "Nano"; then it_pass "flags --nano match Nano"; else it_fail "flags --nano match Nano" "returned non-zero"; fi
+FLAGS='--socks5 172.28.0.25:9050'
+if pool_flags_correct "Main"; then it_pass "no sidechain flag matches Main"; else it_fail "no sidechain flag matches Main" "returned non-zero"; fi
+if pool_flags_correct "Mini"; then it_fail "no sidechain flag rejects Mini" "passed"; else it_pass "no sidechain flag rejects Mini"; fi
+
+echo "== assert_pool_type: four-way verdict (#454/#687/#746) =="
+# Subshell-stub the emitters so the verdict under test can't touch this selftest's counters.
+pool_verdict() { # <got> <want> <flags> -> PASS|WARN|FAIL
+    (
+        it_pass() { printf 'PASS'; }
+        it_warn() { printf 'WARN'; }
+        it_fail() { printf 'FAIL'; }
+        FLAGS="$3"
+        rx() { printf '%s' "$FLAGS"; }
+        assert_pool_type "t" "$1" "$2"
+    )
+}
+assert_eq "match -> PASS" "$(pool_verdict Mini Mini '--mini')" "PASS"
+assert_eq "Unknown -> WARN (peer timing, #454)" "$(pool_verdict Unknown Mini '--mini')" "WARN"
+assert_eq "empty -> WARN (peer timing)" "$(pool_verdict '' Mini '--mini')" "WARN"
+assert_eq "wrong type, flags CORRECT -> WARN (classifier lag, #746)" "$(pool_verdict Main Mini '--mini --socks5 x')" "WARN"
+assert_eq "wrong type, flags WRONG -> FAIL (render bug)" "$(pool_verdict Main Mini '--socks5 x')" "FAIL"
+
+echo "== assert_tari_synced_required: earned lag tolerance (#746) =="
+tari_verdict() { # <state> <seen> -> PASS|WARN|FAIL
+    (
+        it_pass() { printf 'PASS'; }
+        it_warn() { printf 'WARN'; }
+        it_fail() { printf 'FAIL'; }
+        TARI_SEEN_DONE="$2"
+        assert_tari_synced_required "$1"
+    )
+}
+assert_eq "done -> PASS" "$(tari_verdict "done" 0)" "PASS"
+assert_eq "loading BEFORE any done -> FAIL (never synced must fail)" "$(tari_verdict loading 0)" "FAIL"
+assert_eq "loading AFTER a done -> WARN (post-restart re-discovery)" "$(tari_verdict loading 1)" "WARN"
+assert_eq "syncing AFTER a done -> WARN" "$(tari_verdict syncing 1)" "WARN"
+assert_eq "garbage state -> FAIL even after a done" "$(tari_verdict '' 1)" "FAIL"
+# And the proof is recorded: a done sets TARI_SEEN_DONE for the caller's shell.
+(
+    it_pass() { :; }
+    TARI_SEEN_DONE=0
+    assert_tari_synced_required "done"
+    [ "$TARI_SEEN_DONE" = "1" ]
+) && it_pass "done records TARI_SEEN_DONE" || it_fail "done records TARI_SEEN_DONE" "flag not set"
+rx() { printf '%s' "$FIXTURE"; } # restore the /api/state stub for later sections
+
 echo "== _pred_hashes_flowing: gates on stratum.total_hashes > 0 =="
 if _pred_hashes_flowing; then it_pass "_pred_hashes_flowing true when hashes>0"; else it_fail "_pred_hashes_flowing true when hashes>0" "returned non-zero on 12345"; fi
 # total_hashes resets to 0 on a p2pool restart; the gate must hold there (the live-validation regression).

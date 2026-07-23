@@ -136,6 +136,29 @@ A strip of headline KPIs sits below the top bar:
 | **XvB Tier** | The donation tier you're currently holding. |
 | **Mining Mode** | What your hashrate is routed to right now: P2Pool, XvB, or a split. |
 
+### Mine cart train
+
+A pixel-art train runs under the hero band on every view. It is the chart's history retold as
+cargo: the strip splits the loaded chart window into equal intervals, one cart each (the newest
+sits under the tipple chute on the right), and what landed in an interval rides in its cart as
+a token coin poking over the rim:
+
+| In the cart | Means |
+|---|---|
+| Empty cart | Plain hashing, nothing landed in this interval. |
+| One orange ɱ coin | One or more P2Pool shares found. |
+| A pair of orange ɱ coins | A block found. |
+| Purple gem coin | A confirmed Tari payout — for solo merge-mining, the wallet's proof of a found Tari block. Needs [payout confirmation](#payout-confirmation) on for Tari. |
+| Blue X coin | An XvB raffle win. |
+
+Hover a cart for its exact interval and haul ("14:20–14:30 — 2 shares"). A cat sleeps by the
+track; clouds drift past; the coins bob as the track rumbles. The train is decorative: shares,
+blocks, and raffle wins all appear on the chart above with precise timestamps. The one thing
+the train alone marks is the Tari gem coin — Tari payouts stay off the chart (see
+[Payout confirmation](#payout-confirmation)), and the cart's hover tooltip is their timeline.
+All motion stops when your system asks for reduced motion, and the strip disappears while
+there is no history to show.
+
 ### Node status & failover
 
 If a local node becomes unreachable, a red `monerod DOWN` or `Tari DOWN` badge appears in the top
@@ -167,7 +190,9 @@ needed.
 The database also keeps three smaller series: pool block-found events, hourly monerod-DB-size and
 host-disk-usage samples, and XvB-credited scalar samples taken roughly every 5 minutes. `/api/state`
 serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the same way as
-`share_stats`. No chart reads them yet — this is persistence and API exposure only.
+`share_stats`. The [mine cart train](#mine-cart-train) reads `blocks` and the chart's donation
+overlay reads `xvb_history`; only `disk_growth` is persistence and API exposure alone, no
+renderer yet.
 
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
@@ -371,10 +396,17 @@ figures.
 
 The card is split into tabs — **Monero**, **Tari**, **XvB**, and **Energy** — driven by one
 **what-if hashrate** input that sits above the tabs, so switching tabs keeps the value you entered.
-Monero holds the XMR/day·month·year figures, time-to-share, and block reward; Tari holds the solo
-time-to-block, per-block reward, and per-day average; XvB holds the tier/cost block and the
-per-tier payout comparison. The XvB tab appears only when XvB is enabled, and the Energy tab only
-when the fleet reports power (see [Energy & profit](#energy--profit)).
+Monero holds the XMR estimate, time-to-share, and block reward; Tari holds the solo time-to-block,
+per-block reward, and long-run average; XvB holds the tier/cost block, the current tier's published
+expected reward, and the per-tier payout comparison. The XvB tab appears only when XvB is enabled,
+and the Energy tab only when the fleet reports power (see [Energy & profit](#energy--profit)).
+
+Every tab presents its rate estimate in the same **Day / Month / Year** table: the coin figure,
+plus a `≈` fiat column once that coin's price is known (see *Prices* under
+[Energy & profit](#energy--profit)). The three rows of a table share one precision — picked from
+the day figure, the smallest — so the column aligns. Colours follow one rule across the card: coin
+estimates in the accent colour, fiat mirrors plain, and **net** figures green in profit and red in
+loss — the only judgment colour in the calculator.
 
 It is scoped to P2Pool — **not** an XvB calculator:
 
@@ -398,10 +430,10 @@ It is scoped to P2Pool — **not** an XvB calculator:
 | Field | Meaning |
 |---|---|
 | **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
-| **XMR / day · month · year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty`, the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
+| **XMR Day / Month / Year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty`, the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
 | **Est. Time to Tari Block** | Expected time for your hashrate to solo-find one Tari block: `network difficulty ÷ hashrate`. This is the honest headline for solo merge-mining — the reward lands here, all at once. `—` while merge-mining is inactive or Tari is still syncing. |
 | **XTM per Block** | The full Tari block reward paid when you find a block — you get all of it at once, not spread over time. |
-| **XTM / day (avg)** | The Tari block reward spread across the expected time-to-block — a **long-run average**, not steady income. `—` while merge-mining is inactive or Tari is still syncing. |
+| **Long-run Average (XTM)** | The Tari tab's Day / Month / Year table: the per-block reward spread across the expected time-to-block — a **long-run average**, not steady income, and headed as such. `—` while merge-mining is inactive or Tari is still syncing. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
 | **XMR Block Reward** | The current Monero block reward, for context. |
 
@@ -422,14 +454,15 @@ estimate: add `"watts": <number>` to its `workers.list[]` descriptor and it coun
 total, marked *estimated*. A worker with neither a measured nor a configured draw is left out and
 the **Fleet Power** figure turns amber to show the total is a lower bound, not a fabricated zero.
 
-The tab always shows fleet watts, H/s-per-watt, and energy use (kWh per day/month/year, a naive
-extrapolation of the current draw). Three prices add the rest, and each is optional:
+The tab always shows fleet watts and H/s-per-watt, plus the same Day / Month / Year table as the
+other tabs — here its columns grow as prices are set. **kWh** (a naive extrapolation of the
+current draw) is always there; three optional prices add the money columns:
 
 | Config | Adds |
 |---|---|
-| `dashboard.energy.cost_per_kwh` | **Power cost** per day/month/year (`kWh × price`). |
-| `dashboard.energy.xmr_price`    | **Net profit** per day/month/year, P2Pool XMR earnings × your XMR price, minus power cost. Also values the current-tier XvB expected reward (an estimate) into that net when XvB has a fresh figure. |
-| `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same net profit, at your Tari price. Requires `xmr_price` to be set too. |
+| `dashboard.energy.cost_per_kwh` | The **Power Cost** column (`kWh × price`). |
+| `dashboard.energy.xmr_price`    | The **Revenue (est.)** and **Net** columns: P2Pool XMR earnings × your XMR price, gross and then minus power cost. Needs `cost_per_kwh` set too — without a power cost there is no net for revenue to lead into. Also values the current-tier XvB expected reward (an estimate) into both when XvB has a fresh figure. |
+| `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same revenue and net, at your Tari price. Requires `xmr_price` to be set too. |
 
 All three are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no
 conversion happens. Leave `cost_per_kwh` unset and the tab shows only draw and efficiency; set it
@@ -443,7 +476,7 @@ the **XvB** raffle's expected reward for the tier you currently hold, valued at 
 whole net is already probabilistic, so it stays one figure — but the XvB slice is an **estimate**:
 it is XvB's published expected reward for your current tier (the lower of your credited 1h and 24h
 averages), and the raffle draw is random among qualifiers, so it is not a payout you are owed. The
-card's heading and the Net/day tooltip label it `XvB (est.)` and say exactly what the figure counts,
+card's heading and the Net column's tooltip label it `XvB (est.)` and say exactly what the figure counts,
 so it is never silently partial. XvB folds in only while its published estimate is fresh (the same
 staleness rule as the *XvB Donation Stats* card) and you clear a donor tier; otherwise it is left
 out rather than guessed, and the label reverts to P2Pool (and Tari, if priced) alone.
@@ -458,11 +491,11 @@ Prices come from one of two places, and the card always says which:
   [Privacy › Runtime egress](privacy.md#runtime-egress)). The static numbers remain the fallback
   until the first fetch lands; on a failed fetch the last good prices stand and their age is shown.
 
-Once a price is known (either way), the earnings card also grows **≈-fiat rows**: the Monero tab
-shows the fiat value of the XMR/day/month/year estimates, the Tari tab of the per-block reward and
-XTM/day average, and the XvB tab a fiat mirror of the tier comparison. A `Prices:` line at the foot
-of the card states the exact prices in use and their source — live feed (with age) or config.json —
-so no fiat figure is ever unattributed.
+Once a price is known (either way), each estimate table grows its **`≈` fiat column**: the
+Monero tab's Day / Month / Year figures, the Tari tab's Long-run Average (plus a per-block fiat
+card), the XvB tab's published-reward table and a fiat mirror of the tier comparison. A
+`Prices:` line at the foot of the card states the exact prices in use and their source — live
+feed (with age) or config.json — so no fiat figure is ever unattributed.
 
 ### Payout confirmation
 
@@ -481,7 +514,8 @@ landed — onto the hashrate chart, on the same marker row as the event diamonds
 Toggle it from the chart legend like any other series. When XvB is on, a dashed **XvB donation %**
 line overlays the chart on its own right-side 0–100% axis, drawn from the recorded donation history,
 so you can line a payout up against how much hashrate you were donating when it arrived. Tari
-payouts are solo and lumpy, so they stay in the earnings card and off the chart.
+payouts are solo and lumpy, so they stay in the earnings card and off the chart — the
+[mine cart train](#mine-cart-train) marks each one with a purple gem coin instead.
 
 The dashboard polls the wallet on a slow cadence (about every 5 minutes) and records each confirmed
 payout to a small local table, so a restart never re-alerts. Coinbase outputs become spendable only

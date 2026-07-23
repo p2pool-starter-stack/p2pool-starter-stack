@@ -387,6 +387,29 @@ def build_blocks(blocks, range_arg, window=None):
     ]
 
 
+def build_payouts(state_mgr, range_arg, window=None):
+    """Persisted confirmed payouts per chain as chart-ready points, restricted to the selected
+    range/window like ``build_blocks`` (payout rows are ``ts``-keyed too). A confirmed Tari
+    coinbase payout is the wallet's proof of a solo-found Tari block, so this series is what
+    lets the client mark Tari income on a timeline (the mine cart train's purple coin; a chart
+    series can reuse it). Amounts stay atomic (piconero / microTari) — the client only marks
+    the moment, it does no coin math. Empty when payout confirmation is off or the wallet
+    hasn't scanned yet; a handful of rows a week — no downsampling needed."""
+    chains = (
+        ("monero", config.PAYOUT_CONFIRM_ENABLED),
+        ("tari", config.TARI_PAYOUT_CONFIRM_ENABLED),
+    )
+    return {
+        chain: [
+            {"x": int(p["ts"] * 1000), "amount": p.get("amount_atomic", 0)}
+            for p in _filter_events(state_mgr.get_payouts(chain), range_arg, window)
+        ]
+        if enabled and state_mgr is not None
+        else []
+        for chain, enabled in chains
+    }
+
+
 def _gauge_series(rows, range_arg, window, value_cols):
     """Shared shape for a persisted gauge series (#196): filter to the selected range/window,
     bucket-average past ``_MAX_CHART_POINTS`` like ``share_stats``, and key each row's own
@@ -1848,6 +1871,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # samples, and ~5-min XvB-credited samples. No chart renders these yet — that's the
         # deliberate next slice — the payload just carries the persisted series.
         "blocks": build_blocks(state_mgr.get_blocks(), range_arg, window),
+        # Confirmed payouts per chain as timeline points ({x: ms, amount: atomic}), same
+        # range/window bounds as blocks. Feeds the mine cart train's Tari marker; empty lists
+        # while payout confirmation is off.
+        "payouts": build_payouts(state_mgr, range_arg, window),
         "disk_growth": build_disk_growth(state_mgr.get_disk_growth(), range_arg, window),
         "xvb_history": build_xvb_history(state_mgr.get_xvb_history(), range_arg, window),
         "egress": egress,

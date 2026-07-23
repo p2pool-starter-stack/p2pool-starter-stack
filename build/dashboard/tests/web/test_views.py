@@ -1485,6 +1485,79 @@ class TestBlocksDiskGrowthXvbHistorySeries:
     def test_build_blocks_empty(self):
         assert build_blocks([], "all") == []
 
+    def _payout_mgr(self, rows_by_chain):
+        mgr = MagicMock()
+        mgr.get_payouts.side_effect = lambda chain: rows_by_chain.get(chain, [])
+        return mgr
+
+    def test_build_payouts_shape_ms_epoch_and_atomic_amount(self, monkeypatch):
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", True)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", True)
+        now = time.time()
+        mgr = self._payout_mgr(
+            {
+                "monero": [{"ts": now - 60, "amount_atomic": 12_345}],
+                "tari": [{"ts": now - 120, "amount_atomic": 999}],
+            }
+        )
+        out = views.build_payouts(mgr, "all")
+        assert out["monero"] == [{"x": int((now - 60) * 1000), "amount": 12_345}]
+        assert out["tari"] == [{"x": int((now - 120) * 1000), "amount": 999}]
+
+    def test_build_payouts_range_filters_like_blocks(self, monkeypatch):
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", True)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", True)
+        now = time.time()
+        mgr = self._payout_mgr(
+            {
+                "tari": [
+                    {"ts": now - 8 * 24 * 3600, "amount_atomic": 1},
+                    {"ts": now - 60, "amount_atomic": 2},
+                ]
+            }
+        )
+        assert len(views.build_payouts(mgr, "1w")["tari"]) == 1
+
+    def test_build_payouts_gates_per_chain_and_none_mgr(self, monkeypatch):
+        # A disabled chain stays an empty list even when rows exist — the payload never leaks
+        # payout data while the operator has confirmation off for that chain.
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", True)
+        now = time.time()
+        mgr = self._payout_mgr(
+            {
+                "monero": [{"ts": now, "amount_atomic": 1}],
+                "tari": [{"ts": now, "amount_atomic": 2}],
+            }
+        )
+        out = views.build_payouts(mgr, "all")
+        assert out["monero"] == []
+        assert len(out["tari"]) == 1
+        mgr.get_payouts.assert_called_once_with("tari")  # disabled chain never queried
+        assert views.build_payouts(None, "all") == {"monero": [], "tari": []}
+
+    def test_payouts_ride_build_state_end_to_end(self, monkeypatch):
+        # The wiring, not just the builder: with confirmation on, a stored payout row surfaces
+        # in the top-level payload the client polls (the mine cart train reads state.payouts).
+        # The shared _state_mgr() MagicMock auto-mocks get_payouts, so point it at real rows.
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", True)
+        sm = _state_mgr()
+        sm.get_payouts.return_value = [
+            {"chain": "tari", "txid": "t1", "height": 9, "ts": time.time(), "amount_atomic": 4552}
+        ]
+        st = build_state(_data(), sm, "all")
+        assert st["payouts"]["monero"] == []
+        assert len(st["payouts"]["tari"]) == 1
+        assert st["payouts"]["tari"][0]["amount"] == 4552
+        # Only x + amount ship — no txid in the payload the browser sees.
+        assert set(st["payouts"]["tari"][0]) == {"x", "amount"}
+        # The earnings card's confirmed summaries gate on the SAME flags in the same request —
+        # the timeline (mine cart) and the card can never disagree about whether payout
+        # confirmation is on for a chain.
+        assert st["earnings"]["tari_confirmed"]["enabled"] is True
+        assert st["earnings"]["confirmed"] == {"enabled": False}
+
     def test_build_disk_growth_shape_and_ms_epoch(self):
         now = time.time()
         rows = [
@@ -1789,26 +1862,8 @@ class TestEarnings:
         e = build_earnings(self._NET, _metrics())
         assert e["confirmed"] == {"enabled": False}
 
-    def test_confirmed_totals_windowed(self):
-        # #381: 24h / 7d / all-time XMR sums from stored confirmed payouts, atomic→XMR at the edge.
-        now = 1_000_000.0
-        payouts = [
-            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000_000_000},  # in 24h
-            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000_000_000},  # in 7d
-            {
-                "txid": "c",
-                "ts": now - 30 * 86_400,
-                "amount_atomic": 1_000_000_000_000,
-            },  # all-time only
-        ]
-        from mining_dashboard.web.views import _confirmed_payouts_summary
-
-        s = _confirmed_payouts_summary(payouts, now=now)
-        assert s["enabled"] is True and s["count"] == 3
-        assert s["xmr_24h"] == pytest.approx(0.25)
-        assert s["xmr_7d"] == pytest.approx(0.75)
-        assert s["xmr_all"] == pytest.approx(1.75)
-        assert s["last_ts"] == now - 100
+    # ponytail: the 24h/7d/all windowing math is proven once, in TestConfirmedPayoutsSummary —
+    # this class only asserts build_earnings passes payouts through (enabled/empty/disabled).
 
     def test_confirmed_enabled_but_empty(self):
         # Feature on, nothing confirmed yet → enabled with zeroed totals (shows 0.000000, not "—").
@@ -1826,23 +1881,6 @@ class TestEarnings:
         # No tari_payouts passed (Tari feature off) → tari_confirmed reports disabled.
         e = build_earnings(self._NET, _metrics())
         assert e["tari_confirmed"] == {"enabled": False}
-
-    def test_tari_confirmed_totals_windowed_in_xtm(self):
-        # #462: XTM sums (microTari ÷1e6) with xtm_* keys, distinct from the monero xmr_* block.
-        now = 1_000_000.0
-        tari_payouts = [
-            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000},  # in 24h
-            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000},  # in 7d
-            {"txid": "c", "ts": now - 30 * 86_400, "amount_atomic": 1_000_000},  # all-time only
-        ]
-        from mining_dashboard.web.views import MICRO_PER_XTM, _confirmed_payouts_summary
-
-        s = _confirmed_payouts_summary(tari_payouts, now=now, divisor=MICRO_PER_XTM, unit="xtm")
-        assert s["enabled"] is True and s["count"] == 3
-        assert s["xtm_24h"] == pytest.approx(0.25)
-        assert s["xtm_7d"] == pytest.approx(0.75)
-        assert s["xtm_all"] == pytest.approx(1.75)
-        assert s["last_ts"] == now - 100
 
     def test_tari_confirmed_enabled_but_empty(self):
         e = build_earnings(self._NET, _metrics(), tari_payouts=[])
@@ -2056,6 +2094,7 @@ class TestBuildState:
             "share_stats",
             "reject_pct_24h",
             "blocks",
+            "payouts",
             "disk_growth",
             "xvb_history",
             "egress",

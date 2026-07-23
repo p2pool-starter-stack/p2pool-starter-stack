@@ -92,6 +92,9 @@ def _state_mgr():
         }
     ]
     sm.is_db_healthy.return_value = True
+    # Embedded directly in the payload (#249) — an unpinned MagicMock here is not JSON
+    # serializable, unlike the list-shaped methods that iterate as empty. No standby held.
+    sm.get_xvb_standby.return_value = None
     return sm
 
 
