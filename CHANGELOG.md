@@ -11,6 +11,13 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- Dual-distribution plan (#77/#78): the architecture decision record for shipping Pithead as a
+  curl-installed Compose stack, a flashable immutable appliance (Debian 13 + Rugix A/B, Podman
+  Quadlet), and a git clone — one release manifest across all three. Dev doc only, no behaviour
+  change. See [`docs/dev/dual-distribution-plan.md`](docs/dev/dual-distribution-plan.md).
+
 ## [1.13.0] - 2026-07-22
 
 ### Added
