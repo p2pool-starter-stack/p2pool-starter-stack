@@ -471,6 +471,37 @@ test('EarningsCard grows fiat rows + a price provenance line once a price is kno
     assert.match(html, /static, set in config\.json/);
 });
 
+test('EarningsCard shows Confirmed on-chain under the estimates on both tabs when payout confirmation is on (#381)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.tari_available = true;
+    s.earnings.tari_coeff_day = 2e-3;
+    s.earnings.confirmed = {
+        enabled: true, count: 3, xmr_24h: 0.25, xmr_7d: 0.75, xmr_all: 1.75,
+        last_ts: Math.floor(Date.now() / 1000) - 3600,
+    };
+    s.earnings.tari_confirmed = {
+        enabled: true, count: 1, xtm_24h: 0, xtm_7d: 4552.15, xtm_all: 4552.15,
+        last_ts: Math.floor(Date.now() / 1000) - 7200,
+    };
+    let html = renderApp({ state: s });
+    // One confirmed block per tab, populated from the summary keys through the coin formatters.
+    assert.equal(html.split('Confirmed on-chain').length - 1, 2);
+    assert.match(html, /0\.250000 XMR/);   // xmr_24h
+    assert.match(html, /1\.7500 XMR/);     // xmr_all
+    assert.match(html, /4552\.1500 XTM/);  // xtm_all
+    assert.match(html, /Last payout/);
+    // Estimates first, confirmed reality after — on the Tari tab the block follows the
+    // Long-run Average table, mirroring the Monero tab's order.
+    const tari = html.slice(html.indexOf('id="epanel-tari"'), html.indexOf('id="epanel-xvb"'));
+    assert.ok(tari.indexOf('Long-run Average') < tari.indexOf('Confirmed on-chain'));
+    // Confirmation off (the default) -> no confirmed block anywhere, estimates stand alone.
+    s.earnings.confirmed = { enabled: false };
+    s.earnings.tari_confirmed = { enabled: false };
+    html = renderApp({ state: s });
+    assert.doesNotMatch(html, /Confirmed on-chain/);
+});
+
 test('EarningsCard XvB tab shows the published current-tier reward as a day/month/year table', () => {
     const s = clone();
     s.earnings.available = true;

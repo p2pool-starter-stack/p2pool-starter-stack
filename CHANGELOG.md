@@ -11,6 +11,28 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- Mine cart train (#748): a pixel-art strip under the hero band retelling the chart window as
+  cargo — one cart per interval, token coins for what landed (orange ɱ per share interval, a
+  pair for a found block, a purple gem per confirmed Tari payout, a blue X per XvB raffle win),
+  with a tipple, a sleeping cat, and drifting clouds. Static under reduced motion. `/api/state`
+  gains a `payouts` key: confirmed payouts per chain as `{x, amount}` timeline points, gated on
+  the payout-confirmation flags.
+
+### Changed
+
+- Earnings calculator standardized (#748): every tab presents its estimate in one
+  Day / Month / Year table with a shared-precision coin column and a `≈` fiat column once the
+  price is known. Tari gains month/year spans, XvB gains the published current-tier reward
+  table, Energy gains Revenue (est.) / Power Cost / Net columns. Net figures carry the one
+  judgment colour — green in profit, red in loss.
+- Dashboard panel round (#748): stat-heavy cards open collapsed to their headline stats with a
+  "Show all" toggle, the Advanced grid gains Your Stack / The Wider Pool section labels, the
+  workers table gains tabular numerics + row hover with offline-red scoped to the rig name,
+  chart active chips move from green to accent, and the topology diagram gains zone tints and
+  marching-ants on live routes.
+
 ## [1.12.0] - 2026-07-22
 
 ### Added

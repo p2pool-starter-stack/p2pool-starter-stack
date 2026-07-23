@@ -1552,6 +1552,11 @@ class TestBlocksDiskGrowthXvbHistorySeries:
         assert st["payouts"]["tari"][0]["amount"] == 4552
         # Only x + amount ship — no txid in the payload the browser sees.
         assert set(st["payouts"]["tari"][0]) == {"x", "amount"}
+        # The earnings card's confirmed summaries gate on the SAME flags in the same request —
+        # the timeline (mine cart) and the card can never disagree about whether payout
+        # confirmation is on for a chain.
+        assert st["earnings"]["tari_confirmed"]["enabled"] is True
+        assert st["earnings"]["confirmed"] == {"enabled": False}
 
     def test_build_disk_growth_shape_and_ms_epoch(self):
         now = time.time()
@@ -1857,26 +1862,8 @@ class TestEarnings:
         e = build_earnings(self._NET, _metrics())
         assert e["confirmed"] == {"enabled": False}
 
-    def test_confirmed_totals_windowed(self):
-        # #381: 24h / 7d / all-time XMR sums from stored confirmed payouts, atomic→XMR at the edge.
-        now = 1_000_000.0
-        payouts = [
-            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000_000_000},  # in 24h
-            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000_000_000},  # in 7d
-            {
-                "txid": "c",
-                "ts": now - 30 * 86_400,
-                "amount_atomic": 1_000_000_000_000,
-            },  # all-time only
-        ]
-        from mining_dashboard.web.views import _confirmed_payouts_summary
-
-        s = _confirmed_payouts_summary(payouts, now=now)
-        assert s["enabled"] is True and s["count"] == 3
-        assert s["xmr_24h"] == pytest.approx(0.25)
-        assert s["xmr_7d"] == pytest.approx(0.75)
-        assert s["xmr_all"] == pytest.approx(1.75)
-        assert s["last_ts"] == now - 100
+    # ponytail: the 24h/7d/all windowing math is proven once, in TestConfirmedPayoutsSummary —
+    # this class only asserts build_earnings passes payouts through (enabled/empty/disabled).
 
     def test_confirmed_enabled_but_empty(self):
         # Feature on, nothing confirmed yet → enabled with zeroed totals (shows 0.000000, not "—").
@@ -1894,23 +1881,6 @@ class TestEarnings:
         # No tari_payouts passed (Tari feature off) → tari_confirmed reports disabled.
         e = build_earnings(self._NET, _metrics())
         assert e["tari_confirmed"] == {"enabled": False}
-
-    def test_tari_confirmed_totals_windowed_in_xtm(self):
-        # #462: XTM sums (microTari ÷1e6) with xtm_* keys, distinct from the monero xmr_* block.
-        now = 1_000_000.0
-        tari_payouts = [
-            {"txid": "a", "ts": now - 100, "amount_atomic": 250_000},  # in 24h
-            {"txid": "b", "ts": now - 3 * 86_400, "amount_atomic": 500_000},  # in 7d
-            {"txid": "c", "ts": now - 30 * 86_400, "amount_atomic": 1_000_000},  # all-time only
-        ]
-        from mining_dashboard.web.views import MICRO_PER_XTM, _confirmed_payouts_summary
-
-        s = _confirmed_payouts_summary(tari_payouts, now=now, divisor=MICRO_PER_XTM, unit="xtm")
-        assert s["enabled"] is True and s["count"] == 3
-        assert s["xtm_24h"] == pytest.approx(0.25)
-        assert s["xtm_7d"] == pytest.approx(0.75)
-        assert s["xtm_all"] == pytest.approx(1.75)
-        assert s["last_ts"] == now - 100
 
     def test_tari_confirmed_enabled_but_empty(self):
         e = build_earnings(self._NET, _metrics(), tari_payouts=[])
