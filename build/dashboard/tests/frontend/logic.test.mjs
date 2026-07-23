@@ -18,7 +18,7 @@ import {
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
     parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare, formatAgo,
-    computeEnergy, formatFiat, formatUnit,
+    computeEnergy, formatFiat, formatFiatAmount, formatUnit, coinTriplet,
     coinFiat, formatFiatPrice, priceSourceLabel,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
     bandBorderWidth, uptimeCell,
@@ -248,7 +248,8 @@ test('computeEarnings: returns nulls when unavailable or hashrate is non-positiv
     const ok = { available: true, coeff_day: 1e-7, pool_difficulty: 1 };
     const allNull = { day: null, month: null, year: null, timeToShareSec: null,
                       tariDay: null, tariMonth: null, tariYear: null,
-                      tariTimeToBlockSec: null, tariRewardPerBlock: null, xvbDay: null };
+                      tariTimeToBlockSec: null, tariRewardPerBlock: null,
+                      xvbDay: null, xvbMonth: null, xvbYear: null };
     assert.deepEqual(computeEarnings(0, ok), allNull);
     assert.deepEqual(computeEarnings(null, ok), allNull);
     // available:false (network stats missing) -> graceful "—" path even with a valid hashrate.
@@ -633,6 +634,84 @@ test('computeEnergy: tari_price set but Tari not merge-mining (tariDay null) -> 
     );
     assert.ok(Math.abs(en.netDay - 10.2) < 1e-9); // same as P2Pool-only case above
     assert.equal(en.includesTari, false);
+});
+
+// --- Standardized estimate tables --------------------------------------------------------
+
+test('coinTriplet: one shared precision across a Day/Month/Year column, from the smallest value', () => {
+    // Day figure (smallest) is < 0.001 -> 8 dp for all three rows, so the column aligns.
+    assert.deepEqual(
+        coinTriplet([0.00092945, 0.0278835, 0.33925025], 'XMR'),
+        ['0.00092945 XMR', '0.02788350 XMR', '0.33925025 XMR'],
+    );
+    // Day >= 1 -> 4 dp everywhere.
+    assert.deepEqual(
+        coinTriplet([505.54, 15166.2, 184522.1], 'XTM'),
+        ['505.5400 XTM', '15166.2000 XTM', '184522.1000 XTM'],
+    );
+    // Nulls render "—" without disturbing the shared precision of the rest.
+    assert.deepEqual(coinTriplet([null, 2.5, null], 'XMR'), ['—', '2.5000 XMR', '—']);
+    // All-null (estimate unavailable) -> three dashes, no NaN.
+    assert.deepEqual(coinTriplet([null, null, null], 'XMR'), ['—', '—', '—']);
+    assert.deepEqual(coinTriplet([0, 0, 0], 'XMR'), ['0 XMR', '0 XMR', '0 XMR']);
+});
+
+test('formatFiatAmount: bare 2-dp amount for table cells, sign kept, "—" for null', () => {
+    assert.equal(formatFiatAmount(12.345), '12.35');
+    assert.equal(formatFiatAmount(-3.2), '-3.20');
+    assert.equal(formatFiatAmount(0), '0.00');
+    assert.equal(formatFiatAmount(null), '—');
+    assert.equal(formatFiatAmount(Infinity), '—');
+});
+
+test('formatUnit: empty unit gives the bare number (table cells whose header names the unit)', () => {
+    assert.equal(formatUnit(6.43, ''), '6.4');
+    assert.equal(formatUnit(6.43, 'kWh'), '6.4 kWh');
+});
+
+test('computeEarnings: xvb day/month/year are plain spans of the published figure', () => {
+    const est = computeEarnings(50_000, {
+        available: true, coeff_day: 1e-7, pool_difficulty: 1, xvb_day: 0.02,
+    });
+    assert.equal(est.xvbDay, 0.02);
+    assert.equal(est.xvbMonth, 0.02 * DAYS_PER_MONTH);
+    assert.equal(est.xvbYear, 0.02 * DAYS_PER_YEAR);
+    // No fresh estimate -> the whole triplet is null, never fabricated.
+    const none = computeEarnings(50_000, { available: true, coeff_day: 1e-7, pool_difficulty: 1 });
+    assert.equal(none.xvbDay, null);
+    assert.equal(none.xvbMonth, null);
+    assert.equal(none.xvbYear, null);
+});
+
+test('computeEnergy: gross revenue surfaced as day/month/year (the sum the net starts from)', () => {
+    const en = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2, xmr_price: 150 },
+        { day: 0.1 },
+    );
+    assert.equal(en.grossDay, 0.1 * 150);
+    assert.equal(en.grossMonth, en.grossDay * DAYS_PER_MONTH);
+    assert.equal(en.grossYear, en.grossDay * DAYS_PER_YEAR);
+    assert.ok(Math.abs(en.grossDay - en.costDay - en.netDay) < 1e-9);
+    // Gates mirror net: no XMR price -> no gross (cost can still stand alone).
+    const noPrice = computeEnergy(
+        { available: true, total_watts: 1000, cost_per_kwh: 0.2 },
+        { day: 0.1 },
+    );
+    assert.equal(noPrice.grossDay, null);
+    assert.equal(noPrice.grossMonth, null);
+    assert.equal(noPrice.grossYear, null);
+    assert.ok(noPrice.costDay > 0);
+    // The other direction: xmr_price set but no cost_per_kwh -> gross stands alone, net nulls
+    // (net needs BOTH sides; a gross-only net would silently read as free electricity).
+    const noCost = computeEnergy(
+        { available: true, total_watts: 1000, xmr_price: 150 },
+        { day: 0.1 },
+    );
+    assert.ok(noCost.grossDay > 0);
+    assert.equal(noCost.costDay, null);
+    assert.equal(noCost.netDay, null);
+    assert.equal(noCost.netMonth, null);
+    assert.equal(noCost.netYear, null);
 });
 
 // --- XvB folded into net profit (#712) ---------------------------------------------------

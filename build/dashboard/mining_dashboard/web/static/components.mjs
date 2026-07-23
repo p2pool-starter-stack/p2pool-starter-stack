@@ -7,6 +7,7 @@ import { ChartCard } from "./chart.mjs";
 import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
   coinFiat,
+  coinTriplet,
   computeEarnings,
   computeEnergy,
   computeXvbTier,
@@ -14,6 +15,7 @@ import {
   fmtHashrate,
   formatAgo,
   formatFiat,
+  formatFiatAmount,
   formatFiatPrice,
   formatTimeToShare,
   formatUnit,
@@ -32,6 +34,7 @@ import {
   WORKER_COLUMNS,
   xvbTierComparison,
 } from "./logic.mjs";
+import { MineCartTrain } from "./minecart.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
 import { StackTopology } from "./topology.mjs";
@@ -48,11 +51,86 @@ const StatCard = ({ label, value, cls, span, title }) => html`
         <p class=${cls || ""}>${value}</p>
     </div>`;
 
+// Standardized Day/Month/Year estimate table — the one shape every earnings tab presents its
+// estimate in: coin column in accent, a ≈-fiat column appearing once the coin's price is known
+// (the same visibility gate the old per-cell fiat cards used). Replaces per-tab stat-grids whose
+// two-column flow paired unrelated cells (XMR/year beside ≈/day). The coin triplet shares one
+// precision (coinTriplet) so the rows align.
+const EstTable = ({ unit, day, month, year, price, currency, title }) => {
+  const coins = coinTriplet([day, month, year], unit);
+  const haveFiat = Number.isFinite(price) && price > 0;
+  const rows = [
+    ["Day", day, coins[0]],
+    ["Month", month, coins[1]],
+    ["Year", year, coins[2]],
+  ];
+  return html`
+    <div class="est-scroll">
+    <table class="est-table" title=${title || ""}>
+        <thead><tr>
+            <th></th>
+            <th scope="col">${unit}</th>
+            ${haveFiat ? html`<th scope="col">≈ ${currency || "USD"}</th>` : null}
+        </tr></thead>
+        <tbody>
+            ${rows.map(
+              ([label, raw, coin]) => html`
+            <tr>
+                <th scope="row">${label}</th>
+                <td class="c-accent">${coin}</td>
+                ${haveFiat ? html`<td>${formatFiatAmount(coinFiat(raw, price))}</td>` : null}
+            </tr>`,
+            )}
+        </tbody>
+    </table>
+    </div>`;
+};
+
+// Sign colour for a net figure — the one judgment colour in the calculator: green when the
+// operation profits, red when it loses. Everything that is a plain estimate stays accent/plain.
+const netCls = (v) => (v !== null && Number.isFinite(v) && v < 0 ? "c-bad" : "c-ok");
+
 const SharesStat = ({ sw, label = "Share in Window" }) => html`
     <div class="stat-card">
         <h5>${label}</h5>
         <p><span class=${sw.ok ? "status-ok" : "status-bad"}>${sw.count}</span></p>
     </div>`;
+
+// Progressive disclosure for a busy stat-grid card ("show more" pattern). A card splits its
+// StatCards into `headline` (always visible — the figures an operator actually glances at) and
+// `detail` (behind the toggle, collapsed by default); both share one `stat-grid` so the layout is
+// identical to the old flat list once expanded. Expansion is persisted per card via
+// loadPref/savePref — the same helpers dashboardEarningsTab already uses — keyed on `prefKey` so
+// each card remembers its own state independently across a reload. The toggle is a real <button>
+// with aria-expanded (not <details>/<summary>): that keeps the expanded/collapsed state explicit
+// for assistive tech and gives the label control ("Show all (N)") the native disclosure triangle
+// doesn't.
+const EXPAND_STATES = ["expanded", "collapsed"];
+class MoreStats extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { expanded: loadPref(props.prefKey, EXPAND_STATES, "collapsed") === "expanded" };
+    this.toggle = () => {
+      const expanded = !this.state.expanded;
+      savePref(this.props.prefKey, expanded ? "expanded" : "collapsed");
+      this.setState({ expanded });
+    };
+  }
+
+  render() {
+    const { headline, detail, count } = this.props;
+    const { expanded } = this.state;
+    return html`
+        <div class="stat-grid">
+            ${headline}
+            ${expanded ? detail : null}
+        </div>
+        <button type="button" class="more-stats-toggle" aria-expanded=${expanded ? "true" : "false"}
+                onClick=${this.toggle}>
+            ${expanded ? "Show less ▴" : `Show all (${count}) ▾`}
+        </button>`;
+  }
+}
 
 // Tari merge-mine status. The ✔ means the gRPC channel is actually up, so it's gated on `connected`
 // (channel_state READY) — NOT on `active` (a chain is merely configured). When configured but the
@@ -275,49 +353,56 @@ function Overview({ state }) {
 function NodeStats({ state }) {
   const hr = state.hashrate,
     st = state.stratum;
-  return html`
-    <div class="card card-advanced" id="card-mynode">
-        <h3>My P2Pool Node Stats</h3>
-        <div class="stat-grid">
+  // Headline = the figures an operator actually checks first (mode, total hashrate, routed
+  // averages, share health); stratum windows, connections, effort and the rest are drill-down
+  // detail behind the "show more" toggle (progressive disclosure).
+  const headline = html`
             <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
             <${StatCard} label="Total Hashrate" value=${hr.total} cls="text-accent" />
             <${StatCard} label="P2Pool 1h Avg" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
             <${StatCard} label="P2Pool 24h Avg" value=${hr.p2p_24h} cls=${cVar(hr.p2p_variant)} />
+            <${StatCard} label="Shares (OK/Err)" value=${st.shares} />`;
+  const detail = html`
             <div class="stat-card col-span-2">
                 <h5>Stratum (15m / 1h / 24h)</h5>
                 <p class="text-small">${st.h15} / ${st.h1h} / ${st.h24h}</p>
             </div>
-            <${StatCard} label="Shares (OK/Err)" value=${st.shares} />
-            <${StatCard} label="Effort" value=${st.effort} />
             <${StatCard} label="Connections" value=${st.conns} />
+            <${StatCard} label="Effort" value=${st.effort} />
             <${StatCard} label="Reward Share" value=${st.reward_pct} />
             <${StatCard} label="Total Shares" value=${st.total_shares} />
             <${StatCard} label="Last Share" value=${st.last_share} />
-            <${StatCard} label="Total Hashes" value=${st.total_hashes} span=${true} />
-        </div>
+            <${StatCard} label="Total Hashes (Node)" value=${st.total_hashes} span=${true} />`;
+  return html`
+    <div class="card card-advanced" id="card-mynode">
+        <h3>My P2Pool Node Stats</h3>
+        <${MoreStats} prefKey="dashboardCardNode" headline=${headline} detail=${detail} count=${12} />
         <div class="wallet-text">Wallet: ${st.wallet}</div>
     </div>`;
 }
 
 function GlobalStats({ state }) {
   const p = state.pool;
-  return html`
-    <div class="card card-advanced" id="card-global">
-        <h3>Global P2Pool Stats</h3>
-        <div class="stat-grid">
-            <${StatCard} label="Pool Hashrate" value=${p.hr} />
+  // Headline = the pool's own money/health figures (hashrate, whether it's finding blocks, when
+  // it last did); sidechain internals, peers and uptime are reference detail, not a glance figure.
+  const headline = html`
+            <${StatCard} label="Pool Hashrate" value=${p.hr} cls="text-accent" />
+            <${StatCard} label="Blocks Found" value=${p.blocks} />
+            <div class="stat-card"><h5>Last Block</h5><p class="text-small">${p.last_blk}</p></div>`;
+  const detail = html`
             <${StatCard} label="Miners" value=${p.miners} />
             <${StatCard} label="Sidechain Height" value=${p.sidechain_height} />
             <${StatCard} label="Difficulty" value=${p.diff} />
-            <${StatCard} label="Blocks Found" value=${p.blocks} />
             <${StatCard} label="PPLNS Window" value=${p.pplns_win} />
             <${StatCard} label="PPLNS Weight" value=${p.pplns_wgt} />
             <${SharesStat} sw=${state.shares_window} />
-            <div class="stat-card"><h5>Last Block</h5><p class="text-small">${p.last_blk}</p></div>
             <${StatCard} label="Peers" value=${p.peers} />
             <div class="stat-card"><h5>Uptime</h5><p class="text-small">${p.uptime}</p></div>
-            <${StatCard} label="Total Hashes" value=${p.total_hashes} />
-        </div>
+            <${StatCard} label="Total Hashes (Pool)" value=${p.total_hashes} />`;
+  return html`
+    <div class="card card-advanced" id="card-global">
+        <h3>Global P2Pool Stats</h3>
+        <${MoreStats} prefKey="dashboardCardGlobal" headline=${headline} detail=${detail} count=${12} />
     </div>`;
 }
 
@@ -364,18 +449,21 @@ function XvBStats({ state }) {
 function NetworkCard({ state }) {
   const n = state.network,
     m = state.monero;
+  // Headline = the chain's own money/health figures (height, difficulty, block reward); node
+  // internals (mode, DB size, hash, network time) are reference detail.
+  const headline = html`
+            <${StatCard} label="Block Height" value=${n.height} />
+            <${StatCard} label="Difficulty" value=${n.diff} />
+            <${StatCard} label="Reward" value=${n.reward} />`;
+  const detail = html`
+            <${StatCard} label="Node Mode" value=${m.mode} />
+            <${StatCard} label="DB Size" value=${m.db_size} />
+            <div class="stat-card col-span-2"><h5>Current Block Hash</h5><p class="font-mono text-xs">${n.hash}</p></div>
+            <${StatCard} label="Network Time" value=${n.ts} span=${true} />`;
   return html`
     <div class="card card-advanced" id="card-network">
         <h3>XMR Network</h3>
-        <div class="stat-grid">
-            <${StatCard} label="Block Height" value=${n.height} />
-            <${StatCard} label="Reward" value=${n.reward} />
-            <${StatCard} label="Node Mode" value=${m.mode} />
-            <${StatCard} label="DB Size" value=${m.db_size} />
-            <${StatCard} label="Difficulty" value=${n.diff} span=${true} />
-            <div class="stat-card col-span-2"><h5>Current Block Hash</h5><p class="font-mono text-xs">${n.hash}</p></div>
-            <${StatCard} label="Network Time" value=${n.ts} span=${true} />
-        </div>
+        <${MoreStats} prefKey="dashboardCardNetwork" headline=${headline} detail=${detail} count=${7} />
     </div>`;
 }
 
@@ -423,6 +511,7 @@ class XvbComparison extends Component {
                 <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
                              title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
                 <${StatCard} label="Net / yr" value=${sustainable && cmp.net !== null ? formatXmr(cmp.net) : "—"}
+                             cls=${sustainable && cmp.net !== null ? netCls(cmp.net) : ""}
                              title=${
                                sustainable
                                  ? "Expected XvB reward minus the P2Pool earnings given up. Shown only when XvB's estimate is available."
@@ -462,7 +551,7 @@ class XvbComparison extends Component {
 // raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
 // above the threshold. Hidden entirely while XvB is disabled. `coeffDay` (earnings.coeff_day)
 // feeds the per-tier payout comparison dropdown below.
-function XvbTierBlock({ calc, hr, coeffDay, energy }) {
+function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
   if (!calc || !calc.enabled) return null;
   const t = computeXvbTier(hr, calc);
   return html`
@@ -478,6 +567,19 @@ function XvbTierBlock({ calc, hr, coeffDay, energy }) {
             <${StatCard} label="Target Tier" value=${calc.target_tier}
                          title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
         </div>
+        ${
+          // Current-tier expected reward (#712's published per-day figure) in the same
+          // standardized Day/Month/Year table every other tab shows. Only when the server sent a
+          // fresh estimate — never fabricated; a fixed published figure, NOT scaled by the
+          // what-if hashrate, and the heading says so.
+          est && est.xvbDay !== null
+            ? html`
+        <h4 class="est-heading" title="XvB's published expected reward for the tier your fleet holds now — a raffle expectation across all qualifiers, not scaled by the what-if hashrate above.">
+            Current Tier Expected Reward — published by XvB</h4>
+        <${EstTable} unit="XMR" day=${est.xvbDay} month=${est.xvbMonth} year=${est.xvbYear}
+                     price=${energy ? energy.xmr_price : 0} currency=${energy ? energy.currency : "USD"} />`
+            : null
+        }
         <${XvbComparison} calc=${calc} coeffDay=${coeffDay} hr=${hr} energy=${energy} />
         <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
     </div>`;
@@ -584,18 +686,10 @@ class EarningsCard extends Component {
             </div>
 
             <div role="tabpanel" id="epanel-monero" aria-labelledby="etab-monero" hidden=${active !== "monero"}>
+                <${EstTable} unit="XMR" day=${est.day} month=${est.month} year=${est.year}
+                             price=${energy ? energy.xmr_price : 0} currency=${energy ? energy.currency : "USD"}
+                             title=${priceTitle} />
                 <div class="stat-grid">
-                    <${StatCard} label="XMR / day" value=${formatXmr(est.day)} cls="text-accent" />
-                    <${StatCard} label="XMR / month" value=${formatXmr(est.month)} cls="text-accent" />
-                    <${StatCard} label="XMR / year" value=${formatXmr(est.year)} cls="text-accent" />
-                    ${
-                      energy && energy.xmr_price > 0
-                        ? html`
-                    <${StatCard} label="≈ / day" value=${formatFiat(coinFiat(est.day, energy.xmr_price), energy.currency)} title=${priceTitle} />
-                    <${StatCard} label="≈ / month" value=${formatFiat(coinFiat(est.month, energy.xmr_price), energy.currency)} title=${priceTitle} />
-                    <${StatCard} label="≈ / year" value=${formatFiat(coinFiat(est.year, energy.xmr_price), energy.currency)} title=${priceTitle} />`
-                        : null
-                    }
                     <${StatCard} label="Time / Share" value=${formatTimeToShare(est.timeToShareSec)} />
                     <${StatCard} label="XMR Block Reward" value=${e.block_reward} />
                 </div>
@@ -606,18 +700,20 @@ class EarningsCard extends Component {
                 <div class="stat-grid">
                     <${StatCard} label="Est. Time to Tari Block" value=${formatTimeToShare(est.tariTimeToBlockSec)}
                                  title="Tari is merge-mined SOLO: the whole block reward lands at once when your hashrate finds a Tari block, roughly this often (difficulty ÷ your hashrate). Shows — while merge-mining is inactive or syncing." />
-                    <${StatCard} label="XTM per Block" value=${formatXtm(est.tariRewardPerBlock)}
+                    <${StatCard} label="XTM per Block" value=${formatXtm(est.tariRewardPerBlock)} cls="text-accent"
                                  title="The full Tari block reward paid when you solo-find a block — you get all of it at once, not spread over time." />
-                    <${StatCard} label="XTM / day (avg)" value=${formatXtm(est.tariDay)}
-                                 title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — this per-day figure just spreads that lumpy payout out on paper." />
                     ${
                       energy && energy.tari_price > 0
                         ? html`
-                    <${StatCard} label="≈ per Block" value=${formatFiat(coinFiat(est.tariRewardPerBlock, energy.tari_price), energy.currency)} title=${priceTitle} />
-                    <${StatCard} label="≈ / day (avg)" value=${formatFiat(coinFiat(est.tariDay, energy.tari_price), energy.currency)} title=${priceTitle} />`
+                    <${StatCard} label="≈ per Block" value=${formatFiat(coinFiat(est.tariRewardPerBlock, energy.tari_price), energy.currency)} title=${priceTitle} />`
                         : null
                     }
                 </div>
+                <h4 class="est-heading" title="Long-run average, NOT steady income. Solo merge-mining pays the whole block reward at once, roughly every 'time to Tari block' — these figures just spread that lumpy payout out on paper.">
+                    Long-run Average — not steady income</h4>
+                <${EstTable} unit="XTM" day=${est.tariDay} month=${est.tariMonth} year=${est.tariYear}
+                             price=${energy ? energy.tari_price : 0} currency=${energy ? energy.currency : "USD"}
+                             title=${priceTitle} />
                 ${confirmedBlock(e.tari_confirmed, formatXtm, "XTM")}
             </div>
 
@@ -625,7 +721,7 @@ class EarningsCard extends Component {
               xvb && xvb.enabled
                 ? html`
             <div role="tabpanel" id="epanel-xvb" aria-labelledby="etab-xvb" hidden=${active !== "xvb"}>
-                <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} energy=${energy} />
+                <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} energy=${energy} est=${est} />
             </div>`
                 : null
             }
@@ -680,6 +776,15 @@ function EnergyPanel({ energy, est }) {
     : en.includesTari
       ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, minus power cost. Excludes XvB (raffle status, not a per-day income estimate)."
       : "P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it) and XvB (raffle status, not a per-day income estimate).";
+  // One standardized Day/Month/Year table for the whole money side: kWh always, then Revenue /
+  // Cost / Net columns as their inputs exist (same appearance gates as before — never a
+  // fabricated figure). Revenue is the gross the net starts from, so the estimate is no longer
+  // implicit; Net keeps the one judgment colour (green profit / red loss).
+  const rows = [
+    ["Day", en.kwhDay, en.grossDay, en.costDay, en.netDay],
+    ["Month", en.kwhMonth, en.grossMonth, en.costMonth, en.netMonth],
+    ["Year", en.kwhYear, en.grossYear, en.costYear, en.netYear],
+  ];
   return html`
     <div class="stat-grid">
         <${StatCard} label="Fleet Power" value=${formatUnit(energy.total_watts, "W")}
@@ -691,32 +796,36 @@ function EnergyPanel({ energy, est }) {
 } />
         <${StatCard} label="Efficiency" value=${formatUnit(energy.hs_per_watt, "H/s·W", 2)}
                      title="Fleet hashrate ÷ fleet watts." />
-        <${StatCard} label="Energy / day" value=${formatUnit(en.kwhDay, "kWh")} />
-        <${StatCard} label="Energy / month" value=${formatUnit(en.kwhMonth, "kWh")} />
-        <${StatCard} label="Energy / year" value=${formatUnit(en.kwhYear, "kWh")} />
+    </div>
+    <h4 class="est-heading">Energy${haveCost ? ` — Cost${haveNet ? ` & Net Profit, ${netLabel}` : ""} (${cur})` : ""}</h4>
+    <div class="est-scroll">
+    <table class="est-table">
+        <thead><tr>
+            <th></th>
+            <th scope="col">kWh</th>
+            ${haveNet ? html`<th scope="col" title=${netTitle}>Revenue (est.)</th>` : null}
+            ${haveCost ? html`<th scope="col">Power Cost</th>` : null}
+            ${haveNet ? html`<th scope="col" title=${netTitle}>Net</th>` : null}
+        </tr></thead>
+        <tbody>
+            ${rows.map(
+              ([label, kwh, gross, cost, net]) => html`
+            <tr>
+                <th scope="row">${label}</th>
+                <td>${formatUnit(kwh, "")}</td>
+                ${haveNet ? html`<td class="c-accent">${formatFiatAmount(gross)}</td>` : null}
+                ${haveCost ? html`<td>${formatFiatAmount(cost)}</td>` : null}
+                ${haveNet ? html`<td class=${netCls(net)} title=${netTitle}>${formatFiatAmount(net)}</td>` : null}
+            </tr>`,
+            )}
+        </tbody>
+    </table>
     </div>
     ${
       haveCost
-        ? html`
-    <h4 class="text-small mt-2">Cost${haveNet ? ` & Net Profit — ${netLabel}` : ""} (${cur})</h4>
-    <div class="stat-grid">
-        <${StatCard} label="Power cost / day" value=${formatFiat(en.costDay, cur)} />
-        <${StatCard} label="Power cost / month" value=${formatFiat(en.costMonth, cur)} />
-        <${StatCard} label="Power cost / year" value=${formatFiat(en.costYear, cur)} />
-        ${
-          haveNet
-            ? html`
-        <${StatCard} label="Net / day" value=${formatFiat(en.netDay, cur)}
-                     cls=${en.netDay !== null && en.netDay < 0 ? "c-bad" : "text-accent"}
-                     title=${netTitle} />
-        <${StatCard} label="Net / month" value=${formatFiat(en.netMonth, cur)}
-                     cls=${en.netMonth !== null && en.netMonth < 0 ? "c-bad" : "text-accent"} />
-        <${StatCard} label="Net / year" value=${formatFiat(en.netYear, cur)}
-                     cls=${en.netYear !== null && en.netYear < 0 ? "c-bad" : "text-accent"} />`
-            : html`<${StatCard} label="Net Profit" value="set xmr_price"
-                     title="Set dashboard.energy.xmr_price (in your currency), or dashboard.energy.price_feed: true to fetch live prices from CoinGecko over Tor (opt-in — off by default, no clearnet egress)." />`
-        }
-    </div>`
+        ? haveNet
+          ? null
+          : html`<p class="text-muted text-xs mt-2">Set <code>dashboard.energy.xmr_price</code> (in your currency), or <code>dashboard.energy.price_feed: true</code> to fetch live prices from CoinGecko over Tor (opt-in — off by default, no clearnet egress), to see revenue and net profit.</p>`
         : html`<p class="text-muted text-xs mt-2">Set <code>dashboard.energy.cost_per_kwh</code> to see energy cost and net profit after power.</p>`
     }`;
 }
@@ -998,12 +1107,14 @@ function DashboardView({
                              onInspect=${state.control_enabled ? onInspect : null} />
         </div>
         <div class="grid">
+            <div class="grid-section-label">Your Stack</div>
             <${Overview} state=${state} />
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
             <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />
             <${CadenceCard} cadence=${state.cadence} />
             <${TariCard} tari=${state.tari} />
+            <div class="grid-section-label">The Wider Pool</div>
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />
             <${ComponentHealth} topology=${state.topology} egress=${state.egress} />
@@ -1053,6 +1164,7 @@ export function App({
             ? html`<${SyncView} sync=${state.sync} />`
             : html`<${Fragment}>
                 <${HeroBand} state=${state} />
+                <${MineCartTrain} chart=${state.chart} blocks=${state.blocks} payouts=${state.payouts} />
                 <${DashboardView} state=${state} ui=${ui} onRange=${onRange} onSort=${onSort}
                                   onView=${onView} onZoom=${onZoom} onResetZoom=${onResetZoom}
                                   onToggleSeries=${onToggleSeries} onAvgWindow=${onAvgWindow}

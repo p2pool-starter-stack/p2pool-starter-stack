@@ -130,12 +130,16 @@ export class StackTopology extends Component {
     const key = e.leak ? "clearnet" : e.route;
     const color = ROUTE_COLOR[key] || ROUTE_COLOR.local;
     const dash = e.kind === "internal" ? "3 3" : e.blocked_by_firewall ? "2 3" : null;
+    // Marching ants (dashboard.css .topo-edge-ants) mark a live route — Tor or clearnet — so it
+    // reads as "active traffic" against the static grey local/inactive edges. Skipped whenever a
+    // dash pattern is already spoken for (internal mesh, firewall-blocked) so it can't collide.
+    const ants = !dash && key !== "local" && key !== "inactive";
     const note = e.leak ? " — LEAK" : e.blocked_by_firewall ? " — firewall-blocked" : "";
     const from = byId[e.from]?.label || e.from;
     const to = byId[e.to]?.label || e.to;
     const tip = `${from} → ${to}: ${e.label} · ${ROUTE_NAME[key] || key}${note}`;
     return html`
-      <path d=${edgePath(e, a, b)} fill="none"
+      <path d=${edgePath(e, a, b)} fill="none" class=${ants ? "topo-edge-ants" : null}
             stroke=${color} stroke-width=${e.kind === "internal" ? 1 : 1.8}
             stroke-dasharray=${dash} opacity=${e.route === "inactive" ? 0.4 : 1}
             marker-end=${"url(#topo-a-" + key + ")"}
