@@ -152,9 +152,12 @@ a token coin poking over the rim:
 | Blue X coin | An XvB raffle win. |
 
 Hover a cart for its exact interval and haul ("14:20–14:30 — 2 shares"). A cat sleeps by the
-track; clouds drift past; the coins bob as the track rumbles. The train is decorative —
-everything it shows, the chart above shows precisely — and all motion stops when your system
-asks for reduced motion. It disappears while there is no history to show.
+track; clouds drift past; the coins bob as the track rumbles. The train is decorative: shares,
+blocks, and raffle wins all appear on the chart above with precise timestamps. The one thing
+the train alone marks is the Tari gem coin — Tari payouts stay off the chart (see
+[Payout confirmation](#payout-confirmation)), and the cart's hover tooltip is their timeline.
+All motion stops when your system asks for reduced motion, and the strip disappears while
+there is no history to show.
 
 ### Node status & failover
 
@@ -187,7 +190,9 @@ needed.
 The database also keeps three smaller series: pool block-found events, hourly monerod-DB-size and
 host-disk-usage samples, and XvB-credited scalar samples taken roughly every 5 minutes. `/api/state`
 serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the same way as
-`share_stats`. No chart reads them yet — this is persistence and API exposure only.
+`share_stats`. The [mine cart train](#mine-cart-train) reads `blocks` and the chart's donation
+overlay reads `xvb_history`; only `disk_growth` is persistence and API exposure alone, no
+renderer yet.
 
 While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
@@ -509,7 +514,8 @@ landed — onto the hashrate chart, on the same marker row as the event diamonds
 Toggle it from the chart legend like any other series. When XvB is on, a dashed **XvB donation %**
 line overlays the chart on its own right-side 0–100% axis, drawn from the recorded donation history,
 so you can line a payout up against how much hashrate you were donating when it arrived. Tari
-payouts are solo and lumpy, so they stay in the earnings card and off the chart.
+payouts are solo and lumpy, so they stay in the earnings card and off the chart — the
+[mine cart train](#mine-cart-train) marks each one with a purple gem coin instead.
 
 The dashboard polls the wallet on a slow cadence (about every 5 minutes) and records each confirmed
 payout to a small local table, so a restart never re-alerts. Coinbase outputs become spendable only
