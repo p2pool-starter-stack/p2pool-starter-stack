@@ -17,8 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         podman netavark aardvark-dns catatonit uidmap \
         jq openssl curl ca-certificates xxd fdisk parted \
         avahi-daemon libnss-mdns \
-        openssh-server sudo less nano htpdate \
-    && rm -rf /var/lib/apt/lists/*
+        openssh-server sudo less nano htpdate
+# NB: apt lists are kept on purpose — the Rugix core recipes run `apt-get install` in the build
+# chroot (fdisk/parted etc.) and need resolvable metadata; deleting them fails the bake.
 
 # The stack, at the image's exact release state: pithead + schemas + the build/ mount sources
 # (config templates and entrypoints that services bind-mount). Build context = repo root.
