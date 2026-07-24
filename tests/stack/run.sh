@@ -3450,6 +3450,37 @@ assert_eq "bundle carries doctor.json" "$(jq -r 'has("summary")' "$SANDBOX/sb-ex
 assert_contains "bundle .env redacts token keys" "$(cat "$SANDBOX/sb-extract/bundle/env.redacted")" "PROXY_AUTH_TOKEN=[redacted]"
 assert_eq "no raw secret value anywhere in the bundle" "$(grep -rc "ORIGINALTOKEN" "$SANDBOX/sb-extract" | grep -vc ":0")" "0"
 
+echo "== black-box: uninstall keeps the operator's files (#77 phase 1) =="
+# Without confirmation: aborts, changes nothing.
+touch "$V/Caddyfile"
+out=$(cd "$V" && printf 'no\n' | PATH="$V/bin:$PATH" ./pithead uninstall 2>&1) || true
+assert_contains "uninstall aborts without the confirm word" "$out" "Aborted"
+assert_eq "aborted uninstall keeps .env" "$([ -f "$V/.env" ] && echo yes)" "yes"
+# With -y: rendered files go, the operator's files stay.
+out=$(cd "$V" && PATH="$V/bin:$PATH" ./pithead uninstall -y 2>&1)
+assert_contains "uninstall names the kept files" "$out" "config.json"
+assert_eq "uninstall removes .env" "$([ -f "$V/.env" ] || echo gone)" "gone"
+assert_eq "uninstall removes Caddyfile" "$([ -f "$V/Caddyfile" ] || echo gone)" "gone"
+assert_eq "uninstall keeps config.json" "$([ -f "$V/config.json" ] && echo yes)" "yes"
+out=$(cd "$V" && PATH="$V/bin:$PATH" ./pithead uninstall --bogus 2>&1) || true
+assert_contains "uninstall rejects unknown options" "$out" "Unknown option"
+# Re-render the sandbox .env for the sections below — uninstall just deleted it.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+
+echo "== unit: install.sh host gate (#77 phase 1) =="
+# The installer hard-fails on the platforms the stack cannot run on, before any download.
+IBIN="$SANDBOX/install-stub-bin"
+mkdir -p "$IBIN"
+printf '#!/bin/bash\ncase "$1" in -s) echo Linux ;; -m) echo aarch64 ;; esac\n' >"$IBIN/uname"
+chmod +x "$IBIN/uname"
+out=$(PATH="$IBIN:$PATH" bash "$ROOT/install.sh" 2>&1) || true
+assert_contains "install.sh refuses non-amd64" "$out" "x86_64-only"
+printf '#!/bin/bash\ncase "$1" in -s) echo Darwin ;; -m) echo x86_64 ;; esac\n' >"$IBIN/uname"
+out=$(PATH="$IBIN:$PATH" bash "$ROOT/install.sh" 2>&1) || true
+assert_contains "install.sh refuses non-Linux" "$out" "runs on Linux"
+
 echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
 # Default 48 when unset (the Tor-IBD bandwidth default); an explicit value lands verbatim in
 # MONERO_OUT_PEERS (each outbound peer ≈ one Tor circuit — the steady-state Tor CPU lever);
