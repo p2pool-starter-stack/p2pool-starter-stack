@@ -118,7 +118,7 @@ phase_boot() {
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     # UEFI (OVMF), serial to a file we tail, import the raw appliance disk as-is.
-    virt-install --name "$VM" --memory 4096 --vcpus 4 --cpu host-passthrough \
+    virt-install --name "$VM" --memory 8192 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
         --import --disk "path=$DISK,format=raw,bus=virtio" \
@@ -169,7 +169,7 @@ _vm_boot_disk() {
     # panicking the kernel — which is what a real flash to an undersized disk would also do.
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
-    virt-install --name "$VM" --memory 4096 --vcpus 4 --cpu host-passthrough \
+    virt-install --name "$VM" --memory 8192 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
         --import --disk "path=$DISK,format=raw,bus=virtio" \

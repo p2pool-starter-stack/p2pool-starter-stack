@@ -40,6 +40,14 @@ RUN printf 'PITHEAD_ENGINE=podman\n' >> /etc/environment \
     && mkdir -p /etc/systemd/journald.conf.d \
     && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/pithead.conf
 
+# Container storage lives on the DATA partition, never on the root overlay. Two reasons, both
+# load-bearing: podman's overlay driver cannot stack on Rugix's overlayfs root ("'overlay' is not
+# supported over overlayfs"), and images/containers must survive A/B updates and reboots — the
+# root overlay is discarded. This is the plan's "/var/lib/containers on the labeled data
+# partition" rule; the mount guard lives on the units that use it.
+RUN mkdir -p /etc/containers && printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "/data/containers/storage"\n' \
+        > /etc/containers/storage.conf
+
 # The wizard's image, staged by os/build-image.sh — loaded into podman storage on first boot
 # (pithead firstboot-wizard), so the setup page comes up with no registry reachable.
 COPY os/rootfs/images/ /opt/pithead/images/

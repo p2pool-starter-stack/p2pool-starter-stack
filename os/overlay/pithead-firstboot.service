@@ -2,6 +2,9 @@
 Description=Pithead first-boot setup wizard (#77 phase 3)
 # Only while unprovisioned — the wizard window closes permanently at handoff.
 ConditionPathExists=!/opt/pithead/config.json
+# Guard: container storage lives on /data. If it is not a real mount, podman would silently build
+# storage on the discarded root overlay and fill it — refuse to start instead.
+ConditionPathIsMountPoint=/data
 Wants=network-online.target systemd-timesyncd.service podman.socket
 # Time before Tor (and before anything TLS): an RTC-less box that thinks it is 1970 can do
 # neither. htpdate is the wizard's own fallback on NTP-blocked networks (phase-3 rule).
