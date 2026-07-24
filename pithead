@@ -728,10 +728,35 @@ clock_sync_status() {
     esac
 }
 
+# Container engine for doctor's host checks (#77 phase 2): docker on the DIY channel, podman on
+# the appliance. PITHEAD_ENGINE overrides (the appliance image sets it); auto-detect otherwise —
+# docker wins when both are present, matching the DIY default.
+container_engine() {
+    case "${PITHEAD_ENGINE:-}" in
+    docker | podman)
+        printf '%s' "$PITHEAD_ENGINE"
+        return
+        ;;
+    esac
+    if command -v docker >/dev/null 2>&1; then
+        printf 'docker'
+    elif command -v podman >/dev/null 2>&1; then
+        printf 'podman'
+    else
+        printf 'docker'
+    fi
+}
+
 # True if Docker is set to start at boot (docker.service OR docker.socket enabled). systemd only —
 # the caller checks that systemctl exists. Checking docker.socket too covers socket-activated
 # installs where docker.service is "static" but Docker still comes up at boot.
 docker_boot_enabled() {
+    if [ "$(container_engine)" = "podman" ]; then
+        # Rootful podman has no daemon; boot persistence = the socket-activated API (the proxies
+        # mount it) plus systemd starting the Quadlet units, which [Install] handles per-unit.
+        systemctl is-enabled podman.socket >/dev/null 2>&1
+        return
+    fi
     systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
 }
 
@@ -792,7 +817,13 @@ doctor() {
     # --- Docker daemon ---
     echo ""
     echo "Docker daemon:"
-    if ! command -v docker >/dev/null 2>&1; then
+    if [ "$(container_engine)" = "podman" ]; then
+        if podman info >/dev/null 2>&1; then
+            dr_ok "Container engine (podman) is reachable."
+        else
+            dr_fail "Container engine (podman) is not reachable — check 'systemctl status podman.socket' (rootful podman has no daemon; the socket serves the API)."
+        fi
+    elif ! command -v docker >/dev/null 2>&1; then
         dr_info "Skipped — docker is not installed."
     elif docker info >/dev/null 2>&1; then
         dr_ok "Docker daemon is reachable."
@@ -811,7 +842,7 @@ doctor() {
         if docker_boot_enabled; then
             dr_ok "Docker is enabled to start at boot — the stack will come back after a reboot."
         else
-            dr_warn "Docker is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker'."
+            dr_warn "The container engine is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker' (docker) or 'sudo systemctl enable --now podman.socket' (podman)."
         fi
     fi
 

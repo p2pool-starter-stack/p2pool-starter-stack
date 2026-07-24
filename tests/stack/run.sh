@@ -3432,6 +3432,20 @@ for f in mining.network proxy.network tor.container monerod.container tari.conta
     assert_eq "quadlet payout parity: $f" "$(diff -u "$ROOT/os/quadlet/payout/$f" "$QPAY/$f" 2>&1 | head -c 300)" ""
 done
 assert_eq "local render emits no wallet units" "$(find "$QLOCAL" -name 'wallet-rpc.container' -o -name 'tari-wallet.container' | wc -l | tr -d ' ')" "0"
+
+echo "== unit: engine-aware doctor checks (#77 phase 2) =="
+# Same check names and verdict semantics on both engines; PITHEAD_ENGINE pins the appliance.
+assert_eq "engine override wins" "$(PITHEAD_ENGINE=podman run_sourced "$SANDBOX" container_engine)" "podman"
+assert_eq "engine defaults to docker" "$(run_sourced "$SANDBOX" container_engine)" "docker"
+# podman boot persistence = podman.socket enabled (stubbed systemctl says yes for it only).
+EBIN="$SANDBOX/engine-stub-bin"
+mkdir -p "$EBIN"
+printf '#!/bin/bash\n[ "$1" = is-enabled ] && [ "$2" = podman.socket ] && exit 0\nexit 1\n' >"$EBIN/systemctl"
+chmod +x "$EBIN/systemctl"
+out=$(PITHEAD_ENGINE=podman PATH="$EBIN:$PATH" run_sourced "$SANDBOX" docker_boot_enabled && echo enabled || echo disabled)
+assert_eq "podman boot persistence reads podman.socket" "$out" "enabled"
+out=$(PITHEAD_ENGINE=docker PATH="$EBIN:$PATH" run_sourced "$SANDBOX" docker_boot_enabled && echo enabled || echo disabled)
+assert_eq "docker boot persistence ignores podman.socket" "$out" "disabled"
 # A missing env file is a hard error, not an empty render.
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
 assert_contains "render-quadlet missing env errors" "$out" "env file not found"
