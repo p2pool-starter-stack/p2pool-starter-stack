@@ -105,6 +105,7 @@ control channel will commit, are unaffected either way.
 | `monero.prep_blocks_threads` | `auto` | Block-verification threads during sync. `auto` = host cores − 2, clamped to 4–8. |
 | `monero.out_peers` | `48` | monerod's outbound peer target (8–1024). Over Tor each outbound peer is roughly one long-lived circuit, so this is the main steady-state lever on Tor's CPU (#595). Keep the default while syncing (more peers = more download bandwidth over Tor); once synced, `32` — the count P2Pool recommends for clearnet — cuts monerod's circuit maintenance by a third. |
 | `monero.rpc_lan_access` | `false` | `true` publishes the node's RPC on the LAN (`0.0.0.0`) for wallets on other machines; default is localhost-only. |
+| `monero.zmq_lan_access` | `false` | `true` publishes the node's ZMQ block-notification feed (`18083`) on the LAN. With `rpc_lan_access`, this is the serving side of `monero.mode: remote` — a remote P2Pool needs both RPC and ZMQ. ZMQ has no authentication: trusted networks only. |
 | `monero.remote.host` / `rpc_port` / `zmq_port` | — / `18081` / `18083` | Remote node connection details (used when `mode` is `remote`). |
 | `monero.data_dir` | `auto` | Where the Monero blockchain lives on the host. `auto` = `./data/monero`. Point this at an existing `.bitmonero` directory to reuse a synced node. See [Reusing an existing node](#reusing-an-existing-node). |
 | `monero.mem_limit` | `auto` | Upper limit on the monerod container's memory, so a leak/runaway OOM-restarts monerod alone instead of the host's OOM-killer picking a victim. `auto` is a generous ceiling (6 GB) that won't trip during normal operation or initial sync. monerod's OOM-triggering memory is small (~0.1 GiB at rest, ~1–3 GiB during sync) while its multi-GB blockchain DB is reclaimable, memory-mapped page cache that the kernel evicts under pressure rather than OOM-killing. Lower it only to free RAM. Raise it for a full (unpruned) node doing a heavy initial sync on a fast disk, or if a low-RAM host ever OOMs monerod during IBD (it restarts and resumes; the on-disk chain is transactional, no data loss). Accepts any Docker memory value, e.g. `"8g"`. (Tari has its own `tari.mem_limit`; the dashboard, P2Pool, Tor, and the proxies are small and carry fixed conservative ceilings in `docker-compose.yml`.) |
@@ -115,6 +116,7 @@ control channel will commit, are unaffected either way.
 | `tari.payout_scan_birthday` | `auto` | Where the view-only Tari wallet starts scanning on first creation (#462). Unlike Monero's block-height restore point, a Tari birthday is **days since the Unix epoch** (a u16, 0–65535). `auto` = today when the wallet is first made, so it tracks payouts forward without rescanning from genesis. Set an earlier day to backfill older payouts (slower first scan). Only affects the first wallet creation; ignored once the wallet exists. |
 | `tari.clearnet_initial_sync` | `false` | Privacy-relevant, default off. `true` makes the Tari base node sync over clearnet instead of Tor: it switches the P2P transport to TCP, re-enables the `seeds.tari.com` DNS seed (the bundled onion `peer_seeds` are unreachable without Tor), and stops advertising its onion. Your node's IP becomes visible to the Tari P2P network while it's on, plus one DNS lookup of `seeds.tari.com`. `pithead` warns loudly (apply/status/doctor/up). The dashboard switches Tari back to Tor automatically once it's synced (#234), so you can leave this `true`. Full threat model: [Privacy › Optional clearnet initial sync](privacy.md#optional-clearnet-initial-sync-off-by-default). |
 | `tari.remote.host` / `grpc_port` | — / `18142` | Remote Tari base node connection details (used when `tari.mode` is `remote`). See [Remote Tari node](#remote-tari-node). |
+| `tari.grpc_lan_access` | `false` | `true` publishes the local Tari base node's gRPC (`18142`) on the LAN — the serving side of `tari.mode: remote`, so other stacks can merge-mine against this node. The gRPC is plaintext and unauthenticated: trusted networks only (see [Remote Tari node](#remote-tari-node)). Ignored in `remote` mode (no bundled node runs). |
 | `tari.data_dir` | `auto` | Where the Tari node data lives on the host. `auto` = `./data/tari`. |
 | `tari.mem_limit` | `auto` | Upper limit on the Tari container's memory, so a runaway Tari restarts cleanly on its own instead of dragging down the whole host. `auto` picks a safe size for your machine. Leave it unless you want to give Tari less RAM (to free it for other apps) or more (if it ever restarts too often). Accepts any Docker memory value, e.g. `"8g"`. |
 | `p2pool.pool` | `mini` | Which P2Pool sidechain to mine: `main`, `mini`, or `nano`. `mini` (the default) has a lower share difficulty than `main`, so a typical home rig finds shares far more often: smoother, more frequent PPLNS payouts instead of long dry spells. Raise to `main` for high hashrate (large farms); drop to `nano` for a single low-power rig. |
@@ -448,6 +450,9 @@ To connect to an external Monero node instead of running one locally, set `moner
   control; general-purpose public "open node" endpoints do not work, since they don't expose ZMQ.
 - If the remote node requires RPC authentication, set `monero.node_username` / `node_password`
   to match it; otherwise leave them out.
+- If the remote node is another Pithead stack, the serving side is two switches on that stack:
+  `monero.rpc_lan_access: true` (RPC, digest-auth'd with its `node_username`/`node_password`)
+  and `monero.zmq_lan_access: true` (the ZMQ feed).
 
 Switching between `local` and `remote` is a disruptive change, so `apply` will confirm before
 applying it.
@@ -481,6 +486,10 @@ To merge-mine against a Tari base node running elsewhere instead of the bundled 
   exactly this
   (`c_base_node_b_mining_allow_methods.toml`) so `get_new_block_template_with_coinbases` and
   `submit_block` are reachable.
+- If the remote node is another Pithead stack, that is one switch on the serving side:
+  `tari.grpc_lan_access: true` publishes its bundled node's gRPC on the LAN. (For the Monero
+  half of the same arrangement, the serving stack sets `monero.rpc_lan_access` and
+  `monero.zmq_lan_access`.)
 - Leave `grpc_authentication` and `grpc_tls_enabled` off on the remote node. p2pool's Tari
   merge-mine client dials plaintext, unauthenticated gRPC and has no way to speak either — turning
   them on there just breaks the connection.

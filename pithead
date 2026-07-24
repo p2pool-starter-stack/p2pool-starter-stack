@@ -3713,6 +3713,15 @@ render_env() {
         tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_GRPC_PORT}"
     fi
 
+    # Tari gRPC LAN exposure (#760), mirroring monerod's rpc_lan_access above. Default
+    # localhost-only: in-stack consumers reach the node over the internal Docker network
+    # regardless, so the published port only serves other machines — the serving side of the
+    # remote mode (#103). The gRPC is plaintext and unauthenticated: trusted LAN only (#754
+    # trust model). N/A in remote mode (the tari service is profile-gated off; nothing binds).
+    local tari_grpc_bind tari_grpc_lan
+    tari_grpc_lan=$(jq -r '.tari.grpc_lan_access // false' "$CONFIG_FILE")
+    if [ "$tari_grpc_lan" == "true" ]; then tari_grpc_bind="0.0.0.0"; else tari_grpc_bind="127.0.0.1"; fi
+
     # On-chain payout confirmation (#381): the view-only wallet-rpc service only starts when its
     # compose profile is active, which is only when a view key is set on a local node. Off = no
     # container, dashboard unchanged. PAYOUT_CONFIRM_ENABLED is set by parse_and_validate_config
@@ -3772,6 +3781,15 @@ render_env() {
     local rpc_bind rpc_lan
     rpc_lan=$(jq -r '.monero.rpc_lan_access // false' "$CONFIG_FILE")
     if [ "$rpc_lan" == "true" ]; then rpc_bind="0.0.0.0"; else rpc_bind="127.0.0.1"; fi
+
+    # monerod ZMQ LAN exposure (#760). A separate key from rpc_lan_access on purpose: that key's
+    # documented use is wallets (RPC only), and widening it to also open ZMQ would change the
+    # exposure of existing deployments. A node SERVING remote stacks (#103's other half) needs
+    # both: rpc_lan_access for the RPC, zmq_lan_access for the block-notification feed p2pool
+    # requires. ZMQ pub has no auth — trusted LAN only.
+    local zmq_bind zmq_lan
+    zmq_lan=$(jq -r '.monero.zmq_lan_access // false' "$CONFIG_FILE")
+    if [ "$zmq_lan" == "true" ]; then zmq_bind="0.0.0.0"; else zmq_bind="127.0.0.1"; fi
 
     # P2Pool pool type → flags + p2p port
     local pool_type p2pool_flags p2pool_port
@@ -4123,10 +4141,12 @@ CLEARNET_STATE_DIR=$CLEARNET_STATE_DIR
 MONERO_PREP_THREADS=$prep_threads
 MONERO_OUT_PEERS=$out_peers
 MONERO_RPC_BIND=$rpc_bind
+MONERO_ZMQ_BIND=$zmq_bind
 MONERO_NODE_HOST=$mono_host
 MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
 TARI_GRPC_ADDRESS=$tari_grpc_addr
+TARI_GRPC_BIND=$tari_grpc_bind
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
@@ -4659,6 +4679,22 @@ describe_change() {
             msg="Monero RPC will be EXPOSED on your LAN ($old → $new) — make sure this is intended."
         else
             msg="Monero RPC bind address: $old → $new."
+        fi
+        ;;
+    MONERO_ZMQ_BIND)
+        if [ "$new" == "0.0.0.0" ]; then
+            flag=DEST
+            msg="Monero ZMQ will be EXPOSED on your LAN ($old → $new) — it has no auth, trusted networks only."
+        else
+            msg="Monero ZMQ bind address: $old → $new."
+        fi
+        ;;
+    TARI_GRPC_BIND)
+        if [ "$new" == "0.0.0.0" ]; then
+            flag=DEST
+            msg="Tari gRPC will be EXPOSED on your LAN ($old → $new) — it is plaintext and unauthenticated, trusted networks only."
+        else
+            msg="Tari gRPC bind address: $old → $new."
         fi
         ;;
     STRATUM_BIND)

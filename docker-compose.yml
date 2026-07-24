@@ -117,6 +117,10 @@ services:
       # the internal Docker network regardless. Set monero.rpc_lan_access:true in config.json
       # to publish on the LAN (0.0.0.0) for wallets on other machines.
       - "${MONERO_RPC_BIND:-127.0.0.1}:18081:18081"
+      # ZMQ block-notification feed (#760): loopback by default; set monero.zmq_lan_access:true to
+      # publish on the LAN — with rpc_lan_access, the serving side of monero.mode:remote (a remote
+      # p2pool needs both RPC and ZMQ). No auth on ZMQ pub: trusted LAN only.
+      - "${MONERO_ZMQ_BIND:-127.0.0.1}:18083:18083"
     networks:
       mining_net:
         ipv4_address: ${NETWORK_PREFIX:-172.28.0}.26
@@ -262,6 +266,12 @@ services:
     command:
       - --disable-splash-screen
       - --non-interactive
+    ports:
+      # Tari base-node gRPC for other machines (#760): loopback by default (host tools only; the
+      # same trust boundary as the console-wallet's loopback gRPC publish). Set
+      # tari.grpc_lan_access:true in config.json to publish on the LAN (0.0.0.0) — the serving
+      # side of tari.mode:remote (#103). Plaintext, unauthenticated: trusted LAN only (#754).
+      - "${TARI_GRPC_BIND:-127.0.0.1}:18142:18142"
     networks:
       mining_net:
         ipv4_address: ${NETWORK_PREFIX:-172.28.0}.27
