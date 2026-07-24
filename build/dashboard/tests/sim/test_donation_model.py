@@ -224,7 +224,7 @@ class TestDisturbanceRecovery:
             name="drop",
             target_hr=10_000,
             current_hr=46_300,
-            warm_avg=10_300,
+            warm_avg=10_500,
             measurement="fixed",
             p2pool_difficulty=DIFFICULTY,
             cycles=4 * CYCLES_PER_DAY,
