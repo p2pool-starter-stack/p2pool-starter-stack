@@ -1,0 +1,23 @@
+[Unit]
+Description=pithead xmrig-proxy (spike)
+After=p2pool.service
+Wants=p2pool.service
+[Container]
+ContainerName=xmrig-proxy
+Image=ghcr.io/p2pool-starter-stack/pithead-xmrig-proxy:v1.14.0
+Network=mining.network
+IP=172.28.0.29
+Environment=PROXY_API_PORT=3344 PROXY_AUTH_TOKEN=rendered-proxy-token PROXY_STRATUM_PASSWORD= PROXY_STRATUM_TLS=false PROXY_DONATE_LEVEL=0
+Exec=-o 172.28.0.28:3333 -u your_monero_wallet_address -b 0.0.0.0:3333 -m simple --coin monero --verbose --http-host 0.0.0.0 --http-port 3344 --http-access-token rendered-proxy-token --http-no-restricted --donate-level 0
+Volume=/opt/pithead/data/proxy-tls:/tls:ro
+Tmpfs=/tmp:size=64m,mode=1777
+Tmpfs=/home/ubuntu:size=64m,mode=1777
+PublishPort=0.0.0.0:3333:3333
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 512m --memory-swap 512m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target

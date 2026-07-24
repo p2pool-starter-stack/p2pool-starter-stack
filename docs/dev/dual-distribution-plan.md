@@ -75,10 +75,21 @@ the DIY channel changes nothing.
   a systemd-only knob, the escape hatch is a native drop-in
   (`<service>.container.d/override.conf`) beside the generated unit — no
   service-model abstraction layer until a second real divergence exists.
-- Compose-semantics mapping: `depends_on: service_healthy` → `Notify=healthy` +
-  `After=`/`Requires=` (set `TimeoutStartSec` above the longest `HealthStartPeriod` —
-  known Podman interaction); healthchecks → `HealthCmd=`/`HealthInterval=`;
-  `--remove-orphans` → obsolete, systemd owns lifecycle.
+- Compose-semantics mapping — **spike-proven rules** (each bought with an actual
+  failure; evidence on #78, fixtures in `os/quadlet/`):
+  1. `depends_on: service_healthy` → `Notify=healthy` + `After=` + `Requires=` +
+     `TimeoutStartSec=infinity`. A finite start timeout KILLS a not-yet-healthy
+     service and restarts it — compose's `start_period` never kills; p2pool's first
+     sidechain sync hit exactly that kill/restart loop.
+  2. Plain `depends_on` → `After=` + `Wants=`, never `Requires=` — differential
+     proven: after `systemctl stop p2pool`, xmrig-proxy stays running (compose
+     parity); `Requires=` would stop-couple them.
+  3. Compose tmpfs `uid=`/`gid=` options are rejected by podman's `Tmpfs=` —
+     map to `mode=1777` (or `Mount=` with chown).
+  4. Healthchecks → `HealthCmd=`/`HealthInterval=`/`HealthRetries=`/
+     `HealthStartPeriod=`; `--remove-orphans` → obsolete, systemd owns lifecycle.
+  5. Tooling uses stop-then-start: `systemctl restart` racing an in-flight start job
+     fails spuriously.
 - Docker-API consumers (dashboard start/stop/logs via the two socket proxies) point at
   Podman's Docker-compat socket on the appliance; the four endpoints used
   (`GET containers/json`, `GET logs`, `POST start`, `POST stop`) are spike-verified.
@@ -208,7 +219,13 @@ cut, and the installer smoke rides the same checklist.
   reset — delete `config.json` + secrets, re-enter the first-boot wizard, chain data
   kept; (2) factory reset — `rugix-ctrl state reset`, everything wiped. Reflash keeps
   data; the wizard offers tier 1 before tier 2.
-- Perf baked in: hugepages kargs, CPU governor, sysctls; hardware + systemd watchdog.
+- Hugepage reservation baked in at boot — **load-bearing, not perf polish** (spike
+  finding): the RandomX dataset (~2.1 GiB) lives in hugetlbfs outside the memory
+  cgroup only when pages are reserved; unreserved, it falls to anon memory and
+  p2pool OOM-loops at any cap ≤ 2g ("Dataset init invoked oom-killer"). Every memory
+  cap in the stack assumes the reservation, so the image reserves before containers
+  start, and `doctor`'s hugepages check is a hard prerequisite on the appliance.
+  Plus CPU governor, sysctls; hardware + systemd watchdog.
 - Rugix bus-factor-1 risk stands, with the v2 mitigations: updater-agnostic rootfs
   recipe (Docker-exported tarball) keeping RAUC as escape hatch; ask Silitics/Umbrel
   before phase 2 investment.
@@ -234,6 +251,16 @@ Exit: #78 closed with outcome (A) + spike notes, with binding go/no-go consequen
 | `Notify=healthy` ordering diverges in a way that breaks the dashboard | redesign the mapping before phase 1; no renderer until resolved |
 | socket-proxy endpoint gaps | each gap documented as a degraded appliance feature — accepted explicitly or fixed, never discovered later |
 | all four verified | proceed to phase 1 |
+
+**Outcome (2026-07-24): all four verified — #78 closed as (A).** The firewall port is
+an independent `inet pithead_egress` nftables table at forward priority −5 (no chain
+ownership shared with netavark; survives its reprogramming). The unmodified tecnativa
+proxies serve all four endpoints from the Podman compat socket, and the read proxy
+still refuses writes (403). The ordering matrix confirmed `tor < p2pool <
+xmrig-proxy` on `ActiveEnterTimestampMonotonic` with each edge gated on health. The
+full seven-unit stack ran end-to-end against remote nodes, including the dashboard's
+sync-gate driving containers through the control proxy. The degraded-features list is
+empty. Fixtures: `os/quadlet/`; evidence trail: the three verdict comments on #78.
 
 ### Phase 1 — curl installer + Quadlet renderer
 
