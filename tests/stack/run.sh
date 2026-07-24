@@ -3446,6 +3446,34 @@ out=$(PITHEAD_ENGINE=podman PATH="$EBIN:$PATH" run_sourced "$SANDBOX" docker_boo
 assert_eq "podman boot persistence reads podman.socket" "$out" "enabled"
 out=$(PITHEAD_ENGINE=docker PATH="$EBIN:$PATH" run_sourced "$SANDBOX" docker_boot_enabled && echo enabled || echo disabled)
 assert_eq "docker boot persistence ignores podman.socket" "$out" "disabled"
+
+echo "== unit: firstboot wizard token + spool consume (#77 phase 3) =="
+# Token: pit- prefix + 6 chars from the unambiguous alphabet (never 0, O, 1, I, or l).
+tok=$(run_sourced "$SANDBOX" wizard_mint_token)
+assert_eq "token shape" "$(printf '%s' "$tok" | grep -cE '^pit-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$')" "1"
+tok2=$(run_sourced "$SANDBOX" wizard_mint_token)
+assert_eq "tokens vary" "$([ "$tok" = "$tok2" ] && echo same || echo differ)" "differ"
+# Consume: a valid submission installs config.json + marks applied; an invalid one surfaces the
+# error into the spool for the form and installs nothing; an empty spool is rc 2.
+WSPOOL="$V/data/firstboot-test"
+mkdir -p "$WSPOOL"
+rm -f "$V/config.json"
+printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"} }\n' "$WALLET" >"$WSPOOL/config.json"
+out=$(cd "$V" && PATH="$V/bin:$PATH" run_sourced "$V" firstboot_consume_spool "$WSPOOL" && echo rc0)
+assert_contains "valid submission accepted" "$out" "rc0"
+assert_eq "valid submission installs config.json" "$([ -f "$V/config.json" ] && echo yes)" "yes"
+assert_eq "applied marker set" "$([ -f "$WSPOOL/applied" ] && echo yes)" "yes"
+rm -f "$WSPOOL/applied"
+printf '{ "monero": {"wallet_address":"8-not-a-primary"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"} }\n' >"$WSPOOL/config.json"
+out=$(cd "$V" && PATH="$V/bin:$PATH" run_sourced "$V" firstboot_consume_spool "$WSPOOL" || echo "rc$?")
+assert_contains "invalid submission rejected" "$out" "rc1"
+assert_eq "rejection surfaces spool error" "$([ -s "$WSPOOL/error.txt" ] && echo yes)" "yes"
+assert_eq "rejection leaves no candidate" "$([ -f "$WSPOOL/config.json" ] || echo gone)" "gone"
+out=$(run_sourced "$V" firstboot_consume_spool "$WSPOOL" || echo "rc$?")
+assert_contains "empty spool is rc2" "$out" "rc2"
+rm -rf "$WSPOOL"
+# Restore the sandbox config for later sections.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 # A missing env file is a hard error, not an empty render.
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
 assert_contains "render-quadlet missing env errors" "$out" "env file not found"
