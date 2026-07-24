@@ -128,10 +128,13 @@ phase_boot() {
             bad "virt-install failed to define the VM"
             return
         }
-    if wait_serial "Linux version|systemd\[1\]" 120; then
-        ok "image boots (kernel + systemd on the serial console)"
+    # NB: do NOT assert on the kernel banner — the appliance boots with loglevel=3, which keeps
+    # those lines off the console entirely, so a healthy boot looks silent. The getty banner (or
+    # the wizard's own announcement) is the first thing userspace reliably puts on serial.
+    if wait_serial "login:|Debian GNU/Linux|Pithead setup wizard" 240; then
+        ok "image boots to userspace (login banner on the serial console)"
     else
-        bad "no kernel/systemd banner on serial within 120s — EFI boot likely failed"
+        bad "no userspace banner on serial within 240s — boot failed; check the serial log"
         return
     fi
     # The firstboot unit prints the wizard URL + one-time token to the console (phase-3 design).

@@ -40,11 +40,21 @@ RUN printf 'PITHEAD_ENGINE=podman\n' >> /etc/environment \
     && mkdir -p /etc/systemd/journald.conf.d \
     && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/pithead.conf
 
+# The wizard's image, staged by os/build-image.sh — loaded into podman storage on first boot
+# (pithead firstboot-wizard), so the setup page comes up with no registry reachable.
+COPY os/rootfs/images/ /opt/pithead/images/
+
+# Networking: DHCP on any wired interface. The appliance ships no interactive network config —
+# the operator plugs in ethernet and browses to the box, so an unconfigured NIC means an
+# unreachable wizard and a bricked-looking appliance.
+RUN printf '[Match]\nName=en*\nName=eth*\n\n[Network]\nDHCP=yes\nMulticastDNS=yes\n\n[DHCPv4]\nUseDomains=yes\n' \
+        > /etc/systemd/network/10-wired.network
+
 # First boot: time sync, then the wizard (only while unprovisioned). The unit's console output
 # carries the URL + one-time token per the phase-3 design.
 COPY os/overlay/pithead-firstboot.service /etc/systemd/system/pithead-firstboot.service
 RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolved \
-        pithead-firstboot.service \
+        systemd-networkd systemd-networkd-wait-online pithead-firstboot.service \
     && systemctl disable ssh \
     && echo pithead > /etc/hostname
 

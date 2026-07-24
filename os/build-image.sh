@@ -9,6 +9,19 @@ cd "$(dirname "$0")/.."
 RUGIX_BAKERY_VERSION="${RUGIX_BAKERY_VERSION:-v0.9.3}"
 export RUGIX_BAKERY_IMAGE="${RUGIX_BAKERY_IMAGE:-ghcr.io/rugix/rugix-bakery:${RUGIX_BAKERY_VERSION}}"
 
+# Bake the wizard's container image into the appliance: first boot must reach the setup page
+# without a registry (the operator may have no working network config yet, and the plan's
+# offline-first-boot property depends on it). The rest of the release's images are pulled at
+# provision time for now — baking the full set is tracked with the appliance-size work.
+STACK_VERSION="v$(tr -d ' \t\r\n' <VERSION)"
+WIZARD_IMAGE="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION}"
+mkdir -p os/rootfs/images
+if [ ! -s os/rootfs/images/dashboard.tar.gz ]; then
+    echo "==> staging wizard image $WIZARD_IMAGE"
+    docker pull -q "$WIZARD_IMAGE" >/dev/null
+    docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
+fi
+
 echo "==> rootfs: container build + export"
 docker build -f os/rootfs/Containerfile -t pithead-os-rootfs \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \

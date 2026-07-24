@@ -1280,6 +1280,17 @@ firstboot_wizard() {
     # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses
     # only by design, removed at handoff.
     chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
+    # Offline first boot: the appliance carries the wizard image as an archive (os/rootfs/images),
+    # because at this point the operator may have no working network yet — that is what they are
+    # here to configure. Load it once if the engine does not already have it.
+    if ! "$engine" image exists "$image" 2>/dev/null; then
+        local archive
+        for archive in /opt/pithead/images/*.tar.gz /opt/pithead/images/*.tar; do
+            [ -f "$archive" ] || continue
+            log "Loading the wizard image from $archive..."
+            "$engine" load -i "$archive" >/dev/null 2>&1 || true
+        done
+    fi
     trap '"$engine" rm -f pithead-wizard >/dev/null 2>&1 || true' EXIT
     while :; do
         token=$(wizard_mint_token)
