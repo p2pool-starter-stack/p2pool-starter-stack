@@ -45,7 +45,10 @@ plan and stays in the RigForge repo.
 
 All channels consume the same release manifest: five digest-pinned GHCR images +
 `pithead` + rendered Quadlet units + config schema. The appliance embeds the same
-digests the installer pulls.
+digests the installer pulls. Image ownership is per-service, not structural: the
+manifest already pins the Tari node from a registry we do not own
+(`quay.io/tarilabs`) — a service image moving to another repo or registry changes a
+digest line, nothing else.
 
 curl-pipe trust mitigations: the script lives in the repo (reviewable), is served over
 HTTPS with a published checksum, and does nothing but verify + delegate to the signed
@@ -86,6 +89,75 @@ the DIY channel changes nothing.
   backends" advice): the compose file stays the maintained reference — full generation
   is a large refactor whose only payoff is hypothetical third backends (k8s/Helm),
   which this plan rejects. The parity test is the drift lock instead.
+
+## Runtime port surface
+
+Container-engine independence here means a short, mapped port list — not an
+abstraction layer (see the rejected service-model row above). Three contracts carry
+all application logic, and all three are engine-neutral:
+
+1. **OCI images**, pulled by digest from the release manifest — first-party or
+   upstream alike (the Tari node already ships from a foreign registry).
+2. **Four endpoints of the standard container API**, reached only through the
+   allowlisted socket proxies: `GET /containers/{name}/json`,
+   `GET /containers/{id}/logs`, `POST .../start`, `POST .../stop`. The dashboard uses
+   no engine SDK — raw HTTP against the proxy socket.
+3. **`config.json` renders every runtime file** (`.env` + compose on DIY, Quadlet
+   units on the appliance). No hand-edited runtime artifact exists.
+
+The engine-specific residue — the entire cost of supporting a runtime — is four
+items: the egress-firewall implementation, `doctor`'s host checks, the render
+target, and the socket the proxies mount. Supporting engine N+1 is a bounded port of
+that list; nothing else in the stack knows which engine is underneath.
+
+Guardrails that keep the surface from growing silently, all structural: a new API
+endpoint requires a visible change to the socket-proxy allowlist (a compose diff);
+the parity test fails on unrecognized compose keys; config rendering is the only
+path to runtime files. Review rule: a PR that grows the port surface updates this
+section in the same change.
+
+## Testing plan
+
+No new model — every dual-distribution behaviour slots into the existing four-tier
+map ([`testing-strategy.md`](testing-strategy.md)), each tested once at the lowest
+tier that proves it honestly. The scenario catalog grows two sections (renderer,
+appliance) when the code lands.
+
+**The parity test (tier 1, every PR, docker-free).** Text-to-text: parse
+`docker-compose.yml` (the reference), derive per-service expectations — image,
+mounts, env keys, healthcheck command/interval, `cap_drop`/`read_only`/
+`no-new-privileges`, static IP, tmpfs, memory limits, profile membership — and
+assert the rendered `.container`/`.network` units carry the same values. The phase 0
+hand-written units are the first fixtures. The lock is the closed set: a compose key
+the deriver does not recognize fails the test, so a new compose feature cannot ship
+without a decision about its Quadlet mapping. What parity cannot prove is
+*behavioural* equivalence — `Notify=healthy` ordering vs `depends_on:
+service_healthy` — which belongs to tiers 3 and 4, not to text comparison.
+
+**Tier 1 (unit) additions:** `render-quadlet` output shapes; profile gating (a
+disabled profile renders no units); `install.sh` distro/version-floor refusal
+(stubbed); `uninstall`'s kept-vs-removed listing; `doctor --json` schema, identical
+key set on both engines; the migration-deadlock decision (`data_migration` flag →
+chain units withheld pre-commit).
+
+**Tier 3 (mini-stack), Podman flavour:** the existing control-plane suite — real
+dashboard + socket proxies moving real containers — runs a second lane against
+rootful Podman's compat socket on Debian 13. This is where the four API endpoints
+and proxy allowlists stay proven permanently after the spike proves them once. Same
+tests, second engine; no duplicated logic.
+
+**Tier 4 (live matrix), appliance additions:** boot the flashed image on a #54 bench
+box; a good A/B update commits (gate consumes `doctor --json`); a deliberately
+broken update falls back; a `data_migration`-flagged update provably withholds chain
+services until commit; netavark egress verification mirrors the existing Tor-leak
+checks; first-boot pre-seed consumed and wizard gate honoured (token before any
+form); config-reset and factory-reset tiers; the 7-day unattended soak (the phase 2
+exit bar). Installer smoke: `install.sh` on clean Debian 13 and Ubuntu 26.04 VMs
+joins the release-smoke checklist.
+
+**Release gate:** the existing mandate (targeted e2e with a borrowed rig before
+every cut) extends, not changes — the `os-image` lane adds the bench boot-test per
+cut, and the installer smoke rides the same checklist.
 
 ## Appliance architecture (unchanged from v2, runtime swapped)
 
@@ -197,6 +269,14 @@ partition + labeled mounts + mount guards, `pithead` ↔ `rugix-ctrl` commit glu
 (consuming `doctor --json`), clean-state-on-version-change, factory reset, watchdog.
 A/B + rollback demo proven on a #54 bench box: apply a good update (commits), apply a
 deliberately broken one (falls back).
+
+`doctor` grows engine-aware host checks here, before it becomes the commit gate.
+Three of its checks are Docker-shaped — daemon reachable, `docker` group
+membership, `docker.service`/`docker.socket` boot persistence — and all three
+misreport under Podman/systemd. The appliance variants (engine reachable via its
+socket-activated API, Quadlet unit state, `podman.socket` enabled) land behind the
+same check names and the same `--json` shape, so the commit gate and support bundle
+read identically on both channels.
 
 The release manifest grows machine-readable compatibility fields —
 `minimum_os_version`, `db_schema`, `data_migration` — the contract between channels.
