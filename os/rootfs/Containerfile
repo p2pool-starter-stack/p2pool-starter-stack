@@ -10,12 +10,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The OS: init + kernel + bootloader userland for the generic-grub-efi target, the container
 # engine, pithead's host dependencies, mDNS (pithead.local), and time sync (before Tor — the
 # firstboot ordering rule). openssh-server ships installed but DISABLED: SSH is a wizard opt-in.
+# fdisk/parted/e2fsprogs/dosfstools are LOAD-BEARING for first boot: rugix-ctrl runs as init and
+# shells out to sfdisk + mkfs.ext4 to expand the baked image into the A/B layout. debian-slim
+# ships none of them, and their absence aborts bootstrapping (os error 2) before userspace.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv systemd-timesyncd systemd-resolved dbus udev \
         linux-image-amd64 initramfs-tools zstd \
         grub-efi-amd64 shim-signed \
         podman netavark aardvark-dns catatonit uidmap \
-        jq openssl curl ca-certificates xxd fdisk parted \
+        jq openssl curl ca-certificates xxd \
+        fdisk parted e2fsprogs dosfstools \
         avahi-daemon libnss-mdns \
         openssh-server sudo less nano htpdate
 # NB: apt lists are kept on purpose — the Rugix core recipes run `apt-get install` in the build

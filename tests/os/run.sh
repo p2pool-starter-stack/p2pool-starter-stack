@@ -111,6 +111,11 @@ phase_boot() {
     info "phase: boot"
     vm_destroy
     cp "$IMAGE" "$DISK"
+    # Grow the scratch disk before first boot: rugix-ctrl's bootstrapping expands the baked image
+    # into the full A/B layout (256M EFI + 2x512M boot + 2x8GiB system + data ~= 18 GiB minimum).
+    # On the raw 1.8G image it fails with "insufficient space, cannot add partition 5" and exits,
+    # panicking the kernel — which is what a real flash to an undersized disk would also do.
+    qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     # UEFI (OVMF), serial to a file we tail, import the raw appliance disk as-is.
     virt-install --name "$VM" --memory 4096 --vcpus 4 --cpu host-passthrough \
@@ -155,6 +160,11 @@ phase_boot() {
 _vm_boot_disk() {
     vm_destroy
     cp "$1" "$DISK"
+    # Grow the scratch disk before first boot: rugix-ctrl's bootstrapping expands the baked image
+    # into the full A/B layout (256M EFI + 2x512M boot + 2x8GiB system + data ~= 18 GiB minimum).
+    # On the raw 1.8G image it fails with "insufficient space, cannot add partition 5" and exits,
+    # panicking the kernel — which is what a real flash to an undersized disk would also do.
+    qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     virt-install --name "$VM" --memory 4096 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
