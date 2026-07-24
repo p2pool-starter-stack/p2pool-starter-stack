@@ -512,6 +512,19 @@ assert_running_state() {
         *) it_pass "monerod absent in remote mode" ;;
         esac
     fi
+    # 1b. A node's inbound onion follows the node (#103): the LIVE torrc must carry the Monero
+    #     hidden service only in local mode, or the stack advertises an onion address that accepts
+    #     connections into a container that never started. Tier-1 proves the rendering; only here
+    #     can we prove the running container actually got the gate through compose. Read the torrc
+    #     rather than the hostname file — a key minted during an earlier local scenario stays on
+    #     disk, so its presence proves nothing; what tor publishes is what the torrc lists.
+    local hs_monero
+    hs_monero="$(rx "docker exec tor grep -c -F 'HiddenServiceDir /var/lib/tor/monero/' /tmp/torrc 2>/dev/null")"
+    if [ "$mode" = "remote" ]; then
+        assert_eq "no Monero inbound onion in remote mode (#103)" "${hs_monero:-0}" "0"
+    else
+        assert_num_ge "Monero inbound onion published in local mode (#103)" "${hs_monero:-0}" 1
+    fi
 
     # 2. pithead status is green for a healthy config.
     pithead status >/dev/null 2>&1
