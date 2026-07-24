@@ -22,6 +22,9 @@ def algo():
     # the warm-resume seed falls through to feedforward. Warm-resume tests override these.
     state_manager.get_xvb_stats.return_value = {"commanded_fraction": 0.0}
     state_manager.get_xvb_standby.return_value = None
+    # No recorded raffle wins by default, so the in-round hold (#769) is inactive
+    # and the calibration loop steers freely. Hold tests override this.
+    state_manager.get_raffle_wins.return_value = []
     proxy_client = MagicMock()  # called via asyncio.to_thread -> sync methods
     data_service = MagicMock()
     data_service.workers_rejected = False  # not rejecting workers (Issue #31 guard off)
@@ -112,8 +115,8 @@ class TestGetDecision:
                 RECENT_SHARES,
             )
             assert mode in ("SPLIT", "XVB")
-            # reference 10_300 / 46_300 ~ 0.222 of the cycle.
-            assert algo.donation_fraction == pytest.approx(10_300 / 46_300, rel=0.05)
+            # reference 10_500 / 46_300 ~ 0.227 of the cycle.
+            assert algo.donation_fraction == pytest.approx(10_500 / 46_300, rel=0.05)
 
     def test_loop_ramps_up_when_below_reference(self, algo):
         """Calling repeatedly with the 1h average below reference integrates the
@@ -237,9 +240,12 @@ class TestHelpers:
     def test_reference_cushion_is_absolute_capped(self, algo):
         # Cushion above target is capped in ABSOLUTE H/s, so a huge tier doesn't
         # waste a percentage of a huge number.
-        assert algo._reference_hr(1_000_000) == pytest.approx(1_000_000 + 1_000)
-        # Small tier uses the percentage (3% of 10k = 300).
-        assert algo._reference_hr(10_000) == pytest.approx(10_300)
+        assert algo._reference_hr(1_000_000) == pytest.approx(1_000_000 + 5_000)
+        # Small tier uses the percentage (5% of 10k = 500).
+        assert algo._reference_hr(10_000) == pytest.approx(10_500)
+        # Whale sits exactly at the cap: 5% of 100k = 5k, the measured credited
+        # noise (~2.5 kH/s dips) stays clear of the round minimum.
+        assert algo._reference_hr(100_000) == pytest.approx(105_000)
 
     def test_fraction_to_ms_zero_and_positive(self, algo):
         assert algo._fraction_to_ms(0) == 0
@@ -681,8 +687,8 @@ class TestWarmResume:
         # Fresh install: no own state, no standby -> the original feedforward seed, unchanged.
         algo.state_manager.get_xvb_stats.return_value = {"commanded_fraction": 0.0}
         algo.state_manager.get_xvb_standby.return_value = None
-        # reference = 1000 + min(1000*0.03, 1000) = 1030; feedforward = 1030 / current_hr.
-        assert algo._seed_donation_fraction(1000, 2000, 0.85) == pytest.approx(1030 / 2000)
+        # reference = 1000 + min(1000*0.05, 5000) = 1050; feedforward = 1050 / current_hr.
+        assert algo._seed_donation_fraction(1000, 2000, 0.85) == pytest.approx(1050 / 2000)
 
     def test_get_decision_seeds_from_standby_on_failover(self, algo):
         # Integration: the first real donating cycle on a warm backup adopts the standby fraction
@@ -699,3 +705,91 @@ class TestWarmResume:
             RECENT_SHARES,
         )
         assert algo.donation_fraction == pytest.approx(0.35)
+
+
+class TestWonRoundHold:
+    """In-round donation hold (#769): while a won raffle round may still be live,
+    the calibration loop must never steer the donation DOWN — a controller-assisted
+    sag of the credited 1h average through the round minimum terminates the round."""
+
+    def _live_win(self):
+        return [
+            {
+                "ts": time.time() - 600,
+                "hashrate": 5e6,
+                "height": 1,
+                "block_id": "x",
+                "tier": "donor_whale",
+            }
+        ]
+
+    def test_downward_step_held_while_round_live(self, algo):
+        algo.state_manager.get_raffle_wins.return_value = self._live_win()
+        algo.donation_fraction = 0.5
+        # 1h average far above reference -> error negative -> would normally trim.
+        algo._advance_controller(46_300, 10_000, 200_000, 0.85)
+        assert algo.donation_fraction == 0.5  # held, not trimmed
+
+    def test_upward_step_still_ramps_while_round_live(self, algo):
+        algo.state_manager.get_raffle_wins.return_value = self._live_win()
+        algo.donation_fraction = 0.2
+        # Below reference -> catch-up must not be blocked by the hold.
+        algo._advance_controller(46_300, 10_000, 0, 0.85)
+        assert algo.donation_fraction > 0.2
+
+    def test_upward_step_still_clamped_to_reserve_while_round_live(self, algo):
+        algo.state_manager.get_raffle_wins.return_value = self._live_win()
+        algo.donation_fraction = 0.5
+        for _ in range(100):
+            algo._advance_controller(46_300, 10_000, 0, 0.6)
+        assert algo.donation_fraction == pytest.approx(0.6)  # VIP reserve still wins
+
+    def test_downward_step_applies_when_no_wins(self, algo):
+        algo.donation_fraction = 0.5
+        algo._advance_controller(46_300, 10_000, 200_000, 0.85)
+        assert algo.donation_fraction < 0.5
+
+    def test_query_window_bounds_round_liveness(self, algo):
+        # The liveness read asks storage only for wins inside the hold window —
+        # storage filters on ts, so the controller's contract is the `since` bound.
+        now = time.time()
+        algo.state_manager.get_raffle_wins.return_value = []
+        assert algo._won_round_live(now=now) is False
+        since = algo.state_manager.get_raffle_wins.call_args.kwargs["since"]
+        from mining_dashboard.config.config import XVB_WIN_ROUND_HOLD_S
+
+        assert since == pytest.approx(now - XVB_WIN_ROUND_HOLD_S)
+
+    def test_liveness_fails_open_on_storage_error(self, algo):
+        # A broken read must never freeze the controller: hold off, steer normally.
+        algo.state_manager.get_raffle_wins.side_effect = RuntimeError("db locked")
+        algo.donation_fraction = 0.5
+        algo._advance_controller(46_300, 10_000, 200_000, 0.85)
+        assert algo.donation_fraction < 0.5  # trimmed as if no round were live
+
+    def test_liveness_treats_non_list_as_not_live(self, algo):
+        algo.state_manager.get_raffle_wins.return_value = None
+        assert algo._won_round_live() is False
+
+    def test_seed_unaffected_by_live_round(self, algo):
+        # First advance seeds the loop; the hold only gates steering afterwards.
+        algo.state_manager.get_raffle_wins.return_value = self._live_win()
+        assert algo.donation_fraction is None
+        algo._advance_controller(46_300, 10_000, 200_000, 0.85)
+        assert algo.donation_fraction is not None
+
+    def test_stale_decay_still_wins_over_hold(self, algo):
+        # The prolonged-staleness fail-safe outranks the hold: donating blind
+        # through an outage is the bigger risk, live round or not.
+        algo.state_manager.get_raffle_wins.return_value = self._live_win()
+        algo.donation_fraction = 0.4
+        with patch("mining_dashboard.service.algo_service.ENABLE_XVB", True):
+            algo.get_decision(
+                46_300,
+                46_300,
+                POOL_STATS,
+                P2P_MAIN,
+                {"avg_1h": 200_000, "avg_24h": 0, "fail_count": 0, "last_update": _decay_ts()},
+                RECENT_SHARES,
+            )
+        assert algo.donation_fraction < 0.4  # decayed despite the live round

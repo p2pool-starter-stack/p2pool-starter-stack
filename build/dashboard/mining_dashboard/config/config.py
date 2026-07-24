@@ -660,10 +660,20 @@ XVB_MAX_DONATION_FRACTION = float(os.environ.get("XVB_MAX_DONATION_FRACTION", 0.
 
 # Cushion held above the tier threshold: the controller targets the 1h average at
 # threshold * (1 + pct), capped in ABSOLUTE H/s. The raffle terminates a win if the
-# 1h average dips below the round minimum, so we sit a small, noise-covering margin
-# above it — not a percentage of the tier (which wastes more the higher the tier).
-XVB_MAINT_MARGIN_PCT = float(os.environ.get("XVB_MAINT_MARGIN_PCT", 0.03))
-XVB_MAINT_MARGIN_ABS_CAP = float(os.environ.get("XVB_MAINT_MARGIN_ABS_CAP", 1000))
+# 1h average dips below the round minimum, so the cushion must exceed the credited
+# average's own noise. Measured on a live whale-tier fleet (#769): XvB's credited 1h
+# dipped ~2.5 kH/s below the setpoint, sailing straight through the old 1 kH/s cap
+# and killing won rounds. 5% capped at 5 kH/s clears that observed noise at every
+# tier while still capping the waste a flat percentage would cost the higher tiers.
+XVB_MAINT_MARGIN_PCT = float(os.environ.get("XVB_MAINT_MARGIN_PCT", 0.05))
+XVB_MAINT_MARGIN_ABS_CAP = float(os.environ.get("XVB_MAINT_MARGIN_ABS_CAP", 5000))
+
+# How long after a recorded raffle win the controller treats the won round as
+# possibly still live and refuses to steer the donation DOWN (#769): a round runs
+# ~60 min and then until the bonus finds a share, so 90 min covers the round plus
+# its tail. During this hold only downward calibration steps are skipped — upward
+# steps, the VIP reserve clamp, and the stale-read fail-safes all still apply.
+XVB_WIN_ROUND_HOLD_S = float(os.environ.get("XVB_WIN_ROUND_HOLD_S", 5400))
 
 # Integral gain of the calibration loop. Each cycle the donated fraction is nudged
 # by gain * (reference - measured_1h) / current_hr. Low by design: the 1h average

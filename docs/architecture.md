@@ -222,6 +222,15 @@ rounds. It donates the minimum needed to hold the target tier and routes the res
    to P2Pool. The controller edits the proxy config only; your workers keep their existing connection
    to `3333` and need no changes.
 
+3. **Round protection.** XvB terminates a won bonus round if your credited 1h average drops below
+   the round minimum while the round runs, so the controller guards wins two ways. It holds the 1h
+   average a cushion above the tier threshold (5%, capped at 5 kH/s) rather than exactly on it,
+   because XvB's credited average wanders a few kH/s below the setpoint even when your donation is
+   steady. And for 90 minutes after a recorded raffle win — a round plus its tail — it refuses to
+   ease the donation down, so a mid-round dip is never controller-assisted. Both guards spend a
+   little extra donation to keep the round alive; the bonus a completed round mines to your wallet
+   is worth far more than the cushion costs.
+
 The result: the chosen XvB tier holds with minimal donation, and remaining hashrate mines Monero +
 Tari on P2Pool. The dashboard's hashrate chart shades the P2Pool/XvB split over time.
 
