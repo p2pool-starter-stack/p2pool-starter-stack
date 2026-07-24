@@ -1478,7 +1478,9 @@ Lifecycle:
   restart [tor]             Restart the stack — or only the tor container, which picks
                             fresh guards when Tor clearnet egress is stuck (drops
                             and rebuilds all Tor circuits).
-  upgrade                   Rebuild and restart the stack (after a 'git pull').
+  upgrade                   Re-render generated config and rebuild/restart the stack after
+                            an update — a 'git pull' on source installs, or an extracted
+                            release bundle (the dashboard's one-click upgrade runs this).
 
 Inspection:
   logs [service]            Follow logs for all containers, or a single service.
