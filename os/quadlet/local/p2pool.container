@@ -1,0 +1,32 @@
+[Unit]
+Description=pithead p2pool
+After=tor.service
+Requires=tor.service
+[Container]
+ContainerName=p2pool
+Image=ghcr.io/p2pool-starter-stack/pithead-p2pool:v1.14.0
+Network=mining.network
+IP=172.28.0.28
+Environment=P2POOL_FLAGS=--mini
+Exec=--host 172.28.0.26 --rpc-port 18081 --rpc-login rendered-node-user:rendered-node-password --zmq-port 18083 --wallet your_monero_wallet_address --merge-mine tari://172.28.0.27:18142 your_tari_wallet_address --onion-address rendered-p2pool-onion.onion --local-api --stratum 0.0.0.0:3333 --p2p 0.0.0.0:37888 --data-api /stats
+Volume=/opt/pithead/data/p2pool:/home/ubuntu
+Volume=/opt/pithead/data/p2pool/stats:/stats
+Volume=/dev/hugepages:/dev/hugepages
+Tmpfs=/tmp:size=64m,mode=1777
+ReadOnly=true
+DropCapability=all
+AddCapability=IPC_LOCK SYS_NICE
+NoNewPrivileges=true
+Ulimit=memlock=-1:-1
+PodmanArgs=--memory 1g --memory-swap 1g
+HealthCmd=/usr/local/bin/p2pool-healthcheck.sh
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target

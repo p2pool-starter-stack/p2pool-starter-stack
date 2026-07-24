@@ -1,0 +1,19 @@
+[Unit]
+Description=pithead read socket proxy
+[Container]
+ContainerName=docker-proxy
+Image=docker.io/tecnativa/docker-socket-proxy:v0.4.2
+Network=proxy.network
+Environment=CONTAINERS=1 LOGS=1
+Volume=/run/podman/podman.sock:/var/run/docker.sock:ro
+Tmpfs=/run
+Tmpfs=/tmp
+PublishPort=127.0.0.1:12375:2375
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 128m --memory-swap 128m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target
