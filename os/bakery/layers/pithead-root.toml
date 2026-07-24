@@ -1,0 +1,3 @@
+# The rootfs tarball (os/rootfs/Containerfile, exported by os/build-image.sh) imported as the
+# system root — the Bakery-native mechanism, no recipe involved.
+url = "file:///build/pithead-root.tar"

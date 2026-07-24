@@ -1,0 +1,23 @@
+[Unit]
+Description=Pithead first-boot setup wizard (#77 phase 3)
+# Only while unprovisioned — the wizard window closes permanently at handoff.
+ConditionPathExists=!/opt/pithead/config.json
+Wants=network-online.target systemd-timesyncd.service podman.socket
+# Time before Tor (and before anything TLS): an RTC-less box that thinks it is 1970 can do
+# neither. htpdate is the wizard's own fallback on NTP-blocked networks (phase-3 rule).
+After=network-online.target systemd-timesyncd.service podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+WorkingDirectory=/opt/pithead
+Environment=PITHEAD_ENGINE=podman
+# The URL + one-time token must reach a human standing at the machine.
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStartPre=/bin/sh -c 'timedatectl show -p NTPSynchronized --value | grep -qx yes || htpdate -s www.debian.org || true'
+ExecStart=/opt/pithead/pithead firstboot-wizard
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

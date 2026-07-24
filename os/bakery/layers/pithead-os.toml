@@ -1,0 +1,12 @@
+# The appliance layer: our trixie rootfs plus Rugix boot integration and Rugix Ctrl.
+parent = "pithead-root"
+
+recipes = [
+    "pithead-prepare",
+    "setup-rugix-pithead",
+    "pithead-boot",
+]
+
+[parameters."core/rugix-ctrl"]
+use_musl = false
+version = "v1.0.0"

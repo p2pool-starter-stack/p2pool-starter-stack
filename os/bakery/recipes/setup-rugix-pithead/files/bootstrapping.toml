@@ -1,0 +1,10 @@
+[layout]
+type = "gpt"
+partitions = [
+    { name = "EFI", size = "256M", type = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B" },
+    { name = "boot-a", size = "512MiB" },
+    { name = "boot-b", size = "512MiB" },
+    { name = "system-a", size = "8GiB" },
+    { name = "system-b", size = "8GiB" },
+    { name = "data", filesystem = { type = "ext4", label = "data", additional-options = ["-m", "0.5"] } },
+]
