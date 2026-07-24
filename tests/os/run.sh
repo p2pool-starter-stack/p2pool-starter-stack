@@ -115,6 +115,7 @@ phase_boot() {
     : >"$SERIAL"
     # UEFI (OVMF), serial to a file we tail, import the raw appliance disk as-is.
     virt-install --name "$VM" --memory 4096 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
         --boot uefi --import --disk "path=$DISK,format=raw,bus=virtio" \
         --network network=default,model=virtio --graphics none \
         --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 ||
@@ -157,6 +158,7 @@ _vm_boot_disk() {
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     virt-install --name "$VM" --memory 4096 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
         --boot uefi --import --disk "path=$DISK,format=raw,bus=virtio" \
         --network network=default,model=virtio --graphics none \
         --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || return 1
