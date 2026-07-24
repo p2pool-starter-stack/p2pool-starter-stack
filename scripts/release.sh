@@ -503,6 +503,9 @@ publish() {
     write_manifest "$manifest"
     local bundle="$WORKDIR/pithead.tar.gz" # versionless name → stable /releases/latest/download/ URL
     make_bundle "$bundle"
+    # Bundle checksum into the manifest (#77 phase 1): install.sh verifies its download against
+    # this line. Appended here because write_manifest runs before the bundle exists.
+    printf -- '- bundle sha256: `%s`\n' "$(sha256sum "$bundle" | cut -d' ' -f1)" >>"$manifest"
     local bundle_sig="" # pithead.tar.gz.sig — only when signing is on (#376 opt-in)
     if [ "${COSIGN_ENABLED:-0}" -eq 1 ]; then
         bundle_sig="$bundle.sig" # the #59 upgrade runner fetches it by name

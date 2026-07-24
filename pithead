@@ -1147,6 +1147,48 @@ stack_support_bundle() {
     log "Secrets are redacted at collection, but REVIEW the contents before sharing: tar -tzf $(basename "$out")"
 }
 
+# `uninstall` (#77 phase 1): the clean exit for the DIY channel — stop and remove what pithead
+# created on this host, keep what the operator owns. Kept: config.json, the data dirs (chains,
+# Tor onion keys, dashboard DB), backups/. Removed: containers, the stack's images, the rendered
+# .env and Caddyfile, this checkout's control-runner units, the egress firewall rules. The
+# appliance has no uninstall — its equivalents are the reset tiers.
+stack_uninstall() {
+    local yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) yes=1 ;;
+        *) error "Unknown option for uninstall: $arg. Run '$0 help'." ;;
+        esac
+    done
+    [ -f .env ] || error "No .env here — nothing deployed to uninstall. A never-deployed checkout is just a directory: remove it."
+    detect_os
+    # The keep-list is read from .env BEFORE it is removed.
+    local data_dirs
+    data_dirs=$(grep -E '^(MONERO|TARI|P2POOL|DASHBOARD|TOR)_DATA_DIR=' .env | cut -d= -f2- | sort -u | tr '\n' ' ')
+    warn "DESTRUCTIVE: stops the stack, removes its containers and images, and deletes the rendered .env and Caddyfile."
+    log "Kept (yours): config.json, backups/, and the data dirs: ${data_dirs:-none recorded}"
+    if [ "$yes" -ne 1 ]; then
+        printf "Type 'uninstall' to continue: "
+        read -r arg
+        [ "$arg" == "uninstall" ] || {
+            log "Aborted — nothing changed."
+            return 1
+        }
+    fi
+    remove_tor_egress_firewall 2>/dev/null || true
+    docker compose down --remove-orphans 2>/dev/null ||
+        warn "compose down failed (engine not running?) — continuing with cleanup."
+    # Exact image refs from the compose config; failures (image shared/in use) are non-fatal.
+    docker compose config --images 2>/dev/null | sort -u | while read -r img; do
+        [ -n "$img" ] && docker rmi "$img" >/dev/null 2>&1 || true
+    done
+    # Removes only THIS checkout's pithead-control units (the ownership check inside).
+    DASHBOARD_CONTROL_ENABLED=false provision_control_runner 2>/dev/null || true
+    rm -f .env Caddyfile
+    log "Uninstalled. Still on disk: config.json, backups/, data dirs (${data_dirs:-none}) — remove them yourself for a full wipe."
+    log "Kernel HugePages/GRUB tuning from setup persists; revert in GRUB config if you want it gone."
+}
+
 announce_dashboard_url() {
     local display_host
     display_host=$(env_get HOST_IP)
@@ -1629,6 +1671,14 @@ Maintenance:
                             Asks for the passphrase (or reads PITHEAD_BACKUP_PASSPHRASE) and
                             fails before touching anything if it's wrong.
                               -y, --yes        restore without the confirmation prompt.
+
+  uninstall [-y|--yes]      DESTRUCTIVE: the clean exit. Stops the stack, removes its
+                            containers and images, deletes the rendered .env and Caddyfile,
+                            this checkout's control-runner units, and the egress firewall
+                            rules. Keeps what is yours: config.json, backups/, and the data
+                            dirs (chains, Tor onion keys, dashboard DB) — the closing message
+                            lists them for manual removal. Type-to-confirm unless -y.
+                              -y, --yes        skip the confirmation prompt.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -5589,7 +5639,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -7029,6 +7079,7 @@ main() {
         ;;
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
+    uninstall) stack_uninstall "$@" ;;
     control-run-pending)
         _reject_options control-run-pending "$@"
         require_deployed
