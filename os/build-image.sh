@@ -21,8 +21,9 @@ docker rm "$cid" >/dev/null
 echo "==> bakery: bake the EFI image"
 cd os/bakery
 # The layer cache does not track the imported tarball's content — a rebuilt rootfs would bake
-# against the stale cached root. Builds are infrequent; correctness beats cache.
-rm -rf .rugix
+# against the stale cached root. Builds are infrequent; correctness beats cache. The bakery
+# writes cache files as root (container), so the wipe needs sudo.
+sudo rm -rf .rugix build
 if [ ! -x ./run-bakery ]; then
     curl -sfSO "https://raw.githubusercontent.com/rugix/rugix-bakery/${RUGIX_BAKERY_VERSION}/container/run-bakery"
     chmod +x ./run-bakery
