@@ -430,12 +430,72 @@ pithead/
     └── os/                     # boot/update/rollback harness on the #54 matrix
 ```
 
+## The updater bake-off — decision procedure
+
+The A/B updater is the one component whose failures land in the field, unattended, on
+someone's income. It is therefore chosen by **measurement against a shared rootfs**,
+not by argument. Rugix booting first is an accident of order, not a decision: it earns
+no default status, and no further updater-specific work lands until this runs.
+
+**Why a bake-off is affordable at all:** the rootfs is updater-agnostic by design
+(`os/rootfs/Containerfile` contains zero updater knowledge), so each candidate consumes
+the *same* exported tarball. The candidate-specific surface is small — Rugix is ~150
+lines of TOML in `os/bakery/` plus ~30 lines of harness commands.
+
+**Candidates** (each builds a bootable image from the shared tarball):
+
+| | Updater | Image assembly | Notes |
+|---|---|---|---|
+| A | Rugix Ctrl | Rugix Bakery | integrated state/persist, factory reset, delta-over-HTTP |
+| B | RAUC | ours (script: GPT + mkfs + populate + GRUB boot-counting env) | mature, but updater only — we own assembly, persist, reset |
+| C | systemd-sysupdate | ours + `systemd-boot` boot counting | no third-party updater; needs moving off GRUB |
+
+**The battery — identical for every candidate**, run by `tests/os/run.sh`:
+
+1. Cold boot to multi-user on the #54 bench VM.
+2. Install a v2 bundle → boots the spare slot.
+3. Reboot **without** commit → must fall back to v1.
+4. Install + commit → must persist across reboot.
+5. **Fault injection:** `virsh destroy` mid-write and mid-commit, ×3 each → must land
+   on a bootable slot every time, never a brick. This is the field-critical case and
+   the one the maturity argument is really about.
+6. Factory reset and config-only reset behave as specified.
+7. Recorded numbers: update bundle size, delta size on a one-file change, apply
+   duration, image build duration.
+
+**Scoring — weights fixed here, before any results, so the outcome cannot be
+rationalised afterwards:**
+
+| Criterion | Weight | How it is judged |
+|---|---|---|
+| Field reliability | 40% | battery items 3–5; any brick in fault injection is disqualifying, not deducted |
+| Longevity / bus factor | 25% | maintainers, release cadence, independent production users, doc + community depth |
+| Integration surface we own | 20% | lines and concepts we maintain ourselves; every line we own is a line we must debug at 3am |
+| Operational ergonomics | 15% | delta size, apply time, clarity of failure messages, factory-reset support |
+
+**Exit:** a written verdict in this document naming the winner, its score against each
+criterion, and what would reverse it. Ties go to the candidate with the smaller surface
+we own. Only then does updater-specific work resume.
+
+**What is already known, entered as evidence rather than conclusion:** Rugix completed
+bootstrapping and booted to multi-user on generic x86 EFI (2026-07-24). Of the 13 build
+iterations that took, ~7 were our own bugs, ~3 generic image-building reality, and ~3
+Rugix documentation gaps that required reading umbrelOS's source — the last group is
+the honest maturity signal. RAUC and sysupdate have not yet been built once, so they
+carry an unknown integration cost that only the bake-off can price.
+
 ## Risk register
 
 1. **netavark egress-firewall port** (appliance only) — the technical unknown that
    gates the runtime decision; phase 0 item 1.
-2. **Rugix bus factor** — accepted with mitigations (updater-agnostic recipe, RAUC
-   escape hatch, talk to Silitics/Umbrel); re-evaluate at phase 0/2 boundary.
+2. **Rugix bus factor / long-term support** — one maintainer at one small company
+   (1112 commits vs 4 for the next contributor), 1.0 five months old, and umbrelOS —
+   its flagship user — still pins Bakery v0.9.1. RAUC is the mature alternative
+   (2015, two Pengutronix maintainers, Home Assistant OS's x86-64 fleet), but it is
+   *only* an updater: no image builder, no state/persist model, no factory reset, no
+   delta-over-HTTP. Choosing it means hand-building the image assembly Bakery does
+   for us. **Neither is chosen yet** — the updater bake-off above settles it by
+   measurement, and no further updater-specific work lands until it has run.
 3. **Dual-render drift** — two runtime definitions (compose reference + generated
    Quadlet). Locks: units are generated, never hand-edited; the parity test derives
    from the compose file and fails on any compose key it does not recognize, so new

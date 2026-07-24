@@ -1,49 +1,49 @@
 # pithead-os build — known issues
 
-## BLOCKER: first-boot kernel panic — `rugix-ctrl` exits as initramfs init (2026-07-24)
+## RESOLVED: first-boot kernel panic (2026-07-24)
 
-**Status:** the image builds and boots through EFI → GRUB → kernel → initrd, then panics.
-Everything up to userspace works; the initramfs → system handoff does not.
+The image now boots to multi-user on generic x86 EFI. Kept because the debugging
+method is the reusable part.
 
-**Symptom** (serial console, reproducible every boot):
+**What it looked like:** `Kernel panic - not syncing: Attempted to kill init`, with
+`Comm: rugix-ctrl`, ~32 s after the initrd handed off — and *no* diagnostic output,
+through eleven rebuilds.
 
-```
-EFI stub: Loaded initrd from LINUX_EFI_INITRD_MEDIA_GUID device path
-[   32.x] Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000000
-[   32.x] CPU: N UID: 0 PID: 285 Comm: rugix-ctrl ... Debian 6.12.96
-```
+**Why it stayed invisible:** the cmdline was `console=ttyS0 console=tty1`, and the
+**last** `console=` becomes `/dev/console`. Every byte rugix-ctrl printed went to tty1
+while the serial capture saw only kernel messages (the kernel writes to *all*
+consoles). Swapping the order made it talk on the first try. `loglevel=3` compounds
+this: kernel lines below KERN_ERR never reach the console either, which is also why
+the harness's "kernel banner" assertion sees nothing on a *healthy* boot.
 
-`rugix-ctrl` runs as PID 1 in the initramfs (its A/B boot flow), produces **no output**,
-waits ~32 s (the register dump shows `clock_nanosleep` interrupted — a retry/timeout, not
-a crash), then exits, which panics the kernel. First boot, so this is the bootstrapping
-leg (repartition-from-image-layout → reboot).
+**What it was actually saying, once visible:**
 
-**Ruled out** (each tried, panic unchanged):
+1. `insufficient space, cannot add partition 5` — the harness booted the raw 1.8 GB
+   image, but bootstrapping expands to the full A/B layout (~18 GiB minimum). Our
+   regression: the `qemu-img resize 40G` had been removed. Restored, with the reason
+   recorded next to it.
+2. `mkfs.ext4 …: No such file or directory` — `debian-slim` ships no `e2fsprogs` or
+   `dosfstools`, and rugix-ctrl shells out to them as init. Both are now load-bearing
+   rootfs packages.
 
-- Image tag / pseudo-fs dirs / root-layer wiring / apt-in-chroot / cache staleness — all
-  fixed; the build itself is clean and reproducible now.
-- Secure Boot (disabled for the test VM — unsigned GRUB; SB is out of scope for v1).
-- `/.dockerenv` removal (systemd container-detection) — removed via `pithead-prepare`.
-- Baked image layout with `root = "config"/"boot"/"system"` markers — added, matching
-  umbrelOS's amd64 layout.
-- Exact recipe parity with umbrelOS `setup-rugix` (bootstrapping.toml + state-data.toml +
-  system.toml; no manual `update-initramfs`).
+**Method worth reusing:** when init dies silently, check which console `/dev/console`
+actually is before assuming there is nothing to read. Kernel-message presence proves
+nothing about userspace output.
 
-**Leading hypothesis:** the difference is the rootfs itself — a `debian:trixie-slim`
-docker export vs. umbrelOS's purpose-built base (their `umbrelos-prepare` /
-`umbrelos-cleanup` recipes do more than we mirror). `rugix-ctrl` in the initramfs likely
-cannot find/mount the system partition and times out. Silence + 32 s + first-boot points
-at the bootstrapping device lookup.
+## Open: rootfs completeness
 
-**Next step (needs a focused session, not more blind rebuilds):** drop into the
-initramfs — boot with `rd.break` or a shell, or bake a debug initrd — and observe what
-`rugix-ctrl` actually sees: is the system partition present, does its UUID match the image
-layout, what does `rugix-ctrl` log at a higher verbosity. Compare a booting umbrelOS
-amd64 image's initramfs contents against ours. The fix is almost certainly a rootfs
-preparation step umbrelOS does that we don't, or a Rugix boot-flow parameter for a
-from-scratch Debian base.
+Found by the first successful boot — neither is an updater or Bakery issue:
 
-**What is DONE and unaffected:** the entire `os/` build tooling (reproducible), the
-`tests/os/` harness (boot + full A/B update/rollback, ready to run the moment boot
-succeeds), and all of phases 0–3 on `develop-v2`. This is the single remaining item to
-make phase 2's appliance boot.
+- **No network configuration.** The rootfs installs no network manager and ships no
+  `systemd-networkd` `.network` unit, so the appliance boots with no DHCP lease. The
+  wizard is unreachable until this lands.
+- **Stack images are not baked in.** `pithead firstboot-wizard` runs the dashboard
+  image under Podman; with no images present and no network, it cannot start. The
+  appliance must carry the release's images (the plan's "first boot works offline"
+  property).
+
+## Open: harness boot assertion
+
+`tests/os/run.sh` waits for `Linux version|systemd\[1\]` on serial, which `loglevel=3`
+suppresses — so a healthy boot reports failure. Assert on the wizard's console
+announcement (now broadcast to every console device) or on the getty banner instead.
