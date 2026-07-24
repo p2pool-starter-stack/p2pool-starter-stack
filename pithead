@@ -572,6 +572,11 @@ stack_status() {
         if [ "$s" = "monerod" ] && [[ ",$profiles," != *",local_node,"* ]]; then
             continue
         fi
+        # Same for the bundled Tari node under local_tari (#103): tari.mode remote means it's
+        # never expected to be running, so don't flag it missing either.
+        if [ "$s" = "tari" ] && [[ ",$profiles," != *",local_tari,"* ]]; then
+            continue
+        fi
 
         cid=$(docker compose ps -aq "$s" 2>/dev/null | head -n1 || true)
         if [ -z "$cid" ]; then
@@ -924,6 +929,20 @@ doctor() {
         # .env renders MONERO_PRUNE as 1 (pruning on) / 0 (off); default to pruned if unset.
         doctor_prune=$(env_get MONERO_PRUNE)
         [ -n "$doctor_prune" ] || doctor_prune=1
+        # A remote node (#103) keeps its chain elsewhere, so its dir must not count toward THIS
+        # host's disk budget — otherwise doctor demands ~120 GiB (Monero) / ~170 GiB (Tari) for a
+        # container that never runs, on exactly the small-disk hosts remote mode exists for. Read
+        # the mode from the profile tokens like the container checks above; a pre-#103 .env has no
+        # local_tari token yet, so require a rendered TARI_GRPC_ADDRESS (also new in #103) before
+        # trusting its absence — old installs keep the local budget until the next apply re-renders.
+        local doctor_profiles
+        doctor_profiles=$(env_get COMPOSE_PROFILES)
+        if [[ ",$doctor_profiles," != *",local_node,"* ]]; then
+            mono_dir=""
+        fi
+        if [ -n "$(env_get TARI_GRPC_ADDRESS)" ] && [[ ",$doctor_profiles," != *",local_tari,"* ]]; then
+            tari_dir=""
+        fi
     else
         mono_dir="$PWD/data/monero"
         tari_dir="$PWD/data/tari"
@@ -1671,6 +1690,13 @@ assert_safe_dir() {
     esac
     case "$d" in
     *..*) error "Refusing data directory '$d' — '..' path traversal is not allowed." ;;
+    esac
+    # 3) A ':' would split the compose bind-mount short syntax it renders into
+    #    (`${MONERO_DATA_DIR}:/dest`) — e.g. a dir ending ':ro' forges a third MODE field, turning a
+    #    read-write data mount read-only or breaking `compose up`. It's operator-set but, since #728,
+    #    also dashboard-committable, so charset-guard it here. No legitimate data-dir path needs a colon.
+    case "$d" in
+    *:*) error "Refusing data directory '$d' — ':' is not allowed (it would corrupt the container's volume mount)." ;;
     esac
 }
 
@@ -2580,6 +2606,17 @@ parse_and_validate_config() {
     if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
         error "Missing required wallet addresses in $CONFIG_FILE."
     fi
+    # tari.wallet_address gets no exact-format gate like monero's below: Tari addresses come in
+    # base58 AND emoji forms, single/dual, with optional payment IDs — length and charset both vary
+    # (RFC-0155), and p2pool passes the string straight to the Tari node, which accepts either form,
+    # so a strict regex would false-reject valid addresses. The untouched placeholder is caught by the
+    # combined check just below; also reject embedded whitespace here — no Tari address of either form
+    # has an ASCII space, and a space isn't a control char so the central guard above misses it, yet it
+    # would silently mine to a wrong address (the #250 failure mode). A subtler typo is the node's to
+    # reject at merge-mine time. [TODO: verify upstream — exact accepted form, to gate fully.]
+    case "$TARI_WALLET" in
+    *[[:space:]]*) error "tari.wallet_address contains whitespace — a Tari address (base58 or emoji) has none. Check for a stray space or line break in $CONFIG_FILE." ;;
+    esac
     if [ "$MONERO_WALLET" == "your_monero_wallet_address" ] || [ "$TARI_WALLET" == "your_tari_wallet_address" ]; then
         error "Wallet addresses in $CONFIG_FILE are still the template placeholders. Set your real addresses."
     fi
@@ -2597,6 +2634,15 @@ parse_and_validate_config() {
     case "$MONERO_MODE" in
     local | remote) ;;
     *) error "monero.mode must be \"local\" or \"remote\" (got \"$MONERO_MODE\")." ;;
+    esac
+
+    # tari.mode (#103), the same explicit local/remote switch as monero.mode above. Read here (not
+    # only inside the view-key gate below) so an invalid value fails validation regardless of
+    # whether a view key is even set.
+    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
+    case "$TARI_MODE" in
+    local | remote) ;;
+    *) error "tari.mode must be \"local\" or \"remote\" (got \"$TARI_MODE\")." ;;
     esac
 
     # On-chain payout confirmation (#381). The operator supplies the PRIVATE VIEW KEY for
@@ -2630,17 +2676,18 @@ parse_and_validate_config() {
     # merge-mine coinbase actually landed. The view key is a SECRET (reveals all incoming amounts and
     # timing) — handled like node_password: never logged or echoed, delivered to the container via a
     # tmpfs-mounted compose secret, never the command line or `docker inspect`. Empty (the default) =
-    # feature off. Phase 1 is LOCAL NODE ONLY: a view key with a remote Tari node (#103, v1.6) is
-    # refused, mirroring monero.mode. tari.payout_scan_birthday is Tari's restore point: DAYS SINCE
-    # THE UNIX EPOCH (a u16, not a block height), so a fresh wallet doesn't rescan from genesis.
+    # feature off. Phase 1 is LOCAL NODE ONLY: a view key with a remote Tari node (#103) is refused,
+    # mirroring monero.mode — scanning through a third-party node changes the trust story.
+    # tari.payout_scan_birthday is Tari's restore point: DAYS SINCE THE UNIX EPOCH (a u16, not a
+    # block height), so a fresh wallet doesn't rescan from genesis. TARI_MODE was already parsed and
+    # validated above.
     TARI_VIEW_KEY=$(jq -r '.tari.view_key // empty' "$CONFIG_FILE")
     TARI_SPEND_PUBLIC_KEY=$(jq -r '.tari.spend_public_key // empty' "$CONFIG_FILE")
     TARI_WALLET_BIRTHDAY=$(jq -r '.tari.payout_scan_birthday // "auto"' "$CONFIG_FILE")
-    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
     TARI_PAYOUT_CONFIRM_ENABLED=false
     if [ -n "$TARI_VIEW_KEY" ]; then
         if [ "$TARI_MODE" != "local" ]; then
-            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Tari payout confirmation (#462) scans against the LOCAL Tari node only — remote Tari (#103) is v1.6 and changes the trust story. Unset tari.view_key, or use a local Tari node."
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation needs the LOCAL Tari node — unsupported with tari.mode: remote, since scanning through a third-party node changes the trust story. Unset tari.view_key, or use a local Tari node."
         fi
         # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
         if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
@@ -2681,10 +2728,38 @@ parse_and_validate_config() {
     TOR_AUTO_HEAL=$(normalize_bool "$(config_bool '.tor.auto_heal' false)")
     # Surfaced for the dashboard's egress-posture panel (#170); mirrors what p2pool_outbound_flags reads.
     P2POOL_CLEARNET=$(normalize_bool "$(config_bool '.p2pool.clearnet' false)")
+    # Remote-node host/port validation (#103). The central control-char guard above already stops a
+    # newline forging an .env line, but a remote.host also flows into shell/URL sinks it doesn't
+    # cover: monero's into the p2pool `--host` arg, tari's into `--merge-mine tari://…` AND the socat
+    # bridge command `TCP:$_mmhost:$_mmport` (build/p2pool/entrypoint.sh), where a comma is read as a
+    # socat address-option separator (`TCP:host,fork,…`). So charset-guard both with the same
+    # is_valid_host/is_valid_port used for dashboard.host/.port — no comma/space/`{` reaches a sink.
+    # These resolve once here and are reused verbatim by render_env (globals, like MONERO_MODE above),
+    # so the value that passes validation is exactly the value rendered — no second jq read, no drift.
+    # Cleared to empty first (defensive): each real `apply` is a fresh process so these start unset,
+    # but clearing them keeps the invariant "globals reflect only the current config" true even if a
+    # future caller ever parses twice in one process — a stale remote host must never survive into a
+    # later local-mode render.
+    MONERO_REMOTE_HOST="" MONERO_REMOTE_RPC_PORT="" MONERO_REMOTE_ZMQ_PORT=""
+    TARI_REMOTE_HOST="" TARI_REMOTE_GRPC_PORT=""
     if [ "$MONERO_MODE" == "remote" ]; then
-        local remote_host
-        remote_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
-        [ -n "$remote_host" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
+        MONERO_REMOTE_HOST=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
+        [ -n "$MONERO_REMOTE_HOST" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
+        is_valid_host "$MONERO_REMOTE_HOST" || error "monero.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$MONERO_REMOTE_HOST\"."
+        MONERO_REMOTE_RPC_PORT=$(jq -r '.monero.remote.rpc_port // 18081' "$CONFIG_FILE")
+        is_valid_port "$MONERO_REMOTE_RPC_PORT" || error "monero.remote.rpc_port must be a TCP port 1–65535. Got \"$MONERO_REMOTE_RPC_PORT\"."
+        MONERO_REMOTE_ZMQ_PORT=$(jq -r '.monero.remote.zmq_port // 18083' "$CONFIG_FILE")
+        is_valid_port "$MONERO_REMOTE_ZMQ_PORT" || error "monero.remote.zmq_port must be a TCP port 1–65535. Got \"$MONERO_REMOTE_ZMQ_PORT\"."
+    fi
+    # tari.mode remote (#103), mirroring monero.mode above: a third-party (or fleet-shared) Tari
+    # base node needs a host — an empty one would render an empty TARI_GRPC_ADDRESS and mining can't
+    # merge-mine, so abort at validation rather than let that reach the containers silently.
+    if [ "$TARI_MODE" == "remote" ]; then
+        TARI_REMOTE_HOST=$(jq -r '.tari.remote.host // empty' "$CONFIG_FILE")
+        [ -n "$TARI_REMOTE_HOST" ] || error "tari.mode is \"remote\" but tari.remote.host is not set in $CONFIG_FILE."
+        is_valid_host "$TARI_REMOTE_HOST" || error "tari.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$TARI_REMOTE_HOST\"."
+        TARI_REMOTE_GRPC_PORT=$(jq -r '.tari.remote.grpc_port // 18142' "$CONFIG_FILE")
+        is_valid_port "$TARI_REMOTE_GRPC_PORT" || error "tari.remote.grpc_port must be a TCP port 1–65535. Got \"$TARI_REMOTE_GRPC_PORT\"."
     fi
 
     POOL_TYPE=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
@@ -3557,10 +3632,25 @@ render_env() {
         zmq_port="18083"
         profiles="local_node"
     else
-        mono_host=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
-        rpc_port=$(jq -r '.monero.remote.rpc_port // 18081' "$CONFIG_FILE")
-        zmq_port=$(jq -r '.monero.remote.zmq_port // 18083' "$CONFIG_FILE")
+        # Reuse the parse-time validated globals — the validated value IS the rendered value.
+        mono_host="$MONERO_REMOTE_HOST"
+        rpc_port="$MONERO_REMOTE_RPC_PORT"
+        zmq_port="$MONERO_REMOTE_ZMQ_PORT"
         profiles="" # Empty profile disables local monerod
+    fi
+
+    # Tari mode → gRPC address / compose profile (#103), mirroring Monero above. local -> the
+    # bundled Tari node at its fixed bridge IP, plus the local_tari profile so compose starts it.
+    # remote -> a third-party (or fleet-shared) node's host:port; local_tari stays out of $profiles
+    # so the bundled node never starts (parse_and_validate_config already required
+    # tari.remote.host to be set).
+    local tari_grpc_addr
+    if [ "$TARI_MODE" == "local" ]; then
+        tari_grpc_addr="${NETWORK_PREFIX}.27:18142"
+        profiles="${profiles:+$profiles,}local_tari"
+    else
+        # Reuse the parse-time validated globals (see Monero above) — single source of truth.
+        tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_GRPC_PORT}"
     fi
 
     # On-chain payout confirmation (#381): the view-only wallet-rpc service only starts when its
@@ -3802,28 +3892,36 @@ render_env() {
     # Net: with HugePages on, ~7.5 GB on a 16 GB host, ~19 GB on 32 GB; with HugePages off
     # (--skip-optimize) it's ~75% of RAM. Override with tari.mem_limit (any Docker value, e.g. "8g").
     local tari_mem_limit ram_mb huge_mb avail_mb reserve_mb monero_mem_limit
-    tari_mem_limit=$(jq -r '.tari.mem_limit // "auto"' "$CONFIG_FILE")
-    case "$tari_mem_limit" in
-    "" | auto)
-        huge_mb=0
-        if [ "$OS_TYPE" == "Darwin" ]; then
-            ram_mb=$(($(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1048576))
-        else
-            ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
-            # HugePages_Total (pages) * Hugepagesize (kB) -> MiB reserved out of RAM.
-            huge_mb=$(awk '/HugePages_Total/{t=$2} /Hugepagesize/{s=$2} END{print int(t*s/1024)}' /proc/meminfo 2>/dev/null || echo 0)
-        fi
-        [ "${ram_mb:-0}" -gt 0 ] 2>/dev/null || ram_mb=16384 # unknown host => assume 16 GB
-        [ "${huge_mb:-0}" -ge 0 ] 2>/dev/null || huge_mb=0
-        avail_mb=$((ram_mb - huge_mb)) # RAM left after HugePages
-        [ "$avail_mb" -lt 2048 ] && avail_mb=2048
-        reserve_mb=$((avail_mb / 4)) # rest of the stack + OS + cache
-        [ "$reserve_mb" -lt 2048 ] && reserve_mb=2048
-        tari_mem_limit=$((avail_mb - reserve_mb))
-        [ "$tari_mem_limit" -lt 2048 ] && tari_mem_limit=2048 # never starve Tari below 2 GB
-        tari_mem_limit="${tari_mem_limit}m"
-        ;;
-    esac
+    if [ "$TARI_MODE" == "remote" ]; then
+        # No local Tari container to cap in remote mode (#103) — the RAM-sniffing auto-calc below is
+        # about THIS host's memory, irrelevant to a third-party node, so skip it entirely. Render a
+        # fixed placeholder so the (profiled-off) tari service's compose interpolation still
+        # resolves; it is never applied to a running container.
+        tari_mem_limit="0m"
+    else
+        tari_mem_limit=$(jq -r '.tari.mem_limit // "auto"' "$CONFIG_FILE")
+        case "$tari_mem_limit" in
+        "" | auto)
+            huge_mb=0
+            if [ "$OS_TYPE" == "Darwin" ]; then
+                ram_mb=$(($(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1048576))
+            else
+                ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+                # HugePages_Total (pages) * Hugepagesize (kB) -> MiB reserved out of RAM.
+                huge_mb=$(awk '/HugePages_Total/{t=$2} /Hugepagesize/{s=$2} END{print int(t*s/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+            fi
+            [ "${ram_mb:-0}" -gt 0 ] 2>/dev/null || ram_mb=16384 # unknown host => assume 16 GB
+            [ "${huge_mb:-0}" -ge 0 ] 2>/dev/null || huge_mb=0
+            avail_mb=$((ram_mb - huge_mb)) # RAM left after HugePages
+            [ "$avail_mb" -lt 2048 ] && avail_mb=2048
+            reserve_mb=$((avail_mb / 4)) # rest of the stack + OS + cache
+            [ "$reserve_mb" -lt 2048 ] && reserve_mb=2048
+            tari_mem_limit=$((avail_mb - reserve_mb))
+            [ "$tari_mem_limit" -lt 2048 ] && tari_mem_limit=2048 # never starve Tari below 2 GB
+            tari_mem_limit="${tari_mem_limit}m"
+            ;;
+        esac
+    fi
 
     # monerod memory ceiling (#132): a generous default so heavy initial-sync verification never trips
     # it (monerod's LMDB is reclaimable page cache, so its capped RSS stays low). Tunable for low-RAM
@@ -3968,6 +4066,7 @@ MONERO_RPC_BIND=$rpc_bind
 MONERO_NODE_HOST=$mono_host
 MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
+TARI_GRPC_ADDRESS=$tari_grpc_addr
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
@@ -4373,8 +4472,14 @@ preflight_resources() {
     # Treat the stack as one unit: group all five data dirs by the filesystem they live on and warn
     # once per volume that can't hold the combined requirement of the components sharing it (so dirs
     # on the same disk produce a single line, not one per dir). check_disk_grouped is WARN-only here.
+    # A remote node (#103) keeps its chain elsewhere: blank its dir so the ~120 GiB (Monero) /
+    # ~170 GiB (Tari) budget isn't demanded of THIS host — small disks are exactly why an operator
+    # goes remote. check_disk_grouped skips empty dirs.
+    local pre_mono_dir="${MONERO_DIR:-}" pre_tari_dir="${TARI_DIR:-}"
+    [ "$MONERO_MODE" == "remote" ] && pre_mono_dir=""
+    [ "$TARI_MODE" == "remote" ] && pre_tari_dir=""
     check_disk_grouped preflight "$prune" \
-        "${MONERO_DIR:-}" "${TARI_DIR:-}" "${P2POOL_DIR:-}" "${DASHBOARD_DIR:-}" "${TOR_DATA_DIR:-}"
+        "$pre_mono_dir" "$pre_tari_dir" "${P2POOL_DIR:-}" "${DASHBOARD_DIR:-}" "${TOR_DATA_DIR:-}"
 
     # --- RAM: total memory (Linux only — /proc/meminfo isn't available on macOS dev hosts) ---
     if [ "$OS_TYPE" == "Linux" ]; then
@@ -4454,18 +4559,28 @@ describe_change() {
         esac
         ;;
     COMPOSE_PROFILES)
-        # #552: COMPOSE_PROFILES also carries payout_confirm/tari_payout_confirm (#381/#462), so an
-        # empty-vs-non-empty check misreads those toggles as a node switch. Decide by presence of the
-        # local_node token instead — only a real flip of that token is a node switch (DEST).
-        local old_local=false new_local=false
+        # #552: COMPOSE_PROFILES also carries payout_confirm/tari_payout_confirm (#381/#462) and
+        # local_tari (#103), so an empty-vs-non-empty check misreads those toggles as a node switch.
+        # Decide by presence of the local_node / local_tari tokens instead — only a real flip of
+        # either token is a node switch (DEST). Monero is checked first; a same-apply flip of BOTH
+        # nodes is rare and either message alone is enough to make the change obvious.
+        local old_local=false new_local=false old_tari_local=false new_tari_local=false
         case ",$old," in *,local_node,*) old_local=true ;; esac
         case ",$new," in *,local_node,*) new_local=true ;; esac
+        case ",$old," in *,local_tari,*) old_tari_local=true ;; esac
+        case ",$new," in *,local_tari,*) new_tari_local=true ;; esac
         if [ "$old_local" = false ] && [ "$new_local" = true ]; then
             flag=DEST
             msg="Switching to a LOCAL Monero node — monerod will start and SYNC the blockchain (large download / disk use)."
         elif [ "$old_local" = true ] && [ "$new_local" = false ]; then
             flag=DEST
             msg="Switching to a REMOTE Monero node — the local monerod container will be STOPPED and removed (its on-disk data is kept)."
+        elif [ "$old_tari_local" = false ] && [ "$new_tari_local" = true ]; then
+            flag=DEST
+            msg="Switching to a LOCAL Tari node — the tari container will start and SYNC the chain (large download / disk use)."
+        elif [ "$old_tari_local" = true ] && [ "$new_tari_local" = false ]; then
+            flag=DEST
+            msg="Switching to a REMOTE Tari node — the local tari container will be STOPPED and removed (its on-disk data is kept)."
         else
             msg="Payout confirmation profile changed ($old → $new)."
         fi

@@ -32,7 +32,12 @@
         "payout_scan_birthday": "auto",
         "clearnet_initial_sync": false,
         "data_dir": "auto",
-        "mem_limit": "auto"
+        "mem_limit": "auto",
+
+        "remote": {
+            "host": "tari-node.lan",
+            "grpc_port": 18142
+        }
     },
 
     "p2pool": {
