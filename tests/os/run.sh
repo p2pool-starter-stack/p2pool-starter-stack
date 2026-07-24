@@ -136,7 +136,13 @@ phase_boot() {
     fi
     # Reachable on :80 from the host once the VM has a lease.
     local ip
-    ip=$(virsh domifaddr "$VM" --source agent 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+    # No guest agent in the appliance image (by design) — the DHCP lease is the source of truth.
+    local tries=0
+    while [ -z "${ip:-}" ] && [ "$tries" -lt 20 ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] || sleep 3
+        tries=$((tries + 1))
+    done
     if [ -n "$ip" ] && curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
         ok "wizard serves the token gate on :80 ($ip)"
     else
