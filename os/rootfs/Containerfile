@@ -44,4 +44,11 @@ RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolv
     && systemctl disable ssh \
     && echo pithead > /etc/hostname
 
+# TEST-ONLY hooks (tests/os/run.sh --phase update): both default EMPTY and change nothing in a
+# release build. A pubkey enables root-key SSH so the harness can drive rugix-ctrl in the guest;
+# the marker distinguishes v1/v2 slots across the A/B cycle.
+ARG PITHEAD_TEST_SSH_PUBKEY=""
+ARG PITHEAD_TEST_MARKER=""
+RUN if [ -n "$PITHEAD_TEST_SSH_PUBKEY" ]; then         mkdir -p /root/.ssh && chmod 700 /root/.ssh         && printf '%s\n' "$PITHEAD_TEST_SSH_PUBKEY" > /root/.ssh/authorized_keys         && chmod 600 /root/.ssh/authorized_keys         && systemctl enable ssh;     fi     && if [ -n "$PITHEAD_TEST_MARKER" ]; then         printf '%s\n' "$PITHEAD_TEST_MARKER" > /etc/pithead-test-marker;     fi
+
 # Rugix Ctrl lands via the bakery layer's core recipes, not here — rootfs stays updater-agnostic.

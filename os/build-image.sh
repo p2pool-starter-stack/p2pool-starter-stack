@@ -10,7 +10,9 @@ RUGIX_BAKERY_VERSION="${RUGIX_BAKERY_VERSION:-v0.9.3}"
 export RUGIX_BAKERY_IMAGE="${RUGIX_BAKERY_IMAGE:-ghcr.io/rugix/rugix-bakery:${RUGIX_BAKERY_VERSION}}"
 
 echo "==> rootfs: container build + export"
-docker build -f os/rootfs/Containerfile -t pithead-os-rootfs .
+docker build -f os/rootfs/Containerfile -t pithead-os-rootfs \
+    --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
+    --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" .
 cid=$(docker create pithead-os-rootfs)
 mkdir -p os/bakery/build
 docker export --output os/bakery/build/pithead-root.tar "$cid"
@@ -25,5 +27,6 @@ if [ ! -x ./run-bakery ]; then
     curl -sfSO "https://raw.githubusercontent.com/rugix/rugix-bakery/${RUGIX_BAKERY_VERSION}/container/run-bakery"
     chmod +x ./run-bakery
 fi
-./run-bakery bake image pithead-os-amd64
-echo "==> image: $(ls -lh build/pithead-os-amd64/system.img 2>/dev/null | awk '{print $5, $9}')"
+ARTIFACT="${PITHEAD_BAKE_ARTIFACT:-image}" # image | bundle (tests/os builds update bundles)
+./run-bakery bake "$ARTIFACT" pithead-os-amd64
+echo "==> baked $ARTIFACT: $(find build/pithead-os-amd64 -newer rugix-bakery.toml -name 'system.*' -o -name '*.rugixb' 2>/dev/null | head -2 | tr '\n' ' ')"
