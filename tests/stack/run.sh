@@ -3413,14 +3413,23 @@ for f in mining.network proxy.network tor.container p2pool.container xmrig-proxy
     caddy.container docker-proxy.container docker-control.container dashboard.container; do
     assert_eq "quadlet parity: $f" "$(diff -u "$ROOT/os/quadlet/$f" "$QOUT/$f" 2>&1 | head -c 300)" ""
 done
-# Local-node profiles have no bench-proven units yet: the renderer refuses rather than guessing.
+assert_eq "remote render emits no node units" "$(find "$QOUT" -name 'monerod.container' -o -name 'tari.container' | wc -l | tr -d ' ')" "0"
+# The local-node variant (bench-proven 2026-07-24): profiles on, 11 files, node units included.
+QLOCAL="$SANDBOX/quadlet-local-out"
+run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/local/fixture.env" "$QLOCAL" >/dev/null
+for f in mining.network proxy.network tor.container monerod.container tari.container \
+    p2pool.container xmrig-proxy.container caddy.container docker-proxy.container \
+    docker-control.container dashboard.container; do
+    assert_eq "quadlet local parity: $f" "$(diff -u "$ROOT/os/quadlet/local/$f" "$QLOCAL/$f" 2>&1 | head -c 300)" ""
+done
+# The payout-wallet profiles are not bench-proven: the renderer refuses rather than guessing.
 # env_get_file takes the FIRST match, so the override is prepended.
 {
-    echo "COMPOSE_PROFILES=local_node,local_tari"
+    echo "COMPOSE_PROFILES=local_node,payout_confirm"
     cat "$ROOT/os/quadlet/fixture.env"
 } >"$SANDBOX/quadlet-prof.env"
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/quadlet-prof.env" "$SANDBOX/quadlet-prof-out" 2>&1)
-assert_contains "render-quadlet refuses local profiles" "$out" "not yet supported"
+assert_contains "render-quadlet refuses wallet profiles" "$out" "not yet supported"
 assert_eq "refused render writes no units" "$(find "$SANDBOX/quadlet-prof-out" -name '*.container' 2>/dev/null | wc -l | tr -d ' ')" "0"
 # A missing env file is a hard error, not an empty render.
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
