@@ -325,24 +325,57 @@ commands as dashboard buttons (export to a download / restore from an upload), s
 "fresh flash → restore → done" is a supported recovery path with one backup format
 across all channels.
 
-### Phase 3 — first-boot provisioning
+### Phase 3 — the pre-sync setup wizard (both channels)
 
-`pithead` unprovisioned mode. `config.json` pre-seed on the config partition first
-(fleet-friendly); the #33 form as a first-boot web wizard second, reachable at
-`http://pithead.local` (mDNS) / printed console URL, gated only-when-unprovisioned +
-one-time console token; no plaintext wallets persisting on FAT32 after provisioning.
-The setup window is hardened beyond the token gate: the wizard serves HTTPS with an
-ephemeral self-signed certificate whose SHA-256 fingerprint is printed on the
-physical console beside the one-time token (fingerprint display is already this
-project's pattern — the stratum TLS pin), and no form field renders until the token
-is entered — wallet addresses, view keys, and the dashboard password never cross the
-LAN in cleartext or reach an unauthenticated browser.
+Revised 2026-07-24 (operator decisions): the wizard is not appliance-only — it is the
+**default setup experience for both channels**, and it runs on **plain HTTP :80 with a
+one-time token**, not self-signed TLS. Nobody is forced through a CLI.
 
-The wizard keeps the existing clearnet-IBD question (`pithead:2315` —
-"private over Tor (days) or faster over clearnet (hours)") — first-sync duration is
-the single biggest first-day adoption factor and the option already exists. Lockout
-insurance: physical console login always works (the appliance has no SSH by default;
-SSH is a wizard opt-in) — a broken wizard must never brick the box.
+One implementation, `pithead firstboot-wizard`, same trust shape as the #33 control
+channel — the container asks, the host applies:
+
+- **DIY**: `install.sh` → host gates → extract → wizard container starts on :80, the
+  terminal prints the URL + token → browser configures → the host runs
+  `pithead setup` → handoff to the real stack. The CLI wizard stays via `--cli`, and
+  a pre-seeded `config.json` skips the wizard entirely (headless, fleets).
+- **Appliance**: the firstboot systemd unit runs the same command; the console prints
+  the same URL + token. `config.json` on the config partition pre-seeds and skips.
+
+The flashed-image user's path: flash → plug in ethernet → power on → browse to
+`http://pithead.local` (mDNS; the console and the router's device list carry the IP
+as fallbacks) → type the token → the #33 config form in core-keys mode (wallets,
+node local/remote, pool, and the existing clearnet-IBD question — "private over Tor
+(days) or faster over clearnet (hours)", the biggest first-day adoption factor) →
+progress screen while the host applies → auto-redirect to the dashboard, now behind
+caddy + auth, watching the sync it just chose. Configured before the first block
+syncs.
+
+**Security posture (decided, plain HTTP + token):** TLS-warning friction repels
+exactly the audience the wizard exists for, so the window relies on secret
+minimization instead:
+
+- Only-when-unprovisioned, and the window closes permanently at handoff.
+- The token is **short and human-typable** — 6 characters from an unambiguous
+  alphabet (no 0/O/1/l), e.g. `pit-X7KM2Q`, printed on the console/terminal. It is
+  used once to reach the form; attempts are throttled and N failures mint a fresh
+  token. No form field renders before it.
+- The wizard collects wallet **addresses** and shape choices only. The dashboard
+  password is generated host-side and **displayed once** at handoff; view keys and
+  other secrets are day-2 entries through the authenticated HTTPS dashboard.
+- Residual, stated plainly: for the wizard's minutes-long window, a device already
+  sniffing the LAN could read the submitted addresses and the displayed password —
+  the same trusted-LAN model the node feeds document. Fleets and the cautious
+  pre-seed `config.json` and never open the window.
+
+The wizard is cheap by construction: the form is `configlogic.mjs` +
+`config.core-keys.json` (both exist, both already drive the dashboard's config
+view), the apply path is the existing `ensure_config_exists` + `setup`, the wizard
+container is the dashboard image in a flag mode, and the host-side wait-then-apply
+loop lives in `pithead`. `install.sh`'s last step becomes the wizard handoff instead
+of `exec ./pithead setup`.
+
+Lockout insurance: physical console login always works (the appliance has no SSH by
+default; SSH is a wizard opt-in) — a broken wizard must never brick the box.
 
 ### Phase 4 — release pipeline + channels
 
