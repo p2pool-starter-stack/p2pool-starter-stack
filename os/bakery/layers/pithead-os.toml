@@ -2,8 +2,9 @@
 parent = "pithead-root"
 
 recipes = [
-    "pithead-boot",
+    "pithead-prepare",
     "setup-rugix-pithead",
+    "pithead-boot",
 ]
 
 [parameters."core/rugix-ctrl"]

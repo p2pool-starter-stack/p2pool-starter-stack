@@ -1,0 +1,3 @@
+description = "prepare the docker-exported rootfs for real-hardware boot"
+# Before boot integration and rugix-ctrl (higher priority runs earlier).
+priority = 800_000
