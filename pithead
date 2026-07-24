@@ -1292,6 +1292,18 @@ firstboot_wizard() {
         log "Setup wizard is up. From a browser on this network, open:"
         for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    http://$arg"; done
         log "One-time token: $token"
+        # Announce on every physical console, not just stdout. /dev/console is whichever the
+        # kernel cmdline named LAST, so an operator watching the other one (a monitor when the
+        # box also has a serial line, or vice versa) would otherwise never see the token.
+        for dev in /dev/tty1 /dev/ttyS0; do
+            [ -w "$dev" ] || continue
+            {
+                echo ""
+                echo "  Pithead setup wizard — open http://$(hostname -I 2>/dev/null | awk '{print $1}')"
+                echo "  One-time token: $token"
+                echo ""
+            } >"$dev" 2>/dev/null || true
+        done
         while :; do
             if firstboot_consume_spool "$spool"; then
                 sleep 4 # let the page's status poll show "Provisioned"
