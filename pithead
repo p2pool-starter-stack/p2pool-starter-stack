@@ -2609,14 +2609,11 @@ parse_and_validate_config() {
     # tari.wallet_address gets no exact-format gate like monero's below: Tari addresses come in
     # base58 AND emoji forms, single/dual, with optional payment IDs — length and charset both vary
     # (RFC-0155), and p2pool passes the string straight to the Tari node, which accepts either form,
-    # so a strict regex would false-reject valid addresses. But two mistakes are unambiguous and cause
-    # the same silent mining-to-nowhere monero guards against (#250): the untouched placeholder, and
-    # embedded whitespace (no Tari address of either form contains an ASCII space, and a space isn't a
-    # control char so the central guard above doesn't catch it). Reject both; a subtler typo is the
-    # node's to reject at merge-mine time. [TODO: verify upstream — exact accepted form, to gate fully.]
-    if [ "$TARI_WALLET" = "your_tari_wallet_address" ]; then
-        error "tari.wallet_address is still the placeholder in $CONFIG_FILE — set your real Tari (Minotari) payout address, or mining earns Tari that goes nowhere."
-    fi
+    # so a strict regex would false-reject valid addresses. The untouched placeholder is caught by the
+    # combined check just below; also reject embedded whitespace here — no Tari address of either form
+    # has an ASCII space, and a space isn't a control char so the central guard above misses it, yet it
+    # would silently mine to a wrong address (the #250 failure mode). A subtler typo is the node's to
+    # reject at merge-mine time. [TODO: verify upstream — exact accepted form, to gate fully.]
     case "$TARI_WALLET" in
     *[[:space:]]*) error "tari.wallet_address contains whitespace — a Tari address (base58 or emoji) has none. Check for a stray space or line break in $CONFIG_FILE." ;;
     esac
@@ -2690,7 +2687,7 @@ parse_and_validate_config() {
     TARI_PAYOUT_CONFIRM_ENABLED=false
     if [ -n "$TARI_VIEW_KEY" ]; then
         if [ "$TARI_MODE" != "local" ]; then
-            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation needs the LOCAL Tari node — unsupported with tari.mode: remote (#103), since scanning through a third-party node changes the trust story. Unset tari.view_key, or use a local Tari node."
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation needs the LOCAL Tari node — unsupported with tari.mode: remote, since scanning through a third-party node changes the trust story. Unset tari.view_key, or use a local Tari node."
         fi
         # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
         if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
@@ -2739,6 +2736,12 @@ parse_and_validate_config() {
     # is_valid_host/is_valid_port used for dashboard.host/.port — no comma/space/`{` reaches a sink.
     # These resolve once here and are reused verbatim by render_env (globals, like MONERO_MODE above),
     # so the value that passes validation is exactly the value rendered — no second jq read, no drift.
+    # Cleared to empty first (defensive): each real `apply` is a fresh process so these start unset,
+    # but clearing them keeps the invariant "globals reflect only the current config" true even if a
+    # future caller ever parses twice in one process — a stale remote host must never survive into a
+    # later local-mode render.
+    MONERO_REMOTE_HOST="" MONERO_REMOTE_RPC_PORT="" MONERO_REMOTE_ZMQ_PORT=""
+    TARI_REMOTE_HOST="" TARI_REMOTE_GRPC_PORT=""
     if [ "$MONERO_MODE" == "remote" ]; then
         MONERO_REMOTE_HOST=$(jq -r '.monero.remote.host // empty' "$CONFIG_FILE")
         [ -n "$MONERO_REMOTE_HOST" ] || error "monero.mode is \"remote\" but monero.remote.host is not set in $CONFIG_FILE."
@@ -2755,8 +2758,8 @@ parse_and_validate_config() {
         TARI_REMOTE_HOST=$(jq -r '.tari.remote.host // empty' "$CONFIG_FILE")
         [ -n "$TARI_REMOTE_HOST" ] || error "tari.mode is \"remote\" but tari.remote.host is not set in $CONFIG_FILE."
         is_valid_host "$TARI_REMOTE_HOST" || error "tari.remote.host must be a hostname or IP literal (letters, digits, and . : _ - only, ≤253 chars). Got \"$TARI_REMOTE_HOST\"."
-        TARI_REMOTE_PORT=$(jq -r '.tari.remote.grpc_port // 18142' "$CONFIG_FILE")
-        is_valid_port "$TARI_REMOTE_PORT" || error "tari.remote.grpc_port must be a TCP port 1–65535. Got \"$TARI_REMOTE_PORT\"."
+        TARI_REMOTE_GRPC_PORT=$(jq -r '.tari.remote.grpc_port // 18142' "$CONFIG_FILE")
+        is_valid_port "$TARI_REMOTE_GRPC_PORT" || error "tari.remote.grpc_port must be a TCP port 1–65535. Got \"$TARI_REMOTE_GRPC_PORT\"."
     fi
 
     POOL_TYPE=$(jq -r '.p2pool.pool // "mini"' "$CONFIG_FILE")
@@ -3647,7 +3650,7 @@ render_env() {
         profiles="${profiles:+$profiles,}local_tari"
     else
         # Reuse the parse-time validated globals (see Monero above) — single source of truth.
-        tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_PORT}"
+        tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_GRPC_PORT}"
     fi
 
     # On-chain payout confirmation (#381): the view-only wallet-rpc service only starts when its
@@ -4574,10 +4577,10 @@ describe_change() {
             msg="Switching to a REMOTE Monero node — the local monerod container will be STOPPED and removed (its on-disk data is kept)."
         elif [ "$old_tari_local" = false ] && [ "$new_tari_local" = true ]; then
             flag=DEST
-            msg="Switching to a LOCAL Tari node (#103) — the tari container will start and SYNC the chain (large download / disk use)."
+            msg="Switching to a LOCAL Tari node — the tari container will start and SYNC the chain (large download / disk use)."
         elif [ "$old_tari_local" = true ] && [ "$new_tari_local" = false ]; then
             flag=DEST
-            msg="Switching to a REMOTE Tari node (#103) — the local tari container will be STOPPED and removed (its on-disk data is kept)."
+            msg="Switching to a REMOTE Tari node — the local tari container will be STOPPED and removed (its on-disk data is kept)."
         else
             msg="Payout confirmation profile changed ($old → $new)."
         fi

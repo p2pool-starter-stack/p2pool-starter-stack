@@ -3052,14 +3052,14 @@ rc=$?
 assert_rc "integrated payout rejected (would never be paid)" "$rc" "1"
 assert_contains "integrated message names the type" "$out" "INTEGRATED"
 
-# tari.wallet_address left at the placeholder -> rejected (else mining earns Tari that goes nowhere,
-# the #250 failure mode). No exact-format gate (base58/emoji both valid), but the placeholder and any
-# whitespace are unambiguous.
+# tari.wallet_address left at the placeholder -> rejected by the shared template-placeholder guard
+# (else mining earns Tari that goes nowhere, the #250 failure mode). No exact-format gate
+# (base58/emoji both valid), but the placeholder and any whitespace are unambiguous.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"your_tari_wallet_address"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "placeholder tari.wallet_address rejected" "$?" "1"
-assert_contains "placeholder message names the field" "$out" "tari.wallet_address"
+assert_contains "placeholder message names the template placeholders" "$out" "template placeholders"
 # A stray space in the Tari address (not a control char, so the central guard misses it) -> rejected.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"12ab cd34"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
