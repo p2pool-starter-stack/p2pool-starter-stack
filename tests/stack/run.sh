@@ -104,6 +104,13 @@ assert_rc "rejects ':' (compose volume-mount injection)" "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/mnt/disk/monero" >/dev/null 2>&1
 assert_rc "allows mount subfolder" "$?" "0"
 
+echo "== unit: lint-operator-strings self-test (#755) =="
+# The operator-strings guard's frontend scanner is non-trivial awk (comment-stripping + CSS-hex-colour
+# skip); a silent break would make it stop catching leaks. Its --self-test drives fixtures through the
+# real scanners and fails if a planted #NNN is missed or a hex colour/comment is wrongly flagged.
+bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
+assert_rc "operator-strings guard self-test passes" "$?" "0"
+
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
 for ip in 8.8.8.8 1.1.1.1 172.15.0.1 172.32.0.1 100.128.0.1 169.1.1.1 2606:4700:4700::1111 2001:db8::1; do

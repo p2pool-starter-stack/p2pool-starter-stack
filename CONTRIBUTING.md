@@ -42,6 +42,7 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    - **lint** — every file surface gets a linter/formatter check (`make lint` runs them all; run one
      with `make lint-<surface>`): `lint-sh` (shellcheck + shfmt), `lint-py` (ruff), `lint-js` (Biome),
      `lint-yaml` (yamllint), `lint-md` (markdownlint), `lint-docs-voice` (banned-word check),
+     `lint-operator-strings` (no issue/PR numbers in operator-facing `pithead`/dashboard text),
      `lint-proto` (buf), `lint-toml` (taplo). The
      non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
      on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
