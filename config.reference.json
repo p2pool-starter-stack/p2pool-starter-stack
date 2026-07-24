@@ -14,6 +14,7 @@
         "prep_blocks_threads": "auto",
         "out_peers": 48,
         "rpc_lan_access": false,
+        "zmq_lan_access": false,
         "data_dir": "auto",
         "mem_limit": "auto",
 
@@ -30,6 +31,7 @@
         "view_key": "",
         "spend_public_key": "",
         "payout_scan_birthday": "auto",
+        "grpc_lan_access": false,
         "clearnet_initial_sync": false,
         "data_dir": "auto",
         "mem_limit": "auto",

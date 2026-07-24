@@ -13,6 +13,14 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
 ### Added
 
+- **Node LAN exposure switches (#760)** — the serving side of the remote-node modes. `monero.zmq_lan_access`
+  publishes monerod's ZMQ feed on the LAN (with the existing `rpc_lan_access`, everything a remote
+  P2Pool needs), and `tari.grpc_lan_access` publishes the bundled Tari base node's gRPC, so one
+  stack's synced nodes can serve other stacks running `monero.mode`/`tari.mode: remote` (#103).
+  Both default off, publish loopback-only otherwise, and flipping either to the LAN is a
+  host-confirmed destructive change. The Tari gRPC and ZMQ feeds carry no authentication —
+  trusted networks only (see the remote-node sections in `docs/configuration.md`).
+
 - **Remote Tari node (#103).** `tari.mode: remote` merge-mines against a Tari base node running
   elsewhere instead of the bundled one: set `tari.remote.host` (required) and
   `tari.remote.grpc_port` (default `18142`). Remote mode skips the bundled `tari` container, its
