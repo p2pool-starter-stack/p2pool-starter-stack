@@ -1,5 +1,5 @@
 [Unit]
-Description=pithead caddy (spike)
+Description=pithead caddy
 [Container]
 ContainerName=caddy
 Image=docker.io/library/caddy:2.11.4

@@ -1,5 +1,5 @@
 [Unit]
-Description=pithead xmrig-proxy (spike)
+Description=pithead xmrig-proxy
 After=p2pool.service
 Wants=p2pool.service
 [Container]
