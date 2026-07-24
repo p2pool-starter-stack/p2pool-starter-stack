@@ -208,9 +208,11 @@ It runs two phases:
   `:vX.Y.Z` images and verifies them against the committed `cosign.pub`. A good signature must pass;
   a byte-changed bundle must be refused (this is what proves the check is real, not the pre-merge
   fake); the bundle's own `VERSION` must equal the tag (the #376 rollback guard); and an unrelated
-  key must be refused. If the release is **unsigned** — signing is opt-in (#376), so releases up to
-  v1.3.x and any cut with the key off ship without a signature — that is reported plainly and the
-  phase is skipped. It never reports a signed pass for an unsigned release. This phase needs only
+  key must be refused. If the release is **unsigned** — releases up to v1.14.0 predate the signing
+  key, and signing is mandatory for every cut after it (the preflight refuses to run without the
+  key; see [Release / Validation Server › The release signing key](release-server.md#the-release-signing-key))
+  — that is reported plainly and the phase is skipped. It never reports a signed pass for an
+  unsigned release. This phase needs only
   `gh` auth and network; run it anywhere.
 - **Real #59 upgrade** (`--upgrade DIR`). On a box still running the *previous* release, it enqueues
   the exact upgrade intent the dashboard writes into the #33 control spool, runs the host control

@@ -65,6 +65,24 @@ else
     note "No release manifest found — trusting the HTTPS download."
 fi
 
+# --- Cross-channel signature check: the pinned public key comes from the repo over a different
+# endpoint than the release download, so both must agree. Releases before the first signed cut
+# carry no .sig — noted and skipped; a present-but-bad signature is always fatal.
+if command -v cosign >/dev/null 2>&1; then
+    if curl -fsSL -o "$TMP/pithead.tar.gz.sig" "https://github.com/$REPO/releases/download/$TAG/pithead.tar.gz.sig" 2>/dev/null; then
+        curl -fsSL -o "$TMP/cosign.pub" "https://raw.githubusercontent.com/$REPO/main/cosign.pub" ||
+            fail "The release carries a signature but the pinned key could not be fetched from the repo."
+        cosign verify-blob --key "$TMP/cosign.pub" --signature "$TMP/pithead.tar.gz.sig" \
+            --insecure-ignore-tlog=true "$TMP/pithead.tar.gz" >/dev/null 2>&1 ||
+            fail "Bundle signature verification FAILED — the download does not match the release key. Refusing to install."
+        note "Bundle signature verified (cosign, repo-pinned key)."
+    else
+        note "No bundle signature on this release (pre-signing era) — sha256/HTTPS are the trust anchors."
+    fi
+else
+    note "cosign not installed — skipping signature verification (sha256/HTTPS are the trust anchors)."
+fi
+
 mkdir -p "$DIR"
 tar -xzf "$TMP/pithead.tar.gz" --strip-components=1 -C "$DIR"
 [ -x "$DIR/pithead" ] || fail "Extracted bundle has no pithead executable — corrupt download?"
