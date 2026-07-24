@@ -1547,6 +1547,13 @@ Maintenance:
                             release API host-side). Normally fired by the pithead-control
                             systemd path unit when dashboard.control.enabled is true.
 
+  render-quadlet [--env FILE] [--out DIR]
+                            Render Podman Quadlet units (the appliance runtime, #77) from a
+                            rendered .env — the second render target beside docker-compose.
+                            Defaults: --env .env, --out ./quadlet. Refuses local-node profiles
+                            until their units are bench-proven (phase 2). The os/quadlet/
+                            fixtures pin this output byte-for-byte.
+
   rotate-secrets [-y|--yes]
                             Regenerate the stack's internal credentials: the local Monero
                             RPC password, the stratum access-password (only when
@@ -4337,6 +4344,234 @@ EOF
     fi
 }
 
+# Appliance unit rendering (#77 phase 1). Emits Podman Quadlet units from a rendered .env — the
+# second render target beside docker-compose (docs/dev/dual-distribution-plan.md § Runtime
+# architecture). The os/quadlet/ fixtures pin this output byte-for-byte at tier 1: they are the
+# unit set the #78 spike ran live, so a change here that drifts from them needs a bench re-proof,
+# not just a green diff. Spike-proven rules baked in: Notify=healthy services carry
+# TimeoutStartSec=infinity (a finite timeout KILLS a not-yet-healthy service — compose's
+# start_period never does); plain depends_on maps to After=+Wants= (Requires= would stop-couple);
+# tmpfs options use mode= (podman rejects uid=/gid=).
+render_quadlet_units() {
+    local envf="$1" outdir="$2"
+    [ -f "$envf" ] || error "render-quadlet: env file not found: $envf"
+    mkdir -p "$outdir"
+
+    _qenv() { env_get_file "$envf" "$1"; }
+
+    # Scope guard: only the remote-mode service set has bench-proven fixtures. Units for the
+    # local-node profiles (monerod/tari/wallets) land with phase 2, after they have run on the
+    # bench — the render-then-prove order is deliberate.
+    local profiles
+    profiles=$(_qenv COMPOSE_PROFILES)
+    case ",$profiles," in
+    *,local_node,* | *,local_tari,* | *,payout_confirm,* | *,tari_payout_confirm,*)
+        error "render-quadlet: profile set '$profiles' is not yet supported — local-node/wallet units arrive with phase 2 (see docs/dev/dual-distribution-plan.md)."
+        ;;
+    esac
+
+    local reg ver prefix subnet
+    reg=$(_qenv PITHEAD_REGISTRY)
+    ver=$(_qenv STACK_VERSION)
+    prefix=$(_qenv NETWORK_PREFIX)
+    subnet=$(_qenv NETWORK_SUBNET)
+
+    cat >"$outdir/mining.network" <<EOF
+[Network]
+NetworkName=mining_net
+Subnet=$subnet
+EOF
+    cat >"$outdir/proxy.network" <<EOF
+[Network]
+NetworkName=proxy_net
+EOF
+
+    cat >"$outdir/tor.container" <<EOF
+[Unit]
+Description=pithead tor
+[Container]
+ContainerName=tor
+Image=$reg/pithead-tor:$ver
+Network=mining.network
+IP=$prefix.25
+Environment=NETWORK_PREFIX=$prefix COMPOSE_PROFILES=$profiles DASHBOARD_ONION_ENABLED=$(_qenv DASHBOARD_ONION_ENABLED) DASHBOARD_ONION_CLIENT_AUTH=$(_qenv DASHBOARD_ONION_CLIENT_AUTH)
+Volume=$(_qenv TOR_DATA_DIR):/var/lib/tor
+Tmpfs=/tmp:size=64m,mode=1777
+ReadOnly=true
+HealthCmd=/usr/local/bin/tor-healthcheck.sh
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+HealthStartPeriod=90s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat >"$outdir/p2pool.container" <<EOF
+[Unit]
+Description=pithead p2pool
+After=tor.service
+Requires=tor.service
+[Container]
+ContainerName=p2pool
+Image=$reg/pithead-p2pool:$ver
+Network=mining.network
+IP=$prefix.28
+Environment=P2POOL_FLAGS=$(_qenv P2POOL_FLAGS)
+Exec=--host $(_qenv MONERO_NODE_HOST) --rpc-port $(_qenv MONERO_RPC_PORT) --rpc-login $(_qenv MONERO_NODE_USERNAME):$(_qenv MONERO_NODE_PASSWORD) --zmq-port $(_qenv MONERO_ZMQ_PORT) --wallet $(_qenv MONERO_WALLET_ADDRESS) --merge-mine tari://$(_qenv TARI_GRPC_ADDRESS) $(_qenv TARI_WALLET_ADDRESS) --onion-address $(_qenv P2POOL_ONION_ADDRESS) --local-api --stratum 0.0.0.0:3333 --p2p 0.0.0.0:$(_qenv P2POOL_PORT) --data-api /stats
+Volume=$(_qenv P2POOL_DATA_DIR):/home/ubuntu
+Volume=$(_qenv P2POOL_DATA_DIR)/stats:/stats
+Volume=/dev/hugepages:/dev/hugepages
+Tmpfs=/tmp:size=64m,mode=1777
+ReadOnly=true
+DropCapability=all
+AddCapability=IPC_LOCK SYS_NICE
+NoNewPrivileges=true
+Ulimit=memlock=-1:-1
+PodmanArgs=--memory 1g --memory-swap 1g
+HealthCmd=/usr/local/bin/p2pool-healthcheck.sh
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat >"$outdir/xmrig-proxy.container" <<EOF
+[Unit]
+Description=pithead xmrig-proxy
+After=p2pool.service
+Wants=p2pool.service
+[Container]
+ContainerName=xmrig-proxy
+Image=$reg/pithead-xmrig-proxy:$ver
+Network=mining.network
+IP=$prefix.29
+Environment=PROXY_API_PORT=$(_qenv PROXY_API_PORT) PROXY_AUTH_TOKEN=$(_qenv PROXY_AUTH_TOKEN) PROXY_STRATUM_PASSWORD=$(_qenv PROXY_STRATUM_PASSWORD) PROXY_STRATUM_TLS=$(_qenv PROXY_STRATUM_TLS) PROXY_DONATE_LEVEL=$(_qenv PROXY_DONATE_LEVEL)
+Exec=-o $(_qenv P2POOL_URL) -u $(_qenv MONERO_WALLET_ADDRESS) -b 0.0.0.0:$(_qenv STRATUM_PORT) -m simple --coin monero --verbose --http-host 0.0.0.0 --http-port $(_qenv PROXY_API_PORT) --http-access-token $(_qenv PROXY_AUTH_TOKEN) --http-no-restricted --donate-level $(_qenv PROXY_DONATE_LEVEL)
+Volume=$(_qenv PROXY_TLS_DIR):/tls:ro
+Tmpfs=/tmp:size=64m,mode=1777
+Tmpfs=/home/ubuntu:size=64m,mode=1777
+PublishPort=$(_qenv STRATUM_BIND):$(_qenv STRATUM_PORT):$(_qenv STRATUM_PORT)
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 512m --memory-swap 512m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat >"$outdir/caddy.container" <<EOF
+[Unit]
+Description=pithead caddy
+[Container]
+ContainerName=caddy
+Image=docker.io/library/caddy:2.11.4
+Network=host
+Volume=$(_qenv QUADLET_CADDYFILE):/etc/caddy/Caddyfile:ro
+Volume=pithead-caddy-data:/data
+Volume=$(_qenv CADDY_LOG_DIR):/var/log/caddy
+Tmpfs=/tmp
+Tmpfs=/config
+ReadOnly=true
+DropCapability=all
+AddCapability=NET_BIND_SERVICE
+NoNewPrivileges=true
+PodmanArgs=--memory 128m --memory-swap 128m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    local proxy_sock
+    proxy_sock=$(_qenv QUADLET_ENGINE_SOCK)
+    cat >"$outdir/docker-proxy.container" <<EOF
+[Unit]
+Description=pithead read socket proxy
+[Container]
+ContainerName=docker-proxy
+Image=docker.io/tecnativa/docker-socket-proxy:v0.4.2
+Network=proxy.network
+Environment=CONTAINERS=1 LOGS=1
+Volume=$proxy_sock:/var/run/docker.sock:ro
+Tmpfs=/run
+Tmpfs=/tmp
+PublishPort=127.0.0.1:12375:2375
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 128m --memory-swap 128m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+    cat >"$outdir/docker-control.container" <<EOF
+[Unit]
+Description=pithead control socket proxy
+[Container]
+ContainerName=docker-control
+Image=docker.io/tecnativa/docker-socket-proxy:v0.4.2
+Network=proxy.network
+Environment=CONTAINERS=1 POST=1 ALLOW_START=1 ALLOW_STOP=1
+Volume=$proxy_sock:/var/run/docker.sock:ro
+Tmpfs=/run
+Tmpfs=/tmp
+PublishPort=127.0.0.1:12376:2375
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 128m --memory-swap 128m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat >"$outdir/dashboard.container" <<EOF
+[Unit]
+Description=pithead dashboard
+[Container]
+ContainerName=dashboard
+Image=$reg/pithead-dashboard:$ver
+Network=host
+Environment=HOST_IP=$(_qenv HOST_IP) TZ=$(_qenv DASHBOARD_TZ) MONERO_NODE_HOST=$(_qenv MONERO_NODE_HOST) MONERO_NODE_USERNAME=$(_qenv MONERO_NODE_USERNAME) MONERO_NODE_PASSWORD=$(_qenv MONERO_NODE_PASSWORD) MONERO_PRUNE=$(_qenv MONERO_PRUNE) MONERO_CLEARNET_SYNC=$(_qenv MONERO_CLEARNET_SYNC) TARI_CLEARNET_SYNC=$(_qenv TARI_CLEARNET_SYNC) CLEARNET_STATE_DIR=/clearnet-state TOR_EGRESS_FIREWALL=$(_qenv TOR_EGRESS_FIREWALL) TOR_AUTO_HEAL=$(_qenv TOR_AUTO_HEAL) P2POOL_CLEARNET=$(_qenv P2POOL_CLEARNET) P2POOL_URL=$(_qenv P2POOL_URL) MONERO_WALLET_ADDRESS=$(_qenv MONERO_WALLET_ADDRESS) STRATUM_PORT=$(_qenv STRATUM_PORT) TARI_REQUIRED=$(_qenv TARI_REQUIRED) TARI_GRPC_ADDRESS=$(_qenv TARI_GRPC_ADDRESS) XVB_ENABLED=$(_qenv XVB_ENABLED) XVB_TOR_ENABLED=$(_qenv XVB_TOR_ENABLED) XVB_DONATION_LEVEL=$(_qenv XVB_DONATION_LEVEL) PROXY_HOST=$prefix.29 PROXY_API_PORT=$(_qenv PROXY_API_PORT) PROXY_AUTH_TOKEN=$(_qenv PROXY_AUTH_TOKEN) DOCKER_PROXY_URL=tcp://127.0.0.1:12375 DOCKER_CONTROL_URL=tcp://127.0.0.1:12376 LOCAL_MONERO_HOST=$prefix.26 MINING_NET_CIDR=$subnet TOR_SOCKS_PROXY=socks5h://$prefix.25:9050 DASHBOARD_CHECK_UPDATES=$(_qenv DASHBOARD_CHECK_UPDATES) DASHBOARD_CONTROL_ENABLED=$(_qenv DASHBOARD_CONTROL_ENABLED) DASHBOARD_FAIL_CLOSED=$(_qenv DASHBOARD_FAIL_CLOSED) TELEGRAM_ENABLED=$(_qenv TELEGRAM_ENABLED)
+Volume=$(_qenv P2POOL_DATA_DIR)/stats:/app/stats:ro
+Volume=$(_qenv DASHBOARD_DATA_DIR):/data
+Volume=$(_qenv CLEARNET_STATE_DIR):/clearnet-state
+Volume=$(_qenv CONTROL_DIR)/requests:/control/requests
+Volume=$(_qenv CONTROL_DIR)/results:/control/results:ro
+Volume=$(_qenv CONTROL_DIR)/audit:/control/audit:ro
+Volume=$(_qenv CONTROL_DIR)/masked:/control/masked:ro
+Volume=$(_qenv CADDY_LOG_DIR):/access-log:ro
+Volume=$(_qenv QUADLET_HOST_CONFIG_DIR)/config.reference.json:/host-config/config.reference.json:ro
+Volume=$(_qenv QUADLET_HOST_CONFIG_DIR)/config.core-keys.json:/host-config/config.core-keys.json:ro
+Tmpfs=/tmp:size=64m,mode=1777
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 512m --memory-swap 512m
+[Service]
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    log "Rendered Quadlet units to $outdir (9 files)."
+}
+
 # Kernel boot params pithead appends to GRUB_CMDLINE_LINUX_DEFAULT for RandomX: reserve 6 GiB of
 # 2 MiB HugePages and disable Transparent HugePages. NOTE the THP param is SINGULAR
 # (transparent_hugepage) — the plural form is an unrecognized param the kernel silently ignores,
@@ -5256,7 +5491,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor reset-dashboard backup restore control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets version help"
+readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor reset-dashboard backup restore control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -6700,6 +6935,25 @@ main() {
         ;;
     rotate-dashboard-onion) rotate_dashboard_onion "$@" ;;
     rotate-secrets) rotate_secrets "$@" ;;
+    render-quadlet)
+        rq_env=".env" rq_out="./quadlet"
+        while [ $# -gt 0 ]; do
+            case "$1" in
+            --env)
+                [ -n "${2:-}" ] || error "render-quadlet: --env needs a file argument."
+                rq_env="$2"
+                shift 2
+                ;;
+            --out)
+                [ -n "${2:-}" ] || error "render-quadlet: --out needs a directory argument."
+                rq_out="$2"
+                shift 2
+                ;;
+            *) error "Unknown option for render-quadlet: $1. Run '$0 help'." ;;
+            esac
+        done
+        render_quadlet_units "$rq_env" "$rq_out"
+        ;;
     version | -V | --version) show_version ;;
     help | -h | --help) show_help ;;
     *) error "Unknown command: $cmd. Run '$0 help'." ;;
