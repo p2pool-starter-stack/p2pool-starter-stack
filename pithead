@@ -3365,7 +3365,7 @@ resolve_dashboard_host() {
 # can take more or less than that to publish, especially on first run. Returns 1 on timeout so the
 # caller decides whether a missing address is fatal.
 wait_for_onion() {
-    local svc="$1" elapsed=0 timeout="${2:-60}"
+    local svc="$1" elapsed=0 timeout=60
     until docker exec tor test -f "/var/lib/tor/$svc/hostname"; do
         if [ "$elapsed" -ge "$timeout" ]; then
             return 1
