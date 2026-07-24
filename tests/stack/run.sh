@@ -3422,15 +3422,16 @@ for f in mining.network proxy.network tor.container monerod.container tari.conta
     docker-control.container dashboard.container; do
     assert_eq "quadlet local parity: $f" "$(diff -u "$ROOT/os/quadlet/local/$f" "$QLOCAL/$f" 2>&1 | head -c 300)" ""
 done
-# The payout-wallet profiles are not bench-proven: the renderer refuses rather than guessing.
-# env_get_file takes the FIRST match, so the override is prepended.
-{
-    echo "COMPOSE_PROFILES=local_node,payout_confirm"
-    cat "$ROOT/os/quadlet/fixture.env"
-} >"$SANDBOX/quadlet-prof.env"
-out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/quadlet-prof.env" "$SANDBOX/quadlet-prof-out" 2>&1)
-assert_contains "render-quadlet refuses wallet profiles" "$out" "not yet supported"
-assert_eq "refused render writes no units" "$(find "$SANDBOX/quadlet-prof-out" -name '*.container' 2>/dev/null | wc -l | tr -d ' ')" "0"
+# The payout-confirm variant (bench-proven 2026-07-24): both wallet profiles, 13 files, the
+# dashboard gains the payout env keys only in this set (the others stay byte-identical).
+QPAY="$SANDBOX/quadlet-payout-out"
+run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/payout/fixture.env" "$QPAY" >/dev/null
+for f in mining.network proxy.network tor.container monerod.container tari.container \
+    wallet-rpc.container tari-wallet.container p2pool.container xmrig-proxy.container \
+    caddy.container docker-proxy.container docker-control.container dashboard.container; do
+    assert_eq "quadlet payout parity: $f" "$(diff -u "$ROOT/os/quadlet/payout/$f" "$QPAY/$f" 2>&1 | head -c 300)" ""
+done
+assert_eq "local render emits no wallet units" "$(find "$QLOCAL" -name 'wallet-rpc.container' -o -name 'tari-wallet.container' | wc -l | tr -d ' ')" "0"
 # A missing env file is a hard error, not an empty render.
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
 assert_contains "render-quadlet missing env errors" "$out" "env file not found"

@@ -1,0 +1,32 @@
+[Unit]
+Description=pithead monerod
+After=tor.service
+Requires=tor.service
+[Container]
+ContainerName=monerod
+Image=ghcr.io/p2pool-starter-stack/pithead-monero:v1.14.0
+Network=mining.network
+IP=172.28.0.26
+Environment=MONERO_NODE_USERNAME=rendered-node-user MONERO_NODE_PASSWORD=rendered-node-password MONERO_ONION_ADDRESS=rendered-monero-onion.onion MONERO_PRUNE=true MONERO_CLEARNET_SYNC=false MONERO_PREP_THREADS=4 MONERO_OUT_PEERS=48 NETWORK_PREFIX=172.28.0
+Volume=/opt/pithead/data/monero:/home/ubuntu/.bitmonero
+Volume=/dev/hugepages:/dev/hugepages
+Volume=/home/vijit/pithead/build/monero/bitmonero.conf.template:/home/ubuntu/bitmonero.conf.template:ro
+Volume=/opt/pithead/data/clearnet-state:/clearnet-state:ro
+Tmpfs=/tmp:size=64m,mode=1777
+PublishPort=127.0.0.1:18081:18081
+PublishPort=127.0.0.1:18083:18083
+ReadOnly=true
+NoNewPrivileges=true
+StopTimeout=60
+PodmanArgs=--memory 6g --memory-swap 6g
+HealthCmd=/usr/local/bin/monerod-healthcheck.sh
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target

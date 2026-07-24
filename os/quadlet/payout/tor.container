@@ -1,0 +1,22 @@
+[Unit]
+Description=pithead tor
+[Container]
+ContainerName=tor
+Image=ghcr.io/p2pool-starter-stack/pithead-tor:v1.14.0
+Network=mining.network
+IP=172.28.0.25
+Environment=NETWORK_PREFIX=172.28.0 COMPOSE_PROFILES=local_node,local_tari,payout_confirm,tari_payout_confirm DASHBOARD_ONION_ENABLED=false DASHBOARD_ONION_CLIENT_AUTH=false
+Volume=/opt/pithead/data/tor:/var/lib/tor
+Tmpfs=/tmp:size=64m,mode=1777
+ReadOnly=true
+HealthCmd=/usr/local/bin/tor-healthcheck.sh
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+HealthStartPeriod=90s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target
