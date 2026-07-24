@@ -23,6 +23,7 @@ from mining_dashboard.config.config import (
     XVB_TIME_ALGO_MS,
     XVB_TOR_ENABLED,
     XVB_TOR_SOCKS5,
+    XVB_WIN_ROUND_HOLD_S,
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
@@ -256,10 +257,26 @@ class AlgoService:
 
     def _reference_hr(self, target_hr):
         """Hashrate the controller holds XvB's 1h average at: the tier threshold
-        plus a small, noise-covering cushion (capped in absolute H/s). The raffle
-        terminates a win if the 1h average dips below the round minimum, so we sit
-        a hair above it — never a fat percentage that wastes p2pool hashrate."""
+        plus a noise-covering cushion (capped in absolute H/s). The raffle
+        terminates a win if the 1h average dips below the round minimum, so the
+        cushion must clear the credited average's measured noise (#769) — while
+        the cap keeps a flat percentage from wasting p2pool hashrate at high tiers."""
         return target_hr + min(target_hr * self.maint_margin_pct, self.maint_margin_abs_cap)
+
+    def _won_round_live(self, now=None):
+        """Whether a won raffle round may still be running: any recorded win newer
+        than ``XVB_WIN_ROUND_HOLD_S``. Steering the donation down during a live won
+        round can sag the credited 1h average through the round minimum and
+        terminate the round (#769), so ``_advance_controller`` skips downward steps
+        while this holds. Fails open to False (normal steering) on any read error —
+        the hold is a yield optimization, never a safety path."""
+        try:
+            since = (now if now is not None else time.time()) - XVB_WIN_ROUND_HOLD_S
+            wins = self.state_manager.get_raffle_wins(since=since)
+        except Exception as e:
+            logger.debug(f"Raffle-win read failed; steering normally: {e}")
+            return False
+        return isinstance(wins, list) and len(wins) > 0
 
     def _max_donation_fraction(self, current_hr, window_duration, p2pool_stats):
         """
@@ -293,6 +310,10 @@ class AlgoService:
         scales our donation — and it can't wind up: the gain is small and the
         fraction is clamped to ``[0, max_fraction]`` (the VIP reserve), so a
         still-ramping or stale 1h read can only drift it slowly within bounds.
+
+        While a won raffle round may still be live (``_won_round_live``), downward
+        steps are skipped so the controller never helps the 1h average sag through
+        the round minimum (#769). Upward steps and the clamp still apply.
         """
         if current_hr <= 0:
             return
@@ -305,7 +326,17 @@ class AlgoService:
             return
 
         error = self._reference_hr(target_hr) - avg_1h
-        self.donation_fraction += self.control_gain * error / current_hr
+        step = self.control_gain * error / current_hr
+        if step < 0 and self._won_round_live():
+            # A won round is (possibly) live: easing off now is how the credited 1h
+            # average sags through the round minimum and forfeits the round (#769).
+            # Hold the fraction; normal steering resumes once the hold window passes.
+            logger.info(
+                "Won raffle round may still be live: holding donation fraction at "
+                f"{self.donation_fraction:.3f} instead of easing off"
+            )
+            return
+        self.donation_fraction += step
         self.donation_fraction = max(0.0, min(self.donation_fraction, max_fraction))
 
     def _seed_donation_fraction(self, target_hr, current_hr, max_fraction):
