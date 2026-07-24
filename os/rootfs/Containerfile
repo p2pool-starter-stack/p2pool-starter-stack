@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         linux-image-amd64 initramfs-tools zstd \
         grub-efi-amd64 shim-signed \
         podman netavark aardvark-dns catatonit uidmap \
-        jq openssl curl ca-certificates xxd \
+        jq openssl curl ca-certificates xxd fdisk parted \
         avahi-daemon libnss-mdns \
         openssh-server sudo less nano htpdate \
     && rm -rf /var/lib/apt/lists/*
