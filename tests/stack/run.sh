@@ -3426,6 +3426,30 @@ assert_eq "refused render writes no units" "$(find "$SANDBOX/quadlet-prof-out" -
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
 assert_contains "render-quadlet missing env errors" "$out" "env file not found"
 
+echo "== black-box: doctor --json + support-bundle (#77 phase 1) =="
+# doctor --json: valid JSON on stdout, the human report on stderr, counters consistent with the
+# check list (info lines are context, not verdicts).
+dj_out="$SANDBOX/doctor.json"
+dj_err="$SANDBOX/doctor.err"
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead doctor --json >"$dj_out" 2>"$dj_err") || true
+assert_eq "doctor --json has checks + summary" "$(jq -r 'has("checks") and has("summary")' "$dj_out" 2>/dev/null)" "true"
+assert_eq "doctor --json counters match verdict lines" \
+    "$(jq -r '(.summary.ok + .summary.warn + .summary.fail) == ([.checks[] | select(.status != "info")] | length)' "$dj_out" 2>/dev/null)" "true"
+assert_contains "doctor --json human report on stderr" "$(cat "$dj_err")" "Diagnostics summary"
+out=$(cd "$V" && PATH="$V/bin:$PATH" ./pithead doctor --bogus 2>&1 || true)
+assert_contains "doctor rejects unknown options" "$out" "Unknown option"
+# support-bundle: chmod-600 tarball; doctor.json inside; .env secrets redacted by key pattern —
+# seed_env's PROXY_AUTH_TOKEN must never appear in the bundle.
+(cd "$V" && PATH="$V/bin:$PATH" ./pithead support-bundle >/dev/null 2>&1) || true
+sb_tar=$(find "$V" -maxdepth 1 -name 'support-bundle-*.tar.gz' | head -1)
+assert_contains "support bundle written" "$sb_tar" "support-bundle-"
+assert_eq "support bundle is chmod 600" "$(stat -c '%a' "$sb_tar" 2>/dev/null || stat -f '%Lp' "$sb_tar" 2>/dev/null)" "600"
+mkdir -p "$SANDBOX/sb-extract"
+tar -xzf "$sb_tar" -C "$SANDBOX/sb-extract"
+assert_eq "bundle carries doctor.json" "$(jq -r 'has("summary")' "$SANDBOX/sb-extract/bundle/doctor.json" 2>/dev/null)" "true"
+assert_contains "bundle .env redacts token keys" "$(cat "$SANDBOX/sb-extract/bundle/env.redacted")" "PROXY_AUTH_TOKEN=[redacted]"
+assert_eq "no raw secret value anywhere in the bundle" "$(grep -rc "ORIGINALTOKEN" "$SANDBOX/sb-extract" | grep -vc ":0")" "0"
+
 echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
 # Default 48 when unset (the Tor-IBD bandwidth default); an explicit value lands verbatim in
 # MONERO_OUT_PEERS (each outbound peer ≈ one Tor circuit — the steady-state Tor CPU lever);
