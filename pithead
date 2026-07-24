@@ -984,26 +984,21 @@ doctor() {
         # --- Tor onion addresses ---
         echo ""
         echo "Tor onion addresses:"
-        local k onion onion_profiles
+        local k onion onion_profiles needs
         onion_profiles=",$(env_get COMPOSE_PROFILES),"
         for k in MONERO_ONION_ADDRESS TARI_ONION_ADDRESS P2POOL_ONION_ADDRESS; do
             # A node's inbound onion only exists while that node is local (#103) — key off the same
             # profile tokens as the container checks above, so remote mode reports "not needed"
-            # instead of an address that was never meant to be provisioned.
+            # instead of an address that was never meant to be provisioned. P2Pool always runs.
             case "$k" in
-            MONERO_ONION_ADDRESS)
-                if [[ "$onion_profiles" != *",local_node,"* ]]; then
-                    dr_ok "$k not needed — remote Monero node, so no inbound hidden service."
-                    continue
-                fi
-                ;;
-            TARI_ONION_ADDRESS)
-                if [[ "$onion_profiles" != *",local_tari,"* ]]; then
-                    dr_ok "$k not needed — remote Tari node, so no inbound hidden service."
-                    continue
-                fi
-                ;;
+            MONERO_ONION_ADDRESS) needs="local_node" ;;
+            TARI_ONION_ADDRESS) needs="local_tari" ;;
+            *) needs="" ;;
             esac
+            if [ -n "$needs" ] && [[ "$onion_profiles" != *",$needs,"* ]]; then
+                dr_ok "$k not needed — that node runs elsewhere, so it has no inbound hidden service."
+                continue
+            fi
             onion=$(env_get "$k")
             if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
                 dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services."
