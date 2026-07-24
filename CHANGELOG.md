@@ -9,6 +9,19 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.14.1] - 2026-07-24
+
+### Fixed
+
+- **Won XvB raffle rounds no longer terminate on the controller's own thin margin (#769).** XvB ends
+  a won bonus round if your credited 1h average dips below the round minimum while the round runs.
+  The donation controller held that average only ~1% above the whale threshold — inside the credited
+  average's own measured noise — so rounds died mid-flight and paid a fraction of their value. Two
+  guards: the cushion above the tier threshold widens to 5% (capped at 5 kH/s, so a whale-tier stack
+  now deliberately donates a few kH/s more than before), and for 90 minutes after a recorded raffle
+  win the controller refuses to ease the donation down. Safety behaviour is unchanged: the VIP
+  reserve, stale-read hold, and prolonged-outage decay all still override the win-protection hold.
+
 ## [1.14.0] - 2026-07-23
 
 ### Added
