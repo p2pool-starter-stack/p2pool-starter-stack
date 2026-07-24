@@ -3403,6 +3403,29 @@ assert_eq "zmq_lan_access true binds monerod ZMQ to all interfaces" "$(run_sourc
 assert_eq "grpc_lan_access true binds tari gRPC to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_BIND)" "0.0.0.0"
 assert_eq "prep_blocks_threads override reflected verbatim" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_PREP_THREADS)" "6"
 
+echo "== unit: render-quadlet parity vs os/quadlet fixtures (#77 phase 1) =="
+# The renderer must reproduce the spike-proven unit set byte-for-byte from the fixture env — the
+# os/quadlet files ran live in the #78 spike, so any drift here needs a bench re-proof, not just
+# an updated fixture.
+QOUT="$SANDBOX/quadlet-out"
+run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/fixture.env" "$QOUT" >/dev/null
+for f in mining.network proxy.network tor.container p2pool.container xmrig-proxy.container \
+    caddy.container docker-proxy.container docker-control.container dashboard.container; do
+    assert_eq "quadlet parity: $f" "$(diff -u "$ROOT/os/quadlet/$f" "$QOUT/$f" 2>&1 | head -c 300)" ""
+done
+# Local-node profiles have no bench-proven units yet: the renderer refuses rather than guessing.
+# env_get_file takes the FIRST match, so the override is prepended.
+{
+    echo "COMPOSE_PROFILES=local_node,local_tari"
+    cat "$ROOT/os/quadlet/fixture.env"
+} >"$SANDBOX/quadlet-prof.env"
+out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/quadlet-prof.env" "$SANDBOX/quadlet-prof-out" 2>&1)
+assert_contains "render-quadlet refuses local profiles" "$out" "not yet supported"
+assert_eq "refused render writes no units" "$(find "$SANDBOX/quadlet-prof-out" -name '*.container' 2>/dev/null | wc -l | tr -d ' ')" "0"
+# A missing env file is a hard error, not an empty render.
+out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
+assert_contains "render-quadlet missing env errors" "$out" "env file not found"
+
 echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
 # Default 48 when unset (the Tor-IBD bandwidth default); an explicit value lands verbatim in
 # MONERO_OUT_PEERS (each outbound peer ≈ one Tor circuit — the steady-state Tor CPU lever);

@@ -1,5 +1,5 @@
 [Unit]
-Description=pithead p2pool (spike)
+Description=pithead p2pool
 After=tor.service
 Requires=tor.service
 [Container]

@@ -1,5 +1,5 @@
 [Unit]
-Description=pithead tor (spike)
+Description=pithead tor
 [Container]
 ContainerName=tor
 Image=ghcr.io/p2pool-starter-stack/pithead-tor:v1.14.0

@@ -1,5 +1,5 @@
 [Unit]
-Description=pithead control socket proxy (spike)
+Description=pithead control socket proxy
 [Container]
 ContainerName=docker-control
 Image=docker.io/tecnativa/docker-socket-proxy:v0.4.2

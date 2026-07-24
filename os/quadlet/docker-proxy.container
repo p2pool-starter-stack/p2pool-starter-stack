@@ -1,5 +1,5 @@
 [Unit]
-Description=pithead read socket proxy (spike)
+Description=pithead read socket proxy
 [Container]
 ContainerName=docker-proxy
 Image=docker.io/tecnativa/docker-socket-proxy:v0.4.2
