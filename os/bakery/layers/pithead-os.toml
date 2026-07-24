@@ -1,8 +1,11 @@
-# The appliance layer: our trixie rootfs tarball (os/rootfs/Containerfile, exported by
-# os/build-image.sh into this project's build/ dir) plus Rugix's boot integration.
-root = true
+# The appliance layer: our trixie rootfs plus Rugix boot integration and Rugix Ctrl.
+parent = "pithead-root"
 
 recipes = [
-    "import-rootfs",
-    "core/debian-grub-setup",
+    "pithead-boot",
+    "setup-rugix-pithead",
 ]
+
+[parameters."core/rugix-ctrl"]
+use_musl = false
+version = "v1.0.0"
