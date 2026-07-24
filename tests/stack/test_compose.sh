@@ -306,6 +306,14 @@ else
     echo "  ✗ tari service still present with local_tari omitted (remote tari, #103)"
     fails=$((fails + 1))
 fi
+# The same profile list must reach the tor container, which gates each node's inbound hidden service
+# on it (#103) — without this wiring tor would keep publishing an onion for a node that never starts.
+if printf '%s' "$REMOTE_TARI_JSON" | jq -e '.services.tor.environment.COMPOSE_PROFILES == "local_node"' >/dev/null 2>&1; then
+    echo "  ✓ tor receives the active profile list, so its onion gate matches the running nodes (#103)"
+else
+    echo "  ✗ tor did not receive the active profile list (#103)"
+    fails=$((fails + 1))
+fi
 
 # Configurable bridge subnet (#180): a custom network.subnet must rebase every static IP, the bridge
 # CIDR, and the dashboard's derived bridge endpoints — the host address-space-collision install fix.

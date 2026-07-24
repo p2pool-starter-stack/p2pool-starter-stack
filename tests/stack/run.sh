@@ -910,7 +910,7 @@ apply_order=$(
     source "$STACK"
     set +e
     # shellcheck disable=SC2034  # read by the sourced apply()'s "not provisioned" guard, unseen here
-    MONERO_ONION=onion
+    P2POOL_ONION=onion
     require_env() { :; }
     parse_and_validate_config() { :; }
     load_preserved_state() { :; }
@@ -1658,7 +1658,7 @@ caddy_apply_capture=$(
     # The shadowed capture: the address is unknown until the recreated tor container publishes it
     # post-up, exactly like the real provision_dashboard_onion.
     provision_dashboard_onion() { DASHBOARD_ONION="captured1234abcd.onion"; }
-    MONERO_ONION=mona.onion HOST_IP=box.lan DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
+    P2POOL_ONION=p2pa.onion HOST_IP=box.lan DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
         DASHBOARD_AUTH_HASH_B64="$auth_hb64" NETWORK_PREFIX=172.28.0 DASHBOARD_ONION_ENABLED=true \
         DASHBOARD_ONION=placeholder apply -y >/dev/null 2>&1
     cat Caddyfile
@@ -4649,12 +4649,12 @@ rm -rf "$XPTLS"
 # covered above; this exercises the real container entrypoint's branch + the .1 substitution with a
 # stub `tor` on PATH and the repo torrc.template (via the TORRC_TEMPLATE seam).
 TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
-tor_torrc() { # <DASHBOARD_ONION_ENABLED> -> the torrc the entrypoint would hand to `tor -f`
+tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
     d="$(mktemp -d)"
     printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
     chmod +x "$d/tor"
-    PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" NETWORK_PREFIX=10.9.0 \
+    PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" COMPOSE_PROFILES="${2-local_node,local_tari}" NETWORK_PREFIX=10.9.0 \
         TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
     rm -rf "$d"
 }
@@ -4667,6 +4667,144 @@ assert_contains "tor entrypoint: onion also exposes :443 for the Tor-Browser htt
     "$tor_onion_on" "HiddenServicePort 443 10.9.0.1:443"
 assert_not_contains "tor entrypoint: no dashboard onion when disabled (default off) (#343)" \
     "$(tor_torrc false)" "Dashboard Hidden Service"
+
+# Node inbound onions (#103): each is published only while its node is local, so a remote node
+# leaves no onion pointing at a container that never starts. The gate is the compose profile list,
+# passed through from the rendered .env — same tokens that decide whether the node runs at all.
+tor_both_local="$(tor_torrc false local_node,local_tari)"
+assert_contains "tor entrypoint: Monero HS present when local_node is active (#103)" \
+    "$tor_both_local" "HiddenServiceDir /var/lib/tor/monero/"
+assert_contains "tor entrypoint: Monero HS targets the node on the moved prefix (#103/#180)" \
+    "$tor_both_local" "HiddenServicePort 18080 10.9.0.26:18084"
+assert_contains "tor entrypoint: Tari HS present when local_tari is active (#103)" \
+    "$tor_both_local" "HiddenServiceDir /var/lib/tor/tari/"
+assert_contains "tor entrypoint: Tari HS targets the node on the moved prefix (#103/#180)" \
+    "$tor_both_local" "HiddenServicePort 18189 10.9.0.27:18189"
+tor_remote_tari="$(tor_torrc false local_node)"
+assert_contains "tor entrypoint: Monero HS still present with only local_node (#103)" \
+    "$tor_remote_tari" "HiddenServiceDir /var/lib/tor/monero/"
+assert_not_contains "tor entrypoint: no Tari HS when local_tari is omitted (remote tari, #103)" \
+    "$tor_remote_tari" "/var/lib/tor/tari/"
+tor_both_remote="$(tor_torrc false "")"
+assert_not_contains "tor entrypoint: no Monero HS with no profiles (remote monero, #103)" \
+    "$tor_both_remote" "/var/lib/tor/monero/"
+assert_not_contains "tor entrypoint: no Tari HS with no profiles (remote tari, #103)" \
+    "$tor_both_remote" "/var/lib/tor/tari/"
+assert_contains "tor entrypoint: P2Pool HS is unconditional — p2pool always runs (#103)" \
+    "$tor_both_remote" "HiddenServiceDir /var/lib/tor/p2pool/"
+unset tor_both_local tor_remote_tari tor_both_remote
+
+echo "== unit: onion provisioning follows node mode (#103) =="
+# pithead's half of the same gate: a hidden service that is never published has no hostname to wait
+# for, so provision_tor must not block on a remote node's onion (a 60s timeout, then a fatal error),
+# and the address stays a placeholder. wait_for_onion is stubbed — the polling itself is the docker
+# layer, and it runs in a command substitution, so the probe records asks in a file.
+ONP="$SANDBOX/onion-prov"
+mkdir -p "$ONP"
+prov_probe() { # <MONERO_MODE> <TARI_MODE> -> "<onions asked for>|<MONERO_ONION>|<TARI_ONION>|<P2POOL_ONION>"
+    (
+        cd "$ONP" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        : >asked
+        log() { :; }
+        docker() { :; }
+        resolve_pull_policy() { echo missing; }
+        provision_onion_client_auth() { :; }
+        provision_dashboard_onion() { :; }
+        wait_for_onion() {
+            printf '%s,' "$1" >>asked
+            echo "$1.onion"
+        }
+        MONERO_MODE="$1"
+        TARI_MODE="$2"
+        MONERO_ONION=placeholder
+        TARI_ONION=placeholder
+        P2POOL_ONION=placeholder
+        provision_tor
+        printf '%s|%s|%s|%s' "$(cat asked)" "$MONERO_ONION" "$TARI_ONION" "$P2POOL_ONION"
+    )
+}
+assert_eq "provision_tor waits for both node onions when both nodes are local (#103)" \
+    "$(prov_probe local local)" "p2pool,monero,tari,|monero.onion|tari.onion|p2pool.onion"
+assert_eq "provision_tor skips a remote node's onion and leaves it a placeholder (#103)" \
+    "$(prov_probe remote remote)" "p2pool,|placeholder|placeholder|p2pool.onion"
+assert_eq "provision_tor waits for the local node only in a mixed setup (#103)" \
+    "$(prov_probe local remote)" "p2pool,monero,|monero.onion|placeholder|p2pool.onion"
+
+# provision_node_onions: the remote → local switch. A stack first set up in remote mode has no
+# address for that node, so apply/upgrade recreate tor against the committed profiles, capture the
+# freshly minted hostname, and re-render .env BEFORE the node container starts against it. It must
+# cost nothing (no docker, no render) once every local node's address is in hand.
+node_onion_probe() { # <MONERO_MODE> <MONERO_ONION> <TARI_MODE> <TARI_ONION> -> "<docker calls>|<asked>|<MONERO_ONION>|<TARI_ONION>|<renders>"
+    (
+        cd "$ONP" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        : >asked
+        : >dockerlog
+        : >renders
+        log() { :; }
+        docker() { printf '%s ' "$*" >>dockerlog; }
+        render_env() { printf 'x' >>renders; }
+        wait_for_onion() {
+            printf '%s,' "$1" >>asked
+            echo "$1.onion"
+        }
+        # shellcheck disable=SC2034  # read by the sourced provision_node_onions, unseen here
+        MONERO_MODE="$1"
+        MONERO_ONION="$2"
+        # shellcheck disable=SC2034  # read by the sourced provision_node_onions, unseen here
+        TARI_MODE="$3"
+        TARI_ONION="$4"
+        provision_node_onions
+        printf '%s|%s|%s|%s|%s' "$(cat dockerlog)" "$(cat asked)" "$MONERO_ONION" "$TARI_ONION" "$(cat renders)"
+    )
+}
+assert_eq "provision_node_onions is a free no-op once every local node has its onion (#103)" \
+    "$(node_onion_probe local mona.onion local taria.onion)" "||mona.onion|taria.onion|"
+assert_eq "provision_node_onions ignores a remote node with no onion (#103)" \
+    "$(node_onion_probe remote placeholder remote placeholder)" "||placeholder|placeholder|"
+assert_eq "provision_node_onions mints + captures the onion of a node that just went local (#103)" \
+    "$(node_onion_probe local placeholder remote placeholder)" "compose up -d tor |monero,|monero.onion|placeholder|x"
+assert_eq "provision_node_onions treats an empty address as missing, and re-renders once (#103)" \
+    "$(node_onion_probe local '' local '')" "compose up -d tor |monero,tari,|monero.onion|tari.onion|x"
+unset ONP prov_probe node_onion_probe
+
+echo "== black-box: doctor's onion report follows node mode (#103) =="
+# A node running elsewhere has no hidden service to provision, so its placeholder address is the
+# correct state — doctor must not send the operator back to `setup` over it. A LOCAL node with no
+# address is still a real problem and must keep warning.
+DOC="$SANDBOX/doctor-onion"
+mkdir -p "$DOC/build/tari" "$DOC/build/dashboard"
+: >"$DOC/build/dashboard/Dockerfile"
+cp "$STACK" "$DOC/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$DOC/build/tari/"
+make_stubs "$DOC/bin"
+printf '{"monero":{"mode":"remote","wallet_address":"%s","remote":{"host":"10.0.0.8"}},"tari":{"mode":"remote","wallet_address":"T","remote":{"host":"10.0.0.9"}}}\n' "$WALLET" >"$DOC/config.json"
+doctor_onions() { # <COMPOSE_PROFILES> -> doctor's "Tor onion addresses" section
+    {
+        printf 'MONERO_ONION_ADDRESS=placeholder\nTARI_ONION_ADDRESS=placeholder\nP2POOL_ONION_ADDRESS=p2pa.onion\n'
+        printf 'TARI_GRPC_ADDRESS=10.0.0.9:18142\nDEPLOYMENT_COMPLETED=true\nHOST_IP=box.lan\n'
+        printf 'COMPOSE_PROFILES=%s\n' "$1"
+    } >"$DOC/.env"
+    (cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1 | sed -n '/Tor onion addresses/,/^$/p')
+}
+doc_remote="$(doctor_onions "")"
+assert_contains "doctor: a remote Monero node's missing onion is expected, not a warning (#103)" \
+    "$doc_remote" "MONERO_ONION_ADDRESS not needed"
+assert_contains "doctor: a remote Tari node's missing onion is expected, not a warning (#103)" \
+    "$doc_remote" "TARI_ONION_ADDRESS not needed"
+assert_contains "doctor: P2Pool's onion is still reported either way (#103)" \
+    "$doc_remote" "P2POOL_ONION_ADDRESS set"
+doc_local="$(doctor_onions "local_node,local_tari")"
+assert_contains "doctor: a LOCAL Monero node with no onion still warns (#103)" \
+    "$doc_local" "MONERO_ONION_ADDRESS is not provisioned"
+assert_contains "doctor: a LOCAL Tari node with no onion still warns (#103)" \
+    "$doc_local" "TARI_ONION_ADDRESS is not provisioned"
+unset DOC doc_remote doc_local doctor_onions
 
 # ---------------------------------------------------------------------------
 echo "== black-box: dashboard control channel (#33) =="

@@ -439,7 +439,10 @@ To connect to an external Monero node instead of running one locally, set `moner
 }
 ```
 
-- The bundled `monerod` container is not started in remote mode.
+- The bundled `monerod` container is not started in remote mode, and Tor stops publishing the
+  Monero inbound onion with it — a node running elsewhere accepts its own peers. Switch back to
+  `local` and the next `apply` publishes it again, at the same address (the key stays in
+  `tor.data_dir`).
 - The remote node must be set up for P2Pool mining, with ZMQ publishing enabled (`zmq-pub`, port
   `18083` by default) and its RPC reachable by P2Pool. In practice that means a node you run and
   control; general-purpose public "open node" endpoints do not work, since they don't expose ZMQ.
@@ -484,8 +487,8 @@ To merge-mine against a Tari base node running elsewhere instead of the bundled 
 - Remote mode turns off: the bundled `tari` container, the Tari container memory cap
   (`tari.mem_limit` — nothing local left to cap), and payout confirmation (`tari.view_key` is
   rejected with `tari.mode: remote`, same as `monero.view_key` with `monero.mode: remote`). Tor
-  still publishes the Tari inbound onion address, but with no local node behind it, connections to
-  it go nowhere — the same inert leftover a remote Monero node leaves.
+  stops publishing the Tari inbound onion too — the same as a remote Monero node — so no onion
+  address is left pointing at a container that isn't running.
 - The base node's mining-template RPC is request-scoped: every `get_new_block_template_with_coinbases`
   call carries its own caller's coinbase address, and the node holds no per-caller state between
   calls. One Tari node can serve several pithead stacks this way, each with its own

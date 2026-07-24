@@ -28,6 +28,16 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   Quadlet), and a git clone — one release manifest across all three. Dev doc only, no behaviour
   change. See [`docs/dev/dual-distribution-plan.md`](docs/dev/dual-distribution-plan.md).
 
+### Fixed
+
+- **No onion for a node that isn't here (#103).** With `monero.mode` or `tari.mode: remote`, Tor
+  kept publishing that node's inbound hidden service even though the container never starts, so the
+  stack advertised an onion address that accepted connections into nothing. Each node's hidden
+  service is now published only while that node runs locally; P2Pool's is unchanged, since p2pool
+  always runs. Switching a node back to `local` republishes it at the same address — the key never
+  left `tor.data_dir` — and a stack first set up in remote mode mints the address on the apply that
+  makes the node local.
+
 ## [1.13.0] - 2026-07-22
 
 ### Added

@@ -29,6 +29,12 @@ services:
     environment:
       # Subnet prefix (#180): the entrypoint envsubst's it into the rendered torrc's bridge IPs.
       - NETWORK_PREFIX=${NETWORK_PREFIX:-172.28.0}
+      # Node onions (#103): the entrypoint publishes the monerod / Tari inbound hidden services only
+      # when their profile is active, so a remote node leaves no onion pointing at nothing. Passing
+      # the profile list itself (rather than a parallel flag) keeps the gate and the containers that
+      # actually start reading from one value; a change here also recreates tor, which is required
+      # for the new torrc to take effect.
+      - COMPOSE_PROFILES=${COMPOSE_PROFILES:-}
       # Dashboard onion (#343): opt-in, default off. When true the entrypoint appends a hidden
       # service for the dashboard (fronting Caddy on the bridge gateway, never the LAN).
       - DASHBOARD_ONION_ENABLED=${DASHBOARD_ONION_ENABLED:-false}

@@ -415,6 +415,7 @@ stack_upgrade() {
     DEPLOYMENT_COMPLETED=true
     render_env "${ENV_FILE}.new"
     mv "${ENV_FILE}.new" "$ENV_FILE"
+    provision_node_onions # #103: as in apply — a node switched to local needs its onion first
     inject_service_configs
     generate_caddyfile
     provision_control_runner # #33: converge the control-runner units on the current toggle
@@ -983,8 +984,26 @@ doctor() {
         # --- Tor onion addresses ---
         echo ""
         echo "Tor onion addresses:"
-        local k onion
+        local k onion onion_profiles
+        onion_profiles=",$(env_get COMPOSE_PROFILES),"
         for k in MONERO_ONION_ADDRESS TARI_ONION_ADDRESS P2POOL_ONION_ADDRESS; do
+            # A node's inbound onion only exists while that node is local (#103) — key off the same
+            # profile tokens as the container checks above, so remote mode reports "not needed"
+            # instead of an address that was never meant to be provisioned.
+            case "$k" in
+            MONERO_ONION_ADDRESS)
+                if [[ "$onion_profiles" != *",local_node,"* ]]; then
+                    dr_ok "$k not needed — remote Monero node, so no inbound hidden service."
+                    continue
+                fi
+                ;;
+            TARI_ONION_ADDRESS)
+                if [[ "$onion_profiles" != *",local_tari,"* ]]; then
+                    dr_ok "$k not needed — remote Tari node, so no inbound hidden service."
+                    continue
+                fi
+                ;;
+            esac
             onion=$(env_get "$k")
             if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
                 dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services."
@@ -3346,29 +3365,73 @@ resolve_dashboard_host() {
     fi
 }
 
+# Poll the running tor container for one hidden service's hostname file and echo the address.
+# $1 = the HiddenServiceDir name under /var/lib/tor. Polls instead of sleeping a fixed 15s — Tor
+# can take more or less than that to publish, especially on first run. Returns 1 on timeout so the
+# caller decides whether a missing address is fatal.
+wait_for_onion() {
+    local svc="$1" elapsed=0 timeout="${2:-60}"
+    until docker exec tor test -f "/var/lib/tor/$svc/hostname"; do
+        if [ "$elapsed" -ge "$timeout" ]; then
+            return 1
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    docker exec tor cat "/var/lib/tor/$svc/hostname"
+}
+
 provision_tor() {
     log "Initializing Tor service to generate onion addresses..."
     # Client-auth keys must be in place before tor starts, since it reads authorized_clients then (#343).
     provision_onion_client_auth
     docker compose up --pull "$(resolve_pull_policy)" -d tor
-    # Poll for the three hidden-service hostname files instead of a fixed sleep — Tor can take
-    # more or less than 15s to publish them, especially on first run.
     log "Waiting for Tor hidden services to be generated..."
-    local elapsed=0 timeout=60
-    until docker exec tor test -f /var/lib/tor/monero/hostname &&
-        docker exec tor test -f /var/lib/tor/tari/hostname &&
-        docker exec tor test -f /var/lib/tor/p2pool/hostname; do
-        if [ "$elapsed" -ge "$timeout" ]; then
-            error "Timed out after ${timeout}s waiting for Tor hidden-service hostnames."
-        fi
-        sleep 2
-        elapsed=$((elapsed + 2))
-    done
-
-    MONERO_ONION=$(docker exec tor cat /var/lib/tor/monero/hostname)
-    TARI_ONION=$(docker exec tor cat /var/lib/tor/tari/hostname)
-    P2POOL_ONION=$(docker exec tor cat /var/lib/tor/p2pool/hostname)
+    P2POOL_ONION=$(wait_for_onion p2pool) ||
+        error "Timed out waiting for the P2Pool Tor hidden-service hostname."
+    # A node's inbound onion is only published while that node is local (build/tor/entrypoint.sh
+    # gates each block on its compose profile), so in remote mode there is nothing to wait for and
+    # the address stays a placeholder — provision_node_onions mints it if the node ever goes local.
+    if [ "$MONERO_MODE" == "local" ]; then
+        MONERO_ONION=$(wait_for_onion monero) ||
+            error "Timed out waiting for the Monero Tor hidden-service hostname."
+    fi
+    if [ "$TARI_MODE" == "local" ]; then
+        TARI_ONION=$(wait_for_onion tari) ||
+            error "Timed out waiting for the Tari Tor hidden-service hostname."
+    fi
     provision_dashboard_onion # #343: reads the dashboard onion too, but only when it's enabled
+}
+
+# Mint and capture a node's inbound onion when that node has just switched remote → local (#103).
+# Its hidden service exists only while the node is local, so a stack first set up in remote mode
+# has no address for it yet. Recreating tor against the freshly committed .env publishes the
+# service; the address must then be in .env BEFORE the node container starts, because monerod
+# templates `anonymous-inbound` from it and the Tari config takes the onion at render time.
+# No-op — and no docker call — whenever both nodes' addresses are already in hand.
+provision_node_onions() {
+    local want_monero=false want_tari=false
+    if [ "${MONERO_MODE:-}" == "local" ] && onion_missing "${MONERO_ONION:-}"; then want_monero=true; fi
+    if [ "${TARI_MODE:-}" == "local" ] && onion_missing "${TARI_ONION:-}"; then want_tari=true; fi
+    [ "$want_monero" == "true" ] || [ "$want_tari" == "true" ] || return 0
+
+    log "Publishing the Tor hidden service for the node that just became local..."
+    docker compose up -d tor
+    if [ "$want_monero" == "true" ]; then
+        MONERO_ONION=$(wait_for_onion monero) ||
+            error "Timed out waiting for the Monero Tor hidden-service hostname."
+    fi
+    if [ "$want_tari" == "true" ]; then
+        TARI_ONION=$(wait_for_onion tari) ||
+            error "Timed out waiting for the Tari Tor hidden-service hostname."
+    fi
+    render_env # commit the new address before the node container is (re)created against it
+}
+
+# An onion address that was never provisioned: empty, or the placeholder render_env writes until
+# the real hostname is captured.
+onion_missing() {
+    [ -z "${1:-}" ] || [ "${1:-}" == "placeholder" ]
 }
 
 # Prepare Tor v3 client authorization for the dashboard onion (#343). Generates the client keypair
@@ -4948,7 +5011,8 @@ apply_dry_run() {
         # the candidate config. A dry run must only read; an invalid candidate fails validation.
         parse_and_validate_config
         load_preserved_state
-        if [ "$MONERO_ONION" == "placeholder" ] || ! is_deployed; then
+        # P2Pool's onion is the provisioning marker (see apply) — a node's may be a placeholder.
+        if onion_missing "$P2POOL_ONION" || ! is_deployed; then
             error "Stack is not fully provisioned. Run '$0 setup' first."
         fi
         resolve_dashboard_host # non-interactive
@@ -5005,7 +5069,9 @@ apply() {
     ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one
     parse_and_validate_config
     load_preserved_state
-    if [ "$MONERO_ONION" == "placeholder" ] || ! is_deployed; then
+    # P2Pool's onion is the provisioning marker, not Monero's: p2pool always runs, while a node's
+    # onion is legitimately a placeholder in remote mode (#103).
+    if onion_missing "$P2POOL_ONION" || ! is_deployed; then
         error "Stack is not fully provisioned. Run '$0 setup' first."
     fi
 
@@ -5092,6 +5158,7 @@ apply() {
         fi
 
         mv "$newenv" "$ENV_FILE"
+        provision_node_onions # #103: a node that just went local needs its onion before it starts
         inject_service_configs
         generate_caddyfile
     else
