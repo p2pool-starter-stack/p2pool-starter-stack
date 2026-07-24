@@ -1,0 +1,3 @@
+description = "unpack the pithead-os rootfs tarball into the system root"
+# Runs before everything else in the layer — the tarball IS the root filesystem.
+priority = 90_000

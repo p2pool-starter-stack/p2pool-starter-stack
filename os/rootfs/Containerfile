@@ -1,0 +1,46 @@
+# pithead-os rootfs (#77 phase 2) — the appliance operating system as a container build,
+# exported to a tarball and fed to Rugix Bakery (the Umbrel pattern; os/build-image.sh).
+# Debian 13 + systemd + rootful Podman; pithead is the provisioning brain, Quadlet the runtime.
+# Deliberately updater-agnostic: nothing in here knows about Rugix — the RAUC escape hatch
+# stays open (docs/dev/dual-distribution-plan.md § appliance architecture).
+FROM debian:trixie-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The OS: init + kernel + bootloader userland for the generic-grub-efi target, the container
+# engine, pithead's host dependencies, mDNS (pithead.local), and time sync (before Tor — the
+# firstboot ordering rule). openssh-server ships installed but DISABLED: SSH is a wizard opt-in.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        systemd systemd-sysv systemd-timesyncd systemd-resolved dbus udev \
+        linux-image-amd64 initramfs-tools zstd \
+        grub-efi-amd64 shim-signed \
+        podman netavark aardvark-dns catatonit uidmap \
+        jq openssl curl ca-certificates xxd \
+        avahi-daemon libnss-mdns \
+        openssh-server sudo less nano htpdate \
+    && rm -rf /var/lib/apt/lists/*
+
+# The stack, at the image's exact release state: pithead + schemas + the build/ mount sources
+# (config templates and entrypoints that services bind-mount). Build context = repo root.
+COPY pithead pithead-completion.bash VERSION docker-compose.yml \
+     config.reference.json config.core-keys.json config.minimal.json /opt/pithead/
+COPY build/ /opt/pithead/build/
+RUN chmod +x /opt/pithead/pithead
+
+# Appliance identity: the engine pin doctor and the wizard read, hugepages (load-bearing for the
+# memory caps — the RandomX dataset must land in hugetlbfs, not the cgroup), persistent journald
+# (a headless box that loses its logs on reboot is undebuggable).
+RUN printf 'PITHEAD_ENGINE=podman\n' >> /etc/environment \
+    && printf 'vm.nr_hugepages=3072\n' > /etc/sysctl.d/99-pithead-hugepages.conf \
+    && mkdir -p /etc/systemd/journald.conf.d \
+    && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/pithead.conf
+
+# First boot: time sync, then the wizard (only while unprovisioned). The unit's console output
+# carries the URL + one-time token per the phase-3 design.
+COPY os/overlay/pithead-firstboot.service /etc/systemd/system/pithead-firstboot.service
+RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolved \
+        pithead-firstboot.service \
+    && systemctl disable ssh \
+    && echo pithead > /etc/hostname
+
+# Rugix Ctrl lands via the bakery layer's core recipes, not here — rootfs stays updater-agnostic.

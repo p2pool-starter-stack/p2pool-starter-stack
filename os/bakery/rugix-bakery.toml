@@ -1,0 +1,7 @@
+# Pithead OS image builds (#77 phase 2). One system today: the x86_64 EFI appliance.
+# `os/build-image.sh` assembles the rootfs tarball first, then bakes.
+
+[systems.pithead-os-amd64]
+layer = "pithead-os"
+architecture = "amd64"
+target = "generic-grub-efi"

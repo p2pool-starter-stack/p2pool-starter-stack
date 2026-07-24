@@ -1,0 +1,8 @@
+# The appliance layer: our trixie rootfs tarball (os/rootfs/Containerfile, exported by
+# os/build-image.sh into this project's build/ dir) plus Rugix's boot integration.
+root = true
+
+recipes = [
+    "import-rootfs",
+    "core/debian-grub-setup",
+]
