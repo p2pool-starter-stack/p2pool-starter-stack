@@ -1220,6 +1220,96 @@ stack_uninstall() {
     log "Kernel HugePages/GRUB tuning from setup persists; revert in GRUB config if you want it gone."
 }
 
+# --- First-boot wizard (#77 phase 3) -------------------------------------------------------------
+# The browser-first setup path for BOTH channels: a token-gated form (the dashboard image in
+# wizard mode) collects the CLI wizard's answers pre-sync; THIS host validates and applies them.
+# Container asks, host provisions — the #33 trust shape. Plain HTTP on the trusted LAN with
+# secret minimization: addresses and shape choices only (docs/dev/dual-distribution-plan.md § 3).
+
+# Human-typable one-time token: 6 chars from an unambiguous alphabet (no 0/O/1/I/l).
+wizard_mint_token() {
+    local alphabet="23456789ABCDEFGHJKMNPQRSTUVWXYZ" out="" i idx
+    for i in 1 2 3 4 5 6; do
+        idx=$(($(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % ${#alphabet}))
+        out="$out${alphabet:$idx:1}"
+    done
+    printf 'pit-%s' "$out"
+}
+
+# Consume one wizard submission: validate the candidate with the same parser setup/apply use; on
+# success install it as ./config.json and mark the spool applied (the wizard page polls for it).
+# On failure surface a short error into the spool for the form. rc: 0 applied, 1 rejected, 2 none.
+firstboot_consume_spool() { # <spool-dir>
+    local spool="$1" cand="$1/config.json" err
+    [ -f "$cand" ] || return 2
+    # CONFIG_FILE is readonly after sourcing; validate the candidate in a fresh process via the
+    # PITHEAD_CONFIG_FILE override (the same parser setup/apply run, against the same file).
+    if err=$(PITHEAD_CONFIG_FILE="$cand" bash -c "source '${BASH_SOURCE[0]}' && parse_and_validate_config" 2>&1); then
+        cp "$cand" "$PWD/config.json"
+        rm -f "$cand"
+        touch "$spool/applied"
+        return 0
+    fi
+    printf '%s' "$err" | tail -n 2 | tr -d '[:cntrl:]' | tail -c 240 >"$spool/error.txt"
+    rm -f "$cand"
+    return 1
+}
+
+firstboot_wizard() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+        --cli)
+            setup
+            return
+            ;;
+        *) error "Unknown option for firstboot-wizard: $arg. Run '$0 help'." ;;
+        esac
+    done
+    if [ -f "$PWD/config.json" ]; then
+        log "config.json already present (pre-seeded) — skipping the wizard and running setup."
+        setup
+        return
+    fi
+    local engine image spool token ver
+    engine=$(container_engine)
+    ver=$(tr -d ' \t\r\n' <VERSION 2>/dev/null || true)
+    image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${ver:-dev}"
+    spool="$PWD/data/firstboot"
+    mkdir -p "$spool"
+    # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses
+    # only by design, removed at handoff.
+    chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
+    trap '"$engine" rm -f pithead-wizard >/dev/null 2>&1 || true' EXIT
+    while :; do
+        token=$(wizard_mint_token)
+        "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+        "$engine" run -d --name pithead-wizard --entrypoint python3 \
+            -p 80:8000 -e WIZARD_TOKEN="$token" \
+            -v "$spool":/wizard-spool \
+            "$image" -m mining_dashboard.wizard >/dev/null ||
+            error "Could not start the wizard container ($engine, $image). Pre-seed config.json or run '$0 firstboot-wizard --cli'."
+        log "Setup wizard is up. From a browser on this network, open:"
+        for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    http://$arg"; done
+        log "One-time token: $token"
+        while :; do
+            if firstboot_consume_spool "$spool"; then
+                sleep 4 # let the page's status poll show "Provisioned"
+                "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                rm -rf "$spool"
+                log "Configuration accepted — provisioning now."
+                setup
+                return
+            fi
+            if ! "$engine" inspect -f '{{.State.Running}}' pithead-wizard 2>/dev/null | grep -q true; then
+                warn "Wizard stopped (token lockout or crash) — minting a fresh token and restarting it."
+                break
+            fi
+            sleep 2
+        done
+    done
+}
+
 announce_dashboard_url() {
     local display_host
     display_host=$(env_get HOST_IP)
@@ -1710,6 +1800,13 @@ Maintenance:
                             dirs (chains, Tor onion keys, dashboard DB) — the closing message
                             lists them for manual removal. Type-to-confirm unless -y.
                               -y, --yes        skip the confirmation prompt.
+
+  firstboot-wizard [--cli]  Browser-first setup for an unconfigured checkout: serves a
+                            token-gated form on http://<this-host>/ (the dashboard image in
+                            wizard mode), validates the answers host-side, then runs setup.
+                            A pre-seeded config.json skips the form; --cli runs the terminal
+                            wizard instead. The one-time token prints here; five wrong tries
+                            mint a fresh one. See docs/dev/dual-distribution-plan.md § phase 3.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -5833,7 +5930,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -7274,6 +7371,7 @@ main() {
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
     uninstall) stack_uninstall "$@" ;;
+    firstboot-wizard) firstboot_wizard "$@" ;;
     control-run-pending)
         _reject_options control-run-pending "$@"
         require_deployed
