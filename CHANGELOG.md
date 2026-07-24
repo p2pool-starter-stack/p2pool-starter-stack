@@ -9,7 +9,7 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
-## [Unreleased]
+## [1.14.0] - 2026-07-23
 
 ### Added
 
@@ -20,7 +20,6 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   Both default off, publish loopback-only otherwise, and flipping either to the LAN is a
   host-confirmed destructive change. The Tari gRPC and ZMQ feeds carry no authentication —
   trusted networks only (see the remote-node sections in `docs/configuration.md`).
-
 - **Remote Tari node (#103).** `tari.mode: remote` merge-mines against a Tari base node running
   elsewhere instead of the bundled one: set `tari.remote.host` (required) and
   `tari.remote.grpc_port` (default `18142`). Remote mode skips the bundled `tari` container, its
@@ -36,6 +35,16 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   Quadlet), and a git clone — one release manifest across all three. Dev doc only, no behaviour
   change. See [`docs/dev/dual-distribution-plan.md`](docs/dev/dual-distribution-plan.md).
 
+### Changed
+
+- Operator-facing text no longer carries this project's internal issue numbers (#755). A message
+  you read in the terminal or the dashboard is now written for you, not for the tracker; the
+  numbers stay in the source comments, where they explain *why* the code is the way it is. A lint
+  guard (`make lint`) keeps them out from here on.
+- `upgrade`'s help text describes what it actually does — re-render generated config, then rebuild
+  and restart — for both source checkouts and extracted release bundles, instead of naming only
+  `git pull` (#757).
+
 ### Fixed
 
 - **No onion for a node that isn't here (#103).** With `monero.mode` or `tari.mode: remote`, Tor
@@ -45,6 +54,12 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   always runs. Switching a node back to `local` republishes it at the same address — the key never
   left `tor.data_dir` — and a stack first set up in remote mode mints the address on the apply that
   makes the node local.
+- Config validation closes two gaps a dashboard-committed config could otherwise walk into: a
+  `data_dir` containing `:` is rejected (it would forge a third field in the container's volume
+  mount and could silently turn a data mount read-only), and a `tari.wallet_address` containing
+  whitespace is rejected instead of mining to a wrong address. A remote node's host and ports are
+  validated once, at parse time, and reused verbatim by the renderer — the value that passes
+  validation is the value that ships.
 
 ## [1.13.0] - 2026-07-22
 
