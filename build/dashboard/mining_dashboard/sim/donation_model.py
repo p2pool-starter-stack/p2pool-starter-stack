@@ -70,6 +70,11 @@ class _FixedTiers:
     def get_xvb_standby(self):
         return None
 
+    def get_raffle_wins(self, since=0.0):
+        # The sim models steady-state convergence, never a live won round, so the
+        # in-round hold (#769) stays inactive.
+        return []
+
 
 def make_algo_controller(algo, p2pool_difficulty=0) -> Controller:
     """Adapt a real `AlgoService` into a `decide(...) -> fraction` callable.
@@ -530,7 +535,7 @@ DEFAULT_SCENARIOS = [
         name="worker drop below tier mid-run, then recovery",
         target_hr=10_000,
         current_hr=46_300,
-        warm_avg=10_300,
+        warm_avg=10_500,
         drop_at=CYCLES_PER_DAY,
         drop_until=CYCLES_PER_DAY + 18,
         drop_factor=0.2,
