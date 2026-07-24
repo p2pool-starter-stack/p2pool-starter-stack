@@ -1,0 +1,3 @@
+[Network]
+NetworkName=mining_net
+Subnet=172.28.0.0/24

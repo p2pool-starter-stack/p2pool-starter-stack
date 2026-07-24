@@ -1,0 +1,32 @@
+[Unit]
+Description=pithead tari-wallet
+After=tari.service
+Requires=tari.service
+[Container]
+ContainerName=tari-wallet
+Image=quay.io/tarilabs/minotari_console_wallet:v5.3.1-mainnet@sha256:886ce60b1cf2a28bd01fb9ce21533bb3be834215e5bbe918533869e3d2a43622
+Network=mining.network
+IP=172.28.0.31
+User=1000:1000
+Entrypoint=/wallet-config/entrypoint.sh
+Environment=TARI_BASE_NODE_GRPC_ADDRESS=172.28.0.27:18142 TARI_WALLET_BIRTHDAY=auto TARI_WALLET_GRPC_BIND=/ip4/0.0.0.0/tcp/18143 WALLET_DIR=/home/ubuntu/wallet
+Volume=pithead-tari-wallet-data:/home/ubuntu/wallet
+Volume=/home/vijit/pithead/build/tari-wallet:/wallet-config:ro
+Volume=/opt/pithead/data/tari-wallet-secret.env:/run/secrets/tari_wallet_secret:ro
+Tmpfs=/tmp:size=32m,mode=1777
+PublishPort=127.0.0.1:18143:18143
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 512m --memory-swap 512m
+HealthCmd=ps | grep '[m]inotari_consol' || exit 1
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=120s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target

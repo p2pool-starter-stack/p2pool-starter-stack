@@ -1,0 +1,29 @@
+[Unit]
+Description=pithead wallet-rpc
+After=monerod.service
+Requires=monerod.service
+[Container]
+ContainerName=wallet-rpc
+Image=ghcr.io/p2pool-starter-stack/pithead-monero:v1.14.0
+Network=mining.network
+IP=172.28.0.30
+Entrypoint=/usr/local/bin/wallet-entrypoint.sh
+Environment=MONERO_NODE_USERNAME=rendered-node-user MONERO_NODE_PASSWORD=rendered-node-password MONERO_NODE_HOST=172.28.0.26 MONERO_RPC_PORT=18081 WALLET_RPC_USERNAME=wallet WALLET_RPC_PASSWORD=rendered-wallet-rpc-password MONERO_WALLET_ADDRESS=your_monero_wallet_address MONERO_VIEW_KEY=rendered-view-key PAYOUT_SCAN_HEIGHT=auto
+Volume=pithead-wallet-data:/home/ubuntu/wallets
+Tmpfs=/tmp:size=16m,mode=1777
+PublishPort=127.0.0.1:18082:18082
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--memory 2g --memory-swap 2g
+HealthCmd=/usr/local/bin/wallet-healthcheck.sh
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=120s
+Notify=healthy
+[Service]
+Restart=always
+TimeoutStartSec=infinity
+[Install]
+WantedBy=multi-user.target
