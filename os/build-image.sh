@@ -6,8 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Pinned Bakery. The 0.9 line is the one proven in the field (umbrelOS); bump deliberately.
-RUGIX_BAKERY_VERSION="${RUGIX_BAKERY_VERSION:-v0.9.1}"
-export RUGIX_BAKERY_IMAGE="${RUGIX_BAKERY_IMAGE:-ghcr.io/rugix/rugix-bakery:${RUGIX_BAKERY_VERSION#v}}"
+RUGIX_BAKERY_VERSION="${RUGIX_BAKERY_VERSION:-v0.9.3}"
+export RUGIX_BAKERY_IMAGE="${RUGIX_BAKERY_IMAGE:-ghcr.io/rugix/rugix-bakery:${RUGIX_BAKERY_VERSION}}"
 
 echo "==> rootfs: container build + export"
 docker build -f os/rootfs/Containerfile -t pithead-os-rootfs .
