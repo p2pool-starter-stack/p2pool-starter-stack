@@ -389,7 +389,10 @@ image per cut on the #54 matrix, same mandate as the targeted e2e.
 - Appliance base: Debian 13 through its LTS window (mid-2030); rebase to Debian 14
   planned, not emergency.
 - Minimum hardware spec, stated in `docs/appliance.md` and enforced by the installer:
-  amd64 with AVX2 (hard-fail, not warn), RAM sized to the compose memory caps
+  amd64 (hard-fail — no arm64 xmrig-proxy build); AVX2 **warned, never required** —
+  RandomX runs without it and `doctor` says so, and a hard gate would turn away the
+  repurposed hardware this stack is often deployed on (the project's own release box
+  is a pre-AVX Westmere Xeon that mines fine). RAM sized to the compose memory caps
   (monerod 6g + Tari 7.5g + the rest — publish the sum per mode), internal SSD/NVMe
   with headroom over current chain size. `pithead doctor` already checks AVX2,
   hugepages, and free disk; the installer runs the same checks before writing
@@ -430,6 +433,41 @@ pithead/
     └── os/                     # boot/update/rollback harness on the #54 matrix
 ```
 
+## Base distribution — evaluated 2026-07-24, Debian 13 confirmed
+
+Re-opened deliberately (the earlier choice arrived by peer-group convergence, which is
+weak evidence on its own). One correction first: the v2 review rejected **CentOS
+Stream** for being a rolling upstream whose mirrors are deleted at EOL. That does not
+transfer to Rocky/AlmaLinux, which are stable point-release rebuilds — they deserved
+their own look.
+
+**The finding that decides it, measured rather than argued:** `rockylinux:10` refuses
+to start on this project's own release box —
+`Fatal glibc error: CPU does not support x86-64-v3`. RHEL 10 raised the
+microarchitecture baseline to v3 (Haswell, 2013+). Gouda is a Xeon X5690 with no AVX
+at all, and it mines today. A stack routinely deployed on repurposed hardware cannot
+adopt a base that excludes that hardware at the libc level.
+
+| Base | Active support | Security tail | CPU floor | Verdict |
+|---|---|---|---|---|
+| **Debian 13** | Aug 2028 | LTS Jun 2030 (+ELTS) | baseline amd64 | **chosen** |
+| Rocky 10 | May 2030 | May 2035 | x86-64-v3 | disqualified — excludes target hardware |
+| Rocky 9 | May 2027 | May 2032 | x86-64-v2 | viable fallback, *shorter active support than Debian 13* |
+| Ubuntu 26.04 LTS | 2031 | 2036 (Pro) | baseline | no advantage over Debian; adds a vendor dependency |
+| Alpine | — | — | — | out: no systemd, so Quadlet cannot exist |
+| Buildroot | n/a | n/a | baseline | HAOS's path; we would own the whole userland with a two-person team |
+
+Rocky's headline ten-year window exists only on Rocky 10, which we cannot use; Rocky 9
+avoids the CPU floor but expires sooner than Debian 13. Recorded in Rocky's favour, so
+the fallback is honest: Rocky 9 ships podman 5.8.2 against Debian 13's 5.4.2, Quadlet
+is Red Hat's own technology tested there first, and SELinux + Podman is the
+reference-grade hardening pairing. If Quadlet ever misbehaves in a way Debian's
+packaging causes, Rocky 9 is the escape hatch.
+
+**openSUSE MicroOS** is deliberately *not* in this table: it replaces the update
+architecture (btrfs snapshots + `transactional-update` instead of A/B slots), so it
+belongs in the bake-off below as a candidate, not in the base-distro comparison.
+
 ## The updater bake-off — decision procedure
 
 The A/B updater is the one component whose failures land in the field, unattended, on
@@ -449,6 +487,15 @@ lines of TOML in `os/bakery/` plus ~30 lines of harness commands.
 | A | Rugix Ctrl | Rugix Bakery | integrated state/persist, factory reset, delta-over-HTTP |
 | B | RAUC | ours (script: GPT + mkfs + populate + GRUB boot-counting env) | mature, but updater only — we own assembly, persist, reset |
 | C | systemd-sysupdate | ours + `systemd-boot` boot counting | no third-party updater; needs moving off GRUB |
+| D | openSUSE MicroOS `transactional-update` | the distro's own | snapshots instead of A/B slots — changes the base too, so it competes on both axes |
+
+**Packaging couples the updater to the base, and the bake-off must price that:** Rugix
+ships `rugix-ctrl` as `.deb` and `.apk` only (our build installs
+`rugix-ctrl-gnu_1.0.0_amd64.deb`), so candidate A is Debian/Alpine-shaped and would
+need a hand-rolled binary install on an RPM base. RAUC is packaged for Debian but
+built from source on RHEL-family. Only sysupdate is base-neutral. A candidate that
+wins on reliability but forces a base we rejected has not actually won — score it
+with that cost included.
 
 **The battery — identical for every candidate**, run by `tests/os/run.sh`:
 
@@ -483,6 +530,36 @@ iterations that took, ~7 were our own bugs, ~3 generic image-building reality, a
 Rugix documentation gaps that required reading umbrelOS's source — the last group is
 the honest maturity signal. RAUC and sysupdate have not yet been built once, so they
 carry an unknown integration cost that only the bake-off can price.
+
+### OTA findings so far (candidate A, and mostly base-independent)
+
+Facts the first working image produced. The first four apply to *any* A/B updater on a
+docker-exported rootfs, so they are prerequisites for every candidate, not Rugix quirks:
+
+1. **First boot repartitions, so the disk must be big enough for the whole layout** —
+   256M EFI + 2×512M boot + 2×8 GiB system + data ≈ 18 GiB minimum. Below it,
+   bootstrapping aborts (`insufficient space, cannot add partition 5`) and the box
+   panics rather than degrading. This is the appliance's real minimum-disk figure and
+   belongs in `docs/appliance.md`; the installer should check it before writing.
+2. **The rootfs must carry the partitioning userland it shells out to** — `e2fsprogs`,
+   `dosfstools`, `fdisk`, `parted`. `debian-slim` ships none of them, and the updater
+   runs as init before any of our services exist, so a missing `mkfs.ext4` is a panic,
+   not an error message.
+3. **`/.dockerenv` must be removed** or systemd refuses to run as PID 1 (it believes it
+   is in a container). Every docker-export base hits this.
+4. **The pseudo-filesystem mount points must be recreated** after extracting the
+   exported tarball — `docker export` omits `/dev`, `/proc`, `/sys`, `/run`, `/tmp`.
+5. **Debugging rule, worth more than any single fix:** `/dev/console` is whichever
+   `console=` came **last** on the kernel cmdline, and `loglevel=3` suppresses the
+   kernel banner from it entirely. Kernel messages reaching a serial capture prove
+   nothing about whether userspace output does. Eleven rebuilds looked identical and
+   silent for this reason alone; swapping the order made the updater state its exact
+   error on the first try. Any candidate that appears to fail silently gets this check
+   before anything else.
+
+Consequences already applied: the wizard announces its URL and token on *every* console
+device rather than `/dev/console` alone, and the tier-4 harness resizes the scratch
+disk before first boot with the reason recorded beside it.
 
 ## Risk register
 
