@@ -20,6 +20,11 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   Both default off, publish loopback-only otherwise, and flipping either to the LAN is a
   host-confirmed destructive change. The Tari gRPC and ZMQ feeds carry no authentication —
   trusted networks only (see the remote-node sections in `docs/configuration.md`).
+  **Upgrading:** monerod's `18083` and the Tari node's `18142` are now published on the host from
+  this release — on loopback unless you turn a switch on. If something else on the host already
+  holds either port (a hand-rolled `socat` forward serving another machine is the likely one, since
+  that is what these switches replace), free it first: Docker refuses to start the container on a
+  taken port, and the upgrade stops there.
 - **Remote Tari node (#103).** `tari.mode: remote` merge-mines against a Tari base node running
   elsewhere instead of the bundled one: set `tari.remote.host` (required) and
   `tari.remote.grpc_port` (default `18142`). Remote mode skips the bundled `tari` container, its
