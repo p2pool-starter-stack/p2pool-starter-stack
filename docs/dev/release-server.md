@@ -130,8 +130,8 @@ Install cosign (pinned — there is no Ubuntu apt package; the same snippet work
 wants to verify):
 
 ```bash
-curl -fsSL -o /tmp/cosign https://github.com/sigstore/cosign/releases/download/v2.6.3/cosign-linux-amd64
-echo '7c78a7f2efc00088bd788a758db6e0928e79f3e0eb83eb5d3c499ed98da4c4f4  /tmp/cosign' | sha256sum -c
+curl -fsSL -o /tmp/cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
+echo 'f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  /tmp/cosign' | sha256sum -c
 sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
 ```
 
@@ -151,6 +151,12 @@ repo), and point the release shell at the private half:
 export COSIGN_KEY=~/.config/pithead-release/cosign.key
 read -rs COSIGN_PASSWORD && export COSIGN_PASSWORD   # typed, not in shell history
 ```
+
+Both are also defaults now: the preflight falls back to
+`~/.config/pithead-release/cosign.key` when `COSIGN_KEY` is unset, and reads
+`~/.config/pithead-release/cosign.passphrase` (a `chmod 600` file) when `COSIGN_PASSWORD` is
+unset — so a cut on this box needs no signing exports at all. The passphrase file is optional:
+delete it to be prompted per cut via the `read -rs` line above.
 
 cosign reads `COSIGN_PASSWORD` from the environment to decrypt the key; neither the key nor the
 passphrase ever appears on a command line, in the repo, in an image, or in the release log. Keep

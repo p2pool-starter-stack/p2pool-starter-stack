@@ -233,16 +233,23 @@ preflight() {
     # registry token could serve a malicious root-running image — is ALREADY closed by digest-pinning
     # those images in the bundle (make_bundle). cosign additionally signs the promoted digests + the
     # bundle for operators who want to verify. So a normal cut needs NOTHING off-repo: signing turns
-    # on only when a key is configured on this box AND cosign.pub is committed; otherwise we warn and
-    # skip it rather than block the release.
-    COSIGN_ENABLED=0
+    # MANDATORY since the first key was minted (#77 phase 1): every release signs its images and
+    # bundle, or does not cut. The custody arrangement (key location, passphrase, backups,
+    # break-glass) lives in docs/dev/releasing.md § The release signing key.
+    COSIGN_ENABLED=1
     if [ "$DRY_RUN" -eq 0 ]; then
-        if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ] && [ -f "${COSIGN_KEY:-/nonexistent}" ] && [ -f cosign.pub ]; then
-            COSIGN_ENABLED=1
-            ok "Release signing ON (cosign key + committed cosign.pub present)."
-        else
-            warn "Release signing OFF — shipping digest-pinned images + bundle without cosign signatures (#376 is opt-in). Installs are protected by the pinned digests; to also sign, see docs/dev/release-server.md § The release signing key."
+        command -v cosign >/dev/null 2>&1 ||
+            die "cosign is not installed — releases must be signed (#77). Install cosign, then re-run."
+        COSIGN_KEY="${COSIGN_KEY:-$HOME/.config/pithead-release/cosign.key}"
+        [ -f "$COSIGN_KEY" ] ||
+            die "Release signing key not found at $COSIGN_KEY — set COSIGN_KEY or restore the key (docs/dev/releasing.md § The release signing key)."
+        [ -f cosign.pub ] ||
+            die "cosign.pub is not committed at the repo root — the clients' pinned key must ship with the release."
+        if [ -z "${COSIGN_PASSWORD:-}" ] && [ -f "$HOME/.config/pithead-release/cosign.passphrase" ]; then
+            COSIGN_PASSWORD="$(cat "$HOME/.config/pithead-release/cosign.passphrase")"
+            export COSIGN_PASSWORD
         fi
+        ok "Release signing ON (mandatory): key $COSIGN_KEY, committed cosign.pub."
     fi
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
