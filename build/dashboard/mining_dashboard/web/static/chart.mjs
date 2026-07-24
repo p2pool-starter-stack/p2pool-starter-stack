@@ -481,7 +481,7 @@ export class ChartCard extends Component {
                 }
             </div>
             <div class="chart-controls" role="group" aria-label="Hashrate averaging window">
-                <span class="chart-control-label text-small mr-1" title="Which hashrate-averaging window the chart plots (#168)">Avg:</span>
+                <span class="chart-control-label text-small mr-1" title="Which hashrate-averaging window the chart plots">Avg:</span>
                 ${WINDOWS.map(
                   ([w, label]) => html`<button type="button"
                     class=${"btn-range" + (props.avgWindow === w ? " active" : "")}

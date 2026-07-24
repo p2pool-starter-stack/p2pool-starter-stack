@@ -9,7 +9,62 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
-## [Unreleased]
+## [1.14.0] - 2026-07-23
+
+### Added
+
+- **Node LAN exposure switches (#760)** — the serving side of the remote-node modes. `monero.zmq_lan_access`
+  publishes monerod's ZMQ feed on the LAN (with the existing `rpc_lan_access`, everything a remote
+  P2Pool needs), and `tari.grpc_lan_access` publishes the bundled Tari base node's gRPC, so one
+  stack's synced nodes can serve other stacks running `monero.mode`/`tari.mode: remote` (#103).
+  Both default off, publish loopback-only otherwise, and flipping either to the LAN is a
+  host-confirmed destructive change. The Tari gRPC and ZMQ feeds carry no authentication —
+  trusted networks only (see the remote-node sections in `docs/configuration.md`).
+  **Upgrading:** monerod's `18083` and the Tari node's `18142` are now published on the host from
+  this release — on loopback unless you turn a switch on. If something else on the host already
+  holds either port (a hand-rolled `socat` forward serving another machine is the likely one, since
+  that is what these switches replace), free it first: Docker refuses to start the container on a
+  taken port, and the upgrade stops there.
+- **Remote Tari node (#103).** `tari.mode: remote` merge-mines against a Tari base node running
+  elsewhere instead of the bundled one: set `tari.remote.host` (required) and
+  `tari.remote.grpc_port` (default `18142`). Remote mode skips the bundled `tari` container, its
+  memory cap, and payout confirmation. The remote node's mining-template
+  RPC is request-scoped, so one node can serve several pithead stacks at once, each with its own
+  wallet — a shared node for a fleet or household is the intended pattern. The gRPC link stays
+  plaintext and unauthenticated (p2pool has no way to speak TLS or auth to it), so use a node you
+  trust: its operator, or anyone on the network path, can silently redirect Tari rewards. Monero
+  mining is unaffected either way. LAN/trusted-network only for now — a `.onion` remote is a
+  follow-up. See [Configuration › Remote Tari node](docs/configuration.md#remote-tari-node).
+- Dual-distribution plan (#77/#78): the architecture decision record for shipping Pithead as a
+  curl-installed Compose stack, a flashable immutable appliance (Debian 13 + Rugix A/B, Podman
+  Quadlet), and a git clone — one release manifest across all three. Dev doc only, no behaviour
+  change. See [`docs/dev/dual-distribution-plan.md`](docs/dev/dual-distribution-plan.md).
+
+### Changed
+
+- Operator-facing text no longer carries this project's internal issue numbers (#755). A message
+  you read in the terminal or the dashboard is now written for you, not for the tracker; the
+  numbers stay in the source comments, where they explain *why* the code is the way it is. A lint
+  guard (`make lint`) keeps them out from here on.
+- `upgrade`'s help text describes what it actually does — re-render generated config, then rebuild
+  and restart — for both source checkouts and extracted release bundles, instead of naming only
+  `git pull` (#757).
+
+### Fixed
+
+- **No onion for a node that isn't here (#103).** With `monero.mode` or `tari.mode: remote`, Tor
+  kept publishing that node's inbound hidden service even though the container never starts, so the
+  stack advertised an onion address that accepted connections into nothing. Each node's hidden
+  service is now published only while that node runs locally; P2Pool's is unchanged, since p2pool
+  always runs. Switching a node back to `local` republishes it at the same address — the key never
+  left `tor.data_dir` — and a stack first set up in remote mode mints the address on the apply that
+  makes the node local.
+- Config validation closes two gaps a dashboard-committed config could otherwise walk into: a
+  `data_dir` containing `:` is rejected (it would forge a third field in the container's volume
+  mount and could silently turn a data mount read-only), and a `tari.wallet_address` containing
+  whitespace is rejected instead of mining to a wrong address. A remote node's host and ports are
+  validated once, at parse time, and reused verbatim by the renderer — the value that passes
+  validation is the value that ships.
 
 ## [1.13.0] - 2026-07-22
 

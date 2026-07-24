@@ -47,10 +47,13 @@ PROXY_DONATE_LEVEL=1
 MONERO_PRUNE=1
 MONERO_PREP_THREADS=4
 MONERO_RPC_BIND=127.0.0.1
+MONERO_ZMQ_BIND=127.0.0.1
 MONERO_NODE_HOST=172.28.0.26
 MONERO_RPC_PORT=18081
 MONERO_ZMQ_PORT=18083
-COMPOSE_PROFILES=local_node
+TARI_GRPC_ADDRESS=172.28.0.27:18142
+TARI_GRPC_BIND=127.0.0.1
+COMPOSE_PROFILES=local_node,local_tari
 DASHBOARD_SECURE=true
 HOST_IP=box.lan
 EOF
@@ -254,32 +257,65 @@ jq_assert "control channel defaults off in the dashboard env (#33)" \
     '.services.dashboard.environment["DASHBOARD_CONTROL_ENABLED"] == "false"'
 
 # depends_on startup ordering (#565): "wait until healthy" vs "wait until started" is a startup-
-# correctness guarantee, not decoration — e.g. p2pool must not merge-mine against a Tari node that's
-# still starting up. Render with the optional payout-confirmation profiles too
+# correctness guarantee, not decoration. Render with the optional payout-confirmation profiles too
 # (payout_confirm/tari_payout_confirm, #381/#462) so the profile-gated wallet-rpc/tari-wallet edges
-# are covered, not just the always-on services. Edges enumerated from the compose file itself (6
+# are covered, not just the always-on services. Edges enumerated from the compose file itself (5
 # depends_on stanzas total): xmrig-proxy -> p2pool is the one deliberate exception that only waits
-# for service_started, since p2pool's own healthcheck already proves what xmrig-proxy needs and
-# health-gating it too would be circular (p2pool depends on tari, not on xmrig-proxy).
+# for service_started, since p2pool's own healthcheck already proves what xmrig-proxy needs.
+# p2pool itself has NO depends_on (#103/#565): both monerod and tari are profile-gated and can be
+# off in remote mode, so p2pool retries its own RPC/gRPC dials instead of waiting on either.
 DEPS_ENV="$(mktemp)"
-sed 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=local_node,payout_confirm,tari_payout_confirm/' "$ENV_FILE" >"$DEPS_ENV"
+sed 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=local_node,local_tari,payout_confirm,tari_payout_confirm/' "$ENV_FILE" >"$DEPS_ENV"
 JSON="$(docker compose --env-file "$DEPS_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 rm -f "$DEPS_ENV"
-for edge in "monerod=tor" "tari=tor" "p2pool=tari" "wallet-rpc=monerod" "tari-wallet=tari"; do
+for edge in "monerod=tor" "tari=tor" "wallet-rpc=monerod" "tari-wallet=tari"; do
     svc="${edge%%=*}" dep="${edge#*=}"
     jq_assert "$svc waits for $dep to be service_healthy (#565)" \
         ".services[\"$svc\"].depends_on[\"$dep\"].condition == \"service_healthy\""
 done
 jq_assert "xmrig-proxy waits for p2pool service_started only, not health-gated (#565)" \
     '.services["xmrig-proxy"].depends_on["p2pool"].condition == "service_started"'
+jq_assert "p2pool has no depends_on — both monerod and tari can be profiled off (#103/#565)" \
+    '(.services["p2pool"].depends_on // {}) == {}'
 # Count guard: a NEW depends_on edge (health-gated or not) added anywhere in the file must show up
 # in the enumeration above too, or this trips before it ships unasserted.
-jq_assert "exactly 5 service_healthy depends_on edges total (#565)" \
-    '[.services[] | (.depends_on // {}) | to_entries[] | select(.value.condition == "service_healthy")] | length == 5'
-jq_assert "exactly 6 depends_on edges total (#565)" \
-    '[.services[] | (.depends_on // {}) | to_entries[]] | length == 6'
+jq_assert "exactly 4 service_healthy depends_on edges total (#565)" \
+    '[.services[] | (.depends_on // {}) | to_entries[] | select(.value.condition == "service_healthy")] | length == 4'
+jq_assert "exactly 5 depends_on edges total (#565)" \
+    '[.services[] | (.depends_on // {}) | to_entries[]] | length == 5'
 # Restore $JSON to the default-profile render for every check below this point.
 JSON="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+
+# Tari profile gating (#103, mirrors monerod's local_node above): local_tari present/absent from
+# COMPOSE_PROFILES must add/omit the tari service itself, and compose must resolve cleanly either
+# way — a depends_on edge onto a profiled-off service would otherwise fail `compose config`/`up`
+# outright, not just at startup.
+jq_assert "tari service present when local_tari is active (#103)" \
+    '.services | has("tari")'
+REMOTE_TARI_ENV="$(mktemp)"
+sed 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=local_node/' "$ENV_FILE" >"$REMOTE_TARI_ENV"
+if docker compose --env-file "$REMOTE_TARI_ENV" -f "$ROOT/docker-compose.yml" config -q; then
+    echo "  ✓ compose config resolves with local_tari OMITTED (remote tari, #103)"
+else
+    echo "  ✗ compose config failed to resolve with local_tari omitted (remote tari, #103)"
+    fails=$((fails + 1))
+fi
+REMOTE_TARI_JSON="$(docker compose --env-file "$REMOTE_TARI_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
+rm -f "$REMOTE_TARI_ENV"
+if printf '%s' "$REMOTE_TARI_JSON" | jq -e '.services | has("tari") | not' >/dev/null 2>&1; then
+    echo "  ✓ tari service absent when local_tari is omitted (remote tari, #103)"
+else
+    echo "  ✗ tari service still present with local_tari omitted (remote tari, #103)"
+    fails=$((fails + 1))
+fi
+# The same profile list must reach the tor container, which gates each node's inbound hidden service
+# on it (#103) — without this wiring tor would keep publishing an onion for a node that never starts.
+if printf '%s' "$REMOTE_TARI_JSON" | jq -e '.services.tor.environment.COMPOSE_PROFILES == "local_node"' >/dev/null 2>&1; then
+    echo "  ✓ tor receives the active profile list, so its onion gate matches the running nodes (#103)"
+else
+    echo "  ✗ tor did not receive the active profile list (#103)"
+    fails=$((fails + 1))
+fi
 
 # Configurable bridge subnet (#180): a custom network.subnet must rebase every static IP, the bridge
 # CIDR, and the dashboard's derived bridge endpoints — the host address-space-collision install fix.

@@ -98,8 +98,18 @@ run_sourced "$SANDBOX" assert_safe_dir "relative/data" >/dev/null 2>&1
 assert_rc "rejects relative path" "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/srv/../etc/data" >/dev/null 2>&1
 assert_rc "rejects .. traversal" "$?" "1"
+# A ':' would forge an extra field in the compose bind-mount short syntax (SOURCE:TARGET:MODE).
+run_sourced "$SANDBOX" assert_safe_dir "/srv/pithead/data:ro" >/dev/null 2>&1
+assert_rc "rejects ':' (compose volume-mount injection)" "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/mnt/disk/monero" >/dev/null 2>&1
 assert_rc "allows mount subfolder" "$?" "0"
+
+echo "== unit: lint-operator-strings self-test (#755) =="
+# The operator-strings guard's frontend scanner is non-trivial awk (comment-stripping + CSS-hex-colour
+# skip); a silent break would make it stop catching leaks. Its --self-test drives fixtures through the
+# real scanners and fails if a planted #NNN is missed or a hex colour/comment is wrongly flagged.
+bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
+assert_rc "operator-strings guard self-test passes" "$?" "0"
 
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
@@ -414,6 +424,11 @@ echo "== unit: describe_change =="
 assert_contains "prune disable is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 1 0)" "DEST"
 assert_contains "prune enable is CONFIRM" "$(run_sourced "$SANDBOX" describe_change MONERO_PRUNE 0 1)" "CONFIRM"
 assert_contains "rpc lan is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_RPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
+# LAN exposure of the no-auth node feeds (#760): opening to 0.0.0.0 is DEST in that direction only.
+assert_contains "zmq lan is DEST" "$(run_sourced "$SANDBOX" describe_change MONERO_ZMQ_BIND 127.0.0.1 0.0.0.0)" "DEST"
+assert_contains "zmq close is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_ZMQ_BIND 0.0.0.0 127.0.0.1)" "INFO"
+assert_contains "tari grpc lan is DEST" "$(run_sourced "$SANDBOX" describe_change TARI_GRPC_BIND 127.0.0.1 0.0.0.0)" "DEST"
+assert_contains "tari grpc close is INFO" "$(run_sourced "$SANDBOX" describe_change TARI_GRPC_BIND 0.0.0.0 127.0.0.1)" "INFO"
 assert_contains "stratum open is DEST" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 127.0.0.1 0.0.0.0)" "DEST"
 assert_contains "stratum lan is INFO" "$(run_sourced "$SANDBOX" describe_change STRATUM_BIND 0.0.0.0 127.0.0.1)" "INFO"
 # Stratum port (#172/#719): changing it disconnects every rig until repointed — an operator-intent
@@ -900,7 +915,7 @@ apply_order=$(
     source "$STACK"
     set +e
     # shellcheck disable=SC2034  # read by the sourced apply()'s "not provisioned" guard, unseen here
-    MONERO_ONION=onion
+    P2POOL_ONION=onion
     require_env() { :; }
     parse_and_validate_config() { :; }
     load_preserved_state() { :; }
@@ -1648,7 +1663,7 @@ caddy_apply_capture=$(
     # The shadowed capture: the address is unknown until the recreated tor container publishes it
     # post-up, exactly like the real provision_dashboard_onion.
     provision_dashboard_onion() { DASHBOARD_ONION="captured1234abcd.onion"; }
-    MONERO_ONION=mona.onion HOST_IP=box.lan DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
+    P2POOL_ONION=p2pa.onion HOST_IP=box.lan DASHBOARD_SECURE=true DASHBOARD_AUTH_USER=admin \
         DASHBOARD_AUTH_HASH_B64="$auth_hb64" NETWORK_PREFIX=172.28.0 DASHBOARD_ONION_ENABLED=true \
         DASHBOARD_ONION=placeholder apply -y >/dev/null 2>&1
     cat Caddyfile
@@ -2472,6 +2487,14 @@ assert_eq "two fs -> two lines" "$(printf '%s\n' "$out" | grep -c 'Data on')" "2
 assert_contains "/big groups monero+tari (~290 GB)" "$out" "/big (monero, tari): 600G free — needs ~290 GB"
 assert_contains "/small groups the small three (~8 GB)" "$out" "/small (p2pool, dashboard, tor): 600G free — needs ~8 GB"
 
+# Remote node modes (#103): doctor/preflight blank the remote component's dir (its chain lives on
+# the OTHER host), and an empty dir arg must drop that component from the budget entirely — here
+# tari remote drops the ~170 GB Tari share, leaving monero+the small three (120+5+2+1 = 128 GB).
+out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
+    run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "" "$pd" "$dd" "$rd" 2>&1)"
+assert_contains "remote tari drops tari from the budget" "$out" "(monero, p2pool, dashboard, tor)"
+assert_contains "remote tari budget excludes the 170 GB" "$out" "needs ~128 GB"
+
 # Preflight mode is WARN-only and silent when there's enough room.
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
     run_sourced "$SANDBOX" check_disk_grouped preflight 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
@@ -3041,6 +3064,21 @@ rc=$?
 assert_rc "integrated payout rejected (would never be paid)" "$rc" "1"
 assert_contains "integrated message names the type" "$out" "INTEGRATED"
 
+# tari.wallet_address left at the placeholder -> rejected by the shared template-placeholder guard
+# (else mining earns Tari that goes nowhere, the #250 failure mode). No exact-format gate
+# (base58/emoji both valid), but the placeholder and any whitespace are unambiguous.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"your_tari_wallet_address"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "placeholder tari.wallet_address rejected" "$?" "1"
+assert_contains "placeholder message names the template placeholders" "$out" "template placeholders"
+# A stray space in the Tari address (not a control char, so the central guard misses it) -> rejected.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"12ab cd34"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "whitespace in tari.wallet_address rejected" "$?" "1"
+assert_contains "whitespace message names the field" "$out" "tari.wallet_address"
+
 # Remote mode with no host (#*): renders an empty MONERO_NODE_HOST -> p2pool/dashboard dial nothing,
 # mining can't start. Must abort at validation, not silently proceed.
 seed_env
@@ -3049,6 +3087,15 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "remote mode without a host rejected" "$rc" "1"
 assert_contains "remote-host message" "$out" "monero.remote.host"
+
+# monero.remote.host with a comma is rejected by is_valid_host (#103): monero's remote host renders
+# into the p2pool `--host` arg the same way tari's does, and the comma vector slips past the central
+# control-char guard, so the field-specific guard must catch it here too.
+seed_env
+printf '{ "monero": {"mode":"remote","remote":{"host":"1.2.3.4,fork"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "monero.remote.host with a comma rejected" "$?" "1"
+assert_contains "monero comma-host message names the field" "$out" "monero.remote.host"
 
 # A malformed network.subnet (#180): anything but an X.Y.Z.0/24 block renders a broken NETWORK_PREFIX
 # into every service IP and the #270 firewall rules — reject before it can.
@@ -3249,6 +3296,94 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid birthday accepted" "$?" "0"
 assert_eq "valid birthday reflected into .env" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_BIRTHDAY)" "1000"
 
+echo "== black-box: tari.mode remote (#103) =="
+# The Tari sibling of monero.mode remote: mirrors the Monero pattern above (host:port render,
+# missing-host error, mode/view-key gating), so a third-party or fleet-shared Tari base node works
+# the same way an operator already expects from Monero.
+
+# (1) local (default): TARI_GRPC_ADDRESS renders the bundled node's fixed bridge IP, and local_tari
+# is added to COMPOSE_PROFILES so compose actually starts it.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "local tari mode applies cleanly" "$?" "0"
+assert_eq "local tari renders the bundled node's gRPC address" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "172.28.0.27:18142"
+assert_contains "local_tari profile added" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "local_tari"
+
+# (2) remote: TARI_GRPC_ADDRESS renders host:port from tari.remote, and local_tari is OMITTED from
+# COMPOSE_PROFILES so the bundled node stays off. Port defaults to 18142 when unset.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "remote tari mode applies cleanly" "$?" "0"
+assert_eq "remote tari renders host:port with the default gRPC port" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "tari.example.com:18142"
+case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
+*local_tari*) bad "no local_tari profile in remote tari mode" "local_tari leaked into COMPOSE_PROFILES" ;;
+*) ok "no local_tari profile in remote tari mode" ;;
+esac
+# A remote node still renders SOME TARI_MEM_LIMIT placeholder (compose interpolation must resolve
+# even though the profiled-off tari service never uses it) rather than an empty value.
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" ] && ok "remote tari still renders a TARI_MEM_LIMIT placeholder" || bad "remote tari still renders a TARI_MEM_LIMIT placeholder" "empty"
+
+# (3) remote with a custom grpc_port reflects verbatim.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com","grpc_port":28142}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_eq "remote tari custom grpc_port reflected" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "tari.example.com:28142"
+
+# (4) remote mode with no host: renders an empty TARI_GRPC_ADDRESS -> p2pool/dashboard dial nothing,
+# merge-mining can't start. Must abort at validation, not silently proceed.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "remote tari mode without a host rejected" "$rc" "1"
+assert_contains "tari remote-host message" "$out" "tari.remote.host"
+
+# (5) remote Tari node + tari.view_key -> refused loudly (Phase 1 is local-only for the same reason
+# as Monero's #381 gate: scanning through a third-party node changes the trust story).
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"},"view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari view key on a remote node rejected" "$?" "1"
+assert_contains "remote tari view-key message names the field" "$out" "tari.view_key"
+
+# (6a) tari.remote.host carrying a newline is rejected. Defence-in-depth: the central control-char
+# guard catches it first (a newline in ANY value would forge a second .env line), before the
+# per-field is_valid_host check below even runs — so assert rejection + no forged line, not a
+# field-specific message.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"1.2.3.4\\nEVIL=pwned"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari.remote.host with a newline rejected" "$?" "1"
+case "$(cat "$V/.env" 2>/dev/null)" in
+*EVIL=pwned*) bad "no forged .env line from a crafted host" "EVIL=pwned leaked into .env" ;;
+*) ok "no forged .env line from a crafted host" ;;
+esac
+
+# (6b) A comma in tari.remote.host is rejected by is_valid_host — a comma is NOT a control char, so
+# it slips past the central guard above, but it would inject socat address options in the p2pool
+# entrypoint's bridge command (TCP:$_mmhost:$_mmport). This is the field-specific guard's own case.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"1.2.3.4,fork,reuseaddr"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari.remote.host with a comma rejected" "$?" "1"
+assert_contains "comma-host message names the field" "$out" "tari.remote.host"
+
+# (6c) A non-numeric tari.remote.grpc_port is rejected.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com","grpc_port":"18142; rm -rf"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "non-numeric tari.remote.grpc_port rejected" "$?" "1"
+assert_contains "bad grpc_port message names the field" "$out" "tari.remote.grpc_port"
+
+# (7) An invalid tari.mode value is rejected before it ever reaches render_env.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"bogus"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "invalid tari.mode rejected" "$?" "1"
+assert_contains "invalid tari.mode message" "$out" "tari.mode must be"
+
 echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
 # The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
 # (unset) keeps it localhost-only; true opens it to the LAN. prep_blocks_threads overrides the
@@ -3257,10 +3392,15 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "rpc_lan_access default binds monerod RPC to localhost" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "127.0.0.1"
+# The #760 siblings default localhost-only the same way: ZMQ and the Tari gRPC publish.
+assert_eq "zmq_lan_access default binds monerod ZMQ to localhost" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_BIND)" "127.0.0.1"
+assert_eq "grpc_lan_access default binds tari gRPC to localhost" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_BIND)" "127.0.0.1"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","rpc_lan_access":true,"prep_blocks_threads":6}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","rpc_lan_access":true,"zmq_lan_access":true,"prep_blocks_threads":6}, "tari":{"wallet_address":"T","grpc_lan_access":true}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "rpc_lan_access true binds monerod RPC to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "0.0.0.0"
+assert_eq "zmq_lan_access true binds monerod ZMQ to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_BIND)" "0.0.0.0"
+assert_eq "grpc_lan_access true binds tari gRPC to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_BIND)" "0.0.0.0"
 assert_eq "prep_blocks_threads override reflected verbatim" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_PREP_THREADS)" "6"
 
 echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
@@ -3892,7 +4032,7 @@ ST="$SANDBOX/status"
 mkdir -p "$ST/bin"
 cp "$STACK" "$ST/pithead"
 make_status_stub "$ST/bin"
-printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' >"$ST/.env"
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node,local_tari\nHOST_IP=box.lan\n' >"$ST/.env"
 ALL_UP="tor=running:healthy monerod=running:healthy p2pool=running:none tari=running:healthy xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
 
 # All services up -> success, friendly summary.
@@ -3930,6 +4070,14 @@ REMOTE="tor=running:healthy monerod=missing p2pool=running:none tari=running:hea
 out="$(cd "$ST" && FAKE_STATES="$REMOTE" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"
 rc=$?
 assert_rc "status: remote mode ignores monerod" "$rc" "0"
+
+# Remote Tari mode (#103): the bundled tari container is not expected even if absent, mirroring
+# monerod above — COMPOSE_PROFILES carries local_node (Monero local) but no local_tari.
+printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node\nHOST_IP=box.lan\n' >"$ST/.env"
+REMOTE_TARI="tor=running:healthy monerod=running:healthy p2pool=running:none tari=missing xmrig-proxy=running:none dashboard=running:none docker-proxy=running:none docker-control=running:none caddy=running:none"
+out="$(cd "$ST" && FAKE_STATES="$REMOTE_TARI" PATH="$ST/bin:$PATH" ./pithead status 2>&1)"
+rc=$?
+assert_rc "status: remote tari mode ignores tari" "$rc" "0"
 
 echo "== black-box: doctor exit code (#127) =="
 # doctor must EXIT NON-ZERO when a critical check fails, so it's usable as a cron/CI health gate
@@ -4511,12 +4659,12 @@ rm -rf "$XPTLS"
 # covered above; this exercises the real container entrypoint's branch + the .1 substitution with a
 # stub `tor` on PATH and the repo torrc.template (via the TORRC_TEMPLATE seam).
 TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
-tor_torrc() { # <DASHBOARD_ONION_ENABLED> -> the torrc the entrypoint would hand to `tor -f`
+tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
     d="$(mktemp -d)"
     printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
     chmod +x "$d/tor"
-    PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" NETWORK_PREFIX=10.9.0 \
+    PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" COMPOSE_PROFILES="${2-local_node,local_tari}" NETWORK_PREFIX=10.9.0 \
         TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
     rm -rf "$d"
 }
@@ -4529,6 +4677,144 @@ assert_contains "tor entrypoint: onion also exposes :443 for the Tor-Browser htt
     "$tor_onion_on" "HiddenServicePort 443 10.9.0.1:443"
 assert_not_contains "tor entrypoint: no dashboard onion when disabled (default off) (#343)" \
     "$(tor_torrc false)" "Dashboard Hidden Service"
+
+# Node inbound onions (#103): each is published only while its node is local, so a remote node
+# leaves no onion pointing at a container that never starts. The gate is the compose profile list,
+# passed through from the rendered .env — same tokens that decide whether the node runs at all.
+tor_both_local="$(tor_torrc false local_node,local_tari)"
+assert_contains "tor entrypoint: Monero HS present when local_node is active (#103)" \
+    "$tor_both_local" "HiddenServiceDir /var/lib/tor/monero/"
+assert_contains "tor entrypoint: Monero HS targets the node on the moved prefix (#103/#180)" \
+    "$tor_both_local" "HiddenServicePort 18080 10.9.0.26:18084"
+assert_contains "tor entrypoint: Tari HS present when local_tari is active (#103)" \
+    "$tor_both_local" "HiddenServiceDir /var/lib/tor/tari/"
+assert_contains "tor entrypoint: Tari HS targets the node on the moved prefix (#103/#180)" \
+    "$tor_both_local" "HiddenServicePort 18189 10.9.0.27:18189"
+tor_remote_tari="$(tor_torrc false local_node)"
+assert_contains "tor entrypoint: Monero HS still present with only local_node (#103)" \
+    "$tor_remote_tari" "HiddenServiceDir /var/lib/tor/monero/"
+assert_not_contains "tor entrypoint: no Tari HS when local_tari is omitted (remote tari, #103)" \
+    "$tor_remote_tari" "/var/lib/tor/tari/"
+tor_both_remote="$(tor_torrc false "")"
+assert_not_contains "tor entrypoint: no Monero HS with no profiles (remote monero, #103)" \
+    "$tor_both_remote" "/var/lib/tor/monero/"
+assert_not_contains "tor entrypoint: no Tari HS with no profiles (remote tari, #103)" \
+    "$tor_both_remote" "/var/lib/tor/tari/"
+assert_contains "tor entrypoint: P2Pool HS is unconditional — p2pool always runs (#103)" \
+    "$tor_both_remote" "HiddenServiceDir /var/lib/tor/p2pool/"
+unset tor_both_local tor_remote_tari tor_both_remote
+
+echo "== unit: onion provisioning follows node mode (#103) =="
+# pithead's half of the same gate: a hidden service that is never published has no hostname to wait
+# for, so provision_tor must not block on a remote node's onion (a 60s timeout, then a fatal error),
+# and the address stays a placeholder. wait_for_onion is stubbed — the polling itself is the docker
+# layer, and it runs in a command substitution, so the probe records asks in a file.
+ONP="$SANDBOX/onion-prov"
+mkdir -p "$ONP"
+prov_probe() { # <MONERO_MODE> <TARI_MODE> -> "<onions asked for>|<MONERO_ONION>|<TARI_ONION>|<P2POOL_ONION>"
+    (
+        cd "$ONP" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        : >asked
+        log() { :; }
+        docker() { :; }
+        resolve_pull_policy() { echo missing; }
+        provision_onion_client_auth() { :; }
+        provision_dashboard_onion() { :; }
+        wait_for_onion() {
+            printf '%s,' "$1" >>asked
+            echo "$1.onion"
+        }
+        MONERO_MODE="$1"
+        TARI_MODE="$2"
+        MONERO_ONION=placeholder
+        TARI_ONION=placeholder
+        P2POOL_ONION=placeholder
+        provision_tor
+        printf '%s|%s|%s|%s' "$(cat asked)" "$MONERO_ONION" "$TARI_ONION" "$P2POOL_ONION"
+    )
+}
+assert_eq "provision_tor waits for both node onions when both nodes are local (#103)" \
+    "$(prov_probe local local)" "p2pool,monero,tari,|monero.onion|tari.onion|p2pool.onion"
+assert_eq "provision_tor skips a remote node's onion and leaves it a placeholder (#103)" \
+    "$(prov_probe remote remote)" "p2pool,|placeholder|placeholder|p2pool.onion"
+assert_eq "provision_tor waits for the local node only in a mixed setup (#103)" \
+    "$(prov_probe local remote)" "p2pool,monero,|monero.onion|placeholder|p2pool.onion"
+
+# provision_node_onions: the remote → local switch. A stack first set up in remote mode has no
+# address for that node, so apply/upgrade recreate tor against the committed profiles, capture the
+# freshly minted hostname, and re-render .env BEFORE the node container starts against it. It must
+# cost nothing (no docker, no render) once every local node's address is in hand.
+node_onion_probe() { # <MONERO_MODE> <MONERO_ONION> <TARI_MODE> <TARI_ONION> -> "<docker calls>|<asked>|<MONERO_ONION>|<TARI_ONION>|<renders>"
+    (
+        cd "$ONP" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        : >asked
+        : >dockerlog
+        : >renders
+        log() { :; }
+        docker() { printf '%s ' "$*" >>dockerlog; }
+        render_env() { printf 'x' >>renders; }
+        wait_for_onion() {
+            printf '%s,' "$1" >>asked
+            echo "$1.onion"
+        }
+        # shellcheck disable=SC2034  # read by the sourced provision_node_onions, unseen here
+        MONERO_MODE="$1"
+        MONERO_ONION="$2"
+        # shellcheck disable=SC2034  # read by the sourced provision_node_onions, unseen here
+        TARI_MODE="$3"
+        TARI_ONION="$4"
+        provision_node_onions
+        printf '%s|%s|%s|%s|%s' "$(cat dockerlog)" "$(cat asked)" "$MONERO_ONION" "$TARI_ONION" "$(cat renders)"
+    )
+}
+assert_eq "provision_node_onions is a free no-op once every local node has its onion (#103)" \
+    "$(node_onion_probe local mona.onion local taria.onion)" "||mona.onion|taria.onion|"
+assert_eq "provision_node_onions ignores a remote node with no onion (#103)" \
+    "$(node_onion_probe remote placeholder remote placeholder)" "||placeholder|placeholder|"
+assert_eq "provision_node_onions mints + captures the onion of a node that just went local (#103)" \
+    "$(node_onion_probe local placeholder remote placeholder)" "compose up -d tor |monero,|monero.onion|placeholder|x"
+assert_eq "provision_node_onions treats an empty address as missing, and re-renders once (#103)" \
+    "$(node_onion_probe local '' local '')" "compose up -d tor |monero,tari,|monero.onion|tari.onion|x"
+unset ONP prov_probe node_onion_probe
+
+echo "== black-box: doctor's onion report follows node mode (#103) =="
+# A node running elsewhere has no hidden service to provision, so its placeholder address is the
+# correct state — doctor must not send the operator back to `setup` over it. A LOCAL node with no
+# address is still a real problem and must keep warning.
+DOC="$SANDBOX/doctor-onion"
+mkdir -p "$DOC/build/tari" "$DOC/build/dashboard"
+: >"$DOC/build/dashboard/Dockerfile"
+cp "$STACK" "$DOC/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$DOC/build/tari/"
+make_stubs "$DOC/bin"
+printf '{"monero":{"mode":"remote","wallet_address":"%s","remote":{"host":"10.0.0.8"}},"tari":{"mode":"remote","wallet_address":"T","remote":{"host":"10.0.0.9"}}}\n' "$WALLET" >"$DOC/config.json"
+doctor_onions() { # <COMPOSE_PROFILES> -> doctor's "Tor onion addresses" section
+    {
+        printf 'MONERO_ONION_ADDRESS=placeholder\nTARI_ONION_ADDRESS=placeholder\nP2POOL_ONION_ADDRESS=p2pa.onion\n'
+        printf 'TARI_GRPC_ADDRESS=10.0.0.9:18142\nDEPLOYMENT_COMPLETED=true\nHOST_IP=box.lan\n'
+        printf 'COMPOSE_PROFILES=%s\n' "$1"
+    } >"$DOC/.env"
+    (cd "$DOC" && PATH="$DOC/bin:$PATH" ./pithead doctor 2>&1 | sed -n '/Tor onion addresses/,/^$/p')
+}
+doc_remote="$(doctor_onions "")"
+assert_contains "doctor: a remote Monero node's missing onion is expected, not a warning (#103)" \
+    "$doc_remote" "MONERO_ONION_ADDRESS not needed"
+assert_contains "doctor: a remote Tari node's missing onion is expected, not a warning (#103)" \
+    "$doc_remote" "TARI_ONION_ADDRESS not needed"
+assert_contains "doctor: P2Pool's onion is still reported either way (#103)" \
+    "$doc_remote" "P2POOL_ONION_ADDRESS set"
+doc_local="$(doctor_onions "local_node,local_tari")"
+assert_contains "doctor: a LOCAL Monero node with no onion still warns (#103)" \
+    "$doc_local" "MONERO_ONION_ADDRESS is not provisioned"
+assert_contains "doctor: a LOCAL Tari node with no onion still warns (#103)" \
+    "$doc_local" "TARI_ONION_ADDRESS is not provisioned"
+unset DOC doc_remote doc_local doctor_onions
 
 # ---------------------------------------------------------------------------
 echo "== black-box: dashboard control channel (#33) =="

@@ -43,7 +43,9 @@ fails closed instead of leaking your IP.
 
 Your home IP is never advertised to an inbound peer, and you never touch your router's port-forward
 settings. Every service that accepts inbound connections does so through a Tor hidden service (onion
-address): monerod, Tari, and P2Pool each get one from the built-in Tor daemon. So:
+address): monerod, Tari, and P2Pool each get one from the built-in Tor daemon. A node you run
+elsewhere (`monero.mode` / `tari.mode: remote`) accepts its own peers, so Tor publishes no onion for
+it — only services that actually run here get an address. So:
 
 - No public IPv4 port forwarding is required, and your IP is not advertised to inbound peers.
 - The only LAN-facing port is the stratum endpoint `:3333` that your own rigs connect to. It is
@@ -71,6 +73,7 @@ What the running stack sends to the internet, connection by connection.
 | **monerod RPC to a remote node** (only if `monero.mode: remote`) | the node you configured | **your real home IP**, to that node's operator | ❌ clearnet | **off** — the bundled local node is the default and has no remote-RPC egress | use a node you run/trust, or one reachable as a `.onion` over Tor |
 | **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | Tor by default; can opt into clearnet (TCP) for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) |
 | **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | clearnet sync ([#183](#optional-clearnet-initial-sync-off-by-default)) re-enables the `seeds.tari.com` DNS seed for the sync window |
+| **P2Pool** merge-mine gRPC to a remote Tari node (only if `tari.mode: remote`) | the node you configured | **your real IP**, to that node's operator | ❌ clearnet — same posture as monerod's own remote-node RPC above | **off** — the bundled local Tari node is the default and this leg only exists in remote mode | use a node on your LAN or reachable over WireGuard; a `.onion` remote isn't supported yet (see [Configuration › Remote Tari node](configuration.md#remote-tari-node)) |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
 | **P2Pool** outbound sidechain peers | P2Pool sidechain peers, via Tor | — | ✅ **Tor** (`--socks5`, proxy-type `tor`) by default (#165) | on | opt out with `p2pool.clearnet: true` (exposes your IP for max yield) → [below](#p2pool-outbound-peers-165---tor-by-default) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
@@ -87,6 +90,12 @@ What the running stack sends to the internet, connection by connection.
 `socks5h` (used for the XvB stats fetch) routes DNS resolution through Tor too, so the hostname isn't
 resolved on the clearnet either. The host-networked dashboard reaches the bridge's Tor SOCKS at
 `172.28.0.25:9050`.
+
+A remote node given as a hostname (`monero.remote.host` or `tari.remote.host`) is the exception:
+p2pool's socat bridge (above) only moves the TCP connection itself off the SOCKS5 proxy, so the
+DNS lookup that turns that hostname into an IP still happens on the clearnet, via the container's
+own resolver — same exposure as any of the closed clearnet DNS lookups above, but this one has no
+toggle. Use an IP literal instead if that lookup itself is a concern.
 
 The dashboard's egress panel classifies the alert-sink carve-out by what it can prove from the
 config alone: with `notifications.tor: false`, the sinks show as **local** — not a counted leak —

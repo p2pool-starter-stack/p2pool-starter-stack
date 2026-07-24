@@ -18,14 +18,10 @@ ControlPort 127.0.0.1:9051
 
 # --- Hidden Services (Onion Routing) ---
 # Note: Target IPs (__NETWORK_PREFIX__.x) correspond to static assignments in docker-compose.yml
-
-# Monero P2P Hidden Service
-HiddenServiceDir /var/lib/tor/monero/
-HiddenServicePort 18080  __NETWORK_PREFIX__.26:18084
-
-# Tari Base Node Hidden Service
-HiddenServiceDir /var/lib/tor/tari/
-HiddenServicePort 18189  __NETWORK_PREFIX__.27:18189
+#
+# Only P2Pool's onion is unconditional — p2pool always runs. The monerod and Tari inbound onions
+# belong to containers that only start in local mode, so the entrypoint appends those two blocks
+# when their compose profile is active (#103); the dashboard onion (#343) is appended there too.
 
 # P2Pool Hidden Service
 HiddenServiceDir /var/lib/tor/p2pool/

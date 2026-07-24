@@ -12,6 +12,32 @@ set -eu
 
 sed "s/__NETWORK_PREFIX__/${NETWORK_PREFIX}/g" "$TORRC_TEMPLATE" >/tmp/torrc
 
+# Node inbound hidden services (#103): the bundled monerod and Tari containers only start under
+# their compose profiles, so publish each node's onion only then — in remote mode the onion would
+# be an address with nothing behind it. The gate is the profile list itself (passed through from
+# pithead's rendered .env by docker-compose.yml), so it cannot drift from which nodes actually run.
+# Unset (a bare `docker compose` with no .env) means no profiles, so no bundled node and no onion.
+case ",${COMPOSE_PROFILES:-}," in
+*,local_node,*)
+    cat >>/tmp/torrc <<EOF
+
+# Monero P2P Hidden Service
+HiddenServiceDir /var/lib/tor/monero/
+HiddenServicePort 18080 ${NETWORK_PREFIX}.26:18084
+EOF
+    ;;
+esac
+case ",${COMPOSE_PROFILES:-}," in
+*,local_tari,*)
+    cat >>/tmp/torrc <<EOF
+
+# Tari Base Node Hidden Service
+HiddenServiceDir /var/lib/tor/tari/
+HiddenServicePort 18189 ${NETWORK_PREFIX}.27:18189
+EOF
+    ;;
+esac
+
 # Dashboard hidden service (#343): opt-in, default off. Appended only when pithead sets the flag, so
 # the default stack publishes exactly the three mining onions and nothing else. The target is the
 # bridge gateway (NETWORK_PREFIX.1), where host-networked Caddy binds the auth-gated onion vhost —
