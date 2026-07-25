@@ -129,6 +129,22 @@ _commit_cmd() {
     *) printf 'rugix-ctrl system commit' ;;
     esac
 }
+# Booting the newly written slot. rugix installs with --reboot no, so the spare must be selected
+# explicitly — a plain reboot returns to the running slot. RAUC arms the GRUB try-counter during
+# install, so a plain reboot already lands on the new slot.
+_boot_spare_cmd() {
+    case "$UPDATER" in
+    rauc) printf 'reboot' ;;
+    *) printf 'rugix-ctrl system reboot --spare' ;;
+    esac
+}
+# Operator-initiated rollback: the "put it back" button, distinct from automatic fallback.
+_rollback_cmd() {
+    case "$UPDATER" in
+    rauc) printf 'rauc status mark-bad booted && reboot' ;;
+    *) printf 'rugix-ctrl system reboot --spare' ;;
+    esac
+}
 
 require_host() {
     for c in virsh virt-install qemu-img; do
@@ -412,14 +428,19 @@ phase_fault() {
     # Fault B: cut power during the commit itself, the smallest and most dangerous window.
     info "installing v2 fully, then destroying mid-commit"
     _ssh "$(_install_cmd /data/update.bundle)" >/dev/null 2>&1 || true
-    _ssh reboot >/dev/null 2>&1 || true
+    _ssh "$(_boot_spare_cmd)" >/dev/null 2>&1 || true
     sleep 10
     _wait_ssh 300 || {
         bad "guest never returned after installing v2"
         return
     }
     marker=$(_marker)
-    info "post-install slot marker: '$marker'"
+    if [ "$marker" = "v2" ]; then
+        ok "installed update is running (marker v2)"
+    else
+        bad "expected v2 after installing and booting the spare, got '$marker'"
+        return
+    fi
     _ssh "nohup sh -c '$(_commit_cmd)' >/tmp/commit.log 2>&1 &" || true
     sleep 1
     virsh destroy "$VM" >/dev/null 2>&1 || true
@@ -432,11 +453,32 @@ phase_fault() {
         return
     fi
 
+    # Operator-initiated rollback: a release can be bad without failing its health check, so the
+    # operator must be able to put the previous version back on demand — not only wait for an
+    # automatic fallback.
+    info "operator-initiated rollback"
+    marker=$(_marker)
+    _ssh "$(_rollback_cmd)" >/dev/null 2>&1 || true
+    sleep 10
+    if _wait_ssh 300; then
+        local after
+        after=$(_marker)
+        if [ -n "$after" ] && [ "$after" != "$marker" ]; then
+            ok "operator rollback works on demand ($marker -> $after)"
+        else
+            bad "operator rollback did not change the running slot (still '$after')"
+        fi
+    else
+        bad "guest did not return after an operator-initiated rollback"
+        return
+    fi
+
     # The box must still be updatable afterwards, not merely alive.
-    if _ssh "$(_install_cmd /data/update.bundle)" >/dev/null 2>&1; then
+    local out
+    if out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1"); then
         ok "still updatable after fault injection"
     else
-        bad "no longer accepts an update after fault injection"
+        bad "no longer accepts an update after fault injection: $(printf '%s' "$out" | tail -1 | cut -c1-90)"
     fi
 }
 

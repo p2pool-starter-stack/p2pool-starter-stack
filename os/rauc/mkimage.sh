@@ -41,7 +41,7 @@ sgdisk -n 1:0:+256M -t 1:ef00 -c 1:esp \
 
 LOOP=$(losetup -Pf --show "$OUT")
 cleanup() {
-    umount -R /mnt/rauc-sys /mnt/rauc-esp 2>/dev/null || true
+    umount -R /mnt/rauc-sys /mnt/rauc-esp /mnt/rauc-data 2>/dev/null || true
     losetup -d "$LOOP" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -64,7 +64,15 @@ mkdir -p /mnt/rauc-sys/{dev,proc,sys,run,tmp,data,boot/efi}
 # from a two-line [[persist]] declaration; here it is an fstab entry we write and own, and the
 # "what survives a slot replacement" question is still unanswered (/etc changes in a slot are
 # lost when RAUC overwrites it, whereas Rugix keeps an /etc overlay on the data partition).
-printf 'LABEL=data /data ext4 defaults,noatime 0 2\nLABEL=ESP /boot/efi vfat umask=0077 0 1\n' \
+# Writable state, declared explicitly because the root is read-only:
+#   /data  — operator state (config, chains, container storage), survives updates
+#   /var   — machine state (logs, runtime), an OVERLAY so the new slot's /var shows through
+#            after an update while local machine state persists. A bind mount would pin the
+#            old slot's /var forever; the overlay keeps the stack fresh and the state local.
+printf 'LABEL=data /data ext4 defaults,noatime 0 2\n' >>/mnt/rauc-sys/etc/fstab
+printf 'LABEL=ESP /boot/efi vfat umask=0077,x-systemd.requires-mounts-for=/data 0 1\n' \
+    >>/mnt/rauc-sys/etc/fstab
+printf 'overlay /var overlay lowerdir=/var,upperdir=/data/overlay/var,workdir=/data/overlay/var-work,x-systemd.requires-mounts-for=/data 0 0\n' \
     >>/mnt/rauc-sys/etc/fstab
 install -D -m 644 os/rauc/system.conf /mnt/rauc-sys/etc/rauc/system.conf
 install -D -m 644 "$CERT_DIR/cert.pem" /mnt/rauc-sys/etc/rauc/keyring.pem
@@ -79,6 +87,12 @@ install -m 644 os/rauc/grub.cfg /mnt/rauc-esp/grub/grub.cfg
 # Seed boot state: slot A good, B empty. RAUC rewrites these on every install/mark.
 grub-editenv /mnt/rauc-esp/grubenv create
 grub-editenv /mnt/rauc-esp/grubenv set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
+
+echo "==> seeding the data partition (overlay dirs must exist before the first mount)"
+mkdir -p /mnt/rauc-data
+mount "${LOOP}p4" /mnt/rauc-data
+mkdir -p /mnt/rauc-data/overlay/var /mnt/rauc-data/overlay/var-work /mnt/rauc-data/pithead
+umount /mnt/rauc-data
 
 sync
 echo "==> image: $OUT ($(du -h "$OUT" | cut -f1))"
