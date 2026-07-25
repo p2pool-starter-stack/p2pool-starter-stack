@@ -20,6 +20,14 @@ manage the host.
 The machine runs continuously. A slow disk or a USB-resident install will not keep up:
 install to an internal drive.
 
+**Set the machine to power on by itself after an outage.** This is a firmware setting, not
+something the appliance can do for you, and the default on most machines is to stay off.
+A mining box that sits dark until someone notices loses every hour of an outage plus every
+hour until you walk past it. In BIOS/UEFI setup, look under Power or ACPI for
+**Restore on AC Power Loss**, **AC Back Function**, **After Power Failure**, or
+**State After G3**, and set it to power on — not "last state", which stays off if the
+outage happened while the machine was already down.
+
 ## 1. Write the image to a USB stick
 
 Download `pithead-os-vX.Y.Z.img` and verify the checksum. Then write it with
@@ -127,3 +135,7 @@ the dashboard logs, and expect a fixed version.
 
 **Power was cut during an update.** Turn it back on. The machine boots the version it was
 already running — an interrupted update is discarded, not half-applied.
+
+**The power came back but the machine did not.** That is the firmware setting above, not
+a fault in the appliance. Set it to power on after an outage; otherwise every power cut
+costs you mining time until someone presses the button.

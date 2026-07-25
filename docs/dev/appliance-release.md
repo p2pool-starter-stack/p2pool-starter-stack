@@ -118,8 +118,17 @@ the release.*
 Expected: the machine reverts to the previous version without a human present. Then
 perform an operator-initiated rollback from a good version and confirm it returns.
 
-**M10 — power-loss during normal mining.** Cut power with the stack running and synced.
-Expected: comes back, chain intact, mining resumes.
+**M10 — power-loss during normal mining.** Cut power at the wall with the stack running
+and synced, then restore it and **do not touch the machine**. Expected: it powers on by
+itself, the chain is intact, and mining resumes.
+
+The "by itself" half is the part that gets skipped, and it is the half that matters for an
+unattended miner. It depends on a firmware setting — Restore on AC Power Loss, or whatever
+the board calls it — that defaults to staying off on most hardware. Confirm the setting is
+part of the setup instructions and that the machine really does return unaided; a box that
+needs a human to press a button after every outage is not an appliance. This was found the
+obvious way: a mains outage took the build bench down overnight and it was still dark in
+the morning.
 
 ## Cutting a release
 
