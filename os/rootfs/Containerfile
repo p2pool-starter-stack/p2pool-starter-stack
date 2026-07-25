@@ -76,8 +76,13 @@ RUN chmod +x /usr/local/sbin/pithead-sync
 # The updater is chosen per image (bake-off candidates). rugix-ctrl arrives via the bakery layer's
 # core recipe; RAUC is a Debian package, so it is installed here when selected.
 ARG PITHEAD_UPDATER=""
+# NB: `rauc` is the CLI ONLY. Debian splits the D-Bus daemon into `rauc-service`, which is not even
+# a Recommends of `rauc` — so --no-install-recommends is not what drops it, the package simply has
+# to be named. Install just `rauc` and you get a binary that cannot install anything, failing with
+# "de.pengutronix.rauc was not provided by any .service files" rather than anything that names a
+# missing daemon. Both packages are required.
 RUN if [ "$PITHEAD_UPDATER" = "rauc" ]; then \
-        apt-get install -y --no-install-recommends rauc; \
+        apt-get install -y --no-install-recommends rauc rauc-service; \
     fi
 RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
