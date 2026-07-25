@@ -14,7 +14,7 @@ manage the host.
 - 16 GB RAM or more, and an internal SSD or NVMe with room for the chain — Monero alone
   is over 250 GB and grows.
 - A wired ethernet connection. Wi-Fi is not supported.
-- A USB stick, 2 GB or larger.
+- A USB stick, **16 GB or larger** — the image writes 5 GB to the stick, whatever the size of the download.
 - A second computer with a browser, on the same network.
 
 The machine runs continuously. A slow disk or a USB-resident install will not keep up:
@@ -41,8 +41,16 @@ sudo dd if=pithead-os-vX.Y.Z.img of=/dev/sdX bs=4M status=progress conv=fsync
 
 ## 2. Boot the machine from the stick
 
-Plug in the stick and ethernet, and boot. Choose the USB device in the boot menu; on most
-machines that is F12, F11, or Esc during startup.
+First, enter the machine's firmware setup (usually Del or F2 during startup) and check two
+settings:
+
+- **Disable Secure Boot.** The stick will not boot with it enabled — the machine either
+  drops back to its old system or shows a security error, depending on the firmware.
+- **Set the machine to power on after power loss** (the setting from "What you need") while
+  you are in there.
+
+Then plug in the stick and ethernet, and boot. Choose the USB device in the boot menu; on
+most machines that is F12, F11, or Esc during startup.
 
 The screen shows an address and a one-time token:
 
@@ -57,8 +65,9 @@ the console at least once.
 
 ## 3. Install it to the internal disk
 
-Open that address from your other computer and enter the token. Because the machine is
-running from the USB stick, the first screen asks which disk to install onto.
+Open that address from your other computer and enter the token — case doesn't matter, and
+the `pit-` prefix is optional. Because the machine is running from the USB stick, the
+first screen asks which disk to install onto.
 
 Each disk is listed with its model, size and serial number. The USB stick you booted from
 is never offered. Nothing is preselected — you choose deliberately, because **installing
@@ -118,6 +127,11 @@ Your data is never part of an update. Wallets, settings and the chain live on a 
 partition that updates and rollbacks do not touch.
 
 ## If something goes wrong
+
+**The machine will not boot from the stick.** Almost always Secure Boot — disable it in
+firmware setup. Second most common: the stick was too small — the layout needs about 13 GB once the
+machine builds its second system copy and data area, which is why the instructions say
+16 GB; the failure shows up as an "emergency mode" console, not a clean message.
 
 **The setup page will not load.** Check the ethernet cable and that the machine got an
 address, shown on its console. Try <http://pithead.local>. Wi-Fi is not supported, so a

@@ -17,8 +17,8 @@ Rugix candidate is preserved on the `reference/rugix-candidate` branch.
 | `pithead-os-vX.Y.Z.raucb` | `os/rauc/mkbundle.sh` | signed A/B update bundle |
 
 The image carries **only the ESP and slot A**. Slot B and `/data` are created by
-`systemd-repart` on first boot, sized to the machine's real disk — so a 636 MB image
-becomes a full A/B appliance on whatever hardware it lands on, and `/data` fits a 250+ GB
+`systemd-repart` on first boot, sized to the machine's real disk — so a 5 GB image (636 MB of it
+real data) becomes a full A/B appliance on whatever hardware it lands on, and `/data` fits a 250+ GB
 chain instead of the image. The layout is declared once in `os/rootfs/repart.d/`.
 
 The image also carries no installer payload. `pithead-install` rebuilds the layout on the
@@ -64,6 +64,7 @@ is the only thing standing between the hand-written boot path and a fleet.
 |---|---|---|
 | `boot` | EFI boot to userspace; first-boot wizard announces itself with a console token; wizard serves the token gate on `:80` | 3 |
 | `update` | `/data` grew to the disk and slots did not (#784); bundle installs into the spare; spare boots; **an uncommitted update reverts on reboot**; a committed update persists; an operator can roll back off a committed version | 11 |
+| `install` | the image boots as **removable** media (usb bus — the gate keys on it); the inventory offers the internal disk and never the boot medium; the real installer runs; the machine then boots from the target alone with a **complete** copy (`/var/lib/dpkg` — the overlay made an incomplete copy easy and invisible), a fresh machine-id, `/data` sized to the target, and the wizard serving | 10 |
 | `fault` | three power cuts mid-write; a deliberately corrupted bundle is refused without crashing and without bricking; a power cut inside the commit window; operator rollback after all of it; the box is still updatable afterwards | 11 |
 
 A **brick is disqualifying, not deducted** — any run that leaves a machine unable to boot
@@ -87,6 +88,10 @@ see this: the harness disables Secure Boot because our GRUB is unsigned.*
 from another machine at `http://pithead.local`. Expected: the setup page loads.
 *The wizard prints its token to the console, so confirm what a user with no display
 actually sees and how they are meant to get the token.*
+
+KVM analog: `--phase install` automates the mechanics of M3 (inventory, guards, copy
+completeness, target boot). The manual case remains about what KVM cannot fake — real
+firmware's boot order, a real USB controller, and a real internal disk.
 
 **M3 — install to disk.** From the browser, choose the internal disk. Confirm that the
 USB stick itself is **not offered**, that no disk is preselected, and that model, size and

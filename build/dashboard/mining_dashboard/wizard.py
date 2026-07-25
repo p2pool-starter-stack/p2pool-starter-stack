@@ -142,7 +142,14 @@ shares its CPU with the chain it is serving.</p>
 </select>
 
 <label for="tz">Time zone</label>
-<input id="tz" name="timezone" value="UTC" autocomplete="off">
+<input id="tz" name="timezone" value="UTC" autocomplete="off" list="tzs">
+<datalist id="tzs">
+<option value="UTC"><option value="America/New_York"><option value="America/Chicago">
+<option value="America/Denver"><option value="America/Los_Angeles"><option value="America/Sao_Paulo">
+<option value="Europe/London"><option value="Europe/Berlin"><option value="Europe/Warsaw">
+<option value="Africa/Johannesburg"><option value="Asia/Dubai"><option value="Asia/Kolkata">
+<option value="Asia/Singapore"><option value="Asia/Tokyo"><option value="Australia/Sydney">
+</datalist>
 <p class="note">Used for dashboard timestamps and the daily summary. Anything like
 <code>Europe/Berlin</code>.</p>
 
@@ -184,11 +191,16 @@ install onto — everything on it is erased unless it already holds a Pithead da
 {options}
 </select>
 <label for="confirm">Type the disk name to confirm</label>
-<input id="confirm" name="confirm" autocomplete="off" placeholder="e.g. nvme0n1">
+<input id="confirm" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false"
+       placeholder="choose a disk above first">
 <button type="submit">Erase and install</button>
 <p class="note">Disks already holding a Pithead <code>data</code> partition are reinstalled in
 place and keep their synced chain. Everything else is erased.</p>
-</form>"""
+</form>
+<script>
+document.getElementById('disk').addEventListener('change', e =>
+  document.getElementById('confirm').placeholder = e.target.value);
+</script>"""
 
 INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off. When it finishes,
 reboot and remove the installation medium — the setup page comes back on the installed

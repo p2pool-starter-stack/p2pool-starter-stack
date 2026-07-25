@@ -39,10 +39,13 @@ tag images `:dev`, set the pull policy to `never`, and — the serious one — s
 verification of release images entirely. Only the three subtrees services bind-mount
 are shipped now.
 
-**First boot repartitions, so the disk must fit the whole layout** — 256M EFI +
-2×512M boot + 2×8 GiB system + data ≈ **18 GiB minimum**. Below it, bootstrapping
-aborts and the box panics rather than degrading. This is the appliance's real
-minimum-disk spec.
+**First boot repartitions, so the boot medium must fit the whole layout** — 256M ESP +
+2×4 GiB slots + data's 4 GiB minimum ≈ **12.5 GiB**. systemd-repart is transactional:
+below that, NOTHING is created, `/data` never exists, and the machine drops to an
+emergency shell with the root account locked — no clean message. A real 16 GB stick
+(14.9 GiB) is the smallest supported medium, and the install phase tests exactly that
+size. This ceiling is why the slots are 4 GiB: at 8 GiB the layout needed ~20.5 GiB and
+the documented 16 GB stick failed to boot.
 
 **The appliance needs images containing unreleased code.** The wizard module is new on
 this branch, so no published image has it — a pulled image starts and exits with
