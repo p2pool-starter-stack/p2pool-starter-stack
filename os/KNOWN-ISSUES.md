@@ -60,6 +60,32 @@ slot A" and "found nothing" the same value, and the try-flag reset then only fir
 was already bad. Boot tests passed 3/3 throughout — only power-cutting a VM mid-update
 exposed it. If the boot logic is ours, the fault battery is the only thing that checks it.
 
+**`load_env` reads `$prefix/grubenv`, and a misplaced env block fails silently.** Our
+BOOTX64.EFI is built with `-p /grub`, so GRUB looks for `ESP:/grub/grubenv`; the image
+seeded `ESP:/grubenv` and RAUC was configured to write there too. Both wrote the file
+correctly, GRUB never read it, `ORDER` kept its built-in value with both slots marked
+not-OK, and every boot landed on the same slot. Nothing logs an error at any layer — the
+symptom is an update that installs cleanly and simply never takes effect.
+
+**A slot cannot be found by filesystem label.** One RAUC bundle carries one filesystem
+image and installs into whichever slot is spare, so its fs label cannot encode the slot;
+after an install, `search --label system-b` fails with `no such device`. The GPT
+partition label survives (the updater writes the partition, not the table), so
+`root=/dev/disk/by-partlabel/` still works for the kernel. Slots are addressed
+positionally in `grub.cfg`, with the disk derived from where GRUB found its config
+rather than hardcoded to `hd0` — a mining box often has several drives.
+
+**Two hand-maintained copies of "populate a slot" drifted the moment the root went
+read-only.** `mkimage.sh` gained the fstab that mounts `/data` and overlays `/var`;
+`mkbundle.sh` did not, so slot B came up with a read-only root, no writable `/var`, and
+could not boot — while RAUC and GRUB both did their jobs correctly. Both paths now call
+`populate_slot()` from `os/rauc/populate-slot.sh`.
+
+**A stray VM on the bench invalidates results without failing anything.** A
+hand-started diagnostic guest kept the DHCP lease the harness reads back, so the battery
+drove the wrong machine and reported passing legs. `tests/os/run.sh` now refuses to start
+when another `pithead-*` domain is defined.
+
 ## Open
 
 - **Only the wizard image is baked in.** The rest of the stack still pulls at provision
