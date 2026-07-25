@@ -499,9 +499,8 @@ phase_fault() {
         return
     }
     ok "v2 bundle built: $(basename "$bundle")"
-    scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
-        "$bundle" "root@$ip:/data/update.bundle" || {
-        bad "bundle copy to the guest failed"
+    _stage_bundle "$bundle" || {
+        bad "staging the bundle on the guest failed"
         return
     }
 
