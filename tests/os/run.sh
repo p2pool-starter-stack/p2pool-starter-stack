@@ -112,21 +112,55 @@ _build_bundle() {
     else
         PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
         PITHEAD_BAKE_ARTIFACT=bundle os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
-        find os/bakery/build -name '*.rugixb' | head -1
+        local raw signed
+        raw=$(find os/bakery/build -name '*.rugixb' ! -name '*.signed.rugixb' | head -1)
+        [ -n "$raw" ] || return 1
+        # Sign it. Rugix supports CMS/X.509 signing exactly as RAUC does — it is simply absent
+        # from the shipped docs/, so the subcommand has to be found in the source. Signing here
+        # keeps the battery on the PRODUCTION code path: the --insecure-* bypass is a different
+        # branch in rugix-ctrl, and testing crash-safety through it would measure the wrong code.
+        _gen_certs || return 1
+        signed="${raw%.rugixb}.signed.rugixb"
+        rm -f "$signed"
+        docker run --rm -v "$PWD:/work" -w /work --entrypoint rugix-bundler \
+            "ghcr.io/rugix/rugix-bakery:${RUGIX_BAKERY_VERSION:-v0.9.3}" \
+            signatures sign "$raw" "$CERT_DIR/cert.pem" "$CERT_DIR/key.pem" "$signed" \
+            >>/tmp/os-fault-bundle.log 2>&1 || return 1
+        printf '%s' "$signed"
     fi
+}
+
+# Dev signing material, shared by both candidates so the comparison stays updater-only.
+CERT_DIR="os/certs-test"
+_gen_certs() {
+    [ -s "$CERT_DIR/cert.pem" ] && return 0
+    mkdir -p "$CERT_DIR"
+    openssl req -x509 -newkey rsa:4096 -nodes -keyout "$CERT_DIR/key.pem" \
+        -out "$CERT_DIR/cert.pem" -days 3650 -subj "/CN=pithead-os-test" 2>/dev/null
+}
+
+# Stage the bundle AND, for rugix, the root certificate the guest verifies it against.
+# Production bakes the root into the image via [signatures] roots in the rugix-ctrl config;
+# the harness passes it explicitly so the test exercises verification without an image rebuild.
+_stage_bundle() { # $1 bundle path
+    scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
+        "$1" "root@$ip:/data/update.bundle" || return 1
+    [ "$UPDATER" = "rauc" ] && return 0
+    scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
+        "$CERT_DIR/cert.pem" "root@$ip:/data/update-cert.pem"
 }
 
 # Per-updater command vocabulary — the ONLY updater-specific part of the battery.
 #
-# NOTE both updaters refuse unverified bundles by default, which is correct and is why the test
-# bundles carry an explicit bypass: this battery measures crash-safety, not the signing chain.
-# Production signs bundles with the release key — see the signing section of the plan. RAUC has
-# no bypass at all (it will not install an unsigned bundle), so its bundles are signed with the
-# development keypair mkimage.sh generates.
+# NOTE both updaters refuse unverified bundles by default, which is correct, so BOTH candidates
+# are driven with properly signed bundles and real signature verification. Rugix offers an
+# --insecure-skip-bundle-verification bypass; the battery deliberately does not use it, because
+# it is a separate branch in rugix-ctrl and measuring crash-safety through it would exercise the
+# wrong code. Production signs with the release key — see the signing section of the plan.
 _install_cmd() {
     case "$UPDATER" in
     rauc) printf 'rauc install %s' "$1" ;;
-    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification --insecure-allow-missing-block-index --reboot no %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --root-cert /data/update-cert.pem --reboot no %s' "$1" ;;
     esac
 }
 _commit_cmd() {
@@ -148,7 +182,7 @@ _boot_spare_cmd() {
 _install_and_boot_cmd() {
     case "$UPDATER" in
     rauc) printf 'rauc install %s && systemctl reboot' "$1" ;;
-    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification --insecure-allow-missing-block-index %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --root-cert /data/update-cert.pem %s' "$1" ;;
     esac
 }
 # Operator-initiated rollback: the "put it back" button, distinct from automatic fallback.
@@ -345,9 +379,8 @@ phase_update() {
     }
 
     info "leg 1 — install v2, boot spare, reboot WITHOUT commit -> must fall back to v1"
-    scp -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
-        "$bundle" "root@$ip:/data/update.bundle" || {
-        bad "bundle scp to the guest failed"
+    _stage_bundle "$bundle" || {
+        bad "staging the bundle on the guest failed"
         return
     }
     _install_or_fail "leg 1" || {

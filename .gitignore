@@ -41,3 +41,4 @@ htmlcov/
 
 # OS
 .DS_Store
+os/certs-test/
