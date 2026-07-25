@@ -34,7 +34,8 @@ fi
 echo "==> rootfs: container build + export"
 docker build -f os/rootfs/Containerfile -t pithead-os-rootfs \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
-    --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" .
+    --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" \
+    --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-}" .
 cid=$(docker create pithead-os-rootfs)
 mkdir -p os/bakery/build
 docker export --output os/bakery/build/pithead-root.tar "$cid"
