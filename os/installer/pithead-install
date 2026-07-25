@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Install the running appliance onto a local disk.
+#
+# The installer carries no image payload. It rebuilds the layout on the target and copies the
+# RUNNING slot into it — the same work os/rauc/mkimage.sh does, sourced from the live system
+# instead of a tarball. Carrying a compressed copy of the image inside the image would double
+# every download to avoid a copy the machine can already make.
+#
+# The target then boots and systemd-repart creates slot B and /data sized to ITS disk, exactly as
+# it did for the USB. There is no second layout mechanism.
+#
+#   pithead-install --list                 machine-readable inventory of candidate disks
+#   pithead-install --target /dev/nvme0n1  install (destructive unless the disk is already ours)
+#
+# Called by the host, never by a container: this partitions disks. The web installer asks, writes
+# a request to the spool, and `pithead install-wizard` runs this — the same trust shape as the
+# first-boot wizard and the #33 control channel.
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ESP_MIB=256
+SLOT_GIB=8
+
+die() {
+    echo "pithead-install: $*" >&2
+    exit 1
+}
+
+# The disk this system booted from. Never an install target: overwriting the medium you are
+# running from destroys the installer mid-flight.
+boot_disk() {
+    local src
+    src=$(findmnt -no SOURCE / 2>/dev/null) || return 1
+    lsblk -no PKNAME "$src" 2>/dev/null | head -1
+}
+
+# Candidate targets as TSV: name, size, model, serial, and whether it already carries our layout.
+# Model and serial are printed because a bare /dev/sda is not enough to choose safely — an
+# operator picking the wrong disk here loses a 250+ GB synced chain.
+list_disks() {
+    local boot
+    boot=$(boot_disk || true)
+    lsblk -dno NAME,SIZE,MODEL,SERIAL,TYPE | while read -r name size model serial type; do
+        [ "$type" = "disk" ] || continue
+        [ "$name" = "$boot" ] && continue
+        case "$name" in loop* | ram* | sr*) continue ;; esac
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "$name" "$size" "${model:-unknown}" "${serial:-unknown}" "$(layout_state "/dev/$name")"
+    done
+}
+
+# Does the target already carry a pithead layout? Decides destructive-vs-reinstall, and a
+# reinstall must preserve /data — a synced chain is not re-downloadable in an afternoon.
+layout_state() { # $1 disk
+    local labels
+    labels=$(lsblk -no PARTLABEL "$1" 2>/dev/null | tr '\n' ' ')
+    case "$labels" in
+    *system-a*) case "$labels" in *data*) echo "pithead-with-data" ;; *) echo "pithead" ;; esac ;;
+    *) echo "empty" ;;
+    esac
+}
+
+partition_fresh() { # $1 disk — DESTRUCTIVE
+    echo "==> partitioning $1 (this erases it)"
+    sgdisk -Z "$1" >/dev/null
+    # Only the ESP and slot A, matching the shipped image. systemd-repart creates slot B and /data
+    # on first boot, sized to this disk.
+    sgdisk -n "1:0:+${ESP_MIB}M" -t 1:ef00 -c 1:esp \
+        -n "2:0:+${SLOT_GIB}G" -t 2:8300 -c 2:system-a "$1" >/dev/null
+    partprobe "$1" 2>/dev/null || true
+    sleep 2
+}
+
+part_of() { # $1 disk, $2 index — nvme/mmc need a 'p' separator
+    case "$1" in
+    *[0-9]) printf '%sp%s' "$1" "$2" ;;
+    *) printf '%s%s' "$1" "$2" ;;
+    esac
+}
+
+main() {
+    local target="" assume_yes=0 action="install"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --list)
+            action="list"
+            shift
+            ;;
+        --target)
+            target="$2"
+            shift 2
+            ;;
+        --yes)
+            assume_yes=1
+            shift
+            ;;
+        *) die "unknown argument: $1" ;;
+        esac
+    done
+
+    [ "$(id -u)" -eq 0 ] || die "must run as root"
+
+    if [ "$action" = "list" ]; then
+        list_disks
+        return 0
+    fi
+
+    [ -n "$target" ] || die "--target is required"
+    [ -b "$target" ] || die "$target is not a block device"
+    local boot
+    boot=$(boot_disk || true)
+    [ -n "$boot" ] && [ "$target" = "/dev/$boot" ] &&
+        die "refusing to install onto the disk this system booted from ($target)"
+
+    local state
+    state=$(layout_state "$target")
+    if [ "$assume_yes" -ne 1 ]; then
+        die "refusing to write to $target without --yes (state: $state)"
+    fi
+
+    # Reinstall keeps the partition table so an existing /data survives untouched; only slot A is
+    # reformatted and repopulated. A fresh install repartitions and destroys everything.
+    if [ "$state" = "pithead-with-data" ]; then
+        echo "==> $target already carries a pithead layout — preserving its data partition"
+    else
+        partition_fresh "$target"
+    fi
+
+    local esp slot_a
+    esp=$(part_of "$target" 1)
+    slot_a=$(part_of "$target" 2)
+    [ -b "$esp" ] && [ -b "$slot_a" ] || die "expected $esp and $slot_a after partitioning"
+
+    echo "==> filesystems"
+    mkfs.vfat -n ESP "$esp" >/dev/null
+    mkfs.ext4 -q -F -L system-a "$slot_a"
+
+    echo "==> copying the running system to $slot_a"
+    local mnt
+    mnt=$(mktemp -d)
+    trap 'umount -R "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true' EXIT
+    mount "$slot_a" "$mnt"
+    # The running root is READ-ONLY, so it is a consistent source with nothing to quiesce.
+    # Pseudo-filesystems and the mount points for state are excluded and recreated: copying /data
+    # would try to copy a 250+ GB chain onto an 8 GiB slot.
+    tar -C / --one-file-system \
+        --exclude=./data --exclude=./boot/efi \
+        -cf - . | tar -C "$mnt" -xf -
+    mkdir -p "$mnt"/{dev,proc,sys,run,tmp,data,boot/efi}
+    # The test marker is a harness artefact and must not travel to an installed machine.
+    rm -f "$mnt/etc/pithead-test-marker"
+
+    echo "==> bootloader"
+    mkdir -p "$mnt/boot/efi"
+    mount "$esp" "$mnt/boot/efi"
+    mkdir -p "$mnt/boot/efi/EFI/BOOT" "$mnt/boot/efi/grub"
+    grub-mkimage -O x86_64-efi -o "$mnt/boot/efi/EFI/BOOT/BOOTX64.EFI" -p /grub \
+        part_gpt fat ext2 normal linux echo search search_label configfile test loadenv regexp
+    install -m 644 "$SELF_DIR/../rauc/grub.cfg" "$mnt/boot/efi/grub/grub.cfg" 2>/dev/null ||
+        install -m 644 /usr/share/pithead/grub.cfg "$mnt/boot/efi/grub/grub.cfg"
+    # Slot A good, B empty — the same seed the image ships with. The env block lives in GRUB's
+    # prefix directory because bare `load_env` reads $prefix/grubenv; at the ESP root it is a
+    # silent no-op and the machine ignores every boot-state write the updater makes.
+    grub-editenv "$mnt/boot/efi/grub/grubenv" create
+    grub-editenv "$mnt/boot/efi/grub/grubenv" set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
+
+    sync
+    echo "==> installed to $target — reboot and remove the installation medium"
+}
+
+main "$@"

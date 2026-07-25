@@ -128,3 +128,75 @@ def test_main_requires_token(monkeypatch, capsys):
     with pytest.raises(SystemExit) as e:
         wizard.main()
     assert e.value.code == 2
+
+
+# --- installer mode -------------------------------------------------------------------------
+# The host writes disks.tsv when it booted from removable media. Everything here guards a step
+# that ERASES a disk, so the tests are about what the page refuses, not what it accepts.
+
+DISKS = (
+    "nvme0n1\t931.5G\tSamsung SSD 990\tS6P1NF0T\tempty\n"
+    "sda\t3.6T\tWDC WD40EFRX\tWD-WCC7K3\tpithead-with-data\n"
+)
+
+
+@pytest.fixture
+def installer(spool):
+    (spool / "disks.tsv").write_text(DISKS)
+    return spool
+
+
+async def test_authed_lands_on_installer_when_host_offers_disks(client, installer):
+    r = await client.post("/auth", data={"token": "pit-X7KM2Q"}, allow_redirects=False)
+    assert r.headers["Location"] == "/install"
+
+
+async def test_setup_form_is_the_landing_page_without_installer_mode(client, spool):
+    r = await client.post("/auth", data={"token": "pit-X7KM2Q"}, allow_redirects=False)
+    assert r.headers["Location"] == "/setup"
+
+
+async def test_picker_shows_model_size_serial_and_never_preselects(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/install")).text()
+    for expected in ("nvme0n1", "931.5G", "Samsung SSD 990", "S6P1NF0T", "3.6T"):
+        assert expected in body
+    # A disk must never be the default choice — the first click has to be deliberate.
+    assert 'value="" selected disabled' in body
+    # Reinstall-vs-erase has to be visible before choosing, not after.
+    assert "keeps existing data" in body
+    assert "will be erased" in body
+
+
+async def test_target_must_be_one_the_host_offered(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/install", data={"disk": "sdz", "confirm": "sdz"})
+    assert r.status == 400
+    assert not (installer / "install-target").exists()
+
+
+async def test_confirmation_must_match_the_chosen_disk(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n"})
+    assert r.status == 400
+    assert not (installer / "install-target").exists()
+
+
+async def test_unauthed_install_post_writes_nothing(client, installer):
+    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"},
+                          allow_redirects=False)
+    assert r.status == 302
+    assert not (installer / "install-target").exists()
+
+
+async def test_valid_request_is_written_for_the_host(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
+    assert r.status == 200
+    assert (installer / "install-target").read_text() == "nvme0n1"
+
+
+async def test_installer_status_is_distinct_from_provisioning(client, installer):
+    assert "Copying the system" in await (await client.get("/status")).text()
+    (installer / "installed").write_text("1")
+    assert "reboot and remove" in (await (await client.get("/status")).text()).lower()

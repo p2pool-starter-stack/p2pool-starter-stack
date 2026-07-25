@@ -84,6 +84,12 @@ ARG PITHEAD_UPDATER=""
 RUN if [ "$PITHEAD_UPDATER" = "rauc" ]; then \
         apt-get install -y --no-install-recommends rauc rauc-service; \
     fi
+# The disk installer and the boot config it writes to a target. No image payload ships with it —
+# it copies the running slot, so the artifact does not carry a compressed copy of itself.
+COPY os/installer/pithead-install /usr/local/sbin/pithead-install
+COPY os/rauc/grub.cfg /usr/share/pithead/grub.cfg
+RUN chmod +x /usr/local/sbin/pithead-install
+
 # The appliance partition layout. systemd-repart creates slot B and /data on the target machine's
 # real disk at first boot, so the shipped image carries only the ESP and slot A.
 COPY os/rootfs/repart.d/ /usr/lib/repart.d/
