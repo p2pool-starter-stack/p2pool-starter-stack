@@ -132,11 +132,22 @@ _build_bundle() {
 
 # Dev signing material, shared by both candidates so the comparison stays updater-only.
 CERT_DIR="os/certs-test"
+# A ROOT + LEAF chain, not a single self-signed cert. Rugix enforces proper X.509 semantics and
+# rejects a CA certificate used as the end entity ("CaUsedAsEndEntity"); RAUC accepts the same
+# certificate as both root and signer. The stricter reading is the right one, and it is also what
+# production wants: the root that devices trust should not be the key that signs day to day.
 _gen_certs() {
     [ -s "$CERT_DIR/cert.pem" ] && return 0
     mkdir -p "$CERT_DIR"
-    openssl req -x509 -newkey rsa:4096 -nodes -keyout "$CERT_DIR/key.pem" \
-        -out "$CERT_DIR/cert.pem" -days 3650 -subj "/CN=pithead-os-test" 2>/dev/null
+    openssl req -x509 -newkey rsa:4096 -nodes -keyout "$CERT_DIR/ca.key" \
+        -out "$CERT_DIR/ca.pem" -days 3650 -subj "/CN=pithead-os-test-ca" \
+        -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null || return 1
+    openssl req -newkey rsa:4096 -nodes -keyout "$CERT_DIR/key.pem" \
+        -out "$CERT_DIR/leaf.csr" -subj "/CN=pithead-os-test-signer" 2>/dev/null || return 1
+    openssl x509 -req -in "$CERT_DIR/leaf.csr" -CA "$CERT_DIR/ca.pem" -CAkey "$CERT_DIR/ca.key" \
+        -CAcreateserial -out "$CERT_DIR/cert.pem" -days 3650 \
+        -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n') \
+        2>/dev/null || return 1
 }
 
 # Stage the bundle AND, for rugix, the root certificate the guest verifies it against.
@@ -147,7 +158,7 @@ _stage_bundle() { # $1 bundle path
         "$1" "root@$ip:/data/update.bundle" || return 1
     [ "$UPDATER" = "rauc" ] && return 0
     scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
-        "$CERT_DIR/cert.pem" "root@$ip:/data/update-cert.pem"
+        "$CERT_DIR/ca.pem" "root@$ip:/data/update-cert.pem"
 }
 
 # Per-updater command vocabulary — the ONLY updater-specific part of the battery.
