@@ -126,7 +126,7 @@ _build_bundle() {
 _install_cmd() {
     case "$UPDATER" in
     rauc) printf 'rauc install %s' "$1" ;;
-    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification --reboot no %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification --insecure-allow-missing-block-index --reboot no %s' "$1" ;;
     esac
 }
 _commit_cmd() {
@@ -148,7 +148,7 @@ _boot_spare_cmd() {
 _install_and_boot_cmd() {
     case "$UPDATER" in
     rauc) printf 'rauc install %s && systemctl reboot' "$1" ;;
-    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification --insecure-allow-missing-block-index %s' "$1" ;;
     esac
 }
 # Operator-initiated rollback: the "put it back" button, distinct from automatic fallback.
