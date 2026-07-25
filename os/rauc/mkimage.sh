@@ -85,8 +85,12 @@ cp /mnt/rauc-sys/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed /mnt/rauc-esp
         part_gpt fat ext2 normal linux echo search search_label configfile test loadenv
 install -m 644 os/rauc/grub.cfg /mnt/rauc-esp/grub/grub.cfg
 # Seed boot state: slot A good, B empty. RAUC rewrites these on every install/mark.
-grub-editenv /mnt/rauc-esp/grubenv create
-grub-editenv /mnt/rauc-esp/grubenv set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
+# The env block MUST live in GRUB's prefix directory: bare `load_env` reads $prefix/grubenv, and
+# our BOOTX64.EFI is built with -p /grub. Putting it at the ESP root instead makes `load_env` a
+# silent no-op — ORDER keeps its built-in "A B" with both _OK=0, nothing is selectable, and every
+# boot falls to the default entry. RAUC writes the file correctly and the machine still ignores it.
+grub-editenv /mnt/rauc-esp/grub/grubenv create
+grub-editenv /mnt/rauc-esp/grub/grubenv set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
 
 echo "==> seeding the data partition (overlay dirs must exist before the first mount)"
 mkdir -p /mnt/rauc-data
