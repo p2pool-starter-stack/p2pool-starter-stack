@@ -16,9 +16,18 @@ export RUGIX_BAKERY_IMAGE="${RUGIX_BAKERY_IMAGE:-ghcr.io/rugix/rugix-bakery:${RU
 STACK_VERSION="v$(tr -d ' \t\r\n' <VERSION)"
 WIZARD_IMAGE="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION}"
 mkdir -p os/rootfs/images
-if [ ! -s os/rootfs/images/dashboard.tar.gz ]; then
-    echo "==> staging wizard image $WIZARD_IMAGE"
+echo "==> staging wizard image $WIZARD_IMAGE"
+if [ "${PITHEAD_WIZARD_FROM_REGISTRY:-0}" = "1" ]; then
+    # Release path: the published image carries the wizard module.
     docker pull -q "$WIZARD_IMAGE" >/dev/null
+    docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
+elif [ -s os/rootfs/images/dashboard.tar.gz ] && [ os/rootfs/images/dashboard.tar.gz -nt build/dashboard ]; then
+    echo "    (cached — delete os/rootfs/images/dashboard.tar.gz to force)"
+else
+    # Development path, and the default until a release ships the wizard: mining_dashboard.wizard
+    # only exists in this working tree, so a pulled image would start and immediately exit with
+    # "No module named mining_dashboard.wizard". Build the image the appliance will actually run.
+    docker build -q -t "$WIZARD_IMAGE" build/dashboard >/dev/null
     docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
 fi
 
