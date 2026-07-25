@@ -487,6 +487,44 @@ machinery that already exists. Against RAUC there is no partitioning layer at al
 hand-written partitioning is where this project's bugs have actually come from — see
 the bake-off's defect record.
 
+### Decided 2026-07-25: install first, configure on the installed system
+
+Two orderings were considered:
+
+1. **Configure, then install.** The USB boots, serves the wizard on `:80`, and the
+   answers are written into the target's `/data` as it is flashed.
+2. **Install, then configure.** The USB boots an installer, writes the image to the
+   chosen disk, reboots, and the wizard runs on the installed system's first boot.
+
+**We take option 2.** Neither updater favours either ordering — the installer is our
+tooling in both cases — so the decision rests on our own code and on the operator.
+
+- It reuses what exists. `pithead-firstboot.service` already fires when
+  `/data/pithead/config.json` is absent, and that path is covered by the boot battery.
+  Option 1 needs a second wizard mode plus config transplant, which is new code in the
+  path that handles wallet addresses.
+- Configuration is produced on the machine that will run it. Option 1 decides
+  hardware-dependent settings inside the USB environment and moves them to a different
+  machine.
+- Install and configuration stay independently resumable. Under option 1 a failed
+  install discards the operator's configuration work, and the install is the destructive
+  step.
+- It matches the products this appliance is positioned against. TrueNAS and Proxmox
+  both install first. Talos configures first because it is API-driven, has no console,
+  and is provisioned as a fleet with `talosctl` — that is a datacenter posture, not a
+  single-box one.
+
+The argument for option 1 is a headless install, and it is weaker than it appears: the
+wizard prints its one-time token to the console, so a console is assumed either way.
+Requiring a display for one destructive install is reasonable; requiring one afterwards
+is not, and avahi is in the image, so the post-install wizard answers on
+`pithead.local`.
+
+**Wifi is not supported today in either ordering.** The rootfs carries `systemd-networkd`
+with no supplicant — no `wpasupplicant`, no NetworkManager — so wireless is an
+independent decision, not a reason to prefer an ordering. Ethernet stays the default for
+a machine that runs continuously and syncs 250+ GB.
+
 ### The design: one image, two modes
 
 The USB carries a compressed copy of the pristine system image on its data partition.
