@@ -65,7 +65,7 @@ mount "${LOOP}p1" /mnt/rauc-esp
 mkdir -p /mnt/rauc-esp/EFI/BOOT /mnt/rauc-esp/grub
 cp /mnt/rauc-sys/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed /mnt/rauc-esp/EFI/BOOT/BOOTX64.EFI 2>/dev/null ||
     grub-mkimage -O x86_64-efi -o /mnt/rauc-esp/EFI/BOOT/BOOTX64.EFI -p /grub \
-        part_gpt fat ext2 normal linux echo search search_label configfile test loadenv
+        part_gpt fat ext2 normal linux echo search search_label configfile test loadenv regexp
 install -m 644 os/rauc/grub.cfg /mnt/rauc-esp/grub/grub.cfg
 # Seed boot state: slot A good, B empty. RAUC rewrites these on every install/mark.
 # The env block MUST live in GRUB's prefix directory: bare `load_env` reads $prefix/grubenv, and
