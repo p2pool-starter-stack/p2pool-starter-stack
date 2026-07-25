@@ -595,8 +595,13 @@ phase_fault() {
         return
     fi
 
-    # The box must still be updatable afterwards, not merely alive.
+    # The box must still be updatable afterwards, not merely alive. Commit first: an operator who
+    # has just rolled back to a known-good version would mark it good before updating again, and
+    # Rugix correctly refuses to install onto a system that has not yet verified its own boot
+    # ("system needs to be committed before installing an update"). Skipping the commit tested an
+    # operator nobody is, and scored a safety feature as a failure.
     local out
+    _ssh "$(_commit_cmd)" >/dev/null 2>&1 || true
     if out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1"); then
         ok "still updatable after fault injection"
     else
