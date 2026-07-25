@@ -381,6 +381,26 @@ phase_update() {
             return
         }
 
+    # #784: /data must fit the MACHINE, not the image. The image ships ~9 GiB with no data
+    # partition at all; systemd-repart creates it on the target disk at first boot. The harness
+    # grows the scratch disk to 40 GiB, so a correct grow leaves /data well above 15 GiB — an
+    # image-sized or unresized /data would land near zero and is the bug this asserts against.
+    local data_gib
+    data_gib=$(_ssh "df -BG --output=size /data 2>/dev/null | tail -1 | tr -dc '0-9'")
+    if [ -n "$data_gib" ] && [ "$data_gib" -ge 15 ]; then
+        ok "/data grew to fill the disk (${data_gib} GiB of a 40 GiB disk)"
+    else
+        bad "/data did not grow to fill the disk (got '${data_gib:-none}' GiB, want >= 15)"
+    fi
+    # The slots must NOT have grown — an A/B pair has to stay interchangeable.
+    local slot_gib
+    slot_gib=$(_ssh "df -BG --output=size / 2>/dev/null | tail -1 | tr -dc '0-9'")
+    if [ -n "$slot_gib" ] && [ "$slot_gib" -le 9 ]; then
+        ok "system slot stayed fixed at ${slot_gib} GiB"
+    else
+        bad "system slot grew to '${slot_gib:-none}' GiB — slots must stay interchangeable"
+    fi
+
     info "building v2 update bundle (marker v2)"
     bundle=$(_build_bundle v2) || {
         bad "v2 bundle build failed (/tmp/os-fault-bundle.log)"
