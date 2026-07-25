@@ -11,7 +11,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 OUT="${1:-os/rauc/build/system.img}"
-SIZE_GIB="${PITHEAD_IMAGE_GIB:-20}"
+# Only the ESP + slot A ship. systemd-repart creates slot B and /data on the target machine's
+# real disk at first boot, so the image does not carry 8 GiB of zeros and an /data sized for
+# the image rather than the disk. 9 GiB covers 256M ESP + 8 GiB slot A + alignment.
+SIZE_GIB="${PITHEAD_IMAGE_GIB:-9}"
 TARBALL="os/bakery/build/pithead-root.tar"
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh
@@ -36,14 +39,15 @@ truncate -s "${SIZE_GIB}G" "$OUT"
 # Same shape as the Rugix layout: EFI + two system slots + data. Boot files live inside each slot
 # (GRUB reads them by partlabel), so there is no separate boot partition to keep in sync.
 sgdisk -Z "$OUT" >/dev/null
+# Slot B and data are NOT created here — /usr/lib/repart.d declares them and systemd-repart
+# builds them on the target's real disk at first boot. Creating them here would size /data to the
+# image instead of the machine, which is what blocked install-to-disk.
 sgdisk -n 1:0:+256M -t 1:ef00 -c 1:esp \
-    -n 2:0:+8G -t 2:8300 -c 2:system-a \
-    -n 3:0:+8G -t 3:8300 -c 3:system-b \
-    -n 4:0:0 -t 4:8300 -c 4:data "$OUT" >/dev/null
+    -n 2:0:+8G -t 2:8300 -c 2:system-a "$OUT" >/dev/null
 
 LOOP=$(losetup -Pf --show "$OUT")
 cleanup() {
-    umount -R /mnt/rauc-sys /mnt/rauc-esp /mnt/rauc-data 2>/dev/null || true
+    umount -R /mnt/rauc-sys /mnt/rauc-esp 2>/dev/null || true
     losetup -d "$LOOP" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -51,8 +55,6 @@ trap cleanup EXIT
 echo "==> filesystems"
 mkfs.vfat -n ESP "${LOOP}p1" >/dev/null
 mkfs.ext4 -q -L system-a "${LOOP}p2"
-mkfs.ext4 -q -L system-b "${LOOP}p3"
-mkfs.ext4 -q -L data -m 0.5 "${LOOP}p4"
 
 echo "==> populating slot A from the shared rootfs tarball"
 mkdir -p /mnt/rauc-sys /mnt/rauc-esp
@@ -75,11 +77,9 @@ install -m 644 os/rauc/grub.cfg /mnt/rauc-esp/grub/grub.cfg
 grub-editenv /mnt/rauc-esp/grub/grubenv create
 grub-editenv /mnt/rauc-esp/grub/grubenv set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
 
-echo "==> seeding the data partition (overlay dirs must exist before the first mount)"
-mkdir -p /mnt/rauc-data
-mount "${LOOP}p4" /mnt/rauc-data
-mkdir -p /mnt/rauc-data/overlay/var /mnt/rauc-data/overlay/var-work /mnt/rauc-data/pithead
-umount /mnt/rauc-data
+# The /var overlay directories cannot be seeded here any more — /data does not exist until
+# systemd-repart creates it. pithead-dataprep.service makes them on first boot, before anything
+# that needs a writable /var.
 
 sync
 echo "==> image: $OUT ($(du -h "$OUT" | cut -f1))"

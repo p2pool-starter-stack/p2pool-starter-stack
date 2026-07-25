@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         podman netavark aardvark-dns catatonit uidmap \
         jq openssl curl ca-certificates xxd iproute2 \
         fdisk parted e2fsprogs dosfstools \
-        nftables iptables \
+        nftables iptables systemd-repart \
         avahi-daemon libnss-mdns \
         openssh-server sudo less nano htpdate
 # NB: apt lists are kept on purpose — the Rugix core recipes run `apt-get install` in the build
@@ -84,10 +84,16 @@ ARG PITHEAD_UPDATER=""
 RUN if [ "$PITHEAD_UPDATER" = "rauc" ]; then \
         apt-get install -y --no-install-recommends rauc rauc-service; \
     fi
+# The appliance partition layout. systemd-repart creates slot B and /data on the target machine's
+# real disk at first boot, so the shipped image carries only the ESP and slot A.
+COPY os/rootfs/repart.d/ /usr/lib/repart.d/
 RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
     && systemctl disable ssh \
     && echo pithead > /etc/hostname
+# systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
+# static unit is an error that would fail the build. Assert it is present instead.
+RUN test -f /usr/lib/systemd/system/systemd-repart.service
 
 # TEST-ONLY hooks (tests/os/run.sh --phase update): both default EMPTY and change nothing in a
 # release build. A pubkey enables root-key SSH so the harness can drive rugix-ctrl in the guest;
