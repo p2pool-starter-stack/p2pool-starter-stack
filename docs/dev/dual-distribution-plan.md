@@ -547,6 +547,67 @@ Everything else the operator sees is the same across A–D: the dashboard offers
 update, the box reboots once, mining resumes, and a bad release un-installs itself
 without anyone driving to the machine.
 
+## Runbook: we shipped a bad release
+
+The question this design has to answer is not "will we ship a bad release" — we will —
+but "how much damage can one do, and how fast can we undo it". A/B updates bound the
+blast radius; the cases below differ in whether the box recovers by itself.
+
+### Case 1 — the new version does not boot
+
+Nothing to do. The updater never commits, the boot counter expires, and the box returns
+to the previous version on its own. The operator sees mining resume on the old version;
+the dashboard still reports the update as available. **No support contact, no data loss,
+no site visit.** This is the case A/B updates exist for, and it is the one we
+fault-inject on the bench before every release.
+
+### Case 2 — it boots but fails its health check
+
+Also self-healing. The commit gate is `pithead doctor --json`: if the stack does not
+come up healthy, the update is never committed and the next reboot falls back. The
+important design rule is what the gate checks — services up and progressing, never
+"chain synced", because a fresh box legitimately takes days to sync and a gate that
+waits for it would never commit anything.
+
+### Case 3 — it boots, passes the health check, and is still wrong
+
+This is the dangerous one, because nothing automatic saves us: a release can be healthy
+by every mechanical check and still mine to the wrong pool, leak an address, or lose
+5% hashrate. Recovery is deliberate, and needs three things we must build:
+
+1. **An operator rollback that works on demand** — a "go back to the previous version"
+   action in the dashboard, not just a CLI incantation. The updaters support it
+   (`rugix-ctrl system reboot --spare`; `rauc status mark-bad booted` + reboot) and the
+   fault battery now tests it as a first-class case.
+2. **A way to stop offering the bad version.** Update checks read the GitHub release
+   feed, so un-marking a release as latest (or deleting it) stops new boxes taking it
+   within one check interval. That is our fastest lever and it needs to be in the
+   release runbook, not discovered during an incident.
+3. **A way to tell people.** The stack already ships release notifications
+   (`TELEGRAM_EVENT_NEW_RELEASE`) and the dashboard shows update state; a bad release
+   should be announced through the same path that announced it.
+
+Then we cut the fix as a normal release. Boxes that rolled back are on the previous
+version and take the new one when it appears; boxes still running the bad version take
+it the same way. **No box needs to be reflashed, and no operator needs a terminal.**
+
+### What bounds the damage
+
+- Only one version is ever "live"; the previous one stays intact in the other slot, so
+  rollback is a reboot rather than a restore.
+- Operator state lives on the data partition, so neither an update nor a rollback
+  touches wallets, chains, Tor keys or configuration.
+- The appliance's root is immutable, so a bad release cannot leave debris behind that
+  survives into the fixed one — replacing the slot replaces the whole system.
+
+### What this demands of the release process
+
+Every appliance release runs the boot battery and the fault battery on the bench before
+it ships (`tests/os/run.sh --phase boot` and `--phase fault`), because cases 1 and 2 are
+only self-healing if the rollback path actually works on that build. Case 3 is why the
+dashboard rollback action is a requirement of shipping the appliance, not a later
+convenience.
+
 ## The updater bake-off — decision procedure
 
 The A/B updater is the one component whose failures land in the field, unattended, on
