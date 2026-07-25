@@ -531,6 +531,52 @@ Rugix documentation gaps that required reading umbrelOS's source — the last gr
 the honest maturity signal. RAUC and sysupdate have not yet been built once, so they
 carry an unknown integration cost that only the bake-off can price.
 
+### Verdict (2026-07-25): RAUC, on stability grounds — conditional on fault injection
+
+Both candidates were built against the same rootfs tarball and booted on the bench.
+The operator's stated goal is platform stability above all else, and that is what the
+evidence below is weighed against.
+
+**Why RAUC wins the criterion that matters most.** Its test suite targets precisely the
+failure that bricks an unattended miner — `bootchooser.c`, `boot_switch.c`,
+`boot_raw_fallback.c`, plus AddressSanitizer suppressions — and ten years of field
+exposure means the ugly cases (power cut mid-write, corrupted bootloader env) have
+already been hit by other people's fleets. Bus factor is the decisive structural fact:
+**396 of Rugix's 400 recent commits come from one person** (two addresses, same human),
+against 102 contributors for RAUC whose top two are employed to maintain it. RAUC is
+also packaged in Debian, so it inherits distro security updates rather than our
+vendoring. Finally, Rugix repartitions *at first boot on the customer's device* — which
+panicked on this bench when the disk was too small — while the RAUC image is
+partitioned at build time, where failures land at our desk instead.
+
+**What this costs us, recorded so it is not forgotten.** Rugix is 62 lines of config;
+the RAUC candidate is 154 lines we own, and it still lacks factory reset and
+grow-to-disk. Worse for stability specifically: **the rollback logic moves into our own
+46-line GRUB script** (`_OK`/`_TRY` counters), where Rugix kept it inside a tested
+binary. Switching therefore *raises* our risk in exactly the place that matters, which
+is why the decision is conditional: **RAUC is adopted only once it passes the
+fault-injection battery** (destroy mid-write and mid-commit, ×3 each). The Rugix
+candidate stays in-tree until then — it costs 62 lines and is currently the only one
+demonstrably reaching a working appliance.
+
+**On RAUC's own advice to use Yocto, Buildroot or PTXdist — we decline, deliberately.**
+That guidance targets classic embedded: fixed hardware, a minimal from-source userland,
+no package manager. Our context is generic x86-64 PCs running containers, maintained by
+two people. Two facts decide it: **Buildroot has no `podman` package** (it ships
+`docker`, `conmon`, `crun`), so the appliance's chosen runtime would become ours to
+package and maintain; and a from-source userland makes **us** the security team for
+every CVE in systemd, openssl and podman, where Debian gives us one for free. For an
+appliance meant to run unattended for years, outsourcing CVE maintenance is a stability
+feature, not a convenience. If the hand-rolled assembly later proves fiddly, the
+Debian-native path is **mkosi** (systemd project, builds Debian disk images via
+systemd-repart) — a maintained builder rather than a whole embedded build system.
+
+Corrections this research forced on earlier claims in this document: RAUC *does* have
+delta-style updates ("adaptive updates"), it *does* document persistence patterns
+(shared/redundant data partitions), and an earlier "246 vs 2 test files" reading was
+wrong — Rugix is Rust with inline tests (183 `#[test]` functions), on core sizes that
+are near-identical (33.6k C vs 34.8k Rust).
+
 ### OTA findings so far (candidate A, and mostly base-independent)
 
 Facts the first working image produced. The first four apply to *any* A/B updater on a
