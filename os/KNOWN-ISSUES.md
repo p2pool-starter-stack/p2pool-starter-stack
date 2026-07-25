@@ -1,12 +1,16 @@
 # pithead-os build — known issues
 
-## Status: both candidates boot, update, and survive fault injection (2026-07-25)
+## Status: RAUC appliance, installs to disk, all batteries green (2026-07-25)
 
-`tests/os/run.sh` passes all three batteries. Boot 3/3 on both candidates. Update 9/9 on
-both: install, spare boot, automatic rollback of an uncommitted update, commit
-persistence, and operator-initiated rollback off a committed version. Fault injection
-11/11 for RAUC and 10/11 for Rugix, with no brick in any run on either. The updater
-decision and its evidence live in the plan's bake-off section.
+`tests/os/run.sh` passes boot 3/3, update 11/11 and fault 11/11 on the RAUC appliance,
+with no brick in any run. The image ships the ESP and slot A only (636 MB);
+systemd-repart builds slot B and /data on the target's own disk, and `/data` measured
+24 GiB of a 40 GiB disk while the system slot stayed at 8.
+
+The Rugix candidate is removed from this branch and preserved on
+`reference/rugix-candidate`. The decision and its evidence are in the plan's bake-off
+section; build, release and the manual hardware battery are in
+[`docs/dev/appliance-release.md`](../docs/dev/appliance-release.md).
 
 ## Resolved, with the lessons worth keeping
 
@@ -90,6 +94,9 @@ when another `pithead-*` domain is defined.
 
 ## Open
 
+- **The manual hardware battery has not been run.** Everything above is KVM. Secure Boot,
+  real disks, headless discovery and a genuine power cut are exactly what a VM cannot
+  show — M1-M10 in the release doc must pass on a physical box before an image ships.
 - **Only the wizard image is baked in.** The rest of the stack still pulls at provision
   time, so the plan's "first boot works offline" property is partial: the setup page
   works without a network, provisioning does not. Baking the full set roughly triples
