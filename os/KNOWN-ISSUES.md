@@ -44,6 +44,22 @@ this branch, so no published image has it — a pulled image starts and exits wi
 from the working tree by default; `PITHEAD_WIZARD_FROM_REGISTRY=1` switches to the
 released image once a release carries the wizard.
 
+**`apt install rauc` gives you a CLI that cannot install anything.** Debian splits the
+D-Bus daemon into a separate `rauc-service` package which is not even a *Recommends* of
+`rauc` — so `--no-install-recommends` is not what drops it; the package has to be named.
+Every `rauc install` then fails with `de.pengutronix.rauc was not provided by any
+.service files`, which names a D-Bus address and never the missing daemon. This survived
+four full battery runs because boot and the mid-write power cuts don't touch the daemon —
+only the install path does. When a component fails on a D-Bus name, check the package
+split before the code.
+
+**A hand-written GRUB slot selector broke fallback, and the bug was invisible to review.**
+RAUC's reference `grub.cfg` reserves menu index 0 for a rescue entry, so `default=0`
+carries the meaning "no slot was selectable". Renumbering the slots to 0/1 made "chose
+slot A" and "found nothing" the same value, and the try-flag reset then only fired when A
+was already bad. Boot tests passed 3/3 throughout — only power-cutting a VM mid-update
+exposed it. If the boot logic is ours, the fault battery is the only thing that checks it.
+
 ## Open
 
 - **Only the wizard image is baked in.** The rest of the stack still pulls at provision
