@@ -468,6 +468,76 @@ packaging causes, Rocky 9 is the escape hatch.
 architecture (btrfs snapshots + `transactional-update` instead of A/B slots), so it
 belongs in the bake-off below as a candidate, not in the base-distro comparison.
 
+## How an update actually works, per option — and what the operator sees
+
+The mechanics differ far less than the arguments about them suggest: every A/B option
+gives the operator the same shape — one click, a download, a reboot, and an automatic
+return to the working system if the new one misbehaves. What genuinely differs is
+**download size**, **who owns the boot-path code**, and **who patches the userland**.
+
+One correction that keeps recurring: **"Yocto + Debian" is not an option.** Yocto
+compiles its own distribution from source recipes; it replaces Debian rather than
+building it. The real third option is Yocto + `meta-rauc` *instead of* Debian.
+
+### The options
+
+**A. Rugix + Debian** *(built, boots, wizard serves 3/3)*
+`rugix-ctrl update install` writes the spare slot, reboots into it provisionally, and
+`pithead doctor --json` gates `rugix-ctrl system commit`. No commit, or a failed boot,
+and the box returns to the old slot by itself. Delta updates ride plain HTTP range
+requests — no update server, GitHub Releases is enough.
+
+**B. RAUC + Debian** *(built, boots; the current recommendation)*
+`rauc install` writes the whole slot image and arms a GRUB try-counter; the new system
+boots, and `rauc status mark-good` commits. If it never marks itself good, GRUB's
+counter expires and the previous slot boots. Bundles must be X.509-signed — RAUC
+refuses unsigned ones, which suits our mandatory-signing posture.
+
+**C. Yocto + meta-rauc** *(not built)*
+Runtime behaviour is identical to B, because it *is* RAUC. Everything that differs is
+on our side of the fence: `meta-rauc` maintains the bootloader integration we would
+otherwise own, at the price of owning the entire userland instead.
+
+**D. systemd-sysupdate + Debian** *(not built)*
+`systemd-sysupdate` fetches a versioned partition image from a plain HTTP directory
+and writes the spare partition; `systemd-boot` counts boot attempts and
+`systemd-bless-boot` commits. Best bus factor of any option — it is systemd itself —
+but it means dropping GRUB, and full-root A/B is less field-proven here than RAUC.
+
+**E. openSUSE MicroOS / `transactional-update`** *(not built)*
+Snapshots rather than slots: update inside a new btrfs snapshot, reboot into it, roll
+back by booting the previous one. Downloads are small because it updates *packages*.
+That is also its disqualifier for an appliance: the box assembles its own state from a
+package archive, so we no longer ship exactly what we tested.
+
+**F. The DIY channel today** *(shipping)*
+`pithead upgrade` pulls new container images and restarts them. No reboot, no OS
+rollback — the operator owns the host. This stays as-is; the appliance exists precisely
+because not everyone wants that job.
+
+### What the operator actually experiences
+
+| | Download | Downtime | On failure | Bandwidth over Tor |
+|---|---|---|---|---|
+| A. Rugix | delta, tens of MB | one reboot (~1–2 min) + sidechain resync | automatic fallback, old version keeps running | minutes |
+| B. RAUC | **full slot image, ~700 MB–1 GB** unless adaptive updates are implemented | same | same (GRUB try-counter) | **tens of minutes** |
+| C. Yocto + RAUC | full image, but a minimal userland — a few hundred MB | same | same | shorter than B |
+| D. sysupdate | full partition image | same | same (boot counting) | as B |
+| E. MicroOS | package deltas, small | same | boot previous snapshot | minutes |
+| F. DIY | container layers | no reboot; containers restart | none for the OS | minutes |
+
+**The one user-visible difference that matters between the live candidates is download
+size.** Updates are fetched over Tor by default, so Rugix's block-level deltas (tens of
+MB) versus RAUC's full slot image (most of a gigabyte) is the difference between a
+few minutes and most of an hour on a home connection. RAUC has an equivalent —
+"adaptive updates", which fetch only the blocks that differ — but it is extra work we
+have not done. **If RAUC is adopted, implementing adaptive updates is not optional
+polish; it is what keeps the update experience acceptable over Tor.**
+
+Everything else the operator sees is the same across A–D: the dashboard offers the
+update, the box reboots once, mining resumes, and a bad release un-installs itself
+without anyone driving to the machine.
+
 ## The updater bake-off — decision procedure
 
 The A/B updater is the one component whose failures land in the field, unattended, on
