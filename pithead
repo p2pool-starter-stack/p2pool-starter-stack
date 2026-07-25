@@ -1271,10 +1271,13 @@ firstboot_wizard() {
         setup
         return
     fi
-    local engine image spool token ver
+    local engine image spool token
     engine=$(container_engine)
-    ver=$(tr -d ' \t\r\n' <VERSION 2>/dev/null || true)
-    image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${ver:-dev}"
+    # STACK_VERSION is the ONE place the registry tag is derived (a release is v<VERSION>, a
+    # source checkout is dev) — deriving it here instead cost a boot: the archive holds
+    # :vX.Y.Z while a hand-rolled ":$VERSION" looks for a tag that was never published.
+    export_build_provenance
+    image="${PITHEAD_REGISTRY}/pithead-dashboard:${STACK_VERSION}"
     spool="$PWD/data/firstboot"
     mkdir -p "$spool"
     # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses

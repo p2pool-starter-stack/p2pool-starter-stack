@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         linux-image-amd64 initramfs-tools zstd \
         grub-efi-amd64 shim-signed \
         podman netavark aardvark-dns catatonit uidmap \
-        jq openssl curl ca-certificates xxd \
+        jq openssl curl ca-certificates xxd iproute2 \
         fdisk parted e2fsprogs dosfstools \
         avahi-daemon libnss-mdns \
         openssh-server sudo less nano htpdate
@@ -29,7 +29,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (config templates and entrypoints that services bind-mount). Build context = repo root.
 COPY pithead pithead-completion.bash VERSION docker-compose.yml \
      config.reference.json config.core-keys.json config.minimal.json /opt/pithead/
-COPY build/ /opt/pithead/build/
+# ONLY the build/ subtrees services bind-mount at runtime (config templates and wrapper
+# entrypoints). Copying the whole tree ships build/dashboard/Dockerfile, which is exactly what
+# is_source_checkout() looks for — the appliance would then think it is a dev checkout, tag its
+# images :dev, set the pull policy to never, and SKIP cosign verification of the release images.
+COPY build/monero/ /opt/pithead/build/monero/
+COPY build/tari/ /opt/pithead/build/tari/
+COPY build/tari-wallet/ /opt/pithead/build/tari-wallet/
+RUN rm -f /opt/pithead/build/*/Dockerfile
 RUN chmod +x /opt/pithead/pithead
 
 # Appliance identity: the engine pin doctor and the wizard read, hugepages (load-bearing for the
