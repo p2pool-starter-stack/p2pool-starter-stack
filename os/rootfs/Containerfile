@@ -10,17 +10,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The OS: init + kernel + bootloader userland for the generic-grub-efi target, the container
 # engine, pithead's host dependencies, mDNS (pithead.local), and time sync (before Tor — the
 # firstboot ordering rule). openssh-server ships installed but DISABLED: SSH is a wizard opt-in.
-# The shell-out set is LOAD-BEARING and debian-slim ships none of it: rugix-ctrl runs as init and
-# calls sfdisk + mkfs.ext4 to expand the image into the A/B layout, and netavark calls nft to
-# program container networking. Each absence surfaces as a bare "os error 2" from a Rust binary,
-# so the whole set is audited against the image rather than added one failure at a time.
+# The shell-out set is LOAD-BEARING and debian-slim ships none of it: netavark calls nft to
+# program container networking, and pithead-install calls sgdisk (gdisk), partprobe (parted),
+# jq, lsblk, mkfs and the grub tools ON THE APPLIANCE — a tool the build host happens to have is
+# not a tool the image has. Each absence surfaces at runtime, so the set is audited against the
+# built image rather than added one failure at a time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv systemd-timesyncd systemd-resolved dbus udev \
         linux-image-amd64 initramfs-tools zstd \
         grub-efi-amd64 shim-signed \
         podman netavark aardvark-dns catatonit uidmap \
         jq openssl curl ca-certificates xxd iproute2 \
-        fdisk parted e2fsprogs dosfstools \
+        fdisk gdisk parted e2fsprogs dosfstools \
         nftables iptables systemd-repart \
         avahi-daemon libnss-mdns \
         openssh-server sudo less nano htpdate
