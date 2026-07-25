@@ -18,6 +18,7 @@ set -uo pipefail
 IMAGE=""
 KEEP=0
 PHASE="all"
+UPDATER="rugix"
 VM="pithead-os-test"
 BAKERY_DIR="os/bakery"
 DISK="/srv/code/bench-vm/pithead-os-test.img"
@@ -35,6 +36,10 @@ while [ $# -gt 0 ]; do
         ;;
     --phase)
         PHASE="$2"
+        shift 2
+        ;;
+    --updater)
+        UPDATER="$2"
         shift 2
         ;;
     --vm)
@@ -64,6 +69,66 @@ bad() {
 }
 info() { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+KEY="$HOME/.ssh/pithead-os-test"
+ip=""
+
+_ssh() {
+    ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
+}
+_wait_ssh() { # $1 seconds — the definition of "not bricked"
+    local deadline=$(($(date +%s) + $1))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        _ssh true && return 0
+        sleep 5
+    done
+    return 1
+}
+_marker() { _ssh cat /etc/pithead-test-marker 2>/dev/null | tr -d "\r\n"; }
+
+# Build a bootable image carrying $1 as its slot marker, for the selected updater.
+_build_image() {
+    [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
+    if [ "$UPDATER" = "rauc" ]; then
+        PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
+            os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
+        os/rauc/mkimage.sh >>/tmp/os-fault-build.log 2>&1 || return 1
+        printf 'os/rauc/build/system.img'
+    else
+        PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
+            os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
+        printf 'os/bakery/build/pithead-os-amd64/system.img'
+    fi
+}
+
+# Build an update bundle carrying $1 as its marker.
+_build_bundle() {
+    if [ "$UPDATER" = "rauc" ]; then
+        PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
+            os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
+        os/rauc/mkbundle.sh >>/tmp/os-fault-bundle.log 2>&1 || return 1
+        find os/rauc/build -name '*.raucb' | head -1
+    else
+        PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
+        PITHEAD_BAKE_ARTIFACT=bundle os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
+        find os/bakery/build -name '*.rugixb' | head -1
+    fi
+}
+
+# Per-updater command vocabulary — the ONLY updater-specific part of the battery.
+_install_cmd() {
+    case "$UPDATER" in
+    rauc) printf 'rauc install %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --reboot no %s' "$1" ;;
+    esac
+}
+_commit_cmd() {
+    case "$UPDATER" in
+    rauc) printf 'rauc status mark-good' ;;
+    *) printf 'rugix-ctrl system commit' ;;
+    esac
+}
 
 require_host() {
     for c in virsh virt-install qemu-img; do
@@ -294,10 +359,91 @@ phase_update() {
         bad "expected v2 after commit, got '$marker'"
 }
 
+phase_fault() {
+    info "phase: fault injection ($UPDATER) — a brick is disqualifying, not deducted"
+    local img bundle marker i
+
+    info "building v1 image (marker v1)"
+    img=$(_build_image v1) || {
+        bad "v1 image build failed (/tmp/os-fault-build.log)"
+        return
+    }
+    _vm_boot_disk "$img" && _wait_ssh 300 || {
+        bad "v1 guest never answered SSH"
+        return
+    }
+    ok "v1 boots and answers SSH ($ip)"
+
+    info "building v2 bundle (marker v2)"
+    bundle=$(_build_bundle v2) || {
+        bad "v2 bundle build failed (/tmp/os-fault-bundle.log)"
+        return
+    }
+    [ -n "$bundle" ] && [ -f "$bundle" ] || {
+        bad "no update bundle produced"
+        return
+    }
+    ok "v2 bundle built: $(basename "$bundle")"
+    scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
+        "$bundle" "root@$ip:/data/update.bundle" || {
+        bad "bundle copy to the guest failed"
+        return
+    }
+
+    # Fault A: cut power WHILE the updater is writing the spare slot. The invariant is not that
+    # the update survives — it is that the box still boots something.
+    for i in 1 2 3; do
+        info "fault A$i — destroy mid-write"
+        _ssh "nohup sh -c '$(_install_cmd /data/update.bundle)' >/tmp/inst.log 2>&1 &" || true
+        sleep 12
+        virsh destroy "$VM" >/dev/null 2>&1 || true
+        sleep 3
+        virsh start "$VM" >/dev/null 2>&1 || true
+        if _wait_ssh 300; then
+            marker=$(_marker)
+            ok "A$i: survived a mid-write power cut — booted slot marker '$marker'"
+        else
+            bad "A$i: BRICKED — no boot after a mid-write power cut (disqualifying)"
+            return
+        fi
+    done
+
+    # Fault B: cut power during the commit itself, the smallest and most dangerous window.
+    info "installing v2 fully, then destroying mid-commit"
+    _ssh "$(_install_cmd /data/update.bundle)" >/dev/null 2>&1 || true
+    _ssh reboot >/dev/null 2>&1 || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "guest never returned after installing v2"
+        return
+    }
+    marker=$(_marker)
+    info "post-install slot marker: '$marker'"
+    _ssh "nohup sh -c '$(_commit_cmd)' >/tmp/commit.log 2>&1 &" || true
+    sleep 1
+    virsh destroy "$VM" >/dev/null 2>&1 || true
+    sleep 3
+    virsh start "$VM" >/dev/null 2>&1 || true
+    if _wait_ssh 300; then
+        ok "B: survived a mid-commit power cut — booted slot marker '$(_marker)'"
+    else
+        bad "B: BRICKED — no boot after a mid-commit power cut (disqualifying)"
+        return
+    fi
+
+    # The box must still be updatable afterwards, not merely alive.
+    if _ssh "$(_install_cmd /data/update.bundle)" >/dev/null 2>&1; then
+        ok "still updatable after fault injection"
+    else
+        bad "no longer accepts an update after fault injection"
+    fi
+}
+
 require_host
 case "$PHASE" in
 boot) phase_boot ;;
 update) phase_update ;;
+fault) phase_fault ;;
 all)
     phase_boot
     phase_update
