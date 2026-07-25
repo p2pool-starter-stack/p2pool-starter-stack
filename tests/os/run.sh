@@ -138,6 +138,13 @@ _boot_spare_cmd() {
     *) printf 'rugix-ctrl system reboot --spare' ;;
     esac
 }
+# The normal update path an operator would take: install and end up running the new version.
+_install_and_boot_cmd() {
+    case "$UPDATER" in
+    rauc) printf 'rauc install %s && systemctl reboot' "$1" ;;
+    *) printf 'rugix-ctrl update install %s' "$1" ;;
+    esac
+}
 # Operator-initiated rollback: the "put it back" button, distinct from automatic fallback.
 _rollback_cmd() {
     case "$UPDATER" in
@@ -378,7 +385,7 @@ phase_update() {
 
 phase_fault() {
     info "phase: fault injection ($UPDATER) — a brick is disqualifying, not deducted"
-    local img bundle marker i
+    local img bundle marker i out
 
     info "building v1 image (marker v1)"
     img=$(_build_image v1) || {
@@ -427,8 +434,8 @@ phase_fault() {
 
     # Fault B: cut power during the commit itself, the smallest and most dangerous window.
     info "installing v2 fully, then destroying mid-commit"
-    _ssh "$(_install_cmd /data/update.bundle)" >/dev/null 2>&1 || true
-    _ssh "$(_boot_spare_cmd)" >/dev/null 2>&1 || true
+    out=$(_ssh "$(_install_and_boot_cmd /data/update.bundle) 2>&1" || true)
+    [ -n "$out" ] && info "install output: $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-160)"
     sleep 10
     _wait_ssh 300 || {
         bad "guest never returned after installing v2"
