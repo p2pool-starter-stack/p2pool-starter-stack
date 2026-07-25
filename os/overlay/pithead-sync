@@ -1,0 +1,20 @@
+#!/bin/bash
+# Copy the program tree from the system slot onto the data partition, leaving state untouched.
+# Runs every boot, so an A/B update delivers its new program the first time the new slot boots.
+set -euo pipefail
+SRC=/opt/pithead
+DST=/data/pithead
+
+mkdir -p "$DST"
+for f in pithead pithead-completion.bash VERSION docker-compose.yml \
+    config.reference.json config.core-keys.json config.minimal.json cosign.pub; do
+    [ -f "$SRC/$f" ] && install -m 644 "$SRC/$f" "$DST/$f"
+done
+[ -f "$DST/pithead" ] && chmod 755 "$DST/pithead"
+# Mounted-into-containers config templates and the baked images: program data, replaced wholesale.
+for d in build images; do
+    [ -d "$SRC/$d" ] || continue
+    rm -rf "${DST:?}/$d"
+    cp -a "$SRC/$d" "$DST/$d"
+done
+echo "pithead-sync: program tree synced to $DST (state preserved)"

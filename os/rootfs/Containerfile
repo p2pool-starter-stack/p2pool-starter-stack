@@ -70,8 +70,17 @@ RUN printf '[Match]\nName=en*\nName=eth*\n\n[Network]\nDHCP=yes\nMulticastDNS=ye
 # First boot: time sync, then the wizard (only while unprovisioned). The unit's console output
 # carries the URL + one-time token per the phase-3 design.
 COPY os/overlay/pithead-firstboot.service /etc/systemd/system/pithead-firstboot.service
+COPY os/overlay/pithead-sync.service /etc/systemd/system/pithead-sync.service
+COPY os/overlay/pithead-sync /usr/local/sbin/pithead-sync
+RUN chmod +x /usr/local/sbin/pithead-sync
+# The updater is chosen per image (bake-off candidates). rugix-ctrl arrives via the bakery layer's
+# core recipe; RAUC is a Debian package, so it is installed here when selected.
+ARG PITHEAD_UPDATER=""
+RUN if [ "$PITHEAD_UPDATER" = "rauc" ]; then \
+        apt-get install -y --no-install-recommends rauc; \
+    fi
 RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolved \
-        systemd-networkd systemd-networkd-wait-online pithead-firstboot.service \
+        systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
     && systemctl disable ssh \
     && echo pithead > /etc/hostname
 
