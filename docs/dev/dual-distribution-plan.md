@@ -468,6 +468,72 @@ packaging causes, Rocky 9 is the escape hatch.
 architecture (btrfs snapshots + `transactional-update` instead of A/B slots), so it
 belongs in the bake-off below as a candidate, not in the base-distro comparison.
 
+## Installing to disk — designed 2026-07-25
+
+The plan has always said the appliance runs from an internal SSD/NVMe and that a USB
+installer copies it there. This section fixes the design, because neither updater
+provides one and the difference is not a tiebreaker between them.
+
+**Neither candidate installs to a disk, and this does not separate them.** RAUC's
+documentation is explicit that partitioning is "not in the scope" of RAUC
+(`docs/integration.rst`). Rugix does bootstrap a layout on first boot, but
+`find_system_device()` resolves the block device backing `/`, so it always targets the
+medium it booted from — the target is not selectable. Disk selection is our tooling
+either way, exactly as this plan already assumed.
+
+The one asymmetry is what we build it on top of. Rugix exposes a declarative layout
+config and `bootstrap/prepare` hooks, so an installer written against it drives
+machinery that already exists. Against RAUC there is no partitioning layer at all, and
+hand-written partitioning is where this project's bugs have actually come from — see
+the bake-off's defect record.
+
+### The design: one image, two modes
+
+The USB carries a compressed copy of the pristine system image on its data partition.
+When the appliance boots from removable media and finds an internal disk, the wizard's
+first screen becomes a disk picker instead of the setup form. Installing is:
+
+    zstd -dc /data/install/system.img.zst | dd of=/dev/<target> bs=4M
+
+then reboot. The target bootstraps itself on first boot through the same code path the
+USB would have used. There is no second install mechanism to write, test, or sign — the
+installer's whole job is choosing a disk and copying bytes.
+
+Cost: roughly doubles the USB artifact (~1.8 GiB compressed today). The alternative, a
+separate slim installer image, is smaller but adds an artifact to build, sign, release
+and test, and the destructive path would then be exercised by different code than the
+one users boot. Sized deliberately.
+
+Non-negotiable guards, because this step destroys data:
+- The picker never preselects a disk, and never offers the disk it booted from.
+- It shows model, size, and serial — a bare `/dev/sda` is not enough to choose safely.
+- A labeled `data` partition on the target means reinstall, not overwrite: the installer
+  preserves it and re-mounts it. A 250+ GB synced chain is not re-downloadable in an
+  afternoon.
+- Confirmation is typing the target's name, not pressing Enter on a highlighted row.
+
+### systemd-repart, and what it replaces
+
+Debian 13 ships `systemd-repart` (257.13). It creates and grows GPT partitions from
+declarative drop-ins in `/usr/lib/repart.d/`, with control over partition type, label
+and sizing. That is the same job Rugix's bootstrap does for us and that RAUC leaves
+entirely to us, available as an upstream-maintained mechanism on the base we already
+chose.
+
+This matters to the bake-off. The RAUC candidate's weakest point is the volume of
+hand-written image plumbing it requires, and `systemd-repart` removes the partitioning
+share of it. It does not touch bootloader slot selection, which is where most of the
+candidate's defects actually landed, so it narrows the gap rather than closing it.
+Adopting it is a follow-up either way: it is orthogonal to the updater choice.
+
+**live-build was evaluated and rejected for the appliance image.** It is Debian's
+official live-media builder (1:20250505 in Debian 13) and it builds live ISOs —
+squashfs plus live-boot. It does not produce A/B partitioned disk images, so choosing it
+would replace a working container-to-tarball step while leaving the partitioning and
+bootloader layers, which are the layers that have actually broken, untouched.
+live-build is a reasonable fit for a standalone installer ISO if we ever decide the
+dual-purpose image is too large; it is not a fit for the appliance itself.
+
 ## How an update actually works, per option — and what the operator sees
 
 The mechanics differ far less than the arguments about them suggest: every A/B option
