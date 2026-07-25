@@ -12,9 +12,14 @@ cd "$(dirname "$0")/../.."
 
 OUT="${1:-os/rauc/build/system.img}"
 # Only the ESP + slot A ship. systemd-repart creates slot B and /data on the target machine's
-# real disk at first boot, so the image does not carry 8 GiB of zeros and an /data sized for
-# the image rather than the disk. 9 GiB covers 256M ESP + 8 GiB slot A + alignment.
-SIZE_GIB="${PITHEAD_IMAGE_GIB:-9}"
+# real disk at first boot, so the image does not carry gigabytes of zeros and an /data sized
+# for the image rather than the disk. 5 GiB covers 256M ESP + a 4 GiB slot + alignment.
+#
+# Slots are 4 GiB, and the number is load-bearing: repart is transactional, so a boot medium
+# must fit ESP + BOTH slots + data's 4 GiB minimum or NOTHING is created and the machine drops
+# to an emergency shell. At 4 GiB per slot the whole layout needs ~12.5 GiB — a real 16 GB
+# stick (14.9 GiB) works. At 8 GiB it needed ~20.5 GiB and a 16 GB stick failed to boot.
+SIZE_GIB="${PITHEAD_IMAGE_GIB:-5}"
 TARBALL="os/build/pithead-root.tar"
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh
@@ -43,7 +48,7 @@ sgdisk -Z "$OUT" >/dev/null
 # builds them on the target's real disk at first boot. Creating them here would size /data to the
 # image instead of the machine, which is what blocked install-to-disk.
 sgdisk -n 1:0:+256M -t 1:ef00 -c 1:esp \
-    -n 2:0:+8G -t 2:8300 -c 2:system-a "$OUT" >/dev/null
+    -n 2:0:+4G -t 2:8300 -c 2:system-a "$OUT" >/dev/null
 
 LOOP=$(losetup -Pf --show "$OUT")
 cleanup() {

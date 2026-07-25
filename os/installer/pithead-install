@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Must match os/rauc/mkimage.sh and os/rootfs/repart.d — the three describe one layout.
 ESP_MIB=256
-SLOT_GIB=8
+SLOT_GIB=4
 
 die() {
     echo "pithead-install: $*" >&2

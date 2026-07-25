@@ -22,10 +22,10 @@ trap 'umount "$WORK/mnt" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 }
 
 # A slot image is a filesystem image of the whole rootfs — RAUC replaces the inactive slot
-# wholesale. 8 GiB to match the slot size.
+# wholesale. 4 GiB to match the slot size (see mkimage.sh for why 4).
 echo "==> building the slot filesystem image"
 mkdir -p "$WORK/bundle" "$WORK/mnt"
-truncate -s 8G "$WORK/rootfs.ext4"
+truncate -s 4G "$WORK/rootfs.ext4"
 mkfs.ext4 -q -L system "$WORK/rootfs.ext4"
 mount -o loop "$WORK/rootfs.ext4" "$WORK/mnt"
 tar -xf "$TARBALL" -C "$WORK/mnt"

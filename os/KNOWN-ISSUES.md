@@ -92,6 +92,18 @@ hand-started diagnostic guest kept the DHCP lease the harness reads back, so the
 drove the wrong machine and reported passing legs. `tests/os/run.sh` now refuses to start
 when another `pithead-*` domain is defined.
 
+**A copy of / is not a copy of the slot.** The disk installer ran `tar --one-file-system`
+from `/` and shipped an empty `/var` — the overlay mount is a different filesystem, so the
+slot's real `/var` (dpkg database, `/var/lib`) was invisible to the walk. A bind mount of
+`/` exposes the slot filesystem underneath every runtime mount and is the only correct
+source for a self-copy. Nothing failed at boot; the damage was a machine with no package
+database, found only because `--phase install` asserts `/var/lib/dpkg/status` exists.
+
+**lsblk column output cannot be parsed with `read`.** A model with spaces shifts fields
+right; an empty model (all virtio, some NVMe) shifts them left. Both failure modes made
+real disks silently vanish from the installer's inventory. `lsblk -J` through `jq` or
+nothing.
+
 ## Open
 
 - **The manual hardware battery has not been run.** Everything above is KVM. Secure Boot,
@@ -101,6 +113,11 @@ when another `pithead-*` domain is defined.
   time, so the plan's "first boot works offline" property is partial: the setup page
   works without a network, provisioning does not. Baking the full set roughly triples
   the image and inflates every update bundle — sized deliberately, not forgotten.
+- **Every direct-flashed stick shares the image's identity material.** `/etc/machine-id`
+  and the SSH host keys are baked at image build, so two sticks flashed from one release
+  are identical until something regenerates them. The installer resets machine-id for
+  installed systems; direct-flash boots and host-key regeneration need a first-boot
+  answer before fleet shipping.
 - **Hugepages are reserved unconditionally** (6 GiB), so the appliance needs ≥ 16 GiB
   RAM to leave room for the stack. The harness sizes its VM accordingly; a real
   appliance should either check or scale the reservation.

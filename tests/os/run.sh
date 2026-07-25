@@ -351,7 +351,7 @@ phase_update() {
     # The slots must NOT have grown — an A/B pair has to stay interchangeable.
     local slot_gib
     slot_gib=$(_ssh "df -BG --output=size / 2>/dev/null | tail -1 | tr -dc '0-9'")
-    if [ -n "$slot_gib" ] && [ "$slot_gib" -le 9 ]; then
+    if [ -n "$slot_gib" ] && [ "$slot_gib" -le 5 ]; then
         ok "system slot stayed fixed at ${slot_gib} GiB"
     else
         bad "system slot grew to '${slot_gib:-none}' GiB — slots must stay interchangeable"
@@ -463,7 +463,10 @@ phase_install() {
     vm_destroy
     rm -f "$target_disk"
     cp "$img" "$DISK"
-    qemu-img resize "$DISK" 12G >/dev/null 2>&1 || true
+    # 16G, the smallest real stick the docs allow: ESP + two 4 GiB slots + data's 4 GiB minimum
+    # must fit or repart creates nothing and the guest lands in an emergency shell — which is
+    # exactly what this sizing proves cannot happen on supported media.
+    qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
     # The target: blank, larger than the source medium, so the grow assertions distinguish the
     # two disks beyond doubt.
     qemu-img create -f raw "$target_disk" 30G >/dev/null
