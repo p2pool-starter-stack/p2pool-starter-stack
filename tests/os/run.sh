@@ -579,7 +579,7 @@ phase_fault() {
         ok "still updatable after fault injection"
     else
         bad "no longer accepts an update after fault injection"
-        printf '%s\n' "$out" | tail -12 | sed 's/^/       /' 
+        printf '%s\n' "$out" | tail -12 | sed 's/^/       /'
     fi
 }
 

@@ -531,7 +531,9 @@ The USB carries a compressed copy of the pristine system image on its data parti
 When the appliance boots from removable media and finds an internal disk, the wizard's
 first screen becomes a disk picker instead of the setup form. Installing is:
 
-    zstd -dc /data/install/system.img.zst | dd of=/dev/<target> bs=4M
+```bash
+zstd -dc /data/install/system.img.zst | dd of=/dev/<target> bs=4M
+```
 
 then reboot. The target bootstraps itself on first boot through the same code path the
 USB would have used. There is no second install mechanism to write, test, or sign — the
@@ -543,6 +545,7 @@ and test, and the destructive path would then be exercised by different code tha
 one users boot. Sized deliberately.
 
 Non-negotiable guards, because this step destroys data:
+
 - The picker never preselects a disk, and never offers the disk it booted from.
 - It shows model, size, and serial — a bare `/dev/sda` is not enough to choose safely.
 - A labeled `data` partition on the target means reinstall, not overwrite: the installer
@@ -867,6 +870,7 @@ are better, and Rugix's signing path is absent from its shipped `docs/` and had 
 read out of the source.
 
 **What adoption is now conditional on** — the risk did not disappear, it got managed:
+
 - `tests/os/run.sh` is a release gate, not a spike artifact. It caught all five defects
   and it is the only thing standing between the hand-written boot path and a fleet.
 - Adopt `systemd-repart` for partitioning (see the installer section). It removes the

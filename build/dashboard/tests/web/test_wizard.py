@@ -183,8 +183,9 @@ async def test_confirmation_must_match_the_chosen_disk(client, installer):
 
 
 async def test_unauthed_install_post_writes_nothing(client, installer):
-    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"},
-                          allow_redirects=False)
+    r = await client.post(
+        "/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"}, allow_redirects=False
+    )
     assert r.status == 302
     assert not (installer / "install-target").exists()
 
@@ -234,8 +235,11 @@ def test_remote_auth_only_written_when_asked_for():
     plain = _cfg(monero_mode="remote", monero_remote_host="h")
     assert "node_username" not in plain["monero"]
     authed = _cfg(
-        monero_mode="remote", monero_remote_host="h",
-        monero_remote_auth="1", monero_remote_user="u", monero_remote_pass="p",
+        monero_mode="remote",
+        monero_remote_host="h",
+        monero_remote_auth="1",
+        monero_remote_user="u",
+        monero_remote_pass="p",
     )
     assert authed["monero"]["node_username"] == "u"
 
