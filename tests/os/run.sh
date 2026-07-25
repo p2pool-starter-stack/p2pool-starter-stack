@@ -117,10 +117,16 @@ _build_bundle() {
 }
 
 # Per-updater command vocabulary — the ONLY updater-specific part of the battery.
+#
+# NOTE both updaters refuse unverified bundles by default, which is correct and is why the test
+# bundles carry an explicit bypass: this battery measures crash-safety, not the signing chain.
+# Production signs bundles with the release key — see the signing section of the plan. RAUC has
+# no bypass at all (it will not install an unsigned bundle), so its bundles are signed with the
+# development keypair mkimage.sh generates.
 _install_cmd() {
     case "$UPDATER" in
     rauc) printf 'rauc install %s' "$1" ;;
-    *) printf 'rugix-ctrl update install --reboot no %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification --reboot no %s' "$1" ;;
     esac
 }
 _commit_cmd() {
@@ -142,7 +148,7 @@ _boot_spare_cmd() {
 _install_and_boot_cmd() {
     case "$UPDATER" in
     rauc) printf 'rauc install %s && systemctl reboot' "$1" ;;
-    *) printf 'rugix-ctrl update install %s' "$1" ;;
+    *) printf 'rugix-ctrl update install --insecure-skip-bundle-verification %s' "$1" ;;
     esac
 }
 # Operator-initiated rollback: the "put it back" button, distinct from automatic fallback.
