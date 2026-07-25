@@ -76,10 +76,13 @@ require_host() {
         echo "/dev/kvm absent — this harness needs hardware virtualization" >&2
         exit 2
     }
-    [ -n "$IMAGE" ] && [ -f "$IMAGE" ] || {
-        echo "--image PATH is required and must exist (build with os/build-image.sh)" >&2
-        exit 2
-    }
+    # --image is the boot phase's input; the update phase builds its own v1/v2 images.
+    if [ "$PHASE" != "update" ]; then
+        [ -n "$IMAGE" ] && [ -f "$IMAGE" ] || {
+            echo "--image PATH is required for the boot phase (build with os/build-image.sh)" >&2
+            exit 2
+        }
+    fi
 }
 
 vm_destroy() {
