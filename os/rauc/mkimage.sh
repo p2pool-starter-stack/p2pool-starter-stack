@@ -13,6 +13,8 @@ cd "$(dirname "$0")/../.."
 OUT="${1:-os/rauc/build/system.img}"
 SIZE_GIB="${PITHEAD_IMAGE_GIB:-20}"
 TARBALL="os/bakery/build/pithead-root.tar"
+# shellcheck source=os/rauc/populate-slot.sh
+. os/rauc/populate-slot.sh
 CERT_DIR="os/rauc/certs"
 
 [ -s "$TARBALL" ] || {
@@ -56,26 +58,7 @@ echo "==> populating slot A from the shared rootfs tarball"
 mkdir -p /mnt/rauc-sys /mnt/rauc-esp
 mount "${LOOP}p2" /mnt/rauc-sys
 tar -xf "$TARBALL" -C /mnt/rauc-sys
-# Same docker-export fixes the Rugix candidate needs — systemd refuses PID 1 with /.dockerenv,
-# and the export omits the pseudo-filesystem mount points.
-rm -f /mnt/rauc-sys/.dockerenv
-mkdir -p /mnt/rauc-sys/{dev,proc,sys,run,tmp,data,boot/efi}
-# State: RAUC has no persist/state model, so mounting the data partition is ours. Rugix does this
-# from a two-line [[persist]] declaration; here it is an fstab entry we write and own, and the
-# "what survives a slot replacement" question is still unanswered (/etc changes in a slot are
-# lost when RAUC overwrites it, whereas Rugix keeps an /etc overlay on the data partition).
-# Writable state, declared explicitly because the root is read-only:
-#   /data  — operator state (config, chains, container storage), survives updates
-#   /var   — machine state (logs, runtime), an OVERLAY so the new slot's /var shows through
-#            after an update while local machine state persists. A bind mount would pin the
-#            old slot's /var forever; the overlay keeps the stack fresh and the state local.
-printf 'LABEL=data /data ext4 defaults,noatime 0 2\n' >>/mnt/rauc-sys/etc/fstab
-printf 'LABEL=ESP /boot/efi vfat umask=0077,x-systemd.requires-mounts-for=/data 0 1\n' \
-    >>/mnt/rauc-sys/etc/fstab
-printf 'overlay /var overlay lowerdir=/var,upperdir=/data/overlay/var,workdir=/data/overlay/var-work,x-systemd.requires-mounts-for=/data 0 0\n' \
-    >>/mnt/rauc-sys/etc/fstab
-install -D -m 644 os/rauc/system.conf /mnt/rauc-sys/etc/rauc/system.conf
-install -D -m 644 "$CERT_DIR/cert.pem" /mnt/rauc-sys/etc/rauc/keyring.pem
+populate_slot /mnt/rauc-sys
 
 echo "==> bootloader"
 mount "${LOOP}p1" /mnt/rauc-esp

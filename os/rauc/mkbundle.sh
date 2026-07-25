@@ -7,6 +7,8 @@ cd "$(dirname "$0")/../.."
 OUT="${1:-os/rauc/build/update.raucb}"
 TARBALL="os/bakery/build/pithead-root.tar"
 CERT_DIR="os/rauc/certs"
+# shellcheck source=os/rauc/populate-slot.sh
+. os/rauc/populate-slot.sh
 WORK=$(mktemp -d)
 trap 'umount "$WORK/mnt" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
@@ -27,10 +29,7 @@ truncate -s 8G "$WORK/rootfs.ext4"
 mkfs.ext4 -q -L system "$WORK/rootfs.ext4"
 mount -o loop "$WORK/rootfs.ext4" "$WORK/mnt"
 tar -xf "$TARBALL" -C "$WORK/mnt"
-rm -f "$WORK/mnt/.dockerenv"
-mkdir -p "$WORK/mnt"/{dev,proc,sys,run,tmp,data,boot/efi}
-install -D -m 644 os/rauc/system.conf "$WORK/mnt/etc/rauc/system.conf"
-install -D -m 644 "$CERT_DIR/cert.pem" "$WORK/mnt/etc/rauc/keyring.pem"
+populate_slot "$WORK/mnt"
 umount "$WORK/mnt"
 mv "$WORK/rootfs.ext4" "$WORK/bundle/rootfs.ext4"
 
