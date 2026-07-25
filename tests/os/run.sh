@@ -553,10 +553,14 @@ phase_install() {
     }
     ok "installed system boots from the internal disk"
 
-    if _ssh "findmnt -no SOURCE /" | grep -q vda; then
+    # findmnt reports the by-partlabel symlink the cmdline named; resolve to the parent disk
+    # before comparing, or the assertion fails on a correctly installed system.
+    local rootdev
+    rootdev=$(_ssh "lsblk -no PKNAME \$(findmnt -no SOURCE /)" | head -1)
+    if [ "$rootdev" = "vda" ]; then
         ok "root is on the target disk, not a leftover medium"
     else
-        bad "root is on '$(_ssh "findmnt -no SOURCE /")' — expected the target disk"
+        bad "root is on '${rootdev:-unknown}' — expected the target disk (vda)"
     fi
     # THE assertion this phase exists for: the copy must include the slot's real /var, which the
     # overlay mount hides from a naive copy of /. An installed machine without a dpkg database
@@ -578,10 +582,22 @@ phase_install() {
     else
         bad "/data on the target is '${data_gib:-none}' GiB — repart did not size it to the disk"
     fi
-    if curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
+    # First boot on this disk: podman must load the wizard image from the baked tarball before
+    # anything serves. SSH answers long before that finishes, so this check gets the same
+    # patience the boot phase has instead of firing the moment the shell is up.
+    local wtries=0 wizard_up=0
+    while [ "$wtries" -lt 36 ]; do
+        if curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
+            wizard_up=1
+            break
+        fi
+        sleep 5
+        wtries=$((wtries + 1))
+    done
+    if [ "$wizard_up" -eq 1 ]; then
         ok "setup wizard serves on the installed system"
     else
-        bad "no setup wizard on :80 of the installed system"
+        bad "no setup wizard on :80 of the installed system within 180s"
     fi
     rm -f "$target_disk"
 }
