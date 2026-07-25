@@ -142,7 +142,8 @@ require_host() {
         exit 2
     }
     # --image is the boot phase's input; the update phase builds its own v1/v2 images.
-    if [ "$PHASE" != "update" ]; then
+    # --image is the boot phase's input; update and fault build their own v1/v2 images.
+    if [ "$PHASE" = "boot" ] || [ "$PHASE" = "all" ]; then
         [ -n "$IMAGE" ] && [ -f "$IMAGE" ] || {
             echo "--image PATH is required for the boot phase (build with os/build-image.sh)" >&2
             exit 2

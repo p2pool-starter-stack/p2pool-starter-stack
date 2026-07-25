@@ -526,13 +526,22 @@ because not everyone wants that job.
 | E. MicroOS | package deltas, small | same | boot previous snapshot | minutes |
 | F. DIY | container layers | no reboot; containers restart | none for the OS | minutes |
 
-**The one user-visible difference that matters between the live candidates is download
-size.** Updates are fetched over Tor by default, so Rugix's block-level deltas (tens of
-MB) versus RAUC's full slot image (most of a gigabyte) is the difference between a
-few minutes and most of an hour on a home connection. RAUC has an equivalent —
-"adaptive updates", which fetch only the blocks that differ — but it is extra work we
-have not done. **If RAUC is adopted, implementing adaptive updates is not optional
-polish; it is what keeps the update experience acceptable over Tor.**
+**The one user-visible difference between the live candidates is download size, and it
+is smaller than it first appears.** Updates are fetched over Tor by default. A naive
+RAUC bundle ships the whole slot image (most of a gigabyte), against Rugix's block-level
+deltas of tens of MB — the difference between minutes and most of an hour. But RAUC's
+**adaptive updates** (`block-hash-index` + HTTP streaming) close most of that gap, and
+upstream publishes real numbers: the index costs 0.8% of image size, and *"with small
+changes (such as updating a single package) in an ext4 image, around 10% of the bundle
+size needs to be downloaded"*, with install time similar or slightly faster. For us
+that is roughly 70–100 MB per release rather than ~1 GB — the same order as Rugix,
+not the same order as a full image.
+
+**So this is a build-time requirement, not a UX dealbreaker: if RAUC is adopted,
+adaptive updates ship with it from the first release**, because the naive path is the
+one that makes updates hurt over Tor. Two constraints come with it — the mode needs
+block devices (our ext4 slot images qualify; `.tar` payloads do not), and squashfs
+block size affects overhead (`--mksquashfs-args="-b 64k"` is upstream's suggestion).
 
 Everything else the operator sees is the same across A–D: the dashboard offers the
 update, the box reboots once, mining resumes, and a bad release un-installs itself
