@@ -600,7 +600,8 @@ phase_fault() {
     if out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1"); then
         ok "still updatable after fault injection"
     else
-        bad "no longer accepts an update after fault injection: $(printf '%s' "$out" | tail -1 | cut -c1-90)"
+        bad "no longer accepts an update after fault injection"
+        printf '%s\n' "$out" | tail -12 | sed 's/^/       /' 
     fi
 }
 
