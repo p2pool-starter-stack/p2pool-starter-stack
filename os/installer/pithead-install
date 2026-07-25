@@ -155,9 +155,11 @@ main() {
     local mnt src
     mnt=$(mktemp -d)
     src=$(mktemp -d)
-    trap 'umount -R "$mnt" 2>/dev/null || true
-          umount "$src" 2>/dev/null || true
-          rmdir "$mnt" "$src" 2>/dev/null || true' EXIT
+    # ${var:-} in the trap, not $var: the trap also fires AFTER main returns, when these locals
+    # no longer exist, and set -u would turn that into a failure exit on a successful install.
+    trap 'umount -R "${mnt:-}" 2>/dev/null || true
+          umount "${src:-}" 2>/dev/null || true
+          rmdir "${mnt:-}" "${src:-}" 2>/dev/null || true' EXIT
     mount "$slot_a" "$mnt"
     # A bind mount of / exposes the slot filesystem UNDERNEATH every runtime mount: /var without
     # the overlay that masks it, /data and /boot/efi as the empty directories they are on the
