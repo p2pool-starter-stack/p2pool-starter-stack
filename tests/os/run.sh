@@ -214,6 +214,20 @@ require_host() {
     fi
 }
 
+# A stray VM on the same libvirt network can take the DHCP lease the harness then reads back,
+# so the battery silently drives someone else's guest. This happened with a hand-started
+# diagnostic VM and produced passing legs that proved nothing. Refuse to run rather than report.
+require_clean_bench() {
+    local strays
+    strays=$(virsh list --name 2>/dev/null | grep -E '^pithead-' | grep -v "^${VM}$" || true)
+    [ -z "$strays" ] || {
+        echo "refusing to run: other pithead VMs are on the bench and can steal the lease:" >&2
+        echo "$strays" >&2
+        echo "destroy them first (virsh destroy <name>; virsh undefine <name> --nvram)" >&2
+        exit 2
+    }
+}
+
 vm_destroy() {
     virsh destroy "$VM" >/dev/null 2>&1 || true
     virsh undefine "$VM" --nvram >/dev/null 2>&1 || true
@@ -556,6 +570,7 @@ phase_fault() {
 }
 
 require_host
+require_clean_bench
 case "$PHASE" in
 boot) phase_boot ;;
 update) phase_update ;;
