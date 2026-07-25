@@ -194,6 +194,12 @@ vm_destroy() {
 }
 
 cleanup() {
+    # Preserve the console on failure. It is deleted with everything else on a green run, which
+    # meant the one artefact that explains a boot failure was destroyed by the failure itself.
+    if [ "$FAIL" -gt 0 ] && [ -s "$SERIAL" ]; then
+        cp "$SERIAL" "$SERIAL.failed" 2>/dev/null &&
+            info "console from the failed run kept at $SERIAL.failed"
+    fi
     if [ "$KEEP" -eq 1 ]; then
         info "left VM '$VM' and $DISK in place (--keep)"
         return

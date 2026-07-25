@@ -34,7 +34,10 @@ PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pithead setup</title>
 <style>
-body {{ font-family: system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }}
+body {{ font-family: system-ui, sans-serif; max-width: 38rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }}
+h2 {{ margin: 2rem 0 0; font-size: 1.05rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }}
+.addr {{ font-family: ui-monospace, monospace; font-size: 0.85rem; }}
+.when {{ display: none; margin-left: 0.75rem; padding-left: 0.75rem; border-left: 2px solid #ddd; }}
 label {{ display: block; margin: 1rem 0 0.25rem; font-weight: 600; }}
 input, select {{ width: 100%; padding: 0.5rem; box-sizing: border-box; }}
 button {{ margin-top: 1.5rem; padding: 0.6rem 1.4rem; }}
@@ -52,37 +55,113 @@ GATE_FORM = """<p>Enter the one-time token shown on this machine's console or te
 <button type="submit">Continue</button>
 </form>"""
 
-SETUP_FORM = """<p>Answers apply once; everything else keeps its documented default and is
-editable later from the dashboard.</p>
+SETUP_FORM = """<p>Only the answers that cannot be guessed for you. Everything else keeps its
+documented default and stays editable from the dashboard.</p>
 {error}
-<form method="post" action="/submit">
-<label for="mw">Monero payout address (primary, starts with 4)</label>
-<input id="mw" name="monero_wallet" required minlength="95" maxlength="95">
+<form method="post" action="/submit" id="f">
+
+<h2>Payout addresses</h2>
+<p class="note">Paste these — they are far too long to type, and a typo pays a stranger.</p>
+
+<label for="mw">Monero payout address</label>
+<input id="mw" name="monero_wallet" class="addr" required autocomplete="off" spellcheck="false"
+       autocapitalize="off" placeholder="4… (95 characters)">
+<p class="note" id="mwn">Must be your PRIMARY address — it starts with 4. p2pool cannot pay a
+subaddress (8…) or an integrated address.</p>
+
 <label for="tw">Tari payout address</label>
-<input id="tw" name="tari_wallet" required>
-<label for="mode">Monero node</label>
-<select id="mode" name="monero_mode" onchange="r.style.display=this.value=='remote'?'block':'none'">
-<option value="local">Run the bundled node (default)</option>
-<option value="remote">Use a remote node I control</option>
+<input id="tw" name="tari_wallet" class="addr" autocomplete="off" spellcheck="false"
+       autocapitalize="off" placeholder="Tari address">
+<p class="note">Leave blank to mine Monero only. Tari merge-mining earns a second coin from the
+same work, so there is rarely a reason to skip it.</p>
+
+<h2>Monero node</h2>
+<label for="mmode">Where does Monero data come from?</label>
+<select id="mmode" name="monero_mode">
+<option value="local">Run the bundled node on this machine (default)</option>
+<option value="remote">Use a Monero node I already run</option>
 </select>
-<div id="r" style="display:none">
-<label for="rh">Remote node host</label>
-<input id="rh" name="remote_host" placeholder="192.168.1.10">
+<div class="when" id="mremote">
+  <label for="mrh">Node host</label>
+  <input id="mrh" name="monero_remote_host" placeholder="192.168.1.10" autocomplete="off">
+  <label for="mrr">RPC port</label>
+  <input id="mrr" name="monero_remote_rpc" value="18081" inputmode="numeric">
+  <label for="mrz">ZMQ port</label>
+  <input id="mrz" name="monero_remote_zmq" value="18083" inputmode="numeric">
+  <label><input type="checkbox" id="mra" name="monero_remote_auth" value="1"> This node requires a
+  username and password</label>
+  <div class="when" id="mrauth">
+    <label for="mru">Node username</label>
+    <input id="mru" name="monero_remote_user" autocomplete="off">
+    <label for="mrp">Node password</label>
+    <input id="mrp" name="monero_remote_pass" type="password" autocomplete="new-password">
+  </div>
 </div>
+
+<h2>Tari node</h2>
+<label for="tmode">Where does Tari data come from?</label>
+<select id="tmode" name="tari_mode">
+<option value="local">Run the bundled node on this machine (default)</option>
+<option value="remote">Use a Tari node I already run</option>
+</select>
+<div class="when" id="tremote">
+  <label for="trh">Node host</label>
+  <input id="trh" name="tari_remote_host" placeholder="192.168.1.10" autocomplete="off">
+  <label for="trg">gRPC port</label>
+  <input id="trg" name="tari_remote_grpc" value="18142" inputmode="numeric">
+  <p class="note">Only over a network you trust — this connection is not encrypted.</p>
+</div>
+
+<h2>Mining</h2>
 <label for="pool">P2Pool sidechain</label>
 <select id="pool" name="pool">
-<option value="mini">mini (default — best for most miners)</option>
-<option value="main">main (for large hashrate)</option>
+<option value="mini">mini — right for almost every home rig (default)</option>
+<option value="main">main — only for very large hashrate</option>
 </select>
-<label for="ibd">First sync</label>
+
+<label><input type="checkbox" name="local_miner" value="1"> Also mine with this machine's own CPU</label>
+<p class="note">Leave off if this box only coordinates other miners. A node that is also mining
+shares its CPU with the chain it is serving.</p>
+
+<h2>First sync</h2>
+<label for="ibd">Downloading the chain the first time</label>
 <select id="ibd" name="clearnet_sync">
-<option value="false">Fully private over Tor (days)</option>
-<option value="true">Faster over clearnet, then Tor (hours)</option>
+<option value="false">Private, over Tor — takes days</option>
+<option value="true">Faster, over the open internet, then Tor afterwards — takes hours</option>
 </select>
+
+<label for="tz">Time zone</label>
+<input id="tz" name="timezone" value="UTC" autocomplete="off">
+<p class="note">Used for dashboard timestamps and the daily summary. Anything like
+<code>Europe/Berlin</code>.</p>
+
 <button type="submit">Apply</button>
-<p class="note">On Apply, this machine validates and provisions itself; the dashboard
-login is generated and shown on the console.</p>
-</form>"""
+<p class="note">This machine validates and provisions itself. The dashboard login is generated
+here and shown on the console — it never travels over this page.</p>
+</form>
+<script>
+const $ = (id) => document.getElementById(id);
+const toggle = (el, on) => {{ el.style.display = on ? 'block' : 'none'; }};
+const sync = () => {{
+  toggle($('mremote'), $('mmode').value === 'remote');
+  toggle($('tremote'), $('tmode').value === 'remote');
+  toggle($('mrauth'), $('mra').checked);
+}};
+['mmode','tmode','mra'].forEach(id => $(id).addEventListener('change', sync));
+sync();
+
+// Tell the operator what is wrong with a pasted address immediately, instead of after a submit
+// round-trip. The HOST re-validates — this only saves a wasted trip.
+$('mw').addEventListener('input', () => {{
+  const v = $('mw').value.trim(), n = $('mwn');
+  if (!v) {{ n.textContent = 'Must be your PRIMARY address — it starts with 4.'; n.className='note'; return; }}
+  if (v[0] === '8') {{ n.textContent = 'That is a subaddress (8…). p2pool cannot pay it — use your primary address.'; n.className='err'; }}
+  else if (v.length > 95) {{ n.textContent = 'That looks like an integrated address. Use your plain primary address.'; n.className='err'; }}
+  else if (v[0] !== '4') {{ n.textContent = 'A primary Monero address starts with 4.'; n.className='err'; }}
+  else if (v.length !== 95) {{ n.textContent = v.length + ' of 95 characters.'; n.className='note'; }}
+  else {{ n.textContent = 'Looks like a valid primary address.'; n.className='note'; }}
+}});
+</script>"""
 
 INSTALL_FORM = """<p>This machine is running from the installation medium. Choose the disk to
 install onto — everything on it is erased unless it already holds a Pithead data partition.</p>
@@ -232,22 +311,65 @@ async def setup_form(request: web.Request) -> web.Response:
 
 
 def build_config(form: dict) -> dict:
-    """The submitted answers as a pithead config.json — mirrors the CLI wizard's
-    question set; the host's parse_and_validate_config is the validator."""
-    cfg = {
-        "monero": {"wallet_address": str(form.get("monero_wallet", "")).strip()},
-        "tari": {"wallet_address": str(form.get("tari_wallet", "")).strip()},
-        "p2pool": {
-            "pool": str(form.get("pool", "mini")),
-            "stratum_password": "auto",
-        },
+    """The submitted answers as a pithead config.json. Mirrors the CLI wizard's question set;
+    the HOST's parse_and_validate_config is the validator, so this only shapes, never decides.
+
+    Keys are omitted rather than written empty: an absent key inherits the documented default,
+    while an empty string is a value and would override it."""
+
+    def s_(name: str) -> str:
+        return str(form.get(name, "")).strip()
+
+    def port(name: str, fallback: int) -> int:
+        raw = s_(name)
+        return int(raw) if raw.isdigit() else fallback
+
+    cfg: dict = {
+        "monero": {"wallet_address": s_("monero_wallet")},
+        "tari": {},
+        "p2pool": {"pool": s_("pool") or "mini", "stratum_password": "auto"},
     }
+
+    # Tari is optional — an operator can mine Monero only. Writing an empty address would fail
+    # validation on a choice they deliberately made.
+    tari_wallet = s_("tari_wallet")
+    if tari_wallet:
+        cfg["tari"]["wallet_address"] = tari_wallet
+    else:
+        cfg["dashboard"] = {"tari_required": False}
+
     if form.get("monero_mode") == "remote":
         cfg["monero"]["mode"] = "remote"
-        cfg["monero"]["remote"] = {"host": str(form.get("remote_host", "")).strip()}
+        remote = {
+            "host": s_("monero_remote_host"),
+            "rpc_port": port("monero_remote_rpc", 18081),
+            "zmq_port": port("monero_remote_zmq", 18083),
+        }
+        cfg["monero"]["remote"] = remote
+        if form.get("monero_remote_auth"):
+            cfg["monero"]["node_username"] = s_("monero_remote_user")
+            cfg["monero"]["node_password"] = s_("monero_remote_pass")
+
+    if form.get("tari_mode") == "remote":
+        cfg["tari"]["mode"] = "remote"
+        cfg["tari"]["remote"] = {
+            "host": s_("tari_remote_host"),
+            "grpc_port": port("tari_remote_grpc", 18142),
+        }
+
+    if form.get("local_miner"):
+        cfg["local_miner"] = {"enabled": True}
+
     if form.get("clearnet_sync") == "true":
         cfg["monero"]["clearnet_initial_sync"] = True
         cfg["tari"]["clearnet_initial_sync"] = True
+
+    tz = s_("timezone")
+    if tz and tz != "UTC":
+        cfg.setdefault("dashboard", {})["timezone"] = tz
+
+    if not cfg["tari"]:
+        del cfg["tari"]
     return cfg
 
 

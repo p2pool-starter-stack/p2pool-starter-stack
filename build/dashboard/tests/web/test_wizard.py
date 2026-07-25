@@ -63,7 +63,7 @@ async def test_submit_writes_spool_config_atomically(client, spool):
             "monero_wallet": "4" + "A" * 94,
             "tari_wallet": "tari-addr",
             "monero_mode": "remote",
-            "remote_host": "192.168.1.10",
+            "monero_remote_host": "192.168.1.10",
             "pool": "mini",
             "clearnet_sync": "true",
         },
@@ -200,3 +200,71 @@ async def test_installer_status_is_distinct_from_provisioning(client, installer)
     assert "Copying the system" in await (await client.get("/status")).text()
     (installer / "installed").write_text("1")
     assert "reboot and remove" in (await (await client.get("/status")).text()).lower()
+
+
+# --- the expanded question set --------------------------------------------------------------
+# build_config SHAPES answers; the host's parse_and_validate_config decides. These assert the
+# shape, and especially that unanswered questions are omitted rather than written empty — an
+# empty string is a value and would override the documented default.
+
+
+def _cfg(**over):
+    form = {"monero_wallet": "4" + "A" * 94, "pool": "mini"}
+    form.update(over)
+    return wizard.build_config(form)
+
+
+def test_tari_is_optional_and_marks_itself_not_required():
+    cfg = _cfg(tari_wallet="")
+    assert "tari" not in cfg or "wallet_address" not in cfg.get("tari", {})
+    assert cfg["dashboard"]["tari_required"] is False
+
+
+def test_remote_monero_carries_ports_and_defaults_them():
+    cfg = _cfg(monero_mode="remote", monero_remote_host="10.0.0.5", monero_remote_rpc="1234")
+    assert cfg["monero"]["remote"] == {"host": "10.0.0.5", "rpc_port": 1234, "zmq_port": 18083}
+
+
+def test_non_numeric_ports_fall_back_rather_than_crash():
+    cfg = _cfg(monero_mode="remote", monero_remote_host="h", monero_remote_rpc="not-a-port")
+    assert cfg["monero"]["remote"]["rpc_port"] == 18081
+
+
+def test_remote_auth_only_written_when_asked_for():
+    plain = _cfg(monero_mode="remote", monero_remote_host="h")
+    assert "node_username" not in plain["monero"]
+    authed = _cfg(
+        monero_mode="remote", monero_remote_host="h",
+        monero_remote_auth="1", monero_remote_user="u", monero_remote_pass="p",
+    )
+    assert authed["monero"]["node_username"] == "u"
+
+
+def test_remote_tari_is_independent_of_monero():
+    cfg = _cfg(tari_wallet="t", tari_mode="remote", tari_remote_host="10.0.0.9")
+    assert cfg["tari"]["remote"] == {"host": "10.0.0.9", "grpc_port": 18142}
+    assert cfg["monero"].get("mode") != "remote"
+
+
+def test_local_miner_and_timezone_are_omitted_unless_chosen():
+    default = _cfg(tari_wallet="t")
+    assert "local_miner" not in default
+    assert "timezone" not in default.get("dashboard", {})
+    chosen = _cfg(tari_wallet="t", local_miner="1", timezone="Europe/Berlin")
+    assert chosen["local_miner"]["enabled"] is True
+    assert chosen["dashboard"]["timezone"] == "Europe/Berlin"
+
+
+def test_clearnet_sync_applies_to_both_chains():
+    cfg = _cfg(tari_wallet="t", clearnet_sync="true")
+    assert cfg["monero"]["clearnet_initial_sync"] is True
+    assert cfg["tari"]["clearnet_initial_sync"] is True
+
+
+async def test_address_guidance_is_on_the_page(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/setup")).text()
+    # A pasted subaddress is the most common way to misconfigure this, so the page must say so
+    # before the operator submits, not after.
+    assert "subaddress" in body
+    assert "Paste these" in body
