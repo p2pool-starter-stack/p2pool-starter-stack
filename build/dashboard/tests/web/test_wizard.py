@@ -272,3 +272,41 @@ async def test_address_guidance_is_on_the_page(client, spool):
     # before the operator submits, not after.
     assert "subaddress" in body
     assert "Paste these" in body
+
+
+# --- transcription forgiveness --------------------------------------------------------------
+# The operator copies the token from a console, often on a phone that autocapitalizes. Case and
+# the pit- prefix carry no entropy; neither may fail a correct transcription.
+
+
+@pytest.mark.parametrize(
+    "typed",
+    ["pit-X7KM2Q", "PIT-X7KM2Q", "pit-x7km2q", "X7KM2Q", "x7km2q", "  pit-X7KM2Q  "],
+)
+async def test_token_transcription_variants_all_pass(client, typed):
+    r = await client.post("/auth", data={"token": typed}, allow_redirects=False)
+    assert r.status == 302
+
+
+async def test_wrong_token_still_fails(client):
+    r = await client.post("/auth", data={"token": "pit-WRONGX"})
+    assert r.status == 403
+
+
+# --- host-provided strings are data, not markup ---------------------------------------------
+
+
+async def test_disk_fields_are_html_escaped(client, spool):
+    (spool / "disks.tsv").write_text("sda\t1T\tACME <Turbo> & Co\tSN&1\tempty\n")
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/install")).text()
+    assert "ACME &lt;Turbo&gt; &amp; Co" in body
+    assert "<Turbo>" not in body
+
+
+async def test_new_install_attempt_clears_stale_error(client, installer):
+    (installer / "error.txt").write_text("previous failure")
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
+    assert r.status == 200
+    assert not (installer / "error.txt").exists()

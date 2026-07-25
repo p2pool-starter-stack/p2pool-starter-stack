@@ -7539,6 +7539,60 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: consume_install_request (disk installer host side) =="
+# The request file is operator input arriving through a web form; the host must validate it
+# against its own inventory and never trust a browser-supplied target. Driven against a fake
+# pithead-install via PITHEAD_INSTALL_BIN — the real one partitions disks.
+INSTSB=$(mktemp -d)
+cat >"$INSTSB/fake-install" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+--list) printf 'vda\t40G\tFake Disk\tSN1\tempty\n' ;;
+--target)
+    echo "$2" >>"${FAKE_LOG:?}"
+    exit "${FAKE_RC:-0}"
+    ;;
+esac
+FAKE
+chmod +x "$INSTSB/fake-install"
+export PITHEAD_INSTALL_BIN="$INSTSB/fake-install" FAKE_LOG="$INSTSB/calls" FAKE_RC=0
+
+mkdir -p "$INSTSB/spool"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "empty spool -> rc 2 (nothing requested)" "$?" "2"
+
+printf 'vda' >"$INSTSB/spool/install-target"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "offered target -> rc 0" "$?" "0"
+assert_eq "installer invoked with /dev/vda" "$(cat "$INSTSB/calls")" "/dev/vda"
+[ -f "$INSTSB/spool/installed" ] && ok "installed marker written" || bad "installed marker written" "missing"
+[ -f "$INSTSB/spool/install-target" ] && bad "request consumed" "still present" || ok "request consumed"
+
+rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
+printf 'sdz' >"$INSTSB/spool/install-target"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "unlisted target -> rc 1, refused" "$?" "1"
+assert_contains "refusal names the target" "$(cat "$INSTSB/spool/error.txt")" "sdz"
+[ -f "$INSTSB/calls" ] && bad "installer NOT invoked for unlisted target" "was invoked" || ok "installer NOT invoked for unlisted target"
+
+# A browser-supplied name is sanitized before it can reach a shell: path characters vanish and
+# the remainder no longer matches the inventory.
+rm -f "$INSTSB/spool/error.txt"
+printf '../../vda; rm -rf /' >"$INSTSB/spool/install-target"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "hostile target string -> rc 1, refused" "$?" "1"
+[ -f "$INSTSB/calls" ] && bad "installer NOT invoked for hostile string" "was invoked" || ok "installer NOT invoked for hostile string"
+
+# Installer failure surfaces into the spool for the page, and no success marker appears.
+rm -f "$INSTSB/spool/error.txt"
+printf 'vda' >"$INSTSB/spool/install-target"
+FAKE_RC=1 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "installer failure -> rc 1" "$?" "1"
+[ -f "$INSTSB/spool/error.txt" ] && ok "failure surfaced to the page" || bad "failure surfaced to the page" "no error.txt"
+[ -f "$INSTSB/spool/installed" ] && bad "no success marker on failure" "present" || ok "no success marker on failure"
+
+unset PITHEAD_INSTALL_BIN FAKE_LOG FAKE_RC INSTSB
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

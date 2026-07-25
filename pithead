@@ -1260,24 +1260,32 @@ firstboot_consume_spool() { # <spool-dir>
 # a disk picker instead of the setup form: the operator installs first, reboots, and configures
 # the installed machine. Config is never transplanted between machines.
 
-# Booted from removable media AND some other disk is available to install onto. Both halves
-# matter: a box running from its internal disk must never offer to reinstall itself, and an
-# installer with nowhere to install is just a broken setup page.
-installer_mode_available() {
-    [ -x /usr/local/sbin/pithead-install ] || return 1
+# Overridable so the shell suite can point it at a fake — the real one partitions disks.
+install_bin() { printf '%s' "${PITHEAD_INSTALL_BIN:-/usr/local/sbin/pithead-install}"; }
+
+# Did this system boot from removable media (a USB stick)?
+boot_is_removable() {
     local root_src boot_dev
     root_src=$(findmnt -no SOURCE / 2>/dev/null) || return 1
     boot_dev=$(lsblk -no PKNAME "$root_src" 2>/dev/null | head -1)
     [ -n "$boot_dev" ] || return 1
-    [ "$(cat "/sys/block/$boot_dev/removable" 2>/dev/null)" = "1" ] || return 1
-    [ -n "$(/usr/local/sbin/pithead-install --list 2>/dev/null)" ]
+    [ "$(cat "/sys/block/$boot_dev/removable" 2>/dev/null)" = "1" ]
+}
+
+# Booted from removable media AND some other disk is available to install onto. Both halves
+# matter: a box running from its internal disk must never offer to reinstall itself, and an
+# installer with nowhere to install is just a broken setup page.
+installer_mode_available() {
+    [ -x "$(install_bin)" ] || return 1
+    boot_is_removable || return 1
+    [ -n "$("$(install_bin)" --list 2>/dev/null)" ]
 }
 
 # The HOST enumerates disks; the container only renders what it is given. A browser must never be
 # able to name a target the host did not offer — that is the same boundary the #33 control
 # channel draws, and here the action erases a disk.
 publish_disk_inventory() { # <spool-dir>
-    /usr/local/sbin/pithead-install --list >"$1/disks.tsv" 2>/dev/null || : >"$1/disks.tsv"
+    "$(install_bin)" --list >"$1/disks.tsv" 2>/dev/null || : >"$1/disks.tsv"
     chown 1000:1000 "$1/disks.tsv" 2>/dev/null || true
 }
 
@@ -1289,12 +1297,12 @@ consume_install_request() { # <spool-dir>
     rm -f "$req"
     # Re-check against the inventory the host published: the request is operator input arriving
     # through a web form, so it is validated here rather than trusted.
-    if ! /usr/local/sbin/pithead-install --list 2>/dev/null | cut -f1 | grep -qx "$target"; then
+    if ! "$(install_bin)" --list 2>/dev/null | cut -f1 | grep -qx "$target"; then
         printf 'not an offered target: %s' "$target" >"$spool/error.txt"
         return 1
     fi
     log "Installing to /dev/$target ..."
-    if err=$(/usr/local/sbin/pithead-install --target "/dev/$target" --yes 2>&1); then
+    if err=$("$(install_bin)" --target "/dev/$target" --yes 2>&1); then
         touch "$spool/installed"
         log "Installed to /dev/$target."
         return 0
@@ -1337,6 +1345,11 @@ firstboot_wizard() {
         installer=1
         publish_disk_inventory "$spool"
         log "Running from the installation medium — the wizard will offer a disk to install onto."
+    elif boot_is_removable; then
+        # Setup will proceed, but the operator should know what they are standing on: a USB stick
+        # cannot hold a 250+ GB chain and wears out under constant writes.
+        warn "Booted from removable media with no internal disk to install onto."
+        warn "Running the stack from a USB stick is unsupported — it is too slow for the chain and the stick will wear out."
     fi
     # Offline first boot: the appliance carries the wizard image as an archive (os/rootfs/images),
     # because at this point the operator may have no working network yet — that is what they are

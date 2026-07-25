@@ -13,11 +13,11 @@
 #   pithead-install --target /dev/nvme0n1  install (destructive unless the disk is already ours)
 #
 # Called by the host, never by a container: this partitions disks. The web installer asks, writes
-# a request to the spool, and `pithead install-wizard` runs this — the same trust shape as the
-# first-boot wizard and the #33 control channel.
+# a request to the spool, and `pithead firstboot-wizard` runs this — the same trust shape as the
+# #33 control channel. Exercised end to end by `tests/os/run.sh --phase install`.
 set -euo pipefail
 
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Must match os/rauc/mkimage.sh and os/rootfs/repart.d — the three describe one layout.
 ESP_MIB=256
 SLOT_GIB=8
 
@@ -34,19 +34,32 @@ boot_disk() {
     lsblk -no PKNAME "$src" 2>/dev/null | head -1
 }
 
-# Candidate targets as TSV: name, size, model, serial, and whether it already carries our layout.
-# Model and serial are printed because a bare /dev/sda is not enough to choose safely — an
-# operator picking the wrong disk here loses a 250+ GB synced chain.
+# Any partition of the disk mounted (or active as swap)? Such a disk is in use by SOMETHING, and
+# partitioning underneath a mounted filesystem corrupts it. Refuse rather than reason about why.
+disk_in_use() { # $1 disk name (no /dev/)
+    lsblk -no MOUNTPOINTS "/dev/$1" 2>/dev/null | grep -q .
+}
+
+# Candidate targets as TSV: name, size, model, serial, layout state. Model and serial are shown
+# because a bare /dev/sda is not enough to choose safely — an operator picking the wrong disk
+# here loses a 250+ GB synced chain.
+#
+# NB parsed from lsblk's JSON via jq, never its column output: a model with spaces ("Samsung SSD
+# 990 PRO") shifts every column right and an EMPTY model (all virtio, some NVMe) shifts them
+# left, so `read name size model serial type` silently drops real disks either way.
 list_disks() {
-    local boot
+    local boot name size model serial
     boot=$(boot_disk || true)
-    lsblk -dno NAME,SIZE,MODEL,SERIAL,TYPE | while read -r name size model serial type; do
-        [ "$type" = "disk" ] || continue
-        [ "$name" = "$boot" ] && continue
-        case "$name" in loop* | ram* | sr*) continue ;; esac
-        printf '%s\t%s\t%s\t%s\t%s\n' \
-            "$name" "$size" "${model:-unknown}" "${serial:-unknown}" "$(layout_state "/dev/$name")"
-    done
+    lsblk -Jdno NAME,SIZE,MODEL,SERIAL,TYPE |
+        jq -r '.blockdevices[] | select(.type == "disk")
+               | [.name, .size, (.model // "unknown"), (.serial // "unknown")] | @tsv' |
+        while IFS=$'\t' read -r name size model serial; do
+            [ "$name" = "$boot" ] && continue
+            case "$name" in loop* | ram* | sr* | zram*) continue ;; esac
+            disk_in_use "$name" && continue
+            printf '%s\t%s\t%s\t%s\t%s\n' \
+                "$name" "$size" "$model" "$serial" "$(layout_state "/dev/$name")"
+        done
 }
 
 # Does the target already carry a pithead layout? Decides destructive-vs-reinstall, and a
@@ -111,6 +124,8 @@ main() {
     boot=$(boot_disk || true)
     [ -n "$boot" ] && [ "$target" = "/dev/$boot" ] &&
         die "refusing to install onto the disk this system booted from ($target)"
+    disk_in_use "${target#/dev/}" &&
+        die "refusing: $target has mounted filesystems (or active swap) — unmount them first"
 
     local state
     state=$(layout_state "$target")
@@ -118,8 +133,9 @@ main() {
         die "refusing to write to $target without --yes (state: $state)"
     fi
 
-    # Reinstall keeps the partition table so an existing /data survives untouched; only slot A is
-    # reformatted and repopulated. A fresh install repartitions and destroys everything.
+    # Reinstall keeps the partition table so an existing /data survives untouched; only the ESP
+    # and slot A are reformatted and repopulated. A fresh install repartitions and destroys
+    # everything.
     if [ "$state" = "pithead-with-data" ]; then
         echo "==> $target already carries a pithead layout — preserving its data partition"
     else
@@ -136,28 +152,36 @@ main() {
     mkfs.ext4 -q -F -L system-a "$slot_a"
 
     echo "==> copying the running system to $slot_a"
-    local mnt
+    local mnt src
     mnt=$(mktemp -d)
-    trap 'umount -R "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true' EXIT
+    src=$(mktemp -d)
+    trap 'umount -R "$mnt" 2>/dev/null || true
+          umount "$src" 2>/dev/null || true
+          rmdir "$mnt" "$src" 2>/dev/null || true' EXIT
     mount "$slot_a" "$mnt"
-    # The running root is READ-ONLY, so it is a consistent source with nothing to quiesce.
-    # Pseudo-filesystems and the mount points for state are excluded and recreated: copying /data
-    # would try to copy a 250+ GB chain onto an 8 GiB slot.
-    tar -C / --one-file-system \
-        --exclude=./data --exclude=./boot/efi \
-        -cf - . | tar -C "$mnt" -xf -
-    mkdir -p "$mnt"/{dev,proc,sys,run,tmp,data,boot/efi}
-    # The test marker is a harness artefact and must not travel to an installed machine.
+    # A bind mount of / exposes the slot filesystem UNDERNEATH every runtime mount: /var without
+    # the overlay that masks it, /data and /boot/efi as the empty directories they are on the
+    # slot, no /proc, /sys or /run. Copying from / directly does NOT work — /var is an overlay,
+    # i.e. a different filesystem, so --one-file-system ships an empty /var and the installed
+    # machine boots with no dpkg database and no /var/lib. The root is already read-only, so the
+    # bind view is a consistent source with nothing to quiesce.
+    mount --bind / "$src"
+    tar -C "$src" -cf - . | tar -C "$mnt" -xf -
+    umount "$src"
+
+    # Per-machine identity. The machine-id must NOT travel: every install would otherwise share
+    # the USB's identity, and DHCP/DUID collisions between two appliances on one LAN follow.
+    # Empty file = "regenerate on first boot" to systemd.
+    : >"$mnt/etc/machine-id"
+    # Harness artefact; absent on release images, must not travel from a test stick either.
     rm -f "$mnt/etc/pithead-test-marker"
 
     echo "==> bootloader"
-    mkdir -p "$mnt/boot/efi"
     mount "$esp" "$mnt/boot/efi"
     mkdir -p "$mnt/boot/efi/EFI/BOOT" "$mnt/boot/efi/grub"
     grub-mkimage -O x86_64-efi -o "$mnt/boot/efi/EFI/BOOT/BOOTX64.EFI" -p /grub \
         part_gpt fat ext2 normal linux echo search search_label configfile test loadenv regexp
-    install -m 644 "$SELF_DIR/../rauc/grub.cfg" "$mnt/boot/efi/grub/grub.cfg" 2>/dev/null ||
-        install -m 644 /usr/share/pithead/grub.cfg "$mnt/boot/efi/grub/grub.cfg"
+    install -m 644 /usr/share/pithead/grub.cfg "$mnt/boot/efi/grub/grub.cfg"
     # Slot A good, B empty — the same seed the image ships with. The env block lives in GRUB's
     # prefix directory because bare `load_env` reads $prefix/grubenv; at the ESP root it is a
     # silent no-op and the machine ignores every boot-state write the updater makes.

@@ -18,6 +18,7 @@ token and restarts the container — the re-mint loop lives host-side on purpose
 """
 
 import hmac
+import html
 import json
 import os
 import sys
@@ -29,6 +30,14 @@ MAX_FAILURES = 5
 EXIT_TOKEN_LOCKOUT = 3
 
 COOKIE = "wizard_session"
+
+
+def _canon_token(t: str) -> str:
+    """The operator is transcribing from a console, often on a phone that autocapitalizes.
+    Case and the pit- prefix carry no entropy — the six-character suffix does — so neither
+    should be able to fail a correct transcription."""
+    t = t.strip().upper()
+    return t.removeprefix("PIT-")
 
 PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -51,7 +60,9 @@ GATE_FORM = """<p>Enter the one-time token shown on this machine's console or te
 {error}
 <form method="post" action="/auth">
 <label for="token">Token</label>
-<input id="token" name="token" autofocus autocomplete="off" placeholder="pit-XXXXXX">
+<input id="token" name="token" autofocus autocomplete="off" autocapitalize="off"
+       spellcheck="false" placeholder="pit-XXXXXX">
+<p class="note">Case doesn't matter, and the <code>pit-</code> prefix is optional.</p>
 <button type="submit">Continue</button>
 </form>"""
 
@@ -230,7 +241,7 @@ def _disk_options() -> str:
         parts = line.split("\t")
         if len(parts) < 5:
             continue
-        name, size, model, serial, state = parts[:5]
+        name, size, model, serial, state = (html.escape(p) for p in parts[:5])
         note = {
             "pithead-with-data": " — reinstall, keeps existing data",
             "pithead": " — reinstall, no data partition found",
@@ -255,7 +266,7 @@ async def auth(request: web.Request) -> web.Response:
     form = await request.post()
     tok = os.environ.get("WIZARD_TOKEN", "")
     supplied = str(form.get("token", "")).strip()
-    if tok and hmac.compare_digest(supplied, tok):
+    if tok and hmac.compare_digest(_canon_token(supplied), _canon_token(tok)):
         resp = web.HTTPFound("/install" if installer_mode() else "/setup")
         resp.set_cookie(COOKIE, tok, httponly=True)
         raise resp
@@ -294,6 +305,11 @@ async def install(request: web.Request) -> web.Response:
     elif confirm != disk:
         err = f'<p class="err">Type <code>{disk}</code> exactly to confirm.</p>'
     else:
+        # A fresh attempt clears the previous attempt's error, exactly as the config path does —
+        # otherwise the status poll keeps reporting a failure the operator already moved past.
+        err_file = os.path.join(spool_dir(), "error.txt")
+        if os.path.exists(err_file):
+            os.unlink(err_file)
         _spool_write_text("install-target", disk)
         return web.Response(text=PAGE.format(body=INSTALLING), content_type="text/html")
     body = INSTALL_FORM.format(error=err, options=_disk_options())

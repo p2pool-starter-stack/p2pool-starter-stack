@@ -11,8 +11,11 @@
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
 #   update  build a v2 bundle; install, boot the spare, auto-rollback uncommitted, commit, and
 #           roll back off a committed version. Also asserts /data grew to the disk (#784).
+#   install boot the image as removable media beside a blank disk, run the disk installer, then
+#           boot from the target and prove the copied system is COMPLETE (the /var overlay made
+#           an incomplete copy easy to produce and invisible to every other phase).
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
-#   all     all three (default)
+#   all     all four (default)
 #
 # Exit non-zero on the first failed assertion. --keep leaves the VM + disks for inspection.
 set -uo pipefail
@@ -447,6 +450,139 @@ phase_update() {
         bad "expected v1 after the operator rollback, got '$marker'"
 }
 
+phase_install() {
+    info "phase: disk install (USB-style boot -> pithead-install -> boot from the target)"
+    local img target_disk="/srv/code/bench-vm/pithead-target.img" out marker
+
+    info "building the installer image (test SSH key + marker v1)"
+    img=$(_build_image v1) || {
+        bad "image build failed (/tmp/os-fault-build.log)"
+        return
+    }
+
+    vm_destroy
+    rm -f "$target_disk"
+    cp "$img" "$DISK"
+    qemu-img resize "$DISK" 12G >/dev/null 2>&1 || true
+    # The target: blank, larger than the source medium, so the grow assertions distinguish the
+    # two disks beyond doubt.
+    qemu-img create -f raw "$target_disk" 30G >/dev/null
+    : >"$SERIAL"
+    # The image rides a USB bus with removable=on — that is what makes the guest a faithful
+    # analog of a user's stick: the host-side gate (installer_mode_available) keys on
+    # /sys/block/*/removable, which virtio never sets.
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import \
+        --disk "path=$DISK,format=raw,bus=usb,removable=on,boot.order=1" \
+        --disk "path=$target_disk,format=raw,bus=virtio,boot.order=2" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "virt-install failed to define the installer VM"
+        return
+    }
+    ip=""
+    local tries=0
+    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    _wait_ssh 240 || {
+        bad "installer guest never answered SSH (ip: ${ip:-none})"
+        return
+    }
+    ok "image boots as removable media ($ip)"
+
+    out=$(_ssh "pithead-install --list")
+    if printf '%s' "$out" | cut -f1 | grep -qx "vda"; then
+        ok "inventory offers the internal disk (vda)"
+    else
+        bad "inventory does not offer vda — got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-120)"
+        return
+    fi
+    # The boot medium must never be a target. It shows up as sdX on the USB bus.
+    if printf '%s' "$out" | cut -f1 | grep -qE '^sd'; then
+        bad "inventory offers the boot medium itself"
+        return
+    fi
+    ok "inventory excludes the disk the system booted from"
+    # The host wizard loop must be in installer mode — the same gate a real stick hits.
+    if _ssh "test -s /data/pithead/data/firstboot/disks.tsv"; then
+        ok "firstboot entered installer mode (inventory published to the spool)"
+    else
+        bad "firstboot did not publish a disk inventory — installer mode never engaged"
+    fi
+
+    out=$(_ssh "pithead-install --target /dev/vda --yes 2>&1")
+    if [ $? -eq 0 ]; then
+        ok "install to /dev/vda completed"
+    else
+        bad "install failed: $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-160)"
+        return
+    fi
+
+    _ssh "systemctl poweroff" 2>/dev/null || true
+    sleep 8
+    vm_destroy
+    # Boot from the TARGET alone — the stick is gone, exactly as the instructions tell the user.
+    : >"$SERIAL"
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import --disk "path=$target_disk,format=raw,bus=virtio" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "virt-install failed to define the installed VM"
+        return
+    }
+    ip=""
+    tries=0
+    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    _wait_ssh 300 || {
+        bad "installed system never answered SSH (ip: ${ip:-none})"
+        return
+    }
+    ok "installed system boots from the internal disk"
+
+    if _ssh "findmnt -no SOURCE /" | grep -q vda; then
+        ok "root is on the target disk, not a leftover medium"
+    else
+        bad "root is on '$(_ssh "findmnt -no SOURCE /")' — expected the target disk"
+    fi
+    # THE assertion this phase exists for: the copy must include the slot's real /var, which the
+    # overlay mount hides from a naive copy of /. An installed machine without a dpkg database
+    # is subtly broken in ways no boot banner reveals.
+    if _ssh "test -s /var/lib/dpkg/status"; then
+        ok "copied system is complete (/var/lib/dpkg survived the overlay)"
+    else
+        bad "/var/lib/dpkg/status missing — the copy lost the slot's /var"
+    fi
+    if _ssh "test -s /etc/machine-id"; then
+        ok "machine-id regenerated on the installed system"
+    else
+        bad "machine-id empty — identity was not regenerated"
+    fi
+    local data_gib
+    data_gib=$(_ssh "df -BG --output=size /data 2>/dev/null | tail -1 | tr -dc '0-9'")
+    if [ -n "$data_gib" ] && [ "$data_gib" -ge 15 ]; then
+        ok "repart built /data on the target's own disk (${data_gib} GiB of 30)"
+    else
+        bad "/data on the target is '${data_gib:-none}' GiB — repart did not size it to the disk"
+    fi
+    if curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
+        ok "setup wizard serves on the installed system"
+    else
+        bad "no setup wizard on :80 of the installed system"
+    fi
+    rm -f "$target_disk"
+}
+
 phase_fault() {
     info "phase: fault injection — a brick is disqualifying, not deducted"
     local img bundle marker i out
@@ -588,10 +724,12 @@ require_clean_bench
 case "$PHASE" in
 boot) phase_boot ;;
 update) phase_update ;;
+install) phase_install ;;
 fault) phase_fault ;;
 all)
     phase_boot
     phase_update
+    phase_install
     ;;
 *)
     echo "unknown phase: $PHASE" >&2
