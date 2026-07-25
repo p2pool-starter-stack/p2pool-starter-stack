@@ -15,7 +15,7 @@ OUT="${1:-os/rauc/build/system.img}"
 # real disk at first boot, so the image does not carry 8 GiB of zeros and an /data sized for
 # the image rather than the disk. 9 GiB covers 256M ESP + 8 GiB slot A + alignment.
 SIZE_GIB="${PITHEAD_IMAGE_GIB:-9}"
-TARBALL="os/bakery/build/pithead-root.tar"
+TARBALL="os/build/pithead-root.tar"
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh
 CERT_DIR="os/rauc/certs"

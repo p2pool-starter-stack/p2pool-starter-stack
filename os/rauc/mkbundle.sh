@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 OUT="${1:-os/rauc/build/update.raucb}"
-TARBALL="os/bakery/build/pithead-root.tar"
+TARBALL="os/build/pithead-root.tar"
 CERT_DIR="os/rauc/certs"
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh

@@ -1,1 +1,0 @@
-description = "stage the kernel, initrd, and second-stage GRUB script onto the boot partition"

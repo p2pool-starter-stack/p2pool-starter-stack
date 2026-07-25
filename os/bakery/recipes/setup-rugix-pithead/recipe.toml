@@ -1,2 +1,0 @@
-description = "install Rugix Ctrl configuration: A/B layout, labeled data partition, persist set"
-dependencies = ["core/rugix-ctrl"]

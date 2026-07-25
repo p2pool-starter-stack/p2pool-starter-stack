@@ -5,12 +5,14 @@
 # os-image sibling of tests/integration/run.sh; it needs a Linux host with KVM + libvirt + the
 # built image, so it runs on the bench, not in CI.
 #
-#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|all]
+#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|fault|all]
 #
 # Phases:
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
-#   update  build a v2 bundle, install it, commit-on-healthy; then a broken bundle, assert rollback
-#   all     both (default)
+#   update  build a v2 bundle; install, boot the spare, auto-rollback uncommitted, commit, and
+#           roll back off a committed version. Also asserts /data grew to the disk (#784).
+#   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
+#   all     all three (default)
 #
 # Exit non-zero on the first failed assertion. --keep leaves the VM + disks for inspection.
 set -uo pipefail
@@ -18,9 +20,8 @@ set -uo pipefail
 IMAGE=""
 KEEP=0
 PHASE="all"
-UPDATER="rugix"
+
 VM="pithead-os-test"
-BAKERY_DIR="os/bakery"
 DISK="/srv/code/bench-vm/pithead-os-test.img"
 SERIAL="/tmp/pithead-os-serial.log"
 
@@ -36,10 +37,6 @@ while [ $# -gt 0 ]; do
         ;;
     --phase)
         PHASE="$2"
-        shift 2
-        ;;
-    --updater)
-        UPDATER="$2"
         shift 2
         ;;
     --vm)
@@ -90,44 +87,18 @@ _marker() { _ssh cat /etc/pithead-test-marker 2>/dev/null | tr -d "\r\n"; }
 # Build a bootable image carrying $1 as its slot marker, for the selected updater.
 _build_image() {
     [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
-    if [ "$UPDATER" = "rauc" ]; then
-        PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
-            os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
-        os/rauc/mkimage.sh >>/tmp/os-fault-build.log 2>&1 || return 1
-        printf 'os/rauc/build/system.img'
-    else
-        PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
-            os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
-        printf 'os/bakery/build/pithead-os-amd64/system.img'
-    fi
+    PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
+        os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
+    os/rauc/mkimage.sh >>/tmp/os-fault-build.log 2>&1 || return 1
+    printf 'os/rauc/build/system.img'
 }
 
 # Build an update bundle carrying $1 as its marker.
 _build_bundle() {
-    if [ "$UPDATER" = "rauc" ]; then
-        PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
-            os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
-        os/rauc/mkbundle.sh >>/tmp/os-fault-bundle.log 2>&1 || return 1
-        find os/rauc/build -name '*.raucb' | head -1
-    else
-        PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
-        PITHEAD_BAKE_ARTIFACT=bundle os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
-        local raw signed
-        raw=$(find os/bakery/build -name '*.rugixb' ! -name '*.signed.rugixb' | head -1)
-        [ -n "$raw" ] || return 1
-        # Sign it. Rugix supports CMS/X.509 signing exactly as RAUC does — it is simply absent
-        # from the shipped docs/, so the subcommand has to be found in the source. Signing here
-        # keeps the battery on the PRODUCTION code path: the --insecure-* bypass is a different
-        # branch in rugix-ctrl, and testing crash-safety through it would measure the wrong code.
-        _gen_certs || return 1
-        signed="${raw%.rugixb}.signed.rugixb"
-        rm -f "$signed"
-        docker run --rm -v "$PWD:/work" -w /work --entrypoint rugix-bundler \
-            "ghcr.io/rugix/rugix-bakery:${RUGIX_BAKERY_VERSION:-v0.9.3}" \
-            signatures sign "$raw" "$CERT_DIR/cert.pem" "$CERT_DIR/key.pem" "$signed" \
-            >>/tmp/os-fault-bundle.log 2>&1 || return 1
-        printf '%s' "$signed"
-    fi
+    PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
+        os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
+    os/rauc/mkbundle.sh >>/tmp/os-fault-bundle.log 2>&1 || return 1
+    find os/rauc/build -name '*.raucb' | head -1
 }
 
 # Dev signing material, shared by both candidates so the comparison stays updater-only.
@@ -150,58 +121,36 @@ _gen_certs() {
         2>/dev/null || return 1
 }
 
-# Stage the bundle AND, for rugix, the root certificate the guest verifies it against.
-# Production bakes the root into the image via [signatures] roots in the rugix-ctrl config;
-# the harness passes it explicitly so the test exercises verification without an image rebuild.
+# Bundles are signed with the dev chain and RAUC verifies them against the keyring baked into the
+# slot, so nothing but the bundle itself needs staging.
 _stage_bundle() { # $1 bundle path
     scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
-        "$1" "root@$ip:/data/update.bundle" || return 1
-    [ "$UPDATER" = "rauc" ] && return 0
-    scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
-        "$CERT_DIR/ca.pem" "root@$ip:/data/update-cert.pem"
+        "$1" "root@$ip:/data/update.bundle"
 }
 
 # Per-updater command vocabulary — the ONLY updater-specific part of the battery.
 #
-# NOTE both updaters refuse unverified bundles by default, which is correct, so BOTH candidates
-# are driven with properly signed bundles and real signature verification. Rugix offers an
-# --insecure-skip-bundle-verification bypass; the battery deliberately does not use it, because
-# it is a separate branch in rugix-ctrl and measuring crash-safety through it would exercise the
-# wrong code. Production signs with the release key — see the signing section of the plan.
+# NOTE RAUC refuses unsigned bundles, which is correct — the battery signs with the development
+# chain generated below and verification runs for real. Production signs with the release key; see
+# the signing section of the plan.
 _install_cmd() {
-    case "$UPDATER" in
-    rauc) printf 'rauc install %s' "$1" ;;
-    *) printf 'rugix-ctrl update install --root-cert /data/update-cert.pem --reboot no %s' "$1" ;;
-    esac
+    printf 'rauc install %s' "$1"
 }
 _commit_cmd() {
-    case "$UPDATER" in
-    rauc) printf 'rauc status mark-good' ;;
-    *) printf 'rugix-ctrl system commit' ;;
-    esac
+    printf 'rauc status mark-good'
 }
-# Booting the newly written slot. rugix installs with --reboot no, so the spare must be selected
-# explicitly — a plain reboot returns to the running slot. RAUC arms the GRUB try-counter during
-# install, so a plain reboot already lands on the new slot.
+# Booting the newly written slot. RAUC arms the GRUB try-counter during install, so a plain
+# reboot already lands on it.
 _boot_spare_cmd() {
-    case "$UPDATER" in
-    rauc) printf 'reboot' ;;
-    *) printf 'rugix-ctrl system reboot --spare' ;;
-    esac
+    printf 'reboot'
 }
 # The normal update path an operator would take: install and end up running the new version.
 _install_and_boot_cmd() {
-    case "$UPDATER" in
-    rauc) printf 'rauc install %s && systemctl reboot' "$1" ;;
-    *) printf 'rugix-ctrl update install --root-cert /data/update-cert.pem %s' "$1" ;;
-    esac
+    printf 'rauc install %s && systemctl reboot' "$1"
 }
 # Operator-initiated rollback: the "put it back" button, distinct from automatic fallback.
 _rollback_cmd() {
-    case "$UPDATER" in
-    rauc) printf 'rauc status mark-bad booted && reboot' ;;
-    *) printf 'rugix-ctrl system reboot --spare' ;;
-    esac
+    printf 'rauc status mark-bad booted && reboot'
 }
 
 require_host() {
@@ -270,10 +219,9 @@ phase_boot() {
     cp "$IMAGE" "$DISK"
     # 16 GiB guest: the appliance reserves 6 GiB of hugepages at boot (RandomX), so a smaller VM
     # leaves too little for the stack — and the plan sizes appliance RAM to the compose caps anyway.
-    # Grow the scratch disk before first boot: rugix-ctrl's bootstrapping expands the baked image
-    # into the full A/B layout (256M EFI + 2x512M boot + 2x8GiB system + data ~= 18 GiB minimum).
-    # On the raw 1.8G image it fails with "insufficient space, cannot add partition 5" and exits,
-    # panicking the kernel — which is what a real flash to an undersized disk would also do.
+    # Grow the scratch disk before first boot: the image ships only the ESP and slot A, and
+    # systemd-repart creates slot B and /data on whatever disk it finds. A 40 GiB disk leaves
+    # /data around 24 GiB, which the update phase asserts.
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     # UEFI (OVMF), serial to a file we tail, import the raw appliance disk as-is.
@@ -324,10 +272,9 @@ _vm_boot_disk() {
     cp "$1" "$DISK"
     # 16 GiB guest: the appliance reserves 6 GiB of hugepages at boot (RandomX), so a smaller VM
     # leaves too little for the stack — and the plan sizes appliance RAM to the compose caps anyway.
-    # Grow the scratch disk before first boot: rugix-ctrl's bootstrapping expands the baked image
-    # into the full A/B layout (256M EFI + 2x512M boot + 2x8GiB system + data ~= 18 GiB minimum).
-    # On the raw 1.8G image it fails with "insufficient space, cannot add partition 5" and exits,
-    # panicking the kernel — which is what a real flash to an undersized disk would also do.
+    # Grow the scratch disk before first boot: the image ships only the ESP and slot A, and
+    # systemd-repart creates slot B and /data on whatever disk it finds. A 40 GiB disk leaves
+    # /data around 24 GiB, which the update phase asserts.
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
@@ -407,7 +354,7 @@ phase_update() {
         return
     }
     [ -n "$bundle" ] || {
-        bad "no update bundle produced for updater '$UPDATER'"
+        bad "no update bundle produced"
         return
     }
     ok "built v2 bundle: $(basename "$bundle")"
@@ -495,7 +442,7 @@ phase_update() {
 }
 
 phase_fault() {
-    info "phase: fault injection ($UPDATER) — a brick is disqualifying, not deducted"
+    info "phase: fault injection — a brick is disqualifying, not deducted"
     local img bundle marker i out
 
     info "building v1 image (marker v1)"
