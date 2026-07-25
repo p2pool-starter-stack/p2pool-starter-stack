@@ -626,8 +626,17 @@ grow-to-disk. Worse for stability specifically: **the rollback logic moves into 
 binary. Switching therefore *raises* our risk in exactly the place that matters, which
 is why the decision is conditional: **RAUC is adopted only once it passes the
 fault-injection battery** (destroy mid-write and mid-commit, ×3 each). The Rugix
-candidate stays in-tree until then — it costs 62 lines and is currently the only one
-demonstrably reaching a working appliance.
+candidate stays in-tree until then — it costs 62 lines, and both candidates now reach
+a working appliance, so keeping the alternative is cheap insurance rather than dead
+weight.
+
+**Bench status 2026-07-25 — both candidates pass the same boot battery 3/3**
+(`tests/os/run.sh --phase boot`): boots to userspace on generic x86 EFI, opens the
+first-boot wizard with a console token, serves the token gate on :80. Rugix took 18
+build iterations to get there and RAUC took 3, but that gap measures transferred
+knowledge, not quality — the docker-export fixes, the shell-out toolset, the disk
+sizing and the console-order debugging rule were all already paid for. The deciding
+criterion, field reliability (40%), remains unmeasured for both.
 
 **On RAUC's own advice to use Yocto, Buildroot or PTXdist — we decline, deliberately.**
 That guidance targets classic embedded: fixed hardware, a minimal from-source userland,
