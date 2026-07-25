@@ -522,8 +522,33 @@ phase_fault() {
         fi
     done
 
+    # Fault C: hand the updater a CORRUPTED bundle. Three power cuts just landed on this guest,
+    # so a damaged download is exactly what a real box would be holding. The bar is a clean
+    # refusal — refusing to install is correct, crashing is not, and bricking is disqualifying.
+    info "fault C — install a deliberately corrupted bundle"
+    _ssh "dd if=/dev/urandom of=/data/update.bundle bs=1M seek=8 count=2 conv=notrunc" >/dev/null 2>&1 || true
+    out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1" || true)
+    if printf '%s' "$out" | grep -qi "panic"; then
+        bad "C: the updater PANICKED on a corrupt bundle instead of refusing it"
+        info "  $(printf '%s' "$out" | grep -i panic | head -1 | cut -c1-150)"
+    else
+        ok "C: a corrupt bundle is refused without crashing"
+    fi
+    if _wait_ssh 300; then
+        ok "C: still boots after being handed a corrupt bundle (marker '$(_marker)')"
+    else
+        bad "C: BRICKED by a corrupt bundle (disqualifying)"
+        return
+    fi
+
     # Fault B: cut power during the commit itself, the smallest and most dangerous window.
+    # Re-stage first: the bundle on /data has just survived three power cuts and been corrupted
+    # on purpose, and this leg is measuring the commit window, not bundle integrity.
     info "installing v2 fully, then destroying mid-commit"
+    _stage_bundle "$bundle" || {
+        bad "re-staging the bundle before the commit test failed"
+        return
+    }
     out=$(_ssh "$(_install_and_boot_cmd /data/update.bundle) 2>&1" || true)
     [ -n "$out" ] && info "install output: $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-160)"
     sleep 10
