@@ -305,12 +305,12 @@ phase_update() {
     }
 
     info "building v1 test image (test SSH key + marker v1)"
-    if ! PITHEAD_TEST_SSH_PUBKEY="$(cat "$key.pub")" PITHEAD_TEST_MARKER="v1" \
-        os/build-image.sh >/tmp/os-test-v1-build.log 2>&1; then
-        bad "v1 test image build failed (/tmp/os-test-v1-build.log)"
+    local img
+    img=$(_build_image v1) || {
+        bad "v1 test image build failed (/tmp/os-fault-build.log)"
         return
-    fi
-    _vm_boot_disk "$BAKERY_DIR/build/pithead-os-amd64/system.img" && _wait_ssh 240 ||
+    }
+    _vm_boot_disk "$img" && _wait_ssh 240 ||
         {
             bad "v1 test guest never answered SSH (ip: ${ip:-none})"
             return
@@ -323,58 +323,74 @@ phase_update() {
         }
 
     info "building v2 update bundle (marker v2)"
-    if ! PITHEAD_TEST_SSH_PUBKEY="$(cat "$key.pub")" PITHEAD_TEST_MARKER="v2" \
-    PITHEAD_BAKE_ARTIFACT=bundle os/build-image.sh >/tmp/os-test-v2-build.log 2>&1; then
-        bad "v2 bundle build failed (/tmp/os-test-v2-build.log)"
+    bundle=$(_build_bundle v2) || {
+        bad "v2 bundle build failed (/tmp/os-fault-bundle.log)"
         return
-    fi
-    bundle=$(find "$BAKERY_DIR/build/pithead-os-amd64" -name '*.rugixb' | head -1)
+    }
     [ -n "$bundle" ] || {
-        bad "no .rugixb bundle produced"
+        bad "no update bundle produced for updater '$UPDATER'"
         return
     }
     ok "built v2 bundle: $(basename "$bundle")"
 
+    # Install failures MUST be surfaced. Both candidates failed silently for several rounds
+    # because the install was fired with `|| true` and only the marker was checked afterwards —
+    # the harness reported "update did not take" when the real story was "install never ran".
+    _install_or_fail() { # $1 human label
+        local out
+        out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1")
+        local rc=$?
+        [ -n "$out" ] && printf '     install output (%s): %s\n' "$1" "$(printf '%s' "$out" | tail -5)"
+        return $rc
+    }
+
     info "leg 1 — install v2, boot spare, reboot WITHOUT commit -> must fall back to v1"
     scp -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
-        "$bundle" "root@$ip:/data/update.rugixb" || {
+        "$bundle" "root@$ip:/data/update.bundle" || {
         bad "bundle scp to the guest failed"
         return
     }
-    _ssh "rugix-ctrl update install /data/update.rugixb" || true # reboots into the spare slot
+    _install_or_fail "leg 1" || {
+        bad "the v2 install command failed on the guest"
+        return
+    }
+    ok "v2 installed into the spare slot"
+    _ssh "$(_boot_spare_cmd)" || true
     sleep 10
     _wait_ssh 300 || {
-        bad "guest never returned after the v2 install"
+        bad "guest never returned after booting the spare slot"
         return
     }
     marker=$(_ssh cat /etc/pithead-test-marker)
-    [ "$marker" = "v2" ] && ok "spare slot booted with v2" ||
-        {
-            bad "expected v2 in the spare slot, got '$marker'"
-            return
-        }
-    _ssh reboot || true # uncommitted -> Rugix falls back on its own
+    [ "$marker" = "v2" ] && ok "spare slot booted with v2" || {
+        bad "expected v2 in the spare slot, got '$marker'"
+        return
+    }
+    _ssh reboot || true # uncommitted -> the bootloader must fall back on its own
     sleep 10
     _wait_ssh 300 || {
         bad "guest never returned after the no-commit reboot"
         return
     }
     marker=$(_ssh cat /etc/pithead-test-marker)
-    [ "$marker" = "v1" ] && ok "ROLLBACK: an uncommitted update reverts to v1 on reboot" ||
-        {
-            bad "expected v1 after the uncommitted reboot, got '$marker'"
-            return
-        }
+    [ "$marker" = "v1" ] && ok "ROLLBACK: an uncommitted update reverts to v1 on reboot" || {
+        bad "expected v1 after the uncommitted reboot, got '$marker'"
+        return
+    }
 
     info "leg 2 — install v2 again, COMMIT, reboot -> must stay v2"
-    _ssh "rugix-ctrl update install /data/update.rugixb" || true
+    _install_or_fail "leg 2" || {
+        bad "the second v2 install failed on the guest"
+        return
+    }
+    _ssh "$(_boot_spare_cmd)" || true
     sleep 10
     _wait_ssh 300 || {
         bad "guest never returned after the second install"
         return
     }
-    _ssh "rugix-ctrl system commit" || {
-        bad "rugix-ctrl system commit failed"
+    _ssh "$(_commit_cmd)" || {
+        bad "commit failed ($(_commit_cmd))"
         return
     }
     ok "committed the booted update"
@@ -387,6 +403,17 @@ phase_update() {
     marker=$(_ssh cat /etc/pithead-test-marker)
     [ "$marker" = "v2" ] && ok "COMMIT: a committed update persists across reboot" ||
         bad "expected v2 after commit, got '$marker'"
+
+    info "leg 3 — operator-initiated rollback off a committed update"
+    _ssh "$(_rollback_cmd)" || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "guest never returned after an operator rollback"
+        return
+    }
+    marker=$(_ssh cat /etc/pithead-test-marker)
+    [ "$marker" = "v1" ] && ok "ROLLBACK: an operator can return to v1 after committing v2" ||
+        bad "expected v1 after the operator rollback, got '$marker'"
 }
 
 phase_fault() {
