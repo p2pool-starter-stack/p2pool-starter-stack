@@ -766,6 +766,78 @@ candidate stays in-tree until then — it costs 62 lines, and both candidates no
 a working appliance, so keeping the alternative is cheap insurance rather than dead
 weight.
 
+### Verdict confirmed 2026-07-25 — RAUC, fault injection complete
+
+The conditional above is discharged. Both candidates were driven through the same three
+batteries on the same harness, with properly signed bundles and real signature
+verification on both sides.
+
+| Battery | RAUC | Rugix |
+|---|---|---|
+| boot (userspace, wizard, `:80`) | 3/3 | 3/3 |
+| update (install, spare boot, auto-rollback, commit, operator rollback) | 9/9 | 9/9 |
+| fault injection | **11/11** | 10/11 |
+
+Neither candidate bricked a machine in any run — the disqualifying criterion is clean
+for both. Mid-write power cuts (×3) and a cut inside the commit window were survived by
+both, and both roll back on demand.
+
+**The one behavioural difference: Rugix panics on a corrupt bundle.** Handed a
+deliberately damaged bundle, `rugix-ctrl` aborts with `unwrap()` on an `Err` at
+`rugix-bundle/src/reader.rs:522`; RAUC refuses the same input cleanly and says why. It
+reproduced identically on two runs. Both fail *safe* — the box keeps booting the old
+version — so this is not a bricking risk. It is a durability gap in the component whose
+entire job is to be conservative about untrusted input, and a corrupt bundle is an
+ordinary field event: a truncated download, a failing USB stick, a partial write.
+
+**Two findings that go the other way, recorded because they cut against the decision.**
+Rugix enforces stricter X.509 than RAUC: it rejects a CA certificate used as the
+end-entity signer (`CaUsedAsEndEntity`), while RAUC accepts the same self-signed
+certificate as both root and signer. Rugix is right, and the shape it forces — a root
+that devices trust, a separate leaf that signs day to day — is what production should
+use regardless of which updater ships. Rugix also correctly refuses to install onto a
+system that has not yet committed its own boot; the battery initially scored that safety
+feature as a failure, which is a harness bug, not a Rugix one.
+
+**The cost of choosing RAUC was real and it materialized — five times.** Every defect
+found in this bake-off was in integration code we hand-wrote for the RAUC candidate, and
+none was in RAUC itself:
+
+1. `rauc-service` not installed — Debian splits the D-Bus daemon into a package that is
+   not even a Recommends, so `rauc install` could never work.
+2. The GRUB slot-selection sentinel — renumbering the menu entries made "chose slot A"
+   and "found nothing" the same value, breaking fallback.
+3. The grubenv written outside GRUB's prefix directory — `load_env` was a silent no-op,
+   so RAUC's boot-state writes were never read.
+4. `mkbundle.sh` never wrote `/etc/fstab` — two hand-maintained copies of "populate a
+   slot" drifted, and the updated slot came up with a read-only root and no writable
+   `/var`.
+5. Slots addressed by filesystem label — one bundle installs into whichever slot is
+   spare, so its label cannot encode the slot.
+
+Not one of these was caught by a green boot test, by review, or by reasoning. Three of
+them survived multiple passing runs. This is the "surface we own" risk this document
+warned about, and it is now measured rather than argued: the hand-written layer produced
+five bricking-class defects while both updaters produced zero.
+
+**The decision stands anyway, on the weights already fixed.** Field reliability (40%)
+favours RAUC — 11/11 against 10/11, and the gap is a panic on realistic input. Longevity
+(25%) favours RAUC decisively and was already the operator's stated priority. Surface we
+own (20%) favours Rugix clearly and is the reason this was close. Ergonomics (15%)
+splits: Rugix's bakery is the better builder, RAUC's documentation and error messages
+are better, and Rugix's signing path is absent from its shipped `docs/` and had to be
+read out of the source.
+
+**What adoption is now conditional on** — the risk did not disappear, it got managed:
+- `tests/os/run.sh` is a release gate, not a spike artifact. It caught all five defects
+  and it is the only thing standing between the hand-written boot path and a fleet.
+- Adopt `systemd-repart` for partitioning (see the installer section). It removes the
+  partitioning share of the surface that produced defects 4 and 5. It does not touch
+  GRUB slot selection, where defects 2 and 3 landed, so it narrows the gap rather than
+  closing it.
+- The Rugix candidate stays in-tree. It is 62 lines, it passes every battery bar one,
+  and it is the fallback if the hand-written boot path keeps producing defects.
+
 **Bench status 2026-07-25 — both candidates pass the same boot battery 3/3**
 (`tests/os/run.sh --phase boot`): boots to userspace on generic x86 EFI, opens the
 first-boot wizard with a console token, serves the token gate on :80. Rugix took 18

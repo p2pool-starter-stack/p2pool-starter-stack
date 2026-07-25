@@ -1,10 +1,12 @@
 # pithead-os build — known issues
 
-## Status: the appliance boots and serves its setup wizard (2026-07-25)
+## Status: both candidates boot, update, and survive fault injection (2026-07-25)
 
-`tests/os/run.sh --phase boot` passes 3/3: boots to userspace on generic x86 EFI,
-opens the first-boot wizard with a one-time token on the console, and serves the token
-gate on `:80`. The A/B update battery is the remaining proof.
+`tests/os/run.sh` passes all three batteries. Boot 3/3 on both candidates. Update 9/9 on
+both: install, spare boot, automatic rollback of an uncommitted update, commit
+persistence, and operator-initiated rollback off a committed version. Fault injection
+11/11 for RAUC and 10/11 for Rugix, with no brick in any run on either. The updater
+decision and its evidence live in the plan's bake-off section.
 
 ## Resolved, with the lessons worth keeping
 
@@ -65,7 +67,7 @@ BOOTX64.EFI is built with `-p /grub`, so GRUB looks for `ESP:/grub/grubenv`; the
 seeded `ESP:/grubenv` and RAUC was configured to write there too. Both wrote the file
 correctly, GRUB never read it, `ORDER` kept its built-in value with both slots marked
 not-OK, and every boot landed on the same slot. Nothing logs an error at any layer — the
-symptom is an update that installs cleanly and simply never takes effect.
+symptom is an update that installs cleanly and never takes effect.
 
 **A slot cannot be found by filesystem label.** One RAUC bundle carries one filesystem
 image and installs into whichever slot is spare, so its fs label cannot encode the slot;
