@@ -777,16 +777,23 @@ phase_provision() {
         ;;
     esac
     # Caddy fronts the dashboard once the wizard's window closes; self-signed on :443 by default.
+    # Status-based on purpose: the landing response may be a redirect to the login page or an
+    # auth challenge, both empty-bodied — any well-formed HTTP answer proves caddy is proxying.
+    # The window covers the dashboard's healthcheck start period, not just its process start.
     tries=0
-    while [ "$tries" -lt 24 ]; do
-        if curl -ksS -m 8 "https://$ip/" 2>/dev/null | grep -qiE "pithead|dashboard|login"; then
-            ok "dashboard is served through caddy"
+    local code=000
+    while [ "$tries" -lt 60 ]; do
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        case "$code" in
+        2?? | 3?? | 401 | 403)
+            ok "dashboard is served through caddy (HTTP $code)"
             return
-        fi
+            ;;
+        esac
         sleep 5
         tries=$((tries + 1))
     done
-    bad "no dashboard behind caddy on :443 within 2m of the containers running"
+    bad "no HTTP answer behind caddy on :443 within 5m (last: $code)"
 }
 
 phase_fault() {
