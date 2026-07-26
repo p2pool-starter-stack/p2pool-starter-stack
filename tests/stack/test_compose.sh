@@ -176,7 +176,7 @@ for spec in \
     "monerod=/tmp:size=64m,mode=1777" \
     "tari=/tmp:size=64m,mode=1777" \
     "p2pool=/tmp:size=64m,mode=1777" \
-    "xmrig-proxy=/home/ubuntu:size=64m,uid=1000,gid=1000 /tmp:size=64m,mode=1777" \
+    "xmrig-proxy=/home/ubuntu:size=64m,mode=1777 /tmp:size=64m,mode=1777" \
     "dashboard=/tmp:size=64m,mode=1777" \
     "docker-proxy=/run /tmp" \
     "docker-control=/run /tmp" \

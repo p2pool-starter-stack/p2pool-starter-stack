@@ -168,7 +168,7 @@ services:
     # entrypoint writes the create-from-keys JSON to /tmp (tmpfs). Nothing else is written.
     read_only: true
     tmpfs:
-      - /tmp:size=16m,mode=1777,uid=1000,gid=1000
+      - /tmp:size=16m,mode=1777
     volumes:
       - wallet_data:/home/ubuntu/wallets
     environment:
@@ -320,7 +320,7 @@ services:
     # only /tmp (tmpfs). Nothing else is written.
     read_only: true
     tmpfs:
-      - /tmp:size=32m,mode=1777,uid=1000,gid=1000
+      - /tmp:size=32m,mode=1777
     volumes:
       - tari_wallet_data:/home/ubuntu/wallet
       - ./build/tari-wallet:/wallet-config:ro
@@ -466,7 +466,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /home/ubuntu:size=64m,uid=1000,gid=1000
+      - /home/ubuntu:size=64m,mode=1777
     volumes:
       # Stratum TLS keypair (#261), read-only; the wrapper passes the cert flags only when
       # PROXY_STRATUM_TLS=true, so an empty dir (TLS off) changes nothing.
