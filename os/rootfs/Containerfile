@@ -73,7 +73,10 @@ RUN printf '[Match]\nName=en*\nName=eth*\n\n[Network]\nDHCP=yes\nMulticastDNS=ye
 COPY os/overlay/pithead-firstboot.service /etc/systemd/system/pithead-firstboot.service
 COPY os/overlay/pithead-sync.service /etc/systemd/system/pithead-sync.service
 COPY os/overlay/pithead-sync /usr/local/sbin/pithead-sync
-RUN chmod +x /usr/local/sbin/pithead-sync
+# State mounts are derived from the boot disk at every boot, never from labels — every pithead
+# disk carries the same labels, and two present at once made LABEL= mount the wrong /data.
+COPY os/overlay/pithead-mount-generator /usr/lib/systemd/system-generators/pithead-mount-generator
+RUN chmod +x /usr/local/sbin/pithead-sync /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image (bake-off candidates). rugix-ctrl arrives via the bakery layer's
 # core recipe; RAUC is a Debian package, so it is installed here when selected.
 ARG PITHEAD_UPDATER=""

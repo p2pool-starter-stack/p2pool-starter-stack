@@ -26,9 +26,11 @@ populate_slot() { # $1 = mounted rootfs
     #           slot's /var forever; the overlay keeps the stack fresh and the state local.
     # RAUC has no persist/state model, so this is ours to own. Rugix declares it in two lines of
     # [[persist]] and keeps an /etc overlay on the data partition besides.
+    # /data and /boot/efi are NOT here: pithead-mount-generator derives them from the disk the
+    # system actually booted from, because every pithead disk carries the same labels by design
+    # and LABEL= picks whichever udev saw last when two are present. Only the /var overlay is
+    # static — it names paths, not devices, so it cannot pick a wrong disk.
     cat >>"$root/etc/fstab" <<'FSTAB'
-LABEL=data /data ext4 defaults,noatime 0 2
-LABEL=ESP /boot/efi vfat umask=0077,x-systemd.requires-mounts-for=/data 0 1
 overlay /var overlay lowerdir=/var,upperdir=/data/overlay/var,workdir=/data/overlay/var-work,x-systemd.requires-mounts-for=/data 0 0
 FSTAB
 
