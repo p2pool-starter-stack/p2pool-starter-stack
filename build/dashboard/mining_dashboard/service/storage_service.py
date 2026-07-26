@@ -554,7 +554,12 @@ class StateManager:
         ``p2pool_hr``/``xvb_hr`` pair above). Each is stored in its own column so the chart's window
         toggle can plot a true average per window; an omitted/unknown window defaults to 0.
         """
-        t_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        # UTC on purpose, and the trailing Z says so. The epoch `ts` is what everything renders
+        # from (the chart plots epoch ms and the browser localizes); this string is a human label
+        # and the input to the legacy-row migration, whose sqlite strftime('%s', t) parses it AS
+        # UTC — a local-time string there skews every migrated row by the container's offset.
+        # Store UTC everywhere; localize only at display.
+        t_str = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())
         ts = time.time()
 
         try:
