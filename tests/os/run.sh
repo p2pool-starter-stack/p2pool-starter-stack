@@ -310,20 +310,11 @@ _vm_boot_disk() {
 
 phase_update() {
     info "phase: update (A/B commit + rollback, driven over test-only SSH)"
-    local key="$HOME/.ssh/pithead-os-test" ip="" marker bundle
-    [ -f "$key" ] || ssh-keygen -t ed25519 -N "" -f "$key" -q
-    _ssh() {
-        ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
-    }
-    _wait_ssh() {
-        local deadline=$(($(date +%s) + $1))
-        while [ "$(date +%s)" -lt "$deadline" ]; do
-            _ssh true && return 0
-            sleep 5
-        done
-        return 1
-    }
+    # NO local _ssh/_wait_ssh redefinitions here. Function definitions are global but locals are
+    # not: a redefinition capturing a local outlives the phase, and the NEXT phase in an
+    # --phase all run then calls it with the variable gone — an unbound-variable crash that no
+    # standalone phase run can ever reproduce. The top-level helpers already do this job.
+    local ip="" marker bundle
 
     info "building v1 test image (test SSH key + marker v1)"
     local img
