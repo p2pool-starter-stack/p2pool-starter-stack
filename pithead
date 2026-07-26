@@ -61,7 +61,9 @@ readonly CORE_KEYS_CONFIG="config.core-keys.json"
 # Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
 readonly FIRST_RUN_MARKER=".pithead-first-run-done"
-readonly REAL_USER="${SUDO_USER:-$USER}"
+# ${USER:-$(id -un)}: USER is a login-session convention, not a guarantee — systemd services and
+# containers may run without it, and set -u turns the reference into a fatal error at source time.
+readonly REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
 # Non-root uid:gid the BUILT images run their main process as (#255). pithead owns the data dirs,
 # so it chowns each service's bind-mount to this id to match the in-image USER. Tor is the
