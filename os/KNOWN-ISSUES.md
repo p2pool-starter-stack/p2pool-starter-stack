@@ -132,6 +132,14 @@ the test that fails when the product cannot actually start.
   console explains, but the fresh wizard page does not yet show WHY the last attempt
   failed. Plumbing the failure reason into the reopened form is UX work worth doing
   before GA.
+- **First boot needs a display at least once, so nothing can be provisioned headless.** The
+  one-time token is printed only to the console, so a machine with no monitor cannot be set
+  up at all, and a fleet cannot be provisioned without walking to each box. The fix is
+  pre-seeding from the installation medium: the stick's ESP is FAT, so an operator can drop
+  a file on it from any laptop right after flashing — either a chosen token, or a complete
+  `config.json` that skips the wizard entirely (`firstboot_wizard` already honours a
+  pre-seeded config, but only at `/data/pithead/config.json`, which cannot be written before
+  first boot). Roughly 30 lines and the missing half of the appliance's fleet story.
 - **No user-facing OS update path exists yet.** RAUC and rollback are proven at the OS
   layer, but nothing a user can reach applies an update: the dashboard action for
   install/commit/rollback of OS bundles is the pre-GA blocker, and the DIY one-click

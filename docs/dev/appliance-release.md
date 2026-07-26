@@ -85,10 +85,14 @@ Secure Boot **enabled**, then again **disabled**. Expected: reaches userspace bo
 or fails with a legible message on Secure Boot rather than a blank screen. *KVM cannot
 see this: the harness disables Secure Boot because our GRUB is unsigned.*
 
-**M2 — headless discovery.** With only ethernet and no monitor attached, find the box
-from another machine at `http://pithead.local`. Expected: the setup page loads.
-*The wizard prints its token to the console, so confirm what a user with no display
-actually sees and how they are meant to get the token.*
+**M2 — discovery.** Read the token from the console, then find the box from another machine
+at `http://pithead.local` and at the IP it printed. Expected: both load the token gate, and
+the machine stays reachable by name after the monitor is unplugged.
+
+Note what this case does **not** prove: the install is not headless today, because the token
+exists only on the console. A monitor (or serial line) is required at least once. Pre-seeding
+the token or a whole config from the stick's FAT partition is the fix, and it is not built —
+see KNOWN-ISSUES.
 
 KVM analog: `--phase install` automates the mechanics of M3 and M5 (inventory, guards,
 copy completeness, target boot, and reinstall preserving `/data`). The manual cases remain
