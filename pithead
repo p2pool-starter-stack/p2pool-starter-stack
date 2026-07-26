@@ -394,6 +394,9 @@ verify_release_images() {
 }
 
 stack_upgrade() {
+    if is_appliance; then
+        error "This is a Pithead OS appliance: the program tree is delivered by OS images and resynced from the system slot at every boot, so a tarball upgrade here would silently revert at the next reboot. Updates arrive as signed OS images — see the appliance guide."
+    fi
     log "Upgrading stack (rebuilding containers)..."
     # A release (git pull) may change config templates, add/rename .env vars, or restructure the
     # Caddyfile / Tari config — all GENERATED files mounted into containers. Re-render them before
@@ -1262,6 +1265,18 @@ firstboot_consume_spool() { # <spool-dir>
 
 # Overridable so the shell suite can point it at a fake — the real one partitions disks.
 install_bin() { printf '%s' "${PITHEAD_INSTALL_BIN:-/usr/local/sbin/pithead-install}"; }
+
+# Is this host a Pithead OS appliance? Decides which UPGRADE path is legal: the appliance's
+# program tree is delivered by OS images and resynced from the system slot at every boot, so a
+# DIY tarball upgrade would "succeed" and then silently revert at the next reboot. Probes two
+# files only the appliance image bakes; PITHEAD_APPLIANCE=0/1 overrides for tests.
+is_appliance() {
+    case "${PITHEAD_APPLIANCE:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+    esac
+    [ -f /etc/rauc/system.conf ] && [ -x /usr/local/sbin/pithead-install ]
+}
 
 # Did this system boot from removable media (a USB stick)?
 boot_is_removable() {
@@ -6561,6 +6576,10 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     }
     if is_source_checkout; then
         _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
+        return 0
+    fi
+    if is_appliance; then
+        _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. The dashboard OS-update flow is tracked work; nothing was changed."
         return 0
     fi
     # Throttle: one attempt per 10 minutes, checked before any network dial.

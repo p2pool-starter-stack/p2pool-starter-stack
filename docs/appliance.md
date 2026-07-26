@@ -116,15 +116,17 @@ can tune — see [configuration](configuration.md).
 
 The appliance keeps **two copies of the system**, and only one runs at a time. An update
 is written to the copy that is idle, so the running system is never modified in place.
+The machine installs an update, reboots into the new version, and checks that the stack
+came up. If it did not — it fails to boot, or the stack does not start — **the machine
+goes back to the previous version on its own**, with nobody present. That is the entire
+point of keeping two copies.
 
-When an update is ready the dashboard offers it. The machine installs it, reboots into the
-new version, and checks that the stack came up. If it did, the new version is kept. If it
-did not — the machine fails to boot, or the stack does not come up — **the machine goes
-back to the previous version on its own**, with nobody present. That is the entire point
-of keeping two copies.
-
-You can also go back deliberately, from the dashboard, after an update that worked but
-that you did not like.
+**In this test build there is no update button yet.** Applying an OS image update from
+the dashboard — and rolling back from it — is being built; until it ships, updates to a
+test machine are applied by the release process, not by you. The dashboard's update
+notice may still tell you a newer version exists; the one-click action it offers on
+other installs refuses on the appliance on purpose, because it would apply the wrong
+kind of update.
 
 Your data is never part of an update. Wallets, settings and the chain live on a separate
 partition that updates and rollbacks do not touch.

@@ -142,16 +142,16 @@ shares its CPU with the chain it is serving.</p>
 </select>
 
 <label for="tz">Time zone</label>
-<input id="tz" name="timezone" value="UTC" autocomplete="off" list="tzs">
+<input id="tz" name="timezone" value="auto" autocomplete="off" list="tzs">
 <datalist id="tzs">
-<option value="UTC"><option value="America/New_York"><option value="America/Chicago">
+<option value="auto"><option value="UTC"><option value="America/New_York"><option value="America/Chicago">
 <option value="America/Denver"><option value="America/Los_Angeles"><option value="America/Sao_Paulo">
 <option value="Europe/London"><option value="Europe/Berlin"><option value="Europe/Warsaw">
 <option value="Africa/Johannesburg"><option value="Asia/Dubai"><option value="Asia/Kolkata">
 <option value="Asia/Singapore"><option value="Asia/Tokyo"><option value="Australia/Sydney">
 </datalist>
-<p class="note">Used for dashboard timestamps and the daily summary. Anything like
-<code>Europe/Berlin</code>.</p>
+<p class="note"><code>auto</code> uses this machine's own setting. For dashboard timestamps
+and the daily summary — anything like <code>Europe/Berlin</code>.</p>
 
 <button type="submit">Apply</button>
 <p class="note">This machine validates and provisions itself. The dashboard login is generated
@@ -399,7 +399,7 @@ def build_config(form: dict) -> dict:
         cfg["tari"]["clearnet_initial_sync"] = True
 
     tz = s_("timezone")
-    if tz and tz != "UTC":
+    if tz and tz != "auto":  # auto IS the documented default — writing it would only pin it
         cfg.setdefault("dashboard", {})["timezone"] = tz
 
     if not cfg["tari"]:

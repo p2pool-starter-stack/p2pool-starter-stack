@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv systemd-timesyncd systemd-resolved dbus udev \
         linux-image-amd64 initramfs-tools zstd \
         grub-efi-amd64 shim-signed \
-        podman netavark aardvark-dns catatonit uidmap \
+        podman podman-docker netavark aardvark-dns catatonit uidmap \
         jq openssl curl ca-certificates xxd iproute2 \
         fdisk gdisk parted e2fsprogs dosfstools \
         nftables iptables systemd-repart \
@@ -41,6 +41,27 @@ COPY build/tari/ /opt/pithead/build/tari/
 COPY build/tari-wallet/ /opt/pithead/build/tari-wallet/
 RUN rm -f /opt/pithead/build/*/Dockerfile
 RUN chmod +x /opt/pithead/pithead
+
+# The engine bridge, and the reason the appliance can provision at all: pithead drives the stack
+# with `docker compose`, podman-docker maps `docker` onto podman, and podman's compose command
+# delegates to the FIRST provider it finds — this pinned docker-compose v2 binary, which then
+# speaks the compat API on podman.socket. The appliance therefore runs the exact same compose
+# lifecycle as the DIY channel: one config, one validator, one set of commands. Quadlet remains
+# the tracked migration (docs/dev/dual-distribution-plan.md), not a second parallel path.
+# /etc/containers/nodocker silences the shim's stderr banner, which would otherwise leak into
+# every parsed command output.
+ARG COMPOSE_VERSION=v5.3.1
+ARG COMPOSE_SHA256=f9ebc6ebdb19d769b793c245a736caaeb198c62587f13b25c660c13b4987f959
+ARG COSIGN_VERSION=v3.1.2
+ARG COSIGN_SHA256=f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf
+RUN curl -fsSL -o /usr/local/bin/docker-compose \
+        "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+    && echo "${COMPOSE_SHA256}  /usr/local/bin/docker-compose" | sha256sum -c - \
+    && curl -fsSL -o /usr/local/bin/cosign \
+        "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
+    && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - \
+    && chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
+    && touch /etc/containers/nodocker
 
 # Appliance identity: the engine pin doctor and the wizard read, hugepages (load-bearing for the
 # memory caps — the RandomX dataset must land in hugetlbfs, not the cgroup), persistent journald

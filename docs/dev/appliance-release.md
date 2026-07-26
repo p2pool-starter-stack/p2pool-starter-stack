@@ -64,6 +64,7 @@ is the only thing standing between the hand-written boot path and a fleet.
 |---|---|---|
 | `boot` | EFI boot to userspace; first-boot wizard announces itself with a console token; wizard serves the token gate on `:80` | 3 |
 | `update` | `/data` grew to the disk and slots did not (#784); bundle installs into the spare; spare boots; **an uncommitted update reverts on reboot**; a committed update persists; an operator can roll back off a committed version | 11 |
+| `provision` | a config submitted through the wizard's real HTTP flow (token read from the console, exactly as a human would) provisions the stack: validation, cosign-verified image pulls, containers running under podman, dashboard served through caddy. Catches an appliance whose engine cannot run the product — which happened, invisibly to every other phase | 6 |
 | `install` | the image boots as **removable** media (usb bus — the gate keys on it); the inventory offers the internal disk and never the boot medium; the real installer runs; the machine then boots from the target alone with a **complete** copy (`/var/lib/dpkg` — the overlay made an incomplete copy easy and invisible), a fresh machine-id, `/data` sized to the target, and the wizard serving. Then the **reinstall leg**: a sentinel planted in `/data`, a second install over the same disk, and the sentinel required afterwards — the chain-preserving promise, tested | 17 |
 | `fault` | three power cuts mid-write; a deliberately corrupted bundle is refused without crashing and without bricking; a power cut inside the commit window; operator rollback after all of it; the box is still updatable afterwards | 11 |
 
@@ -112,9 +113,11 @@ re-syncing if it is wrong.*
 Confirm a pasted **subaddress** (`8…`) is rejected with an explanation before submitting.
 Expected: the stack provisions and the dashboard comes up.
 
-**M7 — real update.** Publish a `v+1` bundle to the update channel and take the update
-through the dashboard. Expected: installs, reboots into the new version, commits on
-healthy.
+**M7 — real update.** Build a `v+1` bundle, copy it to the machine, and install it with
+`rauc install` (the test image carries SSH for exactly this). Expected: installs, reboots
+into the new version, and an uncommitted update reverts on the next reboot. The
+dashboard-driven OS update is tracked pre-GA work — until it exists, this is the honest
+mechanism, and it is the same one the KVM update phase exercises.
 
 **M8 — pull the plug.** During the update's write phase, physically cut power. Repeat
 three times. Expected: the machine boots the old version every time. *A brick here blocks

@@ -7539,6 +7539,17 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: is_appliance gates the tarball upgrade =="
+# The appliance's program tree is resynced from the system slot every boot, so a DIY tarball
+# upgrade would silently revert — both upgrade entrances must refuse when the host is one.
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" stack_upgrade 2>&1)
+assert_rc "appliance: stack_upgrade refuses" "$?" "1"
+assert_contains "refusal explains the revert-at-reboot trap" "$out" "revert at the next reboot"
+PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" is_appliance
+assert_rc "override PITHEAD_APPLIANCE=1 -> appliance" "$?" "0"
+PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" is_appliance
+assert_rc "override PITHEAD_APPLIANCE=0 -> not appliance" "$?" "1"
+
 echo "== unit: consume_install_request (disk installer host side) =="
 # The request file is operator input arriving through a web form; the host must validate it
 # against its own inventory and never trust a browser-supplied target. Driven against a fake

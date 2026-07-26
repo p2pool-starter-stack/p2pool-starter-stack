@@ -5,7 +5,7 @@
 # os-image sibling of tests/integration/run.sh; it needs a Linux host with KVM + libvirt + the
 # built image, so it runs on the bench, not in CI.
 #
-#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|fault|all]
+#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|fault|all]
 #
 # Phases:
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
@@ -13,7 +13,13 @@
 #           roll back off a committed version. Also asserts /data grew to the disk (#784).
 #   install boot the image as removable media beside a blank disk, run the disk installer, then
 #           boot from the target and prove the copied system is COMPLETE (the /var overlay made
-#           an incomplete copy easy to produce and invisible to every other phase).
+#           an incomplete copy easy to produce and invisible to every other phase). Then the
+#           reinstall leg: /data must survive a second install over the same disk.
+#   provision submit a config through the wizard's real HTTP flow and require the STACK to come
+#           up — wizard accepted, setup ran, images pulled and verified, containers running,
+#           dashboard served. This is the phase that catches an appliance whose engine cannot
+#           actually run the product (it happened: pithead speaks docker, the image had only
+#           podman, and every other phase was green).
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
 #   all     all four (default)
 #
@@ -688,6 +694,99 @@ phase_install() {
     rm -f "$target_disk"
 }
 
+phase_provision() {
+    info "phase: provision (wizard HTTP submit -> setup -> stack containers up)"
+    local img token jar body
+
+    img=$(_build_image v1) || {
+        bad "image build failed (/tmp/os-fault-build.log)"
+        return
+    }
+    _vm_boot_disk "$img" && _wait_ssh 240 || {
+        bad "guest never answered SSH (ip: ${ip:-none})"
+        return
+    }
+    ok "image boots ($ip)"
+
+    # The wizard's one-time token, exactly where a human gets it: the console.
+    local tries=0
+    token=""
+    while [ -z "$token" ] && [ "$tries" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    [ -n "$token" ] || {
+        bad "no one-time token ever appeared on the console"
+        return
+    }
+    ok "one-time token read from the console ($token)"
+    tries=0
+    while ! curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
+        sleep 5
+        tries=$((tries + 1))
+        [ "$tries" -lt 24 ] || {
+            bad "wizard gate never served on :80"
+            return
+        }
+    done
+
+    jar=$(mktemp)
+    curl -fsS -c "$jar" -d "token=$token" "http://$ip/auth" -o /dev/null 2>/dev/null || {
+        bad "token was not accepted"
+        rm -f "$jar"
+        return
+    }
+    # Minimal honest config: a well-formed (dummy) primary Monero address, Monero-only mining.
+    # Everything else keeps its default — which is itself part of what this proves.
+    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=&pool=mini"
+    curl -fsS -b "$jar" --data "$body" "http://$ip/submit" -o /dev/null 2>/dev/null || {
+        bad "config submit failed"
+        rm -f "$jar"
+        return
+    }
+    rm -f "$jar"
+    ok "config submitted through the wizard"
+
+    # The host validates, installs config.json, and runs setup — which pulls the release images
+    # (cosign-verified) and starts the stack. Pulls are the slow part; be generous.
+    if ! _ssh "for i in \$(seq 120); do [ -f /data/pithead/config.json ] && exit 0; sleep 2; done; exit 1"; then
+        bad "the submitted config never became /data/pithead/config.json (validation output: $(_ssh "cat /data/pithead/data/firstboot/error.txt 2>/dev/null" | cut -c1-120))"
+        return
+    fi
+    ok "config validated and installed by the host"
+
+    local deadline=$(($(date +%s) + 1500)) names=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$names" in
+        *dashboard*caddy* | *caddy*dashboard*) break ;;
+        esac
+        sleep 15
+    done
+    case "$names" in
+    *dashboard*caddy* | *caddy*dashboard*)
+        ok "stack containers are running (podman: $names)"
+        ;;
+    *)
+        bad "stack never came up within 25m — running: '${names:-none}'"
+        info "  setup journal tail: $(_ssh "journalctl -u pithead-firstboot -n 5 --no-pager -o cat" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+        return
+        ;;
+    esac
+    # Caddy fronts the dashboard once the wizard's window closes; self-signed on :443 by default.
+    tries=0
+    while [ "$tries" -lt 24 ]; do
+        if curl -ksS -m 8 "https://$ip/" 2>/dev/null | grep -qiE "pithead|dashboard|login"; then
+            ok "dashboard is served through caddy"
+            return
+        fi
+        sleep 5
+        tries=$((tries + 1))
+    done
+    bad "no dashboard behind caddy on :443 within 2m of the containers running"
+}
+
 phase_fault() {
     info "phase: fault injection — a brick is disqualifying, not deducted"
     local img bundle marker i out
@@ -830,11 +929,13 @@ case "$PHASE" in
 boot) phase_boot ;;
 update) phase_update ;;
 install) phase_install ;;
+provision) phase_provision ;;
 fault) phase_fault ;;
 all)
     phase_boot
     phase_update
     phase_install
+    phase_provision
     ;;
 *)
     echo "unknown phase: $PHASE" >&2

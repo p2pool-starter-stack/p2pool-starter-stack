@@ -107,8 +107,22 @@ right; an empty model (all virtio, some NVMe) shifts them left. Both failure mod
 real disks silently vanish from the installer's inventory. `lsblk -J` through `jq` or
 nothing.
 
+**Every battery was green while the appliance could not run the product.** pithead drives
+the stack with `docker compose`; the image shipped only podman — no shim, no compose
+provider, no cosign. The wizard accepted a config and `setup` died at "docker: command
+not found", after boot, update, install and fault all passed: none of them provision.
+The engine bridge (podman-docker + pinned docker-compose v2 as podman's provider +
+pinned cosign) keeps ONE lifecycle across both channels, and the `provision` phase now
+submits a config through the wizard's real HTTP flow and requires running containers —
+the test that fails when the product cannot actually start.
+
 ## Open
 
+- **No user-facing OS update path exists yet.** RAUC and rollback are proven at the OS
+  layer, but nothing a user can reach applies an update: the dashboard action for
+  install/commit/rollback of OS bundles is the pre-GA blocker, and the DIY one-click
+  upgrade deliberately refuses on the appliance (a tarball upgrade would silently revert
+  at the next boot).
 - **The manual hardware battery has not been run.** Everything above is KVM. Secure Boot,
   real disks, headless discovery and a genuine power cut are exactly what a VM cannot
   show — M1-M10 in the release doc must pass on a physical box before an image ships.
