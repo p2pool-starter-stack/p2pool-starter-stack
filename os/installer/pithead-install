@@ -182,7 +182,7 @@ main() {
     mount "$esp" "$mnt/boot/efi"
     mkdir -p "$mnt/boot/efi/EFI/BOOT" "$mnt/boot/efi/grub"
     grub-mkimage -O x86_64-efi -o "$mnt/boot/efi/EFI/BOOT/BOOTX64.EFI" -p /grub \
-        part_gpt fat ext2 normal linux echo search search_label configfile test loadenv regexp
+        part_gpt fat ext2 normal linux echo search search_label configfile test loadenv regexp probe
     install -m 644 /usr/share/pithead/grub.cfg "$mnt/boot/efi/grub/grub.cfg"
     # Slot A good, B empty — the same seed the image ships with. The env block lives in GRUB's
     # prefix directory because bare `load_env` reads $prefix/grubenv; at the ESP root it is a

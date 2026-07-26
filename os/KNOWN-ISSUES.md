@@ -116,12 +116,14 @@ nothing.
   time, so the plan's "first boot works offline" property is partial: the setup page
   works without a network, provisioning does not. Baking the full set roughly triples
   the image and inflates every update bundle — sized deliberately, not forgotten.
-- **The stick and an installed disk carry identical partition labels.** `data`,
-  `system-a`, `ESP` — every by-label mount and the GRUB partlabel search become ambiguous
-  when both are present, and which device wins is udev's choice, not ours. The installer
-  powers the machine off after installing (remove the stick while it is off) and the docs
-  say never to boot with both, but nothing *enforces* it. Per-machine PARTUUIDs in a
-  templated grub.cfg would close it properly — recorded, not done.
+- **The stick and an installed disk carry identical partition labels.** The DANGEROUS half
+  is fixed: the kernel root is the PARTUUID of the partition GRUB actually chose (`probe
+  --part-uuid` at boot), so the machine can no longer boot one disk's kernel against the
+  other disk's system. What remains is `/data` and the ESP, mounted by LABEL from a static
+  fstab — with both disks present, which `data` wins is udev's choice. The installer powers
+  the machine off after installing (remove the stick while it is off) and the docs say
+  never to boot with both; the residual exposure is a confusing but non-destructive mount,
+  not a wrong system.
 - **Every direct-flashed stick shares the image's identity material.** `/etc/machine-id`
   and the SSH host keys are baked at image build, so two sticks flashed from one release
   are identical until something regenerates them. The installer resets machine-id for
