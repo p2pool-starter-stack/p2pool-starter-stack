@@ -739,7 +739,9 @@ phase_provision() {
     }
     # Minimal honest config: a well-formed (dummy) primary Monero address, Monero-only mining.
     # Everything else keeps its default — which is itself part of what this proves.
-    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=&pool=mini"
+    # Both addresses are required — Monero's has a format gate (95 chars, leading 4), Tari's is
+    # deliberately format-free host-side, so a labelled dummy passes and stays obviously fake.
+    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini"
     curl -fsS -b "$jar" --data "$body" "http://$ip/submit" -o /dev/null 2>/dev/null || {
         bad "config submit failed"
         rm -f "$jar"

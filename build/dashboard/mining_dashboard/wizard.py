@@ -81,10 +81,10 @@ documented default and stays editable from the dashboard.</p>
 subaddress (8…) or an integrated address.</p>
 
 <label for="tw">Tari payout address</label>
-<input id="tw" name="tari_wallet" class="addr" autocomplete="off" spellcheck="false"
+<input id="tw" name="tari_wallet" class="addr" required autocomplete="off" spellcheck="false"
        autocapitalize="off" placeholder="Tari address">
-<p class="note">Leave blank to mine Monero only. Tari merge-mining earns a second coin from the
-same work, so there is rarely a reason to skip it.</p>
+<p class="note">Merge-mining earns Tari from the same work that mines Monero — this stack always
+does both, so it needs both addresses. Get one from Tari Universe or any Tari wallet.</p>
 
 <h2>Monero node</h2>
 <label for="mmode">Where does Monero data come from?</label>
@@ -364,13 +364,10 @@ def build_config(form: dict) -> dict:
         "p2pool": {"pool": s_("pool") or "mini", "stratum_password": "auto"},
     }
 
-    # Tari is optional — an operator can mine Monero only. Writing an empty address would fail
-    # validation on a choice they deliberately made.
-    tari_wallet = s_("tari_wallet")
-    if tari_wallet:
-        cfg["tari"]["wallet_address"] = tari_wallet
-    else:
-        cfg["dashboard"] = {"tari_required": False}
+    # Both addresses are REQUIRED — tari.mode is local|remote only, there is no Monero-only
+    # mode in this product, and the CLI wizard enforces the same. An empty value still passes
+    # through so the host's validator produces the error, keeping one source of rejections.
+    cfg["tari"]["wallet_address"] = s_("tari_wallet")
 
     if form.get("monero_mode") == "remote":
         cfg["monero"]["mode"] = "remote"

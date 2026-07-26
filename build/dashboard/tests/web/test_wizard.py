@@ -216,10 +216,12 @@ def _cfg(**over):
     return wizard.build_config(form)
 
 
-def test_tari_is_optional_and_marks_itself_not_required():
+def test_both_wallets_always_flow_to_the_host_validator():
+    # tari.mode is local|remote only — there is no Monero-only mode, and the wizard must not
+    # invent one. An empty address passes through so the HOST produces the rejection.
     cfg = _cfg(tari_wallet="")
-    assert "tari" not in cfg or "wallet_address" not in cfg.get("tari", {})
-    assert cfg["dashboard"]["tari_required"] is False
+    assert cfg["tari"]["wallet_address"] == ""
+    assert "tari_required" not in cfg.get("dashboard", {})
 
 
 def test_remote_monero_carries_ports_and_defaults_them():

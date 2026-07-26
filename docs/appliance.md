@@ -97,7 +97,7 @@ Then a handful of choices, all of which have a sensible default:
 
 | Question | Default | When to change it |
 |---|---|---|
-| Tari payout address | — | Leave blank to mine Monero only. Merge-mining earns a second coin from the same work. |
+| Tari payout address | — | Required, like the Monero one: this stack always merge-mines both coins from the same work. |
 | Monero node | run it here | Point at a node you already run. |
 | Tari node | run it here | Same, over a network you trust. |
 | P2Pool sidechain | mini | `main` only for very large hashrate. On `mini` a home rig gets paid far more often. |
