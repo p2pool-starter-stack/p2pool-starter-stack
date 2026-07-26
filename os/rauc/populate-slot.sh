@@ -13,10 +13,19 @@
 populate_slot() { # $1 = mounted rootfs
     local root="$1"
 
-    # docker-export artefacts: systemd refuses to run as PID 1 with /.dockerenv present, and the
-    # export omits the pseudo-filesystem mount points entirely.
+    # docker-export artefacts: systemd refuses to run as PID 1 with /.dockerenv present, the
+    # export omits the pseudo-filesystem mount points entirely, and /etc/hosts + /etc/resolv.conf
+    # are BIND MOUNTS inside docker — unwritable during the build and exported as empty stubs.
+    # Without real ones the OS cannot resolve even localhost, and glibc's fallback sends DNS to
+    # [::1]:53; the first symptom is image pulls failing while everything else looks healthy.
     rm -f "$root/.dockerenv"
     mkdir -p "$root"/{dev,proc,sys,run,tmp,data,boot/efi}
+    {
+        echo '127.0.0.1 localhost'
+        echo '127.0.1.1 pithead'
+        echo '::1 localhost ip6-localhost ip6-loopback'
+    } >"$root/etc/hosts"
+    ln -sf ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
 
     # Writable state, declared explicitly because the root is READ-ONLY. That is the point of the
     # appliance: the stack cannot be mutated at runtime, only replaced wholesale by an update.
