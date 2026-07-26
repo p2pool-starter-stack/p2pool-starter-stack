@@ -125,6 +125,16 @@ pinned cosign) keeps ONE lifecycle across both channels, and the `provision` pha
 submits a config through the wizard's real HTTP flow and requires running containers —
 the test that fails when the product cannot actually start.
 
+**The appliance runs FROM the installation medium, so the stick cannot come out while it
+runs.** An install ends by powering the machine OFF, never rebooting: removing the stick from
+a running system takes its root, `/data` and the wizard's spool with it, and the machine
+wedges — the browser's request and the host's poll both write to a filesystem that no longer
+exists, so the button appears to do nothing. A restart with the stick still in just boots the
+stick again. Off → stick out → on is the only sequence the hardware allows, and it costs
+nothing: the operator is already at the machine to pull the stick. A bench session hit this
+after the flow was briefly changed to "remove the stick, then press Reboot"; tests now pin the
+order in both the page and the status text.
+
 ## Open
 
 - **A provisioning failure reopens the wizard, but the failed config needs surfacing.**

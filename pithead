@@ -1490,16 +1490,16 @@ firstboot_wizard() {
                 local irc=0
                 consume_install_request "$spool" || irc=$?
                 if [ "$irc" -eq 0 ]; then
-                    # Installed. The operator takes the stick out and presses Reboot on the page;
-                    # the wizard container stays up to serve that button, and only the HOST
-                    # reboots. Powering off instead would work, but it costs a walk to the
-                    # machine — and the label ambiguity that once forced it is gone: the kernel
-                    # root comes from GRUB's own disk (probe --part-uuid) and the state mounts
-                    # from the booted disk (pithead-mount-generator), so a reboot with the stick
-                    # still in merely boots the stick again. Confusing, never destructive.
+                    # Installed. Wait for the operator to press Shut down, then POWER OFF —
+                    # never reboot. This system is running FROM the installation medium: its
+                    # root, /data and this very spool live on the stick, so the stick cannot be
+                    # removed while it runs, and a restart with the stick still in just boots
+                    # the stick again. Off, stick out, on is the only sequence the hardware
+                    # allows, and it costs the operator nothing: they are already at the machine
+                    # to pull the stick.
                     _console "" "Installation complete." \
-                        "Remove the USB stick, then press Reboot on the setup page." \
-                        "(Or power the machine off, remove it, and power it back on.)"
+                        "Press Shut down on the setup page (or power the machine off now)," \
+                        "then remove the USB stick and switch the machine back on."
                     local waited=0
                     while [ ! -f "$spool/reboot-request" ]; do
                         sleep 2
@@ -1507,13 +1507,14 @@ firstboot_wizard() {
                         # Nobody is coming — the browser was closed, or this is headless with no
                         # one watching. Reboot anyway rather than sit installed-but-idle forever.
                         if [ "$waited" -ge 900 ]; then
-                            _console "No reboot confirmation after 15 minutes — rebooting now."
+                            _console "No confirmation after 15 minutes — shutting down now."
                             break
                         fi
                     done
                     "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                    log "Rebooting into the installed system."
-                    systemctl reboot
+                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+                    sleep 3
+                    systemctl poweroff
                     return
                 fi
                 if [ "$irc" -eq 1 ]; then

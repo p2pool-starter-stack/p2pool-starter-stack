@@ -201,9 +201,9 @@ async def test_installer_status_is_distinct_from_provisioning(client, installer)
     assert "Copying the system" in await (await client.get("/status")).text()
     (installer / "installed").write_text("1")
     body = await (await client.get("/status")).text()
-    # Starts with "Installed" — the page's poll keys on that to reveal the Reboot button.
+    # Starts with "Installed" — the page's poll keys on that to reveal the shutdown step.
     assert body.startswith("Installed")
-    assert "remove the usb stick" in body.lower()
+    assert body.lower().index("shut down") < body.lower().index("remove the usb stick")
 
 
 # --- the expanded question set --------------------------------------------------------------
@@ -384,12 +384,16 @@ async def test_reboot_records_the_request_for_the_host(client, installer):
     r = await client.post("/reboot")
     assert r.status == 200
     assert (installer / "reboot-request").read_text() == "1"
-    assert "Rebooting" in await r.text()
+    assert "Shutting down" in await r.text()
 
 
-async def test_install_page_tells_you_to_remove_the_stick_first(client, installer):
+async def test_install_page_orders_shutdown_before_stick_removal(client, installer):
+    # Order is the whole point: the system runs FROM the stick, so removing it while running
+    # takes its filesystem — and the button with it. This sequence must never be reworded into
+    # "remove the stick, then press…" again.
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
     r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
     body = await r.text()
-    assert "Remove the USB stick" in body
+    assert body.index("Shut down") < body.index("Remove the USB stick")
+    assert "running <em>from</em> the\nUSB stick" in body or "running <em>from</em>" in body
     assert "/reboot" in body

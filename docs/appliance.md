@@ -109,9 +109,13 @@ You do not download 250 GB again.
 
 Type the disk's name to confirm and install. It takes a few minutes.
 
-When it finishes the page says so and offers a **Reboot** button. **Take the USB stick out
-first**, then press it. If you reboot with the stick still in, most machines just boot the
-stick again and show you this installer — harmless, but you will be back here.
+When it finishes the page says so and offers a **Shut down** button. Press it, wait for the
+machine to go dark, **then** remove the USB stick, then switch the machine back on.
+
+That order matters and cannot be swapped: until it shuts down, the machine is running *from*
+the stick, so pulling it out takes the running system's filesystem with it and the machine
+stops responding. (If that happens, hold the power button, remove the stick, and switch it on
+— an install that had already finished is safe on the disk.)
 
 ## 4. Configure it
 
@@ -184,6 +188,10 @@ integrated address. Use your primary address, which starts with `4` and is 95 ch
 **It came back on the old version after an update.** That is the safety mechanism working:
 the new version did not come up healthy, so the machine reverted. Nothing is lost. Check
 the dashboard logs, and expect a fixed version.
+
+**Nothing responds after I pulled the USB stick out.** The machine was running from it. Hold
+the power button until it switches off, leave the stick out, and power it on: it boots the
+installed system. An install that had already reported success is safe on the disk.
 
 **Power was cut during an update.** Turn it back on. The machine boots the version it was
 already running — an interrupted update is discarded, not half-applied.
