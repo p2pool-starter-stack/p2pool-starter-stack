@@ -15,6 +15,12 @@ Type=oneshot
 RemainAfterExit=no
 WorkingDirectory=/data/pithead
 Environment=PITHEAD_ENGINE=podman
+# systemd sets neither HOME nor USER for services without User= — but pithead (and tools it
+# shells out to) grew up in login sessions where both always exist. Two set -u crashes came from
+# exactly this (USER, then HOME); setting them here means the NEXT login-session assumption
+# degrades gracefully instead of bricking first boot.
+Environment=HOME=/root
+Environment=USER=root
 # The URL + one-time token must reach a human standing at the machine.
 StandardOutput=journal+console
 StandardError=journal+console

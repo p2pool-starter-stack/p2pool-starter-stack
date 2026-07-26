@@ -2118,7 +2118,7 @@ assert_safe_dir() {
     #    dirs people most often fat-finger a data_dir to. A dedicated SUBfolder of any of these
     #    (e.g. /srv/pithead, /mnt/disk/monero) is still allowed — only the bare root is refused (#91).
     case "$d" in
-    "" | / | // | /. | /root | /home | /etc | /usr | /var | /var/lib | /opt | /srv | /mnt | /media | /tmp | /bin | /sbin | /lib | /lib64 | /boot | /dev | /proc | /sys | /Users | /Applications | "$HOME" | "/home/$REAL_USER" | "/Users/$REAL_USER")
+    "" | / | // | /. | /root | /home | /etc | /usr | /var | /var/lib | /opt | /srv | /mnt | /media | /tmp | /bin | /sbin | /lib | /lib64 | /boot | /dev | /proc | /sys | /Users | /Applications | "${HOME:-/root}" | "/home/$REAL_USER" | "/Users/$REAL_USER")
         error "Refusing to use '$d' as a data directory — it's a system, home, or bare mount root. Choose a dedicated subfolder in $CONFIG_FILE (e.g. .../pithead-data)."
         ;;
     esac
