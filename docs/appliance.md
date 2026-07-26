@@ -147,6 +147,11 @@ through the setup page.
 Everything here stays editable from the dashboard afterwards, and there is much more you
 can tune — see [configuration](configuration.md).
 
+**Already know exactly what you want?** The setup page has an **Advanced** link that takes a
+whole `config.json` pasted in. It is checked the same way the form's answers are, so a mistake
+comes back with the reason rather than a broken machine — and any key you leave out keeps its
+documented default.
+
 ## Updates
 
 The appliance keeps **two copies of the system**, and only one runs at a time. An update

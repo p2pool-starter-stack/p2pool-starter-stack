@@ -158,10 +158,16 @@ the morning.
    PITHEAD_EXPECT_COMMIT=$(git rev-parse HEAD) sudo tests/os/verify-image.sh <image>
    ```
 
-   That comparison exists because a release build once shipped a dashboard two commits stale —
-   the build clone was pulling from an intermediate clone rather than origin, and nothing in
-   the artifact revealed it. The image is stamped with its commit at build time and this
-   asserts it. It is the static gate. It mounts the artifact
+   Run it **from the repo checkout you built**, because it compares the artifact against these
+   files: the shipped `pithead`, compose file and config reference must be byte-identical to the
+   tree, and the baked container archive is unpacked to confirm it carries this tree's
+   `wizard.py`.
+
+   All of that exists because a release build once shipped a dashboard two commits stale — the
+   release clone was pulling from an intermediate clone rather than origin, so `git pull`
+   succeeded and fetched nothing. The image passed every check that existed, behaved like the
+   previous build, and reached a bench. The commit stamp catches a stale *tree*; the comparisons
+   catch a stale *artifact*, including inside the container image, which is where it hid. It mounts the artifact
    and checks everything a green boot cannot prove: no test SSH key or marker shipped, the
    grubenv sits where `load_env` reads it, the kernel root is a probed PARTUUID, all six
    docker-export artefacts are fixed, the engine bridge and cosign are aboard, and

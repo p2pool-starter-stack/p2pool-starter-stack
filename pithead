@@ -1436,15 +1436,24 @@ firstboot_wizard() {
     # Offline first boot: the appliance carries the wizard image as an archive (os/rootfs/images),
     # because at this point the operator may have no working network yet — that is what they are
     # here to configure. Load it once if the engine does not already have it.
-    if ! "$engine" image exists "$image" 2>/dev/null; then
-        local archive
-        for archive in /opt/pithead/images/*.tar.gz /opt/pithead/images/*.tar; do
-            [ -f "$archive" ] || continue
+    # Load the baked image when the ARCHIVE changes — never merely when the tag is missing.
+    # Every build tags the wizard image identically (pithead-dashboard:vX.Y.Z), and podman's
+    # storage lives on /data, which survives reinstalls and updates by design. Keying on
+    # "does the tag exist" therefore pins a machine to the first wizard it ever loaded: a
+    # bench box reinstalled with a newer image kept serving the old setup page, missing
+    # questions that had shipped weeks earlier. The archive's digest is the honest key.
+    local archive stamp="$PWD/.wizard-image-sha" baked=""
+    for archive in /opt/pithead/images/*.tar.gz /opt/pithead/images/*.tar; do
+        [ -f "$archive" ] || continue
+        baked=$(sha256sum "$archive" 2>/dev/null | cut -d' ' -f1)
+        if [ "$baked" != "$(cat "$stamp" 2>/dev/null)" ] || ! "$engine" image exists "$image" 2>/dev/null; then
             # The single slowest step before the page exists, and the one worth narrating.
             _console "Loading the setup page (this is the slow part)..."
-            "$engine" load -i "$archive" >/dev/null 2>&1 || true
-        done
-    fi
+            if "$engine" load -i "$archive" >/dev/null 2>&1; then
+                printf '%s' "$baked" >"$stamp"
+            fi
+        fi
+    done
     # Double quotes on purpose: $engine expands NOW, at trap definition. It is a local, and the
     # trap also fires after this function's locals are gone — where set -u would turn the trap
     # itself into the crash that masks whatever actually failed.

@@ -7539,6 +7539,25 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: the baked wizard image reloads when the ARCHIVE changes =="
+# Every build tags the wizard image identically and podman's storage lives on /data, which
+# survives reinstalls — so "does the tag exist" pins a machine to the first wizard it ever
+# loaded. A bench box served a weeks-old setup page for exactly this reason.
+WSB=$(mktemp -d)
+mkdir -p "$WSB/images"
+printf 'v1-archive' >"$WSB/images/dashboard.tar.gz"
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+assert_eq "digest of an unchanged archive is stable" \
+    "$(sha_of "$WSB/images/dashboard.tar.gz")" "$(sha_of "$WSB/images/dashboard.tar.gz")"
+printf '%s' "$(sha_of "$WSB/images/dashboard.tar.gz")" >"$WSB/.wizard-image-sha"
+[ "$(sha_of "$WSB/images/dashboard.tar.gz")" = "$(cat "$WSB/.wizard-image-sha")" ] &&
+    ok "recorded digest matches -> no reload" || bad "recorded digest matches" "mismatch"
+printf 'v2-archive-different' >"$WSB/images/dashboard.tar.gz"
+[ "$(sha_of "$WSB/images/dashboard.tar.gz")" != "$(cat "$WSB/.wizard-image-sha")" ] &&
+    ok "a rebuilt archive differs -> reload" || bad "a rebuilt archive differs" "same digest"
+rm -rf "$WSB"
+unset WSB
+
 echo "== unit: pre-seeding from the installation medium =="
 # The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
 PSD=$(mktemp -d)

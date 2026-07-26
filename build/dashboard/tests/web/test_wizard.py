@@ -203,7 +203,7 @@ async def test_installer_status_is_distinct_from_provisioning(client, installer)
     body = await (await client.get("/status")).text()
     # Starts with "Installed" — the page's poll keys on that to reveal the shutdown notice.
     assert body.startswith("Installed")
-    assert body.lower().index("go dark") < body.lower().index("remove the usb stick")
+    assert "switching itself off" in body
 
 
 # --- the expanded question set --------------------------------------------------------------
@@ -369,9 +369,9 @@ async def test_install_page_has_no_button_to_sequence_wrongly(client, installer)
     r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
     body = await r.text()
     assert "/reboot" not in body
-    assert "switching itself off" in body
-    # And the order still has to read correctly for a human.
-    assert body.index("go dark") < body.index("remove the USB stick")
+    # The procedure, in order, and nothing else: switch off, remove, switch on.
+    assert body.index("switch itself off") < body.index("Remove the USB stick")
+    assert body.index("Remove the USB stick") < body.index("Switch it back on")
 
 
 async def test_reboot_endpoint_is_gone(client, installer):
@@ -380,3 +380,67 @@ async def test_reboot_endpoint_is_gone(client, installer):
     r = await client.post("/reboot")
     assert r.status == 404
     assert not (installer / "reboot-request").exists()
+
+
+# --- the advanced page ----------------------------------------------------------------------
+# Same token gate, same host validator, same spool. It only skips the form.
+
+
+async def test_advanced_is_reachable_and_offers_a_skeleton(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/advanced")).text()
+    assert "config.json" in body and "<textarea" in body
+    # Escaped for the textarea, so match the key itself rather than its quoting.
+    assert "wallet_address" in body and "&quot;" in body
+
+
+async def test_simple_form_links_to_advanced_and_back(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    assert 'href="/advanced"' in await (await client.get("/setup")).text()
+    assert 'href="/setup"' in await (await client.get("/advanced")).text()
+
+
+async def test_advanced_unauthed_writes_nothing(client, spool):
+    r = await client.post("/advanced", data={"config": "{}"}, allow_redirects=False)
+    assert r.status == 302
+    assert not (spool / "config.json").exists()
+
+
+async def test_advanced_rejects_malformed_json_without_spooling(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/advanced", data={"config": "{not json"})
+    assert r.status == 400
+    assert "Not valid JSON" in await r.text()
+    assert not (spool / "config.json").exists()
+
+
+async def test_advanced_rejects_a_bare_json_array(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/advanced", data={"config": "[1,2,3]"})
+    assert r.status == 400
+    assert not (spool / "config.json").exists()
+
+
+async def test_advanced_spools_valid_json_for_the_host(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    cfg = '{"monero":{"wallet_address":"4AAA"},"tari":{"wallet_address":"t"}}'
+    r = await client.post("/advanced", data={"config": cfg})
+    assert r.status == 200
+    assert json.loads((spool / "config.json").read_text())["monero"]["wallet_address"] == "4AAA"
+
+
+async def test_a_rejected_config_comes_back_for_editing(client, spool):
+    # Retyping a whole config because one key was wrong is how someone gives up.
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    await client.post("/advanced", data={"config": '{"monero":{"wallet_address":"whoops"}}'})
+    (spool / "error.txt").write_text("bad wallet")
+    body = await (await client.get("/advanced")).text()
+    assert "whoops" in body
+    assert "bad wallet" in body
+
+
+async def test_advanced_is_unreachable_in_installer_mode(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.get("/advanced", allow_redirects=False)
+    assert r.status == 302
+    assert r.headers["Location"] == "/install"

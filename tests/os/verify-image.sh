@@ -115,6 +115,38 @@ if [ -n "${PITHEAD_EXPECT_COMMIT:-}" ]; then
     chk "built from a clean tree" 'case "$BUILT" in *-dirty) false ;; *) true ;; esac'
 fi
 
+# The RC3 failure in full: an image shipped a dashboard two commits stale, passed every check
+# above, and behaved like the previous build on a bench. The stamp catches a stale TREE; these
+# catch a stale ARTIFACT — the program and the baked container image are compared against the
+# very files this checkout holds. Skipped when run outside the repo.
+if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
+    echo "==> the artifact matches the tree it was built from"
+    chk "shipped pithead is the tree's pithead" 'cmp -s "$ROOT/opt/pithead/pithead" ./pithead'
+    chk "shipped compose file matches" 'cmp -s "$ROOT/opt/pithead/docker-compose.yml" ./docker-compose.yml'
+    chk "shipped config reference matches" 'cmp -s "$ROOT/opt/pithead/config.reference.json" ./config.reference.json'
+
+    # The wizard is the part that shipped stale, and it lives inside a container archive rather
+    # than on the filesystem — so it needs unpacking to be compared at all. That opacity is
+    # precisely why nobody noticed.
+    WIZ_ARCHIVE=$(ls "$ROOT"/opt/pithead/images/*.tar.gz 2>/dev/null | head -1)
+    WIZ_TMP=$(mktemp -d)
+    WIZ_SHIPPED=""
+    if [ -n "$WIZ_ARCHIVE" ] && tar -xzf "$WIZ_ARCHIVE" -C "$WIZ_TMP" 2>/dev/null; then
+        for layer in "$WIZ_TMP"/blobs/sha256/* "$WIZ_TMP"/*/layer.tar; do
+            [ -f "$layer" ] || continue
+            member=$(tar -tf "$layer" 2>/dev/null | grep -m1 'mining_dashboard/wizard\.py$') || continue
+            tar -xOf "$layer" "$member" >"$WIZ_TMP/shipped-wizard.py" 2>/dev/null && {
+                # shellcheck disable=SC2034  # read inside chk's eval'd condition below
+                WIZ_SHIPPED="$WIZ_TMP/shipped-wizard.py"
+                break
+            }
+        done
+    fi
+    chk "the baked wizard image contains the tree's wizard.py" \
+        '[ -n "$WIZ_SHIPPED" ] && cmp -s "$WIZ_SHIPPED" build/dashboard/mining_dashboard/wizard.py'
+    rm -rf "$WIZ_TMP"
+fi
+
 echo "==> test material"
 if [ "$MODE" = "--test" ]; then
     chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'

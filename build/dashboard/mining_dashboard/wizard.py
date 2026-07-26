@@ -106,7 +106,8 @@ pruned Monero plus a <em>remote</em> Tari node is the combination that fits.</p>
 </select>
 <div class="when" id="mremote">
   <label for="mrh">Node host</label>
-  <input id="mrh" name="monero_remote_host" placeholder="192.168.1.10" autocomplete="off">
+  <input id="mrh" name="monero_remote_host" placeholder="192.168.1.10 or my-node.local"
+         autocomplete="off" spellcheck="false">
   <label for="mrr">RPC port</label>
   <input id="mrr" name="monero_remote_rpc" value="18081" inputmode="numeric" pattern="[0-9]+">
   <label for="mrz">ZMQ port</label>
@@ -129,10 +130,12 @@ pruned Monero plus a <em>remote</em> Tari node is the combination that fits.</p>
 </select>
 <div class="when" id="tremote">
   <label for="trh">Node host</label>
-  <input id="trh" name="tari_remote_host" placeholder="192.168.1.10" autocomplete="off">
+  <input id="trh" name="tari_remote_host" placeholder="192.168.1.10 or my-node.local"
+         autocomplete="off" spellcheck="false">
   <label for="trg">gRPC port</label>
   <input id="trg" name="tari_remote_grpc" value="18142" inputmode="numeric" pattern="[0-9]+">
-  <p class="note">Only over a network you trust — this connection is not encrypted.</p>
+  <p class="note">An IP or a hostname both work. Only over a network you trust — this
+  connection is not encrypted.</p>
 </div>
 
 <h2>Mining</h2>
@@ -169,6 +172,8 @@ and the daily summary — anything like <code>Europe/Berlin</code>.</p>
 <p class="note">This machine validates and provisions itself. The dashboard login is generated
 here and shown on the console — it never travels over this page.</p>
 </form>
+<p class="note"><a href="/advanced">Advanced: paste a full config.json</a> — every option,
+for people who already know what they want.</p>
 <script>
 const $ = (id) => document.getElementById(id);
 const toggle = (el, on) => {{ el.style.display = on ? 'block' : 'none'; }};
@@ -221,16 +226,16 @@ document.getElementById('disk').addEventListener('change', e => {{
 }});
 </script>"""
 
-INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off. This takes a
-few minutes.</p>
+INSTALLING = """<p><strong>Installing.</strong> Takes a few minutes. Do not power it off.</p>
 <p class="note" id="s">Working…</p>
 <div id="done" style="display:none">
-<h2>Installed — the machine is switching itself off</h2>
-<p>Wait for it to go dark, <strong>then</strong> remove the USB stick, then switch it back
-on. It comes up from its own disk and this setup page returns, with a fresh token on its
-console.</p>
-<p class="note">It powers off by itself on purpose: it is running <em>from</em> the USB
-stick, so the stick cannot come out until it stops. There is nothing to click here.</p>
+<h2>Installed</h2>
+<ol>
+<li>Wait for the machine to switch itself off.</li>
+<li>Remove the USB stick.</li>
+<li>Switch it back on.</li>
+</ol>
+<p class="note">The setup page returns from the installed system, with a new token.</p>
 </div>
 <script>
 const poll = setInterval(async () => {
@@ -243,6 +248,40 @@ const poll = setInterval(async () => {
   }
 }, 2000);
 </script>"""
+
+ADVANCED_FORM = """<p>Paste a complete <code>config.json</code>. It is validated by this
+machine exactly as the simple form's answers are — anything it rejects comes back with the
+reason, and nothing is applied until it passes.</p>
+{error}
+<form method="post" action="/advanced">
+<label for="cfg">config.json</label>
+<textarea id="cfg" name="config" rows="22" spellcheck="false"
+  style="width:100%;font-family:ui-monospace,monospace;font-size:0.8rem;box-sizing:border-box"
+>{prefill}</textarea>
+<button type="submit">Apply</button>
+<p class="note">Every key and its default is documented in the configuration guide; the
+skeleton above is the minimum this stack needs. Keys you leave out keep their documented
+defaults, so a short file is normal and usually better than a long one.</p>
+</form>
+<p class="note"><a href="/setup">Back to the simple setup</a></p>"""
+
+# The smallest config the validator accepts, as a starting point. Deliberately NOT the whole
+# reference: a wall of every key invites editing the wrong one, and omitted keys already take
+# their documented defaults.
+ADVANCED_SKELETON = """{
+  "monero": {
+    "wallet_address": "",
+    "mode": "local",
+    "prune": true
+  },
+  "tari": {
+    "wallet_address": "",
+    "mode": "local"
+  },
+  "p2pool": {
+    "pool": "mini"
+  }
+}"""
 
 DONE = """<p><strong>Configuration received.</strong> This machine is validating and
 provisioning itself — watch the console for the dashboard address and the generated
@@ -365,6 +404,42 @@ async def install(request: web.Request) -> web.Response:
     return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
 
 
+async def advanced_form(request: web.Request) -> web.Response:
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    if installer_mode():
+        raise web.HTTPFound("/install")
+    prev = _spool_read("error.txt")
+    err = f'<p class="err">{html.escape(prev)}</p>' if prev else ""
+    # Hand back what they submitted when it failed, not a fresh skeleton — retyping a config
+    # because one key was wrong is the fastest way to make someone give up.
+    prefill = _spool_read("last-advanced") or ADVANCED_SKELETON
+    body = ADVANCED_FORM.format(error=err, prefill=html.escape(prefill))
+    return web.Response(text=PAGE.format(body=body), content_type="text/html")
+
+
+async def advanced_submit(request: web.Request) -> web.Response:
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    form = await request.post()
+    raw = str(form.get("config", "")).strip()
+    _spool_write_text("last-advanced", raw)
+    # Shape is checked here so a typo comes back instantly; MEANING is the host's call, exactly
+    # as for the simple form — one validator, one source of rejections.
+    try:
+        cfg = json.loads(raw)
+        if not isinstance(cfg, dict):
+            raise ValueError("the top level must be a JSON object")
+    except (ValueError, TypeError) as exc:
+        body = ADVANCED_FORM.format(
+            error=f'<p class="err">Not valid JSON: {html.escape(str(exc))}</p>',
+            prefill=html.escape(raw or ADVANCED_SKELETON),
+        )
+        return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
+    _spool_write_config(cfg)
+    return web.Response(text=PAGE.format(body=DONE), content_type="text/html")
+
+
 async def setup_form(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
@@ -477,10 +552,7 @@ async def submit(request: web.Request) -> web.Response:
 async def status(request: web.Request) -> web.Response:
     if installer_mode():
         if _spool_read("installed") is not None:
-            return web.Response(
-                text="Installed — the machine is switching itself off. "
-                "Wait for it to go dark, then remove the USB stick and power it back on."
-            )
+            return web.Response(text="Installed — the machine is switching itself off.")
         err = _spool_read("error.txt")
         if err is not None:
             return web.Response(text=f"Install failed: {err}")
@@ -504,6 +576,8 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.get("/install", install_form),
             web.post("/install", install),
             web.get("/setup", setup_form),
+            web.get("/advanced", advanced_form),
+            web.post("/advanced", advanced_submit),
             web.post("/submit", submit),
             web.get("/status", status),
         ]
