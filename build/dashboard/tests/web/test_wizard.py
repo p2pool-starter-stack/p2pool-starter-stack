@@ -77,7 +77,10 @@ async def test_submit_writes_spool_config_atomically(client, spool):
     assert cfg["tari"]["clearnet_initial_sync"] is True
     assert cfg["p2pool"] == {"pool": "mini", "stratum_password": "auto"}
     # No half-written temp files remain beside the atomic rename target.
-    assert [p.name for p in spool.iterdir()] == ["config.json"]
+    # last-attempt.json is deliberate — it is what refills the form after a rejection. What
+    # must not survive is a half-written temp file beside the atomic rename target.
+    assert sorted(p.name for p in spool.iterdir()) == ["config.json", "last-attempt.json"]
+    assert not [p for p in spool.iterdir() if p.name.startswith(".")]
 
 
 async def test_local_mode_omits_remote_and_clearnet_keys(client, spool):
@@ -382,68 +385,86 @@ async def test_reboot_endpoint_is_gone(client, installer):
     assert not (installer / "reboot-request").exists()
 
 
-# --- the advanced page ----------------------------------------------------------------------
-# Same token gate, same host validator, same spool. It only skips the form.
+# --- the JSON pane is the configuration -----------------------------------------------------
+# The fields write into it, so what the operator sees is exactly what gets applied.
 
 
-async def test_advanced_is_reachable_and_offers_a_skeleton(client, spool):
+@pytest.fixture
+def seeded(spool):
+    spool.joinpath("config.reference.json").write_text(
+        json.dumps({
+            "monero": {"wallet_address": "", "mode": "local", "prune": True},
+            "tari": {"wallet_address": "", "mode": "local"},
+            "p2pool": {"pool": "mini"},
+            "tor": {"auto_heal": False},
+        })
+    )
+    return spool
+
+
+async def test_setup_page_embeds_the_effective_config(client, seeded):
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    body = await (await client.get("/advanced")).text()
-    assert "config.json" in body and "<textarea" in body
-    # Escaped for the textarea, so match the key itself rather than its quoting.
-    assert "wallet_address" in body and "&quot;" in body
+    body = await (await client.get("/setup")).text()
+    assert 'id="cfg-seed"' in body and 'id="cfg"' in body
+    assert "data-path=" in body
 
 
-async def test_simple_form_links_to_advanced_and_back(client, spool):
+async def test_submitted_json_is_what_gets_written(client, seeded):
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    assert 'href="/advanced"' in await (await client.get("/setup")).text()
-    assert 'href="/setup"' in await (await client.get("/advanced")).text()
+    cfg = {"monero": {"wallet_address": "4XYZ", "prune": True}, "tari": {"wallet_address": "t"}}
+    r = await client.post("/submit", data={"config": json.dumps(cfg)})
+    assert r.status == 200
+    written = json.loads((seeded / "config.json").read_text())
+    assert written["monero"]["wallet_address"] == "4XYZ"
 
 
-async def test_advanced_unauthed_writes_nothing(client, spool):
-    r = await client.post("/advanced", data={"config": "{}"}, allow_redirects=False)
-    assert r.status == 302
-    assert not (spool / "config.json").exists()
-
-
-async def test_advanced_rejects_malformed_json_without_spooling(client, spool):
+async def test_keys_at_their_default_are_not_written(client, seeded):
+    # A config that pins every default would freeze them; the appliance receives improved
+    # defaults through updates. Effective configuration is identical either way.
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    r = await client.post("/advanced", data={"config": "{not json"})
+    cfg = {"monero": {"wallet_address": "4XYZ", "prune": True, "mode": "local"},
+           "tari": {"wallet_address": "t"}, "p2pool": {"pool": "mini"}, "tor": {"auto_heal": False}}
+    await client.post("/submit", data={"config": json.dumps(cfg)})
+    written = json.loads((seeded / "config.json").read_text())
+    assert "prune" not in written["monero"]     # equals the default
+    assert "mode" not in written["monero"]      # equals the default
+    assert "p2pool" not in written               # entirely default
+    assert written["monero"]["wallet_address"] == "4XYZ"  # differs, so it is kept
+
+
+async def test_a_changed_default_is_written(client, seeded):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    cfg = {"monero": {"wallet_address": "4XYZ", "prune": False}, "tari": {"wallet_address": "t"}}
+    await client.post("/submit", data={"config": json.dumps(cfg)})
+    assert json.loads((seeded / "config.json").read_text())["monero"]["prune"] is False
+
+
+async def test_malformed_json_is_refused_and_comes_back(client, seeded):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/submit", data={"config": "{not json"})
     assert r.status == 400
     assert "Not valid JSON" in await r.text()
-    assert not (spool / "config.json").exists()
+    assert not (seeded / "config.json").exists()
 
 
-async def test_advanced_rejects_a_bare_json_array(client, spool):
+async def test_a_rejected_attempt_is_offered_back_for_editing(client, seeded):
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    r = await client.post("/advanced", data={"config": "[1,2,3]"})
-    assert r.status == 400
-    assert not (spool / "config.json").exists()
-
-
-async def test_advanced_spools_valid_json_for_the_host(client, spool):
-    await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    cfg = '{"monero":{"wallet_address":"4AAA"},"tari":{"wallet_address":"t"}}'
-    r = await client.post("/advanced", data={"config": cfg})
-    assert r.status == 200
-    assert json.loads((spool / "config.json").read_text())["monero"]["wallet_address"] == "4AAA"
-
-
-async def test_a_rejected_config_comes_back_for_editing(client, spool):
-    # Retyping a whole config because one key was wrong is how someone gives up.
-    await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    await client.post("/advanced", data={"config": '{"monero":{"wallet_address":"whoops"}}'})
-    (spool / "error.txt").write_text("bad wallet")
-    body = await (await client.get("/advanced")).text()
-    assert "whoops" in body
+    cfg = {"monero": {"wallet_address": "4TYPO"}, "tari": {"wallet_address": "t"}}
+    await client.post("/submit", data={"config": json.dumps(cfg)})
+    (seeded / "error.txt").write_text("bad wallet")
+    body = await (await client.get("/setup")).text()
+    assert "4TYPO" in body      # no retyping a 95-character address to fix one field
     assert "bad wallet" in body
 
 
-async def test_advanced_is_unreachable_in_installer_mode(client, installer):
+async def test_a_browser_without_javascript_still_works(client, seeded):
+    # The pane never populates without JS, so the plain form fields remain the fallback.
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    r = await client.get("/advanced", allow_redirects=False)
-    assert r.status == 302
-    assert r.headers["Location"] == "/install"
+    r = await client.post("/submit", data={"monero_wallet": "4" + "A" * 94, "tari_wallet": "t",
+                                           "pool": "mini", "config": ""})
+    assert r.status == 200
+    assert json.loads((seeded / "config.json").read_text())["monero"]["wallet_address"].startswith("4")
+
 
 
 # --- chain size belongs to a node we run ----------------------------------------------------

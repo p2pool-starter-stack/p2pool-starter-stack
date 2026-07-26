@@ -143,8 +143,8 @@ Then a handful of choices, all of which have a sensible default:
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Time zone | UTC | For dashboard timestamps. |
 
-Press Apply. The machine provisions itself, then prints the dashboard address and a login on
-its console:
+Press Apply. The machine provisions itself, then prints the dashboard address, the address to
+point your miners at, and a login — all on its console:
 
 ```
   Dashboard login for this machine:
@@ -152,18 +152,28 @@ its console:
       password: <32 characters>
 ```
 
-**Write that down.** It is generated on the machine, never crosses the setup page, and is
-also stored in `config.json` on the machine if you lose it. Unlike the DIY install — where
+It also prints where to send hashrate:
+
+```
+  Point your miners at this machine:
+      stratum+tcp://pithead.local:3333
+```
+
+**Write the password down.** It is generated on the machine, never crosses the setup page, and
+is also stored in `config.json` on the machine if you lose it. Unlike the DIY install — where
 you are at a terminal and can choose to skip a login — an appliance always gets one: it is a
 headless box on your network, and nobody was there to be asked.
 
 Everything here stays editable from the dashboard afterwards, and there is much more you
 can tune — see [configuration](configuration.md).
 
-**Already know exactly what you want?** The setup page has an **Advanced** link that takes a
-whole `config.json` pasted in. It is checked the same way the form's answers are, so a mistake
-comes back with the reason rather than a broken machine — and any key you leave out keeps its
-documented default.
+**Already know exactly what you want?** Open **Advanced** at the bottom of the setup page. It
+shows the complete configuration — every key, with its default filled in — and it *is* what the
+machine will run: answering a question above rewrites it, and editing it directly wins. Paste a
+whole `config.json` in there if you have one.
+
+Keys still at their default are not written to disk, so this machine keeps picking up improved
+defaults from future updates. The configuration it runs is identical either way.
 
 ## Updates
 

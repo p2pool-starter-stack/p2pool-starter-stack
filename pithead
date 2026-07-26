@@ -1414,6 +1414,12 @@ firstboot_wizard() {
     # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses
     # only by design, removed at handoff.
     chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
+    # The wizard renders the EXACT config that will be written, defaults included, so it needs
+    # the reference. It is a read-only schema, not a secret.
+    cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
+        cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
+    chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
+
     local installer=0
     if installer_mode_available; then
         installer=1
@@ -1531,6 +1537,8 @@ firstboot_wizard() {
                 log "Configuration accepted — provisioning now."
                 ensure_appliance_dashboard_password || true
                 apply_appliance_defaults || true
+                _console "" "Point your miners at this machine:" \
+                    "    stratum+tcp://$(hostname).local:$(jq -r '.p2pool.stratum_port // 3333' "$PWD/config.json" 2>/dev/null || echo 3333)"
                 # Subshell on purpose: error() exits, and a provisioning failure must NOT
                 # dead-end the machine. Without this, config.json exists, the wizard's condition
                 # never re-arms, and a box with no shell has no recovery path at all. Move the
@@ -3048,7 +3056,16 @@ apply_appliance_defaults() {
     [ -f "$CONFIG_FILE" ] || return 0
     local tmp
     tmp=$(mktemp) || return 1
-    if jq 'if .tor.auto_heal == null then (.tor //= {}) | .tor.auto_heal = true else . end' \
+    # dashboard.control.enabled: on DIY the operator has a shell, so the config editor is a
+    # convenience and stays off. An appliance has NO other way in — no shell, ssh disabled — so
+    # without this the machine is unconfigurable after first boot and the only route to a changed
+    # payout address is a reflash. Production runs with it on. It sits behind the generated
+    # login, which is why the password above is not optional.
+    if jq '
+        if .tor.auto_heal == null then (.tor //= {}) | .tor.auto_heal = true else . end
+        | if .dashboard.control.enabled == null
+          then (.dashboard //= {}) | (.dashboard.control //= {}) | .dashboard.control.enabled = true
+          else . end' \
         "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"; then
         return 0
     fi

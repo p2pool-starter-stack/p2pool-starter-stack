@@ -66,6 +66,66 @@ GATE_FORM = """<p>Enter the one-time token shown on this machine's console or te
 <button type="submit">Continue</button>
 </form>"""
 
+# Two-way binding between the simple fields and the JSON. Kept out of the .format() template on
+# purpose: JS braces inside one must be doubled, and getting that wrong 500s the page.
+BIND_SCRIPT = """
+<script>
+(function () {
+  const cfg = JSON.parse(document.getElementById('cfg-seed').textContent);
+  const box = document.getElementById('cfg');
+  const err = document.getElementById('cfgerr');
+  const fields = Array.from(document.querySelectorAll('[data-path]'));
+
+  const get = (o, p) => p.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
+  const set = (o, p, v) => {
+    const ks = p.split('.');
+    let cur = o;
+    ks.slice(0, -1).forEach(k => { if (typeof cur[k] !== 'object' || cur[k] === null) cur[k] = {}; cur = cur[k]; });
+    cur[ks[ks.length - 1]] = v;
+  };
+  // The form's value is always a string; the config's type is not. Coerce to whatever the
+  // reference already holds so a port stays a number and a toggle stays a boolean.
+  const coerce = (el, raw) => {
+    if (el.type === 'checkbox') return el.checked;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    if (/^[0-9]+$/.test(raw) && typeof get(cfg, el.dataset.path) === 'number') return parseInt(raw, 10);
+    return raw;
+  };
+  const render = () => { box.value = JSON.stringify(cfg, null, 2); };
+
+  // JSON -> form, so a reopened page (or a rejected attempt) shows what is actually set.
+  const load = () => {
+    fields.forEach(el => {
+      const v = get(cfg, el.dataset.path);
+      if (v === undefined || v === null) return;
+      if (el.type === 'checkbox') el.checked = !!v;
+      else el.value = String(v);
+    });
+    if (window.syncBlocks) window.syncBlocks();
+  };
+
+  fields.forEach(el => ['input', 'change'].forEach(ev => el.addEventListener(ev, () => {
+    set(cfg, el.dataset.path, coerce(el, el.value));
+    render();
+  })));
+
+  // Hand-edited JSON wins, and its shape is checked as it is typed.
+  box.addEventListener('input', () => {
+    try {
+      const next = JSON.parse(box.value);
+      err.textContent = '';
+      Object.keys(cfg).forEach(k => delete cfg[k]);
+      Object.assign(cfg, next);
+      load();
+    } catch (e) { err.textContent = 'Not valid JSON: ' + e.message; }
+  });
+
+  load();
+  render();
+})();
+</script>"""
+
 SETUP_FORM = """<p>Only the answers that cannot be guessed for you. Everything else keeps its
 documented default and stays editable from the dashboard.</p>
 {error}
@@ -75,26 +135,26 @@ documented default and stays editable from the dashboard.</p>
 <p class="note">Paste these — they are far too long to type, and a typo pays a stranger.</p>
 
 <label for="mw">Monero payout address</label>
-<input id="mw" name="monero_wallet" class="addr" required autocomplete="off" spellcheck="false"
+<input id="mw" name="monero_wallet" data-path="monero.wallet_address" class="addr" required autocomplete="off" spellcheck="false"
        autocapitalize="off" placeholder="4… (95 characters)">
 <p class="note" id="mwn">Must be your PRIMARY address — it starts with 4. p2pool cannot pay a
 subaddress (8…) or an integrated address.</p>
 
 <label for="tw">Tari payout address</label>
-<input id="tw" name="tari_wallet" class="addr" required autocomplete="off" spellcheck="false"
+<input id="tw" name="tari_wallet" data-path="tari.wallet_address" class="addr" required autocomplete="off" spellcheck="false"
        autocapitalize="off" placeholder="Tari address">
 <p class="note">Merge-mining earns Tari from the same work that mines Monero — this stack always
 does both, so it needs both addresses. Get one from Tari Universe or any Tari wallet.</p>
 
 <h2>Monero node</h2>
 <label for="mmode">Where does Monero data come from?</label>
-<select id="mmode" name="monero_mode">
+<select id="mmode" name="monero_mode" data-path="monero.mode">
 <option value="local">Run the bundled node on this machine (default)</option>
 <option value="remote">Use a Monero node I already run</option>
 </select>
 <div class="when" id="mlocal">
   <label for="prune">Chain size</label>
-  <select id="prune" name="prune">
+  <select id="prune" name="prune" data-path="monero.prune">
   <option value="true">Pruned — about 120 GB (default, mines exactly the same)</option>
   <option value="false">Full — about 320 GB (only if you need the whole chain)</option>
   </select>
@@ -103,41 +163,41 @@ does both, so it needs both addresses. Get one from Tari Universe or any Tari wa
 </div>
 <div class="when" id="mremote">
   <label for="mrh">Node host</label>
-  <input id="mrh" name="monero_remote_host" placeholder="192.168.1.10 or my-node.local"
+  <input id="mrh" name="monero_remote_host" data-path="monero.remote.host" placeholder="192.168.1.10 or my-node.local"
          autocomplete="off" spellcheck="false">
   <label for="mrr">RPC port</label>
-  <input id="mrr" name="monero_remote_rpc" value="18081" inputmode="numeric" pattern="[0-9]+">
+  <input id="mrr" name="monero_remote_rpc" data-path="monero.remote.rpc_port" value="18081" inputmode="numeric" pattern="[0-9]+">
   <label for="mrz">ZMQ port</label>
-  <input id="mrz" name="monero_remote_zmq" value="18083" inputmode="numeric" pattern="[0-9]+">
+  <input id="mrz" name="monero_remote_zmq" data-path="monero.remote.zmq_port" value="18083" inputmode="numeric" pattern="[0-9]+">
   <label><input type="checkbox" id="mra" name="monero_remote_auth" value="1"> This node requires a
   username and password</label>
   <div class="when" id="mrauth">
     <label for="mru">Node username</label>
-    <input id="mru" name="monero_remote_user" autocomplete="off">
+    <input id="mru" name="monero_remote_user" data-path="monero.node_username" autocomplete="off">
     <label for="mrp">Node password</label>
-    <input id="mrp" name="monero_remote_pass" type="password" autocomplete="new-password">
+    <input id="mrp" name="monero_remote_pass" data-path="monero.node_password" type="password" autocomplete="new-password">
   </div>
 </div>
 
 <h2>Tari node</h2>
 <label for="tmode">Where does Tari data come from?</label>
-<select id="tmode" name="tari_mode">
+<select id="tmode" name="tari_mode" data-path="tari.mode">
 <option value="local">Run the bundled node on this machine (default)</option>
 <option value="remote">Use a Tari node I already run</option>
 </select>
 <div class="when" id="tremote">
   <label for="trh">Node host</label>
-  <input id="trh" name="tari_remote_host" placeholder="192.168.1.10 or my-node.local"
+  <input id="trh" name="tari_remote_host" data-path="tari.remote.host" placeholder="192.168.1.10 or my-node.local"
          autocomplete="off" spellcheck="false">
   <label for="trg">gRPC port</label>
-  <input id="trg" name="tari_remote_grpc" value="18142" inputmode="numeric" pattern="[0-9]+">
+  <input id="trg" name="tari_remote_grpc" data-path="tari.remote.grpc_port" value="18142" inputmode="numeric" pattern="[0-9]+">
   <p class="note">An IP or a hostname both work. Only over a network you trust — this
   connection is not encrypted.</p>
 </div>
 
 <h2>Mining</h2>
 <label for="pool">P2Pool sidechain</label>
-<select id="pool" name="pool">
+<select id="pool" name="pool" data-path="p2pool.pool">
 <option value="mini">mini — right for almost every home rig (default)</option>
 <option value="nano">nano — a single low-power rig</option>
 <option value="main">main — only for very large hashrate</option>
@@ -146,7 +206,7 @@ does both, so it needs both addresses. Get one from Tari Universe or any Tari wa
 cadence. Too large a tier means waiting days between shares; it costs nothing to change
 later.</p>
 
-<label><input type="checkbox" name="local_miner" value="1"> Also mine with this machine's own CPU</label>
+<label><input type="checkbox" name="local_miner" value="1" data-path="local_miner.enabled"> Also mine with this machine's own CPU</label>
 <p class="note">Leave off if this box only coordinates other miners. A node that is also mining
 shares its CPU with the chain it is serving.</p>
 
@@ -160,22 +220,22 @@ shares its CPU with the chain it is serving.</p>
 <h2>Alerts <span class="note">(optional — skip both if you are not sure)</span></h2>
 
 <label for="hc">Healthchecks.io ping URL</label>
-<input id="hc" name="healthchecks_url" autocomplete="off" spellcheck="false"
+<input id="hc" name="healthchecks_url" data-path="healthchecks.ping_url" autocomplete="off" spellcheck="false"
        placeholder="https://hc-ping.com/your-uuid">
 <p class="note">Tells you when this machine goes <em>silent</em> — a power cut or a crash,
 which the machine itself cannot report. Create a free check at healthchecks.io and paste its
 ping URL.</p>
 
 <label for="tgt">Telegram bot token</label>
-<input id="tgt" name="telegram_token" autocomplete="off" spellcheck="false"
+<input id="tgt" name="telegram_token" data-path="telegram.bot_token" autocomplete="off" spellcheck="false"
        placeholder="123456:ABC-DEF...">
 <label for="tgc">Telegram chat ID</label>
-<input id="tgc" name="telegram_chat" autocomplete="off" spellcheck="false" placeholder="987654321">
+<input id="tgc" name="telegram_chat" data-path="telegram.chat_id" autocomplete="off" spellcheck="false" placeholder="987654321">
 <p class="note">Pushes alerts (node down, worker offline, sync finished) to Telegram and
 answers status commands. Both fields are needed, or leave both blank.</p>
 
 <label for="tz">Time zone</label>
-<input id="tz" name="timezone" value="auto" autocomplete="off" list="tzs">
+<input id="tz" name="timezone" data-path="dashboard.timezone" value="auto" autocomplete="off" list="tzs">
 <datalist id="tzs">
 <option value="auto"><option value="UTC"><option value="America/New_York"><option value="America/Chicago">
 <option value="America/Denver"><option value="America/Los_Angeles"><option value="America/Sao_Paulo">
@@ -186,12 +246,21 @@ answers status commands. Both fields are needed, or leave both blank.</p>
 <p class="note"><code>auto</code> uses this machine's own setting. For dashboard timestamps
 and the daily summary — anything like <code>Europe/Berlin</code>.</p>
 
+<details id="adv">
+<summary><strong>Advanced</strong> — the exact configuration, every key and default</summary>
+<p class="note">This is what the machine will run. Editing a field above updates it; editing it
+here directly wins. Keys already at their documented default are not written to disk, so this
+machine keeps receiving improved defaults from future updates — the effective configuration is
+identical either way.</p>
+<textarea id="cfg" name="config" rows="20" spellcheck="false"
+  style="width:100%;font-family:ui-monospace,monospace;font-size:0.78rem;box-sizing:border-box"></textarea>
+<p class="err" id="cfgerr"></p>
+</details>
+
 <button type="submit">Apply</button>
 <p class="note">This machine validates and provisions itself. The dashboard login is generated
-here and shown on the console — it never travels over this page.</p>
+on the machine and shown on its console — it never travels over this page.</p>
 </form>
-<p class="note"><a href="/advanced">Advanced: paste a full config.json</a> — every option,
-for people who already know what they want.</p>
 <script>
 const $ = (id) => document.getElementById(id);
 const toggle = (el, on) => {{ el.style.display = on ? 'block' : 'none'; }};
@@ -203,6 +272,7 @@ const sync = () => {{
   toggle($('mrauth'), $('mra').checked);
 }};
 ['mmode','tmode','mra'].forEach(id => $(id).addEventListener('change', sync));
+window.syncBlocks = sync;
 sync();
 
 // Tell the operator what is wrong with a pasted address immediately, instead of after a submit
@@ -269,40 +339,6 @@ const poll = setInterval(async () => {
 }, 2000);
 </script>"""
 
-ADVANCED_FORM = """<p>Paste a complete <code>config.json</code>. It is validated by this
-machine exactly as the simple form's answers are — anything it rejects comes back with the
-reason, and nothing is applied until it passes.</p>
-{error}
-<form method="post" action="/advanced">
-<label for="cfg">config.json</label>
-<textarea id="cfg" name="config" rows="22" spellcheck="false"
-  style="width:100%;font-family:ui-monospace,monospace;font-size:0.8rem;box-sizing:border-box"
->{prefill}</textarea>
-<button type="submit">Apply</button>
-<p class="note">Every key and its default is documented in the configuration guide; the
-skeleton above is the minimum this stack needs. Keys you leave out keep their documented
-defaults, so a short file is normal and usually better than a long one.</p>
-</form>
-<p class="note"><a href="/setup">Back to the simple setup</a></p>"""
-
-# The smallest config the validator accepts, as a starting point. Deliberately NOT the whole
-# reference: a wall of every key invites editing the wrong one, and omitted keys already take
-# their documented defaults.
-ADVANCED_SKELETON = """{
-  "monero": {
-    "wallet_address": "",
-    "mode": "local",
-    "prune": true
-  },
-  "tari": {
-    "wallet_address": "",
-    "mode": "local"
-  },
-  "p2pool": {
-    "pool": "mini"
-  }
-}"""
-
 DONE = """<p><strong>Configuration received.</strong> This machine is validating and
 provisioning itself — watch the console for the dashboard address and the generated
 login. This setup page closes when provisioning completes.</p>
@@ -313,6 +349,46 @@ setInterval(async () => {
   document.getElementById('s').textContent = t;
 }, 2000);
 </script>"""
+
+
+def _reference() -> dict:
+    """Every key with its documented default, published into the spool by the host."""
+    raw = _spool_read("config.reference.json")
+    try:
+        ref = json.loads(raw) if raw else {}
+    except ValueError:
+        ref = {}
+    return {k: v for k, v in ref.items() if not k.startswith("_")}
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in (over or {}).items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def strip_defaults(cfg: dict, ref: dict) -> dict:
+    """Drop every key whose value already equals the documented default.
+
+    The page shows the FULL effective config, because hiding what a machine will run is how
+    people get surprised. What gets written is only what actually differs — a config that
+    pins all several hundred defaults at install time would freeze them forever, and an
+    appliance receives improved defaults through OS updates. Same effective configuration,
+    minus the freeze. Setting a value equal to today's default is therefore not a way to pin
+    it; nothing in the product offers that, and the reference is the place to change one.
+    """
+    out: dict = {}
+    for k, v in (cfg or {}).items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, dict) and isinstance(ref.get(k), dict):
+            sub = strip_defaults(v, ref[k])
+            if sub:
+                out[k] = sub
+        elif k not in ref or v != ref[k]:
+            out[k] = v
+    return out
 
 
 def spool_dir() -> str:
@@ -424,42 +500,6 @@ async def install(request: web.Request) -> web.Response:
     return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
 
 
-async def advanced_form(request: web.Request) -> web.Response:
-    if not _authed(request):
-        raise web.HTTPFound("/")
-    if installer_mode():
-        raise web.HTTPFound("/install")
-    prev = _spool_read("error.txt")
-    err = f'<p class="err">{html.escape(prev)}</p>' if prev else ""
-    # Hand back what they submitted when it failed, not a fresh skeleton — retyping a config
-    # because one key was wrong is the fastest way to make someone give up.
-    prefill = _spool_read("last-advanced") or ADVANCED_SKELETON
-    body = ADVANCED_FORM.format(error=err, prefill=html.escape(prefill))
-    return web.Response(text=PAGE.format(body=body), content_type="text/html")
-
-
-async def advanced_submit(request: web.Request) -> web.Response:
-    if not _authed(request):
-        raise web.HTTPFound("/")
-    form = await request.post()
-    raw = str(form.get("config", "")).strip()
-    _spool_write_text("last-advanced", raw)
-    # Shape is checked here so a typo comes back instantly; MEANING is the host's call, exactly
-    # as for the simple form — one validator, one source of rejections.
-    try:
-        cfg = json.loads(raw)
-        if not isinstance(cfg, dict):
-            raise ValueError("the top level must be a JSON object")
-    except (ValueError, TypeError) as exc:
-        body = ADVANCED_FORM.format(
-            error=f'<p class="err">Not valid JSON: {html.escape(str(exc))}</p>',
-            prefill=html.escape(raw or ADVANCED_SKELETON),
-        )
-        return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
-    _spool_write_config(cfg)
-    return web.Response(text=PAGE.format(body=DONE), content_type="text/html")
-
-
 async def setup_form(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
@@ -468,10 +508,17 @@ async def setup_form(request: web.Request) -> web.Response:
         # land in the STICK's spool and vanish. Install first; configure the installed system.
         raise web.HTTPFound("/install")
     prev = _spool_read("error.txt")
-    err = f'<p class="err">{prev}</p>' if prev else ""
-    return web.Response(
-        text=PAGE.format(body=SETUP_FORM.format(error=err)), content_type="text/html"
+    err = f'<p class="err">{html.escape(prev)}</p>' if prev else ""
+    # Defaults, with the last attempt merged over them: a rejected config comes back filled in
+    # rather than making someone retype a 95-character address to fix one field.
+    effective = _deep_merge(_reference(), _last_attempt())
+    seed = (
+        '<script type="application/json" id="cfg-seed">'
+        + html.escape(json.dumps(effective))
+        + "</script>"
     )
+    body = SETUP_FORM.format(error=err) + seed + BIND_SCRIPT
+    return web.Response(text=PAGE.format(body=body), content_type="text/html")
 
 
 def build_config(form: dict) -> dict:
@@ -560,6 +607,14 @@ def _spool_write_text(name: str, text: str) -> None:
     os.replace(tmp, os.path.join(sd, name))
 
 
+def _last_attempt() -> dict:
+    raw = _spool_read("last-attempt.json")
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+
+
 def _spool_write_config(cfg: dict) -> None:
     """Atomic write: the host's consume loop only ever sees a complete file."""
     sd = spool_dir()
@@ -577,7 +632,28 @@ async def submit(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
     form = await request.post()
-    _spool_write_config(build_config(dict(form)))
+    raw = str(form.get("config", "")).strip()
+    ref = _reference()
+    # The JSON pane IS the configuration — the fields write into it, so what the operator can
+    # see is exactly what gets applied. build_config remains the fallback for a browser with no
+    # JavaScript, where the pane never populated.
+    try:
+        cfg = json.loads(raw) if raw else build_config(dict(form))
+        if not isinstance(cfg, dict):
+            raise ValueError("the top level must be a JSON object")
+    except (ValueError, TypeError) as exc:
+        err = f'<p class="err">Not valid JSON: {html.escape(str(exc))}</p>'
+        effective = _deep_merge(ref, _last_attempt())
+        seed = (
+            '<script type="application/json" id="cfg-seed">'
+            + html.escape(json.dumps(effective))
+            + "</script>"
+        )
+        body = SETUP_FORM.format(error=err) + seed + BIND_SCRIPT
+        return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
+    # Keep the full attempt for a retry, write only what differs from the defaults.
+    _spool_write_text("last-attempt.json", json.dumps(cfg))
+    _spool_write_config(strip_defaults(cfg, ref) if ref else cfg)
     return web.Response(text=PAGE.format(body=DONE), content_type="text/html")
 
 
@@ -608,8 +684,6 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.get("/install", install_form),
             web.post("/install", install),
             web.get("/setup", setup_form),
-            web.get("/advanced", advanced_form),
-            web.post("/advanced", advanced_submit),
             web.post("/submit", submit),
             web.get("/status", status),
         ]
