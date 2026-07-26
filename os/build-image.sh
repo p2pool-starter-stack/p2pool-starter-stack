@@ -37,12 +37,17 @@ git diff --quiet 2>/dev/null || BUILD_DIRTY="-dirty"
 printf '%s%s\n' "$BUILD_COMMIT" "$BUILD_DIRTY" >os/rootfs/BUILD_COMMIT
 echo "==> building from commit ${BUILD_COMMIT}${BUILD_DIRTY}"
 
+# Overridable so a parallel release build cannot collide with a harness build on the same host.
+# It is an env var and NOT an edit to this file: the build stamps its own commit, and a sed
+# against the working tree would mark every release image "-dirty" and fail its own gate.
+ROOTFS_TAG="${PITHEAD_ROOTFS_TAG:-pithead-os-rootfs}"
+
 echo "==> rootfs: container build + export"
-docker build -f os/rootfs/Containerfile -t pithead-os-rootfs \
+docker build -f os/rootfs/Containerfile -t "$ROOTFS_TAG" \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
     --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" \
     --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-}" .
-cid=$(docker create pithead-os-rootfs)
+cid=$(docker create "$ROOTFS_TAG")
 mkdir -p os/build
 docker export --output os/build/pithead-root.tar "$cid"
 docker rm "$cid" >/dev/null
