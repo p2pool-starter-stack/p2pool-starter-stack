@@ -11,12 +11,18 @@ for f in pithead pithead-completion.bash VERSION docker-compose.yml \
     [ -f "$SRC/$f" ] && install -m 644 "$SRC/$f" "$DST/$f"
 done
 [ -f "$DST/pithead" ] && chmod 755 "$DST/pithead"
-# Mounted-into-containers config templates and the baked images: program data, replaced wholesale.
-for d in build images; do
-    [ -d "$SRC/$d" ] || continue
-    rm -rf "${DST:?}/$d"
-    cp -a "$SRC/$d" "$DST/$d"
-done
+# Config templates that services bind-mount: program data, replaced wholesale.
+#
+# NOT images/: firstboot loads the wizard archive from /opt/pithead/images — the read-only slot —
+# so a copy here is never read. Copying it wrote 61 MB to the data partition on EVERY boot, on
+# the critical path between power-on and the setup page appearing. On a USB stick that is minutes
+# of the silence a first-time operator spends wondering whether the machine is broken.
+if [ -d "$SRC/build" ]; then
+    rm -rf "${DST:?}/build"
+    cp -a "$SRC/build" "$DST/build"
+fi
+# An images/ copy from an older layout is dead weight on the data partition — reclaim it.
+rm -rf "${DST:?}/images"
 # repart formats /data with ext4's default 5% root reserve — ~50 GB lost on a 1 TB disk that
 # exists to hold chain data. 0.5% keeps a real safety margin (the pre-repart layout used the
 # same figure). tune2fs is idempotent and instant, so every boot is the simplest correct hook.

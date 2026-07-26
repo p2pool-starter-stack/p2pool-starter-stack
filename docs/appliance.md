@@ -52,16 +52,22 @@ settings:
 Then plug in the stick and ethernet, and boot. Choose the USB device in the boot menu; on
 most machines that is F12, F11, or Esc during startup.
 
-The screen shows an address and a one-time token:
+The machine first says it is starting up, and then — **after a minute or two, sometimes
+longer from a USB stick** — prints the address and a one-time token:
 
 ```
-  Pithead setup wizard — open http://192.168.1.42
+  Pithead setup wizard is ready. From a browser on this network, open:
+      http://pithead.local
+      http://192.168.1.42   (if the name above does not resolve)
+
   One-time token: pit-K7M2QX
 ```
 
-You need the token, so this step wants a monitor attached. If the machine has none, the
-box also answers at **<http://pithead.local>** — but you will have to read the token from
-the console at least once.
+Nothing is wrong during the wait. The machine is unpacking the setup page, and a login
+prompt with no other output is what a working machine looks like at that moment. Wait for
+the token line before trying the address — until it appears there is nothing listening.
+
+You need the token, so this step wants a monitor attached at least once.
 
 ## 3. Install it to the internal disk
 
@@ -138,9 +144,11 @@ firmware setup. Second most common: the stick was too small — the layout needs
 machine builds its second system copy and data area, which is why the instructions say
 16 GB; the failure shows up as an "emergency mode" console, not a clean message.
 
-**The setup page will not load.** Check the ethernet cable and that the machine got an
-address, shown on its console. Try <http://pithead.local>. Wi-Fi is not supported, so a
-wireless-only network will not work.
+**The setup page will not load.** First: has the console printed the token line yet? Until
+it does, nothing is listening and the address will refuse the connection — that is the
+normal first-boot wait, not a fault. If the token is showing, check the ethernet cable and
+try the IP the console prints as well as <http://pithead.local>; some networks filter the
+`.local` name. Wi-Fi is not supported, so a wireless-only network will not work.
 
 **"Wrong token."** The token changes each time the setup service restarts — read the
 current one from the console. After five wrong attempts it mints a new one on purpose.

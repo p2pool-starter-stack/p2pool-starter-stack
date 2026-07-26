@@ -1349,6 +1349,21 @@ firstboot_wizard() {
         setup
         return
     fi
+    # Say something BEFORE the slow work. Between power-on and the setup page there is a minute or
+    # more of image loading, and until this line the operator faces a bare login prompt with no
+    # sign the machine is doing anything — measured at 4m15s on a USB stick, which reads as
+    # broken. Every console, because /dev/console is only one of them.
+    _console() { # $1... lines to put in front of a human standing at the machine
+        local dev
+        log "$@"
+        for dev in /dev/tty1 /dev/ttyS0; do
+            [ -w "$dev" ] || continue
+            printf '  %s\n' "$@" >"$dev" 2>/dev/null || true
+        done
+    }
+    _console "" "Pithead is starting up — preparing the setup page." \
+        "This takes a minute or two on first boot. Nothing to do yet."
+
     local engine image spool token
     engine=$(container_engine)
     # STACK_VERSION is the ONE place the registry tag is derived (a release is v<VERSION>, a
@@ -1379,7 +1394,8 @@ firstboot_wizard() {
         local archive
         for archive in /opt/pithead/images/*.tar.gz /opt/pithead/images/*.tar; do
             [ -f "$archive" ] || continue
-            log "Loading the wizard image from $archive..."
+            # The single slowest step before the page exists, and the one worth narrating.
+            _console "Loading the setup page (this is the slow part)..."
             "$engine" load -i "$archive" >/dev/null 2>&1 || true
         done
     fi
@@ -1396,18 +1412,28 @@ firstboot_wizard() {
             -v "$spool":/wizard-spool \
             "$image" -m mining_dashboard.wizard >/dev/null ||
             error "Could not start the wizard container ($engine, $image). Pre-seed config.json or run '$0 firstboot-wizard --cli'."
+        local mdns_name
+        mdns_name="$(hostname).local"
         log "Setup wizard is up. From a browser on this network, open:"
+        log "    http://$mdns_name"
         for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    http://$arg"; done
         log "One-time token: $token"
         # Announce on every physical console, not just stdout. /dev/console is whichever the
         # kernel cmdline named LAST, so an operator watching the other one (a monitor when the
         # box also has a serial line, or vice versa) would otherwise never see the token.
+        # The mDNS name FIRST: it is what the documentation tells operators to use, it survives a
+        # DHCP lease change, and it is the only address that still works once the monitor is gone.
+        # The IP follows as the fallback for networks where mDNS is filtered.
         for dev in /dev/tty1 /dev/ttyS0; do
             [ -w "$dev" ] || continue
             {
                 echo ""
-                echo "  Pithead setup wizard — open http://$(hostname -I 2>/dev/null | awk '{print $1}')"
+                echo "  Pithead setup wizard is ready. From a browser on this network, open:"
+                echo "      http://$mdns_name"
+                echo "      http://$(hostname -I 2>/dev/null | awk '{print $1}')   (if the name above does not resolve)"
+                echo ""
                 echo "  One-time token: $token"
+                echo "  (case does not matter, and the pit- prefix is optional)"
                 echo ""
             } >"$dev" 2>/dev/null || true
         done
