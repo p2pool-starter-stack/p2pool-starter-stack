@@ -132,7 +132,10 @@ Then a handful of choices, all of which have a sensible default:
 | Question | Default | When to change it |
 |---|---|---|
 | Tari payout address | — | Required, like the Monero one: this stack always merge-mines both coins from the same work. |
-| Monero chain | Pruned (~120 GB) | Full is ~320 GB and mines identically — pick it only if you need the whole chain. |
+| Monero chain | Pruned (~120 GB) | Only asked when this machine runs the node. Full is ~320 GB and mines identically. |
+| P2Pool sidechain | mini | `nano` for a single low-power rig, `main` only for very large hashrate. Sized by hashrate so shares arrive at a similar cadence; changeable later. |
+| Healthchecks ping URL | — | Optional. Tells you when the machine goes *silent* — a power cut or crash, which it cannot report itself. |
+| Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
 | Monero node | run it here | Point at a node you already run. |
 | Tari node | run it here | Same, over a network you trust. |
 | P2Pool sidechain | mini | `main` only for very large hashrate. On `mini` a home rig gets paid far more often. |
@@ -140,9 +143,19 @@ Then a handful of choices, all of which have a sensible default:
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Time zone | UTC | For dashboard timestamps. |
 
-Press Apply. The machine provisions itself and prints the dashboard address and a
-generated login on its console. That password is created on the machine and never travels
-through the setup page.
+Press Apply. The machine provisions itself, then prints the dashboard address and a login on
+its console:
+
+```
+  Dashboard login for this machine:
+      user: admin
+      password: <32 characters>
+```
+
+**Write that down.** It is generated on the machine, never crosses the setup page, and is
+also stored in `config.json` on the machine if you lose it. Unlike the DIY install — where
+you are at a terminal and can choose to skip a login — an appliance always gets one: it is a
+headless box on your network, and nobody was there to be asked.
 
 Everything here stays editable from the dashboard afterwards, and there is much more you
 can tune — see [configuration](configuration.md).

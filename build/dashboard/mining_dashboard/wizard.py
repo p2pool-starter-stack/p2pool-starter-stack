@@ -86,24 +86,21 @@ subaddress (8…) or an integrated address.</p>
 <p class="note">Merge-mining earns Tari from the same work that mines Monero — this stack always
 does both, so it needs both addresses. Get one from Tari Universe or any Tari wallet.</p>
 
-<h2>Storage</h2>
-<p class="note">The chains are the whole disk budget. Pick what fits the machine — the setup
-refuses to start if the numbers do not add up, so it is worth getting right here.</p>
-
-<label for="prune">Monero chain</label>
-<select id="prune" name="prune">
-<option value="true">Pruned — about 120 GB (default, mines exactly the same)</option>
-<option value="false">Full — about 320 GB (only if you need the whole chain)</option>
-</select>
-<p class="note">A local Tari node adds about 170 GB on top. On a disk under roughly 350 GB,
-pruned Monero plus a <em>remote</em> Tari node is the combination that fits.</p>
-
 <h2>Monero node</h2>
 <label for="mmode">Where does Monero data come from?</label>
 <select id="mmode" name="monero_mode">
 <option value="local">Run the bundled node on this machine (default)</option>
 <option value="remote">Use a Monero node I already run</option>
 </select>
+<div class="when" id="mlocal">
+  <label for="prune">Chain size</label>
+  <select id="prune" name="prune">
+  <option value="true">Pruned — about 120 GB (default, mines exactly the same)</option>
+  <option value="false">Full — about 320 GB (only if you need the whole chain)</option>
+  </select>
+  <p class="note">A local Tari node adds about 170 GB on top. Under roughly 350 GB of disk,
+  pruned Monero plus a <em>remote</em> Tari node is the combination that fits.</p>
+</div>
 <div class="when" id="mremote">
   <label for="mrh">Node host</label>
   <input id="mrh" name="monero_remote_host" placeholder="192.168.1.10 or my-node.local"
@@ -142,8 +139,12 @@ pruned Monero plus a <em>remote</em> Tari node is the combination that fits.</p>
 <label for="pool">P2Pool sidechain</label>
 <select id="pool" name="pool">
 <option value="mini">mini — right for almost every home rig (default)</option>
+<option value="nano">nano — a single low-power rig</option>
 <option value="main">main — only for very large hashrate</option>
 </select>
+<p class="note">The sidechains are sized by hashrate so miners find shares at a similar
+cadence. Too large a tier means waiting days between shares; it costs nothing to change
+later.</p>
 
 <label><input type="checkbox" name="local_miner" value="1"> Also mine with this machine's own CPU</label>
 <p class="note">Leave off if this box only coordinates other miners. A node that is also mining
@@ -155,6 +156,23 @@ shares its CPU with the chain it is serving.</p>
 <option value="false">Private, over Tor — takes days</option>
 <option value="true">Faster, over the open internet, then Tor afterwards — takes hours</option>
 </select>
+
+<h2>Alerts <span class="note">(optional — skip both if you are not sure)</span></h2>
+
+<label for="hc">Healthchecks.io ping URL</label>
+<input id="hc" name="healthchecks_url" autocomplete="off" spellcheck="false"
+       placeholder="https://hc-ping.com/your-uuid">
+<p class="note">Tells you when this machine goes <em>silent</em> — a power cut or a crash,
+which the machine itself cannot report. Create a free check at healthchecks.io and paste its
+ping URL.</p>
+
+<label for="tgt">Telegram bot token</label>
+<input id="tgt" name="telegram_token" autocomplete="off" spellcheck="false"
+       placeholder="123456:ABC-DEF...">
+<label for="tgc">Telegram chat ID</label>
+<input id="tgc" name="telegram_chat" autocomplete="off" spellcheck="false" placeholder="987654321">
+<p class="note">Pushes alerts (node down, worker offline, sync finished) to Telegram and
+answers status commands. Both fields are needed, or leave both blank.</p>
 
 <label for="tz">Time zone</label>
 <input id="tz" name="timezone" value="auto" autocomplete="off" list="tzs">
@@ -178,7 +196,9 @@ for people who already know what they want.</p>
 const $ = (id) => document.getElementById(id);
 const toggle = (el, on) => {{ el.style.display = on ? 'block' : 'none'; }};
 const sync = () => {{
-  toggle($('mremote'), $('mmode').value === 'remote');
+  const mlocal = $('mmode').value !== 'remote';
+  toggle($('mlocal'), mlocal);          // chain size only matters for a node we run
+  toggle($('mremote'), !mlocal);
   toggle($('tremote'), $('tmode').value === 'remote');
   toggle($('mrauth'), $('mra').checked);
 }};
@@ -498,9 +518,21 @@ def build_config(form: dict) -> dict:
             "grpc_port": port("tari_remote_grpc", 18142),
         }
 
-    # prune defaults TRUE in the reference; only a deliberate "full" is worth writing.
-    if form.get("prune") == "false":
+    # prune only means anything for a node we run. On remote, the key is noise at best and a
+    # lie at worst — the chain lives on someone else's machine and its shape is not ours.
+    if form.get("monero_mode") != "remote" and form.get("prune") == "false":
         cfg["monero"]["prune"] = False
+
+    # Optional services: written ONLY when actually filled in. An empty ping_url or a
+    # half-configured Telegram is worse than absent — one silently disables the dead-man's
+    # switch the operator thinks they have, the other fails validation on a blank they never
+    # meant to set.
+    hc = s_("healthchecks_url")
+    if hc:
+        cfg["healthchecks"] = {"ping_url": hc}
+    tg_token, tg_chat = s_("telegram_token"), s_("telegram_chat")
+    if tg_token and tg_chat:
+        cfg["telegram"] = {"enabled": True, "bot_token": tg_token, "chat_id": tg_chat}
 
     if form.get("local_miner"):
         cfg["local_miner"] = {"enabled": True}

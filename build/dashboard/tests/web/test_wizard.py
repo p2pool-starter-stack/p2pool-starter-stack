@@ -444,3 +444,59 @@ async def test_advanced_is_unreachable_in_installer_mode(client, installer):
     r = await client.get("/advanced", allow_redirects=False)
     assert r.status == 302
     assert r.headers["Location"] == "/install"
+
+
+# --- chain size belongs to a node we run ----------------------------------------------------
+
+
+def test_prune_is_ignored_for_a_remote_node():
+    # The chain lives on someone else's machine; claiming a shape for it is a lie in the config.
+    cfg = _cfg(tari_wallet="t", monero_mode="remote", monero_remote_host="h", prune="false")
+    assert "prune" not in cfg["monero"]
+
+
+def test_prune_still_applies_to_a_local_node():
+    assert _cfg(tari_wallet="t", prune="false")["monero"]["prune"] is False
+
+
+async def test_chain_size_is_nested_under_the_local_node(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/setup")).text()
+    # It sits inside a collapsible block, like the remote-node fields, so it is only visible
+    # once "run the bundled node" is the answer.
+    assert 'class="when" id="mlocal"' in body
+    assert body.index('id="mlocal"') < body.index('id="prune"')
+
+
+# --- sidechains and optional alerts ---------------------------------------------------------
+
+
+async def test_all_three_sidechains_are_offered(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/setup")).text()
+    for tier in ("mini", "nano", "main"):
+        assert f'value="{tier}"' in body
+
+
+def test_sidechain_defaults_to_mini():
+    assert _cfg(tari_wallet="t")["p2pool"]["pool"] == "mini"
+    assert _cfg(tari_wallet="t", pool="nano")["p2pool"]["pool"] == "nano"
+
+
+def test_alerts_are_omitted_unless_filled_in():
+    cfg = _cfg(tari_wallet="t")
+    assert "healthchecks" not in cfg and "telegram" not in cfg
+
+
+def test_healthchecks_url_is_written_when_given():
+    cfg = _cfg(tari_wallet="t", healthchecks_url="https://hc-ping.com/abc")
+    assert cfg["healthchecks"]["ping_url"] == "https://hc-ping.com/abc"
+
+
+def test_telegram_needs_both_halves_or_neither():
+    # A token with no chat id cannot deliver anything, and writing enabled=true on a broken
+    # pair would fail the host's validation on a blank the operator never meant to set.
+    assert "telegram" not in _cfg(tari_wallet="t", telegram_token="123:ABC")
+    assert "telegram" not in _cfg(tari_wallet="t", telegram_chat="999")
+    both = _cfg(tari_wallet="t", telegram_token="123:ABC", telegram_chat="999")
+    assert both["telegram"] == {"enabled": True, "bot_token": "123:ABC", "chat_id": "999"}

@@ -1392,21 +1392,13 @@ firstboot_wizard() {
     [ -f "$PWD/config.json" ] || consume_preseed_config "$PWD/config.json" || true
     if [ -f "$PWD/config.json" ]; then
         log "config.json already present (pre-seeded) — skipping the wizard and running setup."
+        # A pre-seeded config that names no password gets one too: skipping the wizard must not
+        # mean skipping the login.
+        ensure_appliance_dashboard_password || true
+        apply_appliance_defaults || true
         setup
         return
     fi
-    # Say something BEFORE the slow work. Between power-on and the setup page there is a minute or
-    # more of image loading, and until this line the operator faces a bare login prompt with no
-    # sign the machine is doing anything — measured at 4m15s on a USB stick, which reads as
-    # broken. Every console, because /dev/console is only one of them.
-    _console() { # $1... lines to put in front of a human standing at the machine
-        local dev
-        log "$@"
-        for dev in /dev/tty1 /dev/ttyS0; do
-            [ -w "$dev" ] || continue
-            printf '  %s\n' "$@" >"$dev" 2>/dev/null || true
-        done
-    }
     _console "" "Pithead is starting up — preparing the setup page." \
         "This takes a minute or two on first boot. Nothing to do yet."
 
@@ -1537,6 +1529,8 @@ firstboot_wizard() {
                 "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
                 rm -rf "$spool"
                 log "Configuration accepted — provisioning now."
+                ensure_appliance_dashboard_password || true
+                apply_appliance_defaults || true
                 # Subshell on purpose: error() exits, and a provisioning failure must NOT
                 # dead-end the machine. Without this, config.json exists, the wizard's condition
                 # never re-arms, and a box with no shell has no recovery path at all. Move the
@@ -3002,6 +2996,64 @@ ensure_onion_password() {
     jq --arg p "$gen" '.dashboard.auth.password = $p' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE" ||
         error "Could not save the generated dashboard password to $CONFIG_FILE."
     log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
+}
+
+# Put words in front of a human standing at the machine. /dev/console is only ONE of the
+# consoles — whichever the cmdline named last — so a message sent there alone is invisible to an
+# operator watching the other. Between power-on and the setup page there is a minute or more of
+# image loading, and silence there reads as a broken machine.
+_console() { # $1... lines
+    local dev
+    log "$@"
+    for dev in /dev/tty1 /dev/ttyS0; do
+        [ -w "$dev" ] || continue
+        printf '  %s\n' "$@" >"$dev" 2>/dev/null || true
+    done
+}
+
+# An appliance gets a dashboard login whether or not the onion is on.
+#
+# ensure_onion_password only fires for the onion, so a LAN appliance shipped an UNAUTHENTICATED
+# dashboard — and the setup page told the operator a login had been generated. On DIY that is a
+# defensible default: the operator ran the CLI wizard, was asked, and pressed Enter to skip. A
+# headless appliance was never asked, so the safe answer is the one it gets. The credential is
+# generated on the machine and printed to its console; it never crosses the setup page.
+ensure_appliance_dashboard_password() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    [ -z "$(jq -r '.dashboard.auth.password // ""' "$CONFIG_FILE")" ] || return 0
+    local gen tmp user
+    gen=$(generate_node_password) # 32 alnum: clears the >=16 floor, no quotes, no weak pattern
+    user=$(jq -r '.dashboard.auth.username // "admin"' "$CONFIG_FILE")
+    tmp=$(mktemp) || return 1
+    if jq --arg p "$gen" '.dashboard.auth.password = $p' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"; then
+        _console "" "Dashboard login for this machine:" "    user: $user" "    password: $gen" \
+            "Write this down — it is also in config.json on the machine."
+        return 0
+    fi
+    rm -f "$tmp"
+    warn "Could not save a generated dashboard password; the dashboard will have no login."
+    return 1
+}
+
+# Defaults an APPLIANCE should carry that a DIY host should not. Applied only where a key is
+# ABSENT — an operator who wrote "false" meant it.
+#
+# tor.auto_heal: opt-in on DIY because restarting Tor drops every circuit, and the stack should
+# not reshape an operator's privacy boundary behind their back. On an appliance there is no back
+# to go behind: it is headless and unattended, and the failure it heals is SILENT — mining keeps
+# working while Healthchecks, Telegram and XvB all go dark at once. Production once sat that way
+# for six hours. The heal is probe-driven, rate-limited and bounded, so the risk it guards
+# against does not apply the way it does interactively.
+apply_appliance_defaults() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    local tmp
+    tmp=$(mktemp) || return 1
+    if jq 'if .tor.auto_heal == null then (.tor //= {}) | .tor.auto_heal = true else . end' \
+        "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"; then
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
 }
 
 # The one selection rule for every reader of the per-worker descriptors (#506): workers.list[]

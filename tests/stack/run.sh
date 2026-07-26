@@ -7539,6 +7539,21 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: appliance defaults (tor.auto_heal) =="
+# Applied only where ABSENT: an operator who wrote false meant it.
+ADSB=$(mktemp -d)
+printf '{"monero":{"wallet_address":"x"}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "absent auto_heal -> enabled" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "true"
+printf '{"tor":{"auto_heal":false}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "explicit false is respected" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "false"
+printf '{"tor":{"data_dir":"/x"}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "other tor keys survive" "$(jq -r '.tor.data_dir' "$ADSB/config.json")" "/x"
+rm -rf "$ADSB"
+unset ADSB
+
 echo "== unit: the baked wizard image reloads when the ARCHIVE changes =="
 # Every build tags the wizard image identically and podman's storage lives on /data, which
 # survives reinstalls — so "does the tag exist" pins a machine to the first wizard it ever
