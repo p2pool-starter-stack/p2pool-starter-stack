@@ -3798,7 +3798,13 @@ resolve_dashboard_host() {
     else
         # "auto"/unset on a non-interactive run (e.g. apply): always the machine hostname, so
         # setting dashboard.host back to "auto" reverts HOST_IP instead of keeping a stale value.
-        HOST_IP=$(hostname)
+        # On the appliance the browsable name is what avahi publishes — <hostname>.local — not the
+        # bare hostname, which no client on the LAN can resolve.
+        if is_appliance; then
+            HOST_IP="$(hostname).local"
+        else
+            HOST_IP=$(hostname)
+        fi
     fi
 }
 
@@ -4705,12 +4711,32 @@ generate_caddyfile() {
         [ -n "$dport" ] && port_suffix=":$dport"
     fi
 
+    # The site addresses. DIY serves the one host the operator reaches it by. The appliance is
+    # headless: the operator may browse by mDNS name, by IP (the wizard prints it), or from the
+    # console, and Caddy only answers addresses it was told about — a single-host site turns
+    # every other path into a TLS alert. dashboard.host set explicitly still wins and stays single.
+    local site_hosts="$HOST_IP"
+    if is_appliance && [ -z "${DASHBOARD_HOST:-}" ]; then
+        local extra_ip
+        for extra_ip in $(hostname -I 2>/dev/null) localhost; do
+            case " $site_hosts " in *" $extra_ip "*) continue ;; esac
+            site_hosts="$site_hosts $extra_ip"
+        done
+    fi
+    _site_addresses() { # $1 scheme — "https://a, https://b" from $site_hosts
+        local h out=""
+        for h in $site_hosts; do
+            out="${out:+$out, }$1://$h$port_suffix"
+        done
+        printf '%s' "$out"
+    }
+
     : >"Caddyfile"
     [ -n "$global_block" ] && printf '%s' "$global_block" >>"Caddyfile"
     if [ "$DASHBOARD_SECURE" == "true" ]; then
-        log "Generating Caddyfile for automatic HTTPS ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
+        log "Generating Caddyfile for automatic HTTPS ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
-https://$HOST_IP$port_suffix {
+$(_site_addresses https) {
     tls internal
 $auth
 $logblk
@@ -4720,9 +4746,9 @@ $logblk
 }
 EOF
     else
-        log "Generating Caddyfile for HTTP ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
+        log "Generating Caddyfile for HTTP ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
-http://$HOST_IP$port_suffix {
+$(_site_addresses http) {
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {

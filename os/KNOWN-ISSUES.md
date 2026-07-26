@@ -107,11 +107,14 @@ right; an empty model (all virtio, some NVMe) shifts them left. Both failure mod
 real disks silently vanish from the installer's inventory. `lsblk -J` through `jq` or
 nothing.
 
-**docker export lies about /etc/hosts and /etc/resolv.conf.** Third of the family (after
-`/.dockerenv` and the pseudo-dirs): docker overlays both as bind mounts, so the exported
-tarball carries empty stubs. The OS then cannot resolve even `localhost`, and glibc's
-fallback sends DNS to `[::1]:53` — first visible as image pulls failing on a machine
-whose networking otherwise looks healthy. The Containerfile writes real ones.
+**docker export lies about /etc/hosts, /etc/resolv.conf AND /etc/hostname.** Docker
+overlays all three as per-container bind mounts: writes to them during the build never
+leave the build, and the export carries empty stubs. The OS could not resolve even
+`localhost` (glibc's fallback sent DNS to `[::1]:53` — first visible as image pulls
+failing), and it called itself `localhost`, so avahi published `localhost.local` and
+caddy rendered a site nobody could reach. Fourth, fifth and sixth members of the
+docker-export-artefact family after `/.dockerenv` and the pseudo-dirs; populate_slot
+writes all of them, because docker cannot.
 
 **Every battery was green while the appliance could not run the product.** pithead drives
 the stack with `docker compose`; the image shipped only podman — no shim, no compose

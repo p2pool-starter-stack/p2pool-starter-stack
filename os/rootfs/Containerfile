@@ -123,8 +123,7 @@ COPY os/rootfs/repart.d/ /usr/lib/repart.d/
 # a power cycle with no stack running.
 RUN systemctl enable podman.socket podman-restart avahi-daemon systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
-    && systemctl disable ssh \
-    && echo pithead > /etc/hostname
+    && systemctl disable ssh
 # systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
 # static unit is an error that would fail the build. Assert it is present instead.
 RUN test -f /usr/lib/systemd/system/systemd-repart.service

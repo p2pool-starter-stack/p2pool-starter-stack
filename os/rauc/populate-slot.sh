@@ -26,6 +26,10 @@ populate_slot() { # $1 = mounted rootfs
         echo '::1 localhost ip6-localhost ip6-loopback'
     } >"$root/etc/hosts"
     ln -sf ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
+    # /etc/hostname is the FOURTH bind-mount artefact: docker overlays it per container, so the
+    # Containerfile's write never left the build. The machine then calls itself "localhost",
+    # avahi publishes localhost.local, and caddy renders a site nobody can reach.
+    echo 'pithead' >"$root/etc/hostname"
 
     # Writable state, declared explicitly because the root is READ-ONLY. That is the point of the
     # appliance: the stack cannot be mutated at runtime, only replaced wholesale by an update.
