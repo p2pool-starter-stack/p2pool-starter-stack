@@ -11,8 +11,10 @@ manage the host.
 ## What you need
 
 - An x86-64 machine with UEFI you can dedicate to mining. It will be **erased**.
-- 16 GB RAM or more, and an internal SSD or NVMe with room for the chain — Monero alone
-  is over 250 GB and grows.
+- 16 GB RAM or more, and an internal SSD or NVMe with room for the chains. Pruned Monero
+  needs about 120 GB and a local Tari node about 170 GB, so **350 GB or more** runs both
+  locally. On a smaller disk, run pruned Monero and point Tari at a node you already have —
+  the setup page asks both questions.
 - A wired ethernet connection. Wi-Fi is not supported.
 - A USB stick, **16 GB or larger** — the image writes 5 GB to the stick, whatever the size of the download.
 - A second computer with a browser, on the same network.
@@ -84,10 +86,11 @@ holds a Pithead `data` partition is marked *"reinstall, keeps existing data"*. I
 there replaces the system and **keeps your wallets, your settings and your synced chain**.
 You do not download 250 GB again.
 
-Type the disk's name to confirm and install. When the copy finishes, **the machine powers
-itself off** — that is expected, not a crash. Remove the stick while it is off, then power
-it back on. (Powering off before the stick comes out matters: while both disks are
-present the machine cannot reliably tell them apart, so it never boots that way.)
+Type the disk's name to confirm and install. It takes a few minutes.
+
+When it finishes the page says so and offers a **Reboot** button. **Take the USB stick out
+first**, then press it. If you reboot with the stick still in, most machines just boot the
+stick again and show you this installer — harmless, but you will be back here.
 
 ## 4. Configure it
 
@@ -104,6 +107,7 @@ Then a handful of choices, all of which have a sensible default:
 | Question | Default | When to change it |
 |---|---|---|
 | Tari payout address | — | Required, like the Monero one: this stack always merge-mines both coins from the same work. |
+| Monero chain | Pruned (~120 GB) | Full is ~320 GB and mines identically — pick it only if you need the whole chain. |
 | Monero node | run it here | Point at a node you already run. |
 | Tari node | run it here | Same, over a network you trust. |
 | P2Pool sidechain | mini | `main` only for very large hashrate. On `mini` a home rig gets paid far more often. |

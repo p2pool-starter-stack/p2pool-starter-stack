@@ -526,6 +526,8 @@ phase_install() {
         return
     fi
 
+    # The real flow ends with the operator taking the stick out and pressing Reboot; the harness
+    # reaches the same state by powering the guest off and redefining it without the stick.
     _ssh "systemctl poweroff" 2>/dev/null || true
     sleep 8
     vm_destroy

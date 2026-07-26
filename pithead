@@ -1442,15 +1442,30 @@ firstboot_wizard() {
                 local irc=0
                 consume_install_request "$spool" || irc=$?
                 if [ "$irc" -eq 0 ]; then
-                    sleep 6 # let the page's status poll show the shutdown notice
+                    # Installed. The operator takes the stick out and presses Reboot on the page;
+                    # the wizard container stays up to serve that button, and only the HOST
+                    # reboots. Powering off instead would work, but it costs a walk to the
+                    # machine — and the label ambiguity that once forced it is gone: the kernel
+                    # root comes from GRUB's own disk (probe --part-uuid) and the state mounts
+                    # from the booted disk (pithead-mount-generator), so a reboot with the stick
+                    # still in merely boots the stick again. Confusing, never destructive.
+                    _console "" "Installation complete." \
+                        "Remove the USB stick, then press Reboot on the setup page." \
+                        "(Or power the machine off, remove it, and power it back on.)"
+                    local waited=0
+                    while [ ! -f "$spool/reboot-request" ]; do
+                        sleep 2
+                        waited=$((waited + 2))
+                        # Nobody is coming — the browser was closed, or this is headless with no
+                        # one watching. Reboot anyway rather than sit installed-but-idle forever.
+                        if [ "$waited" -ge 900 ]; then
+                            _console "No reboot confirmation after 15 minutes — rebooting now."
+                            break
+                        fi
+                    done
                     "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                    # Power OFF, never reboot: the installed disk and this stick now carry
-                    # IDENTICAL partition labels (data, system-a), so booting with both present
-                    # makes every by-label mount ambiguous — and a reboot with the stick still
-                    # in may simply boot the stick again. Off, stick out, on: no ambiguity.
-                    log "Installation complete — powering off. Remove the installation medium,"
-                    log "then power the machine back on to configure it."
-                    systemctl poweroff
+                    log "Rebooting into the installed system."
+                    systemctl reboot
                     return
                 fi
                 if [ "$irc" -eq 1 ]; then

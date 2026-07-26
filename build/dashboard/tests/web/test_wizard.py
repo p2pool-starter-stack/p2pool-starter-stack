@@ -164,8 +164,8 @@ async def test_picker_shows_model_size_serial_and_never_preselects(client, insta
     # A disk must never be the default choice — the first click has to be deliberate.
     assert 'value="" selected disabled' in body
     # Reinstall-vs-erase has to be visible before choosing, not after.
-    assert "keeps existing data" in body
-    assert "will be erased" in body
+    assert "KEEPS existing data" in body
+    assert "ERASES everything on it" in body
 
 
 async def test_target_must_be_one_the_host_offered(client, installer):
@@ -200,8 +200,10 @@ async def test_valid_request_is_written_for_the_host(client, installer):
 async def test_installer_status_is_distinct_from_provisioning(client, installer):
     assert "Copying the system" in await (await client.get("/status")).text()
     (installer / "installed").write_text("1")
-    body = (await (await client.get("/status")).text()).lower()
-    assert "powering off" in body and "remove the stick" in body
+    body = await (await client.get("/status")).text()
+    # Starts with "Installed" — the page's poll keys on that to reveal the Reboot button.
+    assert body.startswith("Installed")
+    assert "remove the usb stick" in body.lower()
 
 
 # --- the expanded question set --------------------------------------------------------------
@@ -336,3 +338,58 @@ async def test_session_cookie_is_samesite_strict(client):
     # /install erases a disk; the cookie that authorizes it must never ride a cross-site request.
     r = await client.post("/auth", data={"token": "pit-X7KM2Q"}, allow_redirects=False)
     assert "SameSite=Strict" in r.headers.get("Set-Cookie", "")
+
+
+def test_prune_defaults_to_pruned_and_only_full_is_written():
+    # prune is TRUE in the reference, so the common answer must emit nothing; a disk that cannot
+    # hold 320 GB is the normal appliance case, and silence keeps the documented default.
+    assert "prune" not in _cfg(tari_wallet="t")["monero"]
+    assert "prune" not in _cfg(tari_wallet="t", prune="true")["monero"]
+    assert _cfg(tari_wallet="t", prune="false")["monero"]["prune"] is False
+
+
+async def test_picker_puts_the_consequence_before_the_truncation_point(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    body = await (await client.get("/install")).text()
+    # A <select> truncates on the right. The erase/keep verdict must sit right after the disk
+    # name — bench testing cut off exactly these words in the collapsed control.
+    assert "nvme0n1 — ERASES everything on it" in body
+    assert "sda — KEEPS existing data" in body
+    # And it must be restated where nothing truncates.
+    assert 'id="verdict"' in body
+
+
+# --- the post-install reboot handshake ------------------------------------------------------
+# The operator takes the stick out, then asks for the reboot. The container records the request;
+# only the host reboots. Powering off worked but cost a walk to the machine.
+
+
+async def test_reboot_needs_a_completed_install(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/reboot", allow_redirects=False)
+    assert r.status == 302
+    assert not (installer / "reboot-request").exists()
+
+
+async def test_reboot_unauthed_writes_nothing(client, installer):
+    (installer / "installed").write_text("1")
+    r = await client.post("/reboot", allow_redirects=False)
+    assert r.status == 302
+    assert not (installer / "reboot-request").exists()
+
+
+async def test_reboot_records_the_request_for_the_host(client, installer):
+    (installer / "installed").write_text("1")
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/reboot")
+    assert r.status == 200
+    assert (installer / "reboot-request").read_text() == "1"
+    assert "Rebooting" in await r.text()
+
+
+async def test_install_page_tells_you_to_remove_the_stick_first(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
+    body = await r.text()
+    assert "Remove the USB stick" in body
+    assert "/reboot" in body

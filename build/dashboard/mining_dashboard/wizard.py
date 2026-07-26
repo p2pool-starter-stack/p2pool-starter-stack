@@ -86,6 +86,18 @@ subaddress (8…) or an integrated address.</p>
 <p class="note">Merge-mining earns Tari from the same work that mines Monero — this stack always
 does both, so it needs both addresses. Get one from Tari Universe or any Tari wallet.</p>
 
+<h2>Storage</h2>
+<p class="note">The chains are the whole disk budget. Pick what fits the machine — the setup
+refuses to start if the numbers do not add up, so it is worth getting right here.</p>
+
+<label for="prune">Monero chain</label>
+<select id="prune" name="prune">
+<option value="true">Pruned — about 120 GB (default, mines exactly the same)</option>
+<option value="false">Full — about 320 GB (only if you need the whole chain)</option>
+</select>
+<p class="note">A local Tari node adds about 170 GB on top. On a disk under roughly 350 GB,
+pruned Monero plus a <em>remote</em> Tari node is the combination that fits.</p>
+
 <h2>Monero node</h2>
 <label for="mmode">Where does Monero data come from?</label>
 <select id="mmode" name="monero_mode">
@@ -190,6 +202,7 @@ install onto — everything on it is erased unless it already holds a Pithead da
 <option value="" selected disabled>Choose a disk…</option>
 {options}
 </select>
+<p id="verdict" class="note"></p>
 <label for="confirm">Type the disk name to confirm</label>
 <input id="confirm" name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false"
        placeholder="choose a disk above first">
@@ -198,20 +211,42 @@ install onto — everything on it is erased unless it already holds a Pithead da
 place and keep their synced chain. Everything else is erased.</p>
 </form>
 <script>
-document.getElementById('disk').addEventListener('change', e =>
-  document.getElementById('confirm').placeholder = e.target.value);
+// Restate the choice in full, below the control, where nothing is truncated and the text wraps.
+document.getElementById('disk').addEventListener('change', e => {{
+  const opt = e.target.selectedOptions[0];
+  document.getElementById('confirm').placeholder = e.target.value;
+  const d = document.getElementById('verdict');
+  d.textContent = 'Installing to ' + e.target.value + ' — this ' + opt.dataset.verdict + '.';
+  d.className = opt.dataset.verdict.startsWith('KEEPS') ? 'note' : 'err';
+}});
 </script>"""
 
-INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off — it powers
-itself off when the copy is done. Then remove the USB stick and power the machine back on;
-this setup page comes back, served from the installed system.</p>
+INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off. This takes a
+few minutes.</p>
 <p class="note" id="s">Working…</p>
+<div id="done" style="display:none">
+<h2>Installed</h2>
+<p><strong>Remove the USB stick now</strong>, then reboot. The setup page comes back from
+the installed system, with a new token on the console.</p>
+<form method="post" action="/reboot"><button type="submit">Reboot</button></form>
+<p class="note">Take the stick out first. If it is still in, the machine may simply boot it
+again and show this installer — harmless, but you will be back here.</p>
+</div>
 <script>
-setInterval(async () => {
+const poll = setInterval(async () => {
   const t = await (await fetch('/status')).text();
   document.getElementById('s').textContent = t;
+  if (t.indexOf('Installed') === 0) {
+    clearInterval(poll);
+    document.getElementById('s').style.display = 'none';
+    document.getElementById('done').style.display = 'block';
+  }
 }, 2000);
 </script>"""
+
+REBOOTING = """<p><strong>Rebooting.</strong> If the USB stick is out, the machine comes back
+from its own disk in a minute or two — open this address again then. Its console will show a
+fresh one-time token.</p>"""
 
 DONE = """<p><strong>Configuration received.</strong> This machine is validating and
 provisioning itself — watch the console for the dashboard address and the generated
@@ -254,12 +289,16 @@ def _disk_options() -> str:
         if len(parts) < 5:
             continue
         name, size, model, serial, state = (html.escape(p) for p in parts[:5])
-        note = {
-            "pithead-with-data": " — reinstall, keeps existing data",
-            "pithead": " — reinstall, no data partition found",
-        }.get(state, " — will be erased")
-        label = f"{name}  {size}  {model} (SN {serial}){note}"
-        out.append(f'<option value="{name}">{label}</option>')
+        # The consequence goes SECOND, right after the disk name. A <select> truncates on the
+        # right, and bench testing showed the collapsed control cutting off exactly the words
+        # that distinguish "keeps your 250 GB chain" from "erases everything" — the one part of
+        # the line nobody may have to open a dropdown to read.
+        verdict = {
+            "pithead-with-data": "KEEPS existing data (reinstall)",
+            "pithead": "ERASES it (Pithead layout, no data partition)",
+        }.get(state, "ERASES everything on it")
+        label = f"{name} — {verdict} — {size} {model} (SN {serial})"
+        out.append(f'<option value="{name}" data-verdict="{verdict}">{label}</option>')
     return "\n".join(out)
 
 
@@ -330,6 +369,17 @@ async def install(request: web.Request) -> web.Response:
     return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
 
 
+async def reboot(request: web.Request) -> web.Response:
+    """The operator confirms the medium is out; the HOST does the rebooting. The container has
+    no business rebooting a machine — it only records the request, same boundary as install."""
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    if _spool_read("installed") is None:
+        raise web.HTTPFound("/install")
+    _spool_write_text("reboot-request", "1")
+    return web.Response(text=PAGE.format(body=REBOOTING), content_type="text/html")
+
+
 async def setup_form(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
@@ -388,6 +438,10 @@ def build_config(form: dict) -> dict:
             "grpc_port": port("tari_remote_grpc", 18142),
         }
 
+    # prune defaults TRUE in the reference; only a deliberate "full" is worth writing.
+    if form.get("prune") == "false":
+        cfg["monero"]["prune"] = False
+
     if form.get("local_miner"):
         cfg["local_miner"] = {"enabled": True}
 
@@ -438,7 +492,7 @@ async def submit(request: web.Request) -> web.Response:
 async def status(request: web.Request) -> web.Response:
     if installer_mode():
         if _spool_read("installed") is not None:
-            return web.Response(text="Installed — the machine is powering off. Remove the stick, then power it back on.")
+            return web.Response(text="Installed — remove the USB stick, then reboot.")
         err = _spool_read("error.txt")
         if err is not None:
             return web.Response(text=f"Install failed: {err}")
@@ -461,6 +515,7 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/auth", auth),
             web.get("/install", install_form),
             web.post("/install", install),
+            web.post("/reboot", reboot),
             web.get("/setup", setup_form),
             web.post("/submit", submit),
             web.get("/status", status),
