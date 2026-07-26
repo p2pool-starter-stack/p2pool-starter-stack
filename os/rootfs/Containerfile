@@ -120,7 +120,13 @@ RUN chmod +x /usr/local/sbin/pithead-install
 COPY os/rootfs/repart.d/ /usr/lib/repart.d/
 # podman-restart restores restart-policy containers at boot — docker's daemon does this
 # implicitly, podman only with this unit, and without it a provisioned appliance comes back from
-# a power cycle with no stack running.
+# a power cycle with no stack running. The stock unit only starts policy=always containers; the
+# stack's compose policy is unless-stopped (docker semantics), which podman-restart IGNORES — the
+# provision phase's reboot leg caught the stack staying dark. The drop-in adds the second filter;
+# oneshot units run every ExecStart line.
+RUN mkdir -p /etc/systemd/system/podman-restart.service.d \
+    && printf '[Service]\nExecStart=/usr/bin/podman start --all --filter restart-policy=unless-stopped\n' \
+        > /etc/systemd/system/podman-restart.service.d/pithead-unless-stopped.conf
 RUN systemctl enable podman.socket podman-restart avahi-daemon systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
     && systemctl disable ssh

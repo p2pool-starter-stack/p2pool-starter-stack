@@ -509,7 +509,10 @@ phase_install() {
     fi
     ok "inventory excludes the disk the system booted from"
     # The host wizard loop must be in installer mode — the same gate a real stick hits.
-    if _ssh "test -s /data/pithead/data/firstboot/disks.tsv"; then
+    # Poll: firstboot loads the wizard image from its tarball BEFORE publishing the inventory,
+    # which takes about a minute on a first boot. Checking the moment SSH answers is a race the
+    # standalone runs happened to win and the full gate lost.
+    if _ssh "for i in \$(seq 36); do [ -s /data/pithead/data/firstboot/disks.tsv ] && exit 0; sleep 5; done; exit 1"; then
         ok "firstboot entered installer mode (inventory published to the spool)"
     else
         bad "firstboot did not publish a disk inventory — installer mode never engaged"
