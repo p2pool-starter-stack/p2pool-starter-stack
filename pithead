@@ -1383,7 +1383,11 @@ firstboot_wizard() {
             "$engine" load -i "$archive" >/dev/null 2>&1 || true
         done
     fi
-    trap '"$engine" rm -f pithead-wizard >/dev/null 2>&1 || true' EXIT
+    # Double quotes on purpose: $engine expands NOW, at trap definition. It is a local, and the
+    # trap also fires after this function's locals are gone — where set -u would turn the trap
+    # itself into the crash that masks whatever actually failed.
+    # shellcheck disable=SC2064  # expand-now is the point (see above)
+    trap "'$engine' rm -f pithead-wizard >/dev/null 2>&1 || true" EXIT
     while :; do
         token=$(wizard_mint_token)
         "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
@@ -1440,8 +1444,19 @@ firstboot_wizard() {
                 "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
                 rm -rf "$spool"
                 log "Configuration accepted — provisioning now."
-                setup
-                return
+                # Subshell on purpose: error() exits, and a provisioning failure must NOT
+                # dead-end the machine. Without this, config.json exists, the wizard's condition
+                # never re-arms, and a box with no shell has no recovery path at all. Move the
+                # config aside and reopen the window with a fresh token instead.
+                if (setup); then
+                    return
+                fi
+                warn "Provisioning failed. The submitted configuration is kept aside as config.json.failed;"
+                warn "reopening the setup window with a fresh token so it can be corrected."
+                mv -f "$PWD/config.json" "$PWD/config.json.failed" 2>/dev/null || rm -f "$PWD/config.json"
+                mkdir -p "$spool"
+                chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
+                break # outer loop re-mints a token and restarts the wizard container
             fi
             if ! "$engine" inspect -f '{{.State.Running}}' pithead-wizard 2>/dev/null | grep -q true; then
                 warn "Wizard stopped (token lockout or crash) — minting a fresh token and restarting it."

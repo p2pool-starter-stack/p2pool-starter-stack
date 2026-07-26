@@ -83,6 +83,16 @@ RUN mkdir -p /etc/containers && printf '[storage]\ndriver = "overlay"\nrunroot =
 # (pithead firstboot-wizard), so the setup page comes up with no registry reachable.
 COPY os/rootfs/images/ /opt/pithead/images/
 
+# docker-export artefacts, third of the family (after /.dockerenv and the pseudo-dirs): docker
+# OVERLAYS /etc/hosts and /etc/resolv.conf as bind mounts, so the export captures empty stubs.
+# The result is an OS where not even "localhost" resolves and glibc falls back to DNS on
+# [::1]:53 — the first symptom being image pulls failing while everything else looks healthy.
+RUN printf '127.0.0.1	localhost
+127.0.1.1	pithead
+::1	localhost ip6-localhost ip6-loopback
+' > /etc/hosts \
+    && ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
 # Networking: DHCP on any wired interface. The appliance ships no interactive network config —
 # the operator plugs in ethernet and browses to the box, so an unconfigured NIC means an
 # unreachable wizard and a bricked-looking appliance.
@@ -118,7 +128,10 @@ RUN chmod +x /usr/local/sbin/pithead-install
 # The appliance partition layout. systemd-repart creates slot B and /data on the target machine's
 # real disk at first boot, so the shipped image carries only the ESP and slot A.
 COPY os/rootfs/repart.d/ /usr/lib/repart.d/
-RUN systemctl enable podman.socket avahi-daemon systemd-timesyncd systemd-resolved \
+# podman-restart restores restart-policy containers at boot — docker's daemon does this
+# implicitly, podman only with this unit, and without it a provisioned appliance comes back from
+# a power cycle with no stack running.
+RUN systemctl enable podman.socket podman-restart avahi-daemon systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
     && systemctl disable ssh \
     && echo pithead > /etc/hostname

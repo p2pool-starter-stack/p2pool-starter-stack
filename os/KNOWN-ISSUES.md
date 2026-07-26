@@ -107,6 +107,12 @@ right; an empty model (all virtio, some NVMe) shifts them left. Both failure mod
 real disks silently vanish from the installer's inventory. `lsblk -J` through `jq` or
 nothing.
 
+**docker export lies about /etc/hosts and /etc/resolv.conf.** Third of the family (after
+`/.dockerenv` and the pseudo-dirs): docker overlays both as bind mounts, so the exported
+tarball carries empty stubs. The OS then cannot resolve even `localhost`, and glibc's
+fallback sends DNS to `[::1]:53` — first visible as image pulls failing on a machine
+whose networking otherwise looks healthy. The Containerfile writes real ones.
+
 **Every battery was green while the appliance could not run the product.** pithead drives
 the stack with `docker compose`; the image shipped only podman — no shim, no compose
 provider, no cosign. The wizard accepted a config and `setup` died at "docker: command
@@ -118,6 +124,11 @@ the test that fails when the product cannot actually start.
 
 ## Open
 
+- **A provisioning failure reopens the wizard, but the failed config needs surfacing.**
+  Setup failures move the config aside as `config.json.failed` and re-mint a token; the
+  console explains, but the fresh wizard page does not yet show WHY the last attempt
+  failed. Plumbing the failure reason into the reopened form is UX work worth doing
+  before GA.
 - **No user-facing OS update path exists yet.** RAUC and rollback are proven at the OS
   layer, but nothing a user can reach applies an update: the dashboard action for
   install/commit/rollback of OS bundles is the pre-GA blocker, and the DIY one-click
