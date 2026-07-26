@@ -190,6 +190,14 @@ main() {
     grub-editenv "$mnt/boot/efi/grub/grubenv" create
     grub-editenv "$mnt/boot/efi/grub/grubenv" set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
 
+    # Carry pre-seeded files onto the target's ESP. Without this a fleet install loses them at
+    # the first reboot: the installer builds a fresh ESP, and the operator's config — the whole
+    # point of pre-seeding — would stay behind on the stick.
+    local seed
+    for seed in pithead-config.json pithead-token.txt; do
+        [ -f "/boot/efi/$seed" ] && install -m 600 "/boot/efi/$seed" "$mnt/boot/efi/$seed"
+    done
+
     sync
     echo "==> installed to $target — reboot and remove the installation medium"
 }

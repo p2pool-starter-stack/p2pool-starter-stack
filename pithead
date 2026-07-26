@@ -1268,6 +1268,50 @@ firstboot_consume_spool() { # <spool-dir>
 # Overridable so the shell suite can point it at a fake — the real one partitions disks.
 install_bin() { printf '%s' "${PITHEAD_INSTALL_BIN:-/usr/local/sbin/pithead-install}"; }
 
+# --- pre-seeding from the installation medium ----------------------------------------------
+# The ESP is FAT, so an operator can drop files on the stick from any laptop right after
+# flashing — before the machine has ever booted. Two are honoured:
+#
+#   pithead-config.json   a complete configuration: first boot provisions with no browser
+#   pithead-token.txt     a chosen one-time token, so a box with no display can be reached
+#
+# This is what makes a headless or fleet install possible at all: without it the token exists
+# only on the console, so every machine needs a monitor walked to it once.
+PRESEED_DIR="${PITHEAD_PRESEED_DIR:-/boot/efi}"
+
+# A pre-seeded token, sanitised. Anything outside the token alphabet is dropped rather than
+# interpreted — this string is operator input arriving from a filesystem anyone can write.
+preseed_token() {
+    local f="$PRESEED_DIR/pithead-token.txt" t
+    [ -f "$f" ] || return 1
+    t=$(tr -dc 'A-Za-z0-9-' <"$f" 2>/dev/null | head -c 32)
+    [ "${#t}" -ge 4 ] || return 1
+    printf '%s' "$t"
+}
+
+# rc: 0 a valid pre-seeded config was installed, 1 one was present but rejected, 2 none.
+# Validated through a COPY: parse_and_validate_config fills in generated fields as it goes, and
+# writing those back would mutate the operator's stick — and on a fleet, every machine would
+# inherit the first one's generated credentials.
+consume_preseed_config() { # <dest-config-path>
+    local f="$PRESEED_DIR/pithead-config.json" dest="$1" tmp err
+    [ -f "$f" ] || return 2
+    tmp=$(mktemp) || return 1
+    cp "$f" "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    if err=$(PITHEAD_CONFIG_FILE="$tmp" bash -c "source '${BASH_SOURCE[0]}' && parse_and_validate_config" 2>&1); then
+        mv "$tmp" "$dest"
+        log "Using the pre-seeded configuration from $f."
+        return 0
+    fi
+    rm -f "$tmp"
+    warn "The pre-seeded $f was rejected — falling back to the setup page."
+    warn "  $(printf '%s' "$err" | tail -n 1 | tr -d '[:cntrl:]' | tail -c 200)"
+    return 1
+}
+
 # Is this host a Pithead OS appliance? Decides which UPGRADE path is legal: the appliance's
 # program tree is delivered by OS images and resynced from the system slot at every boot, so a
 # DIY tarball upgrade would "succeed" and then silently revert at the next reboot. Probes two
@@ -1344,6 +1388,8 @@ firstboot_wizard() {
         *) error "Unknown option for firstboot-wizard: $arg. Run '$0 help'." ;;
         esac
     done
+    # A configuration dropped on the installation medium beats opening a browser at all.
+    [ -f "$PWD/config.json" ] || consume_preseed_config "$PWD/config.json" || true
     if [ -f "$PWD/config.json" ]; then
         log "config.json already present (pre-seeded) — skipping the wizard and running setup."
         setup
@@ -1405,7 +1451,9 @@ firstboot_wizard() {
     # shellcheck disable=SC2064  # expand-now is the point (see above)
     trap "'$engine' rm -f pithead-wizard >/dev/null 2>&1 || true" EXIT
     while :; do
-        token=$(wizard_mint_token)
+        # A pre-seeded token is the operator's own choice and stays fixed across restarts of
+        # this loop; without one, mint a fresh secret every round.
+        token=$(preseed_token) || token=$(wizard_mint_token)
         "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
         "$engine" run -d --name pithead-wizard --entrypoint python3 \
             -p 80:8000 -e WIZARD_TOKEN="$token" \

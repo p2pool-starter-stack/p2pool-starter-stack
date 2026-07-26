@@ -71,6 +71,27 @@ the token line before trying the address — until it appears there is nothing l
 
 You need the token, so this step wants a monitor attached at least once.
 
+### Setting it up without a monitor
+
+The steps above need a display once, to read the token. You can skip that by writing to the
+USB stick **after flashing it** — the stick's small `PITHEAD` volume is readable on any
+Windows, macOS or Linux machine, so plug it into your laptop and drop a file on it:
+
+- **`pithead-token.txt`** — one line with a token you choose (letters, digits and dashes).
+  The machine uses that instead of printing its own, so you can open the setup page without
+  ever seeing its console.
+- **`pithead-config.json`** — a complete configuration. First boot applies it and provisions
+  itself; no setup page at all. Copy `config.json` from a machine you already set up, or see
+  [configuration](configuration.md).
+
+A rejected file never blocks you: the machine says so on its console and opens the normal
+setup page instead.
+
+Two cautions. A configuration file holds your payout addresses in plain text on a volume
+anyone who picks up the stick can read — fine for a stick that stays in your hand, worth
+thinking about otherwise. And installing to a disk still needs someone to choose that disk;
+pre-seeding covers configuration, not the erase decision.
+
 ## 3. Install it to the internal disk
 
 Open that address from your other computer and enter the token — case doesn't matter, and

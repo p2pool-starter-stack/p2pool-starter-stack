@@ -7539,6 +7539,48 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: pre-seeding from the installation medium =="
+# The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
+PSD=$(mktemp -d)
+export PITHEAD_PRESEED_DIR="$PSD"
+
+run_sourced "$SANDBOX" preseed_token >/dev/null 2>&1
+assert_rc "no token file -> rc 1 (mint one instead)" "$?" "1"
+
+printf 'pit-ABC123\n' >"$PSD/pithead-token.txt"
+assert_eq "token read from the medium" "$(run_sourced "$SANDBOX" preseed_token)" "pit-ABC123"
+
+printf 'pit-ABC123; rm -rf /\n' >"$PSD/pithead-token.txt"
+assert_eq "token sanitised to its alphabet" "$(run_sourced "$SANDBOX" preseed_token)" "pit-ABC123rm-rf"
+
+printf 'ab\n' >"$PSD/pithead-token.txt"
+run_sourced "$SANDBOX" preseed_token >/dev/null 2>&1
+assert_rc "implausibly short token refused" "$?" "1"
+rm -f "$PSD/pithead-token.txt"
+
+run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
+assert_rc "no config file -> rc 2 (nothing pre-seeded)" "$?" "2"
+
+printf '{"monero":{"wallet_address":"nope"},"tari":{"wallet_address":"t"}}' >"$PSD/pithead-config.json"
+run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
+assert_rc "invalid config -> rc 1, wizard still opens" "$?" "1"
+[ -f "$PSD/out.json" ] && bad "rejected config NOT installed" "it was" || ok "rejected config NOT installed"
+
+printf '{"monero":{"wallet_address":"4%s"},"tari":{"wallet_address":"harness-tari"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+    "$(printf 'A%.0s' $(seq 1 94))" >"$PSD/pithead-config.json"
+cp "$PSD/pithead-config.json" "$PSD/original.json"
+run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
+assert_rc "valid config -> rc 0" "$?" "0"
+[ -s "$PSD/out.json" ] && ok "valid config installed" || bad "valid config installed" "missing"
+# The medium must come back unchanged: validation fills in generated credentials, and writing
+# those back would hand every machine in a fleet the first one's secrets.
+if cmp -s "$PSD/pithead-config.json" "$PSD/original.json"; then
+    ok "the medium is left byte-for-byte unchanged"
+else
+    bad "the medium is left byte-for-byte unchanged" "it was rewritten"
+fi
+unset PITHEAD_PRESEED_DIR PSD
+
 echo "== unit: is_appliance gates the tarball upgrade =="
 # The appliance's program tree is resynced from the system slot every boot, so a DIY tarball
 # upgrade would silently revert — both upgrade entrances must refuse when the host is one.
