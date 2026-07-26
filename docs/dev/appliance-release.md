@@ -152,7 +152,16 @@ the morning.
 3. Build the image and bundle. **Sign the bundle with the release key**, never the
    development chain `mkimage.sh` generates. Key custody is in
    [`release-server.md`](release-server.md).
-   Then `sudo tests/os/verify-image.sh <image>` — the static gate. It mounts the artifact
+   Then verify the artifact, pinning the commit you meant to build:
+
+   ```bash
+   PITHEAD_EXPECT_COMMIT=$(git rev-parse HEAD) sudo tests/os/verify-image.sh <image>
+   ```
+
+   That comparison exists because a release build once shipped a dashboard two commits stale —
+   the build clone was pulling from an intermediate clone rather than origin, and nothing in
+   the artifact revealed it. The image is stamped with its commit at build time and this
+   asserts it. It is the static gate. It mounts the artifact
    and checks everything a green boot cannot prove: no test SSH key or marker shipped, the
    grubenv sits where `load_env` reads it, the kernel root is a probed PARTUUID, all six
    docker-export artefacts are fixed, the engine bridge and cosign are aboard, and

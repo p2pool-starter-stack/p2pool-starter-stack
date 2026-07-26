@@ -1497,20 +1497,14 @@ firstboot_wizard() {
                     # the stick again. Off, stick out, on is the only sequence the hardware
                     # allows, and it costs the operator nothing: they are already at the machine
                     # to pull the stick.
-                    _console "" "Installation complete." \
-                        "Press Shut down on the setup page (or power the machine off now)," \
-                        "then remove the USB stick and switch the machine back on."
-                    local waited=0
-                    while [ ! -f "$spool/reboot-request" ]; do
-                        sleep 2
-                        waited=$((waited + 2))
-                        # Nobody is coming — the browser was closed, or this is headless with no
-                        # one watching. Reboot anyway rather than sit installed-but-idle forever.
-                        if [ "$waited" -ge 900 ]; then
-                            _console "No confirmation after 15 minutes — shutting down now."
-                            break
-                        fi
-                    done
+                    _console "" "Installation complete — switching off now." \
+                        "When the machine is dark, remove the USB stick and switch it back on."
+                    # No confirmation step. An operator who removes the stick BEFORE pressing
+                    # anything takes the running filesystem with it, and the button they were
+                    # about to press dies with it — a trap that caught a bench session twice.
+                    # Powering off unprompted removes the ordering mistake entirely: by the time
+                    # anyone reaches the machine, it is already dark and the stick is safe to pull.
+                    sleep 8 # long enough for the page's poll to show what is happening
                     "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
                     _console "" "Shutting down. Remove the USB stick, then switch the machine on."
                     sleep 3

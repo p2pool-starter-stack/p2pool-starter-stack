@@ -104,6 +104,17 @@ chk "rauc keyring baked" '[ -s "$ROOT/etc/rauc/keyring.pem" ]'
 chk "firstboot + sync units enabled" 'ls "$ROOT"/etc/systemd/system/multi-user.target.wants/pithead-firstboot.service "$ROOT"/etc/systemd/system/multi-user.target.wants/pithead-sync.service'
 chk "program tree at /opt/pithead" '[ -x "$ROOT/opt/pithead/pithead" ] && [ -s "$ROOT/opt/pithead/VERSION" ]'
 
+echo "==> provenance"
+BUILT=$(cat "$ROOT/opt/pithead/BUILD_COMMIT" 2>/dev/null || echo missing)
+echo "  image built from: $BUILT"
+chk "carries a build stamp" '[ "$BUILT" != "missing" ] && [ -n "$BUILT" ]'
+# The check that would have caught shipping a two-commits-stale dashboard: compare against what
+# the caller believes it built. PITHEAD_EXPECT_COMMIT is set by the release procedure.
+if [ -n "${PITHEAD_EXPECT_COMMIT:-}" ]; then
+    chk "built from the expected commit ($PITHEAD_EXPECT_COMMIT)" '[ "$BUILT" = "$PITHEAD_EXPECT_COMMIT" ]'
+    chk "built from a clean tree" 'case "$BUILT" in *-dirty) false ;; *) true ;; esac'
+fi
+
 echo "==> test material"
 if [ "$MODE" = "--test" ]; then
     chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'

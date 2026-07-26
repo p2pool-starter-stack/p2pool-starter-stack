@@ -125,15 +125,25 @@ pinned cosign) keeps ONE lifecycle across both channels, and the `provision` pha
 submits a config through the wizard's real HTTP flow and requires running containers —
 the test that fails when the product cannot actually start.
 
+**A build can ship code you never wrote into it.** A release image once carried a dashboard
+two commits stale: the release clone's origin was an intermediate clone, not the real remote,
+so `git pull` succeeded and fetched nothing new. The image looked right, passed every static
+check, and behaved like the previous build — the operator flashed it and hit an
+already-fixed bug. Images are stamped with their build commit now
+(`/opt/pithead/BUILD_COMMIT`) and `verify-image.sh` compares it against
+`PITHEAD_EXPECT_COMMIT`. Never diagnose an image by the label on it.
+
 **The appliance runs FROM the installation medium, so the stick cannot come out while it
 runs.** An install ends by powering the machine OFF, never rebooting: removing the stick from
 a running system takes its root, `/data` and the wizard's spool with it, and the machine
 wedges — the browser's request and the host's poll both write to a filesystem that no longer
 exists, so the button appears to do nothing. A restart with the stick still in just boots the
 stick again. Off → stick out → on is the only sequence the hardware allows, and it costs
-nothing: the operator is already at the machine to pull the stick. A bench session hit this
-after the flow was briefly changed to "remove the stick, then press Reboot"; tests now pin the
-order in both the page and the status text.
+nothing: the operator is already at the machine to pull the stick. A bench session hit this twice —
+once after the flow was changed to "remove the stick, then press Reboot", and again after the
+wording was corrected but the button remained. The button is gone: the install powers the
+machine off unprompted, so by the time anyone reaches it to pull the stick, it is already
+dark and there is no order left to get wrong.
 
 ## Open
 

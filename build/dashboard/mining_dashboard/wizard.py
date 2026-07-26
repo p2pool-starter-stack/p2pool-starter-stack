@@ -225,18 +225,12 @@ INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off. Th
 few minutes.</p>
 <p class="note" id="s">Working…</p>
 <div id="done" style="display:none">
-<h2>Installed</h2>
-<p>Three steps, in this order:</p>
-<ol>
-<li>Press <strong>Shut down</strong> below and wait for the machine to go dark.</li>
-<li>Remove the USB stick.</li>
-<li>Switch the machine back on.</li>
-</ol>
-<form method="post" action="/reboot"><button type="submit">Shut down</button></form>
-<p class="note">It shuts down rather than restarting because it is running <em>from</em> the
-USB stick — pulling that out while it runs takes its filesystem with it, and nothing works
-after that. Off first, then the stick. The setup page comes back from the installed system
-with a new token on its console.</p>
+<h2>Installed — the machine is switching itself off</h2>
+<p>Wait for it to go dark, <strong>then</strong> remove the USB stick, then switch it back
+on. It comes up from its own disk and this setup page returns, with a fresh token on its
+console.</p>
+<p class="note">It powers off by itself on purpose: it is running <em>from</em> the USB
+stick, so the stick cannot come out until it stops. There is nothing to click here.</p>
 </div>
 <script>
 const poll = setInterval(async () => {
@@ -249,10 +243,6 @@ const poll = setInterval(async () => {
   }
 }, 2000);
 </script>"""
-
-REBOOTING = """<p><strong>Shutting down.</strong> Wait for the machine to go dark, then remove
-the USB stick and switch it back on. It comes up from its own disk in a minute or two — open
-this address again then, and its console will show a fresh one-time token.</p>"""
 
 DONE = """<p><strong>Configuration received.</strong> This machine is validating and
 provisioning itself — watch the console for the dashboard address and the generated
@@ -375,21 +365,6 @@ async def install(request: web.Request) -> web.Response:
     return web.Response(text=PAGE.format(body=body), content_type="text/html", status=400)
 
 
-async def reboot(request: web.Request) -> web.Response:
-    """Request the shutdown that ends an install. The container records it; the HOST acts.
-
-    Shutdown, not reboot: this system is running FROM the installation medium, so the stick
-    cannot come out while it runs — and a restart with the stick still in just boots the stick
-    again. The operator is already standing at the machine to pull the stick, so pressing power
-    afterwards costs them nothing."""
-    if not _authed(request):
-        raise web.HTTPFound("/")
-    if _spool_read("installed") is None:
-        raise web.HTTPFound("/install")
-    _spool_write_text("reboot-request", "1")
-    return web.Response(text=PAGE.format(body=REBOOTING), content_type="text/html")
-
-
 async def setup_form(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
@@ -502,7 +477,10 @@ async def submit(request: web.Request) -> web.Response:
 async def status(request: web.Request) -> web.Response:
     if installer_mode():
         if _spool_read("installed") is not None:
-            return web.Response(text="Installed — shut down, remove the USB stick, then power on.")
+            return web.Response(
+                text="Installed — the machine is switching itself off. "
+                "Wait for it to go dark, then remove the USB stick and power it back on."
+            )
         err = _spool_read("error.txt")
         if err is not None:
             return web.Response(text=f"Install failed: {err}")
@@ -525,7 +503,6 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/auth", auth),
             web.get("/install", install_form),
             web.post("/install", install),
-            web.post("/reboot", reboot),
             web.get("/setup", setup_form),
             web.post("/submit", submit),
             web.get("/status", status),

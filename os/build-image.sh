@@ -28,6 +28,15 @@ else
     docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
 fi
 
+# Stamp the commit into the image. A release build once shipped a dashboard two commits stale
+# because it pulled from an intermediate clone, and nothing in the artifact could reveal it —
+# the image looked correct and behaved like the previous build. verify-image asserts this.
+BUILD_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+BUILD_DIRTY=""
+git diff --quiet 2>/dev/null || BUILD_DIRTY="-dirty"
+printf '%s%s\n' "$BUILD_COMMIT" "$BUILD_DIRTY" >os/rootfs/BUILD_COMMIT
+echo "==> building from commit ${BUILD_COMMIT}${BUILD_DIRTY}"
+
 echo "==> rootfs: container build + export"
 docker build -f os/rootfs/Containerfile -t pithead-os-rootfs \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \

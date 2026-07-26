@@ -201,9 +201,9 @@ async def test_installer_status_is_distinct_from_provisioning(client, installer)
     assert "Copying the system" in await (await client.get("/status")).text()
     (installer / "installed").write_text("1")
     body = await (await client.get("/status")).text()
-    # Starts with "Installed" — the page's poll keys on that to reveal the shutdown step.
+    # Starts with "Installed" — the page's poll keys on that to reveal the shutdown notice.
     assert body.startswith("Installed")
-    assert body.lower().index("shut down") < body.lower().index("remove the usb stick")
+    assert body.lower().index("go dark") < body.lower().index("remove the usb stick")
 
 
 # --- the expanded question set --------------------------------------------------------------
@@ -359,41 +359,24 @@ async def test_picker_puts_the_consequence_before_the_truncation_point(client, i
     assert 'id="verdict"' in body
 
 
-# --- the post-install reboot handshake ------------------------------------------------------
-# The operator takes the stick out, then asks for the reboot. The container records the request;
-# only the host reboots. Powering off worked but cost a walk to the machine.
+# --- the post-install shutdown ----------------------------------------------------------
+# There is deliberately no button. An operator who pulls the stick before pressing anything
+# takes the running filesystem — and the control — with it; a bench session hit that twice.
 
 
-async def test_reboot_needs_a_completed_install(client, installer):
-    await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    r = await client.post("/reboot", allow_redirects=False)
-    assert r.status == 302
-    assert not (installer / "reboot-request").exists()
-
-
-async def test_reboot_unauthed_writes_nothing(client, installer):
-    (installer / "installed").write_text("1")
-    r = await client.post("/reboot", allow_redirects=False)
-    assert r.status == 302
-    assert not (installer / "reboot-request").exists()
-
-
-async def test_reboot_records_the_request_for_the_host(client, installer):
-    (installer / "installed").write_text("1")
-    await client.post("/auth", data={"token": "pit-X7KM2Q"})
-    r = await client.post("/reboot")
-    assert r.status == 200
-    assert (installer / "reboot-request").read_text() == "1"
-    assert "Shutting down" in await r.text()
-
-
-async def test_install_page_orders_shutdown_before_stick_removal(client, installer):
-    # Order is the whole point: the system runs FROM the stick, so removing it while running
-    # takes its filesystem — and the button with it. This sequence must never be reworded into
-    # "remove the stick, then press…" again.
+async def test_install_page_has_no_button_to_sequence_wrongly(client, installer):
     await client.post("/auth", data={"token": "pit-X7KM2Q"})
     r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
     body = await r.text()
-    assert body.index("Shut down") < body.index("Remove the USB stick")
-    assert "running <em>from</em> the\nUSB stick" in body or "running <em>from</em>" in body
-    assert "/reboot" in body
+    assert "/reboot" not in body
+    assert "switching itself off" in body
+    # And the order still has to read correctly for a human.
+    assert body.index("go dark") < body.index("remove the USB stick")
+
+
+async def test_reboot_endpoint_is_gone(client, installer):
+    (installer / "installed").write_text("1")
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.post("/reboot")
+    assert r.status == 404
+    assert not (installer / "reboot-request").exists()

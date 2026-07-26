@@ -109,13 +109,13 @@ You do not download 250 GB again.
 
 Type the disk's name to confirm and install. It takes a few minutes.
 
-When it finishes the page says so and offers a **Shut down** button. Press it, wait for the
-machine to go dark, **then** remove the USB stick, then switch the machine back on.
+When it finishes, **the machine switches itself off.** That is the end of the install, not a
+crash. Wait for it to go dark, then remove the USB stick, then switch it back on.
 
-That order matters and cannot be swapped: until it shuts down, the machine is running *from*
-the stick, so pulling it out takes the running system's filesystem with it and the machine
-stops responding. (If that happens, hold the power button, remove the stick, and switch it on
-— an install that had already finished is safe on the disk.)
+There is nothing to click, on purpose: until it powers down the machine is running *from* the
+stick, so the stick cannot come out while it runs. (If you pull it out early, the machine
+stops responding — hold the power button, leave the stick out, and switch it on. An install
+that had already reported success is safe on the disk.)
 
 ## 4. Configure it
 
