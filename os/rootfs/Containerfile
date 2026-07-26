@@ -87,10 +87,7 @@ COPY os/rootfs/images/ /opt/pithead/images/
 # OVERLAYS /etc/hosts and /etc/resolv.conf as bind mounts, so the export captures empty stubs.
 # The result is an OS where not even "localhost" resolves and glibc falls back to DNS on
 # [::1]:53 — the first symptom being image pulls failing while everything else looks healthy.
-RUN printf '127.0.0.1	localhost
-127.0.1.1	pithead
-::1	localhost ip6-localhost ip6-loopback
-' > /etc/hosts \
+RUN { echo '127.0.0.1 localhost'; echo '127.0.1.1 pithead'; echo '::1 localhost ip6-localhost ip6-loopback'; } > /etc/hosts \
     && ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
 # Networking: DHCP on any wired interface. The appliance ships no interactive network config —
