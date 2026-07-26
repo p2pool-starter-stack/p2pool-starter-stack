@@ -64,7 +64,7 @@ is the only thing standing between the hand-written boot path and a fleet.
 |---|---|---|
 | `boot` | EFI boot to userspace; first-boot wizard announces itself with a console token; wizard serves the token gate on `:80` | 3 |
 | `update` | `/data` grew to the disk and slots did not (#784); bundle installs into the spare; spare boots; **an uncommitted update reverts on reboot**; a committed update persists; an operator can roll back off a committed version | 11 |
-| `provision` | a config submitted through the wizard's real HTTP flow (token read from the console, exactly as a human would) provisions the stack: validation, cosign-verified image pulls, containers running under podman, dashboard served through caddy. Catches an appliance whose engine cannot run the product — which happened, invisibly to every other phase | 6 |
+| `provision` | a config submitted through the wizard's real HTTP flow (token read from the console, exactly as a human would) provisions the stack: validation, cosign-verified image pulls, containers running under podman, dashboard served through caddy. Then a **reboot with no hands on it** — the stack must return unaided (podman-restart), the failure mode being a miner that sits dark after every power blip. Catches an appliance whose engine cannot run the product — which happened, invisibly to every other phase | 9 |
 | `install` | the image boots as **removable** media (usb bus — the gate keys on it); the inventory offers the internal disk and never the boot medium; the real installer runs; the machine then boots from the target alone with a **complete** copy (`/var/lib/dpkg` — the overlay made an incomplete copy easy and invisible), a fresh machine-id, `/data` sized to the target, and the wizard serving. Then the **reinstall leg**: a sentinel planted in `/data`, a second install over the same disk, and the sentinel required afterwards — the chain-preserving promise, tested | 17 |
 | `fault` | three power cuts mid-write; a deliberately corrupted bundle is refused without crashing and without bricking; a power cut inside the commit window; operator rollback after all of it; the box is still updatable afterwards | 11 |
 
@@ -148,6 +148,12 @@ the morning.
 3. Build the image and bundle. **Sign the bundle with the release key**, never the
    development chain `mkimage.sh` generates. Key custody is in
    [`release-server.md`](release-server.md).
+   Then `sudo tests/os/verify-image.sh <image>` — the static gate. It mounts the artifact
+   and checks everything a green boot cannot prove: no test SSH key or marker shipped, the
+   grubenv sits where `load_env` reads it, the kernel root is a probed PARTUUID, all six
+   docker-export artefacts are fixed, the engine bridge and cosign are aboard, and
+   podman-restart is enabled. Every check exists because its absence shipped, or nearly
+   shipped, once.
 4. Run the manual battery (M1–M10) on real hardware. Record results.
 5. Publish image + bundle + checksums; the bundle's signature is what devices verify.
 6. Back-merge `main` → `develop`, per the DIY release rule.

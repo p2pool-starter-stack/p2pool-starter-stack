@@ -781,19 +781,66 @@ phase_provision() {
     # auth challenge, both empty-bodied — any well-formed HTTP answer proves caddy is proxying.
     # The window covers the dashboard's healthcheck start period, not just its process start.
     tries=0
-    local code=000
+    local code=000 served=0
     while [ "$tries" -lt 60 ]; do
         code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard is served through caddy (HTTP $code)"
+            served=1
+            break
+            ;;
+        esac
+        sleep 5
+        tries=$((tries + 1))
+    done
+    if [ "$served" -ne 1 ]; then
+        bad "no HTTP answer behind caddy on :443 within 5m (last: $code)"
+        return
+    fi
+
+    # ---- reboot leg: the provisioned stack must return UNAIDED ---------------------------
+    # Docker's daemon restores restart-policy containers implicitly; podman only does it with
+    # podman-restart.service — which was missing once, and the failure mode is exactly a mining
+    # appliance that sits dark after every power blip until a human logs in. Nothing may drive
+    # the recovery here: no pithead command, no wizard. Reboot, wait, demand the stack.
+    info "reboot leg — the stack must come back on its own (podman-restart)"
+    _ssh reboot 2>/dev/null || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "guest never returned from the reboot"
+        return
+    }
+    local deadline2=$(($(date +%s) + 420)) names2=""
+    while [ "$(date +%s)" -lt "$deadline2" ]; do
+        names2=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$names2" in
+        *dashboard*caddy* | *caddy*dashboard*) break ;;
+        esac
+        sleep 10
+    done
+    case "$names2" in
+    *dashboard*caddy* | *caddy*dashboard*)
+        ok "stack returned after reboot with no hands on it (podman: $names2)"
+        ;;
+    *)
+        bad "stack did NOT return after a reboot — running: '${names2:-none}'"
+        return
+        ;;
+    esac
+    tries=0
+    while [ "$tries" -lt 36 ]; do
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        case "$code" in
+        2?? | 3?? | 401 | 403)
+            ok "dashboard answers again after the reboot (HTTP $code)"
             return
             ;;
         esac
         sleep 5
         tries=$((tries + 1))
     done
-    bad "no HTTP answer behind caddy on :443 within 5m (last: $code)"
+    bad "dashboard never answered after the reboot (last: $code)"
 }
 
 phase_fault() {
