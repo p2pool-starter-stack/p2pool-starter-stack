@@ -582,22 +582,108 @@ phase_install() {
     else
         bad "/data on the target is '${data_gib:-none}' GiB — repart did not size it to the disk"
     fi
-    # First boot on this disk: podman must load the wizard image from the baked tarball before
-    # anything serves. SSH answers long before that finishes, so this check gets the same
-    # patience the boot phase has instead of firing the moment the shell is up.
-    local wtries=0 wizard_up=0
-    while [ "$wtries" -lt 36 ]; do
-        if curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
-            wizard_up=1
-            break
-        fi
-        sleep 5
-        wtries=$((wtries + 1))
-    done
-    if [ "$wizard_up" -eq 1 ]; then
+    _wizard_up() { # shared by both legs — first boots must load the wizard image first
+        local wtries=0
+        while [ "$wtries" -lt 36 ]; do
+            curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup" && return 0
+            sleep 5
+            wtries=$((wtries + 1))
+        done
+        return 1
+    }
+    if _wizard_up; then
         ok "setup wizard serves on the installed system"
     else
         bad "no setup wizard on :80 of the installed system within 180s"
+    fi
+
+    # ---- reinstall leg: the path that must NOT lose data --------------------------------
+    # A disk that already carries a pithead layout is reinstalled in place: the system slot is
+    # replaced, /data — the wallets and the synced chain — survives. This is the promise that
+    # costs a user days of re-syncing if it breaks, so it gets its own leg: plant a sentinel in
+    # /data, reinstall over the disk, and require the sentinel afterwards.
+    info "reinstall leg — a second install over the same disk must preserve /data"
+    _ssh "echo chain-data-survives > /data/pithead/reinstall-sentinel" || {
+        bad "could not plant the reinstall sentinel"
+        return
+    }
+    _ssh "systemctl poweroff" 2>/dev/null || true
+    sleep 8
+    vm_destroy
+    : >"$SERIAL"
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import \
+        --disk "path=$DISK,format=raw,bus=usb,removable=on,boot.order=1" \
+        --disk "path=$target_disk,format=raw,bus=virtio,boot.order=2" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "virt-install failed for the reinstall boot"
+        return
+    }
+    ip=""
+    tries=0
+    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    _wait_ssh 240 || {
+        bad "installer guest never answered SSH for the reinstall leg"
+        return
+    }
+    if _ssh "pithead-install --list" | grep -q "pithead-with-data"; then
+        ok "inventory recognises the installed disk (pithead-with-data)"
+    else
+        bad "inventory does not flag the installed disk as carrying data"
+    fi
+    out=$(_ssh "pithead-install --target /dev/vda --yes 2>&1")
+    if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "preserving its data partition"; then
+        ok "reinstall took the preserve path"
+    else
+        bad "reinstall did not preserve: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
+        return
+    fi
+    _ssh "systemctl poweroff" 2>/dev/null || true
+    sleep 8
+    vm_destroy
+    : >"$SERIAL"
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import --disk "path=$target_disk,format=raw,bus=virtio" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "virt-install failed for the reinstalled system"
+        return
+    }
+    ip=""
+    tries=0
+    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    _wait_ssh 300 || {
+        bad "reinstalled system never answered SSH"
+        return
+    }
+    ok "reinstalled system boots"
+    if [ "$(_ssh cat /data/pithead/reinstall-sentinel)" = "chain-data-survives" ]; then
+        ok "REINSTALL PRESERVED /data — the sentinel survived"
+    else
+        bad "REINSTALL LOST /data — the sentinel is gone (this is the chain-eating bug)"
+    fi
+    if _ssh "test -s /var/lib/dpkg/status"; then
+        ok "reinstalled system copy is complete"
+    else
+        bad "/var/lib/dpkg/status missing after reinstall"
+    fi
+    if _wizard_up; then
+        ok "wizard serves after the reinstall"
+    else
+        bad "no wizard on :80 after the reinstall"
     fi
     rm -f "$target_disk"
 }

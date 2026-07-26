@@ -78,7 +78,10 @@ holds a Pithead `data` partition is marked *"reinstall, keeps existing data"*. I
 there replaces the system and **keeps your wallets, your settings and your synced chain**.
 You do not download 250 GB again.
 
-Type the disk's name to confirm, install, then reboot and remove the stick.
+Type the disk's name to confirm and install. When the copy finishes, **the machine powers
+itself off** — that is expected, not a crash. Remove the stick while it is off, then power
+it back on. (Powering off before the stick comes out matters: while both disks are
+present the machine cannot reliably tell them apart, so it never boots that way.)
 
 ## 4. Configure it
 

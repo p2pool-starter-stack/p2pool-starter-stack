@@ -96,9 +96,9 @@ same work, so there is rarely a reason to skip it.</p>
   <label for="mrh">Node host</label>
   <input id="mrh" name="monero_remote_host" placeholder="192.168.1.10" autocomplete="off">
   <label for="mrr">RPC port</label>
-  <input id="mrr" name="monero_remote_rpc" value="18081" inputmode="numeric">
+  <input id="mrr" name="monero_remote_rpc" value="18081" inputmode="numeric" pattern="[0-9]+">
   <label for="mrz">ZMQ port</label>
-  <input id="mrz" name="monero_remote_zmq" value="18083" inputmode="numeric">
+  <input id="mrz" name="monero_remote_zmq" value="18083" inputmode="numeric" pattern="[0-9]+">
   <label><input type="checkbox" id="mra" name="monero_remote_auth" value="1"> This node requires a
   username and password</label>
   <div class="when" id="mrauth">
@@ -119,7 +119,7 @@ same work, so there is rarely a reason to skip it.</p>
   <label for="trh">Node host</label>
   <input id="trh" name="tari_remote_host" placeholder="192.168.1.10" autocomplete="off">
   <label for="trg">gRPC port</label>
-  <input id="trg" name="tari_remote_grpc" value="18142" inputmode="numeric">
+  <input id="trg" name="tari_remote_grpc" value="18142" inputmode="numeric" pattern="[0-9]+">
   <p class="note">Only over a network you trust — this connection is not encrypted.</p>
 </div>
 
@@ -202,9 +202,9 @@ document.getElementById('disk').addEventListener('change', e =>
   document.getElementById('confirm').placeholder = e.target.value);
 </script>"""
 
-INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off. When it finishes,
-reboot and remove the installation medium — the setup page comes back on the installed
-system.</p>
+INSTALLING = """<p><strong>Installing.</strong> Do not power the machine off — it powers
+itself off when the copy is done. Then remove the USB stick and power the machine back on;
+this setup page comes back, served from the installed system.</p>
 <p class="note" id="s">Working…</p>
 <script>
 setInterval(async () => {
@@ -280,7 +280,7 @@ async def auth(request: web.Request) -> web.Response:
     supplied = str(form.get("token", "")).strip()
     if tok and hmac.compare_digest(_canon_token(supplied), _canon_token(tok)):
         resp = web.HTTPFound("/install" if installer_mode() else "/setup")
-        resp.set_cookie(COOKIE, tok, httponly=True)
+        resp.set_cookie(COOKIE, tok, httponly=True, samesite="Strict")
         raise resp
     request.app["failures"] += 1
     if request.app["failures"] >= MAX_FAILURES:
@@ -297,6 +297,8 @@ async def auth(request: web.Request) -> web.Response:
 async def install_form(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
+    if not installer_mode():
+        raise web.HTTPFound("/setup")
     prev = _spool_read("error.txt")
     err = f'<p class="err">{prev}</p>' if prev else ""
     body = INSTALL_FORM.format(error=err, options=_disk_options())
@@ -331,6 +333,10 @@ async def install(request: web.Request) -> web.Response:
 async def setup_form(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
+    if installer_mode():
+        # This machine is running from the installation medium: a config submitted now would
+        # land in the STICK's spool and vanish. Install first; configure the installed system.
+        raise web.HTTPFound("/install")
     prev = _spool_read("error.txt")
     err = f'<p class="err">{prev}</p>' if prev else ""
     return web.Response(
@@ -435,7 +441,7 @@ async def submit(request: web.Request) -> web.Response:
 async def status(request: web.Request) -> web.Response:
     if installer_mode():
         if _spool_read("installed") is not None:
-            return web.Response(text="Installed — reboot and remove the installation medium.")
+            return web.Response(text="Installed — the machine is powering off. Remove the stick, then power it back on.")
         err = _spool_read("error.txt")
         if err is not None:
             return web.Response(text=f"Install failed: {err}")

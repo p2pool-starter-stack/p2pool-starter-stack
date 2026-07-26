@@ -17,4 +17,10 @@ for d in build images; do
     rm -rf "${DST:?}/$d"
     cp -a "$SRC/$d" "$DST/$d"
 done
+# repart formats /data with ext4's default 5% root reserve — ~50 GB lost on a 1 TB disk that
+# exists to hold chain data. 0.5% keeps a real safety margin (the pre-repart layout used the
+# same figure). tune2fs is idempotent and instant, so every boot is the simplest correct hook.
+DATA_DEV=$(findmnt -no SOURCE /data 2>/dev/null || true)
+[ -n "$DATA_DEV" ] && tune2fs -m 0.5 "$DATA_DEV" >/dev/null 2>&1 || true
+
 echo "pithead-sync: program tree synced to $DST (state preserved)"

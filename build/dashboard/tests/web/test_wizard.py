@@ -200,7 +200,8 @@ async def test_valid_request_is_written_for_the_host(client, installer):
 async def test_installer_status_is_distinct_from_provisioning(client, installer):
     assert "Copying the system" in await (await client.get("/status")).text()
     (installer / "installed").write_text("1")
-    assert "reboot and remove" in (await (await client.get("/status")).text()).lower()
+    body = (await (await client.get("/status")).text()).lower()
+    assert "powering off" in body and "remove the stick" in body
 
 
 # --- the expanded question set --------------------------------------------------------------
@@ -310,3 +311,26 @@ async def test_new_install_attempt_clears_stale_error(client, installer):
     r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
     assert r.status == 200
     assert not (installer / "error.txt").exists()
+
+
+# --- mode isolation and cookie scope --------------------------------------------------------
+
+
+async def test_setup_form_redirects_to_install_in_installer_mode(client, installer):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.get("/setup", allow_redirects=False)
+    assert r.status == 302
+    assert r.headers["Location"] == "/install"
+
+
+async def test_install_form_redirects_to_setup_without_installer_mode(client, spool):
+    await client.post("/auth", data={"token": "pit-X7KM2Q"})
+    r = await client.get("/install", allow_redirects=False)
+    assert r.status == 302
+    assert r.headers["Location"] == "/setup"
+
+
+async def test_session_cookie_is_samesite_strict(client):
+    # /install erases a disk; the cookie that authorizes it must never ride a cross-site request.
+    r = await client.post("/auth", data={"token": "pit-X7KM2Q"}, allow_redirects=False)
+    assert "SameSite=Strict" in r.headers.get("Set-Cookie", "")

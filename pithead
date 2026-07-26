@@ -1285,8 +1285,12 @@ installer_mode_available() {
 # able to name a target the host did not offer — that is the same boundary the #33 control
 # channel draws, and here the action erases a disk.
 publish_disk_inventory() { # <spool-dir>
-    "$(install_bin)" --list >"$1/disks.tsv" 2>/dev/null || : >"$1/disks.tsv"
-    chown 1000:1000 "$1/disks.tsv" 2>/dev/null || true
+    # Atomic: the wizard reads this file between our writes, and a truncate-then-write would
+    # hand it an empty inventory mid-write — rendering a disk picker with no disks.
+    local tmp="$1/.disks.tsv.$$"
+    "$(install_bin)" --list >"$tmp" 2>/dev/null || : >"$tmp"
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/disks.tsv"
 }
 
 # rc: 0 installed, 1 failed, 2 nothing requested.
@@ -1388,16 +1392,25 @@ firstboot_wizard() {
         done
         while :; do
             if [ "$installer" -eq 1 ]; then
-                if consume_install_request "$spool"; then
-                    sleep 4 # let the page's status poll show "Installed"
+                local irc=0
+                consume_install_request "$spool" || irc=$?
+                if [ "$irc" -eq 0 ]; then
+                    sleep 6 # let the page's status poll show the shutdown notice
                     "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                    log "Installation complete. Reboot and remove the installation medium;"
-                    log "the setup page comes back on the installed system."
+                    # Power OFF, never reboot: the installed disk and this stick now carry
+                    # IDENTICAL partition labels (data, system-a), so booting with both present
+                    # makes every by-label mount ambiguous — and a reboot with the stick still
+                    # in may simply boot the stick again. Off, stick out, on: no ambiguity.
+                    log "Installation complete — powering off. Remove the installation medium,"
+                    log "then power the machine back on to configure it."
+                    systemctl poweroff
                     return
                 fi
-                # A failed install leaves the picker up with the reason — republish in case the
-                # disk set changed (an operator pulling the wrong drive is a normal reaction).
-                publish_disk_inventory "$spool"
+                if [ "$irc" -eq 1 ]; then
+                    # A failed install leaves the picker up with the reason — republish in case
+                    # the disk set changed (pulling the wrong drive is a normal reaction).
+                    publish_disk_inventory "$spool"
+                fi
                 sleep 2
                 if ! "$engine" inspect -f '{{.State.Running}}' pithead-wizard 2>/dev/null | grep -q true; then
                     warn "Wizard stopped (token lockout or crash) — minting a fresh token and restarting it."

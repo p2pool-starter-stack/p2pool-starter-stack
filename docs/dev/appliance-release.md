@@ -64,7 +64,7 @@ is the only thing standing between the hand-written boot path and a fleet.
 |---|---|---|
 | `boot` | EFI boot to userspace; first-boot wizard announces itself with a console token; wizard serves the token gate on `:80` | 3 |
 | `update` | `/data` grew to the disk and slots did not (#784); bundle installs into the spare; spare boots; **an uncommitted update reverts on reboot**; a committed update persists; an operator can roll back off a committed version | 11 |
-| `install` | the image boots as **removable** media (usb bus — the gate keys on it); the inventory offers the internal disk and never the boot medium; the real installer runs; the machine then boots from the target alone with a **complete** copy (`/var/lib/dpkg` — the overlay made an incomplete copy easy and invisible), a fresh machine-id, `/data` sized to the target, and the wizard serving | 10 |
+| `install` | the image boots as **removable** media (usb bus — the gate keys on it); the inventory offers the internal disk and never the boot medium; the real installer runs; the machine then boots from the target alone with a **complete** copy (`/var/lib/dpkg` — the overlay made an incomplete copy easy and invisible), a fresh machine-id, `/data` sized to the target, and the wizard serving. Then the **reinstall leg**: a sentinel planted in `/data`, a second install over the same disk, and the sentinel required afterwards — the chain-preserving promise, tested | 17 |
 | `fault` | three power cuts mid-write; a deliberately corrupted bundle is refused without crashing and without bricking; a power cut inside the commit window; operator rollback after all of it; the box is still updatable afterwards | 11 |
 
 A **brick is disqualifying, not deducted** — any run that leaves a machine unable to boot
@@ -89,9 +89,10 @@ from another machine at `http://pithead.local`. Expected: the setup page loads.
 *The wizard prints its token to the console, so confirm what a user with no display
 actually sees and how they are meant to get the token.*
 
-KVM analog: `--phase install` automates the mechanics of M3 (inventory, guards, copy
-completeness, target boot). The manual case remains about what KVM cannot fake — real
-firmware's boot order, a real USB controller, and a real internal disk.
+KVM analog: `--phase install` automates the mechanics of M3 and M5 (inventory, guards,
+copy completeness, target boot, and reinstall preserving `/data`). The manual cases remain
+about what KVM cannot fake — real firmware's boot order, a real USB controller, and a real
+internal disk.
 
 **M3 — install to disk.** From the browser, choose the internal disk. Confirm that the
 USB stick itself is **not offered**, that no disk is preselected, and that model, size and

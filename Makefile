@@ -44,7 +44,7 @@ lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-st
 lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
 	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh \
-		os/installer/pithead-install
+		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync tests/os/run.sh
 	shfmt -i 4 -d pithead pithead-completion.bash os/installer/pithead-install $(shell git ls-files '*.sh')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
