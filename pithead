@@ -4848,6 +4848,10 @@ caddy_hash_password_b64() {
     local pw="$1" img hash
     img=$(grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1)
     [ -n "$img" ] || return 1
+    # Fully qualified, because `docker run` here may be podman's shim: docker IMPLIES docker.io
+    # for a short name, podman's native path refuses one outright — the compose pull worked (the
+    # compat API keeps docker semantics) while this exact line killed appliance provisioning.
+    img="docker.io/library/$img"
     hash=$(docker run --rm "$img" caddy hash-password --plaintext "$pw" 2>/dev/null) || return 1
     [ -n "$hash" ] || return 1
     printf '%s' "$hash" | openssl base64 -A

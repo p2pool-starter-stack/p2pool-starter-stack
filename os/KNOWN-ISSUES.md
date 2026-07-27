@@ -145,6 +145,15 @@ wording was corrected but the button remained. The button is gone: the install p
 machine off unprompted, so by the time anyone reaches it to pull the stick, it is already
 dark and there is no order left to get wrong.
 
+**podman is two different engines about short image names.** The compat API (what compose
+speaks) keeps docker's semantics and resolves `caddy:2.x@sha256:…` via docker.io; the native
+path (`docker run` through the shim) refuses the same string outright unless
+`unqualified-search-registries` is configured. So the stack pulled and ran — and then died the
+first time a helper did a bare `docker run` with the same image reference the compose file uses.
+The image reference is now fully qualified at the call site AND the appliance restores docker's
+implied docker.io, because the stack was written against docker semantics and the next bare
+`docker run` is otherwise a time bomb.
+
 ## Open
 
 - **A provisioning failure reopens the wizard, but the failed config needs surfacing.**

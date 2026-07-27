@@ -80,6 +80,12 @@ RUN printf 'PITHEAD_ENGINE=podman\n' >> /etc/environment \
 # partition" rule; the mount guard lives on the units that use it.
 RUN mkdir -p /etc/containers && printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "/data/containers/storage"\n' \
         > /etc/containers/storage.conf
+# Docker's short-name semantics, explicitly: the stack was written against docker, where a bare
+# image name implies docker.io. Podman's native path refuses short names without this — the
+# compat API (compose) resolves them, `docker run` via the shim does not, and that split cost a
+# provisioning run. Every first-party image is digest-pinned regardless; this only restores the
+# implied registry for the few upstream refs.
+RUN printf 'unqualified-search-registries = ["docker.io"]\n' > /etc/containers/registries.conf.d/pithead-docker-compat.conf
 
 # The wizard's image, staged by os/build-image.sh — loaded into podman storage on first boot
 # (pithead firstboot-wizard), so the setup page comes up with no registry reachable.
