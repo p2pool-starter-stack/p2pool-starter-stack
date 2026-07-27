@@ -59,11 +59,23 @@ longer from a USB stick** — prints the address and a one-time token:
 
 ```
   Pithead setup wizard is ready. From a browser on this network, open:
-      http://pithead.local
-      http://192.168.1.42   (if the name above does not resolve)
+      https://pithead.local
+      https://192.168.1.42   (if the name above does not resolve)
 
   One-time token: pit-K7M2QX
+  (case does not matter, and the pit- prefix is optional)
+
+  Your browser will warn that the certificate is not trusted. That is expected:
+  this machine signed its own. Check it matches before continuing --
+  SHA-256: A1:B2:C3:...
 ```
+
+**Your browser will warn you, and that is expected.** The machine makes its own certificate —
+there is no authority that could vouch for a box on your network. The warning means "nobody
+else vouched for this", not "something is wrong". Compare the fingerprint on the console with
+the one your browser shows under the warning's details, then continue. The setup page is
+encrypted either way, which matters because what you type into it includes node passwords and,
+if you use the advanced view, anything else in the configuration.
 
 Nothing is wrong during the wait. The machine is unpacking the setup page, and a login
 prompt with no other output is what a working machine looks like at that moment. Wait for
@@ -94,7 +106,8 @@ pre-seeding covers configuration, not the erase decision.
 
 ## 3. Install it to the internal disk
 
-Open that address from your other computer and enter the token — case doesn't matter, and
+Open that address from your other computer, accept the certificate warning, and enter the
+token — case doesn't matter, and
 the `pit-` prefix is optional. Because the machine is running from the USB stick, the
 first screen asks which disk to install onto.
 
@@ -204,8 +217,8 @@ machine builds its second system copy and data area, which is why the instructio
 **The setup page will not load.** First: has the console printed the token line yet? Until
 it does, nothing is listening and the address will refuse the connection — that is the
 normal first-boot wait, not a fault. If the token is showing, check the ethernet cable and
-try the IP the console prints as well as <http://pithead.local>; some networks filter the
-`.local` name. Wi-Fi is not supported, so a wireless-only network will not work.
+try the IP the console prints as well as <https://pithead.local>; some networks filter the
+`.local` name. Plain `http://` addresses redirect to `https://`, so either spelling works. Wi-Fi is not supported, so a wireless-only network will not work.
 
 **"Wrong token."** The token changes each time the setup service restarts — read the
 current one from the console. After five wrong attempts it mints a new one on purpose.

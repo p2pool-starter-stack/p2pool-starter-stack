@@ -17,10 +17,12 @@ After ``MAX_FAILURES`` bad tokens the process exits 3; the host re-mints a fresh
 token and restarts the container — the re-mint loop lives host-side on purpose.
 """
 
+import asyncio
 import hmac
 import html
 import json
 import os
+import ssl
 import sys
 import tempfile
 
@@ -691,11 +693,52 @@ def make_app(exit_fn=sys.exit) -> web.Application:
     return app
 
 
+async def _redirect_to_tls(request: web.Request) -> web.Response:
+    """Everything on the plain port becomes a redirect to the TLS one.
+
+    An operator who types the address without a scheme lands on :80, and a setup page that
+    simply failed there would read as a broken machine — so :80 stays open and points at :443
+    rather than being closed. The host header carries the name or IP they actually used, so the
+    redirect keeps working for pithead.local and for a bare address alike.
+    """
+    host = request.host.split(":")[0]
+    raise web.HTTPMovedPermanently(f"https://{host}{request.rel_url}")
+
+
+async def _serve(app: web.Application, bind: str, tls: ssl.SSLContext | None) -> web.AppRunner:
+    host, _, port = bind.rpartition(":")
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, host or "0.0.0.0", int(port), ssl_context=tls).start()
+    return runner
+
+
+async def _run_both(bind: str, tls_bind: str, cert: str, key: str) -> None:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert, key)
+    redirect = web.Application()
+    redirect.router.add_route("*", "/{tail:.*}", _redirect_to_tls)
+    await _serve(make_app(), tls_bind, ctx)
+    await _serve(redirect, bind, None)
+    while True:  # both sites serve until the host stops the container
+        await asyncio.sleep(3600)
+
+
 def main() -> None:
     if not os.environ.get("WIZARD_TOKEN"):
         print("wizard: WIZARD_TOKEN is required", file=sys.stderr)
         sys.exit(2)
     bind = os.environ.get("WIZARD_BIND", "0.0.0.0:8000")
+    cert = os.environ.get("WIZARD_TLS_CERT", "")
+    key = os.environ.get("WIZARD_TLS_KEY", "")
+    # TLS because this page now carries real secrets — node passwords, a Telegram bot token,
+    # a view key if one is pasted into the config. A self-signed certificate warns the browser,
+    # which is the honest tradeoff: the alternative is those secrets in clear on the LAN. The
+    # console prints the fingerprint so the warning can actually be checked.
+    if cert and key and os.path.exists(cert) and os.path.exists(key):
+        tls_bind = os.environ.get("WIZARD_BIND_TLS", "0.0.0.0:8443")
+        asyncio.run(_run_both(bind, tls_bind, cert, key))
+        return
     host, _, port = bind.rpartition(":")
     web.run_app(make_app(), host=host or "0.0.0.0", port=int(port))
 

@@ -2,6 +2,8 @@
 
 import json
 
+from aiohttp import web
+
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -521,3 +523,59 @@ def test_telegram_needs_both_halves_or_neither():
     assert "telegram" not in _cfg(tari_wallet="t", telegram_chat="999")
     both = _cfg(tari_wallet="t", telegram_token="123:ABC", telegram_chat="999")
     assert both["telegram"] == {"enabled": True, "bot_token": "123:ABC", "chat_id": "999"}
+
+
+# --- TLS ------------------------------------------------------------------------------------
+# The page carries node passwords, a bot token, and a view key if one is pasted into the config.
+# Plain HTTP puts all of it on the LAN in clear.
+
+
+def test_plain_http_is_the_fallback_when_no_cert_is_supplied(monkeypatch):
+    # A machine that could not mint a certificate must still serve a setup page, not nothing.
+    monkeypatch.setenv("WIZARD_TOKEN", "pit-X7KM2Q")
+    monkeypatch.delenv("WIZARD_TLS_CERT", raising=False)
+    started = {}
+    monkeypatch.setattr(wizard.web, "run_app", lambda app, **kw: started.update(kw))
+    wizard.main()
+    assert started["port"] == 8000
+
+
+def test_tls_is_used_when_both_halves_exist(monkeypatch, tmp_path):
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    cert.write_text("x")
+    key.write_text("y")
+    monkeypatch.setenv("WIZARD_TOKEN", "pit-X7KM2Q")
+    monkeypatch.setenv("WIZARD_TLS_CERT", str(cert))
+    monkeypatch.setenv("WIZARD_TLS_KEY", str(key))
+    seen = {}
+
+    def fake_run(coro):
+        coro.close()
+        seen["ran"] = True
+
+    monkeypatch.setattr(wizard.asyncio, "run", fake_run)
+    monkeypatch.setattr(wizard.web, "run_app", lambda *a, **k: seen.setdefault("plain", True))
+    wizard.main()
+    assert seen.get("ran") and "plain" not in seen
+
+
+def test_a_missing_key_falls_back_rather_than_crashing(monkeypatch, tmp_path):
+    cert = tmp_path / "c.pem"
+    cert.write_text("x")
+    monkeypatch.setenv("WIZARD_TOKEN", "pit-X7KM2Q")
+    monkeypatch.setenv("WIZARD_TLS_CERT", str(cert))
+    monkeypatch.setenv("WIZARD_TLS_KEY", str(tmp_path / "absent.pem"))
+    started = {}
+    monkeypatch.setattr(wizard.web, "run_app", lambda app, **kw: started.update(kw))
+    wizard.main()
+    assert started["port"] == 8000
+
+
+async def test_plain_port_redirects_to_tls_keeping_the_host_used():
+    # Someone typing a bare address lands on :80; a dead port there reads as a broken machine.
+    from aiohttp.test_utils import make_mocked_request
+
+    req = make_mocked_request("GET", "/setup", headers={"Host": "pithead.local"})
+    with pytest.raises(web.HTTPMovedPermanently) as exc:
+        await wizard._redirect_to_tls(req)
+    assert exc.value.location == "https://pithead.local/setup"

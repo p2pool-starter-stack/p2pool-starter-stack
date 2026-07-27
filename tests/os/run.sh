@@ -274,7 +274,7 @@ phase_boot() {
         [ -n "$ip" ] || sleep 3
         tries=$((tries + 1))
     done
-    if [ -n "$ip" ] && curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
+    if [ -n "$ip" ] && curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
         ok "wizard serves the token gate on :80 ($ip)"
     else
         bad "wizard not reachable on :80 (guest-agent IP: ${ip:-none})"
@@ -587,7 +587,7 @@ phase_install() {
     _wizard_up() { # shared by both legs — first boots must load the wizard image first
         local wtries=0
         while [ "$wtries" -lt 36 ]; do
-            curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup" && return 0
+            curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup" && return 0
             sleep 5
             wtries=$((wtries + 1))
         done
@@ -718,7 +718,7 @@ phase_provision() {
     }
     ok "one-time token read from the console ($token)"
     tries=0
-    while ! curl -fsS -m 5 "http://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
+    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
         sleep 5
         tries=$((tries + 1))
         [ "$tries" -lt 24 ] || {
@@ -738,13 +738,18 @@ phase_provision() {
     # Both addresses are required — Monero's has a format gate (95 chars, leading 4), Tari's is
     # deliberately format-free host-side, so a labelled dummy passes and stays obviously fake.
     body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini"
-    curl -fsS -b "$jar" --data "$body" "http://$ip/submit" -o /dev/null 2>/dev/null || {
+    curl -fsSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null 2>/dev/null || {
         bad "config submit failed"
         rm -f "$jar"
         return
     }
     rm -f "$jar"
     ok "config submitted through the wizard"
+    if curl -sS -o /dev/null -w '%{http_code}' -m 5 "http://$ip/" 2>/dev/null | grep -q '^30'; then
+        ok "plain :80 redirects to TLS rather than refusing"
+    else
+        bad "plain :80 does not redirect — an operator typing a bare address sees a dead port"
+    fi
 
     # The host validates, installs config.json, and runs setup — which pulls the release images
     # (cosign-verified) and starts the stack. Pulls are the slow part; be generous.

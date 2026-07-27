@@ -1455,6 +1455,9 @@ firstboot_wizard() {
     # Double quotes on purpose: $engine expands NOW, at trap definition. It is a local, and the
     # trap also fires after this function's locals are gone — where set -u would turn the trap
     # itself into the crash that masks whatever actually failed.
+    local cert_fp=""
+    cert_fp=$(wizard_mint_cert "$spool") || warn "Could not generate a setup certificate — the setup page will be plain HTTP."
+
     # shellcheck disable=SC2064  # expand-now is the point (see above)
     trap "'$engine' rm -f pithead-wizard >/dev/null 2>&1 || true" EXIT
     while :; do
@@ -1463,15 +1466,19 @@ firstboot_wizard() {
         token=$(preseed_token) || token=$(wizard_mint_token)
         "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
         "$engine" run -d --name pithead-wizard --entrypoint python3 \
-            -p 80:8000 -e WIZARD_TOKEN="$token" \
+            -p 80:8000 -p 443:8443 -e WIZARD_TOKEN="$token" \
+            -e WIZARD_TLS_CERT="${cert_fp:+/wizard-spool/wizard.crt}" \
+            -e WIZARD_TLS_KEY="${cert_fp:+/wizard-spool/wizard.key}" \
             -v "$spool":/wizard-spool \
             "$image" -m mining_dashboard.wizard >/dev/null ||
             error "Could not start the wizard container ($engine, $image). Pre-seed config.json or run '$0 firstboot-wizard --cli'."
-        local mdns_name
+        local mdns_name scheme
         mdns_name="$(hostname).local"
+        scheme="http"
+        [ -n "$cert_fp" ] && scheme="https"
         log "Setup wizard is up. From a browser on this network, open:"
-        log "    http://$mdns_name"
-        for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    http://$arg"; done
+        log "    $scheme://$mdns_name"
+        for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    $scheme://$arg"; done
         log "One-time token: $token"
         # Announce on every physical console, not just stdout. /dev/console is whichever the
         # kernel cmdline named LAST, so an operator watching the other one (a monitor when the
@@ -1484,11 +1491,17 @@ firstboot_wizard() {
             {
                 echo ""
                 echo "  Pithead setup wizard is ready. From a browser on this network, open:"
-                echo "      http://$mdns_name"
-                echo "      http://$(hostname -I 2>/dev/null | awk '{print $1}')   (if the name above does not resolve)"
+                echo "      $scheme://$mdns_name"
+                echo "      $scheme://$(hostname -I 2>/dev/null | awk '{print $1}')   (if the name above does not resolve)"
                 echo ""
                 echo "  One-time token: $token"
                 echo "  (case does not matter, and the pit- prefix is optional)"
+                if [ -n "$cert_fp" ]; then
+                    echo ""
+                    echo "  Your browser will warn that the certificate is not trusted. That is expected:"
+                    echo "  this machine signed its own. Check it matches before continuing --"
+                    echo "  SHA-256: $cert_fp"
+                fi
                 echo ""
             } >"$dev" 2>/dev/null || true
         done
@@ -3017,6 +3030,25 @@ _console() { # $1... lines
         [ -w "$dev" ] || continue
         printf '  %s\n' "$@" >"$dev" 2>/dev/null || true
     done
+}
+
+# A self-signed certificate for the setup page, valid for every address the operator might use.
+# Echoes the SHA-256 fingerprint so the console can print it beside the token: a browser warning
+# nobody can check is theatre, and this page now carries node passwords and bot tokens.
+# Regenerated each run — addresses change with the DHCP lease, and the key is disposable.
+wizard_mint_cert() { # <dir>  -> prints the fingerprint
+    local d="$1" alt ip
+    alt="DNS:$(hostname).local,DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
+    for ip in $(hostname -I 2>/dev/null); do alt="$alt,IP:$ip"; done
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout "$d/wizard.key" -out "$d/wizard.crt" \
+        -subj "/CN=$(hostname).local" -addext "subjectAltName=$alt" \
+        -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1 || return 1
+    # The container runs as uid 1000 and must read both halves.
+    chown 1000:1000 "$d/wizard.key" "$d/wizard.crt" 2>/dev/null || true
+    chmod 640 "$d/wizard.key" 2>/dev/null || true
+    openssl x509 -in "$d/wizard.crt" -noout -fingerprint -sha256 2>/dev/null |
+        sed 's/^.*=//'
 }
 
 # An appliance gets a dashboard login whether or not the onion is on.
