@@ -5,27 +5,25 @@
 // The view only ever ASKS — every request rides the X-Pithead-Control header (CSRF guard) and
 // the host decides. When the channel is off the routes 404 and this view explains how to enable.
 //
-// Two edit modes (#529, RATIFIED Wave-0 decision — mirrors #518's Worker Inspect shape exactly):
-// **Form** (the default) pins a `core` group — the wizard's own shortlist, `_core_keys` on the
-// fetched config, sourced from config.core-keys.json so the two never drift apart — above LOGICAL
-// sections (#611, configlogic.js buildSections) an operator recognizes (Wallets & payout, Monero
-// node, Dashboard & access, …) rather than one section per top-level config.json key, each a
-// native <details> collapsed by default. Within a section, a noisy cluster (telegram.events' 26
-// toggles, the notification sinks, healthchecks) nests one level deeper into its own collapsed
-// <details> (#612, configlogic.js nestSection). A field the control gate won't actually commit —
-// derived from `_editable_keys` on the fetched config (#613, configlogic.js markEditable) —
-// renders disabled: read-only value, a tooltip explaining why, and no onChange wired at all, so it
-// can never enter `edits`. **JSON** is the same fetched config
-// as one editable textarea, with a Load-from-file fill button (FileReader, no upload); JSON mode
-// edits the whole config and isn't affected by grouping or grey-out. Both modes build the SAME
-// `proposed` config object and POST it to the SAME /api/control/preview → confirm →
-// /api/control/commit pipeline — the closed-schema gate on the host is the only validation
-// authority; neither mode adds a server-side path the other lacks, and none of this display layer
-// changes what the gate will actually accept.
+// ONE editing surface, the wizard's pattern (#785): the form sections on top and the WHOLE
+// candidate config beneath as a collapsed JSON pane — both live, both views of a single
+// `candidate` object. Editing a field rewrites the candidate (typed by the field, via the shared
+// configsync.coerceForType) and the pane re-renders; editing the pane replaces the candidate and
+// the fields refill. What gets previewed and committed is exactly the candidate the pane shows.
+//
+// The form pins a `core` group — the wizard's own shortlist, `_core_keys` on the fetched config,
+// sourced from config.core-keys.json so the two never drift apart — above LOGICAL sections
+// (#611, buildSections) an operator recognizes, each a native <details> collapsed by default;
+// noisy clusters nest one deeper (#612, nestSection). A field the control gate won't commit —
+// `_editable_keys` (#613, markEditable) — renders disabled with no listener wired, so the FORM
+// can never change it; the pane can (it always could, as the old JSON mode), and the
+// closed-schema gate on the host remains the only validation authority. Secrets arrive masked as
+// sentinels, render blank with a keep-hint, and an untouched or re-blanked secret keeps its
+// sentinel — "blank means keep" survives the model change.
 
 import {
-  applyEdits,
   buildSections,
+  isSecretSentinel,
   jsonSyntaxError,
   markEditable,
   nestSection,
@@ -33,7 +31,7 @@ import {
   regroupCore,
   SECRET_HINT,
 } from "./configlogic.mjs";
-import { loadPref, savePref } from "./logic.mjs";
+import { coerceForType, pathGet, pathSet } from "./configsync.mjs";
 import { Component, html } from "./preact.mjs";
 
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
@@ -89,12 +87,11 @@ const CONFIRM_TITLE = "Editable — this change is disruptive; you'll type APPLY
 // wired at all when disabled, so a greyed field can never add itself to `edits` (defense in
 // depth; the gate is still the real authority). Preact skips an event prop entirely when it's
 // `undefined`, so passing `undefined` rather than a no-op is what actually removes the listener.
-const Field = ({ field, edits, onEdit, full }) => {
+const Field = ({ field, value, onEdit, full }) => {
   const editable = field.editable !== false;
-  const value = field.key in edits ? edits[field.key] : field.value;
   const label = full ? field.key : field.path.slice(1).join(".") || field.path[0];
   const title = !editable ? HOST_ONLY_TITLE : field.confirm ? CONFIRM_TITLE : undefined;
-  const change = editable ? (e) => onEdit(field.key, e.target.value) : undefined;
+  const change = editable ? (e) => onEdit(field, e.target.value) : undefined;
   let input;
   if (field.type === "boolean") {
     input = html`<select value=${String(value)} disabled=${!editable} onChange=${change}>
@@ -173,8 +170,8 @@ export class ConfigView extends Component {
       coreKeys: [],
       editableKeys: [], // #613: config paths the control gate will actually commit
       confirmKeys: [], // #719: config paths the gate commits behind a type-to-confirm
-      edits: {},
-      mode: loadPref("dashboardConfigMode", ["form", "json"], "form"), // form | json (#529, persisted #658)
+      candidate: null, // the ONE config both the fields and the JSON pane edit (#785)
+      pristine: "", // candidate's serialization at load — dirtiness is a comparison, not a flag
       editText: "",
       jsonError: null,
       preview: null,
@@ -188,11 +185,6 @@ export class ConfigView extends Component {
     this.load();
   }
 
-  setMode(mode) {
-    savePref("dashboardConfigMode", mode);
-    this.setState({ mode });
-  }
-
   async load() {
     try {
       const res = await fetch("/api/config");
@@ -202,6 +194,11 @@ export class ConfigView extends Component {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const cfg = await res.json();
+      // The candidate is the config MINUS the underscore metadata (_core_keys and friends are
+      // display directives, not configuration) — what the pane shows is what preview receives.
+      const candidate = {};
+      for (const [k, v] of Object.entries(cfg)) if (!k.startsWith("_")) candidate[k] = v;
+      const text = JSON.stringify(candidate, null, 2);
       this.setState({
         phase: "form",
         cfg,
@@ -209,8 +206,9 @@ export class ConfigView extends Component {
         coreKeys: cfg._core_keys || [],
         editableKeys: cfg._editable_keys || [],
         confirmKeys: cfg._confirm_keys || [],
-        edits: {},
-        editText: JSON.stringify(cfg, null, 2),
+        candidate,
+        pristine: text,
+        editText: text,
         jsonError: null,
       });
     } catch (e) {
@@ -218,10 +216,35 @@ export class ConfigView extends Component {
     }
   }
 
-  // JSON mode (#529, mirrors WorkerInspect.onJsonInput): live parse-error feedback while typing,
-  // not only on Save.
+  // Field -> candidate -> pane. The field's declared type drives coercion (shared
+  // configsync.coerceForType), so a port stays a number and a toggle a boolean in the JSON.
+  // A secret blanked out returns to what the server sent — the sentinel for a set secret —
+  // because blank has always meant KEEP, and the model change must not quietly turn it into
+  // "set to empty string".
+  onFieldEdit(field, raw) {
+    const { candidate, cfg } = this.state;
+    const value =
+      field.type === "secret" && raw === ""
+        ? pathGet(cfg, field.key)
+        : coerceForType(field.type, raw);
+    pathSet(candidate, field.key, value);
+    this.setState({ candidate, editText: JSON.stringify(candidate, null, 2), jsonError: null });
+  }
+
+  // Pane -> candidate -> fields. Hand-edited JSON wins; while it does not parse, the pane keeps
+  // the broken text and the error, and the last good candidate stays what Save would send.
   onJsonInput(text) {
-    this.setState({ editText: text, jsonError: jsonSyntaxError(text) });
+    const err = jsonSyntaxError(text);
+    if (err) {
+      this.setState({ editText: text, jsonError: err });
+      return;
+    }
+    const staged = parseConfigJson(text);
+    if (staged.error) {
+      this.setState({ editText: text, jsonError: staged.error });
+      return;
+    }
+    this.setState({ editText: text, jsonError: null, candidate: staged.config });
   }
 
   // Fill the JSON textarea from a local file (#529, mirrors WorkerInspect.onFilePick, #518) — a
@@ -241,13 +264,12 @@ export class ConfigView extends Component {
     return pollResult(id, skip);
   }
 
-  // Build the SAME staged `proposed` config object regardless of mode (#529) — the form folds
-  // edits back via applyEdits; JSON mode's textarea already IS the candidate config, so it only
-  // needs parsing. Either result feeds the identical preview/commit pipeline below.
+  // The candidate IS the proposed config — the pane shows exactly what preview receives, which
+  // is the point of the pattern (#785). A pane mid-typo blocks Save via jsonError instead.
   buildProposed() {
-    const { cfg, sections, edits, mode, editText } = this.state;
-    if (mode === "json") return parseConfigJson(editText);
-    return { config: applyEdits(cfg, sections, edits) };
+    const { candidate, jsonError } = this.state;
+    if (jsonError) return { error: jsonError };
+    return { config: candidate };
   }
 
   async save() {
@@ -310,10 +332,18 @@ export class ConfigView extends Component {
   // Worker Inspect's own <dialog> made (#518). Within a section, nestSection (#612) pulls a noisy
   // cluster (telegram.events, the notification sinks, healthchecks) into its own nested <details>,
   // one level deeper, also collapsed by default.
-  renderForm(core, groups, edits) {
-    const onEdit = (k, v) => this.setState({ edits: { ...edits, [k]: v } });
+  renderForm(core, groups) {
+    const { candidate } = this.state;
+    const onEdit = (f, v) => this.onFieldEdit(f, v);
+    // A set secret arrives as a sentinel and renders blank behind its keep-hint placeholder;
+    // everything else shows the candidate's live value, so pane edits are visible immediately.
+    const displayValue = (f) => {
+      const v = pathGet(candidate, f.key);
+      if (v === undefined || v === null || isSecretSentinel(v)) return f.value;
+      return typeof v === "object" ? JSON.stringify(v) : String(v);
+    };
     const field = (f, full) =>
-      html`<${Field} field=${f} edits=${edits} full=${full} onEdit=${onEdit} />`;
+      html`<${Field} field=${f} value=${displayValue(f)} full=${full} onEdit=${onEdit} />`;
     return html`<div class="grid">
         ${
           core.length
@@ -343,10 +373,15 @@ export class ConfigView extends Component {
     </div>`;
   }
 
-  // JSON mode (#529): the whole candidate config as one textarea, mirroring Worker Inspect's JSON
-  // mode (#518) — inline parse-error feedback, and a Load-from-file fill button.
+  // The JSON pane (#785, the wizard's pattern): the whole candidate beneath the form, collapsed
+  // by default, two-way live — never a separate mode. Load-from-file fills it (FileReader, no
+  // upload), and what it shows is byte-for-byte what Save previews.
   renderJson(editText, jsonError, busy) {
-    return html`<div class="card config-section">
+    return html`<details class="card config-section">
+        <summary><strong>Advanced</strong> — the exact configuration this will apply</summary>
+        <p class="text-muted text-xs">Editing a field above updates it; editing here directly
+        wins. Set secrets appear as <code>__secret__</code> markers and stay unchanged unless
+        you replace them. The host's gate remains the authority on what commits.</p>
         <textarea class="worker-edit" spellcheck="false" rows="20" disabled=${busy}
                   value=${editText} onInput=${(e) => this.onJsonInput(e.target.value)}></textarea>
         ${jsonError ? html`<p class="status-bad text-xs">${jsonError}</p>` : null}
@@ -355,7 +390,7 @@ export class ConfigView extends Component {
                 <input type="file" accept="application/json,.json" disabled=${busy} onChange=${(e) => this.onFilePick(e)} />
             </label>
         </div>
-    </div>`;
+    </details>`;
   }
 
   render() {
@@ -365,8 +400,6 @@ export class ConfigView extends Component {
       coreKeys,
       editableKeys,
       confirmKeys,
-      edits,
-      mode,
       editText,
       jsonError,
       preview,
@@ -406,26 +439,21 @@ export class ConfigView extends Component {
       </div>`;
     }
     const busy = phase === "previewing" || phase === "committing";
-    const dirty = Object.keys(edits).length > 0;
-    const canSave = mode === "json" ? !jsonError : dirty;
+    const dirty = editText !== this.state.pristine;
+    const canSave = dirty && !jsonError;
     const { core, sections: groups } = regroupCore(
       markEditable(sections, editableKeys, confirmKeys),
       coreKeys,
     );
     return html`<div class="config-view">
         ${error ? html`<div class="card"><p class="status-bad">${error}</p></div>` : null}
-        <div class="toggle-group mb-1" role="group" aria-label="Config editor mode">
-            <button class=${"btn-toggle" + (mode === "form" ? " active" : "")} aria-pressed=${mode === "form"}
-                title="Edit settings as a form" onClick=${() => this.setMode("form")}>Form</button>
-            <button class=${"btn-toggle" + (mode === "json" ? " active" : "")} aria-pressed=${mode === "json"}
-                title="Edit the raw config.json" onClick=${() => this.setMode("json")}>JSON</button>
-        </div>
-        ${mode === "form" ? this.renderForm(core, groups, edits) : this.renderJson(editText, jsonError, busy)}
+        ${this.renderForm(core, groups)}
+        ${this.renderJson(editText, jsonError, busy)}
         <div class="config-actions">
             <button class="btn-toggle active" disabled=${!canSave || busy} onClick=${() => this.save()}>
                 ${phase === "previewing" ? "Previewing…" : "Save & preview changes"}
             </button>
-            ${mode === "form" && dirty ? html`<button class="btn-toggle" disabled=${busy} onClick=${() => this.setState({ edits: {}, error: null })}>Discard edits</button>` : null}
+            ${dirty ? html`<button class="btn-toggle" disabled=${busy} onClick=${() => this.load()}>Discard edits</button>` : null}
         </div>
         ${
           phase === "confirm" || phase === "committing"

@@ -70,7 +70,7 @@ Once both nodes are synced, the dashboard shows the operational view.
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
 position, the worker-table sort column, and the chart stay put between updates. View preferences —
 theme, Simple/Advanced view, the chart's averaging window and series toggles, the worker-table
-sort, the earnings tab, the Form/JSON editor modes, and the topology mesh toggle — are also
+sort, the earnings tab, and the topology mesh toggle — are also
 remembered across reloads. A poll that fails —
 or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
 timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
@@ -353,8 +353,8 @@ How it stays safe:
 - **Masked values stay masked.** If a writable value is ever a masked secret (the same
   `{__secret__: true}` sentinel the [Configuration view](#configuration-view) uses), the table
   editor renders it as a blank password field, never as JSON you could copy or mangle; leave it
-  blank to keep it, type a value to replace it. JSON mode carries the sentinel through untouched
-  unless you edit that key yourself.
+  blank to keep it, type a value to replace it. the config tab's Advanced pane carries the sentinel
+  through untouched unless you edit that key yourself.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
@@ -642,10 +642,14 @@ Edit `config.json` from the dashboard. Off by default: set `dashboard.control.en
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
 button then appears next to the Simple/Advanced toggle.
 
-Two edit modes build the same candidate config and submit it through the same pipeline below
+One editing surface: the form on top and, beneath it, a collapsed **Advanced** pane holding
+the exact configuration that will be applied — both live views of a single candidate. Editing
+a field rewrites the pane; editing the pane refills the fields; what the pane shows is
+byte-for-byte what Save previews. (This is the setup wizard's pattern — the first page and
+the config tab now behave identically.) The pieces:
 ([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
 
-- **Form** (the default) pins a **Core** group at the top — the same wallet-address /
+- **The form** pins a **Core** group at the top — the same wallet-address /
   `monero.mode` / `p2pool.pool` / dashboard-auth-and-host shortlist
   [`./pithead setup`](getting-started.md#3-run-setup) asks, read from the one file the wizard and
   this view share, [`config.core-keys.json`](../config.core-keys.json), so the two can't drift
@@ -678,21 +682,24 @@ Two edit modes build the same candidate config and submit it through the same pi
   enforces (see below) and surfaced on `GET /api/config` as `_editable_keys` and `_confirm_keys`,
   so neither can drift from what the gate actually accepts; a greyed field never enters the staged
   edit set at all.
-- **JSON** edits the whole fetched config as one text block, for operators who'd rather paste than
-  click through fields. A **Load from file** control (`FileReader`, no upload) fills it from a
-  saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect) uses. A
-  malformed edit is flagged inline before you click Save. JSON mode edits the whole config as text,
-  so grouping and the host-only grey-out (both display-layer, form-mode only) don't apply to it —
-  the gate still validates and gates it identically to form mode.
+- **The Advanced pane** is the whole candidate as one text block, for operators who'd rather
+  paste than click through fields. A **Load from file** control (`FileReader`, no upload) fills
+  it from a saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect)
+  uses. A malformed edit is flagged inline, keeps the last good candidate as what Save would
+  send, and blocks Save until fixed. The pane edits the whole config as text, so grouping and
+  the host-only grey-out (both display-layer, form-only) don't constrain it — the gate still
+  validates and gates it identically.
 
-The flow mirrors the CLI's `apply` either way:
+The flow mirrors the CLI's `apply`:
 
 1. The form/textarea is prefilled from a pre-masked copy of `config.json` the host renders into the
    control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)). Secrets (the
    dashboard password, the Telegram bot token, node RPC credentials, the stratum password) show as
    "set — leave blank to keep"; their values never enter the dashboard container, let alone the
-   browser — leaving one untouched sends a sentinel back (JSON mode carries it through verbatim
-   too), and the host swaps in the live value when it stages the change.
+   browser — leaving one untouched sends a sentinel back (the Advanced pane shows it as a
+   `__secret__` marker and carries it verbatim), blanking a previously-edited secret field
+   restores the sentinel rather than setting an empty value, and the host swaps in the live
+   value when it stages the change.
 2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own

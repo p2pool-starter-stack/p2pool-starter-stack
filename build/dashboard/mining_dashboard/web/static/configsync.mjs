@@ -36,6 +36,20 @@ export function coerceForPath(reference, path, raw) {
 }
 
 /**
+ * Coerce a form input's string by the FIELD's declared type (the dashboard's config editor,
+ * where configlogic's buildSections has already typed every field). The wizard's sibling
+ * coerceForPath infers from a reference config instead — same job, different source of truth.
+ */
+export function coerceForType(type, raw) {
+  if (type === "boolean") return raw === "true" || raw === true;
+  if (type === "number") {
+    const n = Number(raw);
+    return Number.isNaN(n) ? raw : n;
+  }
+  return raw;
+}
+
+/**
  * Classify a pasted Monero address the way the CLI wizard does, so the page can name the
  * actual mistake before a submit round-trip. The HOST re-validates — this only saves a trip.
  * Returns { kind, message } with kind one of "empty" | "subaddress" | "integrated" |

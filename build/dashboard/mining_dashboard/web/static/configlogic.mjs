@@ -205,7 +205,7 @@ export function buildSections(cfg) {
   return sections;
 }
 
-function setPath(cfg, path, value) {
+function _setPath(cfg, path, value) {
   let node = cfg;
   for (const key of path.slice(0, -1)) node = node[key];
   node[path.at(-1)] = value;
@@ -214,24 +214,6 @@ function setPath(cfg, path, value) {
 // The proposed config: the fetched (masked) config with the edits applied. Booleans/numbers are
 // coerced back from input strings (garbage in a number field is passed through for the host-side
 // validator to reject with its real message); a blank secret keeps its sentinel.
-export function applyEdits(cfg, sections, edits) {
-  const proposed = structuredClone(cfg);
-  for (const section of sections) {
-    for (const f of section.fields) {
-      if (!(f.key in edits)) continue;
-      const raw = edits[f.key];
-      let v = raw;
-      if (f.type === "boolean") v = raw === true || raw === "true";
-      else if (f.type === "number") {
-        const n = Number(raw);
-        v = Number.isFinite(n) && String(raw).trim() !== "" ? n : raw;
-      } else if (f.type === "secret" && raw === "") continue; // blank = keep the sentinel
-      setPath(proposed, f.path, v);
-    }
-  }
-  return proposed;
-}
-
 // The core-vs-sections regroup (#529, RATIFIED Wave-0): lift every field whose dotted key is in
 // the core shortlist out of its natural section into one pinned `core` group; the same sections
 // keep every OTHER field (never emptied outright — the shortlist is a handful of keys against ~94

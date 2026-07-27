@@ -247,13 +247,19 @@ const CORE_KEYS = ["monero.wallet_address", "p2pool.pool", "dashboard.auth.usern
 function readyView(cfg = CFG, coreKeys = CORE_KEYS) {
   const inst = new ConfigView({});
   stubSetState(inst);
+  const candidate = JSON.parse(
+    JSON.stringify(Object.fromEntries(Object.entries(cfg).filter(([k]) => !k.startsWith("_")))),
+  );
+  const text = JSON.stringify(candidate, null, 2);
   inst.state = {
     ...inst.state,
     phase: "form",
     cfg,
     sections: buildSections(cfg),
     coreKeys,
-    editText: JSON.stringify(cfg, null, 2),
+    candidate,
+    pristine: text,
+    editText: text,
   };
   return inst;
 }
@@ -325,13 +331,12 @@ test("form mode: a section mixing top-level keys only via subgroups keeps short 
   assert.doesNotMatch(out, /config-field-name">telegram\./);
 });
 
-test("mode toggle switches between Form and JSON rendering", () => {
-  const inst = readyView();
-  assert.match(renderToString(inst.render()), /config-section-core/);
-  inst.state.mode = "json";
-  const out = renderToString(inst.render());
-  assert.match(out, /worker-edit/); // the JSON textarea reuses Worker Inspect's own class
-  assert.doesNotMatch(out, /config-section-core/);
+test("one surface: the form AND the JSON pane render together, pane collapsed (#785)", () => {
+  const out = renderToString(readyView().render());
+  assert.match(out, /config-section-core/); // the form
+  assert.match(out, /worker-edit/); // the pane's textarea, same class as Worker Inspect
+  assert.match(out, /the exact configuration this will apply/);
+  assert.doesNotMatch(out, /<details[^>]*\bopen\b/); // pane and sections all start collapsed
 });
 
 // --- Host-only fields render greyed, not edit-then-reject (#613) -----------------------------
@@ -374,7 +379,11 @@ test("form mode: an empty editable set (host not yet reporting _editable_keys) g
   // Every field input/select carries disabled — scoped to the field's own opening tag so the
   // unrelated Save/Discard buttons (also legitimately `disabled` when there's nothing to save)
   // don't inflate the count.
-  const fieldTags = out.match(/<(?:input|select)[^>]*>/g) || [];
+  // The JSON pane's own controls (textarea, file input) are gated by busy, not editability —
+  // pane edits were always allowed even for host-only keys, exactly like the old JSON mode.
+  const fieldTags = (out.match(/<(?:input|select)[^>]*>/g) || []).filter(
+    (t) => !/type="file"/.test(t),
+  );
   assert.ok(fieldTags.length > 0);
   assert.ok(fieldTags.every((t) => /disabled/.test(t)));
 });
@@ -396,48 +405,54 @@ test("form mode: telegram.events nests into its own collapsed <details>, inside 
 
 // --- buildProposed(): both modes build the same staged config object -------------------------
 
-test("buildProposed: form mode folds edits back the same way applyEdits does", () => {
+test("a field edit lands in the candidate, typed, and rewrites the pane (#785)", () => {
   const inst = readyView();
-  inst.state.edits = { "p2pool.pool": "main" };
+  const pool = { key: "p2pool.pool", type: "select", value: "mini" };
+  inst.onFieldEdit(pool, "main");
   const staged = inst.buildProposed();
   assert.equal(staged.config.p2pool.pool, "main");
   assert.equal(staged.config.monero.wallet_address, "4AAAA"); // untouched fields survive
+  assert.match(inst.state.editText, /"pool": "main"/); // the pane shows the same truth
 });
 
-test("buildProposed: JSON mode parses the SAME equivalent edit into an identical staged object", () => {
-  const form = readyView();
-  form.state.edits = { "p2pool.pool": "main" };
-  const viaForm = form.buildProposed();
-
-  const json = readyView();
-  json.state.mode = "json";
-  json.state.editText = JSON.stringify(viaForm.config);
-  const viaJson = json.buildProposed();
-
-  assert.deepEqual(viaJson, viaForm); // identical staged config from either mode
-});
-
-test("buildProposed: JSON mode surfaces a parse error instead of a staged config", () => {
+test("a numeric field edit stays a number in the pane, never a quoted string", () => {
   const inst = readyView();
-  inst.state.mode = "json";
-  inst.state.editText = "{not json";
+  inst.onFieldEdit({ key: "p2pool.stratum_port", type: "number", value: 3333 }, "3334");
+  assert.equal(inst.buildProposed().config.p2pool.stratum_port, 3334);
+  assert.match(inst.state.editText, /"stratum_port": 3334/);
+});
+
+test("a pane edit replaces the candidate and the fields read it back (#785)", () => {
+  const inst = readyView();
+  const next = JSON.parse(inst.state.editText);
+  next.p2pool.pool = "nano";
+  inst.onJsonInput(JSON.stringify(next));
+  assert.equal(inst.buildProposed().config.p2pool.pool, "nano");
+  assert.match(renderToString(inst.render()), /nano/); // the form shows the pane's edit
+});
+
+test("a pane mid-typo keeps the last good candidate and blocks Save with the reason", () => {
+  const inst = readyView();
+  inst.onJsonInput("{not json");
   assert.match(inst.buildProposed().error, /Not valid JSON/);
+  assert.equal(inst.state.editText, "{not json"); // the broken text stays visible for fixing
 });
 
-// --- Masked-secret sentinel round-trip, both modes (#508/#440) --------------------------------
+// --- Masked-secret sentinel semantics survive the candidate model (#508/#440) -----------------
 
-test("form mode: leaving a masked secret untouched keeps the sentinel in the staged config", () => {
+test("an untouched masked secret keeps its sentinel in the staged config", () => {
   const inst = readyView();
-  const staged = inst.buildProposed(); // no edits at all
-  assert.deepEqual(staged.config.dashboard.auth.password, { __secret__: true });
+  assert.match(inst.state.editText, /__secret__/); // visible in the pane, as a marker
+  assert.deepEqual(inst.buildProposed().config.dashboard.auth.password, { __secret__: true });
 });
 
-test("JSON mode: an untouched sentinel round-trips verbatim through the textarea", () => {
+test("blanking a secret field means KEEP — the sentinel returns, never an empty string", () => {
   const inst = readyView();
-  inst.state.mode = "json";
-  assert.match(inst.state.editText, /__secret__/); // still the literal sentinel shape
-  const staged = inst.buildProposed();
-  assert.deepEqual(staged.config.dashboard.auth.password, { __secret__: true });
+  const pw = { key: "dashboard.auth.password", type: "secret", value: "" };
+  inst.onFieldEdit(pw, "hunter2hunter2");
+  assert.equal(inst.buildProposed().config.dashboard.auth.password, "hunter2hunter2");
+  inst.onFieldEdit(pw, "");
+  assert.deepEqual(inst.buildProposed().config.dashboard.auth.password, { __secret__: true });
 });
 
 // --- File-fill button (#529, mirrors #518's ~5 lines) ------------------------------------------

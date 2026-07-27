@@ -59,3 +59,14 @@ test("telegramPairReady demands both halves or neither", () => {
   assert.deepEqual(telegramPairReady("", "999"), { ready: false, partial: true });
   assert.deepEqual(telegramPairReady("", ""), { ready: false, partial: false });
 });
+
+test("coerceForType follows the field's declared type", async () => {
+  const { coerceForType } = await import("../../mining_dashboard/web/static/configsync.mjs");
+  assert.equal(coerceForType("boolean", "true"), true);
+  assert.equal(coerceForType("boolean", "false"), false);
+  assert.equal(coerceForType("number", "18081"), 18081);
+  assert.equal(coerceForType("number", "0.5"), 0.5);
+  // Garbage stays a string for the host validator to name, never NaN into the config.
+  assert.equal(coerceForType("number", "not-a-port"), "not-a-port");
+  assert.equal(coerceForType("text", "18081"), "18081");
+});
