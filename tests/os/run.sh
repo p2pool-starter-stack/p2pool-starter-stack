@@ -700,7 +700,7 @@ phase_install() {
 
 phase_provision() {
     info "phase: provision (wizard HTTP submit -> setup -> stack containers up)"
-    local img token jar body
+    local img token jar body scode
 
     img=$(_build_image v1) || {
         bad "image build failed (/tmp/os-fault-build.log)"
@@ -736,8 +736,17 @@ phase_provision() {
     done
 
     jar=$(mktemp)
-    curl -fsS -c "$jar" -d "token=$token" "http://$ip/auth" -o /dev/null 2>/dev/null || {
+    # https, and PROVE the cookie landed: auth against :80 once hit the new TLS redirect, whose
+    # 301 carries no cookie — curl -f called that success, the jar stayed empty, and the
+    # unauthenticated submit's redirect then ALSO read as success. Two phantom green checks in a
+    # row while nothing was written. Status codes and the jar are asserted now, not inferred.
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
         bad "token was not accepted"
+        rm -f "$jar"
+        return
+    }
+    grep -q "wizard_session" "$jar" || {
+        bad "auth returned no session cookie — the submit below would be silently unauthenticated"
         rm -f "$jar"
         return
     }
@@ -746,8 +755,9 @@ phase_provision() {
     # Both addresses are required — Monero's has a format gate (95 chars, leading 4), Tari's is
     # deliberately format-free host-side, so a labelled dummy passes and stays obviously fake.
     body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini"
-    curl -fsSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null 2>/dev/null || {
-        bad "config submit failed"
+    scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "config submit did not return 200 (got ${scode:-none} — a 30x means the session was not accepted)"
         rm -f "$jar"
         return
     }
