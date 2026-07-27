@@ -177,8 +177,13 @@ is also stored in `config.json` on the machine if you lose it. Unlike the DIY in
 you are at a terminal and can choose to skip a login — an appliance always gets one: it is a
 headless box on your network, and nobody was there to be asked.
 
-Everything here stays editable from the dashboard afterwards, and there is much more you
-can tune — see [configuration](configuration.md).
+Most of this stays editable from the dashboard afterwards — see
+[configuration](configuration.md) for everything you can tune. Be aware of one honest limit
+in this release: the security-sensitive settings (payout addresses, view keys, the dashboard
+password, per-rig worker entries) can be set **here, at setup**, but not changed from the
+dashboard later — that restriction is deliberate, so a compromised browser session can never
+redirect your payouts. Until the approval flow that lifts it ships, changing those means
+re-running setup: reinstall from the stick (your chain survives) and enter them again.
 
 **Already know exactly what you want?** Open **Advanced** at the bottom of the setup page. It
 shows the complete configuration — every key, with its default filled in — and it *is* what the

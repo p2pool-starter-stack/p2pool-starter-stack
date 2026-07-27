@@ -167,6 +167,12 @@ implied docker.io, because the stack was written against docker semantics and th
   which disk to erase is deliberately NOT automated — an unattended installer that picks a
   disk itself will eventually pick the wrong one. A pre-seeded target would need to name the
   disk by serial, not by `/dev/` path, and that is unbuilt.
+- **Everything host-CLI-only is impossible on the appliance (#786).** The control gate's
+  host-only class — wallets, view keys, auth, onion, workers.list, backup/restore — assumes
+  a host terminal that the appliance does not have. Right by design, unreachable by
+  accident: the wizard covers setup, but changing these later means reinstalling. #338's
+  out-of-band approval (or a physical-presence channel via the stick) is the lift;
+  dashboard backup export is the sharpest single loss.
 - **No user-facing OS update path exists yet.** RAUC and rollback are proven at the OS
   layer, but nothing a user can reach applies an update: the dashboard action for
   install/commit/rollback of OS bundles is the pre-GA blocker, and the DIY one-click
