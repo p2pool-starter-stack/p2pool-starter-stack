@@ -99,6 +99,14 @@ _build_image() {
     PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
         os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
     os/rauc/mkimage.sh >>/tmp/os-fault-build.log 2>&1 || return 1
+    # Every image a phase boots gets the static verification first, in --test mode. The check
+    # that matters most is the archive-vs-tree comparison: stale wizard images reached three
+    # benches through caching bugs, and this layer catches the next one before a 25-minute
+    # phase runs against it.
+    tests/os/verify-image.sh os/rauc/build/system.img --test >>/tmp/os-fault-build.log 2>&1 || {
+        echo "verify-image failed on the freshly built image (see /tmp/os-fault-build.log)" >&2
+        return 1
+    }
     printf 'os/rauc/build/system.img'
 }
 

@@ -18,9 +18,12 @@ if [ "${PITHEAD_WIZARD_FROM_REGISTRY:-0}" = "1" ]; then
     # Release path: the published image carries the wizard module.
     docker pull -q "$WIZARD_IMAGE" >/dev/null
     docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
-elif [ -s os/rootfs/images/dashboard.tar.gz ] && [ os/rootfs/images/dashboard.tar.gz -nt build/dashboard ]; then
-    echo "    (cached — delete os/rootfs/images/dashboard.tar.gz to force)"
 else
+    # No mtime cache, EVER. The old test compared the archive against build/dashboard — the
+    # DIRECTORY, whose mtime only moves when a direct child is added or removed. Editing a file
+    # deep inside it changes nothing, so the cache said "fresh" forever and stale wizards
+    # reached three separate benches. Docker's own layer cache makes the rebuild cheap; a
+    # correctness decision must not hang on directory-mtime semantics.
     # Development path, and the default until a release ships the wizard: mining_dashboard.wizard
     # only exists in this working tree, so a pulled image would start and immediately exit with
     # "No module named mining_dashboard.wizard". Build the image the appliance will actually run.
