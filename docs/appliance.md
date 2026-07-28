@@ -156,26 +156,22 @@ Then a handful of choices, all of which have a sensible default:
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Time zone | UTC | For dashboard timestamps. |
 
-Press Apply. The machine provisions itself, then prints the dashboard address, the address to
-point your miners at, and a login — all on its console:
+Press Apply. The machine validates your answers — including dialing any remote node you
+named, so a wrong host fails here with the reason and your answers kept, not twenty minutes
+later — and then shows you, on this page, the things you must save:
 
-```
-  Dashboard login for this machine:
-      user: admin
-      password: <32 characters>
-```
+- the **dashboard login** (generated on the machine — 32 random characters)
+- the **dashboard address** (`https://pithead.local`)
+- where to **point your miners** (`stratum+tcp://pithead.local:3333`)
 
-It also prints where to send hashrate:
-
-```
-  Point your miners at this machine:
-      stratum+tcp://pithead.local:3333
-```
-
-**Write the password down.** It is generated on the machine, never crosses the setup page, and
-is also stored in `config.json` on the machine if you lose it. Unlike the DIY install — where
-you are at a terminal and can choose to skip a login — an appliance always gets one: it is a
-headless box on your network, and nobody was there to be asked.
+**Copy the login somewhere safe, then press "I saved these — start provisioning."** The
+machine waits for that confirmation, because what happens next is that this page goes dark:
+provisioning pulls and starts the whole stack, 10–30 minutes on a home connection, during
+which nothing answers on the network. That silence is the machine working, not failing. Its
+console narrates the progress, and when it finishes the dashboard is at the address above,
+behind the login you saved. (The login is also in `config.json` on the machine if you lose
+it. Unlike the DIY install, an appliance always gets one — it is a headless box on your
+network, and nobody was there to be asked.)
 
 Most of this stays editable from the dashboard afterwards — see
 [configuration](configuration.md) for everything you can tune. Be aware of one honest limit

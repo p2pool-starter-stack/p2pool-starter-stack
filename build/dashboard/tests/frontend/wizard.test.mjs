@@ -60,8 +60,29 @@ test("installing: the completion is the shutdown, steps in un-swappable order", 
   assert.ok(out.indexOf("Remove the USB stick") < out.indexOf("Switch it back on"));
 });
 
-test("done: points at the console for the login and the miner address", () => {
-  const out = renderToString(html`<${Done} status="" />`);
-  assert.match(out, /generated login/);
-  assert.match(out, /point your miners/);
+test("done without a handoff yet: names the dark period and where the dashboard appears", () => {
+  // Before the host publishes credentials (or on the fallback timeout), the page must already
+  // say that going unresponsive IS the machine working — a bench session read the dark period
+  // as a crash.
+  const out = renderToString(html`<${Done} status="" handoff=${null} acked=${false} onAck=${() => {}} />`);
+  assert.match(out, /stop responding/);
+  assert.match(out, /pithead\.local/);
+});
+
+test("handoff card: credentials shown once, provisioning gated on the ack", () => {
+  const handoff = {
+    username: "admin",
+    password: "rX6d2A4sGBHFEcQT4TVQQJRQg7xtbDMg",
+    dashboard: "https://pithead.local",
+    stratum: "stratum+tcp://pithead.local:3333",
+  };
+  const card = renderToString(html`<${Done} status="" handoff=${handoff} acked=${false} onAck=${() => {}} />`);
+  assert.match(card, /Save this before anything else/);
+  assert.match(card, /rX6d2A4sGBHFEcQT4TVQQJRQg7xtbDMg/);
+  assert.match(card, /stratum\+tcp:\/\/pithead\.local:3333/);
+  assert.match(card, /I saved these/);
+  // After the ack: the dark period is NAMED, so a dead tab reads as the machine working.
+  const dark = renderToString(html`<${Done} status="" handoff=${handoff} acked=${true} onAck=${() => {}} />`);
+  assert.match(dark, /stop responding/);
+  assert.match(dark, /pithead\.local/);
 });

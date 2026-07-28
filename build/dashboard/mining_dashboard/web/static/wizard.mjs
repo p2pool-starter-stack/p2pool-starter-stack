@@ -142,11 +142,27 @@ export const Installing = ({ status }) => html`<div class="card">
     }
 </div>`;
 
-export const Done = ({ status }) => html`<div class="card">
-    <p><strong>Configuration received.</strong> This machine is validating and provisioning
-    itself — watch its console for the dashboard address, the generated login, and where to
-    point your miners. This page closes when provisioning completes.</p>
-    <p class="text-muted">${status || "Waiting…"}</p>
+export const Done = ({ status, handoff, onAck, acked }) => html`<div class="card">
+    ${
+      handoff && !acked
+        ? html`<h3>Save this before anything else</h3>
+            <p>This login is generated on the machine and shown exactly once here. It is also in
+            <code>config.json</code> on the machine, but this page is the easy copy.</p>
+            <${Field} label="Dashboard user"><code class="wizard-mono">${handoff.username}</code><//>
+            <${Field} label="Dashboard password"><code class="wizard-mono">${handoff.password}</code><//>
+            <${Field} label="Dashboard"><code class="wizard-mono">${handoff.dashboard}</code><//>
+            <${Field} label="Point miners at"><code class="wizard-mono">${handoff.stratum}</code><//>
+            <button type="button" onClick=${onAck}>I saved these — start provisioning</button>
+            <${Note}>Provisioning waits for this confirmation (up to 10 minutes), because the
+            page goes dark while the machine builds itself.<//>`
+        : html`<p><strong>Provisioning.</strong> The machine is pulling and starting the stack —
+            10 to 30 minutes on a home connection. <strong>This page will stop responding</strong>
+            while it happens; that is the machine working, not failing. Its console narrates, and
+            when it finishes the dashboard is at
+            ${" "}<code class="wizard-mono">${handoff ? handoff.dashboard : "https://pithead.local"}</code>${" "}
+            behind the login you just saved.</p>
+            <p class="text-muted">${status || "Waiting…"}</p>`
+    }
 </div>`;
 
 export class WizardApp extends Component {
@@ -161,6 +177,8 @@ export class WizardApp extends Component {
     jsonText: "",
     jsonError: "",
     status: "",
+    handoff: null,
+    acked: false,
   };
 
   async loadState() {
@@ -236,8 +254,28 @@ export class WizardApp extends Component {
       method: "POST",
       body: new URLSearchParams({ config: JSON.stringify(this.state.cfg) }),
     });
-    if (res.ok) this.poll("done");
-    else this.setState({ error: "Submit failed — check the configuration and retry." });
+    if (!res.ok) {
+      this.setState({ error: "Submit failed — check the configuration and retry." });
+      return;
+    }
+    this.poll("done");
+    // The host validates, then publishes the credentials card; a validation failure instead
+    // reopens the form via the status poll. Poll for whichever arrives first.
+    const seek = async () => {
+      if (this.state.stage !== "done" || this.state.acked) return;
+      const r = await fetch("/api/handoff");
+      if (r.ok) {
+        this.setState({ handoff: await r.json() });
+        return;
+      }
+      setTimeout(seek, 2000);
+    };
+    seek();
+  };
+
+  ack = async () => {
+    await fetch("/handoff-ack", { method: "POST" });
+    this.setState({ acked: true });
   };
 
   install = async (e) => {
@@ -425,7 +463,9 @@ export class WizardApp extends Component {
         onConfirm=${(e) => this.setState({ confirm: e.target.value })}
         onSubmit=${this.install} />`;
     else if (stage === "installing") view = html`<${Installing} status=${status} />`;
-    else if (stage === "done") view = html`<${Done} status=${status} />`;
+    else if (stage === "done")
+      view = html`<${Done} status=${status} handoff=${this.state.handoff} acked=${this.state.acked}
+        onAck=${this.ack} />`;
     else view = this.renderSetup();
     return html`<h1>Pithead setup</h1>${view}`;
   }

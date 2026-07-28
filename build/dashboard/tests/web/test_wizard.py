@@ -422,3 +422,38 @@ async def test_plain_port_redirects_to_tls_keeping_the_host_used():
     with pytest.raises(web.HTTPMovedPermanently) as exc:
         await wizard._redirect_to_tls(req)
     assert exc.value.location == "https://pithead.local/setup"
+
+
+# --- the credentials handoff ----------------------------------------------------------------
+# Generated on the machine, shown exactly once on the page over the same TLS the operator typed
+# secrets into, held until they confirm it is saved — the page goes dark during provisioning.
+
+
+async def test_handoff_requires_auth(client, spool):
+    spool.joinpath("handoff.json").write_text('{"username":"admin"}')
+    assert (await client.get("/api/handoff")).status == 401
+
+
+async def test_handoff_404s_until_the_host_publishes_it(client, spool):
+    await _auth(client)
+    assert (await client.get("/api/handoff")).status == 404
+
+
+async def test_handoff_serves_what_the_host_published(client, spool):
+    spool.joinpath("handoff.json").write_text(
+        json.dumps({"username": "admin", "password": "x" * 32, "dashboard": "https://pithead.local"})
+    )
+    await _auth(client)
+    h = await (await client.get("/api/handoff")).json()
+    assert h["username"] == "admin" and len(h["password"]) == 32
+
+
+async def test_ack_needs_auth_and_a_published_handoff(client, spool):
+    r = await client.post("/handoff-ack", allow_redirects=False)
+    assert r.status == 302
+    await _auth(client)
+    assert (await client.post("/handoff-ack")).status == 400  # nothing published yet
+    assert not (spool / "handoff-ack").exists()
+    spool.joinpath("handoff.json").write_text("{}")
+    assert (await client.post("/handoff-ack")).status == 200
+    assert (spool / "handoff-ack").read_text() == "1"

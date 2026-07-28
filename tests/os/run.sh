@@ -763,6 +763,29 @@ phase_provision() {
     }
     rm -f "$jar"
     ok "config submitted through the wizard"
+    # The credentials handoff: the host publishes the generated login and HOLDS provisioning
+    # until it is acknowledged — the page goes dark afterwards, so the card must come first.
+    tries=0
+    while [ "$tries" -lt 24 ]; do
+        if curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"'; then
+            ok "generated credentials published to the page"
+            break
+        fi
+        sleep 5
+        tries=$((tries + 1))
+    done
+    [ "$tries" -lt 24 ] || {
+        bad "no credentials handoff appeared on the page"
+        rm -f "$jar"
+        return
+    }
+    scode=$(curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "handoff acknowledgement did not return 200 (got ${scode:-none})"
+        rm -f "$jar"
+        return
+    }
+    ok "handoff acknowledged — provisioning released"
     if curl -sS -o /dev/null -w '%{http_code}' -m 5 "http://$ip/" 2>/dev/null | grep -q '^30'; then
         ok "plain :80 redirects to TLS rather than refusing"
     else

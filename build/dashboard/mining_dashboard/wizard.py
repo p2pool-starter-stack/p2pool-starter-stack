@@ -314,6 +314,29 @@ async def install(request: web.Request) -> web.Response:
     return web.json_response({"status": "installing"})
 
 
+async def handoff(request: web.Request) -> web.Response:
+    """The credentials card, once the host publishes it: dashboard login, dashboard URL, and the
+    stratum address. Authed, over the same TLS the operator typed secrets into — a 32-character
+    random password transcribed from a console was never realistic."""
+    if not _authed(request):
+        return web.json_response({"error": "unauthenticated"}, status=401)
+    raw = _spool_read("handoff.json")
+    if not raw:
+        return web.json_response({"error": "not ready"}, status=404)
+    return web.json_response(json.loads(raw))
+
+
+async def handoff_ack(request: web.Request) -> web.Response:
+    """The operator confirms the credentials are saved; provisioning proceeds. The page goes
+    dark from here — the host removes this container and starts the stack."""
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    if _spool_read("handoff.json") is None:
+        return web.json_response({"error": "nothing to acknowledge"}, status=400)
+    _spool_write_text("handoff-ack", "1")
+    return web.json_response({"status": "provisioning"})
+
+
 async def status(request: web.Request) -> web.Response:
     if installer_mode():
         if _spool_read("installed") is not None:
@@ -350,6 +373,8 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/auth", auth),
             web.get("/api/wizard-state", wizard_state),
             web.post("/submit", submit),
+            web.get("/api/handoff", handoff),
+            web.post("/handoff-ack", handoff_ack),
             web.post("/install", install),
             web.get("/status", status),
         ]

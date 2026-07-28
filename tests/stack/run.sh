@@ -7539,6 +7539,20 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: preflight_remote_nodes dials before provisioning commits =="
+PFSB=$(mktemp -d)
+printf '{"monero":{"mode":"local"},"tari":{"mode":"local"}}' >"$PFSB/local.json"
+run_sourced "$PFSB" preflight_remote_nodes "$PFSB/local.json" >/dev/null 2>&1
+assert_rc "all-local config -> nothing to dial, rc 0" "$?" "0"
+# 127.0.0.1:1 — reliably closed; the dial must fail fast and NAME the endpoint.
+printf '{"monero":{"mode":"local"},"tari":{"mode":"remote","remote":{"host":"127.0.0.1","grpc_port":1}}}' >"$PFSB/bad.json"
+out=$(run_sourced "$PFSB" preflight_remote_nodes "$PFSB/bad.json" 2>/dev/null)
+assert_rc "unreachable remote Tari -> rc 1" "$?" "1"
+assert_contains "failure names host and port" "$out" "127.0.0.1:1"
+assert_contains "failure points at the LAN-access switch" "$out" "grpc_lan_access"
+rm -rf "$PFSB"
+unset PFSB out
+
 echo "== unit: appliance defaults (tor.auto_heal) =="
 # Applied only where ABSENT: an operator who wrote false meant it.
 ADSB=$(mktemp -d)
