@@ -76,13 +76,14 @@ test("handoff card: credentials shown once, provisioning gated on the ack", () =
     dashboard: "https://pithead.local",
     stratum: "stratum+tcp://pithead.local:3333",
   };
-  const card = renderToString(html`<${Done} status="" handoff=${handoff} acked=${false} onAck=${() => {}} />`);
+  const card = renderToString(html`<${Done} status="" handoff=${handoff} onAck=${() => {}} />`);
   assert.match(card, /Save this before anything else/);
   assert.match(card, /rX6d2A4sGBHFEcQT4TVQQJRQg7xtbDMg/);
   assert.match(card, /stratum\+tcp:\/\/pithead\.local:3333/);
   assert.match(card, /I saved these/);
-  // After the ack: the dark period is NAMED, so a dead tab reads as the machine working.
-  const dark = renderToString(html`<${Done} status="" handoff=${handoff} acked=${true} onAck=${() => {}} />`);
+  // Once the SERVER drops out of the handoff stage it stops sending the card, and the view
+  // shows the dark-period notice instead — a dead tab must read as the machine working.
+  const dark = renderToString(html`<${Done} status="" handoff=${null} onAck=${() => {}} />`);
   assert.match(dark, /stop responding/);
   assert.match(dark, /pithead\.local/);
 });

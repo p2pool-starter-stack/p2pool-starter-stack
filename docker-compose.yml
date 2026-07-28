@@ -885,6 +885,10 @@ services:
       # JSON access log (#349): Caddy rolls it natively (4 MiB × 3 files, see generate_caddyfile);
       # the dashboard mounts the same dir read-only to show recent accesses and failed logins.
       - ${CADDY_LOG_DIR:-./data/caddy-logs}:/var/log/caddy
+      # The appliance's own certificate — the same one its setup page served, so the browser
+      # that trusted it there is not asked again by the dashboard. Empty on DIY, where Caddy
+      # keeps managing its internal CA (`tls internal`) and this mount is simply unused.
+      - ${PITHEAD_TLS_DIR:-./data/tls}:/pithead-tls:ro
 
 # --- Volumes ---
 volumes:

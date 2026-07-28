@@ -121,6 +121,29 @@ def _last_attempt() -> dict:
         return {}
 
 
+def wizard_stage() -> str:
+    """Which step this machine is actually on, decided by the SPOOL — never by the client.
+
+    A page refresh must not walk backwards into an editable form after a config was accepted,
+    and the client cannot know the difference on its own: a bench session refreshed during
+    provisioning and was handed the setup form again, as if nothing had been submitted.
+
+    handoff    credentials published, waiting for the operator to save them
+    done       provisioning under way (or finished) — nothing left to edit
+    installer  running from the installation medium
+    setup      no config accepted yet
+    """
+    if _spool_read("handoff.json") is not None and _spool_read("handoff-ack") is None:
+        return "handoff"
+    if _spool_read("applied") is not None or _spool_read("handoff-ack") is not None:
+        return "done"
+    if _spool_read("installed") is not None or _spool_read("install-target") is not None:
+        return "installing"
+    if installer_mode():
+        return "installer"
+    return "setup"
+
+
 def installer_mode() -> bool:
     """The host sets this when it booted from removable media and a target disk exists.
     The container never probes hardware — it renders what the host put in the spool."""
@@ -175,13 +198,18 @@ async def wizard_state(request: web.Request) -> web.Response:
     if not _authed(request):
         return web.json_response({"error": "unauthenticated"}, status=401)
     ref = _reference()
+    stage = wizard_stage()
+    raw_handoff = _spool_read("handoff.json") if stage == "handoff" else None
     return web.json_response(
         {
+            "stage": stage,
+            # Kept for the field's original meaning; `stage` is what the client renders from.
             "mode": "installer" if installer_mode() else "setup",
             "config": _deep_merge(ref, _last_attempt()),
             "reference": ref,
             "error": _spool_read("error.txt"),
             "disks": _disks(),
+            "handoff": json.loads(raw_handoff) if raw_handoff else None,
         }
     )
 
@@ -289,6 +317,12 @@ async def submit(request: web.Request) -> web.Response:
             raise ValueError("the top level must be a JSON object")
     except (ValueError, TypeError) as exc:
         return web.json_response({"error": f"Not valid JSON: {exc}"}, status=400)
+    # The dashboard-login choice travels BESIDE the config: "no login" is an empty password,
+    # which is also what "not chosen yet" looks like, so the config alone cannot express intent.
+    # The host reads this to decide whether to generate one.
+    mode = str(form.get("auth_mode", "")).strip()
+    if mode in ("auto", "set", "none"):
+        _spool_write_text("auth-mode", mode)
     # Keep the full attempt for a retry, write only what differs from the defaults.
     _spool_write_text("last-attempt.json", json.dumps(cfg))
     _spool_write_config(strip_defaults(cfg, ref) if ref else cfg)

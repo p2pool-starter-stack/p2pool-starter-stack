@@ -41,6 +41,7 @@ const FIELDS = {
   telegramToken: { path: "telegram.bot_token" },
   telegramChat: { path: "telegram.chat_id" },
   timezone: { path: "dashboard.timezone" },
+  dashPassword: { path: "dashboard.auth.password" },
 };
 
 const TIMEZONES = [
@@ -142,9 +143,9 @@ export const Installing = ({ status }) => html`<div class="card">
     }
 </div>`;
 
-export const Done = ({ status, handoff, onAck, acked }) => html`<div class="card">
+export const Done = ({ status, handoff, onAck }) => html`<div class="card">
     ${
-      handoff && !acked
+      handoff
         ? html`<h3>Save this before anything else</h3>
             <p>This login is generated on the machine and shown exactly once here. It is also in
             <code>config.json</code> on the machine, but this page is the easy copy.</p>
@@ -176,23 +177,34 @@ export class WizardApp extends Component {
     confirm: "",
     jsonText: "",
     jsonError: "",
+    authMode: "auto", // auto | set | none — travels beside the config (see wizard.py submit)
     status: "",
     handoff: null,
-    acked: false,
   };
 
+  // The SERVER decides which step this machine is on (wizard_stage, from the spool). The client
+  // never infers it: a refresh mid-provision used to walk back into an editable form, and a
+  // client-side stage flag raced its own setState so the credentials card could never appear.
   async loadState() {
     const res = await fetch("/api/wizard-state");
     if (!res.ok) return false;
     const s = await res.json();
-    this.setState({
-      stage: s.mode === "installer" ? "install" : "setup",
-      cfg: s.config,
+    const next = {
+      stage:
+        { installer: "install", installing: "installing", handoff: "done", done: "done" }[
+          s.stage
+        ] || "setup",
       reference: s.reference,
       disks: s.disks,
       error: s.error || "",
-      jsonText: JSON.stringify(s.config, null, 2),
-    });
+      handoff: s.handoff || null,
+    };
+    // Do not clobber in-progress editing with the server's copy once the form is up.
+    if (this.state.stage !== "setup" || !this.state.cfg || !Object.keys(this.state.cfg).length) {
+      next.cfg = s.config;
+      next.jsonText = JSON.stringify(s.config, null, 2);
+    }
+    this.setState(next);
     return true;
   }
 
@@ -200,17 +212,13 @@ export class WizardApp extends Component {
     await this.loadState(); // an existing session cookie skips the gate
   }
 
-  poll(stage) {
-    this.setState({ stage });
+  // One loop after submit: refresh the SERVER's stage (which carries the handoff when it is
+  // published) and the human-readable status line. No client-side stage guessing.
+  poll() {
     const tick = async () => {
       try {
-        const status = await (await fetch("/status")).text();
-        this.setState({ status });
-        if (status.startsWith("Rejected")) {
-          // Validation failed host-side: reopen the form with the attempt and the reason.
-          await this.loadState();
-          return;
-        }
+        this.setState({ status: await (await fetch("/status")).text() });
+        await this.loadState();
       } catch {
         /* the machine reboots or powers off under this poll by design */
       }
@@ -252,30 +260,22 @@ export class WizardApp extends Component {
     e.preventDefault();
     const res = await fetch("/submit", {
       method: "POST",
-      body: new URLSearchParams({ config: JSON.stringify(this.state.cfg) }),
+      body: new URLSearchParams({
+        config: JSON.stringify(this.state.cfg),
+        auth_mode: this.state.authMode,
+      }),
     });
     if (!res.ok) {
       this.setState({ error: "Submit failed — check the configuration and retry." });
       return;
     }
-    this.poll("done");
-    // The host validates, then publishes the credentials card; a validation failure instead
-    // reopens the form via the status poll. Poll for whichever arrives first.
-    const seek = async () => {
-      if (this.state.stage !== "done" || this.state.acked) return;
-      const r = await fetch("/api/handoff");
-      if (r.ok) {
-        this.setState({ handoff: await r.json() });
-        return;
-      }
-      setTimeout(seek, 2000);
-    };
-    seek();
+    this.setState({ stage: "done", status: "Validating…" });
+    this.poll();
   };
 
   ack = async () => {
     await fetch("/handoff-ack", { method: "POST" });
-    this.setState({ acked: true });
+    await this.loadState(); // the server drops out of the handoff stage; the view follows
   };
 
   install = async (e) => {
@@ -284,8 +284,10 @@ export class WizardApp extends Component {
       method: "POST",
       body: new URLSearchParams({ disk: this.state.chosen, confirm: this.state.confirm }),
     });
-    if (res.ok) this.poll("installing");
-    else
+    if (res.ok) {
+      this.setState({ stage: "installing" });
+      this.poll();
+    } else
       this.setState({ error: `Type ${this.state.chosen || "the disk name"} exactly to confirm.` });
   };
 
@@ -409,6 +411,30 @@ export class WizardApp extends Component {
                 </select>
             <//>
 
+            <h3>Dashboard login</h3>
+            <${Field} label="How should the dashboard be protected?">
+                <select value=${this.state.authMode} onChange=${(e) => this.setState({ authMode: e.target.value })}>
+                    <option value="auto">Generate a strong password for me (recommended)</option>
+                    <option value="set">Let me choose the password</option>
+                    <option value="none">No login at all</option>
+                </select>
+            <//>
+            ${
+              this.state.authMode === "set"
+                ? html`<div class="wizard-when">
+                    <${Field} label="Password (8+ characters)">
+                        <input type="password" value=${v("dashPassword") || ""}
+                            onInput=${on("dashPassword")} autocomplete="new-password" minlength="8" />
+                    <//>
+                <//>`
+                : this.state.authMode === "none"
+                  ? html`<p class="c-bad">Anyone on this network will be able to open the
+                    dashboard — it shows your payout addresses and hashrate. Only choose this on a
+                    network you fully control, and never with the Tor onion enabled.</p>`
+                  : html`<${Note}>A 32-character password is generated on the machine and shown
+                    to you on the next screen.<//>`
+            }
+
             <h3>Alerts <span class="text-muted">(optional — skip both if you are not sure)</span></h3>
             <${Field} label="Healthchecks.io ping URL">
                 <input value=${v("healthchecks") || ""} onInput=${on("healthchecks")}
@@ -446,9 +472,6 @@ export class WizardApp extends Component {
             </details>
 
             <button type="submit" disabled=${!!jsonError}>Apply</button>
-            <${Note}>This machine validates and provisions itself. The dashboard login is
-            generated on the machine and shown on its console — it never travels over this
-            page.<//>
         </form>
     </div>`;
   }
@@ -464,8 +487,7 @@ export class WizardApp extends Component {
         onSubmit=${this.install} />`;
     else if (stage === "installing") view = html`<${Installing} status=${status} />`;
     else if (stage === "done")
-      view = html`<${Done} status=${status} handoff=${this.state.handoff} acked=${this.state.acked}
-        onAck=${this.ack} />`;
+      view = html`<${Done} status=${status} handoff=${this.state.handoff} onAck=${this.ack} />`;
     else view = this.renderSetup();
     return html`<h1>Pithead setup</h1>${view}`;
   }

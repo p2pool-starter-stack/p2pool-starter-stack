@@ -70,7 +70,9 @@ longer from a USB stick** — prints the address and a one-time token:
   SHA-256: A1:B2:C3:...
 ```
 
-**Your browser will warn you, and that is expected.** The machine makes its own certificate —
+**Your browser will warn you once, and that is expected.** The machine makes its own
+certificate — the *same* one it keeps using for the dashboard afterwards, so you accept it a
+single time and the warning does not return. The machine —
 there is no authority that could vouch for a box on your network. The warning means "nobody
 else vouched for this", not "something is wrong". Compare the fingerprint on the console with
 the one your browser shows under the warning's details, then continue. The setup page is
@@ -155,12 +157,13 @@ Then a handful of choices, all of which have a sensible default:
 | Mine with this machine's CPU | off | On if this box should mine as well as coordinate. |
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Time zone | UTC | For dashboard timestamps. |
+| Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. |
 
 Press Apply. The machine validates your answers — including dialing any remote node you
 named, so a wrong host fails here with the reason and your answers kept, not twenty minutes
 later — and then shows you, on this page, the things you must save:
 
-- the **dashboard login** (generated on the machine — 32 random characters)
+- the **dashboard login** (generated, or the one you chose — see below)
 - the **dashboard address** (`https://pithead.local`)
 - where to **point your miners** (`stratum+tcp://pithead.local:3333`)
 

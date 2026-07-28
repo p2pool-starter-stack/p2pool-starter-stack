@@ -441,7 +441,9 @@ async def test_handoff_404s_until_the_host_publishes_it(client, spool):
 
 async def test_handoff_serves_what_the_host_published(client, spool):
     spool.joinpath("handoff.json").write_text(
-        json.dumps({"username": "admin", "password": "x" * 32, "dashboard": "https://pithead.local"})
+        json.dumps(
+            {"username": "admin", "password": "x" * 32, "dashboard": "https://pithead.local"}
+        )
     )
     await _auth(client)
     h = await (await client.get("/api/handoff")).json()
@@ -457,3 +459,65 @@ async def test_ack_needs_auth_and_a_published_handoff(client, spool):
     spool.joinpath("handoff.json").write_text("{}")
     assert (await client.post("/handoff-ack")).status == 200
     assert (spool / "handoff-ack").read_text() == "1"
+
+
+# --- the server owns the stage --------------------------------------------------------------
+# A refresh must never walk backwards into an editable form after a config was accepted, and the
+# client must not infer the step: a bench session refreshed mid-provision and was handed the
+# setup form again.
+
+
+async def test_stage_is_setup_before_anything_is_submitted(client, seeded):
+    await _auth(client)
+    assert (await (await client.get("/api/wizard-state")).json())["stage"] == "setup"
+
+
+async def test_stage_becomes_handoff_when_credentials_are_published(client, seeded):
+    seeded.joinpath("applied").write_text("1")
+    seeded.joinpath("handoff.json").write_text(json.dumps({"username": "admin", "password": "p"}))
+    await _auth(client)
+    s = await (await client.get("/api/wizard-state")).json()
+    assert s["stage"] == "handoff"
+    # The card's contents ride the SAME payload the page already polls — no second fetch to race.
+    assert s["handoff"]["username"] == "admin"
+
+
+async def test_stage_becomes_done_after_the_ack(client, seeded):
+    seeded.joinpath("handoff.json").write_text("{}")
+    seeded.joinpath("handoff-ack").write_text("1")
+    await _auth(client)
+    s = await (await client.get("/api/wizard-state")).json()
+    assert s["stage"] == "done"
+    assert s["handoff"] is None  # nothing left to save
+
+
+async def test_stage_is_done_while_provisioning_so_a_refresh_cannot_re_edit(client, seeded):
+    seeded.joinpath("applied").write_text("1")
+    await _auth(client)
+    assert (await (await client.get("/api/wizard-state")).json())["stage"] == "done"
+
+
+async def test_stage_reports_installing_once_a_target_is_requested(client, installer):
+    seeded_install = installer
+    seeded_install.joinpath("install-target").write_text("nvme0n1")
+    await _auth(client)
+    assert (await (await client.get("/api/wizard-state")).json())["stage"] == "installing"
+
+
+# --- the dashboard-login choice -------------------------------------------------------------
+
+
+async def test_auth_mode_rides_beside_the_config(client, seeded):
+    # "no login" is an empty password, which is also what "not chosen" looks like — the choice
+    # cannot be encoded in the config without colliding with a real one.
+    await _auth(client)
+    cfg = {"monero": {"wallet_address": "4XYZ"}, "tari": {"wallet_address": "t"}}
+    await client.post("/submit", data={"config": json.dumps(cfg), "auth_mode": "none"})
+    assert (seeded / "auth-mode").read_text() == "none"
+
+
+async def test_an_unknown_auth_mode_is_ignored(client, seeded):
+    await _auth(client)
+    cfg = {"monero": {"wallet_address": "4XYZ"}, "tari": {"wallet_address": "t"}}
+    await client.post("/submit", data={"config": json.dumps(cfg), "auth_mode": "whatever"})
+    assert not (seeded / "auth-mode").exists()
