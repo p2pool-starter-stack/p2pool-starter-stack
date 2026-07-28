@@ -761,7 +761,9 @@ phase_provision() {
         rm -f "$jar"
         return
     }
-    rm -f "$jar"
+    # The jar lives on: the handoff below is authenticated too, and a real operator's session
+    # does not end at submit. (Deleting it here made the handoff poll silently unauthenticated,
+    # which read as "the appliance never published credentials" — it had.)
     ok "config submitted through the wizard"
     # The credentials handoff: the host publishes the generated login and HOLDS provisioning
     # until it is acknowledged — the page goes dark afterwards, so the card must come first.
@@ -786,6 +788,7 @@ phase_provision() {
         return
     }
     ok "handoff acknowledged — provisioning released"
+    rm -f "$jar"
     if curl -sS -o /dev/null -w '%{http_code}' -m 5 "http://$ip/" 2>/dev/null | grep -q '^30'; then
         ok "plain :80 redirects to TLS rather than refusing"
     else
