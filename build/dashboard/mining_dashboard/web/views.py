@@ -42,6 +42,7 @@ from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
 from mining_dashboard.service.earnings import (
     ATOMIC_PER_XMR,
     MICRO_PER_XTM,
+    confirmed_payouts_summary,
     tari_seconds_to_block_per_hs,
     xmr_per_hs_day,
     xtm_per_hs_day,
@@ -1464,39 +1465,6 @@ _EARNINGS_DISCLAIMER = (
 )
 
 
-def _confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="xmr"):
-    """Roll confirmed on-chain payouts into 24h / 7d / all-time totals + a count (#381/#462).
-
-    ``payouts`` is the stored-payout list (``storage.get_payouts(chain)``): each carries ``ts``
-    (unix seconds) and ``amount_atomic``. Sums are converted atomic→whole-unit at this edge only,
-    via ``divisor`` (piconero 1e12 for Monero, microTari 1e6 for Tari) with the amount keys prefixed
-    by ``unit`` (``xmr_*`` / ``xtm_*``). ``enabled`` is False when the feature is off
-    (``payouts is None``) — the UI then shows only the estimate; an empty list means "on, nothing
-    confirmed yet" (shows 0.000000)."""
-    if payouts is None:
-        return {"enabled": False}
-    now = now if now is not None else time.time()
-    day, week = now - 86_400, now - 7 * 86_400
-    atomic_24h = atomic_7d = atomic_all = 0
-    for p in payouts:
-        amt = p.get("amount_atomic", 0) or 0
-        ts = p.get("ts", 0) or 0
-        atomic_all += amt
-        if ts >= week:
-            atomic_7d += amt
-        if ts >= day:
-            atomic_24h += amt
-    last_ts = max((p.get("ts", 0) or 0 for p in payouts), default=0)
-    return {
-        "enabled": True,
-        "count": len(payouts),
-        f"{unit}_24h": atomic_24h / divisor,
-        f"{unit}_7d": atomic_7d / divisor,
-        f"{unit}_all": atomic_all / divisor,
-        "last_ts": last_ts,
-    }
-
-
 def xvb_current_tier_reward_day(metrics, state_mgr):
     """XvB's published expected reward for the tier the fleet is CURRENTLY holding, as XMR/day (#712).
 
@@ -1537,10 +1505,10 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
     ``payouts`` (#381), when the view-only wallet feature is on, is the stored confirmed-payout
-    list; it's rolled into a ``confirmed`` block (24h / 7d / all-time XMR) shown beside this
-    estimate — the estimate is a model, the confirmed figure is ground truth from the wallet.
-    ``tari_payouts`` (#462) is the same for the Tari side, rolled into ``tari_confirmed`` (XTM)
-    beside the Tari time-to-block estimate.
+    list; it's rolled into a ``confirmed`` block (yesterday / 24h / 7d / 30d / all-time XMR, #787)
+    shown beside this estimate — the estimate is a model, the confirmed figure is ground truth from
+    the wallet. ``tari_payouts`` (#462) is the same for the Tari side, rolled into
+    ``tari_confirmed`` (XTM) beside the Tari time-to-block estimate.
 
     This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
     actually mining on your P2Pool node — *not* the rig's total output. The what-if default is
@@ -1593,10 +1561,10 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
         "disclaimer": _EARNINGS_DISCLAIMER,
         # Confirmed on-chain payouts (#381), beside the estimate above. {"enabled": False} when the
         # view-only wallet feature is off — the UI then shows only the estimate.
-        "confirmed": _confirmed_payouts_summary(payouts),
+        "confirmed": confirmed_payouts_summary(payouts),
         # Confirmed Tari payouts (#462), beside the Tari time-to-block estimate. XTM (microTari),
         # {"enabled": False} when the Tari view-only wallet feature is off.
-        "tari_confirmed": _confirmed_payouts_summary(
+        "tari_confirmed": confirmed_payouts_summary(
             tari_payouts, divisor=MICRO_PER_XTM, unit="xtm"
         ),
     }

@@ -595,23 +595,43 @@ function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
 // holds their raw text.
 // Confirmed on-chain payouts (#381), shown beside the estimate when the view-only wallet feature
 // is on (`c.enabled`). Reads the unit-prefixed totals the server rolls up in
-// _confirmed_payouts_summary (`xmr_*` for Monero, `xtm_*` for Tari); `fmt` is the matching coin
+// confirmed_payouts_summary (`xmr_*` for Monero, `xtm_*` for Tari); `fmt` is the matching coin
 // formatter and `unit` (XMR / XTM) picks the key prefix. Renders nothing when the feature is off,
 // so the estimate stands alone.
+// The running windows (#787) — yesterday, 7d, 30d — are what an operator checks against the
+// estimate above; they carry a `*` and a footnote when the server flagged them partial, so a
+// window summed over less history than its label claims never reads as a complete one. The date
+// comes from `since_ts` (oldest payout on record) formatted in the VIEWER's locale, while the
+// day boundaries were cut in the dashboard container's timezone — close enough to place the
+// history, and the footnote says "starts", not a to-the-hour claim.
 function confirmedBlock(c, fmt, unit) {
   if (!c || !c.enabled) return null;
   const k = unit.toLowerCase();
   const n = c.count || 0;
+  const partial = c.partial || {};
+  const anyPartial = ["yesterday", "7d", "30d"].some((w) => partial[w]);
+  const since = c.since_ts ? new Date(c.since_ts * 1000).toLocaleDateString() : null;
+  const hint = since
+    ? `Partial — payout history starts ${since}`
+    : "Partial — no payouts on record yet";
+  const running = (key, label) => html`
+    <${StatCard} label=${partial[key] ? `${label} *` : label}
+                 value=${fmt(c[`${k}_${key}`])}
+                 title=${partial[key] ? hint : ""} />`;
+  const note = `* ${hint.replace("Partial — ", "")} — the window covers only the history on record, not its full span.`;
   return html`
     <div class="confirmed-block">
       <h4 class="confirmed-subhead">Confirmed on-chain</h4>
       <div class="stat-grid">
+        ${running("yesterday", "Yesterday")}
         <${StatCard} label="Confirmed 24h" value=${fmt(c[`${k}_24h`])} />
-        <${StatCard} label="Confirmed 7d" value=${fmt(c[`${k}_7d`])} />
+        ${running("7d", "Running 7d")}
+        ${running("30d", "Running 30d")}
         <${StatCard} label="Confirmed all-time" value=${fmt(c[`${k}_all`])} />
         <${StatCard} label="Last payout" value=${formatAgo(c.last_ts)}
                      title=${"Across " + n + " confirmed payout" + (n === 1 ? "" : "s")} />
       </div>
+      ${anyPartial ? html`<p class="text-muted text-xs">${note}</p>` : null}
     </div>`;
 }
 
