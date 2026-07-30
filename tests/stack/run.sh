@@ -7539,6 +7539,70 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: pithead render rebuilds the whole derived layer in place (#790) =="
+# The defect this guards: pithead-sync delivers a NEW program on every A/B update, but .env and
+# the Caddyfile kept whatever the LAST build rendered. A bench machine served a days-old
+# Caddyfile whose site list didn't include pithead.local — new code, stale derived config, dead
+# TLS. render is the chokepoint: derived files are regenerated from config.json + this program,
+# never inspected or patched, and no container is touched.
+RSUT="$SANDBOX/render-sut"
+mkdir -p "$RSUT/bin"
+cp "$STACK" "$RSUT/pithead" && chmod +x "$RSUT/pithead"
+cp -R "$(dirname "$STACK")/build" "$RSUT/build" # service-config templates render injects from
+make_stubs "$RSUT/bin"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false} }\n' "$WALLET" >"$RSUT/config.json"
+(cd "$RSUT" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$RSUT/bin:$PATH" ./pithead setup --skip-deps --skip-optimize >/dev/null 2>&1)
+echo "# stale — written by an older build" >"$RSUT/Caddyfile"
+render_out=$(cd "$RSUT" && DOCKER_LOG=/dev/null PATH="$RSUT/bin:$PATH" ./pithead render 2>&1)
+assert_rc "render exits 0 on a provisioned tree" "$?" "0"
+grep -q "reverse_proxy" "$RSUT/Caddyfile" &&
+    ok "a stale Caddyfile is rebuilt from config + program" ||
+    bad "a stale Caddyfile is rebuilt from config + program" "$(head -2 "$RSUT/Caddyfile")"
+case "$render_out" in
+*"Updating containers"*) bad "render never touches containers" "$render_out" ;;
+*) ok "render never touches containers" ;;
+esac
+unset RSUT render_out
+
+echo "== unit: on the appliance, control-runner units render into /run — root is read-only (#791) =="
+# /etc/systemd/system cannot take a write on the appliance (RO root by design): apply died at
+# 'tee: Read-only file system' on hardware, killing the ONLY post-setup management path. /run is
+# a first-class unit dir, writable, and cleared every boot — fine, because these units are
+# derived and the boot path re-renders them every boot. Enablement must be --runtime for the
+# same reason (no symlinks under /etc either).
+PCR791="$SANDBOX/pcr791"
+mkdir -p "$PCR791/bin"
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCR791/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PCR791/bin/systemctl"
+chmod +x "$PCR791/bin/uname" "$PCR791/bin/systemctl"
+pcr791_run() { # <PITHEAD_APPLIANCE value> — run the install branch, echo recorded sudo calls
+    (
+        cd "$PCR791" || exit
+        PATH="$PCR791/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        warn() { :; }
+        # a file, not a stream: the function /dev/null's both stdout AND stderr on some calls
+        sudo() { echo "sudo:$*" >>"$PCR791/calls"; }
+        PITHEAD_APPLIANCE="$1" CONTROL_DIR="$PCR791/control" DASHBOARD_CONTROL_ENABLED=true provision_control_runner
+    )
+}
+: >"$PCR791/calls"
+pcr791_run 1 >/dev/null 2>&1
+appl_out=$(cat "$PCR791/calls")
+assert_contains "appliance -> units written under /run/systemd/system" "$appl_out" "sudo:tee /run/systemd/system/pithead-control.service"
+assert_contains "appliance -> enablement is --runtime" "$appl_out" "systemctl enable --runtime --now"
+: >"$PCR791/calls"
+PITHEAD_UNIT_DIR="$PCR791/units" pcr791_run 0 >/dev/null 2>&1
+diy_out=$(cat "$PCR791/calls")
+case "$diy_out" in
+*"--runtime"*) bad "DIY keeps persistent /etc enablement (no --runtime)" "$diy_out" ;;
+*) ok "DIY keeps persistent /etc enablement (no --runtime)" ;;
+esac
+unset PCR791 pcr791_run appl_out diy_out
+
 echo "== unit: the dashboard certificate exists whenever the Caddyfile names it =="
 # A machine that SKIPS the wizard (pre-seeded config, or a reinstall whose preserved /data
 # already held config.json) still gets a certificate: the Caddyfile named a file only the wizard

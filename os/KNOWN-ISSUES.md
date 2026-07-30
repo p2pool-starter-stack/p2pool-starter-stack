@@ -154,18 +154,14 @@ The image reference is now fully qualified at the call site AND the appliance re
 implied docker.io, because the stack was written against docker semantics and the next bare
 `docker run` is otherwise a time bomb.
 
-**Generated config is never re-rendered, so new code reads config it did not write.** The
-most consequential defect found on hardware, and it was invisible to every KVM phase because
-each one provisions fresh. `pithead-sync` copies the PROGRAM tree from the slot on every boot,
-but `.env`, `Caddyfile` and the rendered service configs are state on `/data` — they keep
-whatever the last successful `setup` produced. A bench machine ran the newest `pithead` against
-a `Caddyfile` generated days earlier by an older build: its site list said `https://pithead`
-(no `.local`) and `tls internal`, so `pithead.local` matched no site and TLS died —
-diagnosed twice as a certificate bug it was not. Two ordinary paths reach this state: a
-reinstall over preserved `/data`, and **any A/B OS update**, which is the appliance's whole
-point. VERSION cannot be the trigger (RCs share one); the build stamp at
-`/opt/pithead/BUILD_COMMIT` can. The fix is to record the program identity that produced the
-current render and re-render when it changes — see #787.
+**Fixed — the derived layer is regenerated on every boot.** `pithead-sync` delivers the new
+program; `pithead-boot` then runs `pithead render` before anything starts, so `.env`, the
+Caddyfile, the service configs and the host units are rebuilt from `config.json` plus the
+program that is actually running (#790). The same unit replaced `podman-restart`, which
+SIGKILLed the containers it had just started (#792); it brings the stack up through
+`pithead up` (compose owns the lifecycle) and commits the booted A/B slot only after the
+dashboard answers through caddy (#793). On the read-only root, host units render into
+`/run/systemd/system` and are re-created each boot by the same mechanism (#791).
 
 ## Open
 

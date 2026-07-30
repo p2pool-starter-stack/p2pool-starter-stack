@@ -75,6 +75,11 @@ chk "kernel root by probed PARTUUID, never label" 'grep -q "probe --set=PU --par
 # away is a defect. Journald keeps everything regardless.
 chk "console is quieted so the token stays readable" 'grep -q "loglevel=4" "$ESP/grub/grub.cfg"'
 chk "display hotplug polling off (repeated EDID spam)" 'grep -q "drm_kms_helper.poll=0" "$ESP/grub/grub.cfg"'
+# Boot recovery is compose-owned (#792): pithead-boot renders + ups + health-gates the slot
+# commit. podman-restart started the stack into its own cgroup and SIGKILLed it on unit stop.
+chk "pithead-boot unit enabled" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-boot.service"'
+chk "pithead-boot script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-boot"'
+chk "podman-restart retired (it killed the stack it started)" '[ ! -e "$ROOT/etc/systemd/system/multi-user.target.wants/podman-restart.service" ] && [ ! -e "$ROOT/etc/systemd/system/podman-restart.service.d" ]'
 chk "kernel + initrd in the slot" '[ -s "$ROOT/vmlinuz" ] || [ -L "$ROOT/vmlinuz" ]'
 
 echo "==> docker-export artefacts (all six members)"

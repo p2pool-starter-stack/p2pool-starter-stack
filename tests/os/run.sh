@@ -845,11 +845,15 @@ phase_provision() {
     fi
 
     # ---- reboot leg: the provisioned stack must return UNAIDED ---------------------------
-    # Docker's daemon restores restart-policy containers implicitly; podman only does it with
-    # podman-restart.service — which was missing once, and the failure mode is exactly a mining
-    # appliance that sits dark after every power blip until a human logs in. Nothing may drive
-    # the recovery here: no pithead command, no wizard. Reboot, wait, demand the stack.
-    info "reboot leg — the stack must come back on its own (podman-restart)"
+    # pithead-boot owns recovery (#792): render the derived layer, compose up, health-gated slot
+    # commit. Nothing may drive it here: no pithead command, no wizard. The failure mode this
+    # guards is a mining appliance that sits dark after every power blip until a human logs in.
+    # The Caddyfile is corrupted FIRST (#790): derived files are regenerated on every boot by
+    # construction, so a stale or broken one must not survive — this is the defect that shipped
+    # new code against a days-old Caddyfile on hardware and killed TLS.
+    info "reboot leg — the stack must come back on its own (pithead-boot)"
+    _ssh "echo '# corrupted by the harness — a regenerated boot must not serve this' > /data/pithead/Caddyfile" 2>/dev/null ||
+        bad "could not corrupt the Caddyfile before the reboot"
     _ssh reboot 2>/dev/null || true
     sleep 10
     _wait_ssh 300 || {
@@ -874,18 +878,51 @@ phase_provision() {
         ;;
     esac
     tries=0
+    local answered=0
     while [ "$tries" -lt 36 ]; do
         code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
         case "$code" in
         2?? | 3?? | 401 | 403)
-            ok "dashboard answers again after the reboot (HTTP $code)"
-            return
+            ok "dashboard answers again after the reboot (HTTP $code) — through a REGENERATED Caddyfile"
+            answered=1
+            break
             ;;
         esac
         sleep 5
         tries=$((tries + 1))
     done
-    bad "dashboard never answered after the reboot (last: $code)"
+    [ "$answered" -eq 1 ] || {
+        bad "dashboard never answered after the reboot (last: $code)"
+        return
+    }
+    # No unit may be quietly broken (#792 sat visible in --failed for two RCs, unasserted).
+    local failed_units
+    failed_units=$(_ssh "systemctl --failed --no-legend --no-pager" 2>/dev/null | tr -s ' ' | tr '\n' ';')
+    if [ -z "${failed_units//[; ]/}" ]; then
+        ok "no failed systemd units after the reboot"
+    else
+        bad "failed units after the reboot: $failed_units"
+    fi
+    # The booted slot must commit ITSELF once healthy (#793) — no harness mark-good here. On a
+    # real appliance nothing ever ran mark-good, so RAUC called both slots bad and every boot
+    # took GRUB's degraded fallback path. A_OK=1 + A_TRY=0 is the committed state.
+    local genv tries3=0
+    while [ "$tries3" -lt 18 ]; do
+        genv=$(_ssh "grub-editenv /boot/efi/grub/grubenv list" 2>/dev/null | tr '\n' ' ')
+        case "$genv" in
+        *A_OK=1*A_TRY=0* | *A_TRY=0*A_OK=1*) break ;;
+        esac
+        sleep 10
+        tries3=$((tries3 + 1))
+    done
+    case "$genv" in
+    *A_OK=1*A_TRY=0* | *A_TRY=0*A_OK=1*)
+        ok "booted slot committed itself after the health gate (A_OK=1 A_TRY=0)"
+        ;;
+    *)
+        bad "slot never self-committed — grubenv: ${genv:-unreadable}"
+        ;;
+    esac
 }
 
 phase_fault() {

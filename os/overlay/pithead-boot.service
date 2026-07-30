@@ -1,0 +1,27 @@
+[Unit]
+Description=Pithead stack at boot — render, up, health-gated A/B commit
+# Provisioned machines only: before config.json exists, pithead-firstboot owns the boot.
+ConditionPathExists=/data/pithead/config.json
+# Same guard as firstboot: container storage lives on /data — a missing mount must refuse, not
+# silently rebuild storage on the discarded root overlay.
+ConditionPathIsMountPoint=/data
+Wants=network-online.target podman.socket
+After=network-online.target podman.socket pithead-sync.service systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+# The unit stays 'active' after success so the harness (and an operator) can assert the boot
+# path ran — and so systemd never tears down the cgroup mid-flight, which is the podman-restart
+# failure this unit replaces (#792).
+RemainAfterExit=yes
+WorkingDirectory=/data/pithead
+Environment=PITHEAD_ENGINE=podman
+# systemd sets neither HOME nor USER without User= — same hard-won pair as pithead-firstboot.
+Environment=HOME=/root
+Environment=USER=root
+ExecStart=/usr/local/sbin/pithead-boot
+# Image pulls and first-start waits are unbounded by design (#78 spike rule).
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

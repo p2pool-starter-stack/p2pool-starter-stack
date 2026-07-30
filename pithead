@@ -2076,6 +2076,10 @@ Setup & configuration:
                                                dashboard control runner.
 
 Lifecycle:
+  render                    Regenerate every derived file (.env, Caddyfile, service
+                            configs, host units) from config.json without touching
+                            containers. The appliance runs this on every boot; run it by
+                            hand after replacing the program under an existing config.
   up                        Start the stack.
   down                      Stop the stack.
   restart [tor]             Restart the stack — or only the tor container, which picks
@@ -6262,6 +6266,29 @@ apply_dry_run() {
     rm -f "$newenv"
 }
 
+# Regenerate every DERIVED file — .env, Caddyfile, service configs, host units — from
+# config.json plus THIS program, touching no containers. The appliance's boot path runs this
+# every boot (#790): derived files must never outlive the program that rendered them, and an
+# A/B update swaps the whole program, so the derived layer is rebuilt by construction instead
+# of inspected for staleness. Same preservation guarantees as apply: load_preserved_state
+# keeps Tor onions, RPC credentials and the proxy token across the rewrite.
+render_derived() {
+    require_env
+    ensure_onion_password
+    parse_and_validate_config
+    load_preserved_state
+    ensure_directories
+    resolve_dashboard_host # non-interactive
+    DEPLOYMENT_COMPLETED=true
+    render_env "$ENV_FILE"
+    provision_node_onions
+    inject_service_configs
+    generate_caddyfile
+    provision_onion_client_auth
+    provision_control_runner
+    log "Derived configuration regenerated from config.json."
+}
+
 apply() {
     local assume_yes=0 dry_run=0 porcelain=0 arg
     for arg in "$@"; do
@@ -6436,7 +6463,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -7693,6 +7720,14 @@ provision_control_runner() {
     [ "$OS_TYPE" == "Linux" ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
     local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    # The appliance's root is read-only by design, so /etc/systemd/system cannot take the unit
+    # (#791). /run/systemd/system is a first-class unit path, writable, and cleared every boot —
+    # which is fine, because the appliance re-renders derived files on every boot and these
+    # units are derived. Enablement must be --runtime for the same reason: symlinks under /etc
+    # cannot be written either.
+    local -a enable_args=(enable --now)
+    if [ -z "${PITHEAD_UNIT_DIR:-}" ] && is_appliance; then unit_dir=/run/systemd/system; fi
+    case "$unit_dir" in /run/*) enable_args=(enable --runtime --now) ;; esac
     if [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ]; then
         if [ -e "$unit_dir/pithead-control.path" ] || [ -e "$unit_dir/pithead-control.service" ]; then
             # The unit names are box-global but a box can hold several checkouts (release bench:
@@ -7756,7 +7791,7 @@ PathExistsGlob=$CONTROL_DIR/requests/*.json
 WantedBy=multi-user.target
 EOF
     sudo systemctl daemon-reload
-    sudo systemctl enable --now pithead-control.path >/dev/null 2>&1 ||
+    sudo systemctl "${enable_args[@]}" pithead-control.path >/dev/null 2>&1 ||
         warn "Could not enable pithead-control.path — dashboard config changes will not be applied until it is enabled."
 }
 
@@ -7834,6 +7869,10 @@ main() {
         setup
         ;;
     apply) apply "$@" ;;
+    render)
+        _reject_options render "$@"
+        render_derived
+        ;;
     up)
         _reject_options up "$@"
         require_deployed
