@@ -11,7 +11,7 @@ import {
   Done,
   Gate,
   Installing,
-  InstallView,
+  InstallSection,
   WizardApp,
 } from "../../mining_dashboard/web/static/wizard.mjs";
 import { html } from "../../mining_dashboard/web/static/preact.mjs";
@@ -28,31 +28,37 @@ test("gate: says the token is case- and prefix-forgiving", () => {
   assert.match(out, /pit-/);
 });
 
-test("picker: the consequence sits before the truncation point, per disk state", () => {
-  const out = renderToString(
-    html`<${InstallView} disks=${DISKS} error="" chosen="" confirm=""
-      onPick=${() => {}} onConfirm=${() => {}} onSubmit=${() => {}} />`,
+const sect = (props) =>
+  renderToString(
+    html`<${InstallSection} disks=${DISKS} chosen="" confirm="" wipe="keep"
+      onPick=${() => {}} onConfirm=${() => {}} onWipe=${() => {}} ...${props} />`,
   );
+
+test("picker: the consequence sits before the truncation point, per disk state", () => {
+  const out = sect({});
   // A <select> truncates on the right; bench screenshots cut off exactly the erase/keep words.
   assert.ok(out.indexOf("nvme0n1 — ERASES everything on it") < out.indexOf("931.5G"));
-  assert.ok(out.indexOf("sda — KEEPS existing data") < out.indexOf("3.6T"));
+  assert.ok(out.indexOf("sda — holds a previous install") < out.indexOf("3.6T"));
   // Model and serial show — a bare /dev/sda is not enough to choose safely.
   assert.match(out, /Samsung SSD 990/);
   assert.match(out, /S6P1NF0T/);
 });
 
-test("picker: restates the choice in full below the control, red when destructive", () => {
-  const destructive = renderToString(
-    html`<${InstallView} disks=${DISKS} error="" chosen="nvme0n1" confirm=""
-      onPick=${() => {}} onConfirm=${() => {}} onSubmit=${() => {}} />`,
-  );
+test("picker: an empty disk restates the erase in red, and offers NO wipe choice", () => {
+  const destructive = sect({ chosen: "nvme0n1" });
   assert.match(destructive, /Installing to nvme0n1 — this ERASES everything on it/);
   assert.match(destructive, /c-bad/);
-  const keeps = renderToString(
-    html`<${InstallView} disks=${DISKS} error="" chosen="sda" confirm=""
-      onPick=${() => {}} onConfirm=${() => {}} onSubmit=${() => {}} />`,
-  );
-  assert.match(keeps, /Installing to sda — this KEEPS existing data/);
+  assert.doesNotMatch(destructive, /Keep my data/);
+});
+
+test("picker: a previous install offers the three-way data choice, consequences spelled out", () => {
+  const out = sect({ chosen: "sda" });
+  assert.match(out, /Keep my data/);
+  assert.match(out, /keep the blockchains/);
+  assert.match(out, /Wipe everything/);
+  // The expensive consequence is named where the choice is made, not discovered later.
+  assert.match(out, /days of downloading/);
+  assert.match(out, /re-downloads them from scratch/);
 });
 
 test("installing: the completion is the shutdown, steps in un-swappable order", () => {
@@ -148,13 +154,14 @@ async function appOn(states) {
 test("loadState maps every server stage onto the view it should render", async () => {
   for (const [serverStage, viewStage] of [
     ["setup", "setup"],
-    ["installer", "install"],
+    ["installer", "setup"], // the combined form: same view, installer flag set
     ["installing", "installing"],
     ["handoff", "done"],
     ["done", "done"],
   ]) {
     const { inst, restore } = await appOn([stateFor(serverStage)]);
     assert.equal(inst.state.stage, viewStage, `${serverStage} -> ${viewStage}`);
+    assert.equal(inst.state.installer, serverStage === "installer", `${serverStage} installer flag`);
     restore();
   }
 });
@@ -235,21 +242,39 @@ test("submit carries the auth-mode choice beside the config", async () => {
   restore();
 });
 
-test("the install request sends the chosen disk and its typed confirmation", async () => {
+test("on the installation medium, ONE submit carries config, disk, confirmation and wipe", async () => {
   const { inst, restore } = await appOn([stateFor("installer")]);
-  inst.setState({ chosen: "nvme0n1", confirm: "nvme0n1" });
+  inst.setState({ chosen: "sda", confirm: "sda", wipe: "data" });
   let sentBody = null;
   const real = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
-    if (String(url).includes("/install")) {
+    if (String(url).includes("/submit")) {
       sentBody = String(opts.body);
       return { ok: true, status: 200, json: async () => ({}) };
     }
-    return { ok: true, status: 200, json: async () => stateFor("installing"), text: async () => "" };
+    return { ok: true, status: 200, json: async () => stateFor("handoff"), text: async () => "" };
   };
-  await inst.install({ preventDefault() {} });
+  await inst.submit({ preventDefault() {} });
   globalThis.fetch = real;
-  assert.match(sentBody, /disk=nvme0n1/);
-  assert.match(sentBody, /confirm=nvme0n1/);
+  assert.match(sentBody, /config=/);
+  assert.match(sentBody, /disk=sda/);
+  assert.match(sentBody, /confirm=sda/);
+  assert.match(sentBody, /wipe=data/);
+  restore();
+});
+
+test("the erase is blocked client-side until the disk name is retyped exactly", async () => {
+  const { inst, restore } = await appOn([stateFor("installer")]);
+  inst.setState({ chosen: "sda", confirm: "sd" });
+  let fetched = false;
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetched = true;
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  await inst.submit({ preventDefault() {} });
+  globalThis.fetch = real;
+  assert.equal(fetched, false);
+  assert.match(inst.state.error, /exactly/);
   restore();
 });

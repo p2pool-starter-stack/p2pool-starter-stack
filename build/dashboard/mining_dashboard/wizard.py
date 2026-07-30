@@ -135,10 +135,12 @@ def wizard_stage() -> str:
     """
     if _spool_read("handoff.json") is not None and _spool_read("handoff-ack") is None:
         return "handoff"
-    if _spool_read("applied") is not None or _spool_read("handoff-ack") is not None:
-        return "done"
-    if _spool_read("installed") is not None or _spool_read("install-target") is not None:
+    if _spool_read("installed") is not None or _spool_read("installing") is not None:
         return "installing"
+    if _spool_read("applied") is not None or _spool_read("handoff-ack") is not None:
+        # Same ack, two meanings: on the installation medium it releases the INSTALL (the page
+        # then shows the switch-off steps), on an installed machine it releases provisioning.
+        return "installing" if installer_mode() else "done"
     if installer_mode():
         return "installer"
     return "setup"
@@ -323,29 +325,29 @@ async def submit(request: web.Request) -> web.Response:
     mode = str(form.get("auth_mode", "")).strip()
     if mode in ("auto", "set", "none"):
         _spool_write_text("auth-mode", mode)
+    # On the installation medium, config and disk arrive TOGETHER — one page, one submission.
+    # Three independent gates before anything is written, because this leads to erasing a disk:
+    # the target must be one the HOST offered (never a name the browser invented), the operator
+    # must retype it exactly, and the wipe mode must be from the fixed set — with anything
+    # other than "keep" allowed only on a disk that actually carries data to wipe.
+    if installer_mode():
+        disk = str(form.get("disk", "")).strip()
+        confirm = str(form.get("confirm", "")).strip()
+        wipe = str(form.get("wipe", "keep")).strip() or "keep"
+        by_name = {d["name"]: d for d in _disks()}
+        if disk not in by_name:
+            return web.json_response({"error": "choose a disk from the list"}, status=400)
+        if confirm != disk:
+            return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
+        if wipe not in ("keep", "data", "all"):
+            return web.json_response({"error": "unknown wipe mode"}, status=400)
+        if wipe != "keep" and by_name[disk]["state"] != "pithead-with-data":
+            wipe = "keep"  # nothing on the disk to keep or wipe — normalize silently
+        _spool_write_text("install-request", f"{disk}\t{wipe}")
     # Keep the full attempt for a retry, write only what differs from the defaults.
     _spool_write_text("last-attempt.json", json.dumps(cfg))
     _spool_write_config(strip_defaults(cfg, ref) if ref else cfg)
     return web.json_response({"status": "accepted"})
-
-
-async def install(request: web.Request) -> web.Response:
-    if not _authed(request):
-        raise web.HTTPFound("/")
-    form = await request.post()
-    disk = str(form.get("disk", "")).strip()
-    confirm = str(form.get("confirm", "")).strip()
-    valid = {d["name"] for d in _disks()}
-    # Three independent gates, because this erases a disk: the target must be one the HOST
-    # offered (never a name the browser invented), and the operator must retype it exactly.
-    if disk not in valid:
-        return web.json_response({"error": "choose a disk from the list"}, status=400)
-    if confirm != disk:
-        return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
-    # A fresh attempt clears the previous attempt's error, exactly as the config path does.
-    _spool_clear_error()
-    _spool_write_text("install-target", disk)
-    return web.json_response({"status": "installing"})
 
 
 async def handoff(request: web.Request) -> web.Response:
@@ -409,7 +411,6 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/submit", submit),
             web.get("/api/handoff", handoff),
             web.post("/handoff-ack", handoff_ack),
-            web.post("/install", install),
             web.get("/status", status),
         ]
     )

@@ -30,14 +30,23 @@ renders what it is told. The client must never infer the stage.
 
 | Stage | True when | View |
 |---|---|---|
-| `installer` | `disks.tsv` exists (host booted from removable media with a target) | disk picker |
-| `installing` | `install-target` or `installed` exists | progress, then the switch-off steps |
 | `handoff` | `handoff.json` exists and `handoff-ack` does not | credentials card |
-| `done` | `applied` or `handoff-ack` exists | provisioning notice |
+| `installing` | `installing` or `installed` exists | install progress, then the switch-off steps |
+| `done` | `applied` or `handoff-ack` exists — but `installing` when the machine is the installation medium | provisioning notice |
+| `installer` | `disks.tsv` exists (host booted from removable media with a target) | the COMBINED form: config + disk + reinstall choice |
 | `setup` | none of the above | the config form |
 
-Order matters: `handoff` is checked before `done`, because `applied` is written first and the
-credentials must win while they are still unsaved.
+Order matters twice. `handoff` outranks everything: `applied` is written first and the
+credentials must win while they are still unsaved. And the ack means two different things —
+on an installed machine it releases provisioning (`done`), on the installation medium it
+releases the ERASE, so the same ack lands on `installing` and the switch-off steps.
+
+The installation medium runs the whole flow on one page (config + disk + wipe mode in one
+submission, gated server-side), publishes the credentials card BEFORE anything touches the
+disk — the machine powers off after installing, so the page cannot deliver anything after —
+and stages the accepted config onto the target's ESP. The first boot from disk provisions
+headlessly through the pre-seed path; there is no second wizard. A missing ack installs
+nothing: the erase waits for a human, and a timeout hands the form back intact.
 
 **Why the server owns this.** Two defects came from the client deciding:
 

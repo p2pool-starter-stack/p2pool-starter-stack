@@ -526,18 +526,65 @@ phase_install() {
         bad "firstboot did not publish a disk inventory — installer mode never engaged"
     fi
 
-    out=$(_ssh "pithead-install --target /dev/vda --yes 2>&1")
-    if [ $? -eq 0 ]; then
-        ok "install to /dev/vda completed"
+    # ---- the combined web flow, exactly as an operator drives it -------------------------
+    # ONE page: config + disk + typed confirmation in one submission; the host validates
+    # everything, publishes the credentials, and only the ack releases the erase. The machine
+    # then installs, stages the accepted config for the target, and powers itself off.
+    local token="" jar scode
+    local tries2=0
+    while [ -z "$token" ] && [ "$tries2" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries2=$((tries2 + 1))
+    done
+    [ -n "$token" ] || {
+        bad "no one-time token on the installer console"
+        return
+    }
+    ok "one-time token read from the installer console ($token)"
+    jar=$(mktemp)
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
+        grep -q "wizard_session" "$jar" || {
+        bad "installer wizard auth failed"
+        rm -f "$jar"
+        return
+    }
+    local body
+    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini&disk=vda&confirm=vda&wipe=keep"
+    scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "combined submit (config + disk) did not return 200 (got ${scode:-none})"
+        rm -f "$jar"
+        return
+    }
+    ok "ONE submission carried config + disk + confirmation"
+    tries2=0
+    while [ "$tries2" -lt 24 ]; do
+        curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"' && break
+        sleep 5
+        tries2=$((tries2 + 1))
+    done
+    [ "$tries2" -lt 24 ] || {
+        bad "credentials never published on the installer page — the erase would be releasable blind"
+        rm -f "$jar"
+        return
+    }
+    ok "credentials published BEFORE anything touched the disk"
+    curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
+    rm -f "$jar"
+    # The ack releases the erase; the machine installs and powers ITSELF off.
+    tries2=0
+    while [ "$tries2" -lt 60 ]; do
+        [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ] && break
+        sleep 5
+        tries2=$((tries2 + 1))
+    done
+    if [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ]; then
+        ok "machine installed and switched itself off"
     else
-        bad "install failed: $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-160)"
+        bad "machine never powered off after the ack"
         return
     fi
-
-    # The real flow ends with the operator taking the stick out and pressing Reboot; the harness
-    # reaches the same state by powering the guest off and redefining it without the stick.
-    _ssh "systemctl poweroff" 2>/dev/null || true
-    sleep 8
     vm_destroy
     # Boot from the TARGET alone — the stick is gone, exactly as the instructions tell the user.
     : >"$SERIAL"
@@ -601,10 +648,25 @@ phase_install() {
         done
         return 1
     }
-    if _wizard_up; then
-        ok "setup wizard serves on the installed system"
+    # The staged config makes the first boot HEADLESS: the machine provisions itself and no
+    # second wizard ever serves. The full stack-up is the provision phase's job; here we prove
+    # the config arrived and provisioning began.
+    if _ssh "for i in \$(seq 90); do [ -f /data/pithead/config.json ] && exit 0; sleep 2; done; exit 1"; then
+        ok "staged config crossed to the installed system (headless provisioning began)"
     else
-        bad "no setup wizard on :80 of the installed system within 180s"
+        bad "the config confirmed on the installer page never reached the installed system"
+    fi
+    if _ssh "journalctl -u pithead-firstboot -b --no-pager 2>/dev/null | grep -q pre-seeded"; then
+        ok "installed system took the pre-seed path — no second wizard, no second token"
+    else
+        bad "installed system did not take the pre-seed path"
+    fi
+    # And no plaintext copy lingers: the staged file carried the dashboard password across, and
+    # once consumed it must not sit on the installed machine's unencrypted ESP forever.
+    if _ssh "test -f /boot/efi/pithead-config.json"; then
+        bad "the consumed pre-seed (with credentials) is still on the installed system's ESP"
+    else
+        ok "consumed pre-seed removed from the installed system's ESP"
     fi
 
     # ---- reinstall leg: the path that must NOT lose data --------------------------------
@@ -613,8 +675,11 @@ phase_install() {
     # costs a user days of re-syncing if it breaks, so it gets its own leg: plant a sentinel in
     # /data, reinstall over the disk, and require the sentinel afterwards.
     info "reinstall leg — a second install over the same disk must preserve /data"
-    _ssh "echo chain-data-survives > /data/pithead/reinstall-sentinel" || {
-        bad "could not plant the reinstall sentinel"
+    _ssh "echo chain-data-survives > /data/pithead/reinstall-sentinel &&
+          mkdir -p /data/pithead/data/monero /data/pithead/data/tari &&
+          echo synced-chain > /data/pithead/data/monero/chain-sentinel &&
+          echo synced-chain > /data/pithead/data/tari/chain-sentinel" || {
+        bad "could not plant the reinstall sentinels"
         return
     }
     _ssh "systemctl poweroff" 2>/dev/null || true
@@ -648,6 +713,48 @@ phase_install() {
     else
         bad "inventory does not flag the installed disk as carrying data"
     fi
+    # ---- wipe legs: the three-way reinstall data choice, asserted on the raw partition ----
+    # Mounted from the installer VM (the target's data partition is vda4) rather than booting
+    # between legs — the assertion is about what is ON the disk, and this keeps three slot
+    # copies instead of three full boot cycles.
+    info "wipe=data — user data goes, the synced chains stay"
+    out=$(_ssh "pithead-install --target /dev/vda --wipe data --yes 2>&1")
+    if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "preserving the synced chains"; then
+        ok "wipe=data took the selective path"
+    else
+        bad "wipe=data failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
+        return
+    fi
+    if _ssh "mkdir -p /mnt/t && mount /dev/vda4 /mnt/t &&
+             test -s /mnt/t/pithead/data/monero/chain-sentinel &&
+             test -s /mnt/t/pithead/data/tari/chain-sentinel &&
+             ! test -e /mnt/t/pithead/reinstall-sentinel; umount /mnt/t"; then
+        ok "wipe=data KEPT both chains and dropped the user data"
+    else
+        _ssh "umount /mnt/t" 2>/dev/null
+        bad "wipe=data got the split wrong — chains or user data in the wrong state"
+        return
+    fi
+    info "wipe=all — the data partition is reformatted"
+    out=$(_ssh "pithead-install --target /dev/vda --wipe all --yes 2>&1")
+    if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "everything, chains included"; then
+        ok "wipe=all took the reformat path"
+    else
+        bad "wipe=all failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
+        return
+    fi
+    if _ssh "mount /dev/vda4 /mnt/t && [ -z \"\$(ls /mnt/t | grep -v lost+found)\" ]; rc=\$?; umount /mnt/t; exit \$rc"; then
+        ok "wipe=all left an empty data partition"
+    else
+        bad "wipe=all left residue on the data partition"
+        return
+    fi
+    # Re-plant the keep-leg sentinel on the now-empty partition, then prove the DEFAULT path.
+    _ssh "mount /dev/vda4 /mnt/t && mkdir -p /mnt/t/pithead &&
+          echo chain-data-survives > /mnt/t/pithead/reinstall-sentinel && umount /mnt/t" || {
+        bad "could not re-plant the sentinel for the keep leg"
+        return
+    }
     out=$(_ssh "pithead-install --target /dev/vda --yes 2>&1")
     if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "preserving its data partition"; then
         ok "reinstall took the preserve path"

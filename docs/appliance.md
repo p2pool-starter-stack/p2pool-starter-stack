@@ -103,91 +103,104 @@ setup page instead.
 
 Two cautions. A configuration file holds your payout addresses in plain text on a volume
 anyone who picks up the stick can read — fine for a stick that stays in your hand, worth
-thinking about otherwise. And installing to a disk still needs someone to choose that disk;
-pre-seeding covers configuration, not the erase decision.
+thinking about otherwise. (The installed machine deletes its own copy the moment the
+configuration is applied; the stick keeps yours for the next machine.) And installing to a
+disk still needs someone to choose that disk: on the installation medium a pre-seeded file
+opens the page with every answer already filled in, but the disk choice — the erase — is
+always yours to confirm.
 
-## 3. Install it to the internal disk
+## 3. Install and configure it — one page
 
-Open that address from your other computer, accept the certificate warning, and enter the
-token — case doesn't matter, and
-the `pit-` prefix is optional. Because the machine is running from the USB stick, the
-first screen asks which disk to install onto.
+Open the address from your other computer, accept the certificate warning, and enter the
+token — case doesn't matter, and the `pit-` prefix is optional. Because the machine is running
+from the USB stick, one page asks for everything at once: which disk to install onto, and the
+answers the miner needs. You fill it in, save the login it shows you, and the machine does the
+rest — including erasing the disk only after everything else checked out.
 
-Each disk is listed with its model, size and serial number. The USB stick you booted from
-is never offered. Nothing is preselected — you choose deliberately, because **installing
-erases the disk**.
+### The disk
 
-One exception, and it is the one that matters if you are reinstalling: a disk that already
-holds a Pithead `data` partition is marked *"reinstall, keeps existing data"*. Installing
-there replaces the system and **keeps your wallets, your settings and your synced chain**.
-You do not download 250 GB again.
+Each disk is listed with its model, size and serial number. The USB stick you booted from is
+never offered. Nothing is preselected — you choose deliberately, because **installing erases
+the disk**.
 
-Type the disk's name to confirm and install. It takes a few minutes.
+A disk that already holds a Pithead install is the exception, and the page asks what to do
+with what is on it:
 
-When it finishes, **the machine switches itself off.** That is the end of the install, not a
-crash. Wait for it to go dark, then remove the USB stick, then switch it back on.
+- **Keep my data** — settings, wallets and the synced chains all survive. The system is
+  replaced under them. This is the right choice for an upgrade-by-reinstall, and the default.
+- **Fresh start, keep the blockchains** — settings, wallets, dashboard history and Tor
+  identities are wiped; the synced Monero and Tari chains (days of downloading) survive. The
+  right choice when handing the machine over or starting clean without paying the sync again.
+- **Wipe everything** — chains included. The new install re-downloads them from scratch.
 
-There is nothing to click, on purpose: until it powers down the machine is running *from* the
-stick, so the stick cannot come out while it runs. (If you pull it out early, the machine
-stops responding — hold the power button, leave the stick out, and switch it on. An install
-that had already reported success is safe on the disk.)
+Type the disk's name to confirm.
 
-## 4. Configure it
+### The questions
 
-The machine boots from its own disk now and serves the same setup page. Enter the token
-shown on its console.
+**Paste your payout addresses — do not type them.** A Monero address is 95 characters and a
+single wrong character pays a stranger. The page checks the address as you paste it and tells
+you immediately if it is the wrong kind: p2pool cannot pay a subaddress (starting `8`) or an
+integrated address, only your **primary** address, which starts with `4`.
 
-**Paste your payout addresses — do not type them.** A Monero address is 95 characters and
-a single wrong character pays a stranger. The page checks the address as you paste it and
-tells you immediately if it is the wrong kind: p2pool cannot pay a subaddress (starting
-`8`) or an integrated address, only your **primary** address, which starts with `4`.
-
-Then a handful of choices, all of which have a sensible default:
+Then a handful of choices, all with sensible defaults:
 
 | Question | Default | When to change it |
 |---|---|---|
 | Tari payout address | — | Required, like the Monero one: this stack always merge-mines both coins from the same work. |
 | Monero chain | Pruned (~120 GB) | Only asked when this machine runs the node. Full is ~320 GB and mines identically. |
-| P2Pool sidechain | mini | `nano` for a single low-power rig, `main` only for very large hashrate. Sized by hashrate so shares arrive at a similar cadence; changeable later. |
+| P2Pool sidechain | mini | `nano` for a single low-power rig, `main` only for very large hashrate. Changeable later. |
 | Healthchecks ping URL | — | Optional. Tells you when the machine goes *silent* — a power cut or crash, which it cannot report itself. |
 | Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
 | Monero node | run it here | Point at a node you already run. |
 | Tari node | run it here | Same, over a network you trust. |
-| P2Pool sidechain | mini | `main` only for very large hashrate. On `mini` a home rig gets paid far more often. |
 | Mine with this machine's CPU | off | On if this box should mine as well as coordinate. |
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Time zone | UTC | For dashboard timestamps. |
 | Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. |
 
-Press Apply. The machine validates your answers — including dialing any remote node you
-named, so a wrong host fails here with the reason and your answers kept, not twenty minutes
-later — and then shows you, on this page, the things you must save:
+**Already know exactly what you want?** Open **Advanced** at the bottom. It shows the complete
+configuration — every key, with its default filled in — and it *is* what the machine will run:
+answering a question above rewrites it, and editing it directly wins. Paste a whole
+`config.json` in there if you have one.
 
-- the **dashboard login** (generated, or the one you chose — see below)
+### Press "Validate, then install"
+
+The machine checks your answers first — including dialing any remote node you named, so a
+wrong host fails here with the reason and your answers kept, not after the disk is gone. Only
+when everything passes does it show you, on this page, the things you must save:
+
+- the **dashboard login** (generated, or the one you chose)
 - the **dashboard address** (`https://pithead.local`)
 - where to **point your miners** (`stratum+tcp://pithead.local:3333`)
 
-**Copy the login somewhere safe, then press "I saved these — start provisioning."** The
-machine waits for that confirmation, because what happens next is that this page goes dark:
-provisioning pulls and starts the whole stack, 10–30 minutes on a home connection, during
-which nothing answers on the network. That silence is the machine working, not failing. Its
-console narrates the progress, and when it finishes the dashboard is at the address above,
-behind the login you saved. (The login is also in `config.json` on the machine if you lose
-it. Unlike the DIY install, an appliance always gets one — it is a headless box on your
-network, and nobody was there to be asked.)
+**Copy the login somewhere safe, then press "I saved these — erase the disk and install."**
+Nothing touches the disk until that press. The install takes a few minutes, and when it
+finishes **the machine switches itself off.** That is the end of the install, not a crash.
 
-Most of this stays editable from the dashboard afterwards — see
+Then the last three steps you will ever do at this machine:
+
+1. Wait for it to go dark.
+2. Remove the USB stick.
+3. Switch it back on.
+
+The machine boots from its own disk and **provisions itself with the configuration you just
+confirmed** — no second setup page, no second token. Pulling and starting the stack takes
+10–30 minutes on a home connection, its console narrates the progress, and when it finishes
+the dashboard is at the address above, behind the login you saved. (The login is also in
+`config.json` on the machine if you lose it.)
+
+There is nothing to click before the power-off, on purpose: until it goes dark the machine is
+running *from* the stick, so the stick cannot come out while it runs. (If you pull it out
+early, the machine stops responding — hold the power button, leave the stick out, and switch
+it on. An install that had already reported success is safe on the disk.)
+
+Most of the configuration stays editable from the dashboard afterwards — see
 [configuration](configuration.md) for everything you can tune. Be aware of one honest limit
 in this release: the security-sensitive settings (payout addresses, view keys, the dashboard
-password, per-rig worker entries) can be set **here, at setup**, but not changed from the
+password, per-rig worker entries) can be set **here, at install**, but not changed from the
 dashboard later — that restriction is deliberate, so a compromised browser session can never
 redirect your payouts. Until the approval flow that lifts it ships, changing those means
-re-running setup: reinstall from the stick (your chain survives) and enter them again.
-
-**Already know exactly what you want?** Open **Advanced** at the bottom of the setup page. It
-shows the complete configuration — every key, with its default filled in — and it *is* what the
-machine will run: answering a question above rewrites it, and editing it directly wins. Paste a
-whole `config.json` in there if you have one.
+booting the stick again and reinstalling (choose "Keep my data": your chain survives).
 
 Keys still at their default are not written to disk, so this machine keeps picking up improved
 defaults from future updates. The configuration it runs is identical either way.

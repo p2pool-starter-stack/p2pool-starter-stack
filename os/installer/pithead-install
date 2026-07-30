@@ -91,8 +91,44 @@ part_of() { # $1 disk, $2 index — nvme/mmc need a 'p' separator
     esac
 }
 
+# Reinstall data semantics (#combined-installer). Only meaningful when the target already
+# carries a data partition; a fresh disk has nothing to keep or wipe.
+#   keep   /data survives untouched — a synced chain is not re-downloadable in an afternoon.
+#   data   user data goes (config, wallets, dashboard db, Tor keys, TLS, backups) but the
+#          SYNCED CHAINS stay: data/monero and data/tari are the only dirs whose loss costs
+#          days, and they hold public chain data, not secrets. The container-image cache also
+#          stays — it is derived, and keeping it saves a multi-GB re-pull.
+#   all    the data partition is reformatted. Everything goes, chains included.
+wipe_data_partition() { # $1 disk, $2 mode (data|all)
+    local part mnt keep d
+    part=$(lsblk -lnpo NAME,PARTLABEL "$1" | awk '$2 == "data" {print $1; exit}')
+    [ -b "$part" ] || die "no data partition found on $1 to wipe"
+    if [ "$2" = "all" ]; then
+        echo "==> wiping the data partition (everything, chains included)"
+        mkfs.ext4 -q -F -L data "$part"
+        return 0
+    fi
+    echo "==> wiping user data, preserving the synced chains"
+    mnt=$(mktemp -d)
+    mount "$part" "$mnt"
+    keep="$mnt/.wipe-keep.$$"
+    mkdir -p "$keep"
+    # Same-filesystem renames: preserving a 250 GB chain must not copy it.
+    for d in monero tari; do
+        [ -d "$mnt/pithead/data/$d" ] && mv "$mnt/pithead/data/$d" "$keep/$d"
+    done
+    rm -rf "$mnt/pithead"
+    mkdir -p "$mnt/pithead/data"
+    for d in monero tari; do
+        [ -d "$keep/$d" ] && mv "$keep/$d" "$mnt/pithead/data/$d"
+    done
+    rmdir "$keep" 2>/dev/null || true
+    umount "$mnt"
+    rmdir "$mnt"
+}
+
 main() {
-    local target="" assume_yes=0 action="install"
+    local target="" assume_yes=0 action="install" wipe="keep"
     while [ $# -gt 0 ]; do
         case "$1" in
         --list)
@@ -103,6 +139,10 @@ main() {
             target="$2"
             shift 2
             ;;
+        --wipe)
+            wipe="$2"
+            shift 2
+            ;;
         --yes)
             assume_yes=1
             shift
@@ -110,6 +150,7 @@ main() {
         *) die "unknown argument: $1" ;;
         esac
     done
+    case "$wipe" in keep | data | all) ;; *) die "unknown --wipe mode: $wipe (keep|data|all)" ;; esac
 
     [ "$(id -u)" -eq 0 ] || die "must run as root"
 
@@ -137,7 +178,11 @@ main() {
     # and slot A are reformatted and repopulated. A fresh install repartitions and destroys
     # everything.
     if [ "$state" = "pithead-with-data" ]; then
-        echo "==> $target already carries a pithead layout — preserving its data partition"
+        if [ "$wipe" = "keep" ]; then
+            echo "==> $target already carries a pithead layout — preserving its data partition"
+        else
+            wipe_data_partition "$target" "$wipe"
+        fi
     else
         partition_fresh "$target"
     fi

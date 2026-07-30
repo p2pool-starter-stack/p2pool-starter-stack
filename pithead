@@ -1381,20 +1381,23 @@ preflight_remote_nodes() { # <config-file>
     return 0
 }
 
-# rc: 0 installed, 1 failed, 2 nothing requested.
+# rc: 0 installed, 1 failed, 2 nothing requested. The request is "disk<TAB>wipe" written by
+# the wizard's combined submit; both fields are re-validated HERE because they arrive through
+# a web form — the disk against the inventory this host published, the wipe mode against the
+# fixed set. The container asks, the host decides.
 consume_install_request() { # <spool-dir>
-    local spool="$1" req="$1/install-target" target err
+    local spool="$1" req="$1/install-request" target wipe err
     [ -f "$req" ] || return 2
-    target=$(tr -dc 'a-zA-Z0-9_-' <"$req")
+    target=$(cut -f1 <"$req" | tr -dc 'a-zA-Z0-9_-')
+    wipe=$(cut -f2 <"$req" | tr -dc 'a-z')
     rm -f "$req"
-    # Re-check against the inventory the host published: the request is operator input arriving
-    # through a web form, so it is validated here rather than trusted.
+    case "$wipe" in keep | data | all) ;; *) wipe="keep" ;; esac
     if ! "$(install_bin)" --list 2>/dev/null | cut -f1 | grep -qx "$target"; then
         printf 'not an offered target: %s' "$target" >"$spool/error.txt"
         return 1
     fi
-    log "Installing to /dev/$target ..."
-    if err=$("$(install_bin)" --target "/dev/$target" --yes 2>&1); then
+    log "Installing to /dev/$target (data: $wipe) ..."
+    if err=$("$(install_bin)" --target "/dev/$target" --wipe "$wipe" --yes 2>&1); then
         touch "$spool/installed"
         log "Installed to /dev/$target."
         return 0
@@ -1415,16 +1418,32 @@ firstboot_wizard() {
         *) error "Unknown option for firstboot-wizard: $arg. Run '$0 help'." ;;
         esac
     done
-    # A configuration dropped on the installation medium beats opening a browser at all.
-    [ -f "$PWD/config.json" ] || consume_preseed_config "$PWD/config.json" || true
-    if [ -f "$PWD/config.json" ]; then
-        log "config.json already present (pre-seeded) — skipping the wizard and running setup."
-        # A pre-seeded config that names no password gets one too: skipping the wizard must not
-        # mean skipping the login.
-        ensure_appliance_dashboard_password || true
-        apply_appliance_defaults || true
-        setup
-        return
+    # A configuration dropped on the medium beats opening a browser at all — but never on the
+    # INSTALLATION medium: pre-seeding covers configuration, not the erase decision (the docs'
+    # exact promise), and a fleet stick that provisioned ITSELF instead of offering the
+    # installer would burn out running a chain it can never hold. There, the pre-seed becomes
+    # the pre-filled combined page instead (below).
+    if ! installer_mode_available; then
+        if [ ! -f "$PWD/config.json" ] && consume_preseed_config "$PWD/config.json"; then
+            # Spent: config.json lives on /data now, and a plaintext wallet + password must not
+            # sit on this machine's unencrypted ESP forever. Only on an INSTALLED machine —
+            # running from removable media this is the operator's own stick, theirs to keep
+            # for the next machine in the fleet.
+            if ! boot_is_removable; then
+                mount -o remount,rw "$PRESEED_DIR" 2>/dev/null || true
+                rm -f "$PRESEED_DIR/pithead-config.json" 2>/dev/null ||
+                    warn "Could not remove the consumed pre-seed from $PRESEED_DIR — it holds credentials; delete it."
+            fi
+        fi
+        if [ -f "$PWD/config.json" ]; then
+            log "config.json already present (pre-seeded) — skipping the wizard and running setup."
+            # A pre-seeded config that names no password gets one too: skipping the wizard must
+            # not mean skipping the login.
+            ensure_appliance_dashboard_password || true
+            apply_appliance_defaults || true
+            setup
+            return
+        fi
     fi
     _console "" "Pithead is starting up — preparing the setup page." \
         "This takes a minute or two on first boot. Nothing to do yet."
@@ -1447,11 +1466,16 @@ firstboot_wizard() {
         cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
     chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
 
-    local installer=0
+    local installer=0 operator_preseed=0
+    [ -f "$PRESEED_DIR/pithead-config.json" ] && operator_preseed=1
     if installer_mode_available; then
         installer=1
         publish_disk_inventory "$spool"
-        log "Running from the installation medium — the wizard will offer a disk to install onto."
+        log "Running from the installation medium — install and configure on one page."
+        if [ "$operator_preseed" -eq 1 ] && jq -c . "$PRESEED_DIR/pithead-config.json" >"$spool/last-attempt.json" 2>/dev/null; then
+            chown 1000:1000 "$spool/last-attempt.json" 2>/dev/null || true
+            log "Pre-seeded configuration found — the page opens with it filled in."
+        fi
     elif boot_is_removable; then
         # Setup will proceed, but the operator should know what they are standing on: a USB stick
         # cannot hold a 250+ GB chain and wears out under constant writes.
@@ -1533,43 +1557,6 @@ firstboot_wizard() {
             } >"$dev" 2>/dev/null || true
         done
         while :; do
-            if [ "$installer" -eq 1 ]; then
-                local irc=0
-                consume_install_request "$spool" || irc=$?
-                if [ "$irc" -eq 0 ]; then
-                    # Installed. Wait for the operator to press Shut down, then POWER OFF —
-                    # never reboot. This system is running FROM the installation medium: its
-                    # root, /data and this very spool live on the stick, so the stick cannot be
-                    # removed while it runs, and a restart with the stick still in just boots
-                    # the stick again. Off, stick out, on is the only sequence the hardware
-                    # allows, and it costs the operator nothing: they are already at the machine
-                    # to pull the stick.
-                    _console "" "Installation complete — switching off now." \
-                        "When the machine is dark, remove the USB stick and switch it back on."
-                    # No confirmation step. An operator who removes the stick BEFORE pressing
-                    # anything takes the running filesystem with it, and the button they were
-                    # about to press dies with it — a trap that caught a bench session twice.
-                    # Powering off unprompted removes the ordering mistake entirely: by the time
-                    # anyone reaches the machine, it is already dark and the stick is safe to pull.
-                    sleep 8 # long enough for the page's poll to show what is happening
-                    "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
-                    sleep 3
-                    systemctl poweroff
-                    return
-                fi
-                if [ "$irc" -eq 1 ]; then
-                    # A failed install leaves the picker up with the reason — republish in case
-                    # the disk set changed (pulling the wrong drive is a normal reaction).
-                    publish_disk_inventory "$spool"
-                fi
-                sleep 2
-                if ! "$engine" inspect -f '{{.State.Running}}' pithead-wizard 2>/dev/null | grep -q true; then
-                    warn "Wizard stopped (token lockout or crash) — minting a fresh token and restarting it."
-                    break
-                fi
-                continue
-            fi
             if firstboot_consume_spool "$spool"; then
                 # Reachability before commitment: a remote node that cannot be dialed fails HERE,
                 # on the page, with the attempt kept for editing — not minutes into provisioning.
@@ -1606,6 +1593,73 @@ firstboot_wizard() {
                     sleep 2
                     hwait=$((hwait + 2))
                 done
+                if [ "$installer" -eq 1 ]; then
+                    # Combined install+configure (one page on the USB). The ack releases the
+                    # ERASE, so a missing human means no install: hand the form back intact
+                    # rather than destroy a disk on a timeout.
+                    if [ ! -f "$spool/handoff-ack" ]; then
+                        rm -f "$spool/handoff.json" "$spool/install-request"
+                        printf 'Credentials were never confirmed — nothing was installed. Submit again when you are ready.' >"$spool/error.txt"
+                        jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
+                        chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
+                        rm -f "$PWD/config.json"
+                        continue
+                    fi
+                    touch "$spool/installing"
+                    chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                    # Stage the ACCEPTED config (password already baked) onto the running ESP —
+                    # the installer carries pre-seed files to the target's ESP, and the first
+                    # boot from disk provisions itself headlessly from it. The credentials the
+                    # operator just saved are exactly the ones that machine will serve.
+                    # A fleet stick's own pre-seed is set aside first and restored after: the
+                    # accepted config carries THIS machine's generated password, and leaving it
+                    # on the stick would hand every later machine the first one's secrets.
+                    local preseed_orig=""
+                    if [ "$operator_preseed" -eq 1 ]; then
+                        preseed_orig=$(mktemp)
+                        cp /boot/efi/pithead-config.json "$preseed_orig" 2>/dev/null || preseed_orig=""
+                    fi
+                    mount -o remount,rw /boot/efi 2>/dev/null || true
+                    if ! install -m 600 "$PWD/config.json" /boot/efi/pithead-config.json; then
+                        rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack" "$spool/install-request"
+                        printf 'Could not stage the configuration for the installed system — nothing was installed.' >"$spool/error.txt"
+                        chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
+                        rm -f "$PWD/config.json"
+                        continue
+                    fi
+                    local irc=0
+                    consume_install_request "$spool" || irc=$?
+                    # The stick must not keep the accepted config: a stick with config.json
+                    # boots as a PROVISIONING host next time instead of an installer.
+                    rm -f "$PWD/config.json"
+                    # The stick's ESP gets its ORIGINAL back (fleet stick) or comes up clean:
+                    # either way the staged copy — with this machine's password — never rides on.
+                    if [ -n "$preseed_orig" ] && [ -s "$preseed_orig" ]; then
+                        install -m 600 "$preseed_orig" /boot/efi/pithead-config.json 2>/dev/null || true
+                        rm -f "$preseed_orig"
+                    else
+                        rm -f /boot/efi/pithead-config.json
+                    fi
+                    if [ "$irc" -ne 0 ]; then
+                        rm -f /boot/efi/pithead-config.json "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack"
+                        jq -c . "$spool/last-attempt.json" >/dev/null 2>&1 || true
+                        publish_disk_inventory "$spool"
+                        warn "Install failed — the page shows the reason."
+                        sleep 2
+                        continue
+                    fi
+                    _console "" "Installation complete — switching off now." "When the machine is dark, remove the USB stick and switch it back on." "It will provision itself with the configuration you just confirmed."
+                    # No confirmation step. An operator who removes the stick BEFORE pressing
+                    # anything takes the running filesystem with it — powering off unprompted
+                    # removes the ordering mistake entirely: by the time anyone reaches the
+                    # machine it is already dark and the stick is safe to pull.
+                    sleep 8 # long enough for the page's poll to show the switch-off steps
+                    "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+                    sleep 3
+                    systemctl poweroff
+                    return
+                fi
                 sleep 2
                 "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
                 rm -rf "$spool"

@@ -87,44 +87,53 @@ export const Gate = ({ error, onSubmit }) => html`<div class="card">
 // right — bench screenshots cut off exactly the erase/keep words), and is restated in full
 // below the control, red when destructive. The server re-validates the choice against the
 // inventory the HOST published; a browser can never name a disk the host did not offer.
-export const InstallView = ({ disks, error, chosen, confirm, onPick, onConfirm, onSubmit }) => {
+export const InstallSection = ({ disks, chosen, confirm, wipe, onPick, onConfirm, onWipe }) => {
   const picked = disks.find((d) => d.name === chosen);
   const verdictText = (d) =>
     d.state === "pithead-with-data"
-      ? "KEEPS existing data (reinstall)"
+      ? "holds a previous install"
       : d.state === "pithead"
         ? "ERASES it (Pithead layout, no data partition)"
         : "ERASES everything on it";
-  return html`<div class="card">
-    <p>This machine is running from the installation medium. Choose the disk to install onto —
-    everything on it is erased unless it already holds a Pithead data partition.</p>
-    <${Err}>${error}<//>
-    <form onSubmit=${onSubmit}>
-        <${Field} label="Target disk">
-            <select value=${chosen} onChange=${onPick}>
-                <option value="" disabled selected=${!chosen}>Choose a disk…</option>
-                ${disks.map(
-                  (d) =>
-                    html`<option value=${d.name}>
-                        ${d.name} — ${verdictText(d)} — ${d.size} ${d.model} (SN ${d.serial})
-                    </option>`,
-                )}
-            </select>
-        <//>
-        ${
-          picked &&
-          html`<p class=${picked.state === "pithead-with-data" ? "text-muted" : "c-bad"}>
-            Installing to ${picked.name} — this ${verdictText(picked)}.
-        </p>`
-        }
-        <${Field} label="Type the disk name to confirm">
-            <input value=${confirm} onInput=${onConfirm} autocomplete="off" autocapitalize="off"
-                spellcheck=${false} placeholder=${chosen || "choose a disk above first"} />
-        <//>
-        <button type="submit">Erase and install</button>
-    </form>
-    <${Note}>Disks already holding a Pithead ${" "}<code>data</code>${" "}partition are
-    reinstalled in place and keep their synced chain. Everything else is erased.<//>
+  return html`<div>
+    <h3>Install onto</h3>
+    <${Field} label="Target disk">
+        <select value=${chosen} onChange=${onPick}>
+            <option value="" disabled selected=${!chosen}>Choose a disk…</option>
+            ${disks.map(
+              (d) =>
+                html`<option value=${d.name}>
+                    ${d.name} — ${verdictText(d)} — ${d.size} ${d.model} (SN ${d.serial})
+                </option>`,
+            )}
+        </select>
+    <//>
+    ${
+      picked &&
+      picked.state === "pithead-with-data" &&
+      html`<${Field} label="This disk holds a previous install">
+        <label class="choice"><input type="radio" name="wipe" value="keep"
+            checked=${wipe === "keep"} onChange=${onWipe} />
+            Keep my data — settings, wallets and the synced chains all survive</label>
+        <label class="choice"><input type="radio" name="wipe" value="data"
+            checked=${wipe === "data"} onChange=${onWipe} />
+            Fresh start, keep the blockchains — settings and wallets are wiped, the synced
+            chains (days of downloading) survive</label>
+        <label class="choice"><input type="radio" name="wipe" value="all"
+            checked=${wipe === "all"} onChange=${onWipe} />
+            <span class="c-bad">Wipe everything</span> — including the synced chains; the new
+            install re-downloads them from scratch</label>
+    <//>`
+    }
+    ${
+      picked &&
+      picked.state !== "pithead-with-data" &&
+      html`<p class="c-bad">Installing to ${picked.name} — this ${verdictText(picked)}.</p>`
+    }
+    <${Field} label="Type the disk name to confirm">
+        <input value=${confirm} onInput=${onConfirm} autocomplete="off" autocapitalize="off"
+            spellcheck=${false} placeholder=${chosen || "choose a disk above first"} />
+    <//>
 </div>`;
 };
 
@@ -138,12 +147,14 @@ export const Installing = ({ status }) => html`<div class="card">
                 <li>Remove the USB stick.</li>
                 <li>Switch it back on.</li>
             </ol>
-            <${Note}>The setup page returns from the installed system, with a new token.<//>`
+            <${Note}>Nothing more to configure: the machine provisions itself from the
+            configuration you confirmed, then serves the dashboard behind the login you
+            saved.<//>`
         : html`<p class="text-muted">${status || "Working…"}</p>`
     }
 </div>`;
 
-export const Done = ({ status, handoff, onAck }) => html`<div class="card">
+export const Done = ({ status, handoff, installer, onAck }) => html`<div class="card">
     ${
       handoff
         ? html`<h3>Save this before anything else</h3>
@@ -153,9 +164,16 @@ export const Done = ({ status, handoff, onAck }) => html`<div class="card">
             <${Field} label="Dashboard password"><code class="wizard-mono">${handoff.password}</code><//>
             <${Field} label="Dashboard"><code class="wizard-mono">${handoff.dashboard}</code><//>
             <${Field} label="Point miners at"><code class="wizard-mono">${handoff.stratum}</code><//>
-            <button type="button" onClick=${onAck}>I saved these — start provisioning</button>
-            <${Note}>Provisioning waits for this confirmation (up to 10 minutes), because the
-            page goes dark while the machine builds itself.<//>`
+            <button type="button" onClick=${onAck}>
+                ${installer ? "I saved these — erase the disk and install" : "I saved these — start provisioning"}</button>
+            <${Note}>${
+              installer
+                ? html`Nothing is written to the disk until you press this. The machine installs,
+                  switches itself off, and provisions with this exact configuration when you
+                  power it back on — these credentials are the ones it will serve.`
+                : html`Provisioning waits for this confirmation (up to 10 minutes), because the
+                  page goes dark while the machine builds itself.`
+            }<//>`
         : html`<p><strong>Provisioning.</strong> The machine is pulling and starting the stack —
             10 to 30 minutes on a home connection. <strong>This page will stop responding</strong>
             while it happens; that is the machine working, not failing. Its console narrates, and
@@ -175,6 +193,7 @@ export class WizardApp extends Component {
     disks: [],
     chosen: "",
     confirm: "",
+    wipe: "keep",
     jsonText: "",
     jsonError: "",
     authMode: "auto", // auto | set | none — travels beside the config (see wizard.py submit)
@@ -190,10 +209,12 @@ export class WizardApp extends Component {
     if (!res.ok) return false;
     const s = await res.json();
     const next = {
+      // The installation medium gets the SAME setup form with an install section folded in —
+      // one page, one submission (config + disk + wipe), one credentials card, then the erase.
       stage:
-        { installer: "install", installing: "installing", handoff: "done", done: "done" }[
-          s.stage
-        ] || "setup",
+        { installer: "setup", installing: "installing", handoff: "done", done: "done" }[s.stage] ||
+        "setup",
+      installer: s.stage === "installer",
       reference: s.reference,
       disks: s.disks,
       error: s.error || "",
@@ -258,15 +279,32 @@ export class WizardApp extends Component {
 
   submit = async (e) => {
     e.preventDefault();
-    const res = await fetch("/submit", {
-      method: "POST",
-      body: new URLSearchParams({
-        config: JSON.stringify(this.state.cfg),
-        auth_mode: this.state.authMode,
-      }),
-    });
+    const body = {
+      config: JSON.stringify(this.state.cfg),
+      auth_mode: this.state.authMode,
+    };
+    // One page, one submission: on the installation medium the disk choice rides beside the
+    // config, and the server gates both before anything is written.
+    if (this.state.installer) {
+      if (!this.state.chosen) {
+        this.setState({ error: "Choose the disk to install onto." });
+        return;
+      }
+      if (this.state.confirm !== this.state.chosen) {
+        this.setState({ error: `Type ${this.state.chosen} exactly to confirm the erase.` });
+        return;
+      }
+      body.disk = this.state.chosen;
+      body.confirm = this.state.confirm;
+      body.wipe = this.state.wipe;
+    }
+    const res = await fetch("/submit", { method: "POST", body: new URLSearchParams(body) });
     if (!res.ok) {
-      this.setState({ error: "Submit failed — check the configuration and retry." });
+      let msg = "Submit failed — check the configuration and retry.";
+      try {
+        msg = (await res.json()).error || msg;
+      } catch {}
+      this.setState({ error: msg });
       return;
     }
     this.setState({ stage: "done", status: "Validating…" });
@@ -278,19 +316,6 @@ export class WizardApp extends Component {
     await this.loadState(); // the server drops out of the handoff stage; the view follows
   };
 
-  install = async (e) => {
-    e.preventDefault();
-    const res = await fetch("/install", {
-      method: "POST",
-      body: new URLSearchParams({ disk: this.state.chosen, confirm: this.state.confirm }),
-    });
-    if (res.ok) {
-      this.setState({ stage: "installing" });
-      this.poll();
-    } else
-      this.setState({ error: `Type ${this.state.chosen || "the disk name"} exactly to confirm.` });
-  };
-
   renderSetup() {
     const { cfg, error, jsonText, jsonError } = this.state;
     const v = (name) => pathGet(cfg, FIELDS[name].path);
@@ -299,11 +324,27 @@ export class WizardApp extends Component {
     const tg = telegramPairReady(v("telegramToken"), v("telegramChat"));
     const remoteMonero = v("moneroMode") === "remote";
     const remoteTari = v("tariMode") === "remote";
+    const { installer, disks, chosen, confirm, wipe } = this.state;
     return html`<div class="card">
-        <p>Only the answers that cannot be guessed for you. Everything else keeps its documented
-        default and stays editable from the dashboard.</p>
+        <p>${
+          installer
+            ? html`Choose the disk to install onto and answer the questions below — the machine
+              validates everything, shows you the login to save, and only then erases the disk.
+              After it switches itself off, remove the stick and power it on: it provisions
+              itself with exactly this configuration.`
+            : html`Only the answers that cannot be guessed for you. Everything else keeps its
+              documented default and stays editable from the dashboard.`
+        }</p>
         <${Err}>${error}<//>
         <form onSubmit=${this.submit}>
+            ${
+              installer &&
+              html`<${InstallSection} disks=${disks} chosen=${chosen} confirm=${confirm}
+                wipe=${wipe}
+                onPick=${(e) => this.setState({ chosen: e.target.value, wipe: "keep" })}
+                onConfirm=${(e) => this.setState({ confirm: e.target.value })}
+                onWipe=${(e) => this.setState({ wipe: e.target.value })} />`
+            }
             <h3>Payout addresses</h3>
             <${Note}>Paste these — they are far too long to type, and a typo pays a stranger.<//>
             <${Field} label="Monero payout address">
@@ -471,23 +512,20 @@ export class WizardApp extends Component {
                 <${Err}>${jsonError}<//>
             </details>
 
-            <button type="submit" disabled=${!!jsonError}>Apply</button>
+            <button type="submit" disabled=${!!jsonError}>
+                ${installer ? "Validate, then install" : "Apply"}</button>
         </form>
     </div>`;
   }
 
   render() {
-    const { stage, error, disks, chosen, confirm, status } = this.state;
+    const { stage, error, status } = this.state;
     let view;
     if (stage === "gate") view = html`<${Gate} error=${error} onSubmit=${this.auth} />`;
-    else if (stage === "install")
-      view = html`<${InstallView} disks=${disks} error=${error} chosen=${chosen} confirm=${confirm}
-        onPick=${(e) => this.setState({ chosen: e.target.value })}
-        onConfirm=${(e) => this.setState({ confirm: e.target.value })}
-        onSubmit=${this.install} />`;
     else if (stage === "installing") view = html`<${Installing} status=${status} />`;
     else if (stage === "done")
-      view = html`<${Done} status=${status} handoff=${this.state.handoff} onAck=${this.ack} />`;
+      view = html`<${Done} status=${status} handoff=${this.state.handoff}
+        installer=${this.state.installer} onAck=${this.ack} />`;
     else view = this.renderSetup();
     return html`<h1>Pithead setup</h1>${view}`;
   }

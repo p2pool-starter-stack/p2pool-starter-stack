@@ -7732,7 +7732,8 @@ cat >"$INSTSB/fake-install" <<'FAKE'
 case "$1" in
 --list) printf 'vda\t40G\tFake Disk\tSN1\tempty\n' ;;
 --target)
-    echo "$2" >>"${FAKE_LOG:?}"
+    # record target + wipe mode (args: --target /dev/X [--wipe M] --yes)
+    echo "$2 ${4:-}" >>"${FAKE_LOG:?}"
     exit "${FAKE_RC:-0}"
     ;;
 esac
@@ -7744,15 +7745,25 @@ mkdir -p "$INSTSB/spool"
 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
 assert_rc "empty spool -> rc 2 (nothing requested)" "$?" "2"
 
-printf 'vda' >"$INSTSB/spool/install-target"
+printf 'vda\tkeep' >"$INSTSB/spool/install-request"
 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
 assert_rc "offered target -> rc 0" "$?" "0"
-assert_eq "installer invoked with /dev/vda" "$(cat "$INSTSB/calls")" "/dev/vda"
+assert_eq "installer invoked with /dev/vda and the wipe mode" "$(cat "$INSTSB/calls")" "/dev/vda keep"
 [ -f "$INSTSB/spool/installed" ] && ok "installed marker written" || bad "installed marker written" "missing"
-[ -f "$INSTSB/spool/install-target" ] && bad "request consumed" "still present" || ok "request consumed"
+[ -f "$INSTSB/spool/install-request" ] && bad "request consumed" "still present" || ok "request consumed"
+
+# The wipe mode is validated HERE too: a crafted mode falls back to keep, never reaches a shell.
+rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
+printf 'vda\tdata' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_eq "wipe mode passes through" "$(cat "$INSTSB/calls")" "/dev/vda data"
+rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
+printf 'vda\t; rm -rf /' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_eq "hostile wipe mode normalized to keep" "$(cat "$INSTSB/calls")" "/dev/vda keep"
 
 rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
-printf 'sdz' >"$INSTSB/spool/install-target"
+printf 'sdz\tkeep' >"$INSTSB/spool/install-request"
 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
 assert_rc "unlisted target -> rc 1, refused" "$?" "1"
 assert_contains "refusal names the target" "$(cat "$INSTSB/spool/error.txt")" "sdz"
@@ -7761,14 +7772,14 @@ assert_contains "refusal names the target" "$(cat "$INSTSB/spool/error.txt")" "s
 # A browser-supplied name is sanitized before it can reach a shell: path characters vanish and
 # the remainder no longer matches the inventory.
 rm -f "$INSTSB/spool/error.txt"
-printf '../../vda; rm -rf /' >"$INSTSB/spool/install-target"
+printf '../../vda; rm -rf /\tkeep' >"$INSTSB/spool/install-request"
 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
 assert_rc "hostile target string -> rc 1, refused" "$?" "1"
 [ -f "$INSTSB/calls" ] && bad "installer NOT invoked for hostile string" "was invoked" || ok "installer NOT invoked for hostile string"
 
 # Installer failure surfaces into the spool for the page, and no success marker appears.
 rm -f "$INSTSB/spool/error.txt"
-printf 'vda' >"$INSTSB/spool/install-target"
+printf 'vda\tkeep' >"$INSTSB/spool/install-request"
 FAKE_RC=1 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
 assert_rc "installer failure -> rc 1" "$?" "1"
 [ -f "$INSTSB/spool/error.txt" ] && ok "failure surfaced to the page" || bad "failure surfaced to the page" "no error.txt"

@@ -317,38 +317,67 @@ def test_timezone_auto_is_the_default_and_never_pinned():
     assert berlin["dashboard"]["timezone"] == "Europe/Berlin"
 
 
-# --- the destructive install path -----------------------------------------------------------
+# --- the destructive install path (combined submit: config + disk + wipe on one page) -------
+
+_CFG = '{"monero": {"wallet_address": "4' + "A" * 94 + '"}, "tari": {"wallet_address": "t"}}'
+
+
+async def _submit_install(client, disk="nvme0n1", confirm=None, wipe=None):
+    data = {"config": _CFG, "disk": disk, "confirm": confirm if confirm is not None else disk}
+    if wipe is not None:
+        data["wipe"] = wipe
+    return await client.post("/submit", data=data)
 
 
 async def test_target_must_be_one_the_host_offered(client, installer):
     await _auth(client)
-    r = await client.post("/install", data={"disk": "sdz", "confirm": "sdz"})
+    r = await _submit_install(client, disk="sdz")
     assert r.status == 400
-    assert not (installer / "install-target").exists()
+    assert not (installer / "install-request").exists()
+    # A rejected disk must not half-accept the config either — one page, one atomic answer.
+    assert not (installer / "config.json.candidate").exists()
 
 
 async def test_confirmation_must_match_the_chosen_disk(client, installer):
     await _auth(client)
-    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n"})
+    r = await _submit_install(client, confirm="nvme0n")
     assert r.status == 400
-    assert not (installer / "install-target").exists()
+    assert not (installer / "install-request").exists()
 
 
 async def test_unauthed_install_writes_nothing(client, installer):
     r = await client.post(
-        "/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"}, allow_redirects=False
+        "/submit",
+        data={"config": _CFG, "disk": "nvme0n1", "confirm": "nvme0n1"},
+        allow_redirects=False,
     )
     assert r.status == 302
-    assert not (installer / "install-target").exists()
+    assert not (installer / "install-request").exists()
 
 
-async def test_valid_request_is_written_and_clears_stale_errors(client, installer):
-    (installer / "error.txt").write_text("previous failure")
+async def test_valid_request_is_written_and_carries_the_wipe_mode(client, installer):
+    # sda is the fixture's disk with a previous install — the only kind where wipe means anything.
     await _auth(client)
-    r = await client.post("/install", data={"disk": "nvme0n1", "confirm": "nvme0n1"})
+    r = await _submit_install(client, disk="sda", wipe="data")
     assert r.status == 200
-    assert (installer / "install-target").read_text() == "nvme0n1"
-    assert not (installer / "error.txt").exists()
+    assert (installer / "install-request").read_text() == "sda\tdata"
+
+
+async def test_wipe_mode_defaults_to_keep_and_rejects_inventions(client, installer):
+    await _auth(client)
+    assert (await _submit_install(client, disk="sda")).status == 200
+    assert (installer / "install-request").read_text() == "sda\tkeep"
+    r = await _submit_install(client, disk="sda", wipe="everything")
+    assert r.status == 400
+
+
+async def test_wipe_is_normalized_to_keep_on_a_disk_with_nothing_to_wipe(client, installer):
+    # nvme0n1 is empty in the fixture: "wipe" is meaningless there, and the page never offers
+    # it — a crafted request is normalized rather than trusted.
+    await _auth(client)
+    r = await _submit_install(client, disk="nvme0n1", wipe="all")
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "nvme0n1\tkeep"
 
 
 # --- status: what the polling views read ----------------------------------------------------
@@ -497,9 +526,24 @@ async def test_stage_is_done_while_provisioning_so_a_refresh_cannot_re_edit(clie
     assert (await (await client.get("/api/wizard-state")).json())["stage"] == "done"
 
 
-async def test_stage_reports_installing_once_a_target_is_requested(client, installer):
-    seeded_install = installer
-    seeded_install.joinpath("install-target").write_text("nvme0n1")
+async def test_stage_reports_installing_once_the_install_starts(client, installer):
+    # The HOST writes this marker when it begins the erase (after the credentials ack) —
+    # a pending install-request alone is still editable and must stay on the form.
+    installer.joinpath("installing").write_text("1")
+    await _auth(client)
+    assert (await (await client.get("/api/wizard-state")).json())["stage"] == "installing"
+
+
+async def test_stage_stays_on_the_combined_form_while_a_request_is_pending(client, installer):
+    installer.joinpath("install-request").write_text("sda\tkeep")
+    await _auth(client)
+    assert (await (await client.get("/api/wizard-state")).json())["stage"] == "installer"
+
+
+async def test_ack_on_the_installer_means_installing_not_provisioning(client, installer):
+    # Same ack, two meanings: on an installed machine it releases provisioning ("done"), on the
+    # installation medium it releases the erase — the page must show the switch-off steps.
+    installer.joinpath("handoff-ack").write_text("1")
     await _auth(client)
     assert (await (await client.get("/api/wizard-state")).json())["stage"] == "installing"
 
