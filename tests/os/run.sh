@@ -897,7 +897,11 @@ phase_provision() {
     }
     # No unit may be quietly broken (#792 sat visible in --failed for two RCs, unasserted).
     local failed_units
-    failed_units=$(_ssh "systemctl --failed --no-legend --no-pager" 2>/dev/null | tr -s ' ' | tr '\n' ';')
+    # Transient healthcheck ephemera excluded: podman drives container healthchecks through
+    # hash-named systemd-run units, and one dies harmlessly whenever compose recreates its
+    # container mid-check. Every REAL unit (pithead-boot, tor, podman…) stays load-bearing.
+    failed_units=$(_ssh "systemctl --failed --no-legend --no-pager --plain" 2>/dev/null |
+        awk '$1 !~ /^[0-9a-f]{64}-[0-9a-f]+\.service$/' | tr -s ' ' | tr '\n' ';')
     if [ -z "${failed_units//[; ]/}" ]; then
         ok "no failed systemd units after the reboot"
     else
