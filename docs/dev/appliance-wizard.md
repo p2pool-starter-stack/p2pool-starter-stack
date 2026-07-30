@@ -88,6 +88,34 @@ actually be verified. A warning nobody can check is theatre.
 minting fails, fall back to `tls internal` and say so — a dashboard behind an unfamiliar
 certificate beats no dashboard.
 
+## The boot contract (provisioned machines)
+
+After provisioning, every boot runs one unit — `pithead-boot` — whose three steps each answer
+a hardware-validated failure:
+
+1. **`pithead render`** — regenerate every *derived* file (`.env`, Caddyfile, service configs,
+   host units) from `config.json` plus the program that is actually running. Derived files are
+   never inspected or repaired, only rebuilt: an A/B update swaps the whole program, and a
+   bench machine once served a days-old Caddyfile whose site list predated the code around it.
+   On the read-only root, host units render into `/run/systemd/system` (`--runtime`
+   enablement) and are recreated here each boot.
+2. **`pithead up`** — compose owns the containers' lifecycle. Its predecessor,
+   `podman-restart`, started the stack into its own oneshot cgroup, and systemd SIGKILLed the
+   containers it had just spawned.
+3. **Health-gated slot commit** — `rauc status mark-good` only once the dashboard answers
+   through caddy on a *listed* vhost (`localhost`; bare `127.0.0.1` hits Caddy's empty default
+   site and proves nothing). A slot that boots but cannot serve stays uncommitted on purpose:
+   that is the state A/B fallback exists for. Unprovisioned machines never commit — GRUB's
+   clear-and-retry keeps them booting, and a bad update before provisioning reverts.
+
+**Rule for changes:** anything generated from `config.json` or the program is derived and must
+be rebuilt by `render` — adding one anywhere else recreates the staleness bug. Genuine state
+(`config.json`, wallets, chain data, Tor keys, generated secrets) is never regenerated; it
+gets validation and a safe fallback instead.
+
+The invariant, asserted by the provision phase: **corrupt any derived file, reboot, and the
+machine must serve again.**
+
 ## Where each promise is tested
 
 The layering is deliberate: three defects reached hardware because a layer that looked covered
@@ -100,7 +128,7 @@ had a gap between it and the next one.
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
 | host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests |
-| the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → reboot survival |
+| the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → reboot through a corrupted Caddyfile → no failed units → slot self-commit |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the
 credentials; a render probe proved the card renders given them; nothing proved the app *asked*.
