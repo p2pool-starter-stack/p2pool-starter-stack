@@ -4,6 +4,9 @@ How the appliance is built, tested, released, and rolled back. The DIY channel k
 own process in [`releasing.md`](releasing.md) — this document covers only
 `pithead-os`, and the two share a version number and a release manifest.
 
+The wizard's own contracts — the stage machine and the certificate lifecycle — are in
+[`appliance-wizard.md`](appliance-wizard.md); read that before changing anything it touches.
+
 The updater is RAUC. The evidence for that choice, and the five defects the decision
 cost, are in [`dual-distribution-plan.md`](dual-distribution-plan.md). The rejected
 Rugix candidate is preserved on the `reference/rugix-candidate` branch.

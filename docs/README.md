@@ -30,6 +30,7 @@ Docs for working on Pithead itself live in [`dev/`](dev/). Operators don't need 
 |---|---|
 | [Style Guide](dev/STYLE.md) | The house documentation voice; the banned-word list is enforced by `make lint-docs-voice`. |
 | [Appliance Release](dev/appliance-release.md) | Building, testing and releasing the Pithead OS image: the KVM battery, the manual hardware battery, and the bad-release runbook. |
+| [Appliance Wizard](dev/appliance-wizard.md) | The first-boot wizard's two breakable contracts — the server-owned stage machine and the machine's single TLS certificate — plus which test layer owns which promise. |
 | [Testing Strategy](dev/testing-strategy.md) | The four test tiers (unit → contract → fake-daemon mini-stack → live matrix), the full scenario catalog, and which tier proves each situation. |
 | [Testing Guide](dev/testing-guide.md) | How to write and run tests, per-change recipes, conventions, and real-hardware gotchas. |
 | Test Inventory | An exhaustive list of every test/scenario across all suites — generated on demand by `make test-inventory` (not committed). |
