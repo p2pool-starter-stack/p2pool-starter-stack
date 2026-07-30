@@ -12,6 +12,7 @@ import {
   Gate,
   Installing,
   InstallView,
+  WizardApp,
 } from "../../mining_dashboard/web/static/wizard.mjs";
 import { html } from "../../mining_dashboard/web/static/preact.mjs";
 import { renderToString } from "./helpers/render.mjs";
@@ -86,4 +87,169 @@ test("handoff card: credentials shown once, provisioning gated on the ack", () =
   const dark = renderToString(html`<${Done} status="" handoff=${null} onAck=${() => {}} />`);
   assert.match(dark, /stop responding/);
   assert.match(dark, /pithead\.local/);
+});
+
+// --- app orchestration --------------------------------------------------------------------
+// THE gap these tests exist to close. Three bench-visible defects lived in the app's fetch
+// orchestration, and nothing covered that layer: pytest proved the endpoints, the render probes
+// above prove a view given its props, and between them sat "does the app ask for the right
+// thing and render what comes back". The credentials card could never appear for two whole
+// releases because submit() read a stage its own setState had not applied yet.
+
+function stubSetState(inst) {
+  inst.setState = (patch) => {
+    const next = typeof patch === "function" ? patch(inst.state, inst.props) : patch;
+    Object.assign(inst.state, next);
+  };
+}
+
+// A server whose /api/wizard-state answers are scripted per call, so a stage TRANSITION can be
+// asserted rather than a single snapshot.
+function stubServer(states) {
+  const real = globalThis.fetch;
+  let i = 0;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).includes("/api/wizard-state")) {
+      const s = states[Math.min(i++, states.length - 1)];
+      return { ok: true, status: 200, json: async () => s };
+    }
+    if (String(url).includes("/status")) return { ok: true, text: async () => "Working…" };
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
+  };
+  return () => {
+    globalThis.fetch = real;
+  };
+}
+
+const REF = { monero: { wallet_address: "", prune: true }, p2pool: { pool: "mini" } };
+const stateFor = (stage, extra = {}) => ({
+  stage,
+  mode: stage === "installer" ? "installer" : "setup",
+  config: REF,
+  reference: REF,
+  error: null,
+  disks: [],
+  handoff: null,
+  ...extra,
+});
+
+async function appOn(states) {
+  const inst = new WizardApp({});
+  stubSetState(inst);
+  // poll() re-arms itself on a timer; left live it keeps node alive forever and couples every
+  // assertion to a background loop. The loop's own behaviour is asserted by driving loadState
+  // directly, which is all poll() does.
+  inst.poll = () => {};
+  const restore = stubServer(states);
+  await inst.loadState();
+  return { inst, restore };
+}
+
+test("loadState maps every server stage onto the view it should render", async () => {
+  for (const [serverStage, viewStage] of [
+    ["setup", "setup"],
+    ["installer", "install"],
+    ["installing", "installing"],
+    ["handoff", "done"],
+    ["done", "done"],
+  ]) {
+    const { inst, restore } = await appOn([stateFor(serverStage)]);
+    assert.equal(inst.state.stage, viewStage, `${serverStage} -> ${viewStage}`);
+    restore();
+  }
+});
+
+test("an unknown server stage falls back to setup rather than a blank screen", async () => {
+  const { inst, restore } = await appOn([stateFor("something-new")]);
+  assert.equal(inst.state.stage, "setup");
+  restore();
+});
+
+test("the handoff arrives through the SAME poll and reaches the view", async () => {
+  // The exact bug: the card must appear without a second, separately-raced fetch.
+  const handoff = { username: "admin", password: "p".repeat(32), dashboard: "https://x", stratum: "s" };
+  const { inst, restore } = await appOn([
+    stateFor("done"), // provisioning started, nothing published yet
+    stateFor("handoff", { handoff }), // then credentials appear
+  ]);
+  assert.equal(inst.state.handoff, null);
+  await inst.loadState();
+  assert.equal(inst.state.stage, "done");
+  assert.equal(inst.state.handoff.password.length, 32);
+  // And the view actually renders the card from that state — the end of the chain.
+  assert.match(renderToString(inst.render()), /Save this before anything else/);
+  restore();
+});
+
+test("a refresh mid-provision does not walk back into an editable form", async () => {
+  const { inst, restore } = await appOn([stateFor("done")]);
+  const out = renderToString(inst.render());
+  assert.doesNotMatch(out, /Monero payout address/);
+  assert.match(out, /stop responding/);
+  restore();
+});
+
+test("a host rejection returns to the form with the reason and the submitted answers", async () => {
+  const attempted = { monero: { wallet_address: "4TYPO" }, p2pool: { pool: "mini" } };
+  const { inst, restore } = await appOn([
+    stateFor("setup", { config: attempted, error: "bad wallet" }),
+  ]);
+  assert.equal(inst.state.stage, "setup");
+  assert.equal(inst.state.error, "bad wallet");
+  const out = renderToString(inst.render());
+  assert.match(out, /bad wallet/);
+  assert.match(out, /4TYPO/); // no retyping a 95-character address
+  restore();
+});
+
+test("in-progress edits are not clobbered by a later poll of the server's copy", async () => {
+  // The form polls while open; the operator's half-typed address must survive it.
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.editJson({
+    target: {
+      value: JSON.stringify({ monero: { wallet_address: "4MINE" }, p2pool: { pool: "nano" } }),
+    },
+  });
+  await inst.loadState();
+  assert.equal(inst.state.cfg.monero.wallet_address, "4MINE");
+  assert.equal(inst.state.cfg.p2pool.pool, "nano");
+  restore();
+});
+
+test("submit carries the auth-mode choice beside the config", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.setState({ authMode: "none" });
+  let sentBody = null;
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).includes("/submit")) {
+      sentBody = String(opts.body);
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => stateFor("done"), text: async () => "" };
+  };
+  await inst.submit({ preventDefault() {} });
+  globalThis.fetch = real;
+  assert.match(sentBody, /auth_mode=none/);
+  assert.match(sentBody, /config=/);
+  restore();
+});
+
+test("the install request sends the chosen disk and its typed confirmation", async () => {
+  const { inst, restore } = await appOn([stateFor("installer")]);
+  inst.setState({ chosen: "nvme0n1", confirm: "nvme0n1" });
+  let sentBody = null;
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).includes("/install")) {
+      sentBody = String(opts.body);
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => stateFor("installing"), text: async () => "" };
+  };
+  await inst.install({ preventDefault() {} });
+  globalThis.fetch = real;
+  assert.match(sentBody, /disk=nvme0n1/);
+  assert.match(sentBody, /confirm=nvme0n1/);
+  restore();
 });

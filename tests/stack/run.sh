@@ -7539,6 +7539,24 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: the dashboard certificate exists whenever the Caddyfile names it =="
+# A machine that SKIPS the wizard (pre-seeded config, or a reinstall whose preserved /data
+# already held config.json) still gets a certificate: the Caddyfile named a file only the wizard
+# used to create, so Caddy answered :443 with no usable cert and the dashboard failed the TLS
+# handshake outright — a bench machine looked hung while serving a broken listener.
+TLSSB=$(mktemp -d)
+export PITHEAD_TLS_DIR="$TLSSB/tls"
+fp1=$(run_sourced "$SANDBOX" appliance_mint_cert 2>/dev/null)
+[ -s "$TLSSB/tls/wizard.crt" ] && ok "mints a certificate on demand" || bad "mints a certificate on demand" "no crt"
+[ -s "$TLSSB/tls/wizard.key" ] && ok "mints the matching key" || bad "mints the matching key" "no key"
+assert_contains "prints a SHA-256 fingerprint" "$fp1" ":"
+# Idempotent: the operator has already trusted this one, so a second call must NOT replace it.
+fp2=$(run_sourced "$SANDBOX" appliance_mint_cert 2>/dev/null)
+assert_eq "an existing certificate is reused, never replaced" "$fp2" "$fp1"
+unset PITHEAD_TLS_DIR
+rm -rf "$TLSSB"
+unset TLSSB fp1 fp2
+
 echo "== unit: preflight_remote_nodes dials before provisioning commits =="
 PFSB=$(mktemp -d)
 printf '{"monero":{"mode":"local"},"tari":{"mode":"local"}}' >"$PFSB/local.json"

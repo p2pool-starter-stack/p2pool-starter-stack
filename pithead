@@ -3112,31 +3112,37 @@ _console() { # $1... lines
 # A bench session hit exactly that: the setup page "died" at the moment provisioning succeeded.
 appliance_tls_dir() { printf '%s' "${PITHEAD_TLS_DIR:-$PWD/data/tls}"; }
 
-wizard_mint_cert() { # <spool-dir>  -> prints the fingerprint
-    local d spool="$1" alt ip
+# Mint (or keep) the machine's ONE certificate in appliance_tls_dir. Idempotent: an existing
+# certificate that still covers the machine's names is reused, because the operator has already
+# trusted it and replacing it is indistinguishable from an attack.
+appliance_mint_cert() { # -> prints the SHA-256 fingerprint
+    local d alt ip
     d=$(appliance_tls_dir)
     mkdir -p "$d"
     alt="DNS:$(hostname).local,DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
     for ip in $(hostname -I 2>/dev/null); do alt="$alt,IP:$ip"; done
-    # Reuse an existing certificate that still covers every current address; regenerate only when
-    # the machine's names have actually changed (a new DHCP lease, a rename).
     if [ -s "$d/wizard.crt" ] && [ -s "$d/wizard.key" ] &&
         openssl x509 -in "$d/wizard.crt" -noout -text 2>/dev/null | tr -d ' ' | grep -q "$(printf '%s' "$alt" | tr -d ' ' | cut -d, -f1)"; then
-        : # keep it — the operator has already trusted this one
+        : # keep it
     elif ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
         -keyout "$d/wizard.key" -out "$d/wizard.crt" \
         -subj "/CN=$(hostname).local" -addext "subjectAltName=$alt" \
         -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1; then
         return 1
     fi
+    openssl x509 -in "$d/wizard.crt" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//'
+}
+
+wizard_mint_cert() { # <spool-dir>  -> prints the fingerprint
+    local d spool="$1" fp
+    d=$(appliance_tls_dir)
+    fp=$(appliance_mint_cert) || return 1
+    # The container reads its copy from the spool; the canonical pair stays on /data.
     cp "$d/wizard.crt" "$spool/wizard.crt" 2>/dev/null || return 1
     cp "$d/wizard.key" "$spool/wizard.key" 2>/dev/null || return 1
-    d="$spool"
-    # The container runs as uid 1000 and must read both halves.
-    chown 1000:1000 "$d/wizard.key" "$d/wizard.crt" 2>/dev/null || true
-    chmod 640 "$d/wizard.key" 2>/dev/null || true
-    openssl x509 -in "$d/wizard.crt" -noout -fingerprint -sha256 2>/dev/null |
-        sed 's/^.*=//'
+    chown 1000:1000 "$spool/wizard.key" "$spool/wizard.crt" 2>/dev/null || true
+    chmod 640 "$spool/wizard.key" 2>/dev/null || true
+    printf '%s' "$fp"
 }
 
 # An appliance gets a dashboard login whether or not the onion is on.
@@ -5030,9 +5036,25 @@ generate_caddyfile() {
     # the operator's trust decision survives the handoff. Without this the wizard's cert is
     # replaced by Caddy's own at the exact moment provisioning succeeds, and the browser that
     # trusted the first one refuses the second: the setup page appears to die on success.
-    local tls_line="    tls internal"
-    if is_appliance && [ -s "$(appliance_tls_dir)/wizard.crt" ] && [ -s "$(appliance_tls_dir)/wizard.key" ]; then
-        tls_line="    tls /pithead-tls/wizard.crt /pithead-tls/wizard.key"
+    local tls_line="    tls internal" tlsd
+    if is_appliance; then
+        # MINT IT HERE if it is missing. The certificate was previously created only by the setup
+        # wizard, so any machine that skips the wizard — a pre-seeded config, or a reinstall whose
+        # preserved /data already held config.json — reached this point with the Caddyfile naming
+        # a file that did not exist. Caddy then answered :443 without a usable certificate and the
+        # dashboard failed the TLS handshake outright (ERR_SSL_PROTOCOL_ERROR): a bench machine
+        # looked hung when it was serving a broken listener. Generating on demand makes the
+        # directive true by construction, and the mint is idempotent — an existing certificate the
+        # operator has already trusted is reused, never replaced.
+        tlsd=$(appliance_tls_dir)
+        if [ ! -s "$tlsd/wizard.crt" ] || [ ! -s "$tlsd/wizard.key" ]; then
+            appliance_mint_cert >/dev/null 2>&1 || true
+        fi
+        if [ -s "$tlsd/wizard.crt" ] && [ -s "$tlsd/wizard.key" ]; then
+            tls_line="    tls /pithead-tls/wizard.crt /pithead-tls/wizard.key"
+        else
+            warn "Could not provide a certificate for the dashboard — falling back to Caddy's own."
+        fi
     fi
     if [ "$DASHBOARD_SECURE" == "true" ]; then
         log "Generating Caddyfile for automatic HTTPS ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
