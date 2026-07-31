@@ -747,8 +747,13 @@ class TestStatusWarnings:
     """/status surfaces the same warning/error badges as the dashboard top bar (#104), reusing
     build_badges so the two never drift; informational states ('Syncing…') are excluded."""
 
-    def test_bad_and_flagged_warn_badges_included_stripped(self):
+    def test_bad_and_flagged_warn_badges_included_stripped(self, monkeypatch):
         # Low RAM (⚠ warn) + DB failing (bad) both surface; the leading ⚠ is stripped for the list.
+        # Modes pinned full-local so the mode-aware floor (14) makes 8 GB a real warning.
+        import mining_dashboard.web.views as views_mod
+
+        monkeypatch.setattr(views_mod, "monero_is_local", lambda: True)
+        monkeypatch.setattr(views_mod, "tari_is_local", lambda: True)
         warnings = tc.status_warnings(
             {"system": {"memory": {"total_gb": 8}}}, _metrics(), db_healthy=False
         )

@@ -50,7 +50,6 @@ from mining_dashboard.config.config import (
     HASHRATE_DROP_MINUTES,
     HASHRATE_DROP_THRESHOLD_PCT,
     HOST_IP,
-    LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     MONERO_WALLET_ADDRESS,
     PAYOUT_CONFIRM_ENABLED,
@@ -64,6 +63,9 @@ from mining_dashboard.config.config import (
     UPDATE_INTERVAL,
     WORKER_FALLOFF_SEC,
     XVB_REGISTER_INTERVAL_S,
+    low_ram_floor_gb,
+    monero_is_local,
+    tari_is_local,
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
@@ -1532,7 +1534,11 @@ class DataService:
                         # reserved (recoverable via reboot); low_ram compares live total to the
                         # threshold. avx2 is badge-only (no alert), so it isn't passed here.
                         hugepages_reserved=(hugepages[0] != "Disabled"),
-                        low_ram=(0 < (memory.get("total_gb") or 0) < LOW_RAM_GB),
+                        low_ram=(
+                            0
+                            < (memory.get("total_gb") or 0)
+                            < low_ram_floor_gb(monero_is_local(), tari_is_local())
+                        ),
                         # Trailing-1h reject rate from the delta series (#116); None while no
                         # shares were submitted in the window, which the edge treats as "no
                         # verdict" rather than healthy.

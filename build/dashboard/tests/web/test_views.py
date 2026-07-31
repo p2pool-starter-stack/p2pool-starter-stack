@@ -682,9 +682,20 @@ class TestBadges:
             out = build_badges({"system": {"hugepages": [status, "", "1/2"]}}, _metrics(), "ok")
             assert not any("HugePages" in b["text"] for b in out), status
 
-    def test_low_ram_badge(self):
+    def test_low_ram_badge_tracks_what_runs_locally(self, monkeypatch):
+        # The floor is MODE-AWARE: 8 GB is too little for a full-local stack, fine for a
+        # coordinator whose nodes are remote — remote nodes take their appetite with them.
+        import mining_dashboard.web.views as views_mod
+
+        monkeypatch.setattr(views_mod, "monero_is_local", lambda: True)
+        monkeypatch.setattr(views_mod, "tari_is_local", lambda: True)
         out = build_badges({"system": {"memory": {"total_gb": 8}}}, _metrics(), "ok")
         assert any(b["variant"] == "warn" and "Low RAM (8 GB)" in b["text"] for b in out)
+
+        monkeypatch.setattr(views_mod, "monero_is_local", lambda: False)
+        monkeypatch.setattr(views_mod, "tari_is_local", lambda: False)
+        out = build_badges({"system": {"memory": {"total_gb": 8}}}, _metrics(), "ok")
+        assert not any("Low RAM" in b["text"] for b in out)
 
     def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self):
         # 15.6 is what a NOMINAL 16 GB machine actually reports (reserved memory, GiB-vs-GB) —

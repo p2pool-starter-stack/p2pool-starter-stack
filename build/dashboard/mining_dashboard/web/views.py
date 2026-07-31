@@ -25,9 +25,11 @@ from mining_dashboard.config.config import (
     HASHRATE_WINDOWS,
     HOST_IP,
     LOW_RAM_AVAILABLE_GB,
-    LOW_RAM_GB,
     UPDATE_INTERVAL,
     XVB_MAX_DONATION_FRACTION,
+    low_ram_floor_gb,
+    monero_is_local,
+    tari_is_local,
 )
 from mining_dashboard.helper.utils import (
     detect_host_ipv4,
@@ -1433,12 +1435,15 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
     memory = system.get("memory") or {}
     ram_total = memory.get("total_gb", 0) or 0
     ram_avail = memory.get("available_gb")
-    if 0 < ram_total < LOW_RAM_GB:
+    # The floor tracks what THIS machine runs locally: remote nodes take their appetite with
+    # them, and a light coordinator must not be told to buy RAM for a node it does not run.
+    floor = low_ram_floor_gb(monero_is_local(), tari_is_local())
+    if 0 < ram_total < floor:
         badges.append(
             {
                 "text": f"⚠ Low RAM ({ram_total:.0f} GB)",
                 "variant": "warn",
-                "title": f"Under {LOW_RAM_GB} GB of usable RAM — syncing (Tari especially) is memory-heavy and can OOM. Add RAM for a stable node.",
+                "title": f"Under {floor:g} GB of usable RAM for what this machine runs locally — syncing (Tari especially) is memory-heavy and can OOM. Add RAM for a stable node.",
             }
         )
     # Pressure is a LIVE signal, separate from capacity: a big box can still be out of memory,
