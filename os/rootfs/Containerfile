@@ -132,6 +132,11 @@ COPY os/rootfs/repart.d/ /usr/lib/repart.d/
 # compose-managed, and podman-restart started the containers into its own oneshot cgroup — then
 # systemd stopped the unit and SIGKILLed the conmon processes it had just spawned. The boot unit
 # also re-renders derived config (#790) and health-gates the A/B slot commit (#793).
+# mDNS over IPv4 only: advertising AAAA records made clients that cannot route to the box's
+# IPv6 (a Wi-Fi laptop on a different segment than the box's ethernet) try v6 first and stall
+# on ERR_ADDRESS_UNREACHABLE before falling back — pithead.local "took forever" on a healthy
+# LAN. The console prints the v4 address; the name should resolve to the same thing.
+RUN sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf
 RUN systemctl enable podman.socket pithead-boot.service avahi-daemon systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
     && systemctl disable ssh

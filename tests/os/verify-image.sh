@@ -75,6 +75,8 @@ chk "kernel root by probed PARTUUID, never label" 'grep -q "probe --set=PU --par
 # away is a defect. Journald keeps everything regardless.
 chk "console is quieted so the token stays readable" 'grep -q "loglevel=4" "$ESP/grub/grub.cfg"'
 chk "display hotplug polling off (repeated EDID spam)" 'grep -q "drm_kms_helper.poll=0" "$ESP/grub/grub.cfg"'
+# mDNS advertises IPv4 only — AAAA records stalled clients that cannot route to the box's v6.
+chk "avahi is IPv4-only (no unreachable-AAAA stall)" 'grep -q "^use-ipv6=no" "$ROOT/etc/avahi/avahi-daemon.conf"'
 # Boot recovery is compose-owned (#792): pithead-boot renders + ups + health-gates the slot
 # commit. podman-restart started the stack into its own cgroup and SIGKILLed it on unit stop.
 chk "pithead-boot unit enabled" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-boot.service"'
