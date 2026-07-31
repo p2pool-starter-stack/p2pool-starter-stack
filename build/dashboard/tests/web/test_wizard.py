@@ -402,11 +402,16 @@ async def test_fresh_disk_with_default_wipe_keep_is_a_normal_install(client, ins
     assert (installer / "config.json").exists()
 
 
-async def test_keep_on_a_disk_without_an_install_is_refused(client, installer):
+async def test_keep_on_a_blank_disk_falls_through_to_a_normal_install(client, installer):
+    # The page never offers keep on a blank disk; a bare submit there is treated as a fresh
+    # install whose (empty) config the HOST rejects with a named reason — the server does not
+    # guess intent. The no-JS form path made an early 400 impossible to distinguish from a
+    # legitimate field submit; the gate caught exactly that as a broken fresh install.
     await _auth(client)
     r = await client.post("/submit", data={"disk": "nvme0n1", "confirm": "nvme0n1", "wipe": "keep"})
-    assert r.status == 400
-    assert not (installer / "install-request").exists()
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "nvme0n1\tkeep"
+    assert (installer / "config.json").exists()
 
 
 async def test_wipe_is_normalized_to_keep_on_a_disk_with_nothing_to_wipe(client, installer):

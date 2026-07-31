@@ -332,12 +332,10 @@ async def submit(request: web.Request) -> web.Response:
             _spool_clear_error()
             _spool_write_text("install-request", f"{disk}\tkeep")
             return web.json_response({"status": "accepted"})
-        if not raw:
-            # Nothing to keep and nothing submitted — only the keep-everything page omits the
-            # config, and it never offers a blank disk for it.
-            return web.json_response({"error": "that disk has no install to keep"}, status=400)
-        # A fresh disk with wipe=keep (the client's default) is just a fresh install — fall
-        # through to the normal path, which normalizes the wipe mode away.
+        # A blank disk with wipe=keep (the client's default) is just a fresh install — fall
+        # through unconditionally. The no-JS path submits individual form FIELDS, not a config
+        # blob, so "no config present" cannot distinguish a bare keep from a form submit; the
+        # host's validation names what is missing either way.
     # The JSON pane IS the configuration — what the operator can see is exactly what gets
     # applied. build_config remains the fallback for a client with no JavaScript.
     try:
