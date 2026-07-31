@@ -1514,6 +1514,14 @@ firstboot_wizard() {
     # shellcheck disable=SC2064  # expand-now is the point (see above)
     trap "'$engine' rm -f pithead-wizard >/dev/null 2>&1 || true" EXIT
     while :; do
+        # Every wizard session starts with CLEAN flow state. The spool lives on this medium's
+        # /data, which survives reboots — so a fleet stick that installed machine 1 still
+        # carries its handoff.json, ack and installed markers, and machine 2's boot would open
+        # on the switch-off page with machine 1's stale credentials card still answering.
+        # error.txt and last-attempt.json survive on purpose: they are the retry context the
+        # failed-provisioning path just wrote for the reopened page.
+        rm -f "$spool/handoff.json" "$spool/handoff-ack" "$spool/installing" \
+            "$spool/installed" "$spool/applied" "$spool/install-request"
         # A pre-seeded token is the operator's own choice and stays fixed across restarts of
         # this loop; without one, mint a fresh secret every round.
         token=$(preseed_token) || token=$(wizard_mint_token)
