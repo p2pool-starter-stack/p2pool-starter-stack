@@ -1,187 +1,174 @@
 {
-    "_docs": "Reference for every config.json key, each shown with its default value. Copy ONLY the keys you actually want to change into config.json; any key you omit keeps the default below. The string \"auto\" means 'let the stack decide' (default path / hostname / donor id), and blank node_username/node_password on a local node means 'auto-generate the RPC credentials'. Full descriptions: https://github.com/p2pool-starter-stack/pithead/blob/main/docs/configuration.md#configuration-reference",
-
-    "monero": {
-        "mode": "local",
-        "wallet_address": "your_monero_wallet_address",
-        "node_username": "",
-        "node_password": "",
-        "view_key": "",
-        "payout_scan_height": "auto",
-
-        "prune": true,
-        "clearnet_initial_sync": false,
-        "prep_blocks_threads": "auto",
-        "out_peers": 48,
-        "rpc_lan_access": false,
-        "zmq_lan_access": false,
-        "data_dir": "auto",
-        "mem_limit": "auto",
-
-        "remote": {
-            "host": "node.remote-monero-host.com",
-            "rpc_port": 18081,
-            "zmq_port": 18083
-        }
-    },
-
-    "tari": {
-        "mode": "local",
-        "wallet_address": "your_tari_wallet_address",
-        "view_key": "",
-        "spend_public_key": "",
-        "payout_scan_birthday": "auto",
-        "grpc_lan_access": false,
-        "clearnet_initial_sync": false,
-        "data_dir": "auto",
-        "mem_limit": "auto",
-
-        "remote": {
-            "host": "tari-node.lan",
-            "grpc_port": 18142
-        }
-    },
-
-    "p2pool": {
-        "pool": "mini",
-        "stratum_bind": "0.0.0.0",
-        "stratum_port": 3333,
-        "stratum_password": "",
-        "stratum_tls": false,
-        "clearnet": false,
-        "data_dir": "auto"
-    },
-
-    "proxy": {
-        "donate_level": 0
-    },
-
-    "local_miner": {
-        "enabled": false
-    },
-
-    "xvb": {
-        "enabled": true,
-        "url": "na.xmrvsbeast.com:4247",
-        "donor_id": "auto",
-        "donation_level": "auto",
-        "tor": true,
-        "standby": {
-            "source": ""
-        }
-    },
-
-    "xmrig_proxy": {
-        "_docs": "DEPRECATED backward-compat alias for xvb.* (the block was renamed). Kept in the schema so a config.json that predates the rename still validates through the dashboard control channel; xvb.* wins when both are present. Use xvb.* in new configs.",
-        "enabled": true,
-        "url": "na.xmrvsbeast.com:4247",
-        "donor_id": "auto"
-    },
-
-    "tor": {
-        "data_dir": "auto",
-        "auto_heal": false
-    },
-
-    "dashboard": {
-        "secure": true,
-        "host": "auto",
-        "port": "auto",
-        "timezone": "auto",
-        "data_dir": "auto",
-        "tari_required": true,
-        "fail_closed": false,
-        "check_for_updates": true,
-        "hashrate_drop_threshold": 50,
-        "hashrate_drop_minutes": 10,
-        "auth": {
-            "username": "admin",
-            "password": ""
-        },
-        "onion": {
-            "enabled": false,
-            "client_auth": true
-        },
-        "control": {
-            "enabled": false
-        },
-        "energy": {
-            "cost_per_kwh": 0,
-            "currency": "USD",
-            "price_feed": false,
-            "tari_price": 0,
-            "xmr_price": 0
-        },
-        "_workers_docs": "DEPRECATED alias for the top-level workers.list[] (the block was relocated, #506). Kept in the schema so a config.json that predates the move still validates through the dashboard control channel; setting both workers.list[] and dashboard.workers[] is a hard error at apply. Use workers.list[] in new configs. Removed in v1.9.",
-        "workers": []
-    },
-
-    "workers": {
-        "api_port": 8080,
-        "api_auth": "none",
-        "api_token": "",
-        "list": []
-    },
-
-    "network": {
-        "subnet": "172.28.0.0/24",
-        "tor_egress_firewall": true
-    },
-
-    "healthchecks": {
-        "ping_url": ""
-    },
-
-    "telegram": {
-        "enabled": false,
-        "bot_token": "",
-        "chat_id": "",
-        "events": {
-            "node_down": true,
-            "node_recovered": true,
-            "worker_offline": true,
-            "worker_recovered": true,
-            "worker_joined": true,
-            "worker_left": true,
-            "sync_finished": true,
-            "disk_space": true,
-            "db_unhealthy": true,
-            "db_reset": true,
-            "xvb_no_share": true,
-            "clearnet_exposed": true,
-            "xvb_registration": true,
-            "new_release": true,
-            "stack_online": true,
-            "daily_summary": true,
-            "hashrate_low": true,
-            "hashrate_loss": true,
-            "hugepages": true,
-            "low_ram": true,
-            "wallet_changed": true,
-            "high_reject_rate": true,
-            "block_found": true,
-            "payout_found": true,
-            "payout_confirmed": true,
-            "container_unhealthy": true,
-            "raffle_win": true
-        },
-        "daily_summary_time": "08:00",
-        "commands": {
-            "enabled": false
-        },
-        "control": {
-            "enabled": false,
-            "allowed_ids": [],
-            "confirm_timeout": 60
-        }
-    },
-
-    "notifications": {
-        "webhooks": [],
-        "ntfy": {
-            "url": "",
-            "token": ""
-        },
-        "tor": true
+  "_docs": "Reference for every config.json key, each shown with its default value. Copy ONLY the keys you actually want to change into config.json; any key you omit keeps the default below. The string \"auto\" means 'let the stack decide' (default path / hostname / donor id), and blank node_username/node_password on a local node means 'auto-generate the RPC credentials'. Full descriptions: https://github.com/p2pool-starter-stack/pithead/blob/main/docs/configuration.md#configuration-reference",
+  "monero": {
+    "mode": "local",
+    "wallet_address": "your_monero_wallet_address",
+    "node_username": "",
+    "node_password": "",
+    "view_key": "",
+    "payout_scan_height": "auto",
+    "prune": true,
+    "clearnet_initial_sync": false,
+    "prep_blocks_threads": "auto",
+    "out_peers": 48,
+    "rpc_lan_access": false,
+    "zmq_lan_access": false,
+    "data_dir": "auto",
+    "mem_limit": "auto",
+    "remote": {
+      "host": "node.remote-monero-host.com",
+      "rpc_port": 18081,
+      "zmq_port": 18083
     }
+  },
+  "tari": {
+    "mode": "local",
+    "wallet_address": "your_tari_wallet_address",
+    "view_key": "",
+    "spend_public_key": "",
+    "payout_scan_birthday": "auto",
+    "grpc_lan_access": false,
+    "clearnet_initial_sync": false,
+    "data_dir": "auto",
+    "mem_limit": "auto",
+    "remote": {
+      "host": "tari-node.lan",
+      "grpc_port": 18142
+    }
+  },
+  "p2pool": {
+    "pool": "mini",
+    "stratum_bind": "0.0.0.0",
+    "stratum_port": 3333,
+    "stratum_password": "",
+    "stratum_tls": false,
+    "clearnet": false,
+    "data_dir": "auto"
+  },
+  "proxy": {
+    "donate_level": 0
+  },
+  "local_miner": {
+    "enabled": false
+  },
+  "xvb": {
+    "enabled": true,
+    "url": "na.xmrvsbeast.com:4247",
+    "donor_id": "auto",
+    "donation_level": "auto",
+    "tor": true,
+    "standby": {
+      "source": ""
+    }
+  },
+  "xmrig_proxy": {
+    "_docs": "DEPRECATED backward-compat alias for xvb.* (the block was renamed). Kept in the schema so a config.json that predates the rename still validates through the dashboard control channel; xvb.* wins when both are present. Use xvb.* in new configs.",
+    "enabled": true,
+    "url": "na.xmrvsbeast.com:4247",
+    "donor_id": "auto"
+  },
+  "tor": {
+    "data_dir": "auto",
+    "auto_heal": false
+  },
+  "dashboard": {
+    "secure": true,
+    "host": "auto",
+    "port": "auto",
+    "timezone": "auto",
+    "data_dir": "auto",
+    "tari_required": true,
+    "fail_closed": false,
+    "check_for_updates": true,
+    "hashrate_drop_threshold": 50,
+    "hashrate_drop_minutes": 10,
+    "auth": {
+      "username": "admin",
+      "password": ""
+    },
+    "onion": {
+      "enabled": false,
+      "client_auth": true
+    },
+    "control": {
+      "enabled": false
+    },
+    "energy": {
+      "cost_per_kwh": 0,
+      "currency": "USD",
+      "price_feed": false,
+      "tari_price": 0,
+      "xmr_price": 0
+    },
+    "_workers_docs": "DEPRECATED alias for the top-level workers.list[] (the block was relocated, #506). Kept in the schema so a config.json that predates the move still validates through the dashboard control channel; setting both workers.list[] and dashboard.workers[] is a hard error at apply. Use workers.list[] in new configs. Removed in v1.9.",
+    "workers": []
+  },
+  "workers": {
+    "api_port": 8080,
+    "api_auth": "none",
+    "api_token": "",
+    "list": []
+  },
+  "network": {
+    "subnet": "172.28.0.0/24",
+    "tor_egress_firewall": true
+  },
+  "ssh": {
+    "enabled": false,
+    "authorized_key": ""
+  },
+  "healthchecks": {
+    "ping_url": ""
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": "",
+    "events": {
+      "node_down": true,
+      "node_recovered": true,
+      "worker_offline": true,
+      "worker_recovered": true,
+      "worker_joined": true,
+      "worker_left": true,
+      "sync_finished": true,
+      "disk_space": true,
+      "db_unhealthy": true,
+      "db_reset": true,
+      "xvb_no_share": true,
+      "clearnet_exposed": true,
+      "xvb_registration": true,
+      "new_release": true,
+      "stack_online": true,
+      "daily_summary": true,
+      "hashrate_low": true,
+      "hashrate_loss": true,
+      "hugepages": true,
+      "low_ram": true,
+      "wallet_changed": true,
+      "high_reject_rate": true,
+      "block_found": true,
+      "payout_found": true,
+      "payout_confirmed": true,
+      "container_unhealthy": true,
+      "raffle_win": true
+    },
+    "daily_summary_time": "08:00",
+    "commands": {
+      "enabled": false
+    },
+    "control": {
+      "enabled": false,
+      "allowed_ids": [],
+      "confirm_timeout": 60
+    }
+  },
+  "notifications": {
+    "webhooks": [],
+    "ntfy": {
+      "url": "",
+      "token": ""
+    },
+    "tor": true
+  }
 }

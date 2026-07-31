@@ -158,6 +158,13 @@ Then a handful of choices, all with sensible defaults:
 | Time zone | UTC | For dashboard timestamps. |
 | Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. |
 
+The dashboard login is also the machine's **console login**: sit at the machine, log in as
+`root` with the dashboard password. It is set fresh at every boot and never stored on disk.
+Two more switches live only in the **Advanced** view, deliberately out of the quick form:
+`ssh.enabled` with `ssh.authorized_key` turns on key-only SSH (never passwords) for remote
+debugging. Neither can be changed from the dashboard later — anyone who could flip them from a
+browser session would own the machine, wallets and all.
+
 **Already know exactly what you want?** Open **Advanced** at the bottom. It shows the complete
 configuration — every key, with its default filled in — and it *is* what the machine will run:
 answering a question above rewrites it, and editing it directly wins. Paste a whole
@@ -236,6 +243,10 @@ it does, nothing is listening and the address will refuse the connection — tha
 normal first-boot wait, not a fault. If the token is showing, check the ethernet cable and
 try the IP the console prints as well as <https://pithead.local>; some networks filter the
 `.local` name. Plain `http://` addresses redirect to `https://`, so either spelling works. Wi-Fi is not supported, so a wireless-only network will not work.
+
+**You need a shell on the machine.** Log in at its console as `root` with the dashboard
+password. For SSH, set `ssh.enabled` and `ssh.authorized_key` in the Advanced view at setup —
+key-only, and only if you need it.
 
 **"Wrong token."** The token changes each time the setup service restarts — read the
 current one from the console. After five wrong attempts it mints a new one on purpose.

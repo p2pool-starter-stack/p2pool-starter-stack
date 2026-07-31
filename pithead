@@ -424,6 +424,8 @@ stack_upgrade() {
     inject_service_configs
     generate_caddyfile
     provision_control_runner # #33: converge the control-runner units on the current toggle
+    provision_ssh_access
+    provision_console_login
     log "Re-rendered generated config for the current release."
     migrate_compose_project
     # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
@@ -3170,6 +3172,76 @@ _console() { # $1... lines
 # A bench session hit exactly that: the setup page "died" at the moment provisioning succeeded.
 appliance_tls_dir() { printf '%s' "${PITHEAD_TLS_DIR:-$PWD/data/tls}"; }
 
+# The console login mirrors the dashboard login (operator decision 2026-07-31): one secret per
+# machine. Anyone at the physical console with the dashboard password may log in as root —
+# consistent with the LAN/physical trust model (the console already shows the setup token, and
+# SSH stays key-only regardless: PasswordAuthentication never turns on). Re-asserted on every
+# render, so a changed dashboard password propagates and an empty one locks the console again.
+provision_console_login() {
+    is_appliance || return 0
+    command -v chpasswd >/dev/null 2>&1 || return 0
+    # /etc/shadow sits on the read-only root, so the password lives in a /run-backed overlay on
+    # /etc — DERIVED (#790) in the strictest sense: rewritten from config.json on every boot,
+    # persisted nowhere, gone the moment the machine powers off. (A bind-mounted shadow FILE
+    # does not survive chpasswd, which replaces the file by rename.)
+    if ! findmnt -no FSTYPE /etc 2>/dev/null | grep -q overlay; then
+        sudo mkdir -p /run/pithead-etc/upper /run/pithead-etc/work
+        sudo mount -t overlay overlay \
+            -o lowerdir=/etc,upperdir=/run/pithead-etc/upper,workdir=/run/pithead-etc/work /etc ||
+            {
+                warn "Could not prepare the console login (no /etc overlay)."
+                return 0
+            }
+    fi
+    local pass
+    pass=$(jq -r '.dashboard.auth.password // ""' "$CONFIG_FILE" 2>/dev/null)
+    if [ -z "$pass" ]; then
+        sudo passwd -l root >/dev/null 2>&1 || true
+        return 0
+    fi
+    printf 'root:%s\n' "$pass" | sudo chpasswd 2>/dev/null &&
+        log "Console login set: root, with the dashboard password." ||
+        warn "Could not set the console login."
+}
+
+# SSH per config (ssh.enabled + ssh.authorized_key) — the appliance's opt-in debug and
+# recovery path (#786). Key-only, never passwords. Everything it writes is DERIVED (#790) and
+# lives on tmpfs: the key under /run/pithead-ssh, sshd's override under /run/systemd/system —
+# rebuilt every boot by render, gone on the first boot after the flag turns off, and no key
+# material ever rests on disk outside config.json itself. Appliance-only: a DIY host owns its
+# own sshd. Deliberately in the HOST-ONLY config class (never dashboard-editable): a dashboard
+# session that could enable SSH and choose the key would own the machine.
+provision_ssh_access() {
+    is_appliance || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local unit_d="${PITHEAD_UNIT_DIR:-/run/systemd/system}/ssh.service.d"
+    local key_d="${PITHEAD_SSH_RUN_DIR:-/run/pithead-ssh}" en key
+    en=$(jq -r '.ssh.enabled // false' "$CONFIG_FILE" 2>/dev/null)
+    key=$(jq -r '.ssh.authorized_key // ""' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$en" != "true" ] || [ -z "$key" ]; then
+        if [ -e "$unit_d/pithead.conf" ] || [ -d "$key_d" ]; then
+            log "SSH is OFF (ssh.enabled) — removing the runtime access."
+            rm -rf "$unit_d" "$key_d"
+            sudo systemctl daemon-reload
+            sudo systemctl stop ssh >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+    mkdir -p "$unit_d" "$key_d"
+    chmod 755 "$key_d" # sshd's StrictModes walks the path — group/world-writable would refuse
+    printf '%s\n' "$key" >"$key_d/authorized_keys"
+    chmod 644 "$key_d/authorized_keys"
+    cat >"$unit_d/pithead.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/sshd -D -o AuthorizedKeysFile=$key_d/authorized_keys -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PermitRootLogin=prohibit-password
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl start ssh >/dev/null 2>&1 ||
+        warn "Could not start sshd — ssh.enabled is set but SSH is not running."
+    log "SSH is ON (key-only): root@$(hostname).local"
+}
+
 # Mint (or keep) the machine's ONE certificate in appliance_tls_dir. Idempotent: an existing
 # certificate that still covers the machine's names is reused, because the operator has already
 # trusted it and replacing it is indistinguishable from an attack.
@@ -3406,6 +3478,15 @@ parse_and_validate_config() {
     # future field is missed. No legitimate config value contains a control character.
     if jq -e 'any(.. | strings; test("[[:cntrl:]]"))' "$CONFIG_FILE" >/dev/null 2>&1; then
         error "$CONFIG_FILE has a config value containing a control character or newline. That is not allowed — it could inject an extra line into the stack's .env. Remove the newline/control character (check secrets like node_password, bot_token, api_token)."
+    fi
+
+    # ssh.enabled without a key is a lockout-shaped mistake: sshd would run with nothing to
+    # accept. Key-only by design — password auth never turns on.
+    if [ "$(jq -r '.ssh.enabled // false' "$CONFIG_FILE")" = "true" ]; then
+        case "$(jq -r '.ssh.authorized_key // ""' "$CONFIG_FILE")" in
+        ssh-* | ecdsa-* | sk-*) ;;
+        *) error "ssh.enabled is true but ssh.authorized_key is not a public key (expected it to start with ssh-, ecdsa- or sk-). Paste the PUBLIC key (e.g. ~/.ssh/id_ed25519.pub)." ;;
+        esac
     fi
 
     # Required fields
@@ -4138,6 +4219,10 @@ update_current_symlink() {
 # effect). Interactive setup prompts, defaulting to any previously-set value then the hostname.
 resolve_dashboard_host() {
     local allow_prompt="${1:-}"
+    # An interactive ask with no terminal is an EOF that silently picks the bare hostname —
+    # exactly what happened on the appliance's headless pre-seed boot, whose dashboard then
+    # served a name no LAN client resolves. No tty → the non-interactive rules decide.
+    [ "$allow_prompt" == "interactive" ] && ! [ -t 0 ] && allow_prompt=""
     if [ -n "${DASHBOARD_HOST:-}" ]; then
         HOST_IP="$DASHBOARD_HOST"
         log "Using dashboard hostname '$HOST_IP' from $CONFIG_FILE."
@@ -6340,6 +6425,8 @@ render_derived() {
     generate_caddyfile
     provision_onion_client_auth
     provision_control_runner
+    provision_ssh_access
+    provision_console_login
     log "Derived configuration regenerated from config.json."
 }
 
@@ -6467,7 +6554,9 @@ apply() {
     # Client-auth keys must be written before tor is recreated below, so an onion just turned on (or a
     # client-auth toggle) takes effect on this apply rather than the next (#343).
     provision_onion_client_auth
-    provision_control_runner # #33: converge the control-runner units on the (new) toggle
+    provision_control_runner
+    provision_ssh_access
+    provision_console_login # #33: converge the control-runner units on the (new) toggle
 
     log "Updating containers..."
     migrate_compose_project

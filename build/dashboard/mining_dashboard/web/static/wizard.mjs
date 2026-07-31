@@ -111,19 +111,20 @@ export const InstallSection = ({ disks, chosen, confirm, wipe, onPick, onConfirm
     ${
       picked &&
       picked.state === "pithead-with-data" &&
-      html`<${Field} label="This disk holds a previous install">
-        <label class="choice"><input type="radio" name="wipe" value="keep"
-            checked=${wipe === "keep"} onChange=${onWipe} />
-            Keep my data — settings, wallets and the synced chains all survive</label>
-        <label class="choice"><input type="radio" name="wipe" value="data"
-            checked=${wipe === "data"} onChange=${onWipe} />
-            Fresh start, keep the blockchains — settings and wallets are wiped, the synced
-            chains (days of downloading) survive</label>
-        <label class="choice"><input type="radio" name="wipe" value="all"
-            checked=${wipe === "all"} onChange=${onWipe} />
-            <span class="c-bad">Wipe everything</span> — including the synced chains; the new
-            install re-downloads them from scratch</label>
+      html`<${Field} label="It holds a previous install — what happens to its data?">
+        <select value=${wipe} onChange=${onWipe}>
+            <option value="keep">Keep everything — settings, wallets and the synced chains (default)</option>
+            <option value="data">Fresh start, keep the blockchains — settings and wallets are wiped</option>
+            <option value="all">Wipe everything — the chains re-download from scratch</option>
+        </select>
     <//>`
+    }
+    ${
+      picked &&
+      picked.state === "pithead-with-data" &&
+      wipe === "all" &&
+      html`<p class="c-bad">Everything on ${picked.name} is erased — including synced chains
+        that took days to download.</p>`
     }
     ${
       picked &&

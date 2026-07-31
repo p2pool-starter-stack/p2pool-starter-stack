@@ -51,14 +51,21 @@ test("picker: an empty disk restates the erase in red, and offers NO wipe choice
   assert.doesNotMatch(destructive, /Keep my data/);
 });
 
-test("picker: a previous install offers the three-way data choice, consequences spelled out", () => {
+test("picker: a previous install offers the three-way data choice as a dropdown", () => {
   const out = sect({ chosen: "sda" });
-  assert.match(out, /Keep my data/);
+  assert.match(out, /Keep everything/);
   assert.match(out, /keep the blockchains/);
   assert.match(out, /Wipe everything/);
   // The expensive consequence is named where the choice is made, not discovered later.
-  assert.match(out, /days of downloading/);
-  assert.match(out, /re-downloads them from scratch/);
+  assert.match(out, /re-download from scratch/);
+  // Not yet the red warning — that appears only once "all" is chosen.
+  assert.doesNotMatch(out, /took days to download/);
+});
+
+test("picker: choosing 'wipe everything' surfaces the red consequence line", () => {
+  const out = sect({ chosen: "sda", wipe: "all" });
+  assert.match(out, /took days to download/);
+  assert.match(out, /c-bad/);
 });
 
 test("installing: the completion is the shutdown, steps in un-swappable order", () => {

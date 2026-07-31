@@ -7539,6 +7539,67 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: headless setup resolves the appliance's browsable name, never the bare hostname =="
+# 'interactive' with no terminal is an EOF that silently picked $(hostname) — the appliance's
+# dashboard then served a name no LAN client resolves (a bench machine showed a BLANK page:
+# pithead.local hit Caddy's empty default vhost). No tty -> the non-interactive rules decide.
+RDH=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    log() { :; }
+    PITHEAD_APPLIANCE=1 DASHBOARD_HOST="" resolve_dashboard_host interactive </dev/null
+    printf '%s' "$HOST_IP"
+)
+assert_eq "no tty + appliance -> <hostname>.local" "$RDH" "$(hostname).local"
+unset RDH
+
+echo "== unit: ssh access is derived — key-only, /run-resident, absent when disabled (#786) =="
+SSHSB="$SANDBOX/sshsb"
+mkdir -p "$SSHSB/bin" "$SSHSB/units" "$SSHSB/run"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$SSHSB/bin/systemctl"
+chmod +x "$SSHSB/bin/systemctl"
+ssh_run() { # <config-json>
+    printf '%s' "$1" >"$SSHSB/config.json"
+    (
+        cd "$SSHSB" || exit
+        PATH="$SSHSB/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        warn() { :; }
+        sudo() { "$@"; }
+        PITHEAD_APPLIANCE=1 PITHEAD_UNIT_DIR="$SSHSB/units" PITHEAD_SSH_RUN_DIR="$SSHSB/run/ssh" \
+            CONFIG_FILE="$SSHSB/config.json" provision_ssh_access
+    )
+}
+ssh_run '{"ssh":{"enabled":true,"authorized_key":"ssh-ed25519 AAAATEST key@test"}}'
+grep -q "ssh-ed25519 AAAATEST" "$SSHSB/run/ssh/authorized_keys" 2>/dev/null &&
+    ok "enabled -> the key lands in the runtime dir" || bad "enabled -> the key lands in the runtime dir" "missing"
+grep -q "PasswordAuthentication=no" "$SSHSB/units/ssh.service.d/pithead.conf" 2>/dev/null &&
+    ok "password auth is forced OFF in the unit override" || bad "password auth is forced OFF in the unit override" "missing"
+ssh_run '{"ssh":{"enabled":false}}'
+[ ! -e "$SSHSB/run/ssh" ] && [ ! -e "$SSHSB/units/ssh.service.d" ] &&
+    ok "disabled -> key and override are REMOVED" || bad "disabled -> key and override are REMOVED" "residue"
+unset SSHSB ssh_run
+
+echo "== unit: ssh.enabled without a public key is refused at validation =="
+VSB="$SANDBOX/vsb"
+mkdir -p "$VSB"
+printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "ssh":{"enabled":true} }' "$WALLET" >"$VSB/config.json"
+vout=$(
+    cd "$VSB" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    log() { :; }
+    CONFIG_FILE="$VSB/config.json" parse_and_validate_config 2>&1
+)
+assert_contains "refusal names the missing key" "$vout" "ssh.authorized_key"
+unset VSB vout
+
 echo "== unit: pithead render rebuilds the whole derived layer in place (#790) =="
 # The defect this guards: pithead-sync delivers a NEW program on every A/B update, but .env and
 # the Caddyfile kept whatever the LAST build rendered. A bench machine served a days-old

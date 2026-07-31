@@ -169,6 +169,7 @@ export const LOGICAL_GROUPS = [
       "dashboard.data_dir",
       "dashboard.check_for_updates",
       "network",
+      "ssh",
       "xmrig_proxy",
     ],
   },
