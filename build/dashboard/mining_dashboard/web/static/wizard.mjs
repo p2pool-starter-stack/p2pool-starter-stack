@@ -158,11 +158,10 @@ export const Done = ({ status, handoff, installer, onAck }) => html`<div class="
     ${
       handoff
         ? html`<h3>Save this before anything else</h3>
-            <p>This login is generated on the machine and shown exactly once here. It is also in
-            <code>config.json</code> on the machine, but this page is the easy copy.</p>
+            <p>This is shown once, here.</p>
             <${Field} label="Dashboard user"><code class="wizard-mono">${handoff.username}</code><//>
             <${Field} label="Dashboard password"><code class="wizard-mono">${handoff.password}</code><//>
-            <${Field} label="Dashboard"><code class="wizard-mono">${handoff.dashboard}</code><//>
+            <${Field} label="Dashboard address"><code class="wizard-mono">${handoff.dashboard}</code><//>
             <${Field} label="Point miners at"><code class="wizard-mono">${handoff.stratum}</code><//>
             <button type="button" onClick=${onAck}>
                 ${installer ? "I saved these — erase the disk and install" : "I saved these — start provisioning"}</button>
