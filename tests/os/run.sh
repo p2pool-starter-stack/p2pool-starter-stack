@@ -744,8 +744,8 @@ phase_install() {
                  test -s \"\$T/pithead/data/monero/chain-sentinel\" || s=NO-MONERO-CHAIN
                  test -s \"\$T/pithead/data/tari/chain-sentinel\" || s=\$s,NO-TARI-CHAIN
                  test -e \"\$T/pithead/reinstall-sentinel\" && s=\$s,USER-DATA-SURVIVED
-                 echo \"verdict=\$s\"
-                 umount \"\$T\"" 2>&1)
+                 umount \"\$T\" 2>&1 || s=\$s,UMOUNT-FAILED
+                 echo \"verdict=\$s\"" 2>&1)
     if printf '%s' "$wout" | grep -q "verdict=OK"; then
         ok "wipe=data KEPT both chains and dropped the user data"
     else
@@ -753,6 +753,7 @@ phase_install() {
         return
     fi
     info "wipe=all — the data partition is reformatted"
+    _ssh "umount -A /dev/vda4 2>/dev/null || true"
     out=$(_ssh "pithead-install --target /dev/vda --wipe all --yes 2>&1")
     if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "everything, chains included"; then
         ok "wipe=all took the reformat path"
@@ -772,6 +773,7 @@ phase_install() {
         bad "could not re-plant the sentinel for the keep leg"
         return
     }
+    _ssh "umount -A /dev/vda4 2>/dev/null || true"
     out=$(_ssh "pithead-install --target /dev/vda --yes 2>&1")
     if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "preserving its data partition"; then
         ok "reinstall took the preserve path"
