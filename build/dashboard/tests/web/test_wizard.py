@@ -392,6 +392,16 @@ async def test_keep_with_a_crafted_config_still_takes_the_keep_branch(client, in
     assert not (installer / "config.json").exists()
 
 
+async def test_fresh_disk_with_default_wipe_keep_is_a_normal_install(client, installer):
+    # The client sends wipe=keep (its default) on EVERY submit; a blank disk must still take
+    # the full config path — the gate caught this 400ing every fresh install.
+    await _auth(client)
+    r = await _submit_install(client, disk="nvme0n1", wipe="keep")
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "nvme0n1\tkeep"
+    assert (installer / "config.json").exists()
+
+
 async def test_keep_on_a_disk_without_an_install_is_refused(client, installer):
     await _auth(client)
     r = await client.post("/submit", data={"disk": "nvme0n1", "confirm": "nvme0n1", "wipe": "keep"})

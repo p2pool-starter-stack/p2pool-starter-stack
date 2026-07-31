@@ -324,13 +324,20 @@ async def submit(request: web.Request) -> web.Response:
         by_name = {d["name"]: d for d in _disks()}
         if disk not in by_name:
             return web.json_response({"error": "choose a disk from the list"}, status=400)
-        if by_name[disk]["state"] != "pithead-with-data":
+        if by_name[disk]["state"] == "pithead-with-data":
+            # The disk really holds an install: keep means KEEP — no config crosses, no
+            # password is generated, no card appears, whatever a crafted submit carried.
+            if confirm != disk:
+                return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
+            _spool_clear_error()
+            _spool_write_text("install-request", f"{disk}\tkeep")
+            return web.json_response({"status": "accepted"})
+        if not raw:
+            # Nothing to keep and nothing submitted — only the keep-everything page omits the
+            # config, and it never offers a blank disk for it.
             return web.json_response({"error": "that disk has no install to keep"}, status=400)
-        if confirm != disk:
-            return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
-        _spool_clear_error()
-        _spool_write_text("install-request", f"{disk}\tkeep")
-        return web.json_response({"status": "accepted"})
+        # A fresh disk with wipe=keep (the client's default) is just a fresh install — fall
+        # through to the normal path, which normalizes the wipe mode away.
     # The JSON pane IS the configuration — what the operator can see is exactly what gets
     # applied. build_config remains the fallback for a client with no JavaScript.
     try:
