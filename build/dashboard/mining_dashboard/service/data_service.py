@@ -504,6 +504,8 @@ class DataService:
     (Local collectors, XMRig Proxy, Tari Node, etc.) and maintaining the application state.
     """
 
+    _last_monero_sync = None  # last real {percent,current,target} — held across RPC blips
+
     def __init__(self, state_manager, proxy_client, xvb_client):
         self.state_manager = state_manager
         self.proxy_client = proxy_client
@@ -1418,10 +1420,21 @@ class DataService:
 
                     # Apply Sync Logic Overrides
                     # 1. Monero Sync Check
+                    if all(k in monero_sync for k in ("percent", "current", "target")):
+                        # A real reading — remember it, so a later blip has something to hold.
+                        self._last_monero_sync = {
+                            k: monero_sync[k] for k in ("percent", "current", "target")
+                        }
                     if network_stats.get("height", 0) == 0:
                         monero_sync["is_syncing"] = True
                         if "percent" not in monero_sync:
-                            monero_sync.update({"percent": 0, "current": 0, "target": 1})
+                            # An RPC blip mid-sync must not reset the card: monerod grinding
+                            # at 99% flashed "Synced 0 / 1" whenever a poll came back empty
+                            # (bench-reported). Hold the last real figures; the bare
+                            # placeholder is only for a machine that has never reported any.
+                            monero_sync.update(
+                                self._last_monero_sync or {"percent": 0, "current": 0, "target": 1}
+                            )
 
                     # 2. Global Sync Logic. monerod always drives the full-screen Sync Mode;
                     # Tari does so only when it's required (Issue #51). A non-blocking Tari
