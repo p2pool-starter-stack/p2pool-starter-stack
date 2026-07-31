@@ -736,19 +736,19 @@ phase_install() {
         bad "wipe=data failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
         return
     fi
+    # The mountpoint comes from mktemp: the appliance root is READ-ONLY, so a path like /mnt/t
+    # cannot be created — mkdir's refusal was eaten by _ssh's stderr drop and read as a wipe bug.
     local wout
-    wout=$(_ssh "mkdir -p /mnt/t && mount /dev/vda4 /mnt/t 2>&1 || { echo MOUNT-FAILED; exit 9; }
+    wout=$(_ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" 2>&1 || { echo MOUNT-FAILED; exit 9; }
                  s=OK
-                 test -s /mnt/t/pithead/data/monero/chain-sentinel || s=NO-MONERO-CHAIN
-                 test -s /mnt/t/pithead/data/tari/chain-sentinel || s=\$s,NO-TARI-CHAIN
-                 test -e /mnt/t/pithead/reinstall-sentinel && s=\$s,USER-DATA-SURVIVED
+                 test -s \"\$T/pithead/data/monero/chain-sentinel\" || s=NO-MONERO-CHAIN
+                 test -s \"\$T/pithead/data/tari/chain-sentinel\" || s=\$s,NO-TARI-CHAIN
+                 test -e \"\$T/pithead/reinstall-sentinel\" && s=\$s,USER-DATA-SURVIVED
                  echo \"verdict=\$s\"
-                 ls /mnt/t /mnt/t/pithead 2>&1 | head -12
-                 umount /mnt/t" 2>&1)
+                 umount \"\$T\"" 2>&1)
     if printf '%s' "$wout" | grep -q "verdict=OK"; then
         ok "wipe=data KEPT both chains and dropped the user data"
     else
-        _ssh "umount /mnt/t" 2>/dev/null
         bad "wipe=data got the split wrong: $(printf '%s' "$wout" | tr '\n' ' ' | cut -c1-300)"
         return
     fi
@@ -760,15 +760,15 @@ phase_install() {
         bad "wipe=all failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
         return
     fi
-    if _ssh "mount /dev/vda4 /mnt/t && [ -z \"\$(ls /mnt/t | grep -v lost+found)\" ]; rc=\$?; umount /mnt/t; exit \$rc"; then
+    if _ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" && [ -z \"\$(ls \"\$T\" | grep -v lost+found)\" ]; rc=\$?; umount \"\$T\"; exit \$rc"; then
         ok "wipe=all left an empty data partition"
     else
         bad "wipe=all left residue on the data partition"
         return
     fi
     # Re-plant the keep-leg sentinel on the now-empty partition, then prove the DEFAULT path.
-    _ssh "mount /dev/vda4 /mnt/t && mkdir -p /mnt/t/pithead &&
-          echo chain-data-survives > /mnt/t/pithead/reinstall-sentinel && umount /mnt/t" || {
+    _ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" && mkdir -p \"\$T/pithead\" &&
+          echo chain-data-survives > \"\$T/pithead/reinstall-sentinel\" && umount \"\$T\"" || {
         bad "could not re-plant the sentinel for the keep leg"
         return
     }
