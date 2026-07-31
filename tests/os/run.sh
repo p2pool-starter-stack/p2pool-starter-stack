@@ -736,14 +736,20 @@ phase_install() {
         bad "wipe=data failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
         return
     fi
-    if _ssh "mkdir -p /mnt/t && mount /dev/vda4 /mnt/t &&
-             test -s /mnt/t/pithead/data/monero/chain-sentinel &&
-             test -s /mnt/t/pithead/data/tari/chain-sentinel &&
-             ! test -e /mnt/t/pithead/reinstall-sentinel; umount /mnt/t"; then
+    local wout
+    wout=$(_ssh "mkdir -p /mnt/t && mount /dev/vda4 /mnt/t 2>&1 || { echo MOUNT-FAILED; exit 9; }
+                 s=OK
+                 test -s /mnt/t/pithead/data/monero/chain-sentinel || s=NO-MONERO-CHAIN
+                 test -s /mnt/t/pithead/data/tari/chain-sentinel || s=\$s,NO-TARI-CHAIN
+                 test -e /mnt/t/pithead/reinstall-sentinel && s=\$s,USER-DATA-SURVIVED
+                 echo \"verdict=\$s\"
+                 ls /mnt/t /mnt/t/pithead 2>&1 | head -12
+                 umount /mnt/t" 2>&1)
+    if printf '%s' "$wout" | grep -q "verdict=OK"; then
         ok "wipe=data KEPT both chains and dropped the user data"
     else
         _ssh "umount /mnt/t" 2>/dev/null
-        bad "wipe=data got the split wrong — chains or user data in the wrong state"
+        bad "wipe=data got the split wrong: $(printf '%s' "$wout" | tr '\n' ' ' | cut -c1-300)"
         return
     fi
     info "wipe=all — the data partition is reformatted"
