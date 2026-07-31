@@ -475,10 +475,18 @@ export class WizardApp extends Component {
             <${Note}>The sidechains are sized by hashrate so miners find shares at a similar
             cadence. Too large a tier means waiting days between shares; it costs nothing to
             change later.<//>
-            <label class="config-field">
-                <span class="config-field-name">Also mine with this machine's own CPU</span>
-                <input type="checkbox" checked=${!!v("localMiner")} onChange=${on("localMiner")} />
-            </label>
+            <${Field} label="Mine on this machine too?">
+                <select value=${String(v("localMiner") ?? false)} onChange=${on("localMiner")}>
+                    <option value="false">No — this box only coordinates the miners (default)</option>
+                    <option value="true">Yes — I will install RigForge on it to mine with its CPU</option>
+                </select>
+            <//>
+            ${
+              v("localMiner") === true &&
+              html`<${Note}>Pithead serves the pool; RigForge does the mining. After setup,
+                install RigForge on this machine and point it at the stratum address the final
+                page shows — it owns all CPU tuning.<//>`
+            }
 
             ${
               !keepChains &&

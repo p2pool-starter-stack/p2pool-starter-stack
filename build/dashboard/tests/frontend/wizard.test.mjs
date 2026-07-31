@@ -379,3 +379,12 @@ test("submit validates IN PLACE: no view swap, the button narrates, the server m
   assert.match(renderToString(inst.render()), /bad wallet/);
   restore();
 });
+
+test("the mine-on-this-box choice is a labeled select naming RigForge, default No", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  const out = renderToString(inst.render());
+  assert.match(out, /Mine on this machine too\?/);
+  assert.match(out, /No — this box only coordinates/);
+  assert.match(out, /RigForge/);
+  restore();
+});
