@@ -24,6 +24,7 @@ from mining_dashboard.config.config import (
     HASHRATE_WINDOW_COLUMNS,
     HASHRATE_WINDOWS,
     HOST_IP,
+    LOW_RAM_AVAILABLE_GB,
     LOW_RAM_GB,
     UPDATE_INTERVAL,
     XVB_MAX_DONATION_FRACTION,
@@ -1429,13 +1430,25 @@ def build_badges(data, metrics, mode_variant, db_healthy=True, wallet_change=Non
                 "title": "HugePages aren't reserved — RandomX hashrate is capped until they are. Run setup's tuning (or edit GRUB) and reboot to apply.",
             }
         )
-    ram_total = (system.get("memory") or {}).get("total_gb", 0) or 0
+    memory = system.get("memory") or {}
+    ram_total = memory.get("total_gb", 0) or 0
+    ram_avail = memory.get("available_gb")
     if 0 < ram_total < LOW_RAM_GB:
         badges.append(
             {
                 "text": f"⚠ Low RAM ({ram_total:.0f} GB)",
                 "variant": "warn",
-                "title": f"Under {LOW_RAM_GB} GB of RAM — syncing (Tari especially) is memory-heavy and can OOM. Add RAM for a stable node.",
+                "title": f"Under {LOW_RAM_GB} GB of usable RAM — syncing (Tari especially) is memory-heavy and can OOM. Add RAM for a stable node.",
+            }
+        )
+    # Pressure is a LIVE signal, separate from capacity: a big box can still be out of memory,
+    # and a spec box quietly idling must not wear a warning it has not earned.
+    if ram_avail is not None and 0 < ram_avail < LOW_RAM_AVAILABLE_GB:
+        badges.append(
+            {
+                "text": f"⚠ Memory pressure ({ram_avail:.1f} GB free)",
+                "variant": "warn",
+                "title": f"Under {LOW_RAM_AVAILABLE_GB:g} GB of memory is actually available right now — the next spike can OOM a container. Check which service is growing on the System panel.",
             }
         )
     if system.get("avx2") is False:

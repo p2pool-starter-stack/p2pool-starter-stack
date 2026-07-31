@@ -114,7 +114,8 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | Badge | Means | Fix |
 |---|---|---|
 | `⚠ HugePages off` | HugePages aren't reserved — RandomX hashrate is capped. | Run setup's tuning (or edit GRUB) and reboot; the badge clears once they're reserved. |
-| `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
+| `⚠ Low RAM (N GB)` | Under 14 GB of usable RAM — genuinely under-provisioned hardware (a nominal 16 GB machine reports ~15 and is fine). | Add RAM for a stable node. |
+| `⚠ Memory pressure (N GB free)` | Live signal: under 1.5 GB actually available right now, whatever the machine's size — the next spike can OOM a container. | Check which service is growing on the System panel. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
 | `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
 

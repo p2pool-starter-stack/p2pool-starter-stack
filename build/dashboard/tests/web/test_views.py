@@ -687,15 +687,33 @@ class TestBadges:
         assert any(b["variant"] == "warn" and "Low RAM (8 GB)" in b["text"] for b in out)
 
     def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self):
-        assert not any(
-            "Low RAM" in b["text"]
-            for b in build_badges({"system": {"memory": {"total_gb": 16}}}, _metrics(), "ok")
-        )
+        # 15.6 is what a NOMINAL 16 GB machine actually reports (reserved memory, GiB-vs-GB) —
+        # the documented minimum spec must never wear a permanent warning. Bench-reported.
+        for total in (15.6, 16, 14):
+            assert not any(
+                "Low RAM" in b["text"]
+                for b in build_badges({"system": {"memory": {"total_gb": total}}}, _metrics(), "ok")
+            ), total
         # total 0 = couldn't read /proc/meminfo (not "0 GB of RAM") — no false badge.
         assert not any(
             "Low RAM" in b["text"]
             for b in build_badges({"system": {"memory": {"total_gb": 0}}}, _metrics(), "ok")
         )
+
+    def test_memory_pressure_badge_keys_on_LIVE_availability_not_capacity(self):
+        # A spec box quietly idling wears nothing; a box down to its last GB warns — whatever
+        # its size. Capacity says what it could do; pressure says what is happening.
+        out = build_badges(
+            {"system": {"memory": {"total_gb": 15.6, "available_gb": 0.8}}}, _metrics(), "ok"
+        )
+        assert any(b["variant"] == "warn" and "Memory pressure" in b["text"] for b in out)
+        out = build_badges(
+            {"system": {"memory": {"total_gb": 15.6, "available_gb": 8.0}}}, _metrics(), "ok"
+        )
+        assert not any("Memory pressure" in b["text"] for b in out)
+        # An older payload without available_gb must not fabricate a pressure reading.
+        out = build_badges({"system": {"memory": {"total_gb": 15.6}}}, _metrics(), "ok")
+        assert not any("Memory pressure" in b["text"] for b in out)
 
     def test_avx2_missing_badge(self):
         out = build_badges({"system": {"avx2": False}}, _metrics(), "ok")
