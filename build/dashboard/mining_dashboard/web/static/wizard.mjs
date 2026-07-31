@@ -349,9 +349,6 @@ export class WizardApp extends Component {
     // a trimmed form, fresh = everything), so until one is chosen the page asks only that.
     const diskPicked = !installer || Boolean(pickedState);
     const keepEverything = installer && pickedState === "pithead-with-data" && wipe === "keep";
-    // Fresh start that keeps the blockchains: the chains on the disk ARE the node answer —
-    // local mode, already synced — so the node and first-sync questions disappear too.
-    const keepChains = installer && pickedState === "pithead-with-data" && wipe === "data";
     return html`<div class="card">
         <p>${
           installer && !diskPicked
@@ -361,16 +358,12 @@ export class WizardApp extends Component {
               ? html`This disk keeps everything — settings, wallets, dashboard login and the
               synced chains. Only the system is replaced, so there is nothing to configure:
               the machine comes back exactly as it was, on a fresh install.`
-              : keepChains
-                ? html`The synced blockchains stay, so the node questions are skipped — this
-                machine runs its own nodes on the chains it already has. Settings, wallets and
-                the dashboard login start fresh below.`
-                : installer
-                  ? html`Choose the disk to install onto and answer the questions below — the
+              : installer
+                ? html`Choose the disk to install onto and answer the questions below — the
                 machine validates everything, shows you the login to save, and only then erases
                 the disk. After it switches itself off, remove the stick and power it on: it
                 provisions itself with exactly this configuration.`
-                  : html`Only the answers that cannot be guessed for you. Everything else keeps its
+                : html`Only the answers that cannot be guessed for you. Everything else keeps its
                 documented default and stays editable from the dashboard.`
         }</p>
         <${Err}>${error}<//>
@@ -403,9 +396,7 @@ export class WizardApp extends Component {
             <${Note}>Merge-mining earns Tari from the same work that mines Monero — this stack
             always does both, so it needs both addresses.<//>
 
-            ${
-              !keepChains &&
-              html`<h3>Monero node</h3>
+            <h3>Monero node</h3>
             <${Field} label="Where does Monero data come from?">
                 <select value=${remoteMonero ? "remote" : "local"} onChange=${on("moneroMode")}>
                     <option value="local">Run the bundled node on this machine (default)</option>
@@ -471,9 +462,7 @@ export class WizardApp extends Component {
             </div>`
             }
 
-            `
-            }
-
+            
             <h3>Mining</h3>
             <${Field} label="P2Pool sidechain">
                 <select value=${v("pool") || "mini"} onChange=${on("pool")}>
@@ -498,9 +487,7 @@ export class WizardApp extends Component {
                 page shows — it owns all CPU tuning.<//>`
             }
 
-            ${
-              !keepChains &&
-              html`<h3>First sync</h3>
+            <h3>First sync</h3>
             <${Field} label="Downloading the chain the first time">
                 <select value=${String(v("clearnetSync") ?? false)} onChange=${on("clearnetSync")}>
                     <option value="false">Private, over Tor — takes days</option>
@@ -508,9 +495,7 @@ export class WizardApp extends Component {
                 </select>
             <//>
 
-            `
-            }
-
+            
             <h3>Dashboard login</h3>
             <${Field} label="How should the dashboard be protected?">
                 <select value=${this.state.authMode} onChange=${(e) => this.setState({ authMode: e.target.value })}>

@@ -131,10 +131,11 @@ with what is on it:
   ask: the machine comes back exactly as it was, same dashboard login included. The right
   choice for an upgrade-by-reinstall, and the default.
 - **Fresh start, keep the blockchains** — settings, wallets, dashboard history and Tor
-  identities are wiped; the synced Monero and Tari chains (days of downloading) survive. The
-  node and first-sync questions are skipped — the chains on the disk answer them — and
-  everything else is asked fresh. The right choice when handing the machine over, changing
-  payout addresses, or starting clean without paying the sync again.
+  identities are wiped; the synced Monero and Tari chains (days of downloading) survive.
+  Every question is asked fresh — including the node ones: a kept chain only answers for a
+  node that ran locally, so say again where each node lives. The right choice when handing
+  the machine over, changing payout addresses, or starting clean without paying the sync
+  again.
 - **Wipe everything** — chains included. The new install re-downloads them from scratch, and
   the full set of questions is asked.
 

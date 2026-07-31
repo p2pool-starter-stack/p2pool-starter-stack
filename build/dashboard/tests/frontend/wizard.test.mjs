@@ -312,13 +312,15 @@ test("keep everything: the whole config half disappears — the survivor config 
   assert.match(out, /Reinstall the system — keep everything/);
 });
 
-test("keep the blockchains: node and first-sync questions disappear, the rest stays", async () => {
+test("keep the blockchains still asks the node questions — kept chains only answer for LOCAL nodes", async () => {
+  // A machine with local Monero + REMOTE Tari keeps only the Monero chain; hiding the node
+  // sections forced Tari local and re-downloaded the very chain remote mode avoids (bench).
   const out = await appWithPick("sda", "data");
-  assert.doesNotMatch(out, /Where does Monero data come from/);
-  assert.doesNotMatch(out, /First sync/);
+  assert.match(out, /Where does Monero data come from/);
+  assert.match(out, /Where does Tari data come from/);
+  assert.match(out, /First sync/);
   assert.match(out, /Payout addresses/);
   assert.match(out, /Dashboard login/);
-  assert.match(out, /node questions are skipped/);
 });
 
 test("wipe everything (or an empty disk): the full form asks everything", async () => {
