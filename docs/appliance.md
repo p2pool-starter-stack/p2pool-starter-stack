@@ -126,12 +126,17 @@ the disk**.
 A disk that already holds a Pithead install is the exception, and the page asks what to do
 with what is on it:
 
-- **Keep my data** — settings, wallets and the synced chains all survive. The system is
-  replaced under them. This is the right choice for an upgrade-by-reinstall, and the default.
+- **Keep everything** — settings, wallets, login and the synced chains all survive; only the
+  system is replaced. The page collapses to just this choice, because there is nothing to
+  ask: the machine comes back exactly as it was, same dashboard login included. The right
+  choice for an upgrade-by-reinstall, and the default.
 - **Fresh start, keep the blockchains** — settings, wallets, dashboard history and Tor
   identities are wiped; the synced Monero and Tari chains (days of downloading) survive. The
-  right choice when handing the machine over or starting clean without paying the sync again.
-- **Wipe everything** — chains included. The new install re-downloads them from scratch.
+  node and first-sync questions are skipped — the chains on the disk answer them — and
+  everything else is asked fresh. The right choice when handing the machine over, changing
+  payout addresses, or starting clean without paying the sync again.
+- **Wipe everything** — chains included. The new install re-downloads them from scratch, and
+  the full set of questions is asked.
 
 Type the disk's name to confirm.
 
@@ -207,7 +212,9 @@ in this release: the security-sensitive settings (payout addresses, view keys, t
 password, per-rig worker entries) can be set **here, at install**, but not changed from the
 dashboard later — that restriction is deliberate, so a compromised browser session can never
 redirect your payouts. Until the approval flow that lifts it ships, changing those means
-booting the stick again and reinstalling (choose "Keep my data": your chain survives).
+booting the stick again and reinstalling with **"Fresh start, keep the blockchains"** — you
+enter the configuration again (paste your saved one into Advanced), and the synced chains
+survive.
 
 Keys still at their default are not written to disk, so this machine keeps picking up improved
 defaults from future updates. The configuration it runs is identical either way.

@@ -59,3 +59,14 @@ def test_get_summary_raises_on_http_error(client):
     client.session.get.return_value = resp
     with pytest.raises(RuntimeError):
         client.get_summary()
+
+
+def test_connect_failures_are_never_retried():
+    """A held miner (first sync) means the proxy is legitimately DOWN, and the state loop calls
+    this client twice per cycle. Connect retries burned ~7s of backoff per call, so every
+    dashboard update — and the first page paint — crawled for the whole sync. Refused/no-route
+    must answer immediately; retries are for a running proxy's transient 5xx hiccups."""
+    client = XMRigProxyClient("127.0.0.1", 3344)
+    retry = client.session.get_adapter("http://x/").max_retries
+    assert retry.connect == 0
+    assert retry.total == 3

@@ -774,15 +774,53 @@ phase_install() {
         return
     }
     _ssh "umount -A /dev/vda4 2>/dev/null || true"
-    out=$(_ssh "pithead-install --target /dev/vda --yes 2>&1")
-    if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "preserving its data partition"; then
-        ok "reinstall took the preserve path"
+    # The keep path goes through the PAGE, exactly as an operator would: a bare submit with the
+    # disk and wipe=keep — no config, because the survivor config wins. No credentials card may
+    # appear (the machine keeps its old login; a regenerated one here was a real bench bug).
+    token=""
+    tries2=0
+    while [ -z "$token" ] && [ "$tries2" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries2=$((tries2 + 1))
+    done
+    [ -n "$token" ] || {
+        bad "no token for the keep-reinstall leg"
+        return
+    }
+    jar=$(mktemp)
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
+        grep -q "wizard_session" "$jar" || {
+        bad "keep-reinstall auth failed"
+        rm -f "$jar"
+        return
+    }
+    scode=$(curl -sSk -b "$jar" --data "disk=vda&confirm=vda&wipe=keep" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "keep-reinstall submit did not return 200 (got ${scode:-none})"
+        rm -f "$jar"
+        return
+    }
+    sleep 3
+    hcode=$(curl -sSk -b "$jar" -o /dev/null -w '%{http_code}' -m 5 "https://$ip/api/handoff" 2>/dev/null)
+    if [ "$hcode" = "404" ]; then
+        ok "keep-reinstall shows NO credentials card — the machine keeps its old login"
     else
-        bad "reinstall did not preserve: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
+        bad "a handoff appeared on a keep reinstall (HTTP $hcode) — its password would be a lie"
+    fi
+    rm -f "$jar"
+    tries2=0
+    while [ "$tries2" -lt 60 ]; do
+        [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ] && break
+        sleep 5
+        tries2=$((tries2 + 1))
+    done
+    if [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ]; then
+        ok "keep-reinstall installed and switched itself off"
+    else
+        bad "keep-reinstall never powered off"
         return
     fi
-    _ssh "systemctl poweroff" 2>/dev/null || true
-    sleep 8
     vm_destroy
     : >"$SERIAL"
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \

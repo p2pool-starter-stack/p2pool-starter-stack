@@ -371,6 +371,34 @@ async def test_wipe_mode_defaults_to_keep_and_rejects_inventions(client, install
     assert r.status == 400
 
 
+async def test_keep_everything_submits_no_config_and_gets_no_handoff_machinery(client, installer):
+    # The preserved config wins: a keep reinstall must write ONLY the install request. A config
+    # candidate here would regenerate the dashboard password and show a card the machine never
+    # serves — the exact bench-reported bug.
+    await _auth(client)
+    r = await client.post("/submit", data={"disk": "sda", "confirm": "sda", "wipe": "keep"})
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "sda\tkeep"
+    assert not (installer / "config.json").exists()
+    assert not (installer / "last-attempt.json").exists()
+
+
+async def test_keep_with_a_crafted_config_still_takes_the_keep_branch(client, installer):
+    await _auth(client)
+    r = await client.post(
+        "/submit", data={"config": _CFG, "disk": "sda", "confirm": "sda", "wipe": "keep"}
+    )
+    assert r.status == 200
+    assert not (installer / "config.json").exists()
+
+
+async def test_keep_on_a_disk_without_an_install_is_refused(client, installer):
+    await _auth(client)
+    r = await client.post("/submit", data={"disk": "nvme0n1", "confirm": "nvme0n1", "wipe": "keep"})
+    assert r.status == 400
+    assert not (installer / "install-request").exists()
+
+
 async def test_wipe_is_normalized_to_keep_on_a_disk_with_nothing_to_wipe(client, installer):
     # nvme0n1 is empty in the fixture: "wipe" is meaningless there, and the page never offers
     # it — a crafted request is normalized rather than trusted.

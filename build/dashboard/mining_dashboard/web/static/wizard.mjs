@@ -194,6 +194,7 @@ export class WizardApp extends Component {
     chosen: "",
     confirm: "",
     wipe: "keep",
+    submitting: false,
     jsonText: "",
     jsonError: "",
     authMode: "auto", // auto | set | none — travels beside the config (see wizard.py submit)
@@ -220,6 +221,8 @@ export class WizardApp extends Component {
       error: s.error || "",
       handoff: s.handoff || null,
     };
+    // The wait is over once the server either moved on or rejected: both end "Validating…".
+    if (this.state.submitting && (next.stage !== "setup" || next.error)) next.submitting = false;
     // Do not clobber in-progress editing with the server's copy once the form is up.
     if (this.state.stage !== "setup" || !this.state.cfg || !Object.keys(this.state.cfg).length) {
       next.cfg = s.config;
@@ -279,10 +282,17 @@ export class WizardApp extends Component {
 
   submit = async (e) => {
     e.preventDefault();
-    const body = {
-      config: JSON.stringify(this.state.cfg),
-      auth_mode: this.state.authMode,
-    };
+    const keepEverything =
+      this.state.installer &&
+      (this.state.disks.find((d) => d.name === this.state.chosen) || {}).state ===
+        "pithead-with-data" &&
+      this.state.wipe === "keep";
+    const body = keepEverything
+      ? {} // the preserved config wins — sending one would only mislead
+      : {
+          config: JSON.stringify(this.state.cfg),
+          auth_mode: this.state.authMode,
+        };
     // One page, one submission: on the installation medium the disk choice rides beside the
     // config, and the server gates both before anything is written.
     if (this.state.installer) {
@@ -307,7 +317,10 @@ export class WizardApp extends Component {
       this.setState({ error: msg });
       return;
     }
-    this.setState({ stage: "done", status: "Validating…" });
+    // No optimistic view swap: flipping the stage locally re-rendered a different page and
+    // threw the scroll to the top while nothing had happened yet. The button reads
+    // "Validating…" in place, and the page changes when the SERVER's stage does.
+    this.setState({ submitting: true, error: "" });
     this.poll();
   };
 
@@ -325,15 +338,31 @@ export class WizardApp extends Component {
     const remoteMonero = v("moneroMode") === "remote";
     const remoteTari = v("tariMode") === "remote";
     const { installer, disks, chosen, confirm, wipe } = this.state;
+    // Keep-everything reinstall: the machine's settings, wallets, login and chains all survive,
+    // so there is nothing to ask — the config half of the page would collect answers the
+    // machine will ignore (its preserved config wins). Only the disk half renders.
+    const pickedState = (disks.find((d) => d.name === chosen) || {}).state;
+    const keepEverything = installer && pickedState === "pithead-with-data" && wipe === "keep";
+    // Fresh start that keeps the blockchains: the chains on the disk ARE the node answer —
+    // local mode, already synced — so the node and first-sync questions disappear too.
+    const keepChains = installer && pickedState === "pithead-with-data" && wipe === "data";
     return html`<div class="card">
         <p>${
-          installer
-            ? html`Choose the disk to install onto and answer the questions below — the machine
-              validates everything, shows you the login to save, and only then erases the disk.
-              After it switches itself off, remove the stick and power it on: it provisions
-              itself with exactly this configuration.`
-            : html`Only the answers that cannot be guessed for you. Everything else keeps its
-              documented default and stays editable from the dashboard.`
+          keepEverything
+            ? html`This disk keeps everything — settings, wallets, dashboard login and the
+              synced chains. Only the system is replaced, so there is nothing to configure:
+              the machine comes back exactly as it was, on a fresh install.`
+            : keepChains
+              ? html`The synced blockchains stay, so the node questions are skipped — this
+                machine runs its own nodes on the chains it already has. Settings, wallets and
+                the dashboard login start fresh below.`
+              : installer
+                ? html`Choose the disk to install onto and answer the questions below — the
+                machine validates everything, shows you the login to save, and only then erases
+                the disk. After it switches itself off, remove the stick and power it on: it
+                provisions itself with exactly this configuration.`
+                : html`Only the answers that cannot be guessed for you. Everything else keeps its
+                documented default and stays editable from the dashboard.`
         }</p>
         <${Err}>${error}<//>
         <form onSubmit=${this.submit}>
@@ -345,7 +374,9 @@ export class WizardApp extends Component {
                 onConfirm=${(e) => this.setState({ confirm: e.target.value })}
                 onWipe=${(e) => this.setState({ wipe: e.target.value })} />`
             }
-            <h3>Payout addresses</h3>
+            ${
+              !keepEverything &&
+              html`<h3>Payout addresses</h3>
             <${Note}>Paste these — they are far too long to type, and a typo pays a stranger.<//>
             <${Field} label="Monero payout address">
                 <input class="wizard-mono" value=${v("moneroWallet") || ""} onInput=${on("moneroWallet")}
@@ -362,7 +393,9 @@ export class WizardApp extends Component {
             <${Note}>Merge-mining earns Tari from the same work that mines Monero — this stack
             always does both, so it needs both addresses.<//>
 
-            <h3>Monero node</h3>
+            ${
+              !keepChains &&
+              html`<h3>Monero node</h3>
             <${Field} label="Where does Monero data come from?">
                 <select value=${remoteMonero ? "remote" : "local"} onChange=${on("moneroMode")}>
                     <option value="local">Run the bundled node on this machine (default)</option>
@@ -428,6 +461,9 @@ export class WizardApp extends Component {
             </div>`
             }
 
+            `
+            }
+
             <h3>Mining</h3>
             <${Field} label="P2Pool sidechain">
                 <select value=${v("pool") || "mini"} onChange=${on("pool")}>
@@ -444,13 +480,18 @@ export class WizardApp extends Component {
                 <input type="checkbox" checked=${!!v("localMiner")} onChange=${on("localMiner")} />
             </label>
 
-            <h3>First sync</h3>
+            ${
+              !keepChains &&
+              html`<h3>First sync</h3>
             <${Field} label="Downloading the chain the first time">
                 <select value=${String(v("clearnetSync") ?? false)} onChange=${on("clearnetSync")}>
                     <option value="false">Private, over Tor — takes days</option>
                     <option value="true">Faster, over the open internet, then Tor afterwards — takes hours</option>
                 </select>
             <//>
+
+            `
+            }
 
             <h3>Dashboard login</h3>
             <${Field} label="How should the dashboard be protected?">
@@ -510,10 +551,19 @@ export class WizardApp extends Component {
                 <textarea class="wizard-json wizard-mono" value=${jsonText} onInput=${this.editJson}
                     spellcheck=${false}></textarea>
                 <${Err}>${jsonError}<//>
-            </details>
+            </details>`
+            }
 
-            <button type="submit" disabled=${!!jsonError}>
-                ${installer ? "Validate, then install" : "Apply"}</button>
+            <button type="submit" disabled=${!!jsonError || this.state.submitting}>
+                ${
+                  this.state.submitting
+                    ? "Validating…"
+                    : keepEverything
+                      ? "Reinstall the system — keep everything"
+                      : installer
+                        ? "Validate, then install"
+                        : "Apply"
+                }</button>
         </form>
     </div>`;
   }

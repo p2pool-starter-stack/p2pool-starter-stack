@@ -1559,6 +1559,33 @@ firstboot_wizard() {
             } >"$dev" 2>/dev/null || true
         done
         while :; do
+            # A keep-everything reinstall arrives as a bare install-request with no config
+            # candidate: the preserved /data keeps config, login and chains, so there is
+            # nothing to validate and no credentials to hand off — install and switch off.
+            if [ "$installer" -eq 1 ] && [ -f "$spool/install-request" ] &&
+                [ "$(cut -f2 "$spool/install-request" 2>/dev/null)" = "keep" ] &&
+                [ ! -f "$spool/config.json" ]; then
+                touch "$spool/installing"
+                chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                local irc=0
+                consume_install_request "$spool" || irc=$?
+                if [ "$irc" -ne 0 ]; then
+                    rm -f "$spool/installing"
+                    publish_disk_inventory "$spool"
+                    warn "Reinstall failed — the page shows the reason."
+                    sleep 2
+                    continue
+                fi
+                _console "" "Reinstall complete — switching off now." \
+                    "When the machine is dark, remove the USB stick and switch it back on." \
+                    "Everything it knew — settings, wallets, login, chains — is still there."
+                sleep 8
+                "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+                sleep 3
+                systemctl poweroff
+                return
+            fi
             if firstboot_consume_spool "$spool"; then
                 # Reachability before commitment: a remote node that cannot be dialed fails HERE,
                 # on the page, with the attempt kept for editing — not minutes into provisioning.

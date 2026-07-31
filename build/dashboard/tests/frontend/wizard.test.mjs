@@ -285,3 +285,97 @@ test("the erase is blocked client-side until the disk name is retyped exactly", 
   assert.match(inst.state.error, /exactly/);
   restore();
 });
+
+// --- the form matches the install selection --------------------------------------------------
+
+async function appWithPick(chosen, wipe) {
+  const { inst, restore } = await appOn([
+    stateFor("installer", {
+      disks: [
+        { name: "sda", size: "1T", model: "M", serial: "S", state: "pithead-with-data" },
+        { name: "sdb", size: "1T", model: "M", serial: "S", state: "empty" },
+      ],
+    }),
+  ]);
+  inst.setState({ chosen, wipe });
+  const out = renderToString(inst.render());
+  restore();
+  return out;
+}
+
+test("keep everything: the whole config half disappears — the survivor config wins", async () => {
+  const out = await appWithPick("sda", "keep");
+  assert.doesNotMatch(out, /Payout addresses/);
+  assert.doesNotMatch(out, /Dashboard login/);
+  assert.doesNotMatch(out, /Advanced/);
+  assert.match(out, /keeps everything/);
+  assert.match(out, /Reinstall the system — keep everything/);
+});
+
+test("keep the blockchains: node and first-sync questions disappear, the rest stays", async () => {
+  const out = await appWithPick("sda", "data");
+  assert.doesNotMatch(out, /Where does Monero data come from/);
+  assert.doesNotMatch(out, /First sync/);
+  assert.match(out, /Payout addresses/);
+  assert.match(out, /Dashboard login/);
+  assert.match(out, /node questions are skipped/);
+});
+
+test("wipe everything (or an empty disk): the full form asks everything", async () => {
+  const all = await appWithPick("sda", "all");
+  assert.match(all, /Where does Monero data come from/);
+  assert.match(all, /First sync/);
+  const empty = await appWithPick("sdb", "keep");
+  assert.match(empty, /Payout addresses/);
+});
+
+test("keep everything submits NO config — only the disk request", async () => {
+  const { inst, restore } = await appOn([
+    stateFor("installer", {
+      disks: [{ name: "sda", size: "1T", model: "M", serial: "S", state: "pithead-with-data" }],
+    }),
+  ]);
+  inst.setState({ chosen: "sda", confirm: "sda", wipe: "keep" });
+  let sentBody = null;
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).includes("/submit")) {
+      sentBody = String(opts.body);
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => stateFor("installing"), text: async () => "" };
+  };
+  await inst.submit({ preventDefault() {} });
+  globalThis.fetch = real;
+  assert.doesNotMatch(sentBody, /config=/);
+  assert.match(sentBody, /disk=sda/);
+  assert.match(sentBody, /wipe=keep/);
+  restore();
+});
+
+test("submit validates IN PLACE: no view swap, the button narrates, the server moves the page", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.editJson({ target: { value: JSON.stringify({ monero: { wallet_address: "4A" } }) } });
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/submit")) return { ok: true, status: 200, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => stateFor("setup"), text: async () => "" };
+  };
+  await inst.submit({ preventDefault() {} });
+  // Still the form — no optimistic page change (the scroll-jump bug) — with the wait narrated.
+  assert.equal(inst.state.stage, "setup");
+  assert.equal(inst.state.submitting, true);
+  assert.match(renderToString(inst.render()), /Validating…/);
+  // The server rejects: the wait ends and the reason shows on the same page.
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => stateFor("setup", { error: "bad wallet" }),
+    text: async () => "",
+  });
+  await inst.loadState();
+  globalThis.fetch = real;
+  assert.equal(inst.state.submitting, false);
+  assert.match(renderToString(inst.render()), /bad wallet/);
+  restore();
+});

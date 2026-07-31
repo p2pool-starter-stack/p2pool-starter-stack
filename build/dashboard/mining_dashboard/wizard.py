@@ -311,6 +311,26 @@ async def submit(request: web.Request) -> web.Response:
     form = await request.post()
     raw = str(form.get("config", "")).strip()
     ref = _reference()
+    # Keep-everything reinstall: the preserved config wins, so the submission carries NO config
+    # and nothing here may write one — a config candidate would provision over the survivor,
+    # and a handoff card would show credentials the machine will never serve. Disk gates only.
+    if (
+        installer_mode()
+        and str(form.get("wipe", "")).strip() == "keep"
+        and str(form.get("disk", "")).strip()
+    ):
+        disk = str(form.get("disk", "")).strip()
+        confirm = str(form.get("confirm", "")).strip()
+        by_name = {d["name"]: d for d in _disks()}
+        if disk not in by_name:
+            return web.json_response({"error": "choose a disk from the list"}, status=400)
+        if by_name[disk]["state"] != "pithead-with-data":
+            return web.json_response({"error": "that disk has no install to keep"}, status=400)
+        if confirm != disk:
+            return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
+        _spool_clear_error()
+        _spool_write_text("install-request", f"{disk}\tkeep")
+        return web.json_response({"status": "accepted"})
     # The JSON pane IS the configuration — what the operator can see is exactly what gets
     # applied. build_config remains the fallback for a client with no JavaScript.
     try:

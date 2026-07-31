@@ -1152,7 +1152,11 @@ export function App({
       : null;
   if (!state) {
     return html`<${Fragment}>
-            <div class="loading">${connected ? "Connecting to the dashboard…" : "Cannot reach the dashboard."}</div>
+            <div class="loading">${
+              connected
+                ? "Connecting to the dashboard… If this machine is still syncing its first chain, progress appears here in a moment."
+                : "Cannot reach the dashboard."
+            }</div>
             ${switcher}
         <//>`;
   }
