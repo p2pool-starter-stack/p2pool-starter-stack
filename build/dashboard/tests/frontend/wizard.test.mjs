@@ -388,3 +388,23 @@ test("the mine-on-this-box choice is a labeled select naming RigForge, default N
   assert.match(out, /RigForge/);
   restore();
 });
+
+test("before a disk is chosen, the page asks ONLY that", async () => {
+  const { inst, restore } = await appOn([
+    stateFor("installer", {
+      disks: [{ name: "sda", size: "1T", model: "M", serial: "S", state: "pithead-with-data" }],
+    }),
+  ]);
+  const out = renderToString(inst.render());
+  assert.match(out, /Choose the disk to install onto/);
+  assert.match(out, /Target disk/);
+  assert.doesNotMatch(out, /Payout addresses/);
+  assert.doesNotMatch(out, /Type the disk name to confirm/);
+  assert.doesNotMatch(out, /<button type="submit"/);
+  // Picking the disk reveals the rest.
+  inst.setState({ chosen: "sda", wipe: "all" });
+  const after = renderToString(inst.render());
+  assert.match(after, /Payout addresses/);
+  assert.match(after, /Type the disk name to confirm/);
+  restore();
+});

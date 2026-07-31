@@ -131,10 +131,13 @@ export const InstallSection = ({ disks, chosen, confirm, wipe, onPick, onConfirm
       picked.state !== "pithead-with-data" &&
       html`<p class="c-bad">Installing to ${picked.name} — this ${verdictText(picked)}.</p>`
     }
-    <${Field} label="Type the disk name to confirm">
+    ${
+      picked &&
+      html`<${Field} label="Type the disk name to confirm">
         <input value=${confirm} onInput=${onConfirm} autocomplete="off" autocapitalize="off"
-            spellcheck=${false} placeholder=${chosen || "choose a disk above first"} />
-    <//>
+            spellcheck=${false} placeholder=${chosen} />
+    <//>`
+    }
 </div>`;
 };
 
@@ -342,26 +345,32 @@ export class WizardApp extends Component {
     // so there is nothing to ask — the config half of the page would collect answers the
     // machine will ignore (its preserved config wins). Only the disk half renders.
     const pickedState = (disks.find((d) => d.name === chosen) || {}).state;
+    // Progressive disclosure: the DISK decides what gets asked (keep = nothing, keep-chains =
+    // a trimmed form, fresh = everything), so until one is chosen the page asks only that.
+    const diskPicked = !installer || Boolean(pickedState);
     const keepEverything = installer && pickedState === "pithead-with-data" && wipe === "keep";
     // Fresh start that keeps the blockchains: the chains on the disk ARE the node answer —
     // local mode, already synced — so the node and first-sync questions disappear too.
     const keepChains = installer && pickedState === "pithead-with-data" && wipe === "data";
     return html`<div class="card">
         <p>${
-          keepEverything
-            ? html`This disk keeps everything — settings, wallets, dashboard login and the
+          installer && !diskPicked
+            ? html`Choose the disk to install onto — what happens next depends on what is
+              already on it, so the rest of the page appears once you pick.`
+            : keepEverything
+              ? html`This disk keeps everything — settings, wallets, dashboard login and the
               synced chains. Only the system is replaced, so there is nothing to configure:
               the machine comes back exactly as it was, on a fresh install.`
-            : keepChains
-              ? html`The synced blockchains stay, so the node questions are skipped — this
+              : keepChains
+                ? html`The synced blockchains stay, so the node questions are skipped — this
                 machine runs its own nodes on the chains it already has. Settings, wallets and
                 the dashboard login start fresh below.`
-              : installer
-                ? html`Choose the disk to install onto and answer the questions below — the
+                : installer
+                  ? html`Choose the disk to install onto and answer the questions below — the
                 machine validates everything, shows you the login to save, and only then erases
                 the disk. After it switches itself off, remove the stick and power it on: it
                 provisions itself with exactly this configuration.`
-                : html`Only the answers that cannot be guessed for you. Everything else keeps its
+                  : html`Only the answers that cannot be guessed for you. Everything else keeps its
                 documented default and stays editable from the dashboard.`
         }</p>
         <${Err}>${error}<//>
@@ -375,6 +384,7 @@ export class WizardApp extends Component {
                 onWipe=${(e) => this.setState({ wipe: e.target.value })} />`
             }
             ${
+              diskPicked &&
               !keepEverything &&
               html`<h3>Payout addresses</h3>
             <${Note}>Paste these — they are far too long to type, and a typo pays a stranger.<//>
@@ -562,7 +572,9 @@ export class WizardApp extends Component {
             </details>`
             }
 
-            <button type="submit" disabled=${!!jsonError || this.state.submitting}>
+            ${
+              diskPicked &&
+              html`<button type="submit" disabled=${!!jsonError || this.state.submitting}>
                 ${
                   this.state.submitting
                     ? "Validating…"
@@ -571,7 +583,8 @@ export class WizardApp extends Component {
                       : installer
                         ? "Validate, then install"
                         : "Apply"
-                }</button>
+                }</button>`
+            }
         </form>
     </div>`;
   }
