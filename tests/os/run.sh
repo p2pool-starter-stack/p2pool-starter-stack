@@ -542,6 +542,17 @@ phase_install() {
         return
     }
     ok "one-time token read from the installer console ($token)"
+    # The token prints before the container finishes coming up — wait for the gate to SERVE
+    # before authing, exactly as the provision phase does (and as a human's browser would).
+    tries2=0
+    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
+        sleep 5
+        tries2=$((tries2 + 1))
+        [ "$tries2" -lt 24 ] || {
+            bad "installer wizard never served its gate page"
+            return
+        }
+    done
     jar=$(mktemp)
     curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
         grep -q "wizard_session" "$jar" || {
