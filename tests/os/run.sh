@@ -758,7 +758,7 @@ phase_install() {
     if [ $? -eq 0 ] && printf '%s' "$out" | grep -q "everything, chains included"; then
         ok "wipe=all took the reformat path"
     else
-        bad "wipe=all failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140)"
+        bad "wipe=all failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-140) [mounts: $(_ssh "findmnt -no SOURCE,TARGET | grep vda" | tr '\n' ' ')]"
         return
     fi
     if _ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" && [ -z \"\$(ls \"\$T\" | grep -v lost+found)\" ]; rc=\$?; umount \"\$T\"; exit \$rc"; then

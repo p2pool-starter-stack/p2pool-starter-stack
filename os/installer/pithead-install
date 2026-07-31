@@ -244,6 +244,14 @@ main() {
     done
 
     sync
+    # Release the target DETERMINISTICALLY, before declaring success. The EXIT trap stays as a
+    # best-effort backstop, but its silent \`|| true\` once leaked these mounts when the ESP was
+    # still busy right after the grubenv write — and the NEXT install on the same boot (a retry,
+    # or a fleet stick doing several machines) then refused with "has mounted filesystems".
+    umount -R "$mnt" 2>/dev/null || {
+        sleep 2
+        umount -R "$mnt" || die "could not release $target — its filesystems are still mounted; do not remove media"
+    }
     echo "==> installed to $target — reboot and remove the installation medium"
 }
 
