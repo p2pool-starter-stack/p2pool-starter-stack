@@ -1454,8 +1454,7 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
         _console "Loading this build's container images ($(basename "$archive")) — the slow part..."
         mkdir -p "$PWD/data" 2>/dev/null || true
         if "$engine" load -i "$archive" >/dev/null 2>&1; then
-            printf '%s' "$sha" >"$rec" 2>/dev/null ||
-                warn "Loaded $(basename "$archive") but could not record its digest — it will reload next boot."
+            printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
         else
             # No record on failure, on purpose: the next boot must retry, not skip.
             warn "Could not load the baked image archive $(basename "$archive")."
