@@ -8143,6 +8143,12 @@ assert_contains "runs rigforge setup in appliance mode" "$(cat "$RF_LOG")" "rigf
 assert_contains "runs it from the synced tree" "$(cat "$RF_LOG")" "cwd=$LMP/rigforge"
 [ -s "$LMP/rigforge/config.json" ] && ok "a missing miner config is rendered before setup" ||
     bad "a missing miner config is rendered before setup" "not written"
+# Idempotent re-run (the boot leg fires EVERY boot): same config, run again — same outcome,
+# setup invoked again (rigforge's own appliance mode is the idempotency owner), no error.
+: >"$RF_LOG"
+PITHEAD_APPLIANCE=1 PATH="$LMP/bin:$PATH" run_sourced "$LMP" provision_local_miner >/dev/null 2>&1
+assert_rc "enabled re-run (second boot) -> rc 0" "$?" "0"
+assert_contains "re-run invokes setup again, appliance mode" "$(cat "$RF_LOG")" "rigforge:setup appliance=1"
 # Disabled: stop the service, never run setup — a dashboard toggle must not wait for a reboot.
 printf '{"local_miner":{"enabled":false}}' >"$LMP/config.json"
 : >"$RF_LOG"
@@ -8182,6 +8188,12 @@ else
     bad "pithead-boot runs 'pithead local-miner' after the health-gated commit" \
         "mark-good@${mg_line:-none} local-miner@${lm_line:-none}"
 fi
+# A hung miner setup must not wedge the boot unit either — TimeoutStartSec=infinity on
+# pithead-boot means || true alone cannot save it; the leg needs its own bounded clock.
+grep -qE "timeout [0-9]+ \./pithead local-miner" "$BOOTSCRIPT" &&
+    ok "the miner leg runs under its own timeout (boot unit has no clock of its own)" ||
+    bad "the miner leg runs under its own timeout (boot unit has no clock of its own)" \
+        "no 'timeout N ./pithead local-miner' in pithead-boot"
 unset BOOTSCRIPT mg_line lm_line
 
 echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved, prebuilt seeded =="

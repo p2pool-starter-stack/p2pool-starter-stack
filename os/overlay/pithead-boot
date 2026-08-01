@@ -39,7 +39,11 @@ for _ in $(seq 90); do
         # stack serving is the product's health, the miner is a passenger. Idempotent every
         # boot: RigForge's appliance mode re-renders its /run unit and re-tunes from the tree
         # pithead-sync keeps on /data. No-op unless local_miner.enabled.
-        ./pithead local-miner || true
+        # timeout, not just || true: the boot unit runs with TimeoutStartSec=infinity, so a
+        # hung miner setup (a stalled native rebuild, a wedged mount) would otherwise leave the
+        # unit activating forever. 30 minutes clears a worst-case first native recompile; the
+        # prebuilt path finishes in seconds.
+        timeout 1800 ./pithead local-miner || true
         exit 0
     fi
     sleep 10
